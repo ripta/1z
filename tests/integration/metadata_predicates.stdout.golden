@@ -1,0 +1,46 @@
+PASS: fixnum is numeric
+Stack: [ ]
+PASS: bignum is numeric
+Stack: [ ]
+PASS: float is numeric
+Stack: [ ]
+PASS: ratio is numeric
+Stack: [ ]
+PASS: complex is numeric
+Stack: [ ]
+PASS: string is not numeric
+Stack: [ ]
+PASS: array is not numeric
+Stack: [ ]
+PASS: boolean is not numeric
+Stack: [ ]
+PASS: fixnum is exact
+Stack: [ ]
+PASS: bignum is exact
+Stack: [ ]
+PASS: ratio is exact
+Stack: [ ]
+PASS: float is not exact
+Stack: [ ]
+PASS: complex is not exact
+Stack: [ ]
+PASS: float is inexact
+Stack: [ ]
+PASS: complex is inexact
+Stack: [ ]
+PASS: fixnum is not inexact
+Stack: [ ]
+PASS: bignum is not inexact
+Stack: [ ]
+PASS: ratio is not inexact
+Stack: [ ]
+PASS: fixnum is integer
+Stack: [ ]
+PASS: bignum is integer
+Stack: [ ]
+PASS: float is not integer
+Stack: [ ]
+PASS: ratio is not integer
+Stack: [ ]
+PASS: complex is not integer
+Stack: [ ]

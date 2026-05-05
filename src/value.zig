@@ -179,7 +179,7 @@ pub const TemplateSegment = union(enum) {
 /// Created when type names are used as words.
 pub const TypeValue = struct {
     name: []const u8,
-    descriptor: ?*MutableMap,
+    descriptor: ?*HashTable,
 };
 
 /// StructInstance represents an instance of a struct type.

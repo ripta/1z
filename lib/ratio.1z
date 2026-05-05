@@ -2,7 +2,7 @@
 
 EInexactConversion: [ inexact-conversion: ] ;
 
-ratio: virtual{ struct{ numer denom } } ;
+ratio: H{ numeric: t exact: t } virtual{ struct{ numer denom } } ;
 
 \ Accessors: unwrap the virtual type, then extract by position
 \ Virtual structs don't export these by default
@@ -26,9 +26,6 @@ normalize-ratio: ( numer denom -- ratio-or-int ) [
   [ make-ratio ]
   if
 ] ;
-
-number?: method{ ratio } [ drop t ] ;
-exact?: method{ ratio } [ drop t ] ;
 
 >string: method{ ratio } [
   dup numer>> >string "/" #append

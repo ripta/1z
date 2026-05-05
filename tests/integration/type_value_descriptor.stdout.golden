@@ -1,14 +1,14 @@
 === Symbol path still works ===
 Stack: [ ]
-PASS: symbol returns mutable-map
+PASS: symbol returns hash
 Stack: [ ]
-PASS: string returns mutable-map
+PASS: string returns hash
 Stack: [ ]
 === Type value path works ===
 Stack: [ ]
-PASS: type value returns mutable-map
+PASS: type value returns hash
 Stack: [ ]
-PASS: string type value returns mutable-map
+PASS: string type value returns hash
 Stack: [ ]
 === Both paths return the same descriptor ===
 Stack: [ ]

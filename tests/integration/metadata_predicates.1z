@@ -1,0 +1,35 @@
+use "testing" ;
+use "ratio" ;
+use "complex" ;
+
+\ --- number? ---
+42 number? "fixnum is numeric" assert-true
+999999999999999999999 number? "bignum is numeric" assert-true
+3.14 number? "float is numeric" assert-true
+1 2 make-ratio number? "ratio is numeric" assert-true
+C{ 1.0 2.0 } number? "complex is numeric" assert-true
+
+"hello" number? "string is not numeric" assert-false
+{ 1 2 } number? "array is not numeric" assert-false
+t number? "boolean is not numeric" assert-false
+
+\ --- exact? ---
+42 exact? "fixnum is exact" assert-true
+999999999999999999999 exact? "bignum is exact" assert-true
+1 2 make-ratio exact? "ratio is exact" assert-true
+3.14 exact? "float is not exact" assert-false
+C{ 1.0 2.0 } exact? "complex is not exact" assert-false
+
+\ --- inexact? ---
+3.14 inexact? "float is inexact" assert-true
+C{ 1.0 2.0 } inexact? "complex is inexact" assert-true
+42 inexact? "fixnum is not inexact" assert-false
+999999999999999999999 inexact? "bignum is not inexact" assert-false
+1 2 make-ratio inexact? "ratio is not inexact" assert-false
+
+\ --- integer? ---
+42 integer? "fixnum is integer" assert-true
+999999999999999999999 integer? "bignum is integer" assert-true
+3.14 integer? "float is not integer" assert-false
+1 2 make-ratio integer? "ratio is not integer" assert-false
+C{ 1.0 2.0 } integer? "complex is not integer" assert-false

@@ -4,13 +4,13 @@ use "testing" ;
 
 "Symbol path still works" test-section
 
-"fixnum" native.type-descriptor mutable-map? t "symbol returns mutable-map" assert=
-"string" native.type-descriptor mutable-map? t "string returns mutable-map" assert=
+"fixnum" native.type-descriptor hash? t "symbol returns hash" assert=
+"string" native.type-descriptor hash? t "string returns hash" assert=
 
 "Type value path works" test-section
 
-fixnum native.type-descriptor mutable-map? t "type value returns mutable-map" assert=
-string native.type-descriptor mutable-map? t "string type value returns mutable-map" assert=
+fixnum native.type-descriptor hash? t "type value returns hash" assert=
+string native.type-descriptor hash? t "string type value returns hash" assert=
 
 "Both paths return the same descriptor" test-section
 

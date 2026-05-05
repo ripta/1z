@@ -20,8 +20,8 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const desc_val = try ctx.stack.pop();
-    const descriptor = switch (desc_val) {
-        .mutable_map => |m| m,
+    const descriptor: *value_mod.HashTable = switch (desc_val) {
+        .mutable_map => |m| @ptrCast(m),
         else => {
             helpers.setTypeMismatchError(ctx, "mutable-map", desc_val);
             return error.TypeMismatch;

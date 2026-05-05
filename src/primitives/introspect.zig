@@ -151,7 +151,7 @@ fn nativeToWord(ctx: *Context) anyerror!void {
     try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
 }
 
-/// type-descriptor ( symbol|type -- mutable-map ) - Look up a type descriptor by name or type value
+/// type-descriptor ( symbol|type -- hash ) - Look up a type descriptor by name or type value
 fn nativeTypeDescriptor(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -160,14 +160,14 @@ fn nativeTypeDescriptor(ctx: *Context) anyerror!void {
                 helpers.setErrorContext(ctx, "no type descriptor for '{s}'", .{tv.name});
                 return error.NameError;
             };
-            try ctx.stack.push(.{ .mutable_map = desc });
+            try ctx.stack.push(.{ .hash = desc });
         },
         .symbol, .string => |name| {
             const desc = ctx.lookupTypeDescriptor(name) orelse {
                 helpers.setErrorContext(ctx, "no type descriptor for '{s}'", .{name});
                 return error.NameError;
             };
-            try ctx.stack.push(.{ .mutable_map = desc });
+            try ctx.stack.push(.{ .hash = desc });
         },
         else => {
             helpers.setTypeMismatchError(ctx, "symbol or type", val);

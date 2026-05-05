@@ -145,8 +145,9 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try generated_words.append(alloc, .{ .string = pred_name });
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
-            try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
-            vtype.type_val.?.descriptor = desc_map;
+            const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
+            try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
+            vtype.type_val.?.descriptor = frozen_desc;
         },
         .mutable_map => |struct_desc| {
             const fields_val = struct_desc.get("fields") orelse return error.MissingField;
@@ -225,8 +226,9 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try generated_words.append(alloc, .{ .string = pred_name });
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
-            try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
-            vtype.type_val.?.descriptor = desc_map;
+            const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
+            try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
+            vtype.type_val.?.descriptor = frozen_desc;
         },
         else => {
             helpers.setErrorContext(ctx, "virtual{{ inner type must be a string or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});

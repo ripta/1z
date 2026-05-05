@@ -70,7 +70,14 @@ struct{: parse-time [
 \\ Virtual type definition syntax.
 \   name: virtual{ inner-type } ;
 virtual{: parse-time [
-  M{ type: virtual: }
+  dup type-of hash =
+  [
+    [ type: virtual: ] make-mutable-map
+    over @keys [ dup [ [ over ] dip @get ] dip swap @set! ] #each
+    swap drop
+  ]
+  [ M{ type: virtual: } ]
+  if
   inner-type: "}" parse-values-until @set!
   define: [ define-virtual ] @set!
 ] ;
@@ -222,14 +229,14 @@ iterator?: ( val -- ? ) [ type-of iterator = ] ;
 float?: ( val -- ? ) [ type-of float = ] ;
 bignum?: ( val -- ? ) [ type-of bignum = ] ;
 
-\\ True for any integer type: fixnum or bignum.
-integer?: ( val -- ? ) [ dup fixnum? swap bignum? or ] ;
-\\ True for any numeric type: fixnum, bignum, float, or ratio (via dispatch).
-number?: generic ( val -- ? ) [ dup fixnum? [ drop t ] [ dup bignum? [ drop t ] [ float? ] if ] if ] ;
-\\ True for exact numeric types: fixnum, bignum, or ratio (via dispatch).
-exact?: generic ( val -- ? ) [ dup fixnum? swap bignum? or ] ;
-\\ True for inexact numeric types: float.
-inexact?: generic ( val -- ? ) [ float? ] ;
+\\ True for any numeric type.
+number?: ( val -- ? ) [ "numeric" type-has-property? ] ;
+\\ True for exact numeric types.
+exact?: ( val -- ? ) [ "exact" type-has-property? ] ;
+\\ True for inexact numeric types.
+inexact?: ( val -- ? ) [ dup number? [ exact? not ] [ drop f ] if ] ;
+\\ True for any integer type.
+integer?: ( val -- ? ) [ "integer" type-has-property? ] ;
 
 \\ Push IEEE 754 NaN (not a number).
 nan: ( -- f ) [ 0.0 0.0 / ] ;

@@ -1,6 +1,6 @@
 Stack: [ ]
 PASS: inspect shows type name
 Stack: [ ]
-Stack: [ M{ type: builtin-type: } ]
+Stack: [ H{ type: builtin-type: } ]
 PASS: descriptor registered
 Stack: [ ]

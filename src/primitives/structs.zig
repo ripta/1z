@@ -178,8 +178,9 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     }
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
-    try ctx.type_descriptors.put(ctx.allocator, name, desc_map);
-    struct_type.type_val.?.descriptor = desc_map;
+    const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
+    try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
+    struct_type.type_val.?.descriptor = frozen_desc;
 }
 
 /// Trampoline helper ( field1 .. fieldN struct-type -- instance )

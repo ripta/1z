@@ -173,7 +173,7 @@ pub const Context = struct {
     /// Enum registry mapping enum names to their variant VirtualType pointers.
     enum_registry: std.StringHashMapUnmanaged([]const *const value_mod.VirtualType) = .{},
     /// Type descriptor registry mapping type names to their descriptor maps.
-    type_descriptors: std.StringHashMapUnmanaged(*value_mod.MutableMap) = .{},
+    type_descriptors: std.StringHashMapUnmanaged(*value_mod.HashTable) = .{},
     /// Mapping from type name to registered TypeValue for built-in types.
     /// Populated by `define-builtin-type`; used by `type-of` for lookup.
     builtin_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
@@ -779,7 +779,7 @@ pub const Context = struct {
     }
 
     /// Look up a type descriptor by type name, walking the parent context chain.
-    pub fn lookupTypeDescriptor(self: *const Context, name: []const u8) ?*value_mod.MutableMap {
+    pub fn lookupTypeDescriptor(self: *const Context, name: []const u8) ?*value_mod.HashTable {
         if (self.type_descriptors.get(name)) |desc| return desc;
 
         var ancestor = self.parent_context;
