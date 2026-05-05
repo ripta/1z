@@ -233,14 +233,11 @@ pub fn freezeModuleGraphOpts(
     ctx.popLocalFrame();
 
     // Phase 3: Build AotWordDesc array
-    const result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, ctx, allocator);
+    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, ctx, allocator);
     if (result.skipped_words.len > 0) {
         diagnostics.missing_stack_effects = result.skipped_words;
-        allocator.free(result.words);
-        for (result.quotations) |q| allocator.free(q.c_name);
-        allocator.free(result.quotations);
-        allocator.free(result.entry_instrs);
-        allocator.free(result.warnings);
+        result.skipped_words = &.{};
+        result.deinit(allocator);
         return error.MissingStackEffects;
     }
 
@@ -898,6 +895,77 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
     try testing.expectEqual(@as(usize, 1), result.skipped_words.len);
     try testing.expectEqual(@as(usize, 0), result.warnings.len);
     try testing.expect(std.mem.eql(u8, result.skipped_words[0], "bar"));
+}
+
+test "freezeModuleGraphOpts cleanup releases pic snapshots when stack effects are missing" {
+    const allocator = testing.allocator;
+
+    // A real Context is needed so pic_cache lookups during buildAotDescs
+    // succeed. Context.deinit later frees the cached PicTable we install.
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Compound body for the cached word. The pointer identity of this
+    // slice is what the cache keys on, so it must outlive both
+    // buildAotDescs and the failure-path cleanup. Allocated on testing
+    // allocator and freed at the end of the test.
+    const compound_instrs = try allocator.alloc(Instruction, 1);
+    defer allocator.free(compound_instrs);
+    compound_instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 0 };
+
+    // Populate ctx.pic_cache so buildAotDescs clones a snapshot for the
+    // compound word with a stack effect. ctx.deinit handles the table.
+    const pt = try allocator.create(pic_mod.PicTable);
+    pt.* = try pic_mod.PicTable.init(allocator, compound_instrs.len);
+    try ctx.pic_cache.put(allocator, @intFromPtr(compound_instrs.ptr), pt);
+
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .warning_entries = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.names.deinit(allocator);
+    defer discovered.defs.deinit(allocator);
+
+    // Word with effect AND a pic_cache entry: snapshot will be cloned.
+    try discovered.names.append(allocator, "foo");
+    try discovered.defs.append(allocator, .{
+        .name = "foo",
+        .action = .{ .compound = compound_instrs },
+        .stack_effect = effect,
+    });
+
+    // Word without effect: triggers the MissingStackEffects path in the
+    // production caller.
+    try discovered.names.append(allocator, "bar");
+    try discovered.defs.append(allocator, .{
+        .name = "bar",
+        .action = .{ .compound = &.{} },
+    });
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, &ctx, allocator);
+
+    // Sanity: foo got a pic snapshot, bar was skipped.
+    try testing.expect(result.words[1].pic_snapshot != null);
+    try testing.expectEqual(@as(usize, 1), result.skipped_words.len);
+
+    // Mirror the freezeModuleGraphOpts failure-path cleanup. testing.allocator
+    // panics on leaks, so a regression in pic_snapshot freeing fails this test.
+    const skipped = result.skipped_words;
+    result.skipped_words = &.{};
+    result.deinit(allocator);
+    allocator.free(skipped);
 }
 
 test "buildAotDescs includes native words with is_prelude and empty instructions" {
