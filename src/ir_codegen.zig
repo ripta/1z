@@ -7477,6 +7477,11 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
 /// jitValidateParamEffects to check quotation arguments on the stack.
 fn emitParamValidation(state: *CompileState, effect_ptr: usize) void {
     if (state.validate_params_fn == c.IR_UNUSED) return;
+    // The effect_ptr is process-local; embedding it as a constant is safe
+    // for in-process JIT but produces a stale address in an AOT binary
+    // that runs in a fresh process. Compile-time effect tracking already
+    // validated the quotation arguments, so skip the runtime double-check.
+    if (state.aot_mode) return;
     const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
         state.preloaded_ctx_val
     else blk: {
