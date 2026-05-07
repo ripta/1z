@@ -7768,6 +7768,22 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
     return 0;
 }
 
+/// Record a structured `word-not-found` failure so `onez_print_error` can
+/// surface the missing name. Used by AOT push-literal callbacks where the
+/// runtime lookup helper returned null. The name is duplicated into the
+/// arena allocator so its lifetime tracks the context, matching the
+/// convention used by other error_details producers.
+fn recordWordNotFound(ctx: *Context, name: []const u8) void {
+    const msg = ctx.arena.allocator().dupe(u8, name) catch return;
+    ctx.error_details.append(ctx.allocator, .{
+        .error_type = "word-not-found",
+        .message = msg,
+        .source = "<aot-runtime>",
+        .line = 0,
+        .word_name = msg,
+    }) catch {};
+}
+
 /// Look up a word by name, falling through to the module cache for
 /// module-private words that plain `lookupWord` cannot reach. Returns
 /// the compound body's instructions, or null when not found / not
@@ -7809,6 +7825,7 @@ export fn jitPushWordLiteral(ctx_raw: usize, name_ptr: usize, name_len: usize) c
     const src: [*]const u8 = @ptrFromInt(name_ptr);
     const name = src[0..name_len];
     const instrs = lookupWordCompoundInstrs(ctx, name) orelse {
+        recordWordNotFound(ctx, name);
         ctx.jit_pending_error = error.WordNotFound;
         return 2;
     };
@@ -7851,6 +7868,7 @@ export fn jitPushStructType(ctx_raw: usize, name_ptr: usize, name_len: usize) ca
     };
 
     const ctor_instrs = lookupWordCompoundInstrs(ctx, ctor_name) orelse {
+        recordWordNotFound(ctx, ctor_name);
         ctx.jit_pending_error = error.WordNotFound;
         return 2;
     };
