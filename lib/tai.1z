@@ -29,7 +29,7 @@ tai-timestamp-nsec: ( tai-timestamp -- nsec )     [ unmake-tai-timestamp tai-nse
 \ line, each line containing POSIX_TIMESTAMP OFFSET separated by
 \ whitespace. Lines starting with # are comments.
 
-(default-leap-table): [
+(default-leap-table): ( -- hash ) [
   H{
     timestamps: {
       63072000    \ 1972-01-01

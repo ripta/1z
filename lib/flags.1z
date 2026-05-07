@@ -50,9 +50,8 @@ define-flag: ( name fields markers -- ) [
   flag-order swap n: swap @set! drop
 ] ;
 
-\ parse-flags ( args description -- result-hash )
 \ Parses command-line arguments according to registered flags.
-parse-flags: [
+parse-flags: ( args description -- result-hash ) [
   sym-to-str: [ >string dup #len 1 - 0 swap #slice ] ;
 
   is-positional-flag: ( name -- ? ) [

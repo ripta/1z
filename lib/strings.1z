@@ -79,8 +79,8 @@ split: ( str delim -- array ) [
   ] if
 ] ;
 
-\ Helper for repeat: ( pattern result n -- pattern result )
-repeat-loop: [
+\ Helper for repeat.
+repeat-loop: ( pattern result n -- pattern result ) [
   dup 0 >
   [
     1 -

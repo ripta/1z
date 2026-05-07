@@ -6,7 +6,7 @@
 memo-cache: define-parameter [ M{ } ] ;
 
 \ Run a quotation with a fresh memo cache, after which the memo is discarded
-with-memo: [
+with-memo: ( quot -- ... ) [
   [ M{ } memo-cache ] dip with-parameter
 ] ;
 

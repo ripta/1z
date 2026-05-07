@@ -226,10 +226,9 @@ monotonic-nanos: ( -- nanos ) [
   clock-monotonic swap 1000000000 * +
 ] ;
 
-\ elapsed ( quot -- ...results duration )
 \ Runs quotation, measures wall time, pushes duration on top.
 \ Quotation results remain on stack below the duration.
-elapsed: [
+elapsed: ( quot -- ... duration ) [
   monotonic-nanos
   [ call ] dip
   monotonic-nanos swap - >duration

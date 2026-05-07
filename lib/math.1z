@@ -65,7 +65,7 @@ float64>bits: ( f -- bits ) [ float>bits ] ;
 bits>float64: ( bits -- f ) [ bits>float ] ;
 
 \ Prepend "0" until the string is 16 characters.
-bits-pad-hex: [
+bits-pad-hex: ( str -- str ) [
   dup #len 16 < [
     "0" swap #append bits-pad-hex
   ] when

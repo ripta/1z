@@ -109,8 +109,7 @@ bind: ( stmt i value -- ) [
   dup (column-count) 0 H{ } (read-hash-loop)
 ] ;
 
-\\ Loop: ( stmt count i hash -- hash )
-(read-hash-loop): [
+(read-hash-loop): ( stmt count i hash -- hash ) [
   over 3 pick-n < [
     3 pick-n 2 pick-n (read-hash-col)
     swap ++ swap (read-hash-loop)
@@ -134,8 +133,7 @@ bind: ( stmt i value -- ) [
   dup (column-count) 0 { } (read-array-loop)
 ] ;
 
-\\ Loop: ( stmt count i array -- array )
-(read-array-loop): [
+(read-array-loop): ( stmt count i array -- array ) [
   over 3 pick-n < [
     3 pick-n 2 pick-n (read-array-col)
     swap ++ swap (read-array-loop)
@@ -188,9 +186,8 @@ step-array: ( stmt -- option ) [
   dup #len 1 swap (bind-loop) 2drop
 ] ;
 
-\\ Loop: ( stmt params i limit -- stmt params )
 \\ i goes from 1 to limit (inclusive). Binds params[i-1] at 1-based index i.
-(bind-loop): [
+(bind-loop): ( stmt params i limit -- stmt params ) [
   2dup > [
     2drop
   ] [

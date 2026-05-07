@@ -175,8 +175,7 @@ regex-match: ( str regex -- option ) [
 
 \ Internal match at arbitrary byte offset.
 \ Returns match-start, match-end, and captures array on match, or f f f on no-match.
-\ ( subject-bytes str code offset -- subject-bytes str code match-start match-end captures )
-(regex-match-at): [
+(regex-match-at): ( subject-bytes str code offset -- subject-bytes str code match-start match-end captures ) [
   \ Stack: sb(3) str(2) code(1) offset(0)
   1 pick-n 0 (match-data-create)
   \ Stack: sb(4) str(3) code(2) offset(1) md(0)
@@ -223,8 +222,7 @@ regex-match: ( str regex -- option ) [
 ] ;
 
 \ Capture extraction loop
-\ ( subject-bytes ovector-bytes i count accum -- array )
-(extract-captures): [
+(extract-captures): ( subject-bytes ovector-bytes i count accum -- array ) [
   \ indices: accum=0 count=1 i=2 ovector=3 subject=4
   2 pick-n 2 pick-n >= [
     \ i >= count: done, return accum
@@ -314,8 +312,7 @@ regex-split: ( str regex -- array ) [
   nip nip nip
 ] ;
 
-\ ( sb str code last-end accum -- sb str code result )
-(regex-split-loop): [
+(regex-split-loop): ( sb str code last-end accum -- sb str code result ) [
   \ Stack: sb(4) str(3) code(2) le(1) acc(0)
   over [ (regex-match-at) ] 2dip
   \ 2dip saves le-copy(top) and acc. After match-at + restore:
@@ -379,8 +376,7 @@ regex-replace-all: ( str regex replacement -- str ) [
   nip nip nip nip
 ] ;
 
-\ ( repl sb str code last-end accum -- repl sb str code result )
-(regex-replace-all-loop): [
+(regex-replace-all-loop): ( repl sb str code last-end accum -- repl sb str code result ) [
   \ Stack: repl(5) sb(4) str(3) code(2) le(1) acc(0)
   over [ (regex-match-at) ] 2dip
   \ 2dip saves le-copy(top) and acc. After restore (le on top, acc below):
@@ -443,8 +439,7 @@ regex-replace-all: ( str regex replacement -- str ) [
 ] ;
 
 \ Named groups extraction loop.
-\ ( match-array table-bytes entry-size i count accum -- hash )
-(named-groups-loop): [
+(named-groups-loop): ( match-array table-bytes entry-size i count accum -- hash ) [
   2 pick-n 2 pick-n >= [
     nip nip nip nip nip
   ] [
