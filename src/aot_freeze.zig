@@ -386,6 +386,26 @@ fn discoverReachableWords(
         .quotation_bodies = .{},
     };
 
+    // Push deps frames for every loaded module so that lookupWord can find
+    // module-private words during BFS. At runtime the executor pushes a
+    // module's deps frame just before running its words; the AOT freeze
+    // walks every word statically, so it needs all loaded modules' deps
+    // visible for the duration of discovery.
+    var pushed_module_frames: usize = 0;
+    {
+        var cache_iter = ctx.module_cache_value.iterator();
+        while (cache_iter.next()) |entry| {
+            if (entry.value_ptr.* == .module) {
+                ctx.pushModuleDepsFrame(entry.value_ptr.*.module) catch continue;
+                pushed_module_frames += 1;
+            }
+        }
+    }
+    defer {
+        var i: usize = 0;
+        while (i < pushed_module_frames) : (i += 1) ctx.popLocalFrame();
+    }
+
     // Seed worklist from entry instructions
     collectCallWords(entry_instrs, "__entry__", &worklist, &seen, &result.warning_entries, &warning_seen, &result.quotation_bodies, &quotation_seen, diagnostics, temp_allocator) catch |err| {
         result.names.deinit(temp_allocator);
@@ -632,6 +652,24 @@ fn hasNeverReturnsMarker(def: WordDefinition) bool {
     return false;
 }
 
+fn hasGenericMarker(def: WordDefinition) bool {
+    for (def.markers) |mk| {
+        if (markers_mod.isGenericMarker(mk)) return true;
+    }
+    return false;
+}
+
+/// Generic words generated from struct/virtual/enum definitions carry an
+/// empty compound body; the actual implementation lives in dispatch table
+/// entries keyed by runtime type. They cannot be compiled directly because
+/// the empty body cannot satisfy a non-trivial declared stack effect, and
+/// even when input_count == output_count the compiled body would silently
+/// no-op rather than dispatching. They must always fall through to
+/// jitInterpretedCall, which then routes through tryDispatchGenericWithPic.
+fn isDispatchOnlyGeneric(def: WordDefinition) bool {
+    return def.action == .compound and def.action.compound.len == 0 and hasGenericMarker(def);
+}
+
 /// Polymorphic struct native words that have no fixed stack_effect but must
 /// be included in the AOT word list for resolver access.
 fn isPolymorphicStructNative(name: []const u8) bool {
@@ -672,6 +710,28 @@ fn buildAotDescs(
         };
         const id = next_id;
         next_id += 1;
+
+        // Generic words with empty compound bodies (struct/virtual/enum
+        // setters, getters, predicates) are runtime-dispatched on type;
+        // their compiled body would either fail to satisfy the declared
+        // effect or silently no-op. Route them through interpreter
+        // dispatch by marking them like natives -- skipped during
+        // compilation, looked up by name at runtime.
+        if (isDispatchOnlyGeneric(def)) {
+            try words.append(allocator, .{
+                .name = name,
+                .instructions = &.{},
+                .input_count = @intCast(effect.concreteInputCount()),
+                .output_count = @intCast(effect.concreteOutputCount()),
+                .word_id = id,
+                .is_prelude = true,
+                .is_native = true,
+                .stack_effect = effect,
+                .never_returns = hasNeverReturnsMarker(def),
+            });
+            continue;
+        }
+
         const pic_snapshot: ?*pic_mod.PicTable = blk: {
             const ictx = ctx orelse break :blk null;
             const key = @intFromPtr(def.action.compound.ptr);

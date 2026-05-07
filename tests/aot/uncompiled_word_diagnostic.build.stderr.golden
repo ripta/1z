@@ -1,5 +1,3 @@
-Error: 2 words could not be compiled to C
+Error: 1 word could not be compiled to C
   word 'do-it': NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word '>>x': NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled

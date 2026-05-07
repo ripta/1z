@@ -263,6 +263,7 @@ fn isSupportedOp(name: []const u8) bool {
     //              instrinsics so they can be compiled with the same fast path instead of dynamic dispatch
     if (std.mem.eql(u8, name, "native.virtual-unwrap")) return true;
     if (std.mem.eql(u8, name, "native.struct-field-get")) return true;
+    if (std.mem.eql(u8, name, "native.struct-field-set")) return true;
     if (std.mem.eql(u8, name, "native.typed-validate-and-promote")) return true;
     if (std.mem.eql(u8, name, "native.make-struct-instance")) return true;
     if (std.mem.eql(u8, name, "native.struct-instance-destructure")) return true;
@@ -280,6 +281,27 @@ fn isStructNativeOp(name: []const u8) bool {
         std.mem.eql(u8, name, "native.struct-instance-to-hash") or
         std.mem.eql(u8, name, "native.struct-type-predicate") or
         std.mem.eql(u8, name, "native.hash-to-struct");
+}
+
+/// Native helpers whose preceding fixnum literal is a process-local
+/// VirtualType pointer. In AOT, those pointers are baked from the build
+/// process and become invalid in the generated binary's runtime process, so
+/// callers must fall back to the interpreter.
+fn isRuntimeVirtualPtrNative(name: []const u8) bool {
+    return std.mem.eql(u8, name, "native.virtual-wrap") or
+        std.mem.eql(u8, name, "native.virtual-unwrap") or
+        std.mem.eql(u8, name, "native.virtual-type-predicate") or
+        std.mem.eql(u8, name, "native.virtual-struct-wrap") or
+        std.mem.eql(u8, name, "native.virtual-struct-unwrap") or
+        std.mem.eql(u8, name, "native.virtual-struct-to-hash") or
+        std.mem.eql(u8, name, "native.virtual-struct-hash-wrap") or
+        std.mem.eql(u8, name, "native.virtual-parameterized-wrap") or
+        std.mem.eql(u8, name, "native.typed-validate-and-promote") or
+        std.mem.eql(u8, name, "native.typed-validate-seq-elements") or
+        std.mem.eql(u8, name, "native.typed-nth-mut-dispatch") or
+        std.mem.eql(u8, name, "native.typed-at-set-mut-dispatch") or
+        std.mem.eql(u8, name, "native.typed-at-remove-mut-dispatch") or
+        std.mem.eql(u8, name, "native.typed-freeze-dispatch");
 }
 
 fn isBinaryOp(name: []const u8) bool {
@@ -1261,6 +1283,28 @@ fn emitCopyFromPtr(ctx: *c.ir_ctx, base_addr: c.ir_ref, src_ptr: c.ir_ref, dest_
         const byte_val = c._ir_LOAD(ctx, c.IR_U8, src_addr);
         const dest_off = dest_slot * ValueLayout.value_size + offset;
         const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, dest_off));
+        c._ir_STORE(ctx, dest_addr, byte_val);
+    }
+}
+
+/// Copy a full Value's raw bytes from a physical stack slot into a runtime pointer.
+fn emitCopyToPtr(ctx: *c.ir_ctx, base_addr: c.ir_ref, src_slot: usize, dest_ptr: c.ir_ref) void {
+    const num_words = ValueLayout.value_size / 8;
+    var i: usize = 0;
+    while (i < num_words) : (i += 1) {
+        const offset = i * 8;
+        const src_off = src_slot * ValueLayout.value_size + offset;
+        const src_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, src_off));
+        const word_val = c._ir_LOAD(ctx, c.IR_U64, src_addr);
+        const dest_addr = if (offset == 0) dest_ptr else c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_ptr, c.ir_const_addr(ctx, offset));
+        c._ir_STORE(ctx, dest_addr, word_val);
+    }
+    var offset = num_words * 8;
+    while (offset < ValueLayout.value_size) : (offset += 1) {
+        const src_off = src_slot * ValueLayout.value_size + offset;
+        const src_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, src_off));
+        const byte_val = c._ir_LOAD(ctx, c.IR_U8, src_addr);
+        const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_ptr, c.ir_const_addr(ctx, offset));
         c._ir_STORE(ctx, dest_addr, byte_val);
     }
 }
@@ -3383,6 +3427,106 @@ fn tryEmitInlineStructFieldGet(
     return true;
 }
 
+/// Try to emit inline IR for struct field assignment.
+///
+/// Attempts to recognize the pattern:
+///
+///     push_literal(.struct_type)
+///     push_literal(.fixnum=idx)
+///     call_word("native.struct-field-set")
+///
+/// Stack effect: ( instance new-val -- instance ). The struct_type pointer
+/// and field index are inline literals from the dispatch body; the runtime
+/// helper sees them on the stack as `instance new-val vtype-ptr field-index`
+/// and pops all four.
+///
+/// Bails to the generic dispatch fallback when the struct has typed fields,
+/// since runtime type validation isn't inlined here.
+///
+/// Returns true if inlined; or false to fall back to runtime callback.
+fn tryEmitInlineStructFieldSet(
+    state: *CompileState,
+    instructions: []const Instruction,
+    idx: usize,
+    stack: []StackEntry,
+    sp: *usize,
+) bool {
+    if (sp.* < 4) return false;
+    if (idx < 2) return false;
+
+    // struct_type pointer must be a const from two instructions back
+    const struct_type_ptr: *const StructType = switch (instructions[idx - 2].op) {
+        .push_literal => |v| if (v == .struct_type) v.struct_type else return false,
+        else => return false,
+    };
+
+    // field index must be a const fixnum from the preceding instruction
+    const field_index: usize = switch (instructions[idx - 1].op) {
+        .push_literal => |v| if (v == .fixnum) @as(usize, @intCast(v.fixnum)) else return false,
+        else => return false,
+    };
+
+    // Typed fields require a runtime type check the inline path doesn't emit.
+    if (struct_type_ptr.field_types.len != 0) return false;
+
+    // Flush all four call inputs (instance, new_val, vtype-ptr literal,
+    // field-index literal) to physical slots so they're addressable as
+    // raw bytes for the field copy. After flush every entry [0..sp) is a
+    // raw_at_slot indexing its own position; row_region cannot reach this
+    // path because the dispatch site already gates it.
+    materializeQuotations(state, stack, sp.*) catch return false;
+    flushToPhysicalStack(state, stack, sp.*);
+
+    const instance_slot = sp.* - 4;
+    const new_val_slot = sp.* - 3;
+
+    sp.* -= 4;
+
+    StructInstanceLayout.ensureInit();
+
+    const ctx = state.ctx;
+    const base_addr = state.base_addr;
+
+    // check Value at instance_slot must be .struct_instance
+    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, instance_slot * ValueLayout.value_size));
+    if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+        emitTagCheckOrError(state, elem_addr, state.struct_instance_tag_const, state.type_mismatch_error_fn);
+    } else {
+        emitTagCheck(ctx, elem_addr, state.struct_instance_tag_const, state.tag_offset_const, state.bail_status);
+    }
+
+    // load *StructInstance from Value
+    const si_ptr = emitUnboxPtr(ctx, elem_addr, state.payload_offset_const);
+
+    // check si_ptr.struct_type must match expected type
+    const type_field_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), si_ptr, c.ir_const_addr(ctx, StructInstanceLayout.struct_type_offset));
+    const actual_type = c._ir_LOAD(ctx, c.IR_ADDR, type_field_addr);
+    const expected_type = c.ir_const_addr(ctx, @intFromPtr(struct_type_ptr));
+    const type_mismatch = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), actual_type, expected_type);
+    const if_mismatch = c._ir_IF(ctx, type_mismatch);
+    c._ir_IF_TRUE_cold(ctx, if_mismatch);
+    if (state.type_mismatch_error_fn != c.IR_UNUSED) {
+        emitErrorReturn(state, state.type_mismatch_error_fn);
+    } else {
+        c._ir_RETURN(ctx, state.bail_status);
+    }
+    c._ir_IF_FALSE(ctx, if_mismatch);
+
+    const fields_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), si_ptr, c.ir_const_addr(ctx, StructInstanceLayout.fields_ptr_offset));
+    const fields_ptr = c._ir_LOAD(ctx, c.IR_ADDR, fields_ptr_addr);
+
+    // index into fields [fields_ptr + field_index * value_size]
+    const field_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), fields_ptr, c.ir_const_addr(ctx, field_index * ValueLayout.value_size));
+
+    // copy new_val from stack into struct field
+    emitCopyToPtr(ctx, base_addr, new_val_slot, field_addr);
+
+    // instance remains as the output (its slot is unchanged)
+    stack[sp.*] = .{ .raw_at_slot = instance_slot };
+    sp.* += 1;
+    return true;
+}
+
 /// Emit the body of the `choose` built-in when compiled as a standalone word.
 /// All three parameters (a1, a2, quot) are raw_at_slot entries.
 /// choose: ( a1 a2 quot -- a )
@@ -4705,6 +4849,10 @@ fn compileInstructions(
                     sp.* = ic;
                     resetStackToPhysical(stack, sp.*);
                 } else if (std.mem.eql(u8, name, "native.virtual-unwrap")) {
+                    if (state.aot_mode) {
+                        state.not_compilable_reason = .non_serializable_literal;
+                        return IrCodegenError.NotCompilable;
+                    }
                     if (!tryEmitInlineVirtualUnwrap(state, instructions, idx, stack, sp)) {
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
@@ -4712,7 +4860,15 @@ fn compileInstructions(
                     if (!tryEmitInlineStructFieldGet(state, instructions, idx, stack, sp)) {
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
+                } else if (std.mem.eql(u8, name, "native.struct-field-set")) {
+                    if (!tryEmitInlineStructFieldSet(state, instructions, idx, stack, sp)) {
+                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
+                    }
                 } else if (std.mem.eql(u8, name, "native.typed-validate-and-promote")) {
+                    if (state.aot_mode) {
+                        state.not_compilable_reason = .non_serializable_literal;
+                        return IrCodegenError.NotCompilable;
+                    }
                     if (!tryEmitInlineTypedValidateAndPromote(state, instructions, idx, stack, sp)) {
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
@@ -4727,6 +4883,9 @@ fn compileInstructions(
                     std.mem.eql(u8, name, "native.hash-to-struct"))
                 {
                     try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
+                } else if (state.aot_mode and isRuntimeVirtualPtrNative(name)) {
+                    state.not_compilable_reason = .non_serializable_literal;
+                    return IrCodegenError.NotCompilable;
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
                     const res = state.resolver orelse {
@@ -7604,35 +7763,61 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
     return 0;
 }
 
+/// Look up a word by name, falling through to the module cache for
+/// module-private words that plain `lookupWord` cannot reach. Returns
+/// the compound body's instructions, or null when not found / not
+/// compound. Shared by AOT runtime callbacks that need to read literal
+/// payloads out of word definitions.
+fn lookupWordCompoundInstrs(ctx: *Context, name: []const u8) ?[]const Instruction {
+    if (ctx.lookupWord(name)) |word| {
+        switch (word.action) {
+            .compound => |instrs| return instrs,
+            .native, .host_callback => {},
+        }
+    }
+    var iter = ctx.module_cache_value.iterator();
+    while (iter.next()) |entry| {
+        if (entry.value_ptr.* != .module) continue;
+        const module = entry.value_ptr.*.module;
+        if (module.words.get(name)) |mw| {
+            switch (mw.action) {
+                .compound => |instrs| return instrs,
+                .native, .host_callback => {},
+            }
+        }
+    }
+    return null;
+}
+
 /// Push a word's literal value onto the stack. The word must be a single
 /// push_literal instruction (type words, enum variants, parameter definitions).
 /// The name is at `name_ptr` with length `name_len`. The runtime looks up the
 /// word in the dictionary and pushes its literal value.
+///
+/// Falls through to `module_cache_value` on `lookupWord` miss because
+/// enum variants and parameter words for module-private definitions live in
+/// `module.words` and are not visible to plain `lookupWord` from inside
+/// AOT-to-AOT direct calls.
 export fn jitPushWordLiteral(ctx_raw: usize, name_ptr: usize, name_len: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(name_ptr);
     const name = src[0..name_len];
-    const word = ctx.lookupWord(name) orelse {
+    const instrs = lookupWordCompoundInstrs(ctx, name) orelse {
         ctx.jit_pending_error = error.WordNotFound;
         return 2;
     };
-    switch (word.action) {
-        .compound => |instrs| {
-            if (instrs.len == 1) {
-                switch (instrs[0].op) {
-                    .push_literal => |val| {
-                        ctx.stack.push(val) catch {
-                            ctx.jit_pending_error = error.OutOfMemory;
-                            return 2;
-                        };
-                        return 0;
-                    },
-                    else => {},
-                }
-            }
-        },
-        .native, .host_callback => {},
+    if (instrs.len == 1) {
+        switch (instrs[0].op) {
+            .push_literal => |val| {
+                ctx.stack.push(val) catch {
+                    ctx.jit_pending_error = error.OutOfMemory;
+                    return 2;
+                };
+                return 0;
+            },
+            else => {},
+        }
     }
     ctx.jit_pending_error = error.TypeMismatch;
     return 2;
@@ -7642,6 +7827,11 @@ export fn jitPushWordLiteral(ctx_raw: usize, name_ptr: usize, name_len: usize) c
 /// "make-{name}" and extracting the struct_type from its first instruction.
 /// Used by AOT-compiled struct words whose struct_type pointer is only valid
 /// at compile time.
+///
+/// Falls through to `module_cache_value` on `lookupWord` miss because
+/// constructor words for module-private struct definitions live in
+/// `module.words` and are not visible to plain `lookupWord` from inside
+/// AOT-to-AOT direct calls.
 export fn jitPushStructType(ctx_raw: usize, name_ptr: usize, name_len: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -7655,28 +7845,24 @@ export fn jitPushStructType(ctx_raw: usize, name_ptr: usize, name_len: usize) ca
         return 2;
     };
 
-    const word = ctx.lookupWord(ctor_name) orelse {
+    const ctor_instrs = lookupWordCompoundInstrs(ctx, ctor_name) orelse {
         ctx.jit_pending_error = error.WordNotFound;
         return 2;
     };
-    switch (word.action) {
-        .compound => |instrs| {
-            if (instrs.len >= 1) {
-                switch (instrs[0].op) {
-                    .push_literal => |val| {
-                        if (val == .struct_type) {
-                            ctx.stack.push(val) catch {
-                                ctx.jit_pending_error = error.OutOfMemory;
-                                return 2;
-                            };
-                            return 0;
-                        }
-                    },
-                    else => {},
+
+    if (ctor_instrs.len >= 1) {
+        switch (ctor_instrs[0].op) {
+            .push_literal => |val| {
+                if (val == .struct_type) {
+                    ctx.stack.push(val) catch {
+                        ctx.jit_pending_error = error.OutOfMemory;
+                        return 2;
+                    };
+                    return 0;
                 }
-            }
-        },
-        .native, .host_callback => {},
+            },
+            else => {},
+        }
     }
     ctx.jit_pending_error = error.TypeMismatch;
     return 2;
@@ -7833,6 +8019,74 @@ export fn jitTypeMismatchError(ctx_raw: usize) callconv(.c) i32 {
     return setJitError(ctx_raw, error.TypeMismatch);
 }
 
+const ModuleWordHit = struct {
+    word: value_mod.ModuleWord,
+    module: *const value_mod.Module,
+};
+
+/// Resolve a module-private word that `ctx.lookupWord` cannot see.
+///
+/// Two paths:
+///   - Qualified `module.word`: look up the module value (which may be a
+///     `const`-style word whose first instruction pushes the module
+///     literal, like `native`), and return its `words.get(word)`.
+///   - Bare `name`: walk the module cache and return the first
+///     module that has `name` in its private `words` table.
+///
+/// Used by AOT runtime callbacks that must reach module-private words
+/// (constructors like `make-stdio-opts`, internal helpers like
+/// `(stdio-opts>native)`, qualified natives like `native.make-struct-instance`).
+/// The hot path is `ctx.lookupWord`; this is the slow-path fallback.
+fn lookupAnyModuleWord(ctx: *Context, word_name: []const u8) ?ModuleWordHit {
+    if (std.mem.lastIndexOfScalar(u8, word_name, '.')) |dot_index| {
+        const module_path = word_name[0..dot_index];
+        const suffix = word_name[dot_index + 1 ..];
+        if (module_path.len == 0 or suffix.len == 0) return null;
+
+        const module_word = ctx.lookupWord(module_path) orelse return null;
+        const instrs = switch (module_word.action) {
+            .compound => |compound| compound,
+            .native, .host_callback => return null,
+        };
+        if (instrs.len == 0) return null;
+
+        const module = switch (instrs[0].op) {
+            .push_literal => |val| switch (val) {
+                .module => |m| m,
+                else => return null,
+            },
+            else => return null,
+        };
+
+        if (module.words.get(suffix)) |mw| return .{ .word = mw, .module = module };
+        return null;
+    }
+
+    var iter = ctx.module_cache_value.iterator();
+    while (iter.next()) |entry| {
+        if (entry.value_ptr.* != .module) continue;
+        const module = entry.value_ptr.*.module;
+        if (module.words.get(word_name)) |mw| return .{ .word = mw, .module = module };
+    }
+    return null;
+}
+
+/// Run a module-private word resolved via `lookupAnyModuleWord`. Pushes
+/// the owning module's deps frame so any references inside the word's
+/// body (other module-private helpers, struct types, etc.) resolve.
+fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
+    try ctx.pushModuleDepsFrame(hit.module);
+    defer ctx.popModuleDepsFrameTraced(hit.module);
+    switch (hit.word.action) {
+        .native => |func| try func(ctx),
+        .host_callback => |host| {
+            const rc = host.callback(host.handle, host.user_data);
+            if (rc != 0) return error.HostCallbackFailed;
+        },
+        .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+    }
+}
+
 export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -7856,57 +8110,58 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
     if (bail_stats_mod.enabled) {
         bail_stats_mod.global.recordInterpretedCall(word_id, word_name);
     }
-    const word = ctx.lookupWord(word_name) orelse return 1;
 
     ctx.pushCallFrame(word_name, ctx.current_source, @intCast(line_raw), 0);
+    const looked_up_word = ctx.lookupWord(word_name);
+    const module_hit = if (looked_up_word == null) lookupAnyModuleWord(ctx, word_name) else null;
 
-    if (word.stack_effect) |effect| {
-        ctx.validateParameterEffects(&effect) catch |err| {
-            ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
-            return 2;
-        };
-        if (!shouldSkipTypeAnnotationValidation(word)) {
-            ctx.validateTypeAnnotations(&effect) catch |err| {
+    const result = if (looked_up_word) |word| blk: {
+        if (word.stack_effect) |effect| {
+            ctx.validateParameterEffects(&effect) catch |err| {
                 ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
                 return 2;
             };
-        }
-    }
-
-    if (word.action == .compound) {
-        const has_generic = for (word.markers) |mk| {
-            if (markers_mod.isGenericMarker(mk)) break true;
-        } else false;
-
-        if (has_generic) {
-            const dispatch_pic: ?*pic_mod.PolymorphicCache = blk: {
-                const em = ctx.jit_dispatch.getMut(word_id) orelse break :blk null;
-                if (em.dispatch_pic) |p| break :blk p;
-                const p = ctx.allocator.create(pic_mod.PolymorphicCache) catch break :blk null;
-                p.* = .{};
-                em.dispatch_pic = p;
-                break :blk p;
-            };
-            const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
-                return 2;
-            };
-            if (dispatched) {
-                ctx.wordSuccessCleanup(word_name, null) catch |err| {
-                    ctx.jit_pending_error = err;
+            if (!shouldSkipTypeAnnotationValidation(word)) {
+                ctx.validateTypeAnnotations(&effect) catch |err| {
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
                     return 2;
                 };
-                return 0;
-            }
-            if (word.action.compound.len == 0) {
-                ctx.setGenericDispatchErrorDetails(word_name, word.stack_effect);
-                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, error.TypeError);
-                return 2;
             }
         }
-    }
 
-    const result = blk: {
+        if (word.action == .compound) {
+            const has_generic = for (word.markers) |mk| {
+                if (markers_mod.isGenericMarker(mk)) break true;
+            } else false;
+
+            if (has_generic) {
+                const dispatch_pic: ?*pic_mod.PolymorphicCache = blk2: {
+                    const em = ctx.jit_dispatch.getMut(word_id) orelse break :blk2 null;
+                    if (em.dispatch_pic) |p| break :blk2 p;
+                    const p = ctx.allocator.create(pic_mod.PolymorphicCache) catch break :blk2 null;
+                    p.* = .{};
+                    em.dispatch_pic = p;
+                    break :blk2 p;
+                };
+                const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                    return 2;
+                };
+                if (dispatched) {
+                    ctx.wordSuccessCleanup(word_name, null) catch |err| {
+                        ctx.jit_pending_error = err;
+                        return 2;
+                    };
+                    return 0;
+                }
+                if (word.action.compound.len == 0) {
+                    ctx.setGenericDispatchErrorDetails(word_name, word.stack_effect);
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, error.TypeError);
+                    return 2;
+                }
+            }
+        }
+
         if (word.source_file) |sf| ctx.current_source = sf;
         if (word.source_module) |mod| {
             switch (word.action) {
@@ -7933,6 +8188,10 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                 .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot),
             };
         }
+    } else if (module_hit) |hit| blk: {
+        break :blk invokeModuleWord(ctx, hit);
+    } else {
+        return 1;
     };
 
     if (result) |_| {
@@ -7940,7 +8199,8 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
             ctx.jit_pending_error = err;
             return 2;
         };
-        ctx.wordSuccessCleanup(word_name, word.stack_effect) catch |err| {
+        const cleanup_effect = if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null;
+        ctx.wordSuccessCleanup(word_name, cleanup_effect) catch |err| {
             ctx.jit_pending_error = err;
             return 2;
         };
@@ -9326,6 +9586,103 @@ test "inline struct-field-get returns error_propagate on wrong struct type" {
     var values = [_]Value{ .{ .struct_instance = &instance }, .unit, .unit, .unit };
     var sp: usize = 1;
     try testing.expectEqual(@as(i32, 2), callCompiledValues(func, &values, &sp));
+}
+
+test "compile inline struct-field-set field 0" {
+    var st = StructType{ .name = "point", .fields = &.{ "x", "y" } };
+    var fields = [_]Value{ .{ .fixnum = 42 }, .{ .fixnum = 99 } };
+    var instance = StructInstance{ .struct_type = &st, .fields = &fields };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .struct_instance = &instance } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .struct_type = &st } }, .line = 3 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 4 },
+        .{ .op = .{ .call_word = "native.struct-field-set" }, .line = 5 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .struct_instance);
+    try testing.expectEqual(&instance, values[0].struct_instance);
+    try testing.expect(fields[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 7), fields[0].fixnum);
+    try testing.expectEqual(@as(i64, 99), fields[1].fixnum);
+}
+
+test "compile inline struct-field-set field 1" {
+    var st = StructType{ .name = "point", .fields = &.{ "x", "y" } };
+    var fields = [_]Value{ .{ .fixnum = 42 }, .{ .fixnum = 99 } };
+    var instance = StructInstance{ .struct_type = &st, .fields = &fields };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .struct_instance = &instance } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 123 } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .struct_type = &st } }, .line = 3 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 4 },
+        .{ .op = .{ .call_word = "native.struct-field-set" }, .line = 5 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .struct_instance);
+    try testing.expectEqual(@as(i64, 42), fields[0].fixnum);
+    try testing.expectEqual(@as(i64, 123), fields[1].fixnum);
+}
+
+test "inline struct-field-set returns error_propagate on non-struct value" {
+    var st = StructType{ .name = "point", .fields = &.{ "x", "y" } };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .struct_type = &st } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 3 },
+        .{ .op = .{ .call_word = "native.struct-field-set" }, .line = 4 },
+    };
+
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .fixnum = 123 }, .unit, .unit, .unit };
+    var sp: usize = 1;
+    try testing.expectEqual(@as(i32, 2), callCompiledValues(func, &values, &sp));
+}
+
+test "inline struct-field-set returns error_propagate on wrong struct type" {
+    var st_a = StructType{ .name = "point", .fields = &.{ "x", "y" } };
+    var st_b = StructType{ .name = "color", .fields = &.{ "r", "g" } };
+    var fields = [_]Value{ .{ .fixnum = 42 }, .{ .fixnum = 99 } };
+    var instance = StructInstance{ .struct_type = &st_a, .fields = &fields };
+
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .struct_type = &st_b } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 3 },
+        .{ .op = .{ .call_word = "native.struct-field-set" }, .line = 4 },
+    };
+
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values = [_]Value{ .{ .struct_instance = &instance }, .unit, .unit, .unit };
+    var sp: usize = 1;
+    try testing.expectEqual(@as(i32, 2), callCompiledValues(func, &values, &sp));
+    // Fields must NOT have been mutated since we error before the store
+    try testing.expectEqual(@as(i64, 42), fields[0].fixnum);
 }
 
 test "compile inline typed-validate-and-promote with fixnum" {

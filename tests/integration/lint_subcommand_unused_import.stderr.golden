@@ -1,3 +1,3 @@
 tests/fixtures/lint/unused-import.1z:1:1: warning: [unused-import] no words from "ranges" are used in this file
-tests/fixtures/lint/unused-import.1z:2:1: info: [broad-import] only 1 of 10 words from "strings" are used; consider selective import
+tests/fixtures/lint/unused-import.1z:2:1: info: [broad-import] only 1 of 12 words from "strings" are used; consider selective import
 tests/fixtures/lint/unused-import.1z:5:38: info: [dead-definition] definition is not referenced by any other checked-file word

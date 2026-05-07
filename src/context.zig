@@ -3859,7 +3859,15 @@ pub const Context = struct {
                             }
                             const saved_source = self.current_source;
                             if (word.source_file) |sf| self.current_source = sf;
-                            const jit_result = ir_codegen.executeCompiled(self, wid);
+                            const jit_result = if (word.source_module) |mod| blk: {
+                                self.pushModuleDepsFrame(mod) catch |err| {
+                                    self.current_source = saved_source;
+                                    self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                                    return self.wordErrorCleanup(name, err);
+                                };
+                                defer self.popModuleDepsFrameTraced(mod);
+                                break :blk ir_codegen.executeCompiled(self, wid);
+                            } else ir_codegen.executeCompiled(self, wid);
                             self.current_source = saved_source;
                             if (self.trace.trace_jit) {
                                 var tw = trace_mod.TraceWriter.init();

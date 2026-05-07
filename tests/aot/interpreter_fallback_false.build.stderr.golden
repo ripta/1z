@@ -18,13 +18,15 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: --interpreter-fallback=false requires all words to compile; 36 words need the interpreter
+Error: --interpreter-fallback=false requires all words to compile; 50 words need the interpreter
   word '>option:some' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
   word 'option:some>' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
   word '>result:err' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'ordering:lt?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word '#all' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
   word 'times' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
@@ -39,10 +41,14 @@ Error: --interpreter-fallback=false requires all words to compile; 36 words need
       hint: blocked until row-variable stack regions can be modeled
   word 'make-result:ok' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'on:unhandled-error?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'native?' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
   word 'bytes-alloc-ptr' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'on:module-loaded?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'unmake-result:err' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
   word 'result:err>' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
@@ -59,6 +65,8 @@ Error: --interpreter-fallback=false requires all words to compile; 36 words need
       hint: blocked until the called word is in the AOT compilation set
   word '1check' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
+  word 'result:err?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'defined?' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
   word 'tri' (prelude): NC.8: a quotation in abstract form must become a concrete runtime value
@@ -69,20 +77,40 @@ Error: --interpreter-fallback=false requires all words to compile; 36 words need
       hint: blocked until the called word is in the AOT compilation set
   word '>word-info' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'ordering:eq?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'option:some?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'loop' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
+  word 'option:some>hash' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'cmp' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'result:err>hash' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word '#any' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'ordering:gt?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'on:word-defined?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'make-result:err' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'option:none?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'while' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
+  word 'on:exit?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'result:ok?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'pragma-get?' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
   word 'drop-at' (prelude): NC.17: indexed stack access targets the symbolic row region
       hint: only literal depths into known stack slots above the row are supported
+  word 'result:ok>hash' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word '>result:ok' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
   word 'case' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)

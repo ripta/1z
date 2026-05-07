@@ -121,19 +121,25 @@ zig>ffi-type: ( zig-type -- ffi-type ) [
   2dup split
   \ Stack: str delim parts
   dup #len 1 = [
-    \ No delimiter found
-    -rot> 2drop
-    "" 2 array-n
+    \ No delimiter found: keep parts as before, "" as after.
+    \ Stack: str delim parts ""
+    ""
   ] [
     \ Last element is after the final delimiter
     dup #last swap
     dup #len 1 - #take
     \ Rejoin everything before the last delimiter
     2 pick-n #join
-    \ Stack: str delim before after
-    swap 2 array-n
-    -rot> 2drop
+    \ Stack: str delim last before-joined
+    swap
+    \ Stack: str delim before-joined last
   ] if
+  \ Stack after if: str delim before after
+  \ Drop str and delim from below; array-n must be the last op since
+  \ it leaves a symbolic row region the abstract stack can't see past.
+  2 <rot-n drop
+  2 <rot-n drop
+  2 array-n
 ] ;
 
 \\ Parse a "pub extern fn" line into a declaration hash.
@@ -178,9 +184,10 @@ zig>ffi-type: ( zig-type -- ffi-type ) [
   \ Strip trailing comma if present
   dup #last "," = [ dup #len 1 - #take ] when
 
-  \ Split on " = " to strip default initializer
-  " = " split-once? dup option:some?
-  [ option:some> 0 #nth ]
+  \ Split on " = " to strip default initializer.
+  \ Both branches must leave the line string on the stack.
+  dup " = " split-once? dup option:some?
+  [ option:some> 0 #nth nip ]
   [ drop ]
   if
 
@@ -230,17 +237,17 @@ zig>ffi-type: ( zig-type -- ffi-type ) [
 \\ Collect struct fields from lines starting at index i.
 \\ Reads lines until "};" and advances i past it.
 (collect-struct-fields): ( lines i name fields-vec -- lines next-i name fields-vec ) [
-  \ Check if current line is "};"
-  [ 3 pick-n 3 pick-n #nth trim "};" = not ] [
-    \ Get current line
-    3 pick-n 3 pick-n #nth
+  \ Internal loop layout keeps i at top so increment is `1 +` rather than
+  \ a nested-dip that the AOT compiler can't track through row variables.
+  2 <rot-n
+  [ 3 pick-n 1 pick-n #nth trim "};" = not ] [
+    3 pick-n 1 pick-n #nth
     (parse-struct-field)
-    over swap #push! drop
-    \ Advance i: swap name and i, increment, swap back
-    [ [ 1 + ] dip ] dip
+    2 pick-n swap #push! drop
+    1 +
   ] while
-  \ Advance past "};"
-  [ [ 1 + ] dip ] dip
+  1 +
+  2 rot-n>
 ] ;
 
 \\ Parse an opaque type line into a declaration hash.
@@ -308,14 +315,15 @@ zig>ffi-type: ( zig-type -- ffi-type ) [
 
 \\ Collect enum variants from lines starting at index i.
 (collect-enum-variants): ( lines i name variants-vec -- lines next-i name variants-vec ) [
-  [ 3 pick-n 3 pick-n #nth trim "};" = not ] [
-    3 pick-n 3 pick-n #nth
+  2 <rot-n
+  [ 3 pick-n 1 pick-n #nth trim "};" = not ] [
+    3 pick-n 1 pick-n #nth
     (parse-enum-variant)
-    dup [ over swap #push! drop ] [ drop ] if
-    [ [ 1 + ] dip ] dip
+    dup [ 2 pick-n swap #push! drop ] [ drop ] if
+    1 +
   ] while
-  \ Advance past "};"
-  [ [ 1 + ] dip ] dip
+  1 +
+  2 rot-n>
 ] ;
 
 \ --- Line classification helpers ---
@@ -361,7 +369,6 @@ translate-c-decls: ( header-path flags -- decls ) [
   swap 1array #append
   " " #join
   " | awk '/^pub extern fn /{print} /^pub const .* = (extern struct |opaque \\{\\}|enum\\(c_int\\) )/{b=1} b{print} /^\\};/{b=0}'" #append
-  >shell-safe unmake-shell-safe
   1array
   { "/bin/sh" "-c" } swap #append
   <stdio-opts> capture-stdout

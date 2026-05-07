@@ -1,4 +1,4 @@
-Prelude compilation: 289/325 words compiled (88.9%)
+Prelude compilation: 249/299 words compiled (83.3%)
   word '>option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -8,6 +8,9 @@ Prelude compilation: 289/325 words compiled (88.9%)
   word '>result:err' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'ordering:lt?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word '#all' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -29,12 +32,18 @@ Prelude compilation: 289/325 words compiled (88.9%)
   word 'make-result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'on:unhandled-error?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'native?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
   word 'bytes-alloc-ptr' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'on:module-loaded?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'unmake-result:err' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -59,6 +68,9 @@ Prelude compilation: 289/325 words compiled (88.9%)
   word '1check' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
+  word 'result:err?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'defined?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -74,27 +86,57 @@ Prelude compilation: 289/325 words compiled (88.9%)
   word '>word-info' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'ordering:eq?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'option:some?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'loop' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
+  word 'option:some>hash' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'cmp' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'result:err>hash' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word '#any' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'ordering:gt?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'on:word-defined?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'make-result:err' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
+  word 'option:none?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'while' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
+  word 'on:exit?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
+  word 'result:ok?' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
   word 'drop-at' cannot be compiled
       NC.17: indexed stack access targets the symbolic row region
       hint: only literal depths into known stack slots above the row are supported
+  word 'result:ok>hash' cannot be compiled
+      NC.4: word pushes a value that cannot be embedded in an AOT binary
+      hint: blocked until AOT literals can be serialized
   word '>result:ok' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
