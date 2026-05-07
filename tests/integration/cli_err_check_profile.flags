@@ -1,0 +1,4 @@
+@raw
+check
+--profile
+{file}

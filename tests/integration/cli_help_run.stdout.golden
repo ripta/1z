@@ -26,3 +26,4 @@ Execution options:
   -b, --benchmark           Enable benchmarking
   --benchmark=verbose       Benchmark with human-readable output
   --benchmark=json          Benchmark with JSON output
+  --profile                 Collect per-word wall-time samples

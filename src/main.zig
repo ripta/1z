@@ -14,12 +14,15 @@ const Value = value_mod.Value;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
 const benchmark = @import("benchmark.zig");
+const profile = @import("profile.zig");
 const debugger_mod = @import("debugger/mod.zig");
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
 const hooks = @import("primitives/hooks.zig");
 const LineEditor = @import("line_editor.zig").LineEditor;
 const BenchmarkStats = benchmark.BenchmarkStats;
 const BenchmarkConfig = benchmark.BenchmarkConfig;
+const ProfileStats = profile.ProfileStats;
+const ProfileConfig = profile.ProfileConfig;
 const CountingAllocator = benchmark.CountingAllocator;
 const memory_limit = @import("memory_limit.zig");
 const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
@@ -207,6 +210,7 @@ const ExecutionFlags = struct {
     show_stack: bool = false,
     verbosity: Verbosity = .normal,
     bench_config: BenchmarkConfig = .{},
+    profile_config: ProfileConfig = .{},
     debug_mode: bool = false,
     initial_breakpoints: [16][]const u8 = undefined,
     initial_breakpoint_count: usize = 0,
@@ -294,6 +298,10 @@ fn parseExecutionFlag(
     if (std.mem.eql(u8, arg, "--benchmark=json")) {
         state.bench_config.enabled = true;
         state.bench_config.output = .json;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--profile")) {
+        state.profile_config.enabled = true;
         return .consumed;
     }
     if (std.mem.eql(u8, arg, "--debug")) {
@@ -476,6 +484,7 @@ const execution_flags_help =
     \\  -b, --benchmark           Enable benchmarking
     \\  --benchmark=verbose       Benchmark with human-readable output
     \\  --benchmark=json          Benchmark with JSON output
+    \\  --profile                 Collect per-word wall-time samples
 ;
 
 const global_flags_help =
@@ -529,7 +538,7 @@ fn printCheckHelp() void {
     w.writeAll("Usage: 1z check [options] <file>\n\n") catch {};
     w.writeAll("Run static analysis on a 1z source file without executing it.\n\n") catch {};
     w.writeAll("The following execution flags are NOT accepted by `check`:\n") catch {};
-    w.writeAll("  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json\n\n") catch {};
+    w.writeAll("  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
@@ -592,6 +601,7 @@ const ExecutionContext = struct {
     gpa: std.mem.Allocator,
     mem_limit: *MemoryLimitAllocator,
     bench_stats: *BenchmarkStats,
+    profile_stats: *ProfileStats,
     counting_allocator: *CountingAllocator,
     allocator: std.mem.Allocator,
     ctx: Context,
@@ -599,6 +609,7 @@ const ExecutionContext = struct {
     watchdog: ?std.Thread,
     external_prelude: ?[]const u8,
     bench_enabled: bool,
+    profile_enabled: bool,
 
     fn init(
         gpa: std.mem.Allocator,
@@ -648,6 +659,14 @@ const ExecutionContext = struct {
         errdefer gpa.destroy(bench_stats_ptr);
         bench_stats_ptr.* = .{};
 
+        const profile_stats_ptr = gpa.create(ProfileStats) catch {
+            err_writer.writeAll("Error: out of memory\n") catch {};
+            err_writer.flush() catch {};
+            return error.ExecutionContextInitFailed;
+        };
+        errdefer gpa.destroy(profile_stats_ptr);
+        profile_stats_ptr.* = .{};
+
         const counting_ptr = gpa.create(CountingAllocator) catch {
             err_writer.writeAll("Error: out of memory\n") catch {};
             err_writer.flush() catch {};
@@ -670,6 +689,7 @@ const ExecutionContext = struct {
             .gpa = gpa,
             .mem_limit = mem_limit_ptr,
             .bench_stats = bench_stats_ptr,
+            .profile_stats = profile_stats_ptr,
             .counting_allocator = counting_ptr,
             .allocator = alloc,
             .ctx = Context.init(alloc),
@@ -677,6 +697,7 @@ const ExecutionContext = struct {
             .watchdog = null,
             .external_prelude = null,
             .bench_enabled = bench_enabled,
+            .profile_enabled = exec.profile_config.enabled,
         };
         errdefer ec.ctx.deinit();
 
@@ -732,6 +753,9 @@ const ExecutionContext = struct {
 
         if (bench_enabled) {
             ec.ctx.benchmark = bench_stats_ptr;
+        }
+        if (ec.profile_enabled) {
+            ec.ctx.profile = profile_stats_ptr;
         }
 
         const prelude_path = global.prelude_path orelse std.posix.getenv("ONEZ_PRELUDE");
@@ -817,8 +841,10 @@ const ExecutionContext = struct {
         if (self.dbg != null) self.dbg.?.deinit();
         self.ctx.deinit();
         if (self.external_prelude) |ep| self.gpa.free(ep);
+        self.profile_stats.deinit(self.allocator);
         self.gpa.destroy(self.counting_allocator);
         self.gpa.destroy(self.bench_stats);
+        self.gpa.destroy(self.profile_stats);
         self.gpa.destroy(self.mem_limit);
         self.gpa.destroy(self);
     }
@@ -984,6 +1010,11 @@ fn handleCheck(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     }
     if (exec.bench_config.enabled) {
         err_writer.writeAll("Error: 'check' does not accept --benchmark\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    }
+    if (exec.profile_config.enabled) {
+        err_writer.writeAll("Error: 'check' does not accept --profile\n") catch {};
         err_writer.flush() catch {};
         return 1;
     }
@@ -2556,6 +2587,7 @@ test {
     _ = @import("statement.zig");
     _ = @import("formatter.zig");
     _ = @import("benchmark.zig");
+    _ = @import("profile.zig");
     _ = @import("memory_limit.zig");
     _ = @import("line_editor.zig");
     _ = @import("debugger/mod.zig");

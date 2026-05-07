@@ -33,6 +33,7 @@ const SandboxSpec = types_mod.SandboxSpec;
 const primitives = @import("primitives.zig");
 const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
+const ProfileStats = @import("profile.zig").ProfileStats;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 
 const trace_mod = @import("trace.zig");
@@ -258,6 +259,8 @@ pub const Context = struct {
     parse_time_deferred_calls: std.ArrayListUnmanaged([]const u8) = .{},
     /// Optional benchmark stats (null when benchmarking is disabled)
     benchmark: ?*BenchmarkStats = null,
+    /// Optional word-attributed profile stats (null when --profile is unset)
+    profile: ?*ProfileStats = null,
     /// Counters for unique VirtualType/StructType allocations, used by
     /// --benchmark to report prelude output inventory.
     virtual_type_count: usize = 0,
@@ -3710,6 +3713,7 @@ pub const Context = struct {
     /// and propagate the error.
     pub fn wordErrorCleanup(self: *Context, name: []const u8, err: anyerror) anyerror {
         if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
         self.captureCallStackOnError(err);
         self.popCallFrame();
         return err;
@@ -3723,6 +3727,7 @@ pub const Context = struct {
             if (depth_after < effect.concreteOutputCount()) {
                 self.captureStackEffectMismatch(name, effect, depth_after);
                 if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                if (self.profile) |p| p.recordWordEnd(self.allocator, name);
                 self.popCallFrame();
                 return primitives.InterpreterError.StackEffectMismatch;
             }
@@ -3731,6 +3736,7 @@ pub const Context = struct {
             b.endWordProfile(self.allocator, name);
             b.updatePeakStackDepth(self.stack.depth());
         }
+        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
         self.popCallFrame();
     }
 
@@ -3823,6 +3829,7 @@ pub const Context = struct {
                         b.recordCallWord();
                         b.beginWordProfile();
                     }
+                    if (self.profile) |p| p.recordWordStart(self.allocator);
 
                     if (self.lookupWord(name)) |word| {
                         if (self.active_sandbox) |sandbox| {
@@ -3876,6 +3883,7 @@ pub const Context = struct {
                             switch (jit_result) {
                                 .ok => {
                                     if (self.benchmark) |bm| bm.endWordProfile(self.allocator, name);
+                                    if (self.profile) |p| p.recordWordEnd(self.allocator, name);
                                     continue;
                                 },
                                 .error_propagate => {
@@ -3949,6 +3957,7 @@ pub const Context = struct {
                             switch (word.action) {
                                 .compound => |instrs| {
                                     if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                                    if (self.profile) |p| p.recordWordEnd(self.allocator, name);
                                     self.tail_call_instructions = instrs;
                                     self.tail_call_module = word.source_module;
                                     self.tail_call_source = word.source_file;
