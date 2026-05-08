@@ -835,6 +835,20 @@ const ExecutionContext = struct {
         self.bench_stats.deinit(self.allocator);
     }
 
+    fn finalizeProfile(self: *ExecutionContext) void {
+        if (!self.profile_enabled) return;
+        if (self.profile_stats.samples.items.len == 0) return;
+
+        var buf: [8192]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&buf);
+        self.profile_stats.formatHuman(self.gpa, stream.writer(), 20) catch {};
+        const data = stream.getWritten();
+        var written: usize = 0;
+        while (written < data.len) {
+            written += std.posix.write(std.posix.STDOUT_FILENO, data[written..]) catch break;
+        }
+    }
+
     fn deinit(self: *ExecutionContext) void {
         bail_stats_mod.deinitGlobal();
         if (self.watchdog) |t| t.detach();
@@ -965,6 +979,7 @@ fn handleRun(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     const result = batch(&ec.ctx, path, exec.show_stack);
     ec.fireExitHooks(result);
     ec.finalizeBenchmark(&exec);
+    ec.finalizeProfile();
     return result;
 }
 
@@ -1076,6 +1091,7 @@ fn handleRepl(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     repl(&ec.ctx, exec.verbosity, global.max_memory_bytes);
     ec.fireExitHooks(0);
     ec.finalizeBenchmark(&exec);
+    ec.finalizeProfile();
     return 0;
 }
 
@@ -1135,6 +1151,7 @@ fn handleEval(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     const result = runEval(&ec.ctx, code, print_top, exec.show_stack, err_writer);
     ec.fireExitHooks(result);
     ec.finalizeBenchmark(&exec);
+    ec.finalizeProfile();
     return result;
 }
 
