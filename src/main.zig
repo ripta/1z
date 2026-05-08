@@ -220,6 +220,7 @@ const ExecutionFlags = struct {
     allow_all_recursion: bool = false,
     compile_mode: context.CompileMode = .off,
     cli_set_compile: bool = false,
+    cli_set_profile_top: bool = false,
     allow_interpreter_fallback: bool = false,
 };
 
@@ -302,6 +303,22 @@ fn parseExecutionFlag(
     }
     if (std.mem.eql(u8, arg, "--profile")) {
         state.profile_config.enabled = true;
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--profile-top=")) {
+        const value = arg["--profile-top=".len..];
+        const n = std.fmt.parseInt(usize, value, 10) catch {
+            err_writer.print("Error: invalid value for --profile-top: '{s}'\n", .{value}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        };
+        if (n == 0) {
+            err_writer.print("Error: invalid value for --profile-top: '{s}' (must be > 0)\n", .{value}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        }
+        state.profile_config.top_n = n;
+        state.cli_set_profile_top = true;
         return .consumed;
     }
     if (std.mem.eql(u8, arg, "--debug")) {
@@ -485,6 +502,7 @@ const execution_flags_help =
     \\  --benchmark=verbose       Benchmark with human-readable output
     \\  --benchmark=json          Benchmark with JSON output
     \\  --profile                 Collect per-word wall-time samples
+    \\  --profile-top=N           Limit the profile table to N rows (default 20)
 ;
 
 const global_flags_help =
@@ -538,7 +556,7 @@ fn printCheckHelp() void {
     w.writeAll("Usage: 1z check [options] <file>\n\n") catch {};
     w.writeAll("Run static analysis on a 1z source file without executing it.\n\n") catch {};
     w.writeAll("The following execution flags are NOT accepted by `check`:\n") catch {};
-    w.writeAll("  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile\n\n") catch {};
+    w.writeAll("  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile, --profile-top=N\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
@@ -610,6 +628,7 @@ const ExecutionContext = struct {
     external_prelude: ?[]const u8,
     bench_enabled: bool,
     profile_enabled: bool,
+    profile_top: usize,
 
     fn init(
         gpa: std.mem.Allocator,
@@ -698,6 +717,7 @@ const ExecutionContext = struct {
             .external_prelude = null,
             .bench_enabled = bench_enabled,
             .profile_enabled = exec.profile_config.enabled,
+            .profile_top = exec.profile_config.top_n,
         };
         errdefer ec.ctx.deinit();
 
@@ -841,7 +861,7 @@ const ExecutionContext = struct {
 
         var buf: [8192]u8 = undefined;
         var stream = std.io.fixedBufferStream(&buf);
-        self.profile_stats.formatHuman(self.gpa, stream.writer(), 20) catch {};
+        self.profile_stats.formatHuman(self.gpa, stream.writer(), self.profile_top) catch {};
         const data = stream.getWritten();
         var written: usize = 0;
         while (written < data.len) {
@@ -1030,6 +1050,11 @@ fn handleCheck(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     }
     if (exec.profile_config.enabled) {
         err_writer.writeAll("Error: 'check' does not accept --profile\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    }
+    if (exec.cli_set_profile_top) {
+        err_writer.writeAll("Error: 'check' does not accept --profile-top\n") catch {};
         err_writer.flush() catch {};
         return 1;
     }

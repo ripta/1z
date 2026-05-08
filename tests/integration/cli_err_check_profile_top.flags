@@ -1,0 +1,4 @@
+@raw
+check
+--profile-top=5
+{file}

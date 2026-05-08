@@ -1,0 +1,23 @@
+
+=== Word Profile (top 20 by total time) ===
+  Word                   Calls    Total time     Self time   Time/call
+  run-once               3           1025.222 ms     12.000 us  341.740 ms
+  #reduce                3           1025.135 ms    144.940 ms  341.711 ms
+  =                      150,027      389.329 ms    389.329 ms    2.595 us
+  +                      225,000      293.576 ms    293.576 ms    1.304 us
+  %                      150,000      197.373 ms    197.373 ms    1.315 us
+  if                     52             4.694 ms      2.766 ms   90.269 us
+  ;                      293            3.466 ms      2.776 ms   11.829 us
+  dip                    2              1.875 ms     57.000 us  937.500 us
+  parse-quotation        26             1.733 ms     68.000 us   66.653 us
+  load-file              1              1.434 ms    559.000 us    1.434 ms
+  parse-literal          27           506.000 us    506.000 us   18.740 us
+  define-struct          11           346.000 us    346.000 us   31.454 us
+  parse-until            38           320.000 us    320.000 us    8.421 us
+  define-enum            4            296.000 us    296.000 us   74.000 us
+  make-mutable-map       69           261.000 us    192.000 us    3.782 us
+  when                   1            230.000 us      3.000 us  230.000 us
+  parse-values-until     39           227.000 us    227.000 us    5.820 us
+  @set!                  96           204.000 us    204.000 us    2.125 us
+  build                  3            172.000 us      9.000 us   57.333 us
+  >iterator              3            163.000 us    126.000 us   54.333 us

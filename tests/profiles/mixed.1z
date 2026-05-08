@@ -1,0 +1,16 @@
+\ Mixed-shape profile workload.
+\ Combines a recursive helper with a sequence-iteration driver so the
+\ profile sample shows how recursion-attributed time stacks against
+\ combinator overhead in the same run.
+
+use "ranges" ;
+
+sum-to: stack-recursive ( n -- s ) [
+  dup 0 = [ ] [
+    dup 1 - sum-to +
+  ] if
+] ;
+
+1 200 <range> >iterator [ sum-to ] #map
+0 [ + ] #reduce
+drop

@@ -4,6 +4,7 @@ const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 /// Configuration for word-attributed profile mode.
 pub const ProfileConfig = struct {
     enabled: bool = false,
+    top_n: usize = 20,
 };
 
 /// One recorded word dispatch: the word's name, the start timestamp at

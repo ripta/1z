@@ -1,0 +1,12 @@
+\ Recursion-heavy profile workload.
+\ Naive fibonacci calls itself exponentially, so the profile sample
+\ should be dominated by `fib` itself plus the arithmetic primitives
+\ it calls (`+`, `-`, `<`, `dup`, `if`).
+
+fib: stack-recursive ( n -- fib(n) ) [
+  dup 2 < [ ] [
+    dup 1 - fib swap 2 - fib +
+  ] if
+] ;
+
+20 fib drop

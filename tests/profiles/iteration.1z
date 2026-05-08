@@ -1,0 +1,20 @@
+\ Sequence-iteration profile workload.
+\ Builds a moderately large array and runs higher-order combinators
+\ over it, so the profile sample should highlight the iterator driver
+\ words plus the per-element predicate / transform.
+
+use "ranges" ;
+
+build: ( -- iter ) [
+  0 50000 <range> >iterator
+] ;
+
+run-once: ( iter -- sum ) [
+  [ 1 + ] #map
+  [ 2 % 0 = ] #filter
+  0 [ + ] #reduce
+] ;
+
+build run-once drop
+build run-once drop
+build run-once drop

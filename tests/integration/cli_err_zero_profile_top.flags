@@ -1,0 +1,4 @@
+@raw
+run
+--profile-top=0
+{file}

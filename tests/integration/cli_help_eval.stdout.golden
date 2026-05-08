@@ -35,3 +35,4 @@ Execution options:
   --benchmark=verbose       Benchmark with human-readable output
   --benchmark=json          Benchmark with JSON output
   --profile                 Collect per-word wall-time samples
+  --profile-top=N           Limit the profile table to N rows (default 20)
