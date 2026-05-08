@@ -1,0 +1,4 @@
+\ Test: --interpreter-fallback=false --lock-interpreter-setting on a
+\ program that compiles fully should build and run successfully. Marks
+\ the binary as interpreter-free via the onez_interpreter_linked sentinel.
+1 1 + drop

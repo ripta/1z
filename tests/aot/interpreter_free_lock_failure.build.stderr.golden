@@ -1,0 +1,3 @@
+Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Error: --interpreter-fallback=false --lock-interpreter-setting was set, but at least one compiled word emitted an interpreter fallback call.
+      hint: drop --lock-interpreter-setting, switch to --interpreter-fallback=true, or rewrite the offending words so they compile without fallback.

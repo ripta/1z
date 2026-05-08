@@ -2054,6 +2054,13 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 ) catch {};
             }
             allocator.free(codegen_diagnostics.uncompiled_quotations);
+        } else if (err == error.InterpreterRequiredButLocked) {
+            err_writer.writeAll(
+                "Error: --interpreter-fallback=false --lock-interpreter-setting was set, " ++
+                    "but at least one compiled word emitted an interpreter fallback call.\n" ++
+                    "      hint: drop --lock-interpreter-setting, switch to --interpreter-fallback=true, " ++
+                    "or rewrite the offending words so they compile without fallback.\n",
+            ) catch {};
         } else {
             err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
         }

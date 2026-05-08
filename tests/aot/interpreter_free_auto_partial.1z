@@ -1,0 +1,4 @@
+\ Test: --interpreter-fallback=auto on a program that needs interpreter
+\ fallback (uses 'keep') resolves to interpreter-linked at codegen time.
+\ Build and run succeed; the binary embeds onez_interpreter_linked = 1.
+1 [ 2 + ] keep . .

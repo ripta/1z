@@ -1,0 +1,4 @@
+\ Test: --interpreter-fallback=auto on a program that compiles fully
+\ should resolve to interpreter-free at codegen time. Build and run
+\ succeed; the binary embeds onez_interpreter_linked = 0.
+1 1 + drop

@@ -1,0 +1,5 @@
+\ Test: --interpreter-fallback=false --lock-interpreter-setting on a
+\ program that requires interpreter fallback (uses 'keep', a row-variable
+\ combinator) should fail at build time, not at runtime. Build error is
+\ surfaced by IrCodegenError.InterpreterRequiredButLocked.
+1 [ 2 + ] keep . .
