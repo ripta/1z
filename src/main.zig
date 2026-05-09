@@ -2261,11 +2261,12 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     printInterpreterLinkSummary(interpreter_fallback, lock_interpreter_setting, &codegen_diagnostics, err_writer);
 
     if (codegen_diagnostics.image_stats) |stats| {
-        err_writer.print("runtime-image: words={d} stack-effects={d} typevalue-slots={d} blob-present={s}\n", .{
+        err_writer.print("runtime-image: words={d} stack-effects={d} typevalue-slots={d} blob-present={s} blob-typevalues={d}\n", .{
             stats.word_count,
             stats.stack_effect_count,
             stats.typevalue_slot_count,
             if (stats.blob_present) "true" else "false",
+            stats.blob_typevalues_emitted,
         }) catch {};
         err_writer.flush() catch {};
     }

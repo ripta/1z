@@ -1,2 +1,2 @@
 interpreter: not linked (auto: all reachable code compiled)
-runtime-image: words=8 stack-effects=9 typevalue-slots=1 blob-present=true
+runtime-image: words=8 stack-effects=9 typevalue-slots=2 blob-present=true blob-typevalues=3

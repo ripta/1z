@@ -51,7 +51,50 @@ typedef struct onez_image_word {
     uint32_t marker_count;
     const uint8_t *body_bytecode;
     uint32_t body_bytecode_len;
+    uint32_t blob_entry_idx;          /* 0xFFFFFFFFu when no blob entry. */
+    uint32_t typevalue_slot;          /* 0 when this word does not publish a slot. */
 } onez_image_word_t;
+
+/* Blob-path schema. The structural-C-data structs above ARE the */
+/* runtime values; these blob structs DESCRIBE values that the   */
+/* loader must allocate at startup (TypeValue.descriptor is a    */
+/* StringHashMapUnmanaged whose layout is allocator-dependent).  */
+/* value_kind in onez_image_blob_descriptor_entry: */
+/*   0 = symbol  (string_value points to interned name)         */
+/*   1 = boolean (bool_value carries 0 or 1)                    */
+/*   2 = fixnum  (fixnum_value carries the i64)                 */
+/*   3 = string  (string_value points to the literal)           */
+/*   4 = unit    (no payload)                                   */
+/*   5 = unsupported (loader skips with diagnostic)             */
+typedef struct onez_image_blob_descriptor_entry {
+    const char *key;
+    uint32_t key_len;
+    uint8_t  value_kind;
+    uint8_t  bool_value;
+    uint16_t _pad;
+    int64_t  fixnum_value;
+    const char *string_value;
+    uint32_t string_value_len;
+} onez_image_blob_descriptor_entry_t;
+
+typedef struct onez_image_blob_typevalue {
+    const char *name;
+    uint32_t name_len;
+    uint32_t typevalue_slot;          /* index into onez_image_typevalue_slots */
+    const struct onez_image_blob_descriptor_entry *descriptor_entries;
+    uint32_t descriptor_entry_count;
+    /* Reserved for deeper type-graph rehydration. */
+    const uint32_t *member_type_slots;
+    uint32_t member_type_count;
+} onez_image_blob_typevalue_t;
+
+typedef struct onez_image_blob_entry {
+    uint32_t word_idx;                /* back-pointer into onez_image_words_storage */
+    uint8_t  blob_kind;               /* matches BlobReason; today always type_val_descriptor */
+    uint8_t  _pad[3];
+    /* typevalue is non-NULL for type_val blob entries; NULL for other blob kinds. */
+    const struct onez_image_blob_typevalue *typevalue;
+} onez_image_blob_entry_t;
 
 typedef struct onez_image_header {
     uint32_t format_version;
@@ -60,10 +103,13 @@ typedef struct onez_image_header {
     uint32_t marker_pool_count;
     uint32_t typevalue_slot_count;
     uint32_t stack_effect_count;
+    uint32_t blob_entry_count;
+    uint32_t _pad;
     const struct onez_image_module *modules;
     const struct onez_image_word *words;
     const struct onez_image_marker *markers;
     const struct onez_image_stack_effect *stack_effects;
+    const struct onez_image_blob_entry *blob_entries;
 } onez_image_header_t;
 
 static const char onez_image_mk_0_name[] = "generic";
@@ -78,8 +124,9 @@ static const onez_image_marker_t onez_image_markers_storage[] = {
     { .name = onez_image_mk_3_name, .name_len = 5 },
 };
 
-__attribute__((used)) const struct onez_typevalue *onez_image_typevalue_slots[1] = {
+__attribute__((used)) const struct onez_typevalue *onez_image_typevalue_slots[2] = {
     NULL, /* slot 0: "no annotation" sentinel. */
+    NULL, /* slot 1: color (filled by the loader). */
 };
 
 static const char onez_image_se_1_i0_name[] = "symbol";
@@ -156,6 +203,43 @@ static const char onez_image_w_5_name[] = "color:red?";
 static const char onez_image_w_6_name[] = "color?";
 static const char onez_image_w_7_name[] = "plain-double";
 
+static const onez_image_blob_descriptor_entry_t onez_image_blob_desc_0[] = {
+    { .key = "exact", .key_len = 5, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "integer", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "mutable", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "numeric", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "type", .key_len = 4, .value_kind = 0, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = "enum-descriptor:", .string_value_len = 16 },
+    { .key = "variants", .key_len = 8, .value_kind = 5, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+};
+static const onez_image_blob_descriptor_entry_t onez_image_blob_desc_1[] = {
+    { .key = "exact", .key_len = 5, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "integer", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "mutable", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "numeric", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "type", .key_len = 4, .value_kind = 0, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = "enum-descriptor:", .string_value_len = 16 },
+    { .key = "variants", .key_len = 8, .value_kind = 5, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+};
+static const onez_image_blob_descriptor_entry_t onez_image_blob_desc_2[] = {
+    { .key = "exact", .key_len = 5, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "integer", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "mutable", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "numeric", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+    { .key = "type", .key_len = 4, .value_kind = 0, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = "enum-descriptor:", .string_value_len = 16 },
+    { .key = "variants", .key_len = 8, .value_kind = 5, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
+};
+
+static const onez_image_blob_typevalue_t onez_image_blob_typevalues_storage[] = {
+    { .name = onez_image_w_0_name, .name_len = 5, .typevalue_slot = 1, .descriptor_entries = onez_image_blob_desc_0, .descriptor_entry_count = 6, .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_w_1_name, .name_len = 5, .typevalue_slot = 1, .descriptor_entries = onez_image_blob_desc_1, .descriptor_entry_count = 6, .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_w_6_name, .name_len = 5, .typevalue_slot = 1, .descriptor_entries = onez_image_blob_desc_2, .descriptor_entry_count = 6, .member_type_slots = NULL, .member_type_count = 0 },
+};
+
+static const onez_image_blob_entry_t onez_image_blob_entries_storage[] = {
+    { .word_idx = 0, .blob_kind = 1, ._pad = {0,0,0}, .typevalue = &onez_image_blob_typevalues_storage[0] },
+    { .word_idx = 1, .blob_kind = 1, ._pad = {0,0,0}, .typevalue = &onez_image_blob_typevalues_storage[1] },
+    { .word_idx = 6, .blob_kind = 1, ._pad = {0,0,0}, .typevalue = &onez_image_blob_typevalues_storage[2] },
+};
+
 static const onez_image_marker_t *const onez_image_w_0_markers[] = {
     &onez_image_markers_storage[0],
 };
@@ -185,6 +269,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .marker_count = 1,
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
+        .blob_entry_idx = 0u,
+        .typevalue_slot = 1u,
     },
     {
         .name = onez_image_w_1_name,
@@ -203,6 +289,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .marker_count = 3,
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
+        .blob_entry_idx = 1u,
+        .typevalue_slot = 1u,
     },
     {
         .name = onez_image_w_2_name,
@@ -221,6 +309,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .marker_count = 0,
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
+        .blob_entry_idx = 0xFFFFFFFFu,
+        .typevalue_slot = 0u,
     },
     {
         .name = onez_image_w_3_name,
@@ -239,6 +329,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .marker_count = 0,
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
+        .blob_entry_idx = 0xFFFFFFFFu,
+        .typevalue_slot = 0u,
     },
     {
         .name = onez_image_w_4_name,
@@ -257,6 +349,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .marker_count = 0,
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
+        .blob_entry_idx = 0xFFFFFFFFu,
+        .typevalue_slot = 0u,
     },
     {
         .name = onez_image_w_5_name,
@@ -275,6 +369,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .marker_count = 0,
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
+        .blob_entry_idx = 0xFFFFFFFFu,
+        .typevalue_slot = 0u,
     },
     {
         .name = onez_image_w_6_name,
@@ -293,6 +389,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .marker_count = 0,
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
+        .blob_entry_idx = 2u,
+        .typevalue_slot = 1u,
     },
     {
         .name = onez_image_w_7_name,
@@ -311,6 +409,8 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .marker_count = 0,
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
+        .blob_entry_idx = 0xFFFFFFFFu,
+        .typevalue_slot = 0u,
     },
 };
 
@@ -323,11 +423,14 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .module_count = 1,
     .word_count = 8,
     .marker_pool_count = 4,
-    .typevalue_slot_count = 1,
+    .typevalue_slot_count = 2,
     .stack_effect_count = 9,
+    .blob_entry_count = 3,
+    ._pad = 0,
     .modules = onez_image_modules_storage,
     .words = onez_image_words_storage,
     .markers = onez_image_markers_storage,
     .stack_effects = onez_image_stack_effects_storage,
+    .blob_entries = onez_image_blob_entries_storage,
 };
 

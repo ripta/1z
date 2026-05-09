@@ -58,6 +58,10 @@ pub const ImageEmissionStats = struct {
     /// Number of distinct stack-effect entries (excluding the
     /// reserved sentinel at index 0).
     stack_effect_count: u32 = 0,
+    /// Number of `type_val` blob entries actually emitted. Upperbound
+    /// is `manifest.blob_count`. Non-`type_val` blob reasons emit a
+    /// sentinel and don't contribute to this count.
+    blob_typevalues_emitted: u32 = 0,
 };
 
 /// Emit the runtime image as static C data into `out`. Returns counts
@@ -90,11 +94,29 @@ pub fn emitImageC(
     defer effect_table.deinit();
     try collectStackEffects(&effect_table, ctx, manifest);
 
+    var blob_plans: std.ArrayListUnmanaged(BlobEntryPlan) = .{};
+    defer blob_plans.deinit(allocator);
+    try collectBlobEntries(&blob_plans, &effect_table, ctx, manifest);
+
+    const no_blob_entry: u32 = 0xFFFFFFFF;
+    const word_to_blob = try allocator.alloc(u32, manifest.entries.len);
+    defer allocator.free(word_to_blob);
+    @memset(word_to_blob, no_blob_entry);
+    for (blob_plans.items, 0..) |plan, i| {
+        word_to_blob[plan.word_idx] = @intCast(i);
+    }
+
     try emitMarkerPool(out, allocator, &marker_pool, &stats);
     try emitTypeValueSlotTable(out, allocator, &effect_table);
     try emitStackEffectTable(out, allocator, &effect_table);
-    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, &marker_pool, &effect_table, &stats);
-    try emitHeader(out, allocator, manifest, &marker_pool, &effect_table, stats);
+
+    // Word name string literals are emitted up front so the blob
+    // entries below can reference each word's `onez_image_w_<idx>_name`
+    // symbol without a forward declaration.
+    try emitWordNameStrings(out, allocator, manifest);
+    try emitBlobEntries(out, allocator, blob_plans.items, &stats);
+    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, &marker_pool, &effect_table, blob_plans.items, word_to_blob, &stats);
+    try emitHeader(out, allocator, manifest, &marker_pool, &effect_table, blob_plans.items, stats);
 
     stats.typevalue_slot_count = effect_table.slotCount();
     stats.stack_effect_count = effect_table.effectCount();
@@ -166,6 +188,82 @@ const StackEffectTable = struct {
         return self.effect_index.get(effect) orelse 0;
     }
 };
+
+/// Pre-resolved data for one blob entry. Built before emission so the
+/// slot-table sizing pass can run in lockstep with the manifest walk
+/// while the actual blob emission consumes the same plan.
+const BlobEntryPlan = struct {
+    /// Index into `manifest.entries` (also matches the word's index in
+    /// `onez_image_words_storage`).
+    word_idx: u32,
+    /// Mirrors `manifest.entries[word_idx].blob_reason`. Non-`type_val`
+    /// reasons emit with `typevalue == null` so the loader can route to
+    /// the appropriate (still-missing) decoder.
+    blob_kind: BlobReason,
+    /// Resolved blob-path TypeValue for `.type_val_descriptor`.
+    typevalue: ?*const TypeValue = null,
+    /// Slot index assigned by `internType`; `0` when no slot was
+    /// reserved (non-`type_val` blob reasons).
+    typevalue_slot: u32 = 0,
+};
+
+/// Walk the manifest, classify each blob entry, intern any blob-path
+/// TypeValues into the shared slot table, and return the plan list.
+/// The plan list is sized by the blob count; the caller frees it.
+///
+/// For `.type_val_descriptor` entries, the blob-path TypeValue is
+/// located by inspecting the live `ModuleWord` body for its first
+/// `push_literal: type_val` instruction. The fixture pattern (an enum
+/// type word, its constructor, and its predicate all push the same
+/// `*TypeValue`) makes this a single dedup-friendly lookup; the
+/// `internType` call is identity-keyed and idempotent against any
+/// stack-effect-discovered slot.
+fn collectBlobEntries(
+    plans: *std.ArrayListUnmanaged(BlobEntryPlan),
+    effect_table: *StackEffectTable,
+    ctx: *const Context,
+    manifest: ImageManifest,
+) Allocator.Error!void {
+    for (manifest.entries, 0..) |entry, idx| {
+        if (entry.path != .blob) continue;
+        var plan: BlobEntryPlan = .{
+            .word_idx = @intCast(idx),
+            .blob_kind = entry.blob_reason,
+        };
+        if (entry.blob_reason == .type_val_descriptor) {
+            if (lookupModuleWord(ctx, entry)) |mw_ptr| {
+                if (findTypeValueLiteral(mw_ptr)) |tv| {
+                    plan.typevalue = tv;
+                    plan.typevalue_slot = try effect_table.internType(tv);
+                }
+            }
+        }
+        try plans.append(effect_table.allocator, plan);
+    }
+}
+
+/// Inspect a compound body for its first `push_literal: type_val`
+/// operand. Returns null when the action is not a compound, when the
+/// body has no instructions, or when no `type_val` literal is found.
+/// 248.3 only relies on the first match because the audited fixtures
+/// all carry exactly one TypeValue per blob word; a richer search is
+/// only necessary if multiple TypeValue literals coexist in one body.
+fn findTypeValueLiteral(mw: *const ModuleWord) ?*const TypeValue {
+    const body = switch (mw.action) {
+        .compound => |b| b,
+        else => return null,
+    };
+    for (body) |instr| {
+        switch (instr.op) {
+            .push_literal => |lit| switch (lit) {
+                .type_val => |tv| return tv,
+                else => {},
+            },
+            .call_word => {},
+        }
+    }
+    return null;
+}
 
 /// Walk the manifest, register each word's stack effect, and recurse
 /// into nested quotation effects.
@@ -449,6 +547,192 @@ fn writeEffectParamArraySym(
     try out.appendSlice(allocator, s);
 }
 
+/// Value-kind tags emitted into `onez_image_blob_descriptor_entry.value_kind`.
+/// The set covers exactly what `createTypeDescriptor` produces (symbols,
+/// booleans, fixnums, strings, unit). The `unsupported` sentinel keeps
+/// codegen total when a TypeValue carries a descriptor entry the loader
+/// is not prepared to decode; the loader will drop it with a diagnostic.
+const BlobValueKind = enum(u8) {
+    symbol = 0,
+    boolean = 1,
+    fixnum = 2,
+    string = 3,
+    unit = 4,
+    unsupported = 5,
+};
+
+const BlobDescriptorEntry = struct {
+    key: []const u8,
+    kind: BlobValueKind,
+    bool_value: bool = false,
+    fixnum_value: i64 = 0,
+    string_value: []const u8 = "",
+};
+
+/// Emit per-blob descriptor arrays plus the
+/// `onez_image_blob_typevalues_storage[]` and
+/// `onez_image_blob_entries_storage[]` tables. No-op when no blob
+/// entries are present (the header still emits a NULL pointer so the
+/// loader can branch on count).
+fn emitBlobEntries(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    plans: []const BlobEntryPlan,
+    stats: *ImageEmissionStats,
+) Allocator.Error!void {
+    if (plans.len == 0) return;
+
+    var num_buf: [32]u8 = undefined;
+
+    // Per-blob descriptor entry arrays. Indexed by position in
+    // `plans` so the typevalue struct below can reference each by
+    // its symbol. Non-`type_val` plans contribute no descriptor
+    // array.
+    var emitted_typevalues: u32 = 0;
+    for (plans, 0..) |plan, i| {
+        const tv = plan.typevalue orelse continue;
+        emitted_typevalues += 1;
+
+        var descriptor_entries: std.ArrayListUnmanaged(BlobDescriptorEntry) = .{};
+        defer descriptor_entries.deinit(allocator);
+
+        if (tv.descriptor) |desc| {
+            try collectDescriptorEntries(&descriptor_entries, allocator, desc);
+        }
+
+        // Lex sort by key; StringHashMap iteration is unstable.
+        std.mem.sort(BlobDescriptorEntry, descriptor_entries.items, {}, struct {
+            fn lessThan(_: void, a: BlobDescriptorEntry, b: BlobDescriptorEntry) bool {
+                return std.mem.lessThan(u8, a.key, b.key);
+            }
+        }.lessThan);
+
+        if (descriptor_entries.items.len > 0) {
+            try out.appendSlice(allocator, "static const onez_image_blob_descriptor_entry_t ");
+            try writeBlobDescSym(out, allocator, i);
+            try out.appendSlice(allocator, "[] = {\n");
+            for (descriptor_entries.items) |de| {
+                try out.appendSlice(allocator, "    { .key = ");
+                try emitCStringLiteral(out, allocator, de.key);
+                try out.appendSlice(allocator, ", .key_len = ");
+                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{de.key.len}) catch unreachable);
+                try out.appendSlice(allocator, ", .value_kind = ");
+                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{@intFromEnum(de.kind)}) catch unreachable);
+                try out.appendSlice(allocator, ", .bool_value = ");
+                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{@intFromBool(de.bool_value)}) catch unreachable);
+                try out.appendSlice(allocator, ", ._pad = 0, .fixnum_value = ");
+                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{de.fixnum_value}) catch unreachable);
+                try out.appendSlice(allocator, ", .string_value = ");
+                if (de.kind == .symbol or de.kind == .string) {
+                    try emitCStringLiteral(out, allocator, de.string_value);
+                } else {
+                    try out.appendSlice(allocator, "NULL");
+                }
+                try out.appendSlice(allocator, ", .string_value_len = ");
+                if (de.kind == .symbol or de.kind == .string) {
+                    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{de.string_value.len}) catch unreachable);
+                } else {
+                    try out.appendSlice(allocator, "0");
+                }
+                try out.appendSlice(allocator, " },\n");
+            }
+            try out.appendSlice(allocator, "};\n");
+        }
+    }
+    if (emitted_typevalues > 0) try out.append(allocator, '\n');
+    stats.blob_typevalues_emitted = emitted_typevalues;
+
+    // Per-blob TypeValue records. One per `type_val` plan. The
+    // `name`/`name_len` mirror the word's name symbol that
+    // `emitModuleAndWordTables` already emits, so we can reuse that
+    // pool by referencing `onez_image_w_<idx>_name`.
+    if (emitted_typevalues > 0) {
+        try out.appendSlice(allocator, "static const onez_image_blob_typevalue_t onez_image_blob_typevalues_storage[] = {\n");
+        for (plans, 0..) |plan, i| {
+            const tv = plan.typevalue orelse continue;
+            try out.appendSlice(allocator, "    { .name = ");
+            try writeWordNameSym(out, allocator, plan.word_idx);
+            try out.appendSlice(allocator, ", .name_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{tv.name.len}) catch unreachable);
+            try out.appendSlice(allocator, ", .typevalue_slot = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{plan.typevalue_slot}) catch unreachable);
+
+            // Descriptor entry array reference + count. Recompute the
+            // count by walking the descriptor; the per-blob symbol
+            // exists iff the count is non-zero.
+            const has_descriptor = tv.descriptor != null and tv.descriptor.?.count() > 0;
+            if (has_descriptor) {
+                try out.appendSlice(allocator, ", .descriptor_entries = ");
+                try writeBlobDescSym(out, allocator, i);
+                try out.appendSlice(allocator, ", .descriptor_entry_count = ");
+                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{tv.descriptor.?.count()}) catch unreachable);
+            } else {
+                try out.appendSlice(allocator, ", .descriptor_entries = NULL, .descriptor_entry_count = 0");
+            }
+            try out.appendSlice(allocator, ", .member_type_slots = NULL, .member_type_count = 0 },\n");
+        }
+        try out.appendSlice(allocator, "};\n\n");
+    }
+
+    // Top-level blob entry table. One per plan (covers both `type_val`
+    // and non-`type_val` reasons; the latter emit `typevalue = NULL`
+    // so the loader can route by `blob_kind`).
+    try out.appendSlice(allocator, "static const onez_image_blob_entry_t onez_image_blob_entries_storage[] = {\n");
+    var emitted_typevalue_idx: u32 = 0;
+    for (plans) |plan| {
+        try out.appendSlice(allocator, "    { .word_idx = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{plan.word_idx}) catch unreachable);
+        try out.appendSlice(allocator, ", .blob_kind = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{@intFromEnum(plan.blob_kind)}) catch unreachable);
+        try out.appendSlice(allocator, ", ._pad = {0,0,0}, .typevalue = ");
+        if (plan.typevalue != null) {
+            try out.appendSlice(allocator, "&onez_image_blob_typevalues_storage[");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{emitted_typevalue_idx}) catch unreachable);
+            try out.appendSlice(allocator, "]");
+            emitted_typevalue_idx += 1;
+        } else {
+            try out.appendSlice(allocator, "NULL");
+        }
+        try out.appendSlice(allocator, " },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+fn writeBlobDescSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    plan_idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_blob_desc_{d}", .{plan_idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+/// Walk a TypeValue descriptor map, classify each entry's value, and
+/// append it to `out`. Unsupported variants land on
+/// `BlobValueKind.unsupported` so the loader can skip them with a
+/// diagnostic rather than fail codegen.
+fn collectDescriptorEntries(
+    out: *std.ArrayListUnmanaged(BlobDescriptorEntry),
+    allocator: Allocator,
+    desc: *const value_mod.HashTable,
+) Allocator.Error!void {
+    var iter = desc.iterator();
+    while (iter.next()) |kv| {
+        const key = kv.key_ptr.*;
+        const v = kv.value_ptr.*;
+        const entry: BlobDescriptorEntry = switch (v) {
+            .symbol => |s| .{ .key = key, .kind = .symbol, .string_value = s },
+            .boolean => |b| .{ .key = key, .kind = .boolean, .bool_value = b },
+            .fixnum => |n| .{ .key = key, .kind = .fixnum, .fixnum_value = n },
+            .string => |s| .{ .key = key, .kind = .string, .string_value = s },
+            .unit => .{ .key = key, .kind = .unit },
+            else => .{ .key = key, .kind = .unsupported },
+        };
+        try out.append(allocator, entry);
+    }
+}
+
 fn writeMarkerNameSym(
     out: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
@@ -584,7 +868,50 @@ fn emitTypeDeclarations(
         \\    uint32_t marker_count;
         \\    const uint8_t *body_bytecode;
         \\    uint32_t body_bytecode_len;
+        \\    uint32_t blob_entry_idx;          /* 0xFFFFFFFFu when no blob entry. */
+        \\    uint32_t typevalue_slot;          /* 0 when this word does not publish a slot. */
         \\} onez_image_word_t;
+        \\
+        \\/* Blob-path schema. The structural-C-data structs above ARE the */
+        \\/* runtime values; these blob structs DESCRIBE values that the   */
+        \\/* loader must allocate at startup (TypeValue.descriptor is a    */
+        \\/* StringHashMapUnmanaged whose layout is allocator-dependent).  */
+        \\/* value_kind in onez_image_blob_descriptor_entry: */
+        \\/*   0 = symbol  (string_value points to interned name)         */
+        \\/*   1 = boolean (bool_value carries 0 or 1)                    */
+        \\/*   2 = fixnum  (fixnum_value carries the i64)                 */
+        \\/*   3 = string  (string_value points to the literal)           */
+        \\/*   4 = unit    (no payload)                                   */
+        \\/*   5 = unsupported (loader skips with diagnostic)             */
+        \\typedef struct onez_image_blob_descriptor_entry {
+        \\    const char *key;
+        \\    uint32_t key_len;
+        \\    uint8_t  value_kind;
+        \\    uint8_t  bool_value;
+        \\    uint16_t _pad;
+        \\    int64_t  fixnum_value;
+        \\    const char *string_value;
+        \\    uint32_t string_value_len;
+        \\} onez_image_blob_descriptor_entry_t;
+        \\
+        \\typedef struct onez_image_blob_typevalue {
+        \\    const char *name;
+        \\    uint32_t name_len;
+        \\    uint32_t typevalue_slot;          /* index into onez_image_typevalue_slots */
+        \\    const struct onez_image_blob_descriptor_entry *descriptor_entries;
+        \\    uint32_t descriptor_entry_count;
+        \\    /* Reserved for deeper type-graph rehydration. */
+        \\    const uint32_t *member_type_slots;
+        \\    uint32_t member_type_count;
+        \\} onez_image_blob_typevalue_t;
+        \\
+        \\typedef struct onez_image_blob_entry {
+        \\    uint32_t word_idx;                /* back-pointer into onez_image_words_storage */
+        \\    uint8_t  blob_kind;               /* matches BlobReason; today always type_val_descriptor */
+        \\    uint8_t  _pad[3];
+        \\    /* typevalue is non-NULL for type_val blob entries; NULL for other blob kinds. */
+        \\    const struct onez_image_blob_typevalue *typevalue;
+        \\} onez_image_blob_entry_t;
         \\
         \\typedef struct onez_image_header {
         \\    uint32_t format_version;
@@ -593,19 +920,43 @@ fn emitTypeDeclarations(
         \\    uint32_t marker_pool_count;
         \\    uint32_t typevalue_slot_count;
         \\    uint32_t stack_effect_count;
+        \\    uint32_t blob_entry_count;
+        \\    uint32_t _pad;
         \\    const struct onez_image_module *modules;
         \\    const struct onez_image_word *words;
         \\    const struct onez_image_marker *markers;
         \\    const struct onez_image_stack_effect *stack_effects;
+        \\    const struct onez_image_blob_entry *blob_entries;
         \\} onez_image_header_t;
         \\
         \\
     );
 }
 
+/// Emit per-word name string literals (`onez_image_w_<idx>_name`).
+/// Hoisted out of the module/word table emit pass so blob entries,
+/// emitted before the word table, can reference each word's name
+/// symbol without forward declarations.
+fn emitWordNameStrings(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    manifest: ImageManifest,
+) Allocator.Error!void {
+    if (manifest.entries.len == 0) return;
+    for (manifest.entries, 0..) |entry, idx| {
+        try out.appendSlice(allocator, "static const char ");
+        try writeWordNameSym(out, allocator, idx);
+        try out.appendSlice(allocator, "[] = ");
+        try emitCStringLiteral(out, allocator, entry.word_name);
+        try out.appendSlice(allocator, ";\n");
+    }
+    try out.append(allocator, '\n');
+}
+
 /// Emit `onez_image_modules[]` and `onez_image_words[]` along with
-/// each word's name string and per-word marker pointer array. The
-/// stack-effect table and slot table are emitted in later sub-passes.
+/// each word's marker pointer array. Word name strings are emitted
+/// up front by `emitWordNameStrings` so the blob entries (emitted
+/// earlier) can reference them.
 fn emitModuleAndWordTables(
     out: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
@@ -614,6 +965,8 @@ fn emitModuleAndWordTables(
     word_id_lookup: *const std.StringHashMapUnmanaged(u32),
     pool: *const MarkerPool,
     effect_table: *const StackEffectTable,
+    blob_plans: []const BlobEntryPlan,
+    word_to_blob: []const u32,
     stats: *ImageEmissionStats,
 ) Allocator.Error!void {
     if (manifest.entries.len == 0) {
@@ -627,20 +980,6 @@ fn emitModuleAndWordTables(
 
     var num_buf: [32]u8 = undefined;
     var qualified_buf: [256]u8 = undefined;
-
-    // Per-word string literals come first so the word and module tables
-    // can reference them by symbol name. Names are emitted as anonymous
-    // `static const char[]` arrays prefixed `onez_image_w_<idx>_name`
-    // and `onez_image_m_<idx>_name` -- one per entry, deduplicated would
-    // be a later size optimization.
-    for (manifest.entries, 0..) |entry, idx| {
-        try out.appendSlice(allocator, "static const char ");
-        try writeWordNameSym(out, allocator, idx);
-        try out.appendSlice(allocator, "[] = ");
-        try emitCStringLiteral(out, allocator, entry.word_name);
-        try out.appendSlice(allocator, ";\n");
-    }
-    try out.append(allocator, '\n');
 
     // Per-word marker pointer arrays. A word with zero markers
     // emits nothing here and references NULL in the word table; a
@@ -761,9 +1100,21 @@ fn emitModuleAndWordTables(
                 \\
             );
         }
+        try out.appendSlice(allocator, "        .body_bytecode = NULL,\n");
+        try out.appendSlice(allocator, "        .body_bytecode_len = 0,\n");
+
+        const blob_idx = word_to_blob[idx];
+        try out.appendSlice(allocator, "        .blob_entry_idx = ");
+        if (blob_idx == 0xFFFFFFFF) {
+            try out.appendSlice(allocator, "0xFFFFFFFFu");
+        } else {
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{blob_idx}) catch unreachable);
+        }
+        try out.appendSlice(allocator, ",\n        .typevalue_slot = ");
+        const tv_slot: u32 = if (blob_idx == 0xFFFFFFFF) 0 else blob_plans[blob_idx].typevalue_slot;
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{tv_slot}) catch unreachable);
         try out.appendSlice(allocator,
-            \\        .body_bytecode = NULL,
-            \\        .body_bytecode_len = 0,
+            \\,
             \\    },
             \\
         );
@@ -800,12 +1151,8 @@ fn emitModuleAndWordTables(
     }
     try out.appendSlice(allocator, "};\n\n");
 
-    stats.* = .{
-        .word_count = @intCast(manifest.entries.len),
-        .blob_present = blob_present,
-        .typevalue_slot_count = 0,
-        .stack_effect_count = 0,
-    };
+    stats.word_count = @intCast(manifest.entries.len);
+    stats.blob_present = blob_present;
 
     _ = module_count;
 }
@@ -880,6 +1227,7 @@ fn emitHeader(
     manifest: ImageManifest,
     pool: *const MarkerPool,
     effect_table: *const StackEffectTable,
+    blob_plans: []const BlobEntryPlan,
     stats: ImageEmissionStats,
 ) Allocator.Error!void {
     var num_buf: [32]u8 = undefined;
@@ -901,6 +1249,7 @@ fn emitHeader(
     const words_ref: []const u8 = if (has_entries) "onez_image_words_storage" else "NULL";
     const markers_ref: []const u8 = if (pool.count() > 0) "onez_image_markers_storage" else "NULL";
     const effects_ref: []const u8 = if (effect_table.effectCount() > 1) "onez_image_stack_effects_storage" else "NULL";
+    const blobs_ref: []const u8 = if (blob_plans.len > 0) "onez_image_blob_entries_storage" else "NULL";
 
     try out.appendSlice(allocator,
         \\__attribute__((used)) const onez_image_header_t onez_image_v1 = {
@@ -917,7 +1266,9 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{effect_table.slotCount()}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .stack_effect_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{effect_table.effectCount()}) catch unreachable);
-    try out.appendSlice(allocator, ",\n    .modules = ");
+    try out.appendSlice(allocator, ",\n    .blob_entry_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{blob_plans.len}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    ._pad = 0,\n    .modules = ");
     try out.appendSlice(allocator, modules_ref);
     try out.appendSlice(allocator, ",\n    .words = ");
     try out.appendSlice(allocator, words_ref);
@@ -925,6 +1276,8 @@ fn emitHeader(
     try out.appendSlice(allocator, markers_ref);
     try out.appendSlice(allocator, ",\n    .stack_effects = ");
     try out.appendSlice(allocator, effects_ref);
+    try out.appendSlice(allocator, ",\n    .blob_entries = ");
+    try out.appendSlice(allocator, blobs_ref);
     try out.appendSlice(allocator,
         \\,
         \\};
@@ -998,6 +1351,9 @@ test "emitImageC: type declarations include all schema structs" {
         "struct onez_image_marker",
         "struct onez_image_stack_effect",
         "struct onez_image_stack_effect_param",
+        "struct onez_image_blob_descriptor_entry",
+        "struct onez_image_blob_typevalue",
+        "struct onez_image_blob_entry",
         "struct onez_image_header",
     };
     for (required_structs) |needle| {
@@ -1296,4 +1652,275 @@ test "emitImageC: required runtime-image symbols all appear" {
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_modules_storage") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_words_storage") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typevalue_slots") != null);
+}
+
+test "emitImageC: type_val blob produces descriptor entry table and slot reservation" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // Synthesize a single blob word whose body pushes a TypeValue with
+    // a fully populated `createTypeDescriptor`-shaped descriptor.
+    const desc = try arena.create(value_mod.HashTable);
+    desc.* = .{};
+    try desc.put(arena, "type", .{ .symbol = "virtual:" });
+    try desc.put(arena, "numeric", .{ .boolean = false });
+    try desc.put(arena, "exact", .{ .boolean = true });
+    try desc.put(arena, "integer", .{ .boolean = false });
+    try desc.put(arena, "mutable", .{ .boolean = false });
+
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "color", .descriptor = desc };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "color", .{ .action = .{ .compound = instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    try testing.expectEqual(@as(u32, 1), stats.blob_typevalues_emitted);
+    try testing.expectEqual(true, stats.blob_present);
+    // Sentinel + the one blob TypeValue.
+    try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_blob_desc_0[]") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_blob_typevalues_storage") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_blob_entries_storage") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".blob_entries = onez_image_blob_entries_storage") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".blob_entry_count = 1") != null);
+    // Word entry references blob entry index 0 and slot 1.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".blob_entry_idx = 0u") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".typevalue_slot = 1u") != null);
+}
+
+test "emitImageC: same TypeValue across multiple blob words shares one slot" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const desc = try arena.create(value_mod.HashTable);
+    desc.* = .{};
+    try desc.put(arena, "type", .{ .symbol = "virtual:" });
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "color", .descriptor = desc };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "color", .{ .action = .{ .compound = instrs } });
+    try m.words.put(arena, ">color", .{ .action = .{ .compound = instrs } });
+    try m.words.put(arena, "color?", .{ .action = .{ .compound = instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // Three blob words share one slot, so we get three blob entries
+    // but the slot table only grew by 1 (sentinel + 1 = 2).
+    try testing.expectEqual(@as(u32, 3), stats.blob_typevalues_emitted);
+    try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".blob_entry_count = 3") != null);
+
+    // All three words reference slot 1.
+    var occurrences: usize = 0;
+    var search_idx: usize = 0;
+    while (std.mem.indexOfPos(u8, out.items, search_idx, ".typevalue_slot = 1u")) |pos| {
+        occurrences += 1;
+        search_idx = pos + 1;
+    }
+    try testing.expect(occurrences == 3);
+}
+
+test "emitImageC: structural words have sentinel blob_entry_idx" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try buildSyntheticImageContext(&ctx);
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // Three structural words plus one blob word; the structurals carry
+    // the sentinel and the blob carries the live index.
+    var sentinel_occurrences: usize = 0;
+    var search_idx: usize = 0;
+    while (std.mem.indexOfPos(u8, out.items, search_idx, ".blob_entry_idx = 0xFFFFFFFFu")) |pos| {
+        sentinel_occurrences += 1;
+        search_idx = pos + 1;
+    }
+    try testing.expectEqual(@as(usize, 3), sentinel_occurrences);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".blob_entry_idx = 0u") != null);
+}
+
+test "collectBlobEntries dedupes against stack-effect-discovered TypeValues" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // One TypeValue referenced by both a stack-effect param and a
+    // blob word's body. The slot pool should collapse it to a single
+    // entry; both sites read slot 1.
+    const desc = try arena.create(value_mod.HashTable);
+    desc.* = .{};
+    try desc.put(arena, "type", .{ .symbol = "virtual:" });
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "color", .descriptor = desc };
+
+    const eff_inputs = try arena.dupe(StackEffectParam, &.{
+        .{ .name = "x", .type_annotation = tv },
+    });
+    const eff_outputs = try arena.dupe(StackEffectParam, &.{});
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "color", .{
+        .action = .{ .compound = instrs },
+        .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
+    });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // Sentinel + 1 TV = 2 slots, regardless of the two reference sites.
+    try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
+    try testing.expectEqual(@as(u32, 1), stats.blob_typevalues_emitted);
+}
+
+test "emitImageC: descriptor with all five value kinds" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const desc = try arena.create(value_mod.HashTable);
+    desc.* = .{};
+    try desc.put(arena, "k_symbol", .{ .symbol = "abc" });
+    try desc.put(arena, "k_boolean", .{ .boolean = true });
+    try desc.put(arena, "k_fixnum", .{ .fixnum = 42 });
+    try desc.put(arena, "k_string", .{ .string = "hello" });
+    try desc.put(arena, "k_unit", .{ .unit = {} });
+
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "kinds", .descriptor = desc };
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "kinds", .{ .action = .{ .compound = instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // Each value_kind tag appears at least once.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 0") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 1") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 2") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 3") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 4") != null);
+    // Specific payloads survive the round-trip.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".string_value = \"abc\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".string_value = \"hello\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".fixnum_value = 42") != null);
+}
+
+test "emitImageC: descriptor entries are sorted by key" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const desc = try arena.create(value_mod.HashTable);
+    desc.* = .{};
+    // Insert in non-alphabetical order. The emitted output must
+    // still surface the keys alphabetically.
+    try desc.put(arena, "type", .{ .symbol = "virtual:" });
+    try desc.put(arena, "numeric", .{ .boolean = false });
+    try desc.put(arena, "exact", .{ .boolean = true });
+    try desc.put(arena, "integer", .{ .boolean = false });
+    try desc.put(arena, "mutable", .{ .boolean = false });
+
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "color", .descriptor = desc };
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "color", .{ .action = .{ .compound = instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // The expected positions follow the lex order: exact, integer,
+    // mutable, numeric, type.
+    const i_exact = std.mem.indexOf(u8, out.items, ".key = \"exact\"").?;
+    const i_integer = std.mem.indexOf(u8, out.items, ".key = \"integer\"").?;
+    const i_mutable = std.mem.indexOf(u8, out.items, ".key = \"mutable\"").?;
+    const i_numeric = std.mem.indexOf(u8, out.items, ".key = \"numeric\"").?;
+    const i_type = std.mem.indexOf(u8, out.items, ".key = \"type\"").?;
+
+    try testing.expect(i_exact < i_integer);
+    try testing.expect(i_integer < i_mutable);
+    try testing.expect(i_mutable < i_numeric);
+    try testing.expect(i_numeric < i_type);
 }
