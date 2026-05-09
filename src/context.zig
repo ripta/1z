@@ -56,7 +56,7 @@ const nativeSuppressChecksValidator = @import("effect_inference.zig").nativeSupp
 const helpers = @import("primitives/helpers.zig");
 
 /// Embedded prelude source code
-const prelude_source = @embedFile("prelude.1z");
+pub const prelude_source = @embedFile("prelude.1z");
 
 pub const CompileMode = enum { off, eager, hybrid };
 

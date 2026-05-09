@@ -6280,6 +6280,32 @@ fn patchMissingD0(body: []u8, allocator: Allocator) Allocator.Error![]u8 {
 /// `entry_word_id` identifies which word to call from main().
 pub const InterpreterFallbackMode = enum { true, false, auto };
 
+/// Core metadata embedded into every AOT binary as a single rodata
+/// string. The schema-version and surrounding sentinels make the block
+/// self-describing for an external inspector. The `interpreter_linked`
+/// field is decided inside `emitProgramC` so it matches the compiled
+/// artifact, not the user's pre-resolution intent; callers fill in the
+/// other fields.
+pub const AotMetadata = struct {
+    /// User-facing intent passed on the build command line. Recorded
+    /// verbatim to distinguish "auto" builds from "true" / "false"
+    /// builds.
+    interpreter_fallback_mode: InterpreterFallbackMode,
+    interpreter_setting_locked: bool,
+    /// Hard-coded false until a runtime image is actually emitted.
+    runtime_image_present: bool,
+    /// e.g. "aarch64-macos". Caller-owned slice; lifetime must outlive
+    /// the call to emitProgramC.
+    target_triple: []const u8,
+    /// `@tagName(builtin.mode)`: "Debug" / "ReleaseSafe" / etc.
+    build_mode: []const u8,
+    /// build_options.version
+    onez_version: []const u8,
+    /// Hex-encoded SHA-256 of the prelude source bytes that fed
+    /// `Context.loadPrelude` for this build, length 64.
+    prelude_hash_hex: []const u8,
+};
+
 pub fn emitProgramC(
     words: []const AotWordDesc,
     quotations: []AotQuotationDesc,
@@ -6288,6 +6314,7 @@ pub fn emitProgramC(
     static_libs: []const []const u8,
     interpreter_fallback: InterpreterFallbackMode,
     lock_interpreter_setting: bool,
+    metadata: AotMetadata,
     diagnostics: *CodegenDiagnostics,
     interp_ctx: ?*const Context,
     allocator: Allocator,
@@ -6877,6 +6904,13 @@ pub fn emitProgramC(
     else
         "__attribute__((used)) static const char onez_inspect_v1[] = \"<<1Z_INSPECT_V1:interpreter_linked=1>>\";\n\n");
 
+    // Core metadata block. Lives in rodata next to the inspect sentinel;
+    // the `<<1Z_AOT_META_V1` ... `>>` delimiters give an external
+    // inspector a stable byte-scan target. Schema-version is the first
+    // key after the open marker so future format changes can flip both
+    // the open marker (V2) and the schema-version field together.
+    try emitAotMetadata(allocator, &out, metadata, !interpreter_free);
+
     // 6. Main entry point. Interpreter-free binaries skip prelude loading
     // since every reachable word was compiled and registered explicitly via
     // onez_runtime_register_compiled below; calling onez_init() would drag
@@ -6978,6 +7012,56 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "}\n");
 
     return out.toOwnedSlice(allocator);
+}
+
+/// Render the core metadata block as a single
+/// `__attribute__((used)) static const char` rodata literal. The byte
+/// shape is fixed across builds so an external inspector can scan for
+/// `<<1Z_AOT_META_V1` and parse the trailing newline-delimited
+/// key=value lines until `>>`.
+fn emitAotMetadata(
+    allocator: Allocator,
+    out: *std.ArrayListUnmanaged(u8),
+    meta: AotMetadata,
+    interpreter_linked: bool,
+) !void {
+    const fallback_str: []const u8 = switch (meta.interpreter_fallback_mode) {
+        .true => "true",
+        .false => "false",
+        .auto => "auto",
+    };
+    const yes_no_interp_linked: []const u8 = if (interpreter_linked) "yes" else "no";
+    const yes_no_locked: []const u8 = if (meta.interpreter_setting_locked) "yes" else "no";
+    const yes_no_runtime_image: []const u8 = if (meta.runtime_image_present) "yes" else "no";
+
+    try out.appendSlice(allocator, "__attribute__((used)) static const char onez_aot_meta_v1[] =\n");
+    try out.appendSlice(allocator, "    \"<<1Z_AOT_META_V1\\n\"\n");
+    try out.appendSlice(allocator, "    \"schema-version=1\\n\"\n");
+    try out.appendSlice(allocator, "    \"interpreter-linked=");
+    try out.appendSlice(allocator, yes_no_interp_linked);
+    try out.appendSlice(allocator, "\\n\"\n");
+    try out.appendSlice(allocator, "    \"interpreter-fallback-mode=");
+    try out.appendSlice(allocator, fallback_str);
+    try out.appendSlice(allocator, "\\n\"\n");
+    try out.appendSlice(allocator, "    \"interpreter-setting-locked=");
+    try out.appendSlice(allocator, yes_no_locked);
+    try out.appendSlice(allocator, "\\n\"\n");
+    try out.appendSlice(allocator, "    \"runtime-image-present=");
+    try out.appendSlice(allocator, yes_no_runtime_image);
+    try out.appendSlice(allocator, "\\n\"\n");
+    try out.appendSlice(allocator, "    \"target-triple=");
+    try out.appendSlice(allocator, meta.target_triple);
+    try out.appendSlice(allocator, "\\n\"\n");
+    try out.appendSlice(allocator, "    \"build-mode=");
+    try out.appendSlice(allocator, meta.build_mode);
+    try out.appendSlice(allocator, "\\n\"\n");
+    try out.appendSlice(allocator, "    \"onez-version=");
+    try out.appendSlice(allocator, meta.onez_version);
+    try out.appendSlice(allocator, "\\n\"\n");
+    try out.appendSlice(allocator, "    \"prelude-hash=");
+    try out.appendSlice(allocator, meta.prelude_hash_hex);
+    try out.appendSlice(allocator, "\\n\"\n");
+    try out.appendSlice(allocator, "    \">>\\n\";\n\n");
 }
 
 /// Emit an overflow-checked binary operation (add/sub/mul).
@@ -8428,6 +8512,18 @@ fn makeInstructions(comptime ops: anytype) [ops.len]Instruction {
     }
     return instrs;
 }
+
+/// Default metadata for unit tests. Static field values keep the
+/// emitted C source byte-for-byte stable across hosts.
+const test_aot_metadata: AotMetadata = .{
+    .interpreter_fallback_mode = .auto,
+    .interpreter_setting_locked = false,
+    .runtime_image_present = false,
+    .target_triple = "test-target",
+    .build_mode = "Debug",
+    .onez_version = "0.0.0-test",
+    .prelude_hash_hex = "0000000000000000000000000000000000000000000000000000000000000000",
+};
 
 /// Helper to call a compiled function with a Value stack.
 /// Sets up a stack with the given fixnum values, calls the function, and
@@ -10125,7 +10221,7 @@ test "emitProgramC generates complete C source" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, &diag, null, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -10164,7 +10260,7 @@ test "emitProgramC dispatch table has correct entries" {
     };
 
     var diag2: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, &diag2, null, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -10189,7 +10285,7 @@ test "emitProgramC quotation table with all compiled entries" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, &diag, null, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, testing.allocator);
     defer testing.allocator.free(source);
 
     // Table exists with all entries
@@ -10219,7 +10315,7 @@ test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, &diag, null, testing.allocator);
+    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, testing.allocator);
     try testing.expectError(error.UncompiledQuotations, result);
 
     // Diagnostics report the uncompiled quotation
@@ -10237,7 +10333,7 @@ test "emitProgramC no quotation table when quotations empty" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, &diag, null, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, testing.allocator);
     defer testing.allocator.free(source);
 
     // No quotation table emitted (extern decl exists but table and call do not)
@@ -10255,7 +10351,7 @@ test "emitProgramC output compiles with cc" {
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, &diag3, null, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});

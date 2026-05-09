@@ -2035,6 +2035,36 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var codegen_diagnostics: ir_codegen.CodegenDiagnostics = .{};
     defer if (codegen_diagnostics.prelude_stats.uncompiled.len > 0)
         allocator.free(codegen_diagnostics.prelude_stats.uncompiled);
+
+    // Hash the embedded prelude source unconditionally: the build path's
+    // `--prelude=` handling above passes the path string directly to
+    // loadPrelude, which expects content, so external preludes are not
+    // currently honored in build mode.
+    var prelude_hash_bytes: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(context.prelude_source, &prelude_hash_bytes, .{});
+    const prelude_hash_hex_buf = std.fmt.bytesToHex(prelude_hash_bytes, .lower);
+
+    const target_triple = std.fmt.allocPrint(
+        allocator,
+        "{s}-{s}",
+        .{ @tagName(builtin.target.cpu.arch), @tagName(builtin.target.os.tag) },
+    ) catch {
+        err_writer.writeAll("Error: out of memory\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    defer allocator.free(target_triple);
+
+    const aot_metadata: ir_codegen.AotMetadata = .{
+        .interpreter_fallback_mode = interpreter_fallback,
+        .interpreter_setting_locked = lock_interpreter_setting,
+        .runtime_image_present = false,
+        .target_triple = target_triple,
+        .build_mode = @tagName(builtin.mode),
+        .onez_version = version,
+        .prelude_hash_hex = &prelude_hash_hex_buf,
+    };
+
     const c_source = ir_codegen.emitProgramC(
         freeze_result.words,
         freeze_result.quotations,
@@ -2043,6 +2073,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         static_libs.items,
         interpreter_fallback,
         lock_interpreter_setting,
+        aot_metadata,
         &codegen_diagnostics,
         ctx,
         allocator,
