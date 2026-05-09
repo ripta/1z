@@ -6855,8 +6855,8 @@ pub fn emitProgramC(
     }
 
     // Emit the interpreter-linked sentinel as a non-static global. The linker
-    // GC will actually drop lib1z.a when this is 0, while `1z inspect` reads
-    // this symbol to report the binary's interpreter status.
+    // GC drops lib1z.a when this is 0; the symbol itself is a redundant marker
+    // alongside the inspect-friendly string below.
     const interpreter_free = switch (interpreter_fallback) {
         .true => false,
         .false => lock_interpreter_setting,
@@ -6866,6 +6866,16 @@ pub fn emitProgramC(
         "int onez_interpreter_linked = 0;\n\n"
     else
         "int onez_interpreter_linked = 1;\n\n");
+
+    // Embedded ASCII marker that `1z inspect` byte-scans for. Lives in rodata
+    // so it survives `strip`, and is force-kept by `__attribute__((used))` so
+    // -dead_strip / --gc-sections do not GC it. The value byte ('0' or '1')
+    // mirrors onez_interpreter_linked; the surrounding sentinel keeps the
+    // search needle unambiguous.
+    try out.appendSlice(allocator, if (interpreter_free)
+        "__attribute__((used)) static const char onez_inspect_v1[] = \"<<1Z_INSPECT_V1:interpreter_linked=0>>\";\n\n"
+    else
+        "__attribute__((used)) static const char onez_inspect_v1[] = \"<<1Z_INSPECT_V1:interpreter_linked=1>>\";\n\n");
 
     // 6. Main entry point. Interpreter-free binaries skip prelude loading
     // since every reachable word was compiled and registered explicitly via

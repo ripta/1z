@@ -9,6 +9,7 @@ Subcommands:
   lint [files...]        Check code style and conventions
   highlight [file]       Highlight 1z source code
   build <file>           Compile a 1z file to a native executable
+  inspect <binary>       Report metadata embedded in an AOT binary
   version                Print version and exit
 
 Global options (available to all subcommands):

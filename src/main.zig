@@ -457,6 +457,7 @@ fn printUsage() void {
         \\  lint [files...]        Check code style and conventions
         \\  highlight [file]       Highlight 1z source code
         \\  build <file>           Compile a 1z file to a native executable
+        \\  inspect <binary>       Report metadata embedded in an AOT binary
         \\  version                Print version and exit
         \\
         \\Global options (available to all subcommands):
@@ -613,6 +614,17 @@ fn printHighlightHelp() void {
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
+fn printInspectHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z inspect <binary>\n\n") catch {};
+    w.writeAll("Report metadata embedded in a 1z AOT binary.\n\n") catch {};
+    w.writeAll("Currently reports whether the interpreter is linked into the binary.\n") catch {};
     w.flush() catch {};
 }
 
@@ -917,6 +929,7 @@ pub fn main() u8 {
     if (std.mem.eql(u8, first, "lint")) return handleLint(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "highlight")) return handleHighlight(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "build")) return handleBuild(gpa_allocator, args[2..]);
+    if (std.mem.eql(u8, first, "inspect")) return handleInspect(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "version")) {
         printVersion();
         return 0;
@@ -1698,20 +1711,30 @@ fn printQuotationStats(
     err_writer.flush() catch {};
 }
 
-fn printInterpreterFallbackDecision(
+fn printInterpreterLinkSummary(
+    interpreter_fallback: ir_codegen.InterpreterFallbackMode,
+    lock_interpreter_setting: bool,
     diagnostics: *const ir_codegen.CodegenDiagnostics,
     err_writer: anytype,
 ) void {
-    const resolved = diagnostics.resolved_interpreter_fallback orelse return;
-    switch (resolved) {
-        .true => {
-            err_writer.writeAll("Interpreter fallback: included (auto: compiled code calls interpreter)\n") catch {};
-        },
-        .false => {
-            err_writer.writeAll("Interpreter fallback: not needed (auto: all code fully compiled)\n") catch {};
-        },
-        .auto => unreachable,
-    }
+    const interpreter_free = switch (interpreter_fallback) {
+        .true => false,
+        .false => lock_interpreter_setting,
+        .auto => !diagnostics.has_interpreter_callbacks,
+    };
+    const status: []const u8 = if (interpreter_free) "not linked" else "linked";
+    const reason: []const u8 = switch (interpreter_fallback) {
+        .true => "--interpreter-fallback=true",
+        .false => if (lock_interpreter_setting)
+            "--interpreter-fallback=false --lock-interpreter-setting"
+        else
+            "--interpreter-fallback=false without --lock-interpreter-setting",
+        .auto => if (interpreter_free)
+            "auto: all reachable code compiled"
+        else
+            "auto: compiled code calls interpreter",
+    };
+    err_writer.print("interpreter: {s} ({s})\n", .{ status, reason }) catch {};
     err_writer.flush() catch {};
 }
 
@@ -2074,7 +2097,6 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
         printQuotationStats(freeze_result.quotations, err_writer);
         printPicStats(&codegen_diagnostics, err_writer);
-        printInterpreterFallbackDecision(&codegen_diagnostics, err_writer);
     }
 
     printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
@@ -2107,6 +2129,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             return 1;
         }
     }
+
+    printInterpreterLinkSummary(interpreter_fallback, lock_interpreter_setting, &codegen_diagnostics, err_writer);
 
     // Write C source to a temp file.
     const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";
@@ -2227,6 +2251,96 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         std.fs.cwd().deleteFile(tmp_path) catch {};
     }
 
+    return 0;
+}
+
+const inspect_marker_prefix = "<<1Z_INSPECT_V1:interpreter_linked=";
+const inspect_marker_suffix = ">>";
+const inspect_max_bytes: usize = 256 * 1024 * 1024;
+
+fn handleInspect(gpa: std.mem.Allocator, args: []const []const u8) u8 {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const out_writer = &stdout.interface;
+
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    const err_writer = &stderr.interface;
+
+    if (hasHelpFlag(args)) {
+        printInspectHelp();
+        return 0;
+    }
+
+    var binary_path: ?[]const u8 = null;
+    for (args) |arg| {
+        if (arg.len > 0 and arg[0] == '-') {
+            err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
+        if (binary_path != null) {
+            err_writer.writeAll("Error: 1z inspect takes exactly one binary path\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
+        binary_path = arg;
+    }
+
+    const path = binary_path orelse {
+        err_writer.writeAll("Usage: 1z inspect <binary>\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        err_writer.print("Error opening '{s}': {s}\n", .{ path, @errorName(err) }) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    defer file.close();
+
+    const contents = file.readToEndAlloc(gpa, inspect_max_bytes) catch |err| {
+        err_writer.print("Error reading '{s}': {s}\n", .{ path, @errorName(err) }) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    defer gpa.free(contents);
+
+    const idx = std.mem.indexOf(u8, contents, inspect_marker_prefix) orelse {
+        err_writer.print("Error: '{s}': not a 1z AOT binary or unsupported version\n", .{path}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    const value_start = idx + inspect_marker_prefix.len;
+    if (value_start + 1 + inspect_marker_suffix.len > contents.len) {
+        err_writer.print("Error: '{s}': truncated 1z inspect marker\n", .{path}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    }
+    const value_byte = contents[value_start];
+    const after = contents[value_start + 1 .. value_start + 1 + inspect_marker_suffix.len];
+    if (!std.mem.eql(u8, after, inspect_marker_suffix)) {
+        err_writer.print("Error: '{s}': malformed 1z inspect marker\n", .{path}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    }
+
+    const interpreter_status: []const u8 = switch (value_byte) {
+        '0' => "not linked",
+        '1' => "linked",
+        else => {
+            err_writer.print("Error: '{s}': unrecognized interpreter-linked value '{c}'\n", .{ path, value_byte }) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        },
+    };
+
+    out_writer.writeAll("kind: aot-binary\n") catch {};
+    out_writer.print("interpreter: {s}\n", .{interpreter_status}) catch {};
+    out_writer.flush() catch {};
     return 0;
 }
 

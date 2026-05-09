@@ -1,1 +1,2 @@
 Warning: AOT build may diverge at runtime: '>quotation' in 'make-word'
+interpreter: linked (auto: compiled code calls interpreter)

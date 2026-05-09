@@ -1,1 +1,2 @@
 Warning: 'my-apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+interpreter: linked (auto: compiled code calls interpreter)

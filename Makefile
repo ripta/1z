@@ -83,7 +83,18 @@ aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader
 	echo "PASS: _onez_load_prelude absent from interpreter-free, present in interpreter-linked"; \
 	echo "      interpreter-free size:   $$free_size bytes"; \
 	echo "      interpreter-linked size: $$linked_size bytes"; \
-	echo "      delta:                   $$((linked_size - free_size)) bytes"
+	echo "      delta:                   $$((linked_size - free_size)) bytes"; \
+	free_inspect=$$(./$(ZIG_PREFIX)/bin/1z inspect $(_free_bin)); \
+	linked_inspect=$$(./$(ZIG_PREFIX)/bin/1z inspect $(_linked_bin)); \
+	if ! echo "$$free_inspect" | grep -qx 'interpreter: not linked'; then \
+		echo "FAIL: 1z inspect on free binary did not report 'not linked':"; \
+		echo "$$free_inspect"; exit 1; \
+	fi; \
+	if ! echo "$$linked_inspect" | grep -qx 'interpreter: linked'; then \
+		echo "FAIL: 1z inspect on linked binary did not report 'linked':"; \
+		echo "$$linked_inspect"; exit 1; \
+	fi; \
+	echo "PASS: 1z inspect reports 'not linked' for interpreter-free, 'linked' for interpreter-linked"
 
 bail-stats: ## Build with bail instrumentation and AOT-run a file (FILE=)
 	zig build --prefix $(ZIG_PREFIX) -Dbail-stats=true
