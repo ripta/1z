@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test aot-run bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation profiles build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test aot-run aot-interpreter-strip-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation profiles build-example clean help docs docker-build docker-test
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -63,8 +63,27 @@ aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
 	chmod +x $(_aot_tmp) && \
 	timeout $(AOT_TIMEOUT) $(_aot_tmp)
 
-aot-test: ## Run AOT build integration tests
+aot-test: aot-interpreter-strip-check ## Run AOT build integration tests
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+
+aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader from interpreter-free AOT binaries
+	$(eval _free_bin := $(shell mktemp /tmp/1z-strip-check-free-XXXXXX))
+	$(eval _linked_bin := $(shell mktemp /tmp/1z-strip-check-linked-XXXXXX))
+	@trap 'rm -f $(_free_bin) $(_linked_bin)' EXIT; \
+	./$(ZIG_PREFIX)/bin/1z build --interpreter-fallback=false --lock-interpreter-setting -o $(_free_bin) tests/aot/interpreter_free_lock_explicit.1z && \
+	./$(ZIG_PREFIX)/bin/1z build --interpreter-fallback=true -o $(_linked_bin) tests/aot/interpreter_free_lock_explicit.1z && \
+	if nm $(_free_bin) | grep -q '_onez_load_prelude'; then \
+		echo "FAIL: interpreter-free binary still contains _onez_load_prelude (linker GC did not strip)"; exit 1; \
+	fi; \
+	if ! nm $(_linked_bin) | grep -q '_onez_load_prelude'; then \
+		echo "FAIL: interpreter-linked binary missing _onez_load_prelude (build is broken or codegen mis-routed)"; exit 1; \
+	fi; \
+	free_size=$$(stat -f %z $(_free_bin) 2>/dev/null || stat -c %s $(_free_bin)); \
+	linked_size=$$(stat -f %z $(_linked_bin) 2>/dev/null || stat -c %s $(_linked_bin)); \
+	echo "PASS: _onez_load_prelude absent from interpreter-free, present in interpreter-linked"; \
+	echo "      interpreter-free size:   $$free_size bytes"; \
+	echo "      interpreter-linked size: $$linked_size bytes"; \
+	echo "      delta:                   $$((linked_size - free_size)) bytes"
 
 bail-stats: ## Build with bail instrumentation and AOT-run a file (FILE=)
 	zig build --prefix $(ZIG_PREFIX) -Dbail-stats=true

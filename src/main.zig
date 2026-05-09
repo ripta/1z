@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const File = std.fs.File;
 
 const context = @import("context.zig");
@@ -2158,6 +2159,20 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     cc_argv.append(allocator, output) catch return 1;
     cc_argv.append(allocator, tmp_path) catch return 1;
     cc_argv.append(allocator, resolved_lib) catch return 1;
+    // XXX(ripta): linker GC when the binary is interpreter-free (no jitInterpretedCall / jitCallQuotation),
+    //             the linker drops the unreferenced interpreter code. Harmless when the interpreter is in
+    //             use because the symbols are still referenced.
+    switch (builtin.os.tag) {
+        .macos => {
+            cc_argv.append(allocator, "-Wl,-dead_strip") catch return 1;
+        },
+        .linux => {
+            cc_argv.append(allocator, "-ffunction-sections") catch return 1;
+            cc_argv.append(allocator, "-fdata-sections") catch return 1;
+            cc_argv.append(allocator, "-Wl,--gc-sections") catch return 1;
+        },
+        else => {},
+    }
     cc_argv.append(allocator, "-lffi") catch return 1;
     for (static_libs.items) |lib_name| {
         const flag = std.fmt.allocPrint(allocator, "-l{s}", .{lib_name}) catch return 1;

@@ -47,6 +47,13 @@ pub fn build(b: *std.Build) void {
         .root_module = capi_static_module,
         .linkage = .static,
     });
+
+    // XXX(ripta): Per-function and per-data sections let the linker GC unused interpreter code at
+    //             function granularity when an AOT binary is built interpreter-free. Mach-O strips
+    //             the per-symbol natively so this is a noüop, but ELF needs it for `--gc-sections`.
+    static_lib.link_function_sections = true;
+    static_lib.link_data_sections = true;
+
     const install_static = b.addInstallArtifact(static_lib, .{
         .dest_dir = .{ .override = .{ .custom = "clib" } },
     });

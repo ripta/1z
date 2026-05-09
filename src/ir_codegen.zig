@@ -6357,6 +6357,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator,
         \\
         \\extern void *onez_init(void);
+        \\extern void *onez_init_no_prelude(void);
         \\extern int onez_set_args(void *ctx, int argc, char **argv);
         \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
         \\extern int32_t onez_runtime_register_quotations(void *rt, int32_t (**table)(uintptr_t), uint32_t size);
@@ -6856,21 +6857,26 @@ pub fn emitProgramC(
     // Emit the interpreter-linked sentinel as a non-static global. The linker
     // GC will actually drop lib1z.a when this is 0, while `1z inspect` reads
     // this symbol to report the binary's interpreter status.
-    {
-        const interpreter_free = switch (interpreter_fallback) {
-            .true => false,
-            .false => lock_interpreter_setting,
-            .auto => !interpreter_callbacks_emitted,
-        };
-        try out.appendSlice(allocator, if (interpreter_free)
-            "int onez_interpreter_linked = 0;\n\n"
-        else
-            "int onez_interpreter_linked = 1;\n\n");
-    }
+    const interpreter_free = switch (interpreter_fallback) {
+        .true => false,
+        .false => lock_interpreter_setting,
+        .auto => !interpreter_callbacks_emitted,
+    };
+    try out.appendSlice(allocator, if (interpreter_free)
+        "int onez_interpreter_linked = 0;\n\n"
+    else
+        "int onez_interpreter_linked = 1;\n\n");
 
-    // 6. Main entry point
+    // 6. Main entry point. Interpreter-free binaries skip prelude loading
+    // since every reachable word was compiled and registered explicitly via
+    // onez_runtime_register_compiled below; calling onez_init() would drag
+    // the parser/tokenizer/statement processor into the binary just to
+    // re-evaluate the prelude source at startup.
     try out.appendSlice(allocator, "int main(int argc, char **argv) {\n");
-    try out.appendSlice(allocator, "    void *rt = onez_init();\n");
+    try out.appendSlice(allocator, if (interpreter_free)
+        "    void *rt = onez_init_no_prelude();\n"
+    else
+        "    void *rt = onez_init();\n");
     try out.appendSlice(allocator, "    onez_set_args(rt, argc, argv);\n");
 
     // Register statically linked FFI libraries.
