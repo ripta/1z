@@ -1,0 +1,4 @@
+\ Test: --interpreter-fallback=auto on a fully-compilable program.
+\ Codegen resolves to interpreter-free; metadata reports
+\ linked=no, fallback=auto, locked=no.
+1 1 + drop

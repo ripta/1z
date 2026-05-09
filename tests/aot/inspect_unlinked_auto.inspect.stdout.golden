@@ -1,0 +1,7 @@
+kind: aot-binary
+target: <target>
+build-mode: <build-mode>
+interpreter: linked=no, fallback=auto, locked=no
+runtime-image: present=no
+1z-version: <version>
+prelude-hash: <prelude-hash>

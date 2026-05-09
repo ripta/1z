@@ -1,0 +1,4 @@
+\ Test: --interpreter-fallback=false --lock-interpreter-setting on a
+\ fully-compilable program. Metadata reports linked=no, fallback=false,
+\ locked=yes.
+1 1 + drop

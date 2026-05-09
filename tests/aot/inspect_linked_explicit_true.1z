@@ -1,0 +1,4 @@
+\ Test: --interpreter-fallback=true keeps the interpreter linked
+\ even when the program could compile fully. Metadata reports
+\ linked=yes, fallback=true, locked=no.
+"hello" print-line

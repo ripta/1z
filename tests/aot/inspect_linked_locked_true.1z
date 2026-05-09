@@ -1,0 +1,4 @@
+\ Test: --interpreter-fallback=true --lock-interpreter-setting on a
+\ program that needs the interpreter. Metadata reports linked=yes,
+\ fallback=true, locked=yes.
+1 [ 2 + ] keep . .

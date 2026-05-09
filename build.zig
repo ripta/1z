@@ -861,6 +861,9 @@ const AotTestEntry = struct {
     has_exitcode: bool,
     exitcode_path: []const u8,
     expected_exit_code: ?u8,
+    has_inspect_stdout_golden: bool,
+    inspect_stdout_golden_path: []const u8,
+    inspect_stdout_content: []const u8,
     build_flags: []const []const u8,
     build_flags_path: []const u8,
     env_entries: []const AotEnvEntry,
@@ -940,6 +943,15 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             }
         } else |_| {}
 
+        var has_inspect_stdout_golden = false;
+        var inspect_stdout_content: []const u8 = "";
+        const inspect_stdout_golden_path = b.fmt("tests/aot/{s}.inspect.stdout.golden", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.inspect.stdout.golden", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            inspect_stdout_content = file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            has_inspect_stdout_golden = true;
+        } else |_| {}
+
         var build_flags: std.ArrayListUnmanaged([]const u8) = .{};
         const build_flags_path = b.fmt("tests/aot/{s}.build-flags", .{name_without_ext});
         if (aot_dir.openFile(b.fmt("{s}.build-flags", .{name_without_ext}), .{})) |file| {
@@ -993,6 +1005,9 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             .has_exitcode = has_exitcode,
             .exitcode_path = exitcode_path,
             .expected_exit_code = expected_exit_code,
+            .has_inspect_stdout_golden = has_inspect_stdout_golden,
+            .inspect_stdout_golden_path = inspect_stdout_golden_path,
+            .inspect_stdout_content = inspect_stdout_content,
             .build_flags = build_flags.items,
             .build_flags_path = build_flags_path,
             .env_entries = env_entries.items,
@@ -1056,6 +1071,84 @@ fn addAotTests(
         addCommonFileDeps(b, compile_run);
         for (te.build_flags) |flag| compile_run.addArg(flag);
         if (te.build_flags.len > 0) compile_run.addFileInput(b.path(te.build_flags_path));
+
+        const build_succeeds = !(is_build_only and expected_build_exit != 0);
+
+        if (te.has_inspect_stdout_golden and build_succeeds) {
+            const inspect_run = b.addSystemCommand(&.{ exe_path, "inspect" });
+            inspect_run.addFileArg(aot_binary);
+            inspect_run.step.dependOn(b.getInstallStep());
+            inspect_run.addFileInput(artifact.getEmittedBin());
+            inspect_run.expectExitCode(0);
+
+            const normalize_inspect = b.addSystemCommand(&.{
+                "sed",
+                "-e",
+                "s|^target: .*|target: <target>|",
+                "-e",
+                "s|^build-mode: .*|build-mode: <build-mode>|",
+                "-e",
+                "s|^1z-version: .*|1z-version: <version>|",
+                "-e",
+                "s|^prelude-hash: .*|prelude-hash: <prelude-hash>|",
+                "-e",
+                "/^1z-git-commit:/d",
+                "-e",
+                "/^zig-version:/d",
+                "-e",
+                "/^c-compiler-id:/d",
+                "-e",
+                "/^c-compiler-version:/d",
+            });
+            normalize_inspect.addFileArg(inspect_run.captureStdOut());
+
+            if (has_diff) {
+                addGoldenDiff(b, test_step, normalize_inspect.captureStdOut(), te.inspect_stdout_golden_path, te.file_path);
+            } else {
+                normalize_inspect.expectStdOutEqual(te.inspect_stdout_content);
+                test_step.dependOn(&normalize_inspect.step);
+            }
+
+            const update_compile_inspect = b.addSystemCommand(&.{exe_path});
+            update_compile_inspect.addArg("build");
+            update_compile_inspect.addArg(b.fmt("--stdlib-path={s}/lib", .{b.build_root.path orelse "."}));
+            update_compile_inspect.addFileArg(b.path(te.file_path));
+            update_compile_inspect.addArg("-o");
+            const update_inspect_binary = update_compile_inspect.addOutputFileArg(b.fmt("aot_inspect_{s}", .{te.name_without_ext}));
+            update_compile_inspect.step.dependOn(b.getInstallStep());
+            update_compile_inspect.addFileInput(artifact.getEmittedBin());
+
+            addCommonFileDeps(b, update_compile_inspect);
+            for (te.build_flags) |flag| update_compile_inspect.addArg(flag);
+            if (te.build_flags.len > 0) update_compile_inspect.addFileInput(b.path(te.build_flags_path));
+
+            const update_inspect_run = b.addSystemCommand(&.{ exe_path, "inspect" });
+            update_inspect_run.addFileArg(update_inspect_binary);
+            update_inspect_run.step.dependOn(b.getInstallStep());
+            update_inspect_run.addFileInput(artifact.getEmittedBin());
+
+            const update_normalize_inspect = b.addSystemCommand(&.{
+                "sed",
+                "-e",
+                "s|^target: .*|target: <target>|",
+                "-e",
+                "s|^build-mode: .*|build-mode: <build-mode>|",
+                "-e",
+                "s|^1z-version: .*|1z-version: <version>|",
+                "-e",
+                "s|^prelude-hash: .*|prelude-hash: <prelude-hash>|",
+                "-e",
+                "/^1z-git-commit:/d",
+                "-e",
+                "/^zig-version:/d",
+                "-e",
+                "/^c-compiler-id:/d",
+                "-e",
+                "/^c-compiler-version:/d",
+            });
+            update_normalize_inspect.addFileArg(update_inspect_run.captureStdOut());
+            update_files.*.addCopyFileToSource(update_normalize_inspect.captureStdOut(), te.inspect_stdout_golden_path);
+        }
 
         if (is_build_only) {
             if (has_diff) {

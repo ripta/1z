@@ -1,0 +1,5 @@
+\ Test: default 1z build flags. Program needs prelude support
+\ (print-line is a non-AOT-compilable prelude word in current state),
+\ so the resulting binary should have interpreter-linked=yes,
+\ fallback=auto, locked=no.
+"hello" print-line
