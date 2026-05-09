@@ -3192,6 +3192,7 @@ test {
     _ = @import("aot_freeze.zig");
     _ = @import("aot_image.zig");
     _ = @import("aot_image_emit.zig");
+    _ = @import("aot_image_loader.zig");
 }
 
 test "writeVersion emits '1z <version>\\n'" {

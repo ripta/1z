@@ -468,6 +468,12 @@ pub const ModuleWord = struct {
     provenance: ?WordProvenance = null,
     capability: Capability = .none,
     dispatch_id: u32 = 0,
+    /// JIT dispatch table ID, populated when this word is registered for
+    /// AOT-compiled execution. The runtime-image loader sets this from
+    /// the embedded image so module-private dictionary entries can fall
+    /// through to compiled dispatch when their compound body is the M1
+    /// stub.
+    word_id: ?u32 = null,
     action: union(enum) {
         compound: []const Instruction,
         native: NativeFn,

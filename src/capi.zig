@@ -32,6 +32,8 @@ const TypeValue = value_mod.TypeValue;
 
 const debugger_mod = @import("debugger/mod.zig");
 
+const aot_image_loader = @import("aot_image_loader.zig");
+
 const HostWordRegistration = struct {
     name: []const u8,
 };
@@ -256,6 +258,40 @@ export fn onez_load_prelude(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
         };
     }
 
+    return ONEZ_OK;
+}
+
+/// Load the AOT runtime image after the prelude is in place. The
+/// generated `main()` for runtime-image AOT binaries calls this once
+/// between `onez_init` and `onez_set_args`.
+///
+/// `header_ptr` points at the embedded `onez_image_v1` symbol;
+/// `slot_table_ptr` points at the first element of
+/// `onez_image_typevalue_slots[]`. Both must remain valid for the
+/// lifetime of the runtime.
+export fn onez_load_runtime_image(
+    ptr: ?*anyopaque,
+    header_ptr: ?*const anyopaque,
+    slot_table_ptr: ?*anyopaque,
+) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+
+    const hp = header_ptr orelse {
+        setLastError(handle, "onez_load_runtime_image: NULL header pointer", .{});
+        return ONEZ_ERR_LOAD_FAILED;
+    };
+    const header: *const aot_image_loader.Header = @ptrCast(@alignCast(hp));
+
+    const slots: ?aot_image_loader.SlotTable = if (slot_table_ptr) |sp|
+        @ptrCast(@alignCast(sp))
+    else
+        null;
+
+    aot_image_loader.loadIntoContext(ctx, header, slots, null) catch |err| {
+        captureError(handle, err);
+        return ONEZ_ERR_LOAD_FAILED;
+    };
     return ONEZ_OK;
 }
 

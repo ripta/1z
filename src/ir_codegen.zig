@@ -6421,6 +6421,7 @@ pub fn emitProgramC(
         \\extern void onez_deinit(void *rt);
         \\extern int onez_set_static_libs(void *rt, const char **names, unsigned int count);
         \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
+        \\extern int onez_load_runtime_image(void *rt, const void *header, void *slot_table);
         \\
         \\
     );
@@ -6968,6 +6969,24 @@ pub fn emitProgramC(
         "    void *rt = onez_init_no_prelude();\n"
     else
         "    void *rt = onez_init();\n");
+
+    // Runtime-image hookup: rehydrate module-private dictionary
+    // entries, blob TypeValues, and the shared slot table before user
+    // code runs. The image symbols are emitted earlier in this file by
+    // `aot_image_emit.emitImageC` when `emit_runtime_image` is true.
+    if (emit_runtime_image) {
+        try out.appendSlice(allocator,
+            \\    extern const onez_image_header_t onez_image_v1;
+            \\    extern const struct onez_typevalue *onez_image_typevalue_slots[];
+            \\    if (onez_load_runtime_image(rt, &onez_image_v1, onez_image_typevalue_slots) != 0) {
+            \\        onez_print_error(rt);
+            \\        onez_deinit(rt);
+            \\        return 1;
+            \\    }
+            \\
+        );
+    }
+
     try out.appendSlice(allocator, "    onez_set_args(rt, argc, argv);\n");
 
     // Register statically linked FFI libraries.
@@ -8040,9 +8059,28 @@ fn recordWordNotFound(ctx: *Context, name: []const u8) void {
 /// compound. Shared by AOT runtime callbacks that need to read literal
 /// payloads out of word definitions.
 fn lookupWordCompoundInstrs(ctx: *Context, name: []const u8) ?[]const Instruction {
+    if (lookupWordCompoundEntry(ctx, name)) |entry| return entry.instrs;
+    return null;
+}
+
+const RuntimeImageWordEntry = struct {
+    instrs: []const Instruction,
+    /// Populated only when the word came from a runtime-image module
+    /// (loader-seeded `ModuleWord.word_id`). Words found via the local
+    /// dictionary go through their own JIT registration path and don't
+    /// need this fallback.
+    word_id: ?u32 = null,
+};
+
+/// Like `lookupWordCompoundInstrs` but also returns the runtime-image
+/// JIT word_id when the word came from `module_cache_value`. The
+/// runtime-image M1 stub bodies have `instrs.len == 0`; the AOT-side
+/// callers (`jitPushWordLiteral`, `jitPushStructType`) detect the stub
+/// case and fall through to compiled dispatch via `word_id`.
+fn lookupWordCompoundEntry(ctx: *Context, name: []const u8) ?RuntimeImageWordEntry {
     if (ctx.lookupWord(name)) |word| {
         switch (word.action) {
-            .compound => |instrs| return instrs,
+            .compound => |instrs| return .{ .instrs = instrs, .word_id = word.word_id },
             .native, .host_callback => {},
         }
     }
@@ -8052,12 +8090,42 @@ fn lookupWordCompoundInstrs(ctx: *Context, name: []const u8) ?[]const Instructio
         const module = entry.value_ptr.*.module;
         if (module.words.get(name)) |mw| {
             switch (mw.action) {
-                .compound => |instrs| return instrs,
+                .compound => |instrs| return .{ .instrs = instrs, .word_id = mw.word_id },
                 .native, .host_callback => {},
             }
         }
     }
     return null;
+}
+
+/// Invoke an AOT-compiled word by JIT dispatch id, pushing its results
+/// onto the runtime stack. Returns true on success. False means either
+/// the dispatch entry is missing/uncompiled, or the call bailed; the
+/// caller decides whether to surface that as an error.
+fn invokeCompiledWordById(ctx: *Context, word_id: u32) bool {
+    const entry = ctx.jit_dispatch.get(word_id) orelse return false;
+    const code_ptr = entry.code_ptr orelse return false;
+
+    const saved_sp = ctx.stack.items.items.len;
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = ctx,
+    };
+    const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
+    const status = ExecResult.fromStatus(func(&jit_ctx));
+    return switch (status) {
+        .ok => true,
+        .error_propagate => false,
+        .bail => blk: {
+            // A bail from compiled code restores stack depth so the
+            // caller can fall through to its existing failure path
+            // without leaving the stack in an inconsistent state.
+            ctx.stack.items.items.len = saved_sp;
+            break :blk false;
+        },
+    };
 }
 
 /// Push a word's literal value onto the stack. The word must be a single
@@ -8074,13 +8142,13 @@ export fn jitPushWordLiteral(ctx_raw: usize, name_ptr: usize, name_len: usize) c
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(name_ptr);
     const name = src[0..name_len];
-    const instrs = lookupWordCompoundInstrs(ctx, name) orelse {
+    const entry = lookupWordCompoundEntry(ctx, name) orelse {
         recordWordNotFound(ctx, name);
         ctx.jit_pending_error = error.WordNotFound;
         return 2;
     };
-    if (instrs.len == 1) {
-        switch (instrs[0].op) {
+    if (entry.instrs.len == 1) {
+        switch (entry.instrs[0].op) {
             .push_literal => |val| {
                 ctx.stack.push(val) catch {
                     ctx.jit_pending_error = error.OutOfMemory;
@@ -8089,6 +8157,16 @@ export fn jitPushWordLiteral(ctx_raw: usize, name_ptr: usize, name_len: usize) c
                 return 0;
             },
             else => {},
+        }
+    }
+    // Runtime-image stub: an empty compound body whose word_id maps to
+    // an AOT-compiled dispatch entry. Calling the compiled word lets
+    // the variant constructor (or other literal-pushing word) push the
+    // right Value via its frozen body, which is what the structural
+    // path's M1 emission relies on.
+    if (entry.instrs.len == 0) {
+        if (entry.word_id) |word_id| {
+            if (invokeCompiledWordById(ctx, word_id)) return 0;
         }
     }
     ctx.jit_pending_error = error.TypeMismatch;
@@ -8117,14 +8195,14 @@ export fn jitPushStructType(ctx_raw: usize, name_ptr: usize, name_len: usize) ca
         return 2;
     };
 
-    const ctor_instrs = lookupWordCompoundInstrs(ctx, ctor_name) orelse {
+    const ctor_entry = lookupWordCompoundEntry(ctx, ctor_name) orelse {
         recordWordNotFound(ctx, ctor_name);
         ctx.jit_pending_error = error.WordNotFound;
         return 2;
     };
 
-    if (ctor_instrs.len >= 1) {
-        switch (ctor_instrs[0].op) {
+    if (ctor_entry.instrs.len >= 1) {
+        switch (ctor_entry.instrs[0].op) {
             .push_literal => |val| {
                 if (val == .struct_type) {
                     ctx.stack.push(val) catch {
@@ -8135,6 +8213,13 @@ export fn jitPushStructType(ctx_raw: usize, name_ptr: usize, name_len: usize) ca
                 }
             },
             else => {},
+        }
+    }
+    // Runtime-image stub: empty constructor body with an AOT word_id
+    // that pushes the struct_type when invoked.
+    if (ctor_entry.instrs.len == 0) {
+        if (ctor_entry.word_id) |word_id| {
+            if (invokeCompiledWordById(ctx, word_id)) return 0;
         }
     }
     ctx.jit_pending_error = error.TypeMismatch;
