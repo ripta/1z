@@ -623,8 +623,9 @@ fn printInspectHelp() void {
     var stdout = stdout_file.writerStreaming(&stdout_buf);
     const w = &stdout.interface;
     w.writeAll("Usage: 1z inspect <binary>\n\n") catch {};
-    w.writeAll("Report metadata embedded in a 1z AOT binary.\n\n") catch {};
-    w.writeAll("Currently reports whether the interpreter is linked into the binary.\n") catch {};
+    w.writeAll("Report metadata embedded in a 1z AOT binary, including target,\n") catch {};
+    w.writeAll("build mode, interpreter linkage and fallback policy, runtime\n") catch {};
+    w.writeAll("image presence, 1z version, and prelude content hash.\n") catch {};
     w.flush() catch {};
 }
 
@@ -2285,9 +2286,123 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     return 0;
 }
 
-const inspect_marker_prefix = "<<1Z_INSPECT_V1:interpreter_linked=";
-const inspect_marker_suffix = ">>";
+const inspect_meta_open = "<<1Z_AOT_META_V1\n";
+const inspect_meta_close = ">>";
 const inspect_max_bytes: usize = 256 * 1024 * 1024;
+
+const AotInspectFields = struct {
+    schema_version: []const u8,
+    interpreter_linked: []const u8,
+    interpreter_fallback_mode: []const u8,
+    interpreter_setting_locked: []const u8,
+    runtime_image_present: []const u8,
+    target_triple: []const u8,
+    build_mode: []const u8,
+    onez_version: []const u8,
+    prelude_hash: []const u8,
+};
+
+const AotInspectError = error{
+    MarkerNotFound,
+    Truncated,
+    MalformedLine,
+    UnsupportedSchemaVersion,
+    MissingField,
+};
+
+const AotInspectErrorContext = struct {
+    missing_field: []const u8 = "",
+    schema_version: []const u8 = "",
+};
+
+fn parseAotMetadata(
+    contents: []const u8,
+    err_ctx: *AotInspectErrorContext,
+) AotInspectError!AotInspectFields {
+    const open_idx = std.mem.indexOf(u8, contents, inspect_meta_open) orelse
+        return error.MarkerNotFound;
+    const payload_start = open_idx + inspect_meta_open.len;
+    const close_rel = std.mem.indexOf(u8, contents[payload_start..], inspect_meta_close) orelse
+        return error.Truncated;
+    const payload = contents[payload_start .. payload_start + close_rel];
+
+    var schema_version: ?[]const u8 = null;
+    var interpreter_linked: ?[]const u8 = null;
+    var interpreter_fallback_mode: ?[]const u8 = null;
+    var interpreter_setting_locked: ?[]const u8 = null;
+    var runtime_image_present: ?[]const u8 = null;
+    var target_triple: ?[]const u8 = null;
+    var build_mode: ?[]const u8 = null;
+    var onez_version: ?[]const u8 = null;
+    var prelude_hash: ?[]const u8 = null;
+
+    var line_it = std.mem.splitScalar(u8, payload, '\n');
+    while (line_it.next()) |line| {
+        if (line.len == 0) continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse return error.MalformedLine;
+        const key = line[0..eq];
+        const value = line[eq + 1 ..];
+        if (std.mem.eql(u8, key, "schema-version")) {
+            schema_version = value;
+        } else if (std.mem.eql(u8, key, "interpreter-linked")) {
+            interpreter_linked = value;
+        } else if (std.mem.eql(u8, key, "interpreter-fallback-mode")) {
+            interpreter_fallback_mode = value;
+        } else if (std.mem.eql(u8, key, "interpreter-setting-locked")) {
+            interpreter_setting_locked = value;
+        } else if (std.mem.eql(u8, key, "runtime-image-present")) {
+            runtime_image_present = value;
+        } else if (std.mem.eql(u8, key, "target-triple")) {
+            target_triple = value;
+        } else if (std.mem.eql(u8, key, "build-mode")) {
+            build_mode = value;
+        } else if (std.mem.eql(u8, key, "onez-version")) {
+            onez_version = value;
+        } else if (std.mem.eql(u8, key, "prelude-hash")) {
+            prelude_hash = value;
+        }
+        // Unknown keys are ignored so the parser can read newer schema-1
+        // binaries that add forward-compatible optional fields.
+    }
+
+    const sv = schema_version orelse {
+        err_ctx.missing_field = "schema-version";
+        return error.MissingField;
+    };
+    if (!std.mem.eql(u8, sv, "1")) {
+        err_ctx.schema_version = sv;
+        return error.UnsupportedSchemaVersion;
+    }
+
+    const required_fields = [_]struct { name: []const u8, value: ?[]const u8 }{
+        .{ .name = "interpreter-linked", .value = interpreter_linked },
+        .{ .name = "interpreter-fallback-mode", .value = interpreter_fallback_mode },
+        .{ .name = "interpreter-setting-locked", .value = interpreter_setting_locked },
+        .{ .name = "runtime-image-present", .value = runtime_image_present },
+        .{ .name = "target-triple", .value = target_triple },
+        .{ .name = "build-mode", .value = build_mode },
+        .{ .name = "onez-version", .value = onez_version },
+        .{ .name = "prelude-hash", .value = prelude_hash },
+    };
+    for (required_fields) |f| {
+        if (f.value == null) {
+            err_ctx.missing_field = f.name;
+            return error.MissingField;
+        }
+    }
+
+    return AotInspectFields{
+        .schema_version = sv,
+        .interpreter_linked = interpreter_linked.?,
+        .interpreter_fallback_mode = interpreter_fallback_mode.?,
+        .interpreter_setting_locked = interpreter_setting_locked.?,
+        .runtime_image_present = runtime_image_present.?,
+        .target_triple = target_triple.?,
+        .build_mode = build_mode.?,
+        .onez_version = onez_version.?,
+        .prelude_hash = prelude_hash.?,
+    };
+}
 
 fn handleInspect(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     const stdout_file: File = .stdout();
@@ -2340,37 +2455,45 @@ fn handleInspect(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     };
     defer gpa.free(contents);
 
-    const idx = std.mem.indexOf(u8, contents, inspect_marker_prefix) orelse {
-        err_writer.print("Error: '{s}': not a 1z AOT binary or unsupported version\n", .{path}) catch {};
-        err_writer.flush() catch {};
-        return 1;
-    };
-    const value_start = idx + inspect_marker_prefix.len;
-    if (value_start + 1 + inspect_marker_suffix.len > contents.len) {
-        err_writer.print("Error: '{s}': truncated 1z inspect marker\n", .{path}) catch {};
-        err_writer.flush() catch {};
-        return 1;
-    }
-    const value_byte = contents[value_start];
-    const after = contents[value_start + 1 .. value_start + 1 + inspect_marker_suffix.len];
-    if (!std.mem.eql(u8, after, inspect_marker_suffix)) {
-        err_writer.print("Error: '{s}': malformed 1z inspect marker\n", .{path}) catch {};
-        err_writer.flush() catch {};
-        return 1;
-    }
-
-    const interpreter_status: []const u8 = switch (value_byte) {
-        '0' => "not linked",
-        '1' => "linked",
-        else => {
-            err_writer.print("Error: '{s}': unrecognized interpreter-linked value '{c}'\n", .{ path, value_byte }) catch {};
+    var err_ctx: AotInspectErrorContext = .{};
+    const fields = parseAotMetadata(contents, &err_ctx) catch |err| switch (err) {
+        error.MarkerNotFound => {
+            err_writer.print("Error: '{s}': not a 1z AOT binary or unsupported version\n", .{path}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        },
+        error.Truncated => {
+            err_writer.print("Error: '{s}': truncated 1z metadata block\n", .{path}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        },
+        error.MalformedLine => {
+            err_writer.print("Error: '{s}': malformed 1z metadata line\n", .{path}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        },
+        error.UnsupportedSchemaVersion => {
+            err_writer.print("Error: '{s}': unsupported metadata schema version '{s}'\n", .{ path, err_ctx.schema_version }) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        },
+        error.MissingField => {
+            err_writer.print("Error: '{s}': metadata missing field '{s}'\n", .{ path, err_ctx.missing_field }) catch {};
             err_writer.flush() catch {};
             return 1;
         },
     };
 
     out_writer.writeAll("kind: aot-binary\n") catch {};
-    out_writer.print("interpreter: {s}\n", .{interpreter_status}) catch {};
+    out_writer.print("target: {s}\n", .{fields.target_triple}) catch {};
+    out_writer.print("build-mode: {s}\n", .{fields.build_mode}) catch {};
+    out_writer.print(
+        "interpreter: linked={s}, fallback={s}, locked={s}\n",
+        .{ fields.interpreter_linked, fields.interpreter_fallback_mode, fields.interpreter_setting_locked },
+    ) catch {};
+    out_writer.print("runtime-image: present={s}\n", .{fields.runtime_image_present}) catch {};
+    out_writer.print("1z-version: {s}\n", .{fields.onez_version}) catch {};
+    out_writer.print("prelude-hash: {s}\n", .{fields.prelude_hash}) catch {};
     out_writer.flush() catch {};
     return 0;
 }
@@ -2815,4 +2938,108 @@ test "writeVersion emits '1z <version>\\n'" {
     try writeVersion(fbs.writer());
     const expected = "1z " ++ version ++ "\n";
     try std.testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
+test "parseAotMetadata happy path" {
+    const sample =
+        "leading garbage bytes\x00\x00" ++
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=1\n" ++
+        "interpreter-linked=no\n" ++
+        "interpreter-fallback-mode=auto\n" ++
+        "interpreter-setting-locked=no\n" ++
+        "runtime-image-present=no\n" ++
+        "target-triple=aarch64-macos\n" ++
+        "build-mode=ReleaseSafe\n" ++
+        "onez-version=0.1.0-dev\n" ++
+        "prelude-hash=" ++ ("0123456789abcdef" ** 4) ++ "\n" ++
+        ">>\ntrailing\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const fields = try parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectEqualStrings("1", fields.schema_version);
+    try std.testing.expectEqualStrings("no", fields.interpreter_linked);
+    try std.testing.expectEqualStrings("auto", fields.interpreter_fallback_mode);
+    try std.testing.expectEqualStrings("no", fields.interpreter_setting_locked);
+    try std.testing.expectEqualStrings("no", fields.runtime_image_present);
+    try std.testing.expectEqualStrings("aarch64-macos", fields.target_triple);
+    try std.testing.expectEqualStrings("ReleaseSafe", fields.build_mode);
+    try std.testing.expectEqualStrings("0.1.0-dev", fields.onez_version);
+    try std.testing.expectEqualStrings("0123456789abcdef" ** 4, fields.prelude_hash);
+}
+
+test "parseAotMetadata ignores unknown forward-compat keys" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=1\n" ++
+        "interpreter-linked=yes\n" ++
+        "interpreter-fallback-mode=true\n" ++
+        "interpreter-setting-locked=yes\n" ++
+        "runtime-image-present=no\n" ++
+        "target-triple=x86_64-linux\n" ++
+        "build-mode=Debug\n" ++
+        "onez-version=99.99.99\n" ++
+        "prelude-hash=" ++ ("ff" ** 32) ++ "\n" ++
+        "future-conditional-field=hello\n" ++
+        ">>\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const fields = try parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectEqualStrings("yes", fields.interpreter_linked);
+    try std.testing.expectEqualStrings("Debug", fields.build_mode);
+}
+
+test "parseAotMetadata reports unsupported schema version" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=2\n" ++
+        ">>\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const result = parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectError(error.UnsupportedSchemaVersion, result);
+    try std.testing.expectEqualStrings("2", err_ctx.schema_version);
+}
+
+test "parseAotMetadata reports missing required field" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=1\n" ++
+        "interpreter-linked=no\n" ++
+        "interpreter-fallback-mode=auto\n" ++
+        "interpreter-setting-locked=no\n" ++
+        "runtime-image-present=no\n" ++
+        "target-triple=aarch64-macos\n" ++
+        "build-mode=ReleaseSafe\n" ++
+        "onez-version=0.1.0\n" ++
+        ">>\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const result = parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectError(error.MissingField, result);
+    try std.testing.expectEqualStrings("prelude-hash", err_ctx.missing_field);
+}
+
+test "parseAotMetadata reports missing open marker" {
+    const sample = "no marker anywhere in this buffer";
+    var err_ctx: AotInspectErrorContext = .{};
+    const result = parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectError(error.MarkerNotFound, result);
+}
+
+test "parseAotMetadata reports truncated payload" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=1\n" ++
+        "interpreter-linked=no\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const result = parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectError(error.Truncated, result);
+}
+
+test "parseAotMetadata reports malformed line" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=1\n" ++
+        "no-equals-sign-here\n" ++
+        ">>\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const result = parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectError(error.MalformedLine, result);
 }
