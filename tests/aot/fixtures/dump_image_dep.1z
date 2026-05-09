@@ -1,0 +1,14 @@
+\ Fixture for tests/aot/dump_image_classification.
+\ Mixes structural (compound bodies, enum variants) and blob
+\ (TypeValues, mutable maps) module-private values to exercise the
+\ --dump-aot-image-classification surface.
+
+\ Structural: a plain compound word.
+plain-double: ( n -- n ) [ 2 * ] ;
+
+\ Enum -- the parent type is a TypeValue (blob path), but each variant
+\ word resolves to a `tagged` value with a unit inner, which is structural.
+color: enum{
+  red: unit
+  green: unit
+} ;

@@ -31,6 +31,7 @@ const trace_mod = @import("trace.zig");
 const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
 const aot_freeze = @import("aot_freeze.zig");
+const aot_image = @import("aot_image.zig");
 const ir_codegen = @import("ir_codegen.zig");
 const bail_stats_mod = @import("bail_stats.zig");
 
@@ -1855,6 +1856,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var compilation_stats = false;
     var compile_all_prelude = false;
     var save_temps = false;
+    var dump_image_classification = false;
     var interpreter_fallback: ir_codegen.InterpreterFallbackMode = .auto;
     var lock_interpreter_setting = false;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
@@ -1889,6 +1891,10 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         }
         if (std.mem.eql(u8, arg, "--save-temps")) {
             save_temps = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--dump-aot-image-classification")) {
+            dump_image_classification = true;
             continue;
         }
         if (std.mem.startsWith(u8, arg, "--link-static=")) {
@@ -1953,7 +1959,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const allocator = mem_limit.allocator();
 
     const source = source_file orelse {
-        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps] [--compilation-stats] [--compile-all-prelude] [--interpreter-fallback=true|false|auto] [--lock-interpreter-setting]\n") catch {};
+        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps] [--compilation-stats] [--compile-all-prelude] [--interpreter-fallback=true|false|auto] [--lock-interpreter-setting] [--dump-aot-image-classification]\n") catch {};
         err_writer.flush() catch {};
         return 1;
     };
@@ -2034,6 +2040,32 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         return 1;
     };
     defer freeze_result.deinit(allocator);
+
+    if (dump_image_classification) {
+        var manifest = aot_image.buildImageManifest(ctx, allocator) catch |err| {
+            err_writer.print("Error building image manifest: {s}\n", .{@errorName(err)}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+        defer manifest.deinit(allocator);
+
+        var dump_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer dump_buf.deinit(allocator);
+        aot_image.writeManifestDump(&dump_buf, allocator, manifest) catch {
+            err_writer.writeAll("Error: out of memory rendering image manifest\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+        err_writer.writeAll(dump_buf.items) catch {};
+        err_writer.flush() catch {};
+
+        // Touch the output path so build pipelines that declare it as an
+        // output (test frameworks, make rules) see a file. The dump flag is
+        // a diagnostic mode -- no real binary is produced.
+        if (std.fs.cwd().createFile(output, .{ .truncate = true })) |f| f.close() else |_| {}
+
+        return 0;
+    }
 
     if (freeze_result.warnings.len > 0) {
         for (freeze_result.warnings) |warning| {
@@ -3102,6 +3134,7 @@ test {
     _ = @import("lsp/mod.zig");
     _ = @import("simd.zig");
     _ = @import("aot_freeze.zig");
+    _ = @import("aot_image.zig");
 }
 
 test "writeVersion emits '1z <version>\\n'" {

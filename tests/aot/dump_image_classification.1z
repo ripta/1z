@@ -1,0 +1,3 @@
+\ Build-only test: --dump-aot-image-classification prints the freeze-time
+\ image manifest to stderr and exits without producing a binary.
+use "fixtures/dump_image_dep.1z" ;
