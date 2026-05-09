@@ -37,6 +37,18 @@ const bail_stats_mod = @import("bail_stats.zig");
 const signal = @import("signal.zig");
 const build_options = @import("build_options");
 pub const version = build_options.version;
+pub const git_commit = build_options.git_commit;
+
+/// Compile-time-rendered Zig compiler version string. Format matches
+/// `<major>.<minor>.<patch>`, with `-pre.<n>` appended only when the
+/// running Zig is a pre-release build.
+const zig_version_str: []const u8 = blk: {
+    const v = builtin.zig_version;
+    break :blk if (v.pre) |pre|
+        std.fmt.comptimePrint("{d}.{d}.{d}-{s}", .{ v.major, v.minor, v.patch, pre })
+    else
+        std.fmt.comptimePrint("{d}.{d}.{d}", .{ v.major, v.minor, v.patch });
+};
 
 /// Verbosity level for REPL output.
 const Verbosity = enum(u8) {
@@ -2056,6 +2068,9 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     };
     defer allocator.free(target_triple);
 
+    const cc_probe = probeCCompiler(allocator);
+    defer cc_probe.deinit(allocator);
+
     const aot_metadata: ir_codegen.AotMetadata = .{
         .interpreter_fallback_mode = interpreter_fallback,
         .interpreter_setting_locked = lock_interpreter_setting,
@@ -2064,6 +2079,10 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         .build_mode = @tagName(builtin.mode),
         .onez_version = version,
         .prelude_hash_hex = &prelude_hash_hex_buf,
+        .onez_git_commit = git_commit,
+        .zig_version = zig_version_str,
+        .c_compiler_id = cc_probe.id,
+        .c_compiler_version = cc_probe.banner,
     };
 
     const c_source = ir_codegen.emitProgramC(
@@ -2286,6 +2305,93 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     return 0;
 }
 
+/// Result of probing the C compiler for its self-reported identity.
+/// Both fields default to the empty slice when the probe could not
+/// reach the compiler or could not parse a usable banner.
+const CCompilerProbe = struct {
+    id: []const u8 = "",
+    banner: []const u8 = "",
+    /// Allocation backing `banner` (a slice of captured stdout).
+    raw: []u8 = &.{},
+    /// Allocation backing `id` (always owned separately so we can prefix
+    /// `zig ` when we invoked `zig cc`).
+    id_buf: []u8 = &.{},
+
+    fn deinit(self: CCompilerProbe, allocator: std.mem.Allocator) void {
+        if (self.raw.len > 0) allocator.free(self.raw);
+        if (self.id_buf.len > 0) allocator.free(self.id_buf);
+    }
+};
+
+/// Run `<cc> --version` (matching the cc invocation `1z build` will use)
+/// and synthesize a (`id`, `banner`) pair. Failure modes -- spawn error,
+/// non-zero exit, empty output, parse miss -- all collapse to an empty
+/// probe; the caller treats both fields as advisory provenance.
+fn probeCCompiler(allocator: std.mem.Allocator) CCompilerProbe {
+    const cc_env = std.posix.getenv("CC");
+    const cc_cmd = cc_env orelse "zig";
+
+    var argv: std.ArrayListUnmanaged([]const u8) = .{};
+    defer argv.deinit(allocator);
+    argv.append(allocator, cc_cmd) catch return .{};
+    if (cc_env == null) argv.append(allocator, "cc") catch return .{};
+    argv.append(allocator, "--version") catch return .{};
+
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = argv.items,
+        .max_output_bytes = 4096,
+    }) catch return .{};
+    allocator.free(result.stderr);
+
+    if (result.term != .Exited or result.term.Exited != 0) {
+        allocator.free(result.stdout);
+        return .{};
+    }
+
+    const newline_idx = std.mem.indexOfScalar(u8, result.stdout, '\n') orelse result.stdout.len;
+    const banner = std.mem.trim(u8, result.stdout[0..newline_idx], &std.ascii.whitespace);
+    if (banner.len == 0) {
+        allocator.free(result.stdout);
+        return .{};
+    }
+
+    const family_id: []const u8 =
+        if (std.mem.indexOf(u8, banner, "Apple clang") != null)
+            "Apple clang"
+        else if (std.mem.indexOf(u8, banner, "clang") != null)
+            "clang"
+        else if (std.mem.indexOf(u8, banner, "gcc") != null or std.mem.indexOf(u8, banner, "GCC") != null)
+            "gcc"
+        else blk: {
+            const first_space = std.mem.indexOfScalar(u8, banner, ' ') orelse banner.len;
+            break :blk banner[0..first_space];
+        };
+
+    // When we invoked `zig cc`, prefix the family so the metadata
+    // distinguishes the bundled clang from a system clang.
+    const id_buf: []u8 = if (cc_env == null) blk: {
+        const buf = std.fmt.allocPrint(allocator, "zig {s}", .{family_id}) catch {
+            allocator.free(result.stdout);
+            return .{};
+        };
+        break :blk buf;
+    } else blk: {
+        const buf = allocator.dupe(u8, family_id) catch {
+            allocator.free(result.stdout);
+            return .{};
+        };
+        break :blk buf;
+    };
+
+    return .{
+        .id = id_buf,
+        .banner = banner,
+        .raw = result.stdout,
+        .id_buf = id_buf,
+    };
+}
+
 const inspect_meta_open = "<<1Z_AOT_META_V1\n";
 const inspect_meta_close = ">>";
 const inspect_max_bytes: usize = 256 * 1024 * 1024;
@@ -2300,6 +2406,17 @@ const AotInspectFields = struct {
     build_mode: []const u8,
     onez_version: []const u8,
     prelude_hash: []const u8,
+    // Runtime-image fields are populated only when the binary
+    // embeds a runtime program image; absent otherwise.
+    runtime_image_format_version: ?[]const u8 = null,
+    runtime_image_blob_present: ?[]const u8 = null,
+    runtime_image_word_count: ?[]const u8 = null,
+    // Optional toolchain provenance. Present only when the build
+    // environment captured the corresponding value.
+    onez_git_commit: ?[]const u8 = null,
+    zig_version: ?[]const u8 = null,
+    c_compiler_id: ?[]const u8 = null,
+    c_compiler_version: ?[]const u8 = null,
 };
 
 const AotInspectError = error{
@@ -2335,6 +2452,13 @@ fn parseAotMetadata(
     var build_mode: ?[]const u8 = null;
     var onez_version: ?[]const u8 = null;
     var prelude_hash: ?[]const u8 = null;
+    var runtime_image_format_version: ?[]const u8 = null;
+    var runtime_image_blob_present: ?[]const u8 = null;
+    var runtime_image_word_count: ?[]const u8 = null;
+    var onez_git_commit: ?[]const u8 = null;
+    var zig_version: ?[]const u8 = null;
+    var c_compiler_id: ?[]const u8 = null;
+    var c_compiler_version: ?[]const u8 = null;
 
     var line_it = std.mem.splitScalar(u8, payload, '\n');
     while (line_it.next()) |line| {
@@ -2360,6 +2484,20 @@ fn parseAotMetadata(
             onez_version = value;
         } else if (std.mem.eql(u8, key, "prelude-hash")) {
             prelude_hash = value;
+        } else if (std.mem.eql(u8, key, "runtime-image-format-version")) {
+            runtime_image_format_version = value;
+        } else if (std.mem.eql(u8, key, "runtime-image-blob-present")) {
+            runtime_image_blob_present = value;
+        } else if (std.mem.eql(u8, key, "runtime-image-word-count")) {
+            runtime_image_word_count = value;
+        } else if (std.mem.eql(u8, key, "onez-git-commit")) {
+            onez_git_commit = value;
+        } else if (std.mem.eql(u8, key, "zig-version")) {
+            zig_version = value;
+        } else if (std.mem.eql(u8, key, "c-compiler-id")) {
+            c_compiler_id = value;
+        } else if (std.mem.eql(u8, key, "c-compiler-version")) {
+            c_compiler_version = value;
         }
         // Unknown keys are ignored so the parser can read newer schema-1
         // binaries that add forward-compatible optional fields.
@@ -2401,6 +2539,13 @@ fn parseAotMetadata(
         .build_mode = build_mode.?,
         .onez_version = onez_version.?,
         .prelude_hash = prelude_hash.?,
+        .runtime_image_format_version = runtime_image_format_version,
+        .runtime_image_blob_present = runtime_image_blob_present,
+        .runtime_image_word_count = runtime_image_word_count,
+        .onez_git_commit = onez_git_commit,
+        .zig_version = zig_version,
+        .c_compiler_id = c_compiler_id,
+        .c_compiler_version = c_compiler_version,
     };
 }
 
@@ -2491,9 +2636,36 @@ fn handleInspect(gpa: std.mem.Allocator, args: []const []const u8) u8 {
         "interpreter: linked={s}, fallback={s}, locked={s}\n",
         .{ fields.interpreter_linked, fields.interpreter_fallback_mode, fields.interpreter_setting_locked },
     ) catch {};
-    out_writer.print("runtime-image: present={s}\n", .{fields.runtime_image_present}) catch {};
+    if (std.mem.eql(u8, fields.runtime_image_present, "yes") and
+        fields.runtime_image_format_version != null and
+        fields.runtime_image_blob_present != null and
+        fields.runtime_image_word_count != null)
+    {
+        out_writer.print(
+            "runtime-image: present=yes, format-version={s}, blob-present={s}, word-count={s}\n",
+            .{
+                fields.runtime_image_format_version.?,
+                fields.runtime_image_blob_present.?,
+                fields.runtime_image_word_count.?,
+            },
+        ) catch {};
+    } else {
+        out_writer.print("runtime-image: present={s}\n", .{fields.runtime_image_present}) catch {};
+    }
     out_writer.print("1z-version: {s}\n", .{fields.onez_version}) catch {};
     out_writer.print("prelude-hash: {s}\n", .{fields.prelude_hash}) catch {};
+    if (fields.onez_git_commit) |v| {
+        out_writer.print("1z-git-commit: {s}\n", .{v}) catch {};
+    }
+    if (fields.zig_version) |v| {
+        out_writer.print("zig-version: {s}\n", .{v}) catch {};
+    }
+    if (fields.c_compiler_id) |v| {
+        out_writer.print("c-compiler-id: {s}\n", .{v}) catch {};
+    }
+    if (fields.c_compiler_version) |v| {
+        out_writer.print("c-compiler-version: {s}\n", .{v}) catch {};
+    }
     out_writer.flush() catch {};
     return 0;
 }
@@ -2965,6 +3137,64 @@ test "parseAotMetadata happy path" {
     try std.testing.expectEqualStrings("ReleaseSafe", fields.build_mode);
     try std.testing.expectEqualStrings("0.1.0-dev", fields.onez_version);
     try std.testing.expectEqualStrings("0123456789abcdef" ** 4, fields.prelude_hash);
+    try std.testing.expectEqual(@as(?[]const u8, null), fields.runtime_image_format_version);
+    try std.testing.expectEqual(@as(?[]const u8, null), fields.runtime_image_blob_present);
+    try std.testing.expectEqual(@as(?[]const u8, null), fields.runtime_image_word_count);
+    try std.testing.expectEqual(@as(?[]const u8, null), fields.onez_git_commit);
+    try std.testing.expectEqual(@as(?[]const u8, null), fields.zig_version);
+    try std.testing.expectEqual(@as(?[]const u8, null), fields.c_compiler_id);
+    try std.testing.expectEqual(@as(?[]const u8, null), fields.c_compiler_version);
+}
+
+test "parseAotMetadata captures toolchain provenance when present" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=1\n" ++
+        "interpreter-linked=no\n" ++
+        "interpreter-fallback-mode=auto\n" ++
+        "interpreter-setting-locked=no\n" ++
+        "runtime-image-present=no\n" ++
+        "target-triple=aarch64-macos\n" ++
+        "build-mode=ReleaseSafe\n" ++
+        "onez-version=0.1.0-dev\n" ++
+        "prelude-hash=" ++ ("0123456789abcdef" ** 4) ++ "\n" ++
+        "onez-git-commit=" ++ ("ab" ** 20) ++ "\n" ++
+        "zig-version=0.15.2\n" ++
+        "c-compiler-id=zig clang\n" ++
+        "c-compiler-version=Homebrew clang version 20.1.8\n" ++
+        ">>\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const fields = try parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectEqualStrings("ab" ** 20, fields.onez_git_commit.?);
+    try std.testing.expectEqualStrings("0.15.2", fields.zig_version.?);
+    try std.testing.expectEqualStrings("zig clang", fields.c_compiler_id.?);
+    try std.testing.expectEqualStrings("Homebrew clang version 20.1.8", fields.c_compiler_version.?);
+    // Runtime-image fields stay absent when present=no.
+    try std.testing.expectEqual(@as(?[]const u8, null), fields.runtime_image_format_version);
+}
+
+test "parseAotMetadata captures runtime-image conditional fields" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=1\n" ++
+        "interpreter-linked=no\n" ++
+        "interpreter-fallback-mode=auto\n" ++
+        "interpreter-setting-locked=no\n" ++
+        "runtime-image-present=yes\n" ++
+        "target-triple=aarch64-macos\n" ++
+        "build-mode=ReleaseSafe\n" ++
+        "onez-version=0.1.0-dev\n" ++
+        "prelude-hash=" ++ ("0123456789abcdef" ** 4) ++ "\n" ++
+        "runtime-image-format-version=1\n" ++
+        "runtime-image-blob-present=yes\n" ++
+        "runtime-image-word-count=412\n" ++
+        ">>\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const fields = try parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectEqualStrings("yes", fields.runtime_image_present);
+    try std.testing.expectEqualStrings("1", fields.runtime_image_format_version.?);
+    try std.testing.expectEqualStrings("yes", fields.runtime_image_blob_present.?);
+    try std.testing.expectEqualStrings("412", fields.runtime_image_word_count.?);
 }
 
 test "parseAotMetadata ignores unknown forward-compat keys" {

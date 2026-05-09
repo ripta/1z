@@ -12,6 +12,7 @@ pub fn build(b: *std.Build) void {
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
+    options.addOption([]const u8, "git_commit", captureGitCommit(b));
     options.addOption(u32, "test_case_timeout_secs", test_case_timeout_secs);
     options.addOption(bool, "verbose_test_reporting", verbose_test_reporting);
     options.addOption(u64, "slow_test_threshold_ms", slow_test_threshold_ms);
@@ -624,6 +625,24 @@ fn testTimeoutSeconds(flags_lines: ?[]const u8) ?u32 {
 fn envFlagIsSet(b: *std.Build, name: []const u8) bool {
     const value = b.graph.env_map.get(name) orelse return false;
     return value.len != 0 and !std.mem.eql(u8, value, "0");
+}
+
+/// Best-effort capture of the toolchain's current git commit. Returns
+/// the empty string when git is unavailable, the source tree is not a
+/// git checkout, or the command fails for any other reason; the build
+/// must not fail because provenance metadata could not be captured.
+fn captureGitCommit(b: *std.Build) []const u8 {
+    const result = std.process.Child.run(.{
+        .allocator = b.allocator,
+        .argv = &.{ "git", "rev-parse", "HEAD" },
+        .cwd = b.build_root.path,
+    }) catch return "";
+    defer b.allocator.free(result.stderr);
+    defer b.allocator.free(result.stdout);
+    if (result.term != .Exited or result.term.Exited != 0) return "";
+    const trimmed = std.mem.trim(u8, result.stdout, &std.ascii.whitespace);
+    if (trimmed.len == 0) return "";
+    return b.allocator.dupe(u8, trimmed) catch "";
 }
 
 fn addWrappedCommand(

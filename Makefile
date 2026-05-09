@@ -86,14 +86,24 @@ aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader
 	echo "      delta:                   $$((linked_size - free_size)) bytes"; \
 	free_inspect=$$(./$(ZIG_PREFIX)/bin/1z inspect $(_free_bin)); \
 	linked_inspect=$$(./$(ZIG_PREFIX)/bin/1z inspect $(_linked_bin)); \
-	if ! echo "$$free_inspect" | grep -qx 'interpreter: linked=no, fallback=false, locked=yes'; then \
+	if ! echo "$$free_inspect" | grep -q '^interpreter: linked=no, fallback=false, locked=yes$$'; then \
 		echo "FAIL: 1z inspect on free binary did not report linked=no with fallback=false, locked=yes:"; \
 		echo "$$free_inspect"; exit 1; \
 	fi; \
-	if ! echo "$$linked_inspect" | grep -qx 'interpreter: linked=yes, fallback=true, locked=no'; then \
+	if ! echo "$$linked_inspect" | grep -q '^interpreter: linked=yes, fallback=true, locked=no$$'; then \
 		echo "FAIL: 1z inspect on linked binary did not report linked=yes with fallback=true, locked=no:"; \
 		echo "$$linked_inspect"; exit 1; \
 	fi; \
+	for required in '^1z-version: ' '^prelude-hash: '; do \
+		if ! echo "$$free_inspect" | grep -q "$$required"; then \
+			echo "FAIL: 1z inspect on free binary missing required row matching $$required"; \
+			echo "$$free_inspect"; exit 1; \
+		fi; \
+		if ! echo "$$linked_inspect" | grep -q "$$required"; then \
+			echo "FAIL: 1z inspect on linked binary missing required row matching $$required"; \
+			echo "$$linked_inspect"; exit 1; \
+		fi; \
+	done; \
 	echo "PASS: 1z inspect reports linked=no for interpreter-free, linked=yes for interpreter-linked"
 
 bail-stats: ## Build with bail instrumentation and AOT-run a file (FILE=)

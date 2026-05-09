@@ -6304,6 +6304,19 @@ pub const AotMetadata = struct {
     /// Hex-encoded SHA-256 of the prelude source bytes that fed
     /// `Context.loadPrelude` for this build, length 64.
     prelude_hash_hex: []const u8,
+    /// Read only when `runtime_image_present` is true; ignored
+    /// otherwise. Stays at the defaults until a binary actually
+    /// embeds a runtime program image.
+    runtime_image_format_version: u32 = 0,
+    runtime_image_blob_present: bool = false,
+    runtime_image_word_count: u32 = 0,
+    /// Optional toolchain provenance. An empty slice means the field
+    /// was unavailable at build time and must not appear in the
+    /// embedded metadata or in `1z inspect` output.
+    onez_git_commit: []const u8 = "",
+    zig_version: []const u8 = "",
+    c_compiler_id: []const u8 = "",
+    c_compiler_version: []const u8 = "",
 };
 
 pub fn emitProgramC(
@@ -7061,6 +7074,53 @@ fn emitAotMetadata(
     try out.appendSlice(allocator, "    \"prelude-hash=");
     try out.appendSlice(allocator, meta.prelude_hash_hex);
     try out.appendSlice(allocator, "\\n\"\n");
+
+    // Runtime-image fields are only meaningful when a runtime image
+    // is actually embedded; absent fields must not be rendered as
+    // empty values.
+    if (meta.runtime_image_present) {
+        var num_buf: [32]u8 = undefined;
+        const fmt_str = std.fmt.bufPrint(&num_buf, "{d}", .{meta.runtime_image_format_version}) catch unreachable;
+        try out.appendSlice(allocator, "    \"runtime-image-format-version=");
+        try out.appendSlice(allocator, fmt_str);
+        try out.appendSlice(allocator, "\\n\"\n");
+
+        const blob_yes_no: []const u8 = if (meta.runtime_image_blob_present) "yes" else "no";
+        try out.appendSlice(allocator, "    \"runtime-image-blob-present=");
+        try out.appendSlice(allocator, blob_yes_no);
+        try out.appendSlice(allocator, "\\n\"\n");
+
+        const wc_str = std.fmt.bufPrint(&num_buf, "{d}", .{meta.runtime_image_word_count}) catch unreachable;
+        try out.appendSlice(allocator, "    \"runtime-image-word-count=");
+        try out.appendSlice(allocator, wc_str);
+        try out.appendSlice(allocator, "\\n\"\n");
+    }
+
+    // Optional toolchain provenance. Each is included only when the
+    // build environment supplied it; absent fields are omitted from
+    // the embedded record entirely so the inspector can render them
+    // as "not present" rather than as empty strings.
+    if (meta.onez_git_commit.len > 0) {
+        try out.appendSlice(allocator, "    \"onez-git-commit=");
+        try out.appendSlice(allocator, meta.onez_git_commit);
+        try out.appendSlice(allocator, "\\n\"\n");
+    }
+    if (meta.zig_version.len > 0) {
+        try out.appendSlice(allocator, "    \"zig-version=");
+        try out.appendSlice(allocator, meta.zig_version);
+        try out.appendSlice(allocator, "\\n\"\n");
+    }
+    if (meta.c_compiler_id.len > 0) {
+        try out.appendSlice(allocator, "    \"c-compiler-id=");
+        try out.appendSlice(allocator, meta.c_compiler_id);
+        try out.appendSlice(allocator, "\\n\"\n");
+    }
+    if (meta.c_compiler_version.len > 0) {
+        try out.appendSlice(allocator, "    \"c-compiler-version=");
+        try out.appendSlice(allocator, meta.c_compiler_version);
+        try out.appendSlice(allocator, "\\n\"\n");
+    }
+
     try out.appendSlice(allocator, "    \">>\\n\";\n\n");
 }
 
