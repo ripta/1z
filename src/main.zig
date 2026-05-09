@@ -32,6 +32,7 @@ const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
 const aot_freeze = @import("aot_freeze.zig");
 const aot_image = @import("aot_image.zig");
+const aot_image_emit = @import("aot_image_emit.zig");
 const ir_codegen = @import("ir_codegen.zig");
 const bail_stats_mod = @import("bail_stats.zig");
 
@@ -1857,6 +1858,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var compile_all_prelude = false;
     var save_temps = false;
     var dump_image_classification = false;
+    var dump_image_c = false;
+    var emit_runtime_image_flag = false;
     var interpreter_fallback: ir_codegen.InterpreterFallbackMode = .auto;
     var lock_interpreter_setting = false;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
@@ -1895,6 +1898,14 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         }
         if (std.mem.eql(u8, arg, "--dump-aot-image-classification")) {
             dump_image_classification = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--dump-aot-image-c")) {
+            dump_image_c = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--emit-runtime-image")) {
+            emit_runtime_image_flag = true;
             continue;
         }
         if (std.mem.startsWith(u8, arg, "--link-static=")) {
@@ -1959,7 +1970,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const allocator = mem_limit.allocator();
 
     const source = source_file orelse {
-        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps] [--compilation-stats] [--compile-all-prelude] [--interpreter-fallback=true|false|auto] [--lock-interpreter-setting] [--dump-aot-image-classification]\n") catch {};
+        err_writer.writeAll("Usage: 1z build <file.1z> [-o <output>] [--save-temps] [--compilation-stats] [--compile-all-prelude] [--interpreter-fallback=true|false|auto] [--lock-interpreter-setting] [--dump-aot-image-classification] [--dump-aot-image-c] [--emit-runtime-image]\n") catch {};
         err_writer.flush() catch {};
         return 1;
     };
@@ -2067,6 +2078,39 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         return 0;
     }
 
+    if (dump_image_c) {
+        var manifest = aot_image.buildImageManifest(ctx, allocator) catch |err| {
+            err_writer.print("Error building image manifest: {s}\n", .{@errorName(err)}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+        defer manifest.deinit(allocator);
+
+        var image_word_lookup: std.StringHashMapUnmanaged(u32) = .{};
+        defer image_word_lookup.deinit(allocator);
+        for (freeze_result.words) |w| {
+            image_word_lookup.put(allocator, w.name, w.word_id) catch {
+                err_writer.writeAll("Error: out of memory while building word-id lookup\n") catch {};
+                err_writer.flush() catch {};
+                return 1;
+            };
+        }
+
+        var dump_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer dump_buf.deinit(allocator);
+        _ = aot_image_emit.emitImageC(&dump_buf, allocator, ctx, manifest, &image_word_lookup) catch {
+            err_writer.writeAll("Error: out of memory rendering image C\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+        err_writer.writeAll(dump_buf.items) catch {};
+        err_writer.flush() catch {};
+
+        if (std.fs.cwd().createFile(output, .{ .truncate = true })) |f| f.close() else |_| {}
+
+        return 0;
+    }
+
     if (freeze_result.warnings.len > 0) {
         for (freeze_result.warnings) |warning| {
             err_writer.print(
@@ -2128,6 +2172,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         aot_metadata,
         &codegen_diagnostics,
         ctx,
+        emit_runtime_image_flag,
         allocator,
     ) catch |err| {
         printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
@@ -2214,6 +2259,16 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     }
 
     printInterpreterLinkSummary(interpreter_fallback, lock_interpreter_setting, &codegen_diagnostics, err_writer);
+
+    if (codegen_diagnostics.image_stats) |stats| {
+        err_writer.print("runtime-image: words={d} stack-effects={d} typevalue-slots={d} blob-present={s}\n", .{
+            stats.word_count,
+            stats.stack_effect_count,
+            stats.typevalue_slot_count,
+            if (stats.blob_present) "true" else "false",
+        }) catch {};
+        err_writer.flush() catch {};
+    }
 
     // Write C source to a temp file.
     const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";
@@ -3135,6 +3190,7 @@ test {
     _ = @import("simd.zig");
     _ = @import("aot_freeze.zig");
     _ = @import("aot_image.zig");
+    _ = @import("aot_image_emit.zig");
 }
 
 test "writeVersion emits '1z <version>\\n'" {

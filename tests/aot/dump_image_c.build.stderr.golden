@@ -1,0 +1,333 @@
+/* AOT runtime image: static-C-data layout. */
+/* The loader walks `onez_image_v1` to populate the runtime */
+/* Context's dictionary, modules, and slot tables. */
+
+struct onez_typevalue;  /* opaque; layout owned by the blob path. */
+
+typedef struct onez_image_module {
+    const char *name;
+    uint32_t name_len;
+    uint32_t word_start_idx;
+    uint32_t word_count;
+} onez_image_module_t;
+
+typedef struct onez_image_marker {
+    const char *name;
+    uint32_t name_len;
+} onez_image_marker_t;
+
+typedef struct onez_image_stack_effect_param {
+    const char *name;
+    uint32_t name_len;
+    uint8_t  is_row_variable;
+    uint8_t  has_type_annotation;
+    uint8_t  has_quotation_effect;
+    uint8_t  _pad;
+    uint32_t typevalue_slot;
+    uint32_t quotation_effect_idx;
+} onez_image_stack_effect_param_t;
+
+typedef struct onez_image_stack_effect {
+    const struct onez_image_stack_effect_param *inputs;
+    uint32_t input_count;
+    const struct onez_image_stack_effect_param *outputs;
+    uint32_t output_count;
+} onez_image_stack_effect_t;
+
+typedef struct onez_image_word {
+    const char *name;
+    uint32_t name_len;
+    uint32_t word_id;
+    uint32_t module_idx;
+    uint8_t  classification;
+    uint8_t  blob_reason;
+    uint8_t  flags;
+    uint8_t  _reserved;
+    uint8_t  input_count;
+    uint8_t  output_count;
+    uint16_t _pad;
+    uint32_t stack_effect_idx;
+    const struct onez_image_marker *const *markers;
+    uint32_t marker_count;
+    const uint8_t *body_bytecode;
+    uint32_t body_bytecode_len;
+} onez_image_word_t;
+
+typedef struct onez_image_header {
+    uint32_t format_version;
+    uint32_t module_count;
+    uint32_t word_count;
+    uint32_t marker_pool_count;
+    uint32_t typevalue_slot_count;
+    uint32_t stack_effect_count;
+    const struct onez_image_module *modules;
+    const struct onez_image_word *words;
+    const struct onez_image_marker *markers;
+    const struct onez_image_stack_effect *stack_effects;
+} onez_image_header_t;
+
+static const char onez_image_mk_0_name[] = "generic";
+static const char onez_image_mk_1_name[] = "parse-time";
+static const char onez_image_mk_2_name[] = "const";
+static const char onez_image_mk_3_name[] = "typed";
+
+static const onez_image_marker_t onez_image_markers_storage[] = {
+    { .name = onez_image_mk_0_name, .name_len = 7 },
+    { .name = onez_image_mk_1_name, .name_len = 10 },
+    { .name = onez_image_mk_2_name, .name_len = 5 },
+    { .name = onez_image_mk_3_name, .name_len = 5 },
+};
+
+__attribute__((used)) const struct onez_typevalue *onez_image_typevalue_slots[1] = {
+    NULL, /* slot 0: "no annotation" sentinel. */
+};
+
+static const char onez_image_se_1_i0_name[] = "symbol";
+static const char onez_image_se_1_o0_name[] = "color";
+static const onez_image_stack_effect_param_t onez_image_se_1_in[] = {
+    { .name = onez_image_se_1_i0_name, .name_len = 6, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const onez_image_stack_effect_param_t onez_image_se_1_out[] = {
+    { .name = onez_image_se_1_o0_name, .name_len = 5, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const char onez_image_se_2_o0_name[] = "type";
+static const onez_image_stack_effect_param_t onez_image_se_2_out[] = {
+    { .name = onez_image_se_2_o0_name, .name_len = 4, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const char onez_image_se_3_o0_name[] = "color:green";
+static const onez_image_stack_effect_param_t onez_image_se_3_out[] = {
+    { .name = onez_image_se_3_o0_name, .name_len = 11, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const char onez_image_se_4_i0_name[] = "val";
+static const char onez_image_se_4_o0_name[] = "?";
+static const onez_image_stack_effect_param_t onez_image_se_4_in[] = {
+    { .name = onez_image_se_4_i0_name, .name_len = 3, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const onez_image_stack_effect_param_t onez_image_se_4_out[] = {
+    { .name = onez_image_se_4_o0_name, .name_len = 1, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const char onez_image_se_5_o0_name[] = "color:red";
+static const onez_image_stack_effect_param_t onez_image_se_5_out[] = {
+    { .name = onez_image_se_5_o0_name, .name_len = 9, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const char onez_image_se_6_i0_name[] = "val";
+static const char onez_image_se_6_o0_name[] = "?";
+static const onez_image_stack_effect_param_t onez_image_se_6_in[] = {
+    { .name = onez_image_se_6_i0_name, .name_len = 3, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const onez_image_stack_effect_param_t onez_image_se_6_out[] = {
+    { .name = onez_image_se_6_o0_name, .name_len = 1, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const char onez_image_se_7_i0_name[] = "val";
+static const char onez_image_se_7_o0_name[] = "?";
+static const onez_image_stack_effect_param_t onez_image_se_7_in[] = {
+    { .name = onez_image_se_7_i0_name, .name_len = 3, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const onez_image_stack_effect_param_t onez_image_se_7_out[] = {
+    { .name = onez_image_se_7_o0_name, .name_len = 1, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const char onez_image_se_8_i0_name[] = "n";
+static const char onez_image_se_8_o0_name[] = "n";
+static const onez_image_stack_effect_param_t onez_image_se_8_in[] = {
+    { .name = onez_image_se_8_i0_name, .name_len = 1, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+static const onez_image_stack_effect_param_t onez_image_se_8_out[] = {
+    { .name = onez_image_se_8_o0_name, .name_len = 1, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+};
+
+static const onez_image_stack_effect_t onez_image_stack_effects_storage[] = {
+    { NULL, 0, NULL, 0 }, /* index 0: "no effect" sentinel. */
+    { .inputs = onez_image_se_1_in, .input_count = 1, .outputs = onez_image_se_1_out, .output_count = 1 },
+    { .inputs = NULL, .input_count = 0, .outputs = onez_image_se_2_out, .output_count = 1 },
+    { .inputs = NULL, .input_count = 0, .outputs = onez_image_se_3_out, .output_count = 1 },
+    { .inputs = onez_image_se_4_in, .input_count = 1, .outputs = onez_image_se_4_out, .output_count = 1 },
+    { .inputs = NULL, .input_count = 0, .outputs = onez_image_se_5_out, .output_count = 1 },
+    { .inputs = onez_image_se_6_in, .input_count = 1, .outputs = onez_image_se_6_out, .output_count = 1 },
+    { .inputs = onez_image_se_7_in, .input_count = 1, .outputs = onez_image_se_7_out, .output_count = 1 },
+    { .inputs = onez_image_se_8_in, .input_count = 1, .outputs = onez_image_se_8_out, .output_count = 1 },
+};
+
+static const char onez_image_w_0_name[] = ">color";
+static const char onez_image_w_1_name[] = "color";
+static const char onez_image_w_2_name[] = "color:green";
+static const char onez_image_w_3_name[] = "color:green?";
+static const char onez_image_w_4_name[] = "color:red";
+static const char onez_image_w_5_name[] = "color:red?";
+static const char onez_image_w_6_name[] = "color?";
+static const char onez_image_w_7_name[] = "plain-double";
+
+static const onez_image_marker_t *const onez_image_w_0_markers[] = {
+    &onez_image_markers_storage[0],
+};
+static const onez_image_marker_t *const onez_image_w_1_markers[] = {
+    &onez_image_markers_storage[1],
+    &onez_image_markers_storage[2],
+    &onez_image_markers_storage[3],
+};
+
+static const char onez_image_m_0_name[] = "fixtures/dump_image_dep.1z";
+
+static const onez_image_word_t onez_image_words_storage[] = {
+    {
+        .name = onez_image_w_0_name,
+        .name_len = 6,
+        .word_id = 0xFFFFFFFFu,
+        .module_idx = 0,
+        .classification = 1,
+        .blob_reason = 1,
+        .flags = 8,
+        ._reserved = 0,
+        .input_count = 1,
+        .output_count = 1,
+        ._pad = 0,
+        .stack_effect_idx = 1,
+        .markers = onez_image_w_0_markers,
+        .marker_count = 1,
+        .body_bytecode = NULL,
+        .body_bytecode_len = 0,
+    },
+    {
+        .name = onez_image_w_1_name,
+        .name_len = 5,
+        .word_id = 0xFFFFFFFFu,
+        .module_idx = 0,
+        .classification = 1,
+        .blob_reason = 1,
+        .flags = 8,
+        ._reserved = 0,
+        .input_count = 0,
+        .output_count = 1,
+        ._pad = 0,
+        .stack_effect_idx = 2,
+        .markers = onez_image_w_1_markers,
+        .marker_count = 3,
+        .body_bytecode = NULL,
+        .body_bytecode_len = 0,
+    },
+    {
+        .name = onez_image_w_2_name,
+        .name_len = 11,
+        .word_id = 0xFFFFFFFFu,
+        .module_idx = 0,
+        .classification = 0,
+        .blob_reason = 0,
+        .flags = 8,
+        ._reserved = 0,
+        .input_count = 0,
+        .output_count = 1,
+        ._pad = 0,
+        .stack_effect_idx = 3,
+        .markers = NULL,
+        .marker_count = 0,
+        .body_bytecode = NULL,
+        .body_bytecode_len = 0,
+    },
+    {
+        .name = onez_image_w_3_name,
+        .name_len = 12,
+        .word_id = 0xFFFFFFFFu,
+        .module_idx = 0,
+        .classification = 0,
+        .blob_reason = 0,
+        .flags = 8,
+        ._reserved = 0,
+        .input_count = 1,
+        .output_count = 1,
+        ._pad = 0,
+        .stack_effect_idx = 4,
+        .markers = NULL,
+        .marker_count = 0,
+        .body_bytecode = NULL,
+        .body_bytecode_len = 0,
+    },
+    {
+        .name = onez_image_w_4_name,
+        .name_len = 9,
+        .word_id = 0xFFFFFFFFu,
+        .module_idx = 0,
+        .classification = 0,
+        .blob_reason = 0,
+        .flags = 8,
+        ._reserved = 0,
+        .input_count = 0,
+        .output_count = 1,
+        ._pad = 0,
+        .stack_effect_idx = 5,
+        .markers = NULL,
+        .marker_count = 0,
+        .body_bytecode = NULL,
+        .body_bytecode_len = 0,
+    },
+    {
+        .name = onez_image_w_5_name,
+        .name_len = 10,
+        .word_id = 0xFFFFFFFFu,
+        .module_idx = 0,
+        .classification = 0,
+        .blob_reason = 0,
+        .flags = 8,
+        ._reserved = 0,
+        .input_count = 1,
+        .output_count = 1,
+        ._pad = 0,
+        .stack_effect_idx = 6,
+        .markers = NULL,
+        .marker_count = 0,
+        .body_bytecode = NULL,
+        .body_bytecode_len = 0,
+    },
+    {
+        .name = onez_image_w_6_name,
+        .name_len = 6,
+        .word_id = 0xFFFFFFFFu,
+        .module_idx = 0,
+        .classification = 1,
+        .blob_reason = 1,
+        .flags = 8,
+        ._reserved = 0,
+        .input_count = 1,
+        .output_count = 1,
+        ._pad = 0,
+        .stack_effect_idx = 7,
+        .markers = NULL,
+        .marker_count = 0,
+        .body_bytecode = NULL,
+        .body_bytecode_len = 0,
+    },
+    {
+        .name = onez_image_w_7_name,
+        .name_len = 12,
+        .word_id = 0xFFFFFFFFu,
+        .module_idx = 0,
+        .classification = 0,
+        .blob_reason = 0,
+        .flags = 8,
+        ._reserved = 0,
+        .input_count = 1,
+        .output_count = 1,
+        ._pad = 0,
+        .stack_effect_idx = 8,
+        .markers = NULL,
+        .marker_count = 0,
+        .body_bytecode = NULL,
+        .body_bytecode_len = 0,
+    },
+};
+
+static const onez_image_module_t onez_image_modules_storage[] = {
+    { .name = onez_image_m_0_name, .name_len = 26, .word_start_idx = 0, .word_count = 8 },
+};
+
+__attribute__((used)) const onez_image_header_t onez_image_v1 = {
+    .format_version = 1,
+    .module_count = 1,
+    .word_count = 8,
+    .marker_pool_count = 4,
+    .typevalue_slot_count = 1,
+    .stack_effect_count = 9,
+    .modules = onez_image_modules_storage,
+    .words = onez_image_words_storage,
+    .markers = onez_image_markers_storage,
+    .stack_effects = onez_image_stack_effects_storage,
+};
+

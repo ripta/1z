@@ -22,12 +22,19 @@ const pic_mod = @import("pic.zig");
 const dispatch_mod = @import("dispatch.zig");
 
 const Context = @import("context.zig").Context;
+
+const aot_image_mod = @import("aot_image.zig");
+const aot_image_emit_mod = @import("aot_image_emit.zig");
 const bail_stats_mod = @import("bail_stats.zig");
+
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
+
 const signal = @import("signal.zig");
 const trace_mod = @import("trace.zig");
+
 const Scheduler = @import("scheduler.zig").Scheduler;
+
 const helpers = @import("primitives/helpers.zig");
 const dynamic_vars_mod = @import("primitives/dynamic_vars.zig");
 const errors_mod = @import("primitives/errors.zig");
@@ -181,6 +188,10 @@ pub const CodegenDiagnostics = struct {
     pic_stats: PicStats = .{},
     resolved_interpreter_fallback: ?InterpreterFallbackMode = null,
     has_interpreter_callbacks: bool = false,
+    /// Populated when `emit_runtime_image=true`. Drives the
+    /// `runtime-image-*` metadata fields and lets tests confirm the
+    /// emission wiring without inspecting the generated C source.
+    image_stats: ?aot_image_emit_mod.ImageEmissionStats = null,
 };
 
 pub const CompiledWord = struct {
@@ -6330,6 +6341,10 @@ pub fn emitProgramC(
     metadata: AotMetadata,
     diagnostics: *CodegenDiagnostics,
     interp_ctx: ?*const Context,
+    /// When true, walk `interp_ctx.module_cache_value`, build an image
+    /// manifest, and emit the `onez_image_v1` runtime image alongside
+    /// the dispatch table. Requires `interp_ctx` to be non-null.
+    emit_runtime_image: bool,
     allocator: Allocator,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .{};
@@ -6879,6 +6894,25 @@ pub fn emitProgramC(
             }
         }
         try out.appendSlice(allocator, "};\n\n");
+    }
+
+    // Runtime image: emitted alongside the dispatch table when the
+    // caller opts in. The loader rehydrates this into the runtime
+    // Context so module-private words become resolvable at runtime.
+    if (emit_runtime_image) {
+        if (interp_ctx) |ctx| {
+            var manifest = try aot_image_mod.buildImageManifest(@constCast(ctx), allocator);
+            defer manifest.deinit(allocator);
+
+            var image_word_lookup: std.StringHashMapUnmanaged(u32) = .{};
+            defer image_word_lookup.deinit(allocator);
+            for (words) |w| {
+                try image_word_lookup.put(allocator, w.name, w.word_id);
+            }
+
+            const stats = try aot_image_emit_mod.emitImageC(&out, allocator, ctx, manifest, &image_word_lookup);
+            diagnostics.image_stats = stats;
+        }
     }
 
     // Interpreter-free decision: an AOT binary can drop the interpreter when
@@ -10281,7 +10315,7 @@ test "emitProgramC generates complete C source" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -10320,7 +10354,7 @@ test "emitProgramC dispatch table has correct entries" {
     };
 
     var diag2: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, false, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -10345,7 +10379,7 @@ test "emitProgramC quotation table with all compiled entries" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
     defer testing.allocator.free(source);
 
     // Table exists with all entries
@@ -10375,7 +10409,7 @@ test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, testing.allocator);
+    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
     try testing.expectError(error.UncompiledQuotations, result);
 
     // Diagnostics report the uncompiled quotation
@@ -10393,7 +10427,7 @@ test "emitProgramC no quotation table when quotations empty" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
     defer testing.allocator.free(source);
 
     // No quotation table emitted (extern decl exists but table and call do not)
@@ -10411,7 +10445,7 @@ test "emitProgramC output compiles with cc" {
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});

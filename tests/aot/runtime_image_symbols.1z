@@ -1,0 +1,4 @@
+\ End-to-end check: building with --emit-runtime-image emits the
+\ runtime-image static-C-data tables alongside the dispatch table and
+\ reports the ImageEmissionStats summary on stderr.
+use "fixtures/dump_image_dep.1z" ;

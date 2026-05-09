@@ -1,0 +1,3 @@
+\ Build-only test: --dump-aot-image-c emits the freeze-time runtime image
+\ as static C source to stderr and exits without producing a binary.
+use "fixtures/dump_image_dep.1z" ;
