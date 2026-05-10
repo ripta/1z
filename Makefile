@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test aot-run aot-interpreter-strip-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation profiles build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test aot-run aot-interpreter-strip-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter profiles build-example clean help docs docker-build docker-test
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -139,6 +139,13 @@ benchmark-quotation: build ## Run quotation sequence benchmark across all execut
 
 benchmark-scanner: build ## Run scanner vs direct benchmark across interpreter modes
 	@scripts/benchmark-scanner.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/scanner_vs_direct.1z
+
+# The runtime-image loader cannot rehydrate descriptor entries (`field-types`, `variants`, etc.)
+# on types from lib/process.1z and lib/scanner.1z, both pulled in transitively via `use "ffi-gen"`.
+# When that bug is fixed, restore the AOT capture portion of this target.
+benchmark-ffi-gen-filter: build ## Capture baseline interpreter profile for the native ffi-gen filter on toy.h
+	./$(ZIG_PREFIX)/bin/1z run --max-memory=2G --profile tests/benchmark/ffi_gen_filter_baseline.1z \
+		> tests/benchmark/ffi_gen_filter_baseline.profile.sample
 
 benchmark: build ## Run benchmarks
 	@for f in $(BENCHMARK_FILES); do echo "--- $$f ---"; ./$(ZIG_PREFIX)/bin/1z "$$f"; echo; done

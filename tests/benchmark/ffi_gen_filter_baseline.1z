@@ -1,0 +1,78 @@
+\ Baseline harness for the interpreter line-iteration cost investigation.
+\
+\ Mirrors the native-filter words from ffi_gen_filter.1z but runs decls-native
+\ exactly once on toy.h. Used to capture the interpreter --profile and AOT
+\ timing anchors that variant filters are compared against. Keep these word
+\ definitions in sync with ffi_gen_filter.1z.
+
+use "ffi-gen" ;
+use "strings" ;
+
+filter-state: mutable struct{ acc b } ;
+
+native-line-contains?: ( line str -- ? ) [ #index-of f = not ] ;
+
+native-block-start?: ( line -- ? ) [
+  dup "pub const " #starts-with?
+  [
+    dup " = extern struct {" native-line-contains?
+    [ drop t ]
+    [
+      dup " = opaque {};" native-line-contains?
+      [ drop t ]
+      [ " = enum(c_int) {" native-line-contains? ]
+      if
+    ]
+    if
+  ]
+  [ drop f ]
+  if
+] ;
+
+native-filter-step: ( state line -- state ) [
+  dup "pub extern fn " #starts-with?
+  [
+    over acc>> swap #push! drop
+  ]
+  [
+    over b>>
+    [
+      [ over acc>> swap #push! drop ] keep
+      "};" #starts-with?
+      [ f >>b ]
+      [ ]
+      if
+    ]
+    [
+      dup native-block-start?
+      [
+        over acc>> swap #push! drop
+        t >>b
+      ]
+      [ drop ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+translate-c-filtered-native: ( header-path flags -- filtered-source ) [
+  translate-c
+  "\n" split
+  V{ } f make-filter-state
+  [ native-filter-step ] #reduce
+  acc>> >array "\n" #join
+] ;
+
+decls-native: ( header-path flags -- decls ) [
+  translate-c-filtered-native parse-zig-decls
+] ;
+
+toy-header: ( -- str ) [ "/Users/ripta/projects/1z/ext/toy/toy.h" ] ;
+
+"--- timing: native filter on toy.h (translate-c output ~6000 lines) ---" print-line
+
+[
+  "native (toy.h)" [ toy-header { } decls-native drop ] benchmark-auto
+] run-benchmarks
