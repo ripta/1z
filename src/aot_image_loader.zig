@@ -360,16 +360,16 @@ fn rehydrateBlobTypeValues(
             return LoaderError.BadSlotIndex;
         }
 
-        const descriptor_map = arena.create(value_mod.MutableMap) catch
+        const descriptor = arena.create(value_mod.TypeDescriptor) catch
             return LoaderError.OutOfMemory;
-        descriptor_map.* = .{};
-        try populateDescriptor(ctx, arena, descriptor_map, tv);
+        descriptor.* = .{ .kind = .{ .builtin = {} } };
+        try populateDescriptor(ctx, descriptor, tv);
 
         const runtime_tv = arena.create(value_mod.TypeValue) catch
             return LoaderError.OutOfMemory;
         runtime_tv.* = .{
             .name = nameSlice(tv.name, tv.name_len),
-            .descriptor = @ptrCast(descriptor_map),
+            .descriptor = descriptor,
         };
 
         if (slots) |slot_table| {
@@ -386,51 +386,112 @@ fn rehydrateBlobTypeValues(
 
 fn populateDescriptor(
     ctx: *Context,
-    arena: Allocator,
-    map: *value_mod.MutableMap,
+    desc: *value_mod.TypeDescriptor,
     tv: BlobTypeValue,
 ) LoaderError!void {
     if (tv.descriptor_entry_count == 0 or tv.descriptor_entries == null) return;
     const entries = tv.descriptor_entries.?;
+
+    // First pass: discover the `type` discriminator so the kind-data
+    // variant can be initialized with sensible defaults before the
+    // second pass populates kind-specific fields.
     var i: u32 = 0;
     while (i < tv.descriptor_entry_count) : (i += 1) {
         const e = entries[i];
-        const key = nameSlice(e.key, e.key_len);
-        const decoded = decodeDescriptorValue(e) catch |err| switch (err) {
-            error.Unsupported => {
-                // Known image-side escape hatch. Record a note in
-                // ctx.error_details so the operator can grep for the
-                // skip, but don't abort the load.
-                recordLoaderNote(
-                    ctx,
-                    "runtime-image: skipping unsupported descriptor entry '{s}' on type '{s}'",
-                    .{ key, nameSlice(tv.name, tv.name_len) },
-                );
-                continue;
-            },
-            error.BadValueKind => return LoaderError.BadValueKind,
+        if (e.value_kind != blob_value_kind_symbol) continue;
+        if (!std.mem.eql(u8, nameSlice(e.key, e.key_len), "type")) continue;
+        const sym = if (e.string_value) |p| p[0..e.string_value_len] else "";
+        const kind = typeKindFromSymbol(sym) orelse {
+            recordLoaderNote(
+                ctx,
+                "runtime-image: unrecognized type discriminator '{s}' on type '{s}'",
+                .{ sym, nameSlice(tv.name, tv.name_len) },
+            );
+            continue;
         };
-        map.put(arena, key, decoded) catch return LoaderError.OutOfMemory;
+        desc.kind = emptyKindData(kind);
+        break;
+    }
+
+    // Second pass: universal flags and kind-specific scalar fields.
+    // Entries with `BlobValueKind.unsupported` (or unrecognized keys
+    // for the kind) record a note rather than abort the load,
+    // preserving the existing behavior the bug-closure test observes.
+    i = 0;
+    while (i < tv.descriptor_entry_count) : (i += 1) {
+        const e = entries[i];
+        const key = nameSlice(e.key, e.key_len);
+        if (std.mem.eql(u8, key, "type")) continue;
+
+        if (std.mem.eql(u8, key, "numeric")) {
+            if (e.value_kind == blob_value_kind_boolean) desc.numeric = e.bool_value != 0;
+            continue;
+        }
+        if (std.mem.eql(u8, key, "exact")) {
+            if (e.value_kind == blob_value_kind_boolean) desc.exact = e.bool_value != 0;
+            continue;
+        }
+        if (std.mem.eql(u8, key, "integer")) {
+            if (e.value_kind == blob_value_kind_boolean) desc.integer = e.bool_value != 0;
+            continue;
+        }
+        if (std.mem.eql(u8, key, "mutable")) {
+            if (e.value_kind == blob_value_kind_boolean) desc.mutable = e.bool_value != 0;
+            continue;
+        }
+
+        switch (desc.kind) {
+            .resource => |*rd| {
+                if (std.mem.eql(u8, key, "resource-kind") and e.value_kind == blob_value_kind_string) {
+                    rd.resource_kind = if (e.string_value) |p| p[0..e.string_value_len] else "";
+                    continue;
+                }
+            },
+            .ffi_struct => |*fsd| {
+                if (std.mem.eql(u8, key, "ffi-layout") and e.value_kind == blob_value_kind_fixnum) {
+                    fsd.ffi_layout = @intCast(e.fixnum_value);
+                    continue;
+                }
+            },
+            else => {},
+        }
+
+        if (e.value_kind == blob_value_kind_unsupported) {
+            recordLoaderNote(
+                ctx,
+                "runtime-image: skipping unsupported descriptor entry '{s}' on type '{s}'",
+                .{ key, nameSlice(tv.name, tv.name_len) },
+            );
+        } else if (e.value_kind > blob_value_kind_unsupported) {
+            return LoaderError.BadValueKind;
+        }
     }
 }
 
-const DescriptorDecodeError = error{ Unsupported, BadValueKind };
+fn typeKindFromSymbol(sym: []const u8) ?value_mod.TypeKind {
+    if (std.mem.eql(u8, sym, "builtin-type")) return .builtin;
+    if (std.mem.eql(u8, sym, "sentinel")) return .sentinel;
+    if (std.mem.eql(u8, sym, "struct-descriptor")) return .struct_;
+    if (std.mem.eql(u8, sym, "virtual")) return .virtual;
+    if (std.mem.eql(u8, sym, "enum-descriptor")) return .enum_;
+    if (std.mem.eql(u8, sym, "enum-variant")) return .enum_variant;
+    if (std.mem.eql(u8, sym, "resource-type")) return .resource;
+    if (std.mem.eql(u8, sym, "ffi-struct-type")) return .ffi_struct;
+    if (std.mem.eql(u8, sym, "union-type")) return .union_;
+    return null;
+}
 
-fn decodeDescriptorValue(e: BlobDescriptorEntry) DescriptorDecodeError!value_mod.Value {
-    return switch (e.value_kind) {
-        blob_value_kind_symbol => blk: {
-            const s = if (e.string_value) |p| p[0..e.string_value_len] else "";
-            break :blk value_mod.Value{ .symbol = s };
-        },
-        blob_value_kind_boolean => value_mod.Value{ .boolean = e.bool_value != 0 },
-        blob_value_kind_fixnum => value_mod.Value{ .fixnum = e.fixnum_value },
-        blob_value_kind_string => blk: {
-            const s = if (e.string_value) |p| p[0..e.string_value_len] else "";
-            break :blk value_mod.Value{ .string = s };
-        },
-        blob_value_kind_unit => value_mod.Value.unit,
-        blob_value_kind_unsupported => DescriptorDecodeError.Unsupported,
-        else => DescriptorDecodeError.BadValueKind,
+fn emptyKindData(kind: value_mod.TypeKind) value_mod.TypeKindData {
+    return switch (kind) {
+        .builtin => .{ .builtin = {} },
+        .sentinel => .{ .sentinel = {} },
+        .struct_ => .{ .struct_ = .{} },
+        .virtual => .{ .virtual = .{} },
+        .enum_ => .{ .enum_ = .{} },
+        .enum_variant => .{ .enum_variant = .{} },
+        .resource => .{ .resource = .{} },
+        .ffi_struct => .{ .ffi_struct = .{} },
+        .union_ => .{ .union_ = {} },
     };
 }
 
@@ -654,26 +715,37 @@ fn wordRow(name: []const u8, word_id: u32, module_idx: u32) Word {
     };
 }
 
-test "loadIntoContext: blob TypeValue covers every BlobValueKind" {
+test "loadIntoContext: resource TypeValue rehydrates kind + universal bools + resource_kind" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const tv_name = "config";
-    const w_name = "Config";
+    const tv_name = "demo-resource";
+    const w_name = "DemoResource";
     const m_name = "demo";
 
-    // Five descriptor entries, one per supported BlobValueKind, plus
-    // the unsupported sentinel which the loader skips with a note.
+    // Realistic descriptor schema: `type` discriminator (symbol),
+    // four universal boolean flags, the kind-specific `resource-kind`
+    // string, plus one unsupported entry to verify the note path.
     const entries = [_]BlobDescriptorEntry{
         .{
-            .key = "kind".ptr,
+            .key = "type".ptr,
             .key_len = 4,
             .value_kind = blob_value_kind_symbol,
             .bool_value = 0,
             ._pad = 0,
             .fixnum_value = 0,
-            .string_value = "user-defined".ptr,
-            .string_value_len = 12,
+            .string_value = "resource-type".ptr,
+            .string_value_len = 13,
+        },
+        .{
+            .key = "numeric".ptr,
+            .key_len = 7,
+            .value_kind = blob_value_kind_boolean,
+            .bool_value = 1,
+            ._pad = 0,
+            .fixnum_value = 0,
+            .string_value = null,
+            .string_value_len = 0,
         },
         .{
             .key = "exact".ptr,
@@ -686,38 +758,38 @@ test "loadIntoContext: blob TypeValue covers every BlobValueKind" {
             .string_value_len = 0,
         },
         .{
-            .key = "limit".ptr,
-            .key_len = 5,
-            .value_kind = blob_value_kind_fixnum,
+            .key = "integer".ptr,
+            .key_len = 7,
+            .value_kind = blob_value_kind_boolean,
             .bool_value = 0,
             ._pad = 0,
-            .fixnum_value = 42,
+            .fixnum_value = 0,
             .string_value = null,
             .string_value_len = 0,
         },
         .{
-            .key = "label".ptr,
-            .key_len = 5,
+            .key = "mutable".ptr,
+            .key_len = 7,
+            .value_kind = blob_value_kind_boolean,
+            .bool_value = 1,
+            ._pad = 0,
+            .fixnum_value = 0,
+            .string_value = null,
+            .string_value_len = 0,
+        },
+        .{
+            .key = "resource-kind".ptr,
+            .key_len = 13,
             .value_kind = blob_value_kind_string,
             .bool_value = 0,
             ._pad = 0,
             .fixnum_value = 0,
-            .string_value = "hello".ptr,
-            .string_value_len = 5,
+            .string_value = "demo-handle".ptr,
+            .string_value_len = 11,
         },
         .{
-            .key = "marker".ptr,
+            .key = "fields".ptr,
             .key_len = 6,
-            .value_kind = blob_value_kind_unit,
-            .bool_value = 0,
-            ._pad = 0,
-            .fixnum_value = 0,
-            .string_value = null,
-            .string_value_len = 0,
-        },
-        .{
-            .key = "skipped".ptr,
-            .key_len = 7,
             .value_kind = blob_value_kind_unsupported,
             .bool_value = 0,
             ._pad = 0,
@@ -778,21 +850,13 @@ test "loadIntoContext: blob TypeValue covers every BlobValueKind" {
     };
     try testing.expectEqualStrings(tv_name, tv.name);
 
-    // Descriptor must contain exactly the five supported entries.
-    const desc = @as(*const value_mod.MutableMap, @ptrCast(@alignCast(tv.descriptor.?)));
-    try testing.expectEqual(@as(u32, 5), desc.count());
-
-    const kind_val = desc.get("kind") orelse return error.TestUnexpectedResult;
-    try testing.expectEqualStrings("user-defined", kind_val.symbol);
-    const exact_val = desc.get("exact") orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(true, exact_val.boolean);
-    const limit_val = desc.get("limit") orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(@as(i64, 42), limit_val.fixnum);
-    const label_val = desc.get("label") orelse return error.TestUnexpectedResult;
-    try testing.expectEqualStrings("hello", label_val.string);
-    const marker_val = desc.get("marker") orelse return error.TestUnexpectedResult;
-    try testing.expect(marker_val == .unit);
-    try testing.expect(desc.get("skipped") == null);
+    const desc = tv.descriptor.?;
+    try testing.expect(desc.kind == .resource);
+    try testing.expectEqual(true, desc.numeric);
+    try testing.expectEqual(true, desc.exact);
+    try testing.expectEqual(false, desc.integer);
+    try testing.expectEqual(true, desc.mutable);
+    try testing.expectEqualStrings("demo-handle", desc.kind.resource.resource_kind);
 
     // The corresponding word's compound body must now push the
     // freshly-allocated TypeValue.

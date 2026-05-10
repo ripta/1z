@@ -2,9 +2,9 @@
 Stack: [ ]
 Stack: [ ]
 PASS: typed struct fields exposed
-Stack: [ H{ mutable: f exact: f integer: f fields: { "x" "y" } field-types: { <type:fixnum> <type:string> } type: struct-descriptor:: numeric: f } ]
+Stack: [ H{ mutable: f exact: f integer: f fields: { "x" "y" } field-types: { <type:fixnum> <type:string> } type: struct-descriptor: numeric: f } ]
 PASS: typed struct field-types exposed
-Stack: [ H{ mutable: f exact: f integer: f fields: { "x" "y" } field-types: { <type:fixnum> <type:string> } type: struct-descriptor:: numeric: f } ]
+Stack: [ H{ mutable: f exact: f integer: f fields: { "x" "y" } field-types: { <type:fixnum> <type:string> } type: struct-descriptor: numeric: f } ]
 Stack: [ ]
 === typed struct any metadata ===
 Stack: [ ]
@@ -71,9 +71,9 @@ Stack: [ ]
 === typed virtual struct metadata ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ H{ mutable: f exact: f integer: f fields: { "dx" "dy" } field-types: { <type:fixnum> <type:any> } type: struct-descriptor:: numeric: f } ]
+Stack: [ H{ field-types: { <type:fixnum> <type:any> } fields: { "dx" "dy" } } ]
 PASS: virtual inner struct fields exposed
-Stack: [ H{ mutable: f exact: f integer: f fields: { "dx" "dy" } field-types: { <type:fixnum> <type:any> } type: struct-descriptor:: numeric: f } ]
+Stack: [ H{ field-types: { <type:fixnum> <type:any> } fields: { "dx" "dy" } } ]
 PASS: virtual inner struct field-types exposed
 Stack: [ ]
 === any stack effect annotation skips validation ===

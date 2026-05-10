@@ -184,9 +184,43 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
         },
     };
 
-    const enum_desc_map = try value_mod.createTypeDescriptor(alloc, "enum-descriptor:", .{});
-    try enum_desc_map.put(alloc, "variants", variants_val);
-    const enum_desc: *value_mod.HashTable = @ptrCast(enum_desc_map);
+    if (variants_array.len % 2 != 0) {
+        helpers.setErrorContext(ctx, "enum variants must be name: type pairs (got odd count {d})", .{variants_array.len});
+        return error.ParseError;
+    }
+    const variants_slice = try alloc.alloc(value_mod.Variant, variants_array.len / 2);
+    {
+        var vi: usize = 0;
+        while (vi < variants_array.len) : (vi += 2) {
+            const variant_name_val = variants_array[vi];
+            const raw_name = switch (variant_name_val) {
+                .symbol => |s| s,
+                else => {
+                    helpers.setTypeMismatchError(ctx, "symbol", variant_name_val);
+                    return error.TypeMismatch;
+                },
+            };
+            const bare_name = if (raw_name.len > 1 and raw_name[raw_name.len - 1] == ':')
+                raw_name[0 .. raw_name.len - 1]
+            else
+                raw_name;
+            const type_v = variants_array[vi + 1];
+            const tv_ptr = switch (type_v) {
+                .type_val => |t| t,
+                else => {
+                    helpers.setTypeMismatchError(ctx, "type", type_v);
+                    return error.TypeMismatch;
+                },
+            };
+            variants_slice[vi / 2] = .{ .name = bare_name, .type_val = tv_ptr };
+        }
+    }
+
+    const enum_desc = try value_mod.createTypeDescriptor(
+        alloc,
+        .{ .enum_ = .{ .variants = variants_slice } },
+        .{},
+    );
 
     // Create a TypeValue for the enum type itself
     const enum_tv = try alloc.create(value_mod.TypeValue);
@@ -212,11 +246,6 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
     var vtype_list = std.ArrayListUnmanaged(*const VirtualType){};
     var generated_words = std.ArrayListUnmanaged(Value){};
-
-    if (variants_array.len % 2 != 0) {
-        helpers.setErrorContext(ctx, "enum variants must be name: type pairs (got odd count {d})", .{variants_array.len});
-        return error.ParseError;
-    }
 
     const unit_tv = ctx.lookupBuiltinTypeValue("unit");
 
@@ -259,10 +288,12 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             ctx.virtual_type_count += 1;
 
             const variant_tv = try alloc.create(value_mod.TypeValue);
-            const variant_desc_map = try value_mod.createTypeDescriptor(alloc, "enum-variant:", .{});
-            try variant_desc_map.put(alloc, "parent", .{ .type_val = enum_tv });
-            try variant_desc_map.put(alloc, "inner-type", .{ .type_val = tv });
-            variant_tv.* = .{ .name = full_name, .descriptor = @ptrCast(variant_desc_map) };
+            const variant_desc = try value_mod.createTypeDescriptor(
+                alloc,
+                .{ .enum_variant = .{ .parent = enum_tv, .inner_type = tv } },
+                .{},
+            );
+            variant_tv.* = .{ .name = full_name, .descriptor = variant_desc };
             vtype.type_val = variant_tv;
 
             try vtype_list.append(alloc, vtype);
@@ -306,10 +337,12 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             ctx.virtual_type_count += 1;
 
             const variant_tv = try alloc.create(value_mod.TypeValue);
-            const variant_desc_map = try value_mod.createTypeDescriptor(alloc, "enum-variant:", .{});
-            try variant_desc_map.put(alloc, "parent", .{ .type_val = enum_tv });
-            try variant_desc_map.put(alloc, "inner-type", .{ .type_val = tv });
-            variant_tv.* = .{ .name = full_name, .descriptor = @ptrCast(variant_desc_map) };
+            const variant_desc = try value_mod.createTypeDescriptor(
+                alloc,
+                .{ .enum_variant = .{ .parent = enum_tv, .inner_type = tv } },
+                .{},
+            );
+            variant_tv.* = .{ .name = full_name, .descriptor = variant_desc };
             vtype.type_val = variant_tv;
 
             try vtype_list.append(alloc, vtype);

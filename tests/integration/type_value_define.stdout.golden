@@ -1,7 +1,7 @@
 Stack: [ ]
 PASS: inspect shows type name
 Stack: [ ]
-Stack: [ H{ type: builtin-type: } ]
+Stack: [ H{ integer: f mutable: f type: builtin-type: exact: f numeric: f } ]
 PASS: descriptor registered
 Stack: [ ]
 Stack: [ [ fixnum: [ type: builtin-type: ] make-mutable-map native.define-builtin-type ; ] ]

@@ -562,9 +562,9 @@ test "generic word includes dispatch entry callees" {
         .{ .op = .{ .call_word = "dispatch-call" }, .line = 1 },
     };
 
-    const duration_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    const duration_desc = try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, duration_desc);
-    const unary_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    const unary_desc = try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, unary_desc);
     try dispatch.register(
         .{ .dispatch_id = 42, .type_a = duration_desc, .type_b = unary_desc },

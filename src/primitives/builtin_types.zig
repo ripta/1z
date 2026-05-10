@@ -23,8 +23,8 @@ pub const registry_entries = [_]RegistryEntry{
 /// Otherwise a new TypeValue is allocated and registered.
 fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     const desc_val = try ctx.stack.pop();
-    const descriptor: *value_mod.HashTable = switch (desc_val) {
-        .mutable_map => |m| @ptrCast(m),
+    const source_map: *value_mod.MutableMap = switch (desc_val) {
+        .mutable_map => |m| m,
         else => {
             helpers.setTypeMismatchError(ctx, "mutable-map", desc_val);
             return error.TypeMismatch;
@@ -40,20 +40,22 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
         },
     };
 
+    const alloc = ctx.quotationAllocator();
+
     const tv = if (ctx.lookupBuiltinTypeValue(name)) |existing| blk: {
         if (existing.descriptor) |existing_desc| {
-            var iter = descriptor.iterator();
-            while (iter.next()) |entry| {
-                try existing_desc.put(ctx.quotationAllocator(), entry.key_ptr.*, entry.value_ptr.*);
-            }
+            applyDescriptorMerge(existing_desc, source_map);
             break :blk existing;
         }
-        existing.descriptor = descriptor;
+        const new_desc = try value_mod.createBuiltinTypeDescriptor(alloc, .{});
+        applyDescriptorMerge(new_desc, source_map);
+        existing.descriptor = new_desc;
         break :blk existing;
     } else blk: {
-        const alloc = ctx.quotationAllocator();
+        const new_desc = try value_mod.createBuiltinTypeDescriptor(alloc, .{});
+        applyDescriptorMerge(new_desc, source_map);
         const new_tv = try alloc.create(value_mod.TypeValue);
-        new_tv.* = .{ .name = name, .descriptor = descriptor };
+        new_tv.* = .{ .name = name, .descriptor = new_desc };
         try ctx.registerBuiltinTypeValue(name, new_tv);
         break :blk new_tv;
     };
@@ -66,7 +68,31 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .type_val = tv });
 }
 
-/// native.type-has-property? ( type property -- bool ) - Check whether a type's descriptor contains a given property key.
+/// Merge the user-supplied mutable-map descriptor into a typed
+/// TypeDescriptor. Only the universal boolean keys are recognised;
+/// the legacy `type` key was the kind discriminator and is no longer
+/// stored as a string. Unknown keys are silently ignored (mirroring
+/// the previous put-everything behavior, since no reader consumed
+/// keys beyond the bools).
+fn applyDescriptorMerge(desc: *value_mod.TypeDescriptor, source: *const value_mod.MutableMap) void {
+    var iter = source.iterator();
+    while (iter.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const val = entry.value_ptr.*;
+        if (val != .boolean) continue;
+        const b = val.boolean;
+        const std_mem = @import("std").mem;
+        if (std_mem.eql(u8, key, "numeric")) desc.numeric = b;
+        if (std_mem.eql(u8, key, "exact")) desc.exact = b;
+        if (std_mem.eql(u8, key, "integer")) desc.integer = b;
+        if (std_mem.eql(u8, key, "mutable")) desc.mutable = b;
+    }
+}
+
+/// native.type-has-property? ( type property -- bool ) - Check whether a type's descriptor
+/// reports the given property. Always true for `type` (the kind discriminator is always
+/// present), the four universal boolean flags when set, and the kind-specific scalar
+/// fields when they carry a non-default payload. Other property names return false.
 fn nativeTypeHasProperty(ctx: *Context) anyerror!void {
     const prop_val = try ctx.stack.pop();
     const prop_str = switch (prop_val) {
@@ -81,13 +107,40 @@ fn nativeTypeHasProperty(ctx: *Context) anyerror!void {
     switch (type_val) {
         .type_val => |tv| {
             const desc = tv.descriptor orelse unreachable;
-            const result = if (desc.get(prop_str)) |prop|
-                switch (prop) {
-                    .boolean => |b| b,
-                    else => true,
+            const std_mem = @import("std").mem;
+            const result = blk: {
+                if (std_mem.eql(u8, prop_str, "type")) break :blk true;
+                if (std_mem.eql(u8, prop_str, "numeric")) break :blk desc.numeric;
+                if (std_mem.eql(u8, prop_str, "exact")) break :blk desc.exact;
+                if (std_mem.eql(u8, prop_str, "integer")) break :blk desc.integer;
+                if (std_mem.eql(u8, prop_str, "mutable")) break :blk desc.mutable;
+                switch (desc.kind) {
+                    .resource => |rd| {
+                        if (std_mem.eql(u8, prop_str, "resource-kind")) break :blk rd.resource_kind.len != 0;
+                    },
+                    .ffi_struct => |fsd| {
+                        if (std_mem.eql(u8, prop_str, "fields")) break :blk fsd.fields.len != 0;
+                        if (std_mem.eql(u8, prop_str, "ffi-layout")) break :blk fsd.ffi_layout != 0;
+                    },
+                    .struct_ => |sd| {
+                        if (std_mem.eql(u8, prop_str, "fields")) break :blk sd.fields.len != 0;
+                        if (std_mem.eql(u8, prop_str, "field-types")) break :blk sd.field_types.len != 0;
+                    },
+                    .virtual => |vd| {
+                        if (std_mem.eql(u8, prop_str, "inner-type")) break :blk vd.inner_type != null or vd.anon_struct != null;
+                        if (std_mem.eql(u8, prop_str, "element-type")) break :blk vd.type_params.len != 0;
+                    },
+                    .enum_ => |ed| {
+                        if (std_mem.eql(u8, prop_str, "variants")) break :blk ed.variants.len != 0;
+                    },
+                    .enum_variant => |evd| {
+                        if (std_mem.eql(u8, prop_str, "parent")) break :blk evd.parent != null;
+                        if (std_mem.eql(u8, prop_str, "inner-type")) break :blk evd.inner_type != null;
+                    },
+                    else => {},
                 }
-            else
-                false;
+                break :blk false;
+            };
             try ctx.stack.push(.{ .boolean = result });
         },
         else => {

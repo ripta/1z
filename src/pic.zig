@@ -2,15 +2,15 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const DispatchEntry = @import("dispatch.zig").DispatchEntry;
 const value_mod = @import("value.zig");
-const HashTable = value_mod.HashTable;
+const TypeDescriptor = value_mod.TypeDescriptor;
 
 pub const max_pic_entries = 4;
 
 /// A single entry in a polymorphic inline cache, caching the result of
 /// a dispatch table lookup keyed by descriptor pointers.
 pub const PicEntry = struct {
-    type_a: *const HashTable = undefined,
-    type_b: *const HashTable = undefined,
+    type_a: *const TypeDescriptor = undefined,
+    type_b: *const TypeDescriptor = undefined,
     entry: DispatchEntry = undefined,
     unwrap_a: bool = false,
     unwrap_b: bool = false,
@@ -27,7 +27,7 @@ pub const PolymorphicCache = struct {
     generation: u32 = 0,
     megamorphic: bool = false,
 
-    pub fn lookup(self: *const PolymorphicCache, a_type: *const HashTable, b_type: *const HashTable) ?*const PicEntry {
+    pub fn lookup(self: *const PolymorphicCache, a_type: *const TypeDescriptor, b_type: *const TypeDescriptor) ?*const PicEntry {
         for (self.entries[0..self.count]) |*e| {
             if (a_type == e.type_a and b_type == e.type_b) return e;
         }
@@ -92,16 +92,16 @@ test "PolymorphicCache defaults to empty" {
 
 test "PolymorphicCache lookup returns null when empty" {
     const cache = PolymorphicCache{};
-    const fixnum_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    const fixnum_desc = try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
     try std.testing.expect(cache.lookup(fixnum_desc, fixnum_desc) == null);
 }
 
 test "PolymorphicCache insert and lookup" {
     var cache = PolymorphicCache{};
-    const type_a_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    const type_a_desc = try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, type_a_desc);
-    const type_b_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    const type_b_desc = try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, type_b_desc);
     cache.insert(.{ .type_a = type_a_desc, .type_b = type_b_desc });
     try std.testing.expectEqual(@as(u8, 1), cache.count);
@@ -113,11 +113,11 @@ test "PolymorphicCache insert and lookup" {
 
 test "PolymorphicCache holds up to max_pic_entries" {
     var cache = PolymorphicCache{};
-    const descs = [_]*value_mod.MutableMap{
-        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
-        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
-        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
-        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
+    const descs = [_]*value_mod.TypeDescriptor{
+        try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{}),
+        try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{}),
+        try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{}),
+        try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{}),
     };
     defer {
         for (descs) |desc| value_mod.destroyTypeDescriptor(std.testing.allocator, desc);
@@ -135,12 +135,12 @@ test "PolymorphicCache holds up to max_pic_entries" {
 
 test "PolymorphicCache becomes megamorphic on overflow" {
     var cache = PolymorphicCache{};
-    const descs = [_]*value_mod.MutableMap{
-        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
-        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
-        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
-        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
-        try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{}),
+    const descs = [_]*value_mod.TypeDescriptor{
+        try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{}),
+        try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{}),
+        try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{}),
+        try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{}),
+        try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{}),
     };
     defer {
         for (descs) |desc| value_mod.destroyTypeDescriptor(std.testing.allocator, desc);
@@ -175,7 +175,7 @@ test "PicTable get returns mutable pointer to entry" {
     try std.testing.expectEqual(@as(u8, 0), entry.count);
 
     entry.generation = 42;
-    const fixnum_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    const fixnum_desc = try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
     entry.insert(.{ .type_a = fixnum_desc, .type_b = fixnum_desc });
 
@@ -196,7 +196,7 @@ test "PicTable clone produces independent copy" {
     var original = try PicTable.init(allocator, 3);
     defer original.deinit();
 
-    const desc = try value_mod.createTypeDescriptor(allocator, "test:", .{});
+    const desc = try value_mod.createBuiltinTypeDescriptor(allocator, .{});
     defer value_mod.destroyTypeDescriptor(allocator, desc);
 
     original.get(1).insert(.{ .type_a = desc, .type_b = desc });

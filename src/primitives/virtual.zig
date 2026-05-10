@@ -107,20 +107,15 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             else => true,
         } else false,
     };
-    const desc_map = try value_mod.createTypeDescriptor(alloc, "virtual:", descriptor_flags);
-    var src_iter = src_map.iterator();
-    while (src_iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.key_ptr.*, "type") or
-            std.mem.eql(u8, entry.key_ptr.*, "numeric") or
-            std.mem.eql(u8, entry.key_ptr.*, "exact") or
-            std.mem.eql(u8, entry.key_ptr.*, "integer") or
-            std.mem.eql(u8, entry.key_ptr.*, "mutable"))
-        {
-            continue;
-        }
-        try desc_map.put(alloc, entry.key_ptr.*, entry.value_ptr.*);
-    }
-    const inner_type_raw = desc_map.get("inner-type") orelse return error.MissingField;
+    // Allocate the descriptor with an empty virtual payload now; the
+    // type_val branch below populates `inner_type` and the struct-
+    // backed branch populates `anon_struct`.
+    const desc_map = try value_mod.createTypeDescriptor(
+        alloc,
+        .{ .virtual = .{} },
+        descriptor_flags,
+    );
+    const inner_type_raw = src_map.get("inner-type") orelse return error.MissingField;
     const inner_type_val = switch (inner_type_raw) {
         .array => |arr| blk: {
             if (arr.len != 1) {
@@ -152,9 +147,11 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             };
             ctx.virtual_type_count += 1;
 
+            desc_map.kind = .{ .virtual = .{ .inner_type = inner_tv } };
+
             // Create a TypeValue for type-of lookups
             const tv = try alloc.create(value_mod.TypeValue);
-            tv.* = .{ .name = name, .descriptor = @ptrCast(desc_map) };
+            tv.* = .{ .name = name, .descriptor = desc_map };
             vtype.type_val = tv;
 
             // NAME: ( -- type ) - the virtual type itself pushing a TypeValue
@@ -198,8 +195,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try generated_words.append(alloc, .{ .string = pred_name });
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             tv.generated_words = gw_slice;
-            const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
-            try ctx.registerTypeDescriptor(name, frozen_desc);
+            try ctx.registerTypeDescriptor(name, desc_map);
         },
         .mutable_map => |struct_desc| {
             const fields_val = struct_desc.get("fields") orelse return error.MissingField;
@@ -217,10 +213,9 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
                 .boolean => |b| b,
                 else => false,
             } else false;
-            const frozen_inner_desc = try ctx.getOrCreateStructDescriptor(fields_slice, field_types_slice, inner_mutable);
-            const inner_type_values = try alloc.alloc(Value, 1);
-            inner_type_values[0] = .{ .hash = frozen_inner_desc };
-            try desc_map.put(alloc, "inner-type", .{ .array = inner_type_values });
+            // Intern the struct descriptor so downstream readers can
+            // reach it via `desc.kind.virtual.anon_struct`'s type_val.
+            _ = try ctx.getOrCreateStructDescriptor(fields_slice, field_types_slice, inner_mutable);
 
             const anon_struct = try alloc.create(StructType);
             anon_struct.* = .{
@@ -238,9 +233,11 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             };
             ctx.virtual_type_count += 1;
 
+            desc_map.kind = .{ .virtual = .{ .anon_struct = anon_struct } };
+
             // Create a TypeValue for type-of lookups
             const tv = try alloc.create(value_mod.TypeValue);
-            tv.* = .{ .name = name, .descriptor = @ptrCast(desc_map) };
+            tv.* = .{ .name = name, .descriptor = desc_map };
             vtype.type_val = tv;
 
             // NAME: ( -- type ) - the virtual type itself pushing a TypeValue
@@ -293,8 +290,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try generated_words.append(alloc, .{ .string = pred_name });
             const gw_slice = try generated_words.toOwnedSlice(alloc);
             tv.generated_words = gw_slice;
-            const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
-            try ctx.registerTypeDescriptor(name, frozen_desc);
+            try ctx.registerTypeDescriptor(name, desc_map);
         },
         else => {
             helpers.setErrorContext(ctx, "virtual{{ inner type must be a type value or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});

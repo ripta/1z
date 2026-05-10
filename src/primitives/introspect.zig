@@ -9,6 +9,7 @@ const call_graph_mod = @import("../call_graph.zig");
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
+const TypeDescriptor = value_mod.TypeDescriptor;
 const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
 const MutableMap = value_mod.MutableMap;
@@ -525,23 +526,28 @@ fn nativeToWord(ctx: *Context) anyerror!void {
     try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
 }
 
-/// type-descriptor ( symbol|type -- hash ) - Look up a type descriptor by name or type value
+/// type-descriptor ( symbol|type -- hash ) - Look up a type descriptor by name or type value.
+/// Returns a synthesized HashTable view of the underlying TypeDescriptor; the dedicated
+/// Value variant and accessor words land in a follow-up.
 fn nativeTypeDescriptor(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    const alloc = ctx.quotationAllocator();
     switch (val) {
         .type_val => |tv| {
             const desc = tv.descriptor orelse {
                 helpers.setErrorContext(ctx, "no type descriptor for '{s}'", .{tv.name});
                 return error.NameError;
             };
-            try ctx.stack.push(.{ .hash = desc });
+            const hash = try value_mod.descriptorToHash(alloc, desc);
+            try ctx.stack.push(.{ .hash = hash });
         },
         .symbol, .string => |name| {
             const desc = ctx.lookupTypeDescriptor(name) orelse {
                 helpers.setErrorContext(ctx, "no type descriptor for '{s}'", .{name});
                 return error.NameError;
             };
-            try ctx.stack.push(.{ .hash = desc });
+            const hash = try value_mod.descriptorToHash(alloc, desc);
+            try ctx.stack.push(.{ .hash = hash });
         },
         else => {
             helpers.setTypeMismatchError(ctx, "symbol or type", val);
@@ -599,16 +605,13 @@ fn appendGeneratedWords(buf: *std.ArrayListUnmanaged(u8), alloc: Allocator, tv: 
 fn appendBoolFieldIfTrue(
     buf: *std.ArrayListUnmanaged(u8),
     alloc: Allocator,
-    desc: *const value_mod.HashTable,
     key: []const u8,
+    val: bool,
 ) !void {
-    const field = desc.get(key) orelse return;
-    if (field != .boolean or !field.boolean) return;
+    if (!val) return;
     try buf.appendSlice(alloc, "  ");
     try buf.appendSlice(alloc, key);
-    try buf.appendSlice(alloc, ": ");
-    try buf.appendSlice(alloc, try helpers.formatValueBrief(alloc, field, 256));
-    try buf.appendSlice(alloc, "\n");
+    try buf.appendSlice(alloc, ": t\n");
 }
 
 /// type-info-string ( symbol|type -- string ) - Render type info for help/introspection output.
@@ -620,83 +623,50 @@ fn nativeTypeInfoString(ctx: *Context) anyerror!void {
         return;
     };
 
-    const kind = desc.get("type") orelse {
-        try ctx.stack.push(.{ .string = "" });
-        return;
-    };
-
     var buf: std.ArrayListUnmanaged(u8) = .{};
 
-    const kind_name = switch (kind) {
-        .symbol => |sym| sym,
-        .string => |s| s,
-        else => "",
-    };
-
-    if (std.mem.eql(u8, kind_name, "builtin-type:") or std.mem.eql(u8, kind_name, "builtin-type")) {
-        try buf.appendSlice(alloc, "type info:\n  kind: builtin-type\n");
-        const ordered_keys = [_][]const u8{ "integer", "exact", "numeric", "mutable" };
-        for (ordered_keys) |key| {
-            try appendBoolFieldIfTrue(&buf, alloc, desc, key);
-        }
-    } else if (std.mem.eql(u8, kind_name, "struct-descriptor:")) {
-        try buf.appendSlice(alloc, "type info:\n  kind: struct\n  fields: ");
-        if (desc.get("fields")) |fields| if (fields == .array) {
-            for (fields.array, 0..) |field, i| {
+    switch (desc.kind) {
+        .builtin => {
+            try buf.appendSlice(alloc, "type info:\n  kind: builtin-type\n");
+            try appendBoolFieldIfTrue(&buf, alloc, "integer", desc.integer);
+            try appendBoolFieldIfTrue(&buf, alloc, "exact", desc.exact);
+            try appendBoolFieldIfTrue(&buf, alloc, "numeric", desc.numeric);
+            try appendBoolFieldIfTrue(&buf, alloc, "mutable", desc.mutable);
+        },
+        .struct_ => |sd| {
+            try buf.appendSlice(alloc, "type info:\n  kind: struct\n  fields: ");
+            for (sd.fields, 0..) |field, i| {
                 if (i > 0) try buf.append(alloc, ' ');
-                try buf.appendSlice(alloc, field.string);
+                try buf.appendSlice(alloc, field);
             }
-        };
-        try buf.appendSlice(alloc, "\n");
-        try appendGeneratedWords(&buf, alloc, tv);
-    } else if (std.mem.eql(u8, kind_name, "virtual:")) {
-        try buf.appendSlice(alloc, "type info:\n  kind: virtual\n");
-        if (desc.get("inner-type")) |inner_raw| {
-            const inner = if (inner_raw == .array and inner_raw.array.len > 0) inner_raw.array[0] else inner_raw;
-            switch (inner) {
-                .type_val => |inner_tv| {
-                    try buf.appendSlice(alloc, "  wraps: ");
-                    try buf.appendSlice(alloc, inner_tv.name);
-                    try buf.appendSlice(alloc, "\n");
-                },
-                .mutable_map, .hash => |h| {
-                    try buf.appendSlice(alloc, "  fields: ");
-                    if (h.get("fields")) |fields| if (fields == .array) {
-                        for (fields.array, 0..) |field, i| {
-                            if (i > 0) try buf.append(alloc, ' ');
-                            try buf.appendSlice(alloc, field.string);
-                        }
-                    };
-                    try buf.appendSlice(alloc, "\n");
-                },
-                else => {},
+            try buf.appendSlice(alloc, "\n");
+            try appendGeneratedWords(&buf, alloc, tv);
+        },
+        .virtual => |vd| {
+            try buf.appendSlice(alloc, "type info:\n  kind: virtual\n");
+            if (vd.inner_type) |inner_tv| {
+                try buf.appendSlice(alloc, "  wraps: ");
+                try buf.appendSlice(alloc, inner_tv.name);
+                try buf.appendSlice(alloc, "\n");
+            } else if (vd.anon_struct) |st| {
+                try buf.appendSlice(alloc, "  fields: ");
+                for (st.fields, 0..) |field, i| {
+                    if (i > 0) try buf.append(alloc, ' ');
+                    try buf.appendSlice(alloc, field);
+                }
+                try buf.appendSlice(alloc, "\n");
             }
-        }
-        try appendGeneratedWords(&buf, alloc, tv);
-    } else if (std.mem.eql(u8, kind_name, "enum-descriptor:")) {
-        try buf.appendSlice(alloc, "type info:\n  kind: enum\n  variants:\n");
-        if (desc.get("variants")) |variants| if (variants == .array) {
+            try appendGeneratedWords(&buf, alloc, tv);
+        },
+        .enum_ => |ed| {
+            try buf.appendSlice(alloc, "type info:\n  kind: enum\n  variants:\n");
             var max_name_len: usize = 0;
-            var i_width: usize = 0;
-            while (i_width + 1 < variants.array.len) : (i_width += 2) {
-                const variant_name = variants.array[i_width];
-                const name_len = switch (variant_name) {
-                    .symbol => |name| name.len,
-                    .string => |name| name.len,
-                    else => continue,
-                };
-                if (name_len > max_name_len) max_name_len = name_len;
+            for (ed.variants) |v| {
+                if (v.name.len > max_name_len) max_name_len = v.name.len;
             }
-
-            var i: usize = 0;
-            while (i + 1 < variants.array.len) : (i += 2) {
-                const variant_name = variants.array[i];
-                const variant_type = variants.array[i + 1];
-                const variant_name_str = switch (variant_name) {
-                    .symbol => |name| name,
-                    .string => |name| name,
-                    else => try helpers.formatValueBrief(alloc, variant_name, 256),
-                };
+            for (ed.variants) |v| {
+                const variant_name_str = v.name;
+                const variant_type = if (v.type_val) |t| Value{ .type_val = @constCast(t) } else Value{ .unit = {} };
                 try buf.appendSlice(alloc, "    ");
                 try buf.appendSlice(alloc, variant_name_str);
                 try buf.appendSlice(alloc, ":");
@@ -708,8 +678,9 @@ fn nativeTypeInfoString(ctx: *Context) anyerror!void {
                 }
                 try buf.appendSlice(alloc, "\n");
             }
-        };
-        try appendGeneratedWords(&buf, alloc, tv);
+            try appendGeneratedWords(&buf, alloc, tv);
+        },
+        .enum_variant, .resource, .ffi_struct, .sentinel, .union_ => {},
     }
 
     try ctx.stack.push(.{ .string = try buf.toOwnedSlice(alloc) });

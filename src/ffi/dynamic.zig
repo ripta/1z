@@ -339,11 +339,12 @@ fn ffiTypeToLibffiExt(ffi_type: FfiType) [*c]c_ffi.ffi_type {
 /// Resolve a token as an FFI struct type by looking up its type descriptor.
 fn resolveStructType(ctx: *const Context, token: []const u8) ?FfiType {
     const desc = ctx.lookupTypeDescriptor(token) orelse return null;
-    const layout_val = desc.get("ffi-layout") orelse return null;
-    const layout_ptr: *const FfiStructLayout = switch (layout_val) {
-        .fixnum => |v| @ptrFromInt(@as(usize, @intCast(v))),
+    const layout_raw: usize = switch (desc.kind) {
+        .ffi_struct => |fs| fs.ffi_layout,
         else => return null,
     };
+    if (layout_raw == 0) return null;
+    const layout_ptr: *const FfiStructLayout = @ptrFromInt(layout_raw);
     return FfiType{
         .tag = .struct_type,
         .struct_layout = layout_ptr,

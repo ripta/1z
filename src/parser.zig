@@ -1565,16 +1565,19 @@ test "struct field annotations accept anonymous unions" {
                 try std.testing.expect(false);
                 return;
             };
-            const field_types_val = desc.get("field-types") orelse {
-                try std.testing.expect(false);
-                return;
+            const sd = switch (desc.kind) {
+                .struct_ => |s| s,
+                else => {
+                    try std.testing.expect(false);
+                    return;
+                },
             };
-            const field_types = field_types_val.array;
+            const field_types = sd.field_types;
 
             try std.testing.expectEqual(@as(usize, 2), field_types.len);
-            try std.testing.expect(field_types[0].type_val.member_types != null);
-            try std.testing.expect(field_types[0].type_val == field_types[1].type_val);
-            try std.testing.expectEqualStrings("bignum|fixnum", field_types[0].type_val.name);
+            try std.testing.expect(field_types[0].?.member_types != null);
+            try std.testing.expect(field_types[0].? == field_types[1].?);
+            try std.testing.expectEqualStrings("bignum|fixnum", field_types[0].?.name);
         },
         .native, .host_callback => try std.testing.expect(false),
     }

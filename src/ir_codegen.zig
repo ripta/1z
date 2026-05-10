@@ -8,7 +8,7 @@ const VirtualType = value_mod.VirtualType;
 const StructInstance = value_mod.StructInstance;
 const StructType = value_mod.StructType;
 const TypeValue = value_mod.TypeValue;
-const HashTable = value_mod.HashTable;
+const TypeDescriptor = value_mod.TypeDescriptor;
 
 const ir_mod = @import("ffi/ir.zig");
 const JitBuffer = ir_mod.JitBuffer;
@@ -658,7 +658,7 @@ const DispatchGenerationLayout = struct {
 /// (tagged, struct_instance, resource with instance-specific descriptors).
 fn reverseMapDescriptorToTag(
     interp_ctx: *const Context,
-    descriptor: *const HashTable,
+    descriptor: *const TypeDescriptor,
 ) ?std.meta.Tag(Value) {
     for (interp_ctx.builtin_type_array, 0..) |slot, i| {
         if (slot) |tv| {

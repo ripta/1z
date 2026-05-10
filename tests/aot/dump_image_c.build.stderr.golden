@@ -210,7 +210,7 @@ static const onez_image_blob_descriptor_entry_t onez_image_blob_desc_0[] = {
     { .key = "integer", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
     { .key = "mutable", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
     { .key = "numeric", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
-    { .key = "type", .key_len = 4, .value_kind = 0, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = "enum-descriptor:", .string_value_len = 16 },
+    { .key = "type", .key_len = 4, .value_kind = 0, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = "enum-descriptor", .string_value_len = 15 },
     { .key = "variants", .key_len = 8, .value_kind = 5, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
 };
 static const onez_image_blob_descriptor_entry_t onez_image_blob_desc_1[] = {
@@ -218,7 +218,7 @@ static const onez_image_blob_descriptor_entry_t onez_image_blob_desc_1[] = {
     { .key = "integer", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
     { .key = "mutable", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
     { .key = "numeric", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
-    { .key = "type", .key_len = 4, .value_kind = 0, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = "enum-descriptor:", .string_value_len = 16 },
+    { .key = "type", .key_len = 4, .value_kind = 0, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = "enum-descriptor", .string_value_len = 15 },
     { .key = "variants", .key_len = 8, .value_kind = 5, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
 };
 static const onez_image_blob_descriptor_entry_t onez_image_blob_desc_2[] = {
@@ -226,7 +226,7 @@ static const onez_image_blob_descriptor_entry_t onez_image_blob_desc_2[] = {
     { .key = "integer", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
     { .key = "mutable", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
     { .key = "numeric", .key_len = 7, .value_kind = 1, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
-    { .key = "type", .key_len = 4, .value_kind = 0, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = "enum-descriptor:", .string_value_len = 16 },
+    { .key = "type", .key_len = 4, .value_kind = 0, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = "enum-descriptor", .string_value_len = 15 },
     { .key = "variants", .key_len = 8, .value_kind = 5, .bool_value = 0, ._pad = 0, .fixnum_value = 0, .string_value = NULL, .string_value_len = 0 },
 };
 

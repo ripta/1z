@@ -400,7 +400,7 @@ pub const TemplateSegment = union(enum) {
 /// Created when type names are used as words.
 pub const TypeValue = struct {
     name: []const u8,
-    descriptor: ?*HashTable,
+    descriptor: ?*TypeDescriptor,
     generated_words: ?[]Value = null,
     member_types: ?[]const *const TypeValue = null,
 };
@@ -412,34 +412,235 @@ pub const DescriptorFlags = struct {
     mutable: bool = false,
 };
 
-/// Allocate a normalized descriptor with the shared boolean property schema.
+/// TypeKind classifies the descriptor kinds. The variant chosen here
+/// determines which payload struct lives inside the `TypeKindData`
+/// tagged union.
+pub const TypeKind = enum {
+    builtin,
+    sentinel,
+    struct_,
+    virtual,
+    enum_,
+    enum_variant,
+    resource,
+    ffi_struct,
+    union_,
+};
+
+/// TypeDescriptor carries a type's metadata in a closed-vocabulary,
+/// statically-typed shape. The four universal boolean properties live
+/// as direct fields; kind-specific data lives in `kind`.
+pub const TypeDescriptor = struct {
+    numeric: bool = false,
+    exact: bool = false,
+    integer: bool = false,
+    mutable: bool = false,
+    kind: TypeKindData,
+};
+
+/// TypeKindData carries the kind-specific payload of a TypeDescriptor.
+pub const TypeKindData = union(TypeKind) {
+    builtin: void,
+    sentinel: void,
+    struct_: StructData,
+    virtual: VirtualData,
+    enum_: EnumData,
+    enum_variant: EnumVariantData,
+    resource: ResourceData,
+    ffi_struct: FfiStructData,
+    /// Anonymous union types carry their member list on `TypeValue.member_types`;
+    /// the descriptor itself has no extra kind-specific data beyond the
+    /// universal flags inferred from the union members.
+    union_: void,
+};
+
+/// StructData carries the metadata of a struct-defined type.
+pub const StructData = struct {
+    fields: []const []const u8 = &.{},
+    field_types: []const ?*const TypeValue = &.{},
+};
+
+/// VirtualData carries the metadata of a virtual-defined type.
+pub const VirtualData = struct {
+    /// Inner type for non-parameterized virtual types: the wrap target.
+    /// For struct-backed virtual types this is null; reach the anon
+    /// struct through `anon_struct` instead.
+    inner_type: ?*const TypeValue = null,
+    /// For struct-backed virtual types, the anonymous struct backing.
+    /// Mirrors `VirtualType.anon_struct` so descriptor-only readers can
+    /// reach the struct shape.
+    anon_struct: ?*const StructType = null,
+    /// Type parameters for parameterized types (e.g. `[fixnum]` for
+    /// `array(fixnum)`).
+    type_params: []const *const TypeValue = &.{},
+};
+
+/// EnumData carries the metadata of an enum-defined type.
+pub const EnumData = struct {
+    variants: []const Variant = &.{},
+};
+
+/// Variant pairs a variant name with its inner-type, mirroring the
+/// `(name, type)` shape carried by enum descriptors.
+pub const Variant = struct {
+    name: []const u8,
+    type_val: ?*const TypeValue = null,
+};
+
+/// EnumVariantData carries the metadata of a single enum variant's TypeValue.
+pub const EnumVariantData = struct {
+    parent: ?*const TypeValue = null,
+    inner_type: ?*const TypeValue = null,
+};
+
+/// ResourceData carries the metadata of a resource type.
+pub const ResourceData = struct {
+    resource_kind: []const u8 = &.{},
+};
+
+/// FfiStructData carries the metadata of an FFI struct type.
+pub const FfiStructData = struct {
+    fields: []const []const u8 = &.{},
+    field_types: []const ?*const TypeValue = &.{},
+    /// Pointer to the FFI layout object, encoded as a usize. The
+    /// previous `MutableMap` descriptor stored this as a fixnum
+    /// carrying the pointer; the value-level shape is preserved.
+    ffi_layout: usize = 0,
+};
+
+/// Allocate a TypeDescriptor with the given kind payload and universal
+/// boolean flags. Producers that build kind-specific payloads
+/// progressively can pass `.{ .builtin = {} }` (or the eventual kind
+/// with empty defaults) and mutate `desc.kind` afterwards.
 pub fn createTypeDescriptor(
     allocator: std.mem.Allocator,
-    category: []const u8,
+    kind: TypeKindData,
     flags: DescriptorFlags,
-) !*MutableMap {
-    const desc = try allocator.create(MutableMap);
-    desc.* = MutableMap{};
-    try desc.put(allocator, "type", .{ .symbol = category });
-    try desc.put(allocator, "numeric", .{ .boolean = flags.numeric });
-    try desc.put(allocator, "exact", .{ .boolean = flags.exact });
-    try desc.put(allocator, "integer", .{ .boolean = flags.integer });
-    try desc.put(allocator, "mutable", .{ .boolean = flags.mutable });
-
+) !*TypeDescriptor {
+    const desc = try allocator.create(TypeDescriptor);
+    desc.* = .{
+        .numeric = flags.numeric,
+        .exact = flags.exact,
+        .integer = flags.integer,
+        .mutable = flags.mutable,
+        .kind = kind,
+    };
     return desc;
 }
 
-pub fn createBuiltinTypeDescriptor(allocator: std.mem.Allocator, flags: DescriptorFlags) !*MutableMap {
-    return createTypeDescriptor(allocator, "builtin-type:", flags);
+pub fn createBuiltinTypeDescriptor(allocator: std.mem.Allocator, flags: DescriptorFlags) !*TypeDescriptor {
+    return createTypeDescriptor(allocator, .{ .builtin = {} }, flags);
 }
 
-pub fn createSentinelTypeDescriptor(allocator: std.mem.Allocator) !*MutableMap {
-    return createTypeDescriptor(allocator, "sentinel:", .{});
+pub fn createSentinelTypeDescriptor(allocator: std.mem.Allocator) !*TypeDescriptor {
+    return createTypeDescriptor(allocator, .{ .sentinel = {} }, .{});
 }
 
-pub fn destroyTypeDescriptor(allocator: std.mem.Allocator, desc: *MutableMap) void {
-    desc.deinit(allocator);
+pub fn destroyTypeDescriptor(allocator: std.mem.Allocator, desc: *TypeDescriptor) void {
     allocator.destroy(desc);
+}
+
+/// Transient shim: synthesize a HashTable view of a TypeDescriptor so the
+/// 1z-level `type-descriptor` word can continue to return a hash until
+/// the 1z surface redesign lands a dedicated Value variant and accessor
+/// words. The keys mirror the layout used by the previous
+/// `MutableMap`-backed descriptor: `type`, `numeric`, `exact`, `integer`,
+/// `mutable`, and kind-specific keys.
+pub fn descriptorToHash(allocator: std.mem.Allocator, desc: *const TypeDescriptor) !*HashTable {
+    const hash = try allocator.create(HashTable);
+    hash.* = HashTable{};
+    try hash.put(allocator, "type", .{ .symbol = typeKindSymbol(desc.kind) });
+    try hash.put(allocator, "numeric", .{ .boolean = desc.numeric });
+    try hash.put(allocator, "exact", .{ .boolean = desc.exact });
+    try hash.put(allocator, "integer", .{ .boolean = desc.integer });
+    try hash.put(allocator, "mutable", .{ .boolean = desc.mutable });
+    switch (desc.kind) {
+        .builtin, .sentinel, .union_ => {},
+        .struct_ => |sd| {
+            const fields = try allocator.alloc(Value, sd.fields.len);
+            for (sd.fields, 0..) |f, i| fields[i] = .{ .string = f };
+            try hash.put(allocator, "fields", .{ .array = fields });
+            if (sd.field_types.len != 0) {
+                const ft = try allocator.alloc(Value, sd.field_types.len);
+                for (sd.field_types, 0..) |t, i| ft[i] = .{ .type_val = @constCast(t.?) };
+                try hash.put(allocator, "field-types", .{ .array = ft });
+            }
+        },
+        .virtual => |vd| {
+            if (vd.inner_type) |inner| {
+                const arr = try allocator.alloc(Value, 1);
+                arr[0] = .{ .type_val = @constCast(inner) };
+                try hash.put(allocator, "inner-type", .{ .array = arr });
+            } else if (vd.anon_struct) |st| {
+                // Struct-backed virtuals carry their inner descriptor as
+                // a nested hash; the wrapped fields slice mirrors what
+                // the prior descriptor produced.
+                const inner_hash = try allocator.create(HashTable);
+                inner_hash.* = HashTable{};
+                const fields = try allocator.alloc(Value, st.fields.len);
+                for (st.fields, 0..) |f, i| fields[i] = .{ .string = f };
+                try inner_hash.put(allocator, "fields", .{ .array = fields });
+                if (st.field_types.len != 0) {
+                    const ft = try allocator.alloc(Value, st.field_types.len);
+                    for (st.field_types, 0..) |t, i| {
+                        ft[i] = if (t) |tv| .{ .type_val = @constCast(tv) } else .{ .boolean = false };
+                    }
+                    try inner_hash.put(allocator, "field-types", .{ .array = ft });
+                }
+                const arr = try allocator.alloc(Value, 1);
+                arr[0] = .{ .hash = inner_hash };
+                try hash.put(allocator, "inner-type", .{ .array = arr });
+            }
+            if (vd.type_params.len != 0) {
+                if (vd.type_params.len == 1) {
+                    try hash.put(allocator, "element-type", .{ .type_val = @constCast(vd.type_params[0]) });
+                }
+            }
+        },
+        .enum_ => |ed| {
+            const arr = try allocator.alloc(Value, ed.variants.len * 2);
+            for (ed.variants, 0..) |v, i| {
+                const colon_name = try std.fmt.allocPrint(allocator, "{s}:", .{v.name});
+                arr[i * 2] = .{ .symbol = colon_name };
+                arr[i * 2 + 1] = .{ .type_val = @constCast(v.type_val orelse continue) };
+            }
+            try hash.put(allocator, "variants", .{ .array = arr });
+        },
+        .enum_variant => |evd| {
+            if (evd.parent) |p| try hash.put(allocator, "parent", .{ .type_val = @constCast(p) });
+            if (evd.inner_type) |inner| try hash.put(allocator, "inner-type", .{ .type_val = @constCast(inner) });
+        },
+        .resource => |rd| {
+            try hash.put(allocator, "resource-kind", .{ .string = rd.resource_kind });
+        },
+        .ffi_struct => |fsd| {
+            const fields = try allocator.alloc(Value, fsd.fields.len);
+            for (fsd.fields, 0..) |f, i| fields[i] = .{ .string = f };
+            try hash.put(allocator, "fields", .{ .array = fields });
+            if (fsd.ffi_layout != 0) {
+                try hash.put(allocator, "ffi-layout", .{ .fixnum = @intCast(fsd.ffi_layout) });
+            }
+        },
+    }
+    return hash;
+}
+
+/// Returns the stored symbol name for a TypeKindData variant. The 1z
+/// symbol-literal syntax `name:` produces a symbol whose stored name is
+/// `name` (the trailing colon is syntactic), so these strings omit the
+/// colon. The 1z-level inspect form re-adds the colon when printing.
+pub fn typeKindSymbol(kind: TypeKindData) []const u8 {
+    return switch (kind) {
+        .builtin => "builtin-type",
+        .sentinel => "sentinel",
+        .struct_ => "struct-descriptor",
+        .virtual => "virtual",
+        .enum_ => "enum-descriptor",
+        .enum_variant => "enum-variant",
+        .resource => "resource-type",
+        .ffi_struct => "ffi-struct-type",
+        .union_ => "union-type",
+    };
 }
 
 /// StructInstance represents an instance of a struct type.
@@ -449,7 +650,7 @@ pub const StructInstance = struct {
     fields: []Value, // Field values in order (mutable for setter support)
 };
 
-fn structTypeDescriptor(st: *const StructType) ?*const HashTable {
+fn structTypeDescriptor(st: *const StructType) ?*const TypeDescriptor {
     const tv = st.type_val orelse return null;
     return tv.descriptor;
 }
@@ -1643,4 +1844,123 @@ test "resource hash consistent with equality" {
     const val1 = Value{ .resource = &r1 };
     const val2 = Value{ .resource = &r2 };
     try std.testing.expectEqual(val1.hashValue(), val2.hashValue());
+}
+
+test "TypeDescriptor default construction" {
+    const desc: TypeDescriptor = .{ .kind = .{ .builtin = {} } };
+    try std.testing.expectEqual(false, desc.numeric);
+    try std.testing.expectEqual(false, desc.exact);
+    try std.testing.expectEqual(false, desc.integer);
+    try std.testing.expectEqual(false, desc.mutable);
+    try std.testing.expectEqual(TypeKind.builtin, @as(TypeKind, desc.kind));
+}
+
+test "TypeKindData exhaustive switch over all variants" {
+    const variants = [_]TypeKindData{
+        .{ .builtin = {} },
+        .{ .sentinel = {} },
+        .{ .struct_ = .{} },
+        .{ .virtual = .{} },
+        .{ .enum_ = .{} },
+        .{ .enum_variant = .{} },
+        .{ .resource = .{} },
+        .{ .ffi_struct = .{} },
+        .{ .union_ = {} },
+    };
+    for (variants) |v| {
+        const tag: TypeKind = switch (v) {
+            .builtin => .builtin,
+            .sentinel => .sentinel,
+            .struct_ => .struct_,
+            .virtual => .virtual,
+            .enum_ => .enum_,
+            .enum_variant => .enum_variant,
+            .resource => .resource,
+            .ffi_struct => .ffi_struct,
+            .union_ => .union_,
+        };
+        try std.testing.expectEqual(@as(TypeKind, v), tag);
+    }
+}
+
+test "createTypeDescriptor preserves flags and kind" {
+    const desc = try createTypeDescriptor(
+        std.testing.allocator,
+        .{ .builtin = {} },
+        .{ .numeric = true, .integer = true },
+    );
+    defer destroyTypeDescriptor(std.testing.allocator, desc);
+    try std.testing.expect(desc.numeric);
+    try std.testing.expect(!desc.exact);
+    try std.testing.expect(desc.integer);
+    try std.testing.expect(!desc.mutable);
+    try std.testing.expectEqual(TypeKind.builtin, @as(TypeKind, desc.kind));
+}
+
+test "createBuiltinTypeDescriptor wires builtin kind" {
+    const desc = try createBuiltinTypeDescriptor(std.testing.allocator, .{ .mutable = true });
+    defer destroyTypeDescriptor(std.testing.allocator, desc);
+    try std.testing.expect(desc.mutable);
+    try std.testing.expectEqual(TypeKind.builtin, @as(TypeKind, desc.kind));
+}
+
+test "createSentinelTypeDescriptor wires sentinel kind" {
+    const desc = try createSentinelTypeDescriptor(std.testing.allocator);
+    defer destroyTypeDescriptor(std.testing.allocator, desc);
+    try std.testing.expectEqual(TypeKind.sentinel, @as(TypeKind, desc.kind));
+}
+
+test "StructData default fields are empty slices" {
+    const data: StructData = .{};
+    try std.testing.expectEqual(@as(usize, 0), data.fields.len);
+    try std.testing.expectEqual(@as(usize, 0), data.field_types.len);
+}
+
+test "VirtualData default fields are null and empty" {
+    const data: VirtualData = .{};
+    try std.testing.expectEqual(@as(?*const TypeValue, null), data.inner_type);
+    try std.testing.expectEqual(@as(?*const StructType, null), data.anon_struct);
+    try std.testing.expectEqual(@as(usize, 0), data.type_params.len);
+}
+
+test "EnumData and Variant round-trip" {
+    var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    const variants = [_]Variant{
+        .{ .name = "red", .type_val = &fixnum_tv },
+        .{ .name = "green", .type_val = null },
+    };
+    const data: EnumData = .{ .variants = &variants };
+    try std.testing.expectEqual(@as(usize, 2), data.variants.len);
+    try std.testing.expectEqualStrings("red", data.variants[0].name);
+    try std.testing.expect(data.variants[0].type_val == &fixnum_tv);
+    try std.testing.expectEqualStrings("green", data.variants[1].name);
+    try std.testing.expectEqual(@as(?*const TypeValue, null), data.variants[1].type_val);
+}
+
+test "EnumVariantData carries parent and inner_type" {
+    var parent_tv = TypeValue{ .name = "color", .descriptor = null };
+    var inner_tv = TypeValue{ .name = "fixnum", .descriptor = null };
+    const data: EnumVariantData = .{ .parent = &parent_tv, .inner_type = &inner_tv };
+    try std.testing.expect(data.parent == &parent_tv);
+    try std.testing.expect(data.inner_type == &inner_tv);
+}
+
+test "ResourceData carries resource_kind" {
+    const data: ResourceData = .{ .resource_kind = "stream" };
+    try std.testing.expectEqualStrings("stream", data.resource_kind);
+}
+
+test "FfiStructData defaults" {
+    const data: FfiStructData = .{};
+    try std.testing.expectEqual(@as(usize, 0), data.fields.len);
+    try std.testing.expectEqual(@as(usize, 0), data.field_types.len);
+    try std.testing.expectEqual(@as(usize, 0), data.ffi_layout);
+}
+
+test "TypeValue carries TypeDescriptor pointer" {
+    const desc = try createBuiltinTypeDescriptor(std.testing.allocator, .{ .numeric = true });
+    defer destroyTypeDescriptor(std.testing.allocator, desc);
+    const tv = TypeValue{ .name = "fixnum", .descriptor = desc };
+    try std.testing.expectEqualStrings("fixnum", tv.name);
+    try std.testing.expect(tv.descriptor.?.numeric);
 }

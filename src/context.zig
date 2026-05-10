@@ -113,7 +113,7 @@ pub const PragmaFrame = std.StringHashMapUnmanaged(Value);
 /// a single scope. Pushed/popped by `with-isolation` to enable rollback
 /// of type registrations.
 pub const TypeRegistryFrame = struct {
-    type_descriptors: std.StringHashMapUnmanaged(*value_mod.HashTable) = .{},
+    type_descriptors: std.StringHashMapUnmanaged(*value_mod.TypeDescriptor) = .{},
     enum_registry: std.AutoHashMapUnmanaged(*const value_mod.TypeValue, []const *const value_mod.VirtualType) = .{},
 
     pub fn deinit(self: *TypeRegistryFrame, allocator: Allocator) void {
@@ -427,14 +427,14 @@ pub const Context = struct {
     /// (base TypeValue pointer, element TypeValue pointer).
     parameterized_type_descriptors: std.HashMapUnmanaged(
         ParameterizedTypeKey,
-        *value_mod.HashTable,
+        *value_mod.TypeDescriptor,
         ParameterizedTypeKeyContext,
         80,
     ) = .{},
     /// Interned descriptors for bare structs, keyde by ordered field names and by mutability.
     struct_descriptors: std.HashMapUnmanaged(
         StructDescriptorKey,
-        *value_mod.HashTable,
+        *value_mod.TypeDescriptor,
         StructDescriptorKeyContext,
         80,
     ) = .{},
@@ -513,17 +513,17 @@ pub const Context = struct {
     fn initSentinelTypeValues(self: *Context) !void {
         const alloc = self.arena.allocator();
 
-        const dispatch_any_desc: *value_mod.HashTable = @ptrCast(try value_mod.createSentinelTypeDescriptor(alloc));
+        const dispatch_any_desc = try value_mod.createSentinelTypeDescriptor(alloc);
         const dispatch_any = try alloc.create(value_mod.TypeValue);
         dispatch_any.* = .{ .name = "*", .descriptor = dispatch_any_desc };
         self.dispatch_any_sentinel = dispatch_any;
 
-        const dispatch_unary_desc: *value_mod.HashTable = @ptrCast(try value_mod.createSentinelTypeDescriptor(alloc));
+        const dispatch_unary_desc = try value_mod.createSentinelTypeDescriptor(alloc);
         const dispatch_unary = try alloc.create(value_mod.TypeValue);
         dispatch_unary.* = .{ .name = "", .descriptor = dispatch_unary_desc };
         self.dispatch_unary_sentinel = dispatch_unary;
 
-        const type_sentinel_desc: *value_mod.HashTable = @ptrCast(try value_mod.createSentinelTypeDescriptor(alloc));
+        const type_sentinel_desc = try value_mod.createSentinelTypeDescriptor(alloc);
 
         const self_sentinel = try alloc.create(value_mod.TypeValue);
         self_sentinel.* = .{ .name = "self", .descriptor = type_sentinel_desc };
@@ -547,10 +547,10 @@ pub const Context = struct {
         inline for (0..num_variants) |i| {
             const tag: std.meta.Tag(value_mod.Value) = @enumFromInt(i);
             const name = dispatch_mod.builtinTypeName(tag);
-            const desc: *value_mod.HashTable = @ptrCast(try value_mod.createBuiltinTypeDescriptor(
+            const desc = try value_mod.createBuiltinTypeDescriptor(
                 alloc,
                 builtinDescriptorFlags(tag),
-            ));
+            );
 
             const tv = try alloc.create(value_mod.TypeValue);
             tv.* = .{ .name = name, .descriptor = desc };
@@ -1660,13 +1660,13 @@ pub const Context = struct {
 
     /// Look up a binary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
-    pub fn lookupBinaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
+    pub fn lookupBinaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupBinaryDispatchLocked(dispatch_id, type_a, type_b);
     }
 
-    fn lookupBinaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
+    fn lookupBinaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
         const any_sentinel = self.getDispatchAnySentinel().descriptor.?;
         // Walk dispatch frames top-to-bottom
         var i = self.dispatch_frames.items.len;
@@ -1693,13 +1693,13 @@ pub const Context = struct {
 
     /// Look up a unary dispatch entry by walking dispatch frames (top to
     /// bottom), then the base dispatch table, then the parent context chain.
-    pub fn lookupUnaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable) ?DispatchEntry {
+    pub fn lookupUnaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupUnaryDispatchLocked(dispatch_id, type_a);
     }
 
-    fn lookupUnaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable) ?DispatchEntry {
+    fn lookupUnaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
         const any_sentinel = self.getDispatchAnySentinel().descriptor.?;
         const unary_sentinel = self.getDispatchUnarySentinel().descriptor.?;
         // Walk dispatch frames top-to-bottom
@@ -1733,13 +1733,13 @@ pub const Context = struct {
 
     /// Look up a binary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
-    pub fn lookupNativeBinaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
+    pub fn lookupNativeBinaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupNativeBinaryDispatchLocked(dispatch_id, type_a, type_b);
     }
 
-    fn lookupNativeBinaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable, type_b: *const value_mod.HashTable) ?DispatchEntry {
+    fn lookupNativeBinaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) ?DispatchEntry {
         if (self.dispatch.lookupNativeBinary(dispatch_id, type_a, type_b, self.getDispatchAnySentinel().descriptor.?)) |entry| return entry;
 
         var ancestor = self.parent_context;
@@ -1753,13 +1753,13 @@ pub const Context = struct {
 
     /// Look up a unary dispatch entry in the native-only shadow table,
     /// walking the parent context chain.
-    pub fn lookupNativeUnaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable) ?DispatchEntry {
+    pub fn lookupNativeUnaryDispatch(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupNativeUnaryDispatchLocked(dispatch_id, type_a);
     }
 
-    fn lookupNativeUnaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.HashTable) ?DispatchEntry {
+    fn lookupNativeUnaryDispatchLocked(self: *const Context, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) ?DispatchEntry {
         if (self.dispatch.lookupNativeUnary(dispatch_id, type_a, self.getDispatchAnySentinel().descriptor.?, self.getDispatchUnarySentinel().descriptor.?)) |entry| return entry;
 
         var ancestor = self.parent_context;
@@ -1801,13 +1801,13 @@ pub const Context = struct {
 
     /// Look up a type descriptor by type name, walking type registry frames
     /// (top to bottom), then the parent context chain.
-    pub fn lookupTypeDescriptor(self: *const Context, name: []const u8) ?*value_mod.HashTable {
+    pub fn lookupTypeDescriptor(self: *const Context, name: []const u8) ?*value_mod.TypeDescriptor {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupTypeDescriptorLocked(name);
     }
 
-    fn lookupTypeDescriptorLocked(self: *const Context, name: []const u8) ?*value_mod.HashTable {
+    fn lookupTypeDescriptorLocked(self: *const Context, name: []const u8) ?*value_mod.TypeDescriptor {
         var i = self.type_registry_frames.items.len;
         while (i > 0) {
             i -= 1;
@@ -1903,13 +1903,13 @@ pub const Context = struct {
         }
     }
 
-    pub fn lookupTypeNameByDescriptor(self: *const Context, desc: *const value_mod.HashTable) ?[]const u8 {
+    pub fn lookupTypeNameByDescriptor(self: *const Context, desc: *const value_mod.TypeDescriptor) ?[]const u8 {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupTypeNameByDescriptorLocked(desc);
     }
 
-    fn lookupTypeNameByDescriptorLocked(self: *const Context, desc: *const value_mod.HashTable) ?[]const u8 {
+    fn lookupTypeNameByDescriptorLocked(self: *const Context, desc: *const value_mod.TypeDescriptor) ?[]const u8 {
         const sentinels = [_]*const value_mod.TypeValue{
             self.dispatch_any_sentinel orelse unreachable,
             self.dispatch_unary_sentinel orelse unreachable,
@@ -2008,7 +2008,7 @@ pub const Context = struct {
         self: *const Context,
         base: *const value_mod.TypeValue,
         element: *const value_mod.TypeValue,
-    ) ?*value_mod.HashTable {
+    ) ?*value_mod.TypeDescriptor {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupParameterizedTypeDescriptorLocked(base, element);
@@ -2018,7 +2018,7 @@ pub const Context = struct {
         self: *const Context,
         base: *const value_mod.TypeValue,
         element: *const value_mod.TypeValue,
-    ) ?*value_mod.HashTable {
+    ) ?*value_mod.TypeDescriptor {
         const key = ParameterizedTypeKey{ .base = base, .element = element };
         if (self.parameterized_type_descriptors.get(key)) |desc| return desc;
 
@@ -2036,7 +2036,7 @@ pub const Context = struct {
         fields: []const []const u8,
         field_types: []const ?*const value_mod.TypeValue,
         mutable: bool,
-    ) ?*value_mod.HashTable {
+    ) ?*value_mod.TypeDescriptor {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupStructDescriptorLocked(fields, field_types, mutable);
@@ -2047,7 +2047,7 @@ pub const Context = struct {
         fields: []const []const u8,
         field_types: []const ?*const value_mod.TypeValue,
         mutable: bool,
-    ) ?*value_mod.HashTable {
+    ) ?*value_mod.TypeDescriptor {
         const key = StructDescriptorKey{ .fields = fields, .field_types = field_types, .mutable = mutable };
         if (self.struct_descriptors.get(key)) |desc| return desc;
 
@@ -2106,15 +2106,14 @@ pub const Context = struct {
         if (self.lookupResourceTypeValue(name)) |tv| return tv;
 
         const alloc = self.quotationAllocator();
-        const desc_map = try value_mod.createTypeDescriptor(
+        const desc = try value_mod.createTypeDescriptor(
             alloc,
-            "resource-type:",
+            .{ .resource = .{ .resource_kind = name } },
             .{ .mutable = true },
         );
-        try desc_map.put(alloc, "resource-kind", .{ .string = name });
         // TODO(ripta): investigate per-resource mutability instead of assuming all resources are mutable.
         const tv = try alloc.create(value_mod.TypeValue);
-        tv.* = .{ .name = name, .descriptor = @ptrCast(desc_map) };
+        tv.* = .{ .name = name, .descriptor = desc };
 
         try self.registerResourceTypeValue(name, tv);
         return tv;
@@ -2124,23 +2123,30 @@ pub const Context = struct {
         self: *Context,
         base: *const value_mod.TypeValue,
         element: *const value_mod.TypeValue,
-    ) !*value_mod.HashTable {
+    ) !*value_mod.TypeDescriptor {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
 
         if (self.lookupParameterizedTypeDescriptorLocked(base, element)) |desc| return desc;
 
         const alloc = self.quotationAllocator();
-        const desc_map = try value_mod.createTypeDescriptor(alloc, "virtual:", .{});
-        try desc_map.put(alloc, "inner-type", .{ .type_val = @constCast(base) });
-        try desc_map.put(alloc, "element-type", .{ .type_val = @constCast(element) });
+        const type_params = try alloc.alloc(*const value_mod.TypeValue, 1);
+        type_params[0] = element;
+        const desc = try value_mod.createTypeDescriptor(
+            alloc,
+            .{ .virtual = .{
+                .inner_type = base,
+                .type_params = type_params,
+            } },
+            .{},
+        );
 
         try self.parameterized_type_descriptors.put(
             self.allocator,
             .{ .base = base, .element = element },
-            @ptrCast(desc_map),
+            desc,
         );
-        return @ptrCast(desc_map);
+        return desc;
     }
 
     pub fn getOrCreateStructDescriptor(
@@ -2148,37 +2154,37 @@ pub const Context = struct {
         fields: []const []const u8,
         field_types: []const ?*const value_mod.TypeValue,
         mutable: bool,
-    ) !*value_mod.HashTable {
+    ) !*value_mod.TypeDescriptor {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
 
         if (self.lookupStructDescriptorLocked(fields, field_types, mutable)) |desc| return desc;
 
         const alloc = self.quotationAllocator();
-        const desc_map = try value_mod.createTypeDescriptor(
+        // Own a copy of the field-name slice in the descriptor so it
+        // outlives the caller's transient slice.
+        const owned_fields = try alloc.alloc([]const u8, fields.len);
+        for (fields, 0..) |field, i| owned_fields[i] = field;
+        const owned_field_types: []const ?*const value_mod.TypeValue = if (field_types.len != 0) blk: {
+            const buf = try alloc.alloc(?*const value_mod.TypeValue, field_types.len);
+            for (field_types, 0..) |ft, i| buf[i] = ft;
+            break :blk buf;
+        } else &.{};
+        const desc = try value_mod.createTypeDescriptor(
             alloc,
-            "struct-descriptor:",
+            .{ .struct_ = .{
+                .fields = owned_fields,
+                .field_types = owned_field_types,
+            } },
             .{ .mutable = mutable },
         );
-        const desc_fields = try alloc.alloc(value_mod.Value, fields.len);
-        for (fields, 0..) |field, i| {
-            desc_fields[i] = .{ .string = field };
-        }
-        try desc_map.put(alloc, "fields", .{ .array = desc_fields });
-        if (field_types.len != 0) {
-            const desc_field_types = try alloc.alloc(value_mod.Value, field_types.len);
-            for (field_types, 0..) |field_type, i| {
-                desc_field_types[i] = .{ .type_val = @constCast(field_type orelse unreachable) };
-            }
-            try desc_map.put(alloc, "field-types", .{ .array = desc_field_types });
-        }
 
         try self.struct_descriptors.put(
             self.allocator,
             .{ .fields = fields, .field_types = field_types, .mutable = mutable },
-            @ptrCast(desc_map),
+            desc,
         );
-        return @ptrCast(desc_map);
+        return desc;
     }
 
     fn lessThanTypeValuePtr(_: void, a: *const value_mod.TypeValue, b: *const value_mod.TypeValue) bool {
@@ -2205,21 +2211,13 @@ pub const Context = struct {
                 break;
             };
 
-            flags.numeric = flags.numeric and descriptorBooleanFlag(desc, "numeric");
-            flags.exact = flags.exact and descriptorBooleanFlag(desc, "exact");
-            flags.integer = flags.integer and descriptorBooleanFlag(desc, "integer");
-            flags.mutable = flags.mutable and descriptorBooleanFlag(desc, "mutable");
+            flags.numeric = flags.numeric and desc.numeric;
+            flags.exact = flags.exact and desc.exact;
+            flags.integer = flags.integer and desc.integer;
+            flags.mutable = flags.mutable and desc.mutable;
         }
 
         return flags;
-    }
-
-    fn descriptorBooleanFlag(desc: *const value_mod.HashTable, key: []const u8) bool {
-        const val = desc.get(key) orelse return false;
-        return switch (val) {
-            .boolean => |b| b,
-            else => false,
-        };
     }
 
     /// Return the canonical type value for an anonymous union member set.
@@ -2273,15 +2271,15 @@ pub const Context = struct {
             }
         }
 
-        const desc_map = try value_mod.createTypeDescriptor(
+        const desc = try value_mod.createTypeDescriptor(
             alloc,
-            "union-type:",
+            .{ .union_ = {} },
             inferUnionDescriptorFlags(sorted_members),
         );
         const tv = try alloc.create(value_mod.TypeValue);
         tv.* = .{
             .name = union_name,
-            .descriptor = @ptrCast(desc_map),
+            .descriptor = desc,
             .member_types = sorted_members,
         };
 
@@ -2324,13 +2322,13 @@ pub const Context = struct {
     }
 
     /// Register a type descriptor into the topmost type registry frame.
-    pub fn registerTypeDescriptor(self: *Context, name: []const u8, desc: *value_mod.HashTable) !void {
+    pub fn registerTypeDescriptor(self: *Context, name: []const u8, desc: *value_mod.TypeDescriptor) !void {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
         return self.registerTypeDescriptorLocked(name, desc);
     }
 
-    fn registerTypeDescriptorLocked(self: *Context, name: []const u8, desc: *value_mod.HashTable) !void {
+    fn registerTypeDescriptorLocked(self: *Context, name: []const u8, desc: *value_mod.TypeDescriptor) !void {
         if (self.type_registry_frames.items.len == 0) return error.OutOfMemory;
         const top = self.type_registry_frames.items.len - 1;
         try self.type_registry_frames.items[top].type_descriptors.put(self.allocator, name, desc);
@@ -3424,7 +3422,7 @@ pub const Context = struct {
         }
     }
 
-    fn formatDispatchTypeName(self: *const Context, desc: *const value_mod.HashTable) []const u8 {
+    fn formatDispatchTypeName(self: *const Context, desc: *const value_mod.TypeDescriptor) []const u8 {
         if (desc == self.getDispatchAnySentinel().descriptor.?) return "any";
         return self.lookupTypeNameByDescriptor(desc) orelse "<unknown>";
     }
@@ -4478,8 +4476,7 @@ test "type registry frame push/pop with lookup visibility" {
     defer ctx.deinit();
 
     const alloc = ctx.arena.allocator();
-    const desc = try alloc.create(value_mod.HashTable);
-    desc.* = .{};
+    const desc = try value_mod.createBuiltinTypeDescriptor(alloc, .{});
     try ctx.registerTypeDescriptor("test-type", desc);
 
     // Visible through base frame
@@ -4487,8 +4484,7 @@ test "type registry frame push/pop with lookup visibility" {
 
     // Push a new frame, register in it
     try ctx.pushTypeRegistryFrame();
-    const desc2 = try alloc.create(value_mod.HashTable);
-    desc2.* = .{};
+    const desc2 = try value_mod.createBuiltinTypeDescriptor(alloc, .{});
     try ctx.registerTypeDescriptor("inner-type", desc2);
 
     try std.testing.expect(ctx.lookupTypeDescriptor("inner-type") != null);
@@ -4506,27 +4502,23 @@ test "type registry frame shadowing" {
 
     const alloc = ctx.arena.allocator();
 
-    // Register in base frame
-    const desc1 = try alloc.create(value_mod.HashTable);
-    desc1.* = .{};
-    try desc1.put(alloc, "marker", .{ .fixnum = 1 });
+    // Register in base frame; use `mutable` as a distinguishing marker.
+    const desc1 = try value_mod.createBuiltinTypeDescriptor(alloc, .{ .mutable = false });
     try ctx.registerTypeDescriptor("shadowed", desc1);
 
     // Push a frame and shadow the same name
     try ctx.pushTypeRegistryFrame();
-    const desc2 = try alloc.create(value_mod.HashTable);
-    desc2.* = .{};
-    try desc2.put(alloc, "marker", .{ .fixnum = 2 });
+    const desc2 = try value_mod.createBuiltinTypeDescriptor(alloc, .{ .mutable = true });
     try ctx.registerTypeDescriptor("shadowed", desc2);
 
     // Inner wins
     const found = ctx.lookupTypeDescriptor("shadowed").?;
-    try std.testing.expectEqual(@as(i64, 2), found.get("marker").?.fixnum);
+    try std.testing.expect(found.mutable);
 
     // Pop; outer visible again
     ctx.popTypeRegistryFrame();
     const found2 = ctx.lookupTypeDescriptor("shadowed").?;
-    try std.testing.expectEqual(@as(i64, 1), found2.get("marker").?.fixnum);
+    try std.testing.expect(!found2.mutable);
 }
 
 test "parameterized type descriptor interning reuses descriptor for same key" {
@@ -4608,14 +4600,14 @@ test "anonymous union descriptor flags are inferred by intersection" {
     const mixed_union = try ctx.getOrCreateAnonymousUnionTypeValue(&.{ fixnum_tv, string_tv });
 
     const numeric_desc = numeric_union.descriptor.?;
-    try std.testing.expect(Context.descriptorBooleanFlag(numeric_desc, "numeric"));
-    try std.testing.expect(!Context.descriptorBooleanFlag(numeric_desc, "exact"));
-    try std.testing.expect(!Context.descriptorBooleanFlag(numeric_desc, "integer"));
+    try std.testing.expect(numeric_desc.numeric);
+    try std.testing.expect(!numeric_desc.exact);
+    try std.testing.expect(!numeric_desc.integer);
 
     const mixed_desc = mixed_union.descriptor.?;
-    try std.testing.expect(!Context.descriptorBooleanFlag(mixed_desc, "numeric"));
-    try std.testing.expect(!Context.descriptorBooleanFlag(mixed_desc, "exact"));
-    try std.testing.expect(!Context.descriptorBooleanFlag(mixed_desc, "integer"));
+    try std.testing.expect(!mixed_desc.numeric);
+    try std.testing.expect(!mixed_desc.exact);
+    try std.testing.expect(!mixed_desc.integer);
 }
 
 test "enum registry frame push/pop" {
@@ -4693,9 +4685,9 @@ test "dispatch frame shadowing" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    const duration_desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
+    const duration_desc = try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, duration_desc);
-    const duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = @ptrCast(duration_desc) };
+    const duration_tv = value_mod.TypeValue{ .name = "duration", .descriptor = duration_desc };
     const did: u32 = 1001;
 
     const body1 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
@@ -4800,9 +4792,9 @@ test "initBuiltinTypeValues creates TypeValues with normalized descriptors" {
     const tv = ctx.lookupBuiltinTypeValue("fixnum");
     try std.testing.expect(tv != null);
     const desc = tv.?.descriptor orelse unreachable;
-    try std.testing.expectEqualStrings("builtin-type:", desc.get("type").?.symbol);
-    try std.testing.expect(desc.get("numeric").?.boolean);
-    try std.testing.expect(desc.get("exact").?.boolean);
-    try std.testing.expect(desc.get("integer").?.boolean);
-    try std.testing.expect(!desc.get("mutable").?.boolean);
+    try std.testing.expect(desc.kind == .builtin);
+    try std.testing.expect(desc.numeric);
+    try std.testing.expect(desc.exact);
+    try std.testing.expect(desc.integer);
+    try std.testing.expect(!desc.mutable);
 }

@@ -948,7 +948,7 @@ export fn onez_register_method(
     const any_sentinel = handle.ctx.getDispatchAnySentinel();
     const unary_sentinel = handle.ctx.getDispatchUnarySentinel();
 
-    const desc_a: *const value_mod.HashTable = if (type_a) |ta|
+    const desc_a: *const value_mod.TypeDescriptor = if (type_a) |ta|
         (@as(*const TypeValue, @ptrCast(@alignCast(ta)))).descriptor orelse {
             setLastError(handle, "type_a has no descriptor", .{});
             return ONEZ_ERR_TYPE_MISMATCH;
@@ -956,7 +956,7 @@ export fn onez_register_method(
     else
         any_sentinel.descriptor.?;
 
-    const desc_b: *const value_mod.HashTable = if (type_b) |tb|
+    const desc_b: *const value_mod.TypeDescriptor = if (type_b) |tb|
         (@as(*const TypeValue, @ptrCast(@alignCast(tb)))).descriptor orelse {
             setLastError(handle, "type_b has no descriptor", .{});
             return ONEZ_ERR_TYPE_MISMATCH;

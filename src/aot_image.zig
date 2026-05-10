@@ -453,7 +453,7 @@ test "classifyValue: array of structurals is structural" {
 }
 
 test "classifyValue: array containing a blob element propagates the leaf reason" {
-    var desc = value_mod.HashTable{};
+    var desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
     var tv = value_mod.TypeValue{ .name = "t", .descriptor = &desc };
     const elems = [_]Value{
         .{ .fixnum = 1 },
@@ -465,7 +465,7 @@ test "classifyValue: array containing a blob element propagates the leaf reason"
 }
 
 test "classifyValue: type_val is blob with type_val_descriptor reason" {
-    var desc = value_mod.HashTable{};
+    var desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
     var tv = value_mod.TypeValue{ .name = "color", .descriptor = &desc };
     const c = classifyValue(.{ .type_val = &tv });
     try testing.expectEqual(ImagePath.blob, c.path);
@@ -481,7 +481,7 @@ test "classifyValue: tagged with structural inner is structural" {
 
 test "classifyValue: tagged with blob inner propagates the leaf reason" {
     var virt = value_mod.VirtualType{ .name = "wrapper", .inner_type = "type" };
-    var desc = value_mod.HashTable{};
+    var desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
     var tv = value_mod.TypeValue{ .name = "inner-type", .descriptor = &desc };
     const inner: Value = .{ .type_val = &tv };
     const c = classifyValue(.{ .tagged = .{ .tag = &virt, .inner = &inner } });
@@ -504,7 +504,7 @@ test "classifyValue: quotation with only call_word and structural literals is st
 }
 
 test "classifyValue: quotation with blob literal is blob" {
-    var desc = value_mod.HashTable{};
+    var desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
     var tv = value_mod.TypeValue{ .name = "t", .descriptor = &desc };
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .type_val = &tv } }, .line = 0, .column = 0 },
@@ -561,7 +561,7 @@ test "classifyModuleWord: compound with structural body is structural" {
 }
 
 test "classifyModuleWord: compound containing a type_val literal is blob" {
-    var desc = value_mod.HashTable{};
+    var desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
     var tv = value_mod.TypeValue{ .name = "t", .descriptor = &desc };
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .type_val = &tv } }, .line = 0, .column = 0 },
@@ -592,8 +592,7 @@ test "buildImageManifest: synthetic modules produce sorted, classified entries" 
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
 
-    const blob_desc = try arena.create(value_mod.HashTable);
-    blob_desc.* = .{};
+    const blob_desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
     const blob_tv = try arena.create(value_mod.TypeValue);
     blob_tv.* = .{ .name = "t", .descriptor = blob_desc };
     const blob_instrs = try arena.dupe(Instruction, &.{
@@ -670,8 +669,7 @@ test "writeManifestDump: deterministic output" {
     const struct_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
-    const blob_desc = try arena.create(value_mod.HashTable);
-    blob_desc.* = .{};
+    const blob_desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
     const blob_tv = try arena.create(value_mod.TypeValue);
     blob_tv.* = .{ .name = "t", .descriptor = blob_desc };
     const blob_instrs = try arena.dupe(Instruction, &.{

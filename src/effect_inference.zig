@@ -309,10 +309,8 @@ pub const InferenceEngine = struct {
         return self.diagnostics.items;
     }
 
-    fn descriptorName(self: *const InferenceEngine, desc: *const value_mod.HashTable) []const u8 {
-        if (desc.get("type")) |kind| {
-            if (kind == .symbol and std.mem.eql(u8, kind.symbol, "sentinel:")) return "";
-        }
+    fn descriptorName(self: *const InferenceEngine, desc: *const value_mod.TypeDescriptor) []const u8 {
+        if (desc.kind == .sentinel) return "";
         const btv = self.builtin_type_values orelse return "<descriptor>";
         var iter = btv.iterator();
         while (iter.next()) |entry| {
@@ -1808,9 +1806,9 @@ test "generic word with agreeing dispatch entries" {
     const dispatch_body: []const Instruction = &.{
         makeInstr(.{ .push_literal = .{ .fixnum = 42 } }),
     };
-    const duration_desc = try value_mod.createTypeDescriptor(testing.allocator, "test:", .{});
+    const duration_desc = try value_mod.createBuiltinTypeDescriptor(testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(testing.allocator, duration_desc);
-    const unary_desc = try value_mod.createTypeDescriptor(testing.allocator, "test:", .{});
+    const unary_desc = try value_mod.createBuiltinTypeDescriptor(testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(testing.allocator, unary_desc);
 
     try dispatch.register(
@@ -1853,9 +1851,9 @@ test "generic word with disagreeing dispatch entries emits diagnostic" {
         makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
         makeInstr(.{ .push_literal = .{ .fixnum = 2 } }),
     };
-    const duration_desc2 = try value_mod.createTypeDescriptor(testing.allocator, "test:", .{});
+    const duration_desc2 = try value_mod.createBuiltinTypeDescriptor(testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(testing.allocator, duration_desc2);
-    const unary_desc2 = try value_mod.createTypeDescriptor(testing.allocator, "test:", .{});
+    const unary_desc2 = try value_mod.createBuiltinTypeDescriptor(testing.allocator, .{});
     defer value_mod.destroyTypeDescriptor(testing.allocator, unary_desc2);
 
     try dispatch.register(

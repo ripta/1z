@@ -603,6 +603,10 @@ fn emitBlobEntries(
     // `plans` so the typevalue struct below can reference each by
     // its symbol. Non-`type_val` plans contribute no descriptor
     // array.
+    const descriptor_entry_counts = try allocator.alloc(u32, plans.len);
+    defer allocator.free(descriptor_entry_counts);
+    @memset(descriptor_entry_counts, 0);
+
     var emitted_typevalues: u32 = 0;
     for (plans, 0..) |plan, i| {
         const tv = plan.typevalue orelse continue;
@@ -614,6 +618,7 @@ fn emitBlobEntries(
         if (tv.descriptor) |desc| {
             try collectDescriptorEntries(&descriptor_entries, allocator, desc);
         }
+        descriptor_entry_counts[i] = @intCast(descriptor_entries.items.len);
 
         // Lex sort by key; StringHashMap iteration is unstable.
         std.mem.sort(BlobDescriptorEntry, descriptor_entries.items, {}, struct {
@@ -672,15 +677,14 @@ fn emitBlobEntries(
             try out.appendSlice(allocator, ", .typevalue_slot = ");
             try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{plan.typevalue_slot}) catch unreachable);
 
-            // Descriptor entry array reference + count. Recompute the
-            // count by walking the descriptor; the per-blob symbol
-            // exists iff the count is non-zero.
-            const has_descriptor = tv.descriptor != null and tv.descriptor.?.count() > 0;
-            if (has_descriptor) {
+            // Descriptor entry array reference + count. The per-blob
+            // symbol exists iff the first-loop count is non-zero.
+            const entry_count = descriptor_entry_counts[i];
+            if (entry_count > 0) {
                 try out.appendSlice(allocator, ", .descriptor_entries = ");
                 try writeBlobDescSym(out, allocator, i);
                 try out.appendSlice(allocator, ", .descriptor_entry_count = ");
-                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{tv.descriptor.?.count()}) catch unreachable);
+                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{entry_count}) catch unreachable);
             } else {
                 try out.appendSlice(allocator, ", .descriptor_entries = NULL, .descriptor_entry_count = 0");
             }
@@ -723,28 +727,70 @@ fn writeBlobDescSym(
     try out.appendSlice(allocator, s);
 }
 
-/// Walk a TypeValue descriptor map, classify each entry's value, and
-/// append it to `out`. Unsupported variants land on
+/// Walk a TypeDescriptor and append blob entries to `out`. Always emits the
+/// `type` discriminator and the four universal booleans, then per-kind
+/// fields. Kind-specific fields whose runtime payload would require a
+/// type_val reference (struct/virtual/enum cross-links) land on
 /// `BlobValueKind.unsupported` so the loader can skip them with a
-/// diagnostic rather than fail codegen.
+/// diagnostic; primitive fields (`resource-kind`, `ffi-layout`) round-trip.
 fn collectDescriptorEntries(
     out: *std.ArrayListUnmanaged(BlobDescriptorEntry),
     allocator: Allocator,
-    desc: *const value_mod.HashTable,
+    desc: *const value_mod.TypeDescriptor,
 ) Allocator.Error!void {
-    var iter = desc.iterator();
-    while (iter.next()) |kv| {
-        const key = kv.key_ptr.*;
-        const v = kv.value_ptr.*;
-        const entry: BlobDescriptorEntry = switch (v) {
-            .symbol => |s| .{ .key = key, .kind = .symbol, .string_value = s },
-            .boolean => |b| .{ .key = key, .kind = .boolean, .bool_value = b },
-            .fixnum => |n| .{ .key = key, .kind = .fixnum, .fixnum_value = n },
-            .string => |s| .{ .key = key, .kind = .string, .string_value = s },
-            .unit => .{ .key = key, .kind = .unit },
-            else => .{ .key = key, .kind = .unsupported },
-        };
-        try out.append(allocator, entry);
+    try out.append(allocator, .{
+        .key = "type",
+        .kind = .symbol,
+        .string_value = value_mod.typeKindSymbol(desc.kind),
+    });
+    try out.append(allocator, .{ .key = "numeric", .kind = .boolean, .bool_value = desc.numeric });
+    try out.append(allocator, .{ .key = "exact", .kind = .boolean, .bool_value = desc.exact });
+    try out.append(allocator, .{ .key = "integer", .kind = .boolean, .bool_value = desc.integer });
+    try out.append(allocator, .{ .key = "mutable", .kind = .boolean, .bool_value = desc.mutable });
+    switch (desc.kind) {
+        .builtin, .sentinel, .union_ => {},
+        .struct_ => |sd| {
+            try out.append(allocator, .{ .key = "fields", .kind = .unsupported });
+            if (sd.field_types.len != 0) {
+                try out.append(allocator, .{ .key = "field-types", .kind = .unsupported });
+            }
+        },
+        .virtual => |vd| {
+            if (vd.inner_type != null or vd.anon_struct != null) {
+                try out.append(allocator, .{ .key = "inner-type", .kind = .unsupported });
+            }
+            if (vd.type_params.len == 1) {
+                try out.append(allocator, .{ .key = "element-type", .kind = .unsupported });
+            }
+        },
+        .enum_ => {
+            try out.append(allocator, .{ .key = "variants", .kind = .unsupported });
+        },
+        .enum_variant => |evd| {
+            if (evd.parent != null) {
+                try out.append(allocator, .{ .key = "parent", .kind = .unsupported });
+            }
+            if (evd.inner_type != null) {
+                try out.append(allocator, .{ .key = "inner-type", .kind = .unsupported });
+            }
+        },
+        .resource => |rd| {
+            try out.append(allocator, .{
+                .key = "resource-kind",
+                .kind = .string,
+                .string_value = rd.resource_kind,
+            });
+        },
+        .ffi_struct => |fsd| {
+            try out.append(allocator, .{ .key = "fields", .kind = .unsupported });
+            if (fsd.ffi_layout != 0) {
+                try out.append(allocator, .{
+                    .key = "ffi-layout",
+                    .kind = .fixnum,
+                    .fixnum_value = @intCast(fsd.ffi_layout),
+                });
+            }
+        },
     }
 }
 
@@ -1470,8 +1516,7 @@ fn buildSyntheticImageContext(ctx: *Context) !void {
     const struct_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
-    const blob_desc = try arena.create(value_mod.HashTable);
-    blob_desc.* = .{};
+    const blob_desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
     const blob_tv = try arena.create(value_mod.TypeValue);
     blob_tv.* = .{ .name = "t", .descriptor = blob_desc };
     const blob_instrs = try arena.dupe(Instruction, &.{
@@ -1622,13 +1667,11 @@ test "emitImageC: stack-effect table dedupes type slots and emits sentinel index
     });
 
     // Two TypeValues that share identity by pointer.
-    const desc_a = try arena.create(value_mod.HashTable);
-    desc_a.* = .{};
+    const desc_a = try value_mod.createBuiltinTypeDescriptor(arena, .{});
     const tv_a = try arena.create(value_mod.TypeValue);
     tv_a.* = .{ .name = "color", .descriptor = desc_a };
 
-    const desc_b = try arena.create(value_mod.HashTable);
-    desc_b.* = .{};
+    const desc_b = try value_mod.createBuiltinTypeDescriptor(arena, .{});
     const tv_b = try arena.create(value_mod.TypeValue);
     tv_b.* = .{ .name = "shape", .descriptor = desc_b };
 
@@ -1760,15 +1803,8 @@ test "emitImageC: type_val blob produces descriptor entry table and slot reserva
     const arena = ctx.quotationAllocator();
 
     // Synthesize a single blob word whose body pushes a TypeValue with
-    // a fully populated `createTypeDescriptor`-shaped descriptor.
-    const desc = try arena.create(value_mod.HashTable);
-    desc.* = .{};
-    try desc.put(arena, "type", .{ .symbol = "virtual:" });
-    try desc.put(arena, "numeric", .{ .boolean = false });
-    try desc.put(arena, "exact", .{ .boolean = true });
-    try desc.put(arena, "integer", .{ .boolean = false });
-    try desc.put(arena, "mutable", .{ .boolean = false });
-
+    // a fully populated TypeDescriptor.
+    const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{ .exact = true });
     const tv = try arena.create(value_mod.TypeValue);
     tv.* = .{ .name = "color", .descriptor = desc };
 
@@ -1811,9 +1847,7 @@ test "emitImageC: same TypeValue across multiple blob words shares one slot" {
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
 
-    const desc = try arena.create(value_mod.HashTable);
-    desc.* = .{};
-    try desc.put(arena, "type", .{ .symbol = "virtual:" });
+    const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
     const tv = try arena.create(value_mod.TypeValue);
     tv.* = .{ .name = "color", .descriptor = desc };
 
@@ -1890,9 +1924,7 @@ test "collectBlobEntries dedupes against stack-effect-discovered TypeValues" {
     // One TypeValue referenced by both a stack-effect param and a
     // blob word's body. The slot pool should collapse it to a single
     // entry; both sites read slot 1.
-    const desc = try arena.create(value_mod.HashTable);
-    desc.* = .{};
-    try desc.put(arena, "type", .{ .symbol = "virtual:" });
+    const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
     const tv = try arena.create(value_mod.TypeValue);
     tv.* = .{ .name = "color", .descriptor = desc };
 
@@ -1929,27 +1961,38 @@ test "collectBlobEntries dedupes against stack-effect-discovered TypeValues" {
     try testing.expectEqual(@as(u32, 1), stats.blob_typevalues_emitted);
 }
 
-test "emitImageC: descriptor with all five value kinds" {
+test "emitImageC: descriptor surfaces symbol, boolean, fixnum, string, unsupported value_kind tags" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
 
-    const desc = try arena.create(value_mod.HashTable);
-    desc.* = .{};
-    try desc.put(arena, "k_symbol", .{ .symbol = "abc" });
-    try desc.put(arena, "k_boolean", .{ .boolean = true });
-    try desc.put(arena, "k_fixnum", .{ .fixnum = 42 });
-    try desc.put(arena, "k_string", .{ .string = "hello" });
-    try desc.put(arena, "k_unit", .{ .unit = {} });
-
-    const tv = try arena.create(value_mod.TypeValue);
-    tv.* = .{ .name = "kinds", .descriptor = desc };
-    const instrs = try arena.dupe(Instruction, &.{
-        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    // An ffi_struct descriptor exercises three value kinds in one
+    // record: symbol (the `type` discriminator), boolean (the four
+    // universal flags), fixnum (`ffi-layout`), and unsupported (the
+    // `fields` placeholder for the type_val array). A resource
+    // TypeValue follows below to add the string kind.
+    const ffi_desc = try value_mod.createTypeDescriptor(arena, .{
+        .ffi_struct = .{ .ffi_layout = 42 },
+    }, .{});
+    const ffi_tv = try arena.create(value_mod.TypeValue);
+    ffi_tv.* = .{ .name = "ffi-kinds", .descriptor = ffi_desc };
+    const ffi_instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = ffi_tv } }, .line = 0, .column = 0 },
     });
+
+    const res_desc = try value_mod.createTypeDescriptor(arena, .{
+        .resource = .{ .resource_kind = "demo-handle" },
+    }, .{});
+    const res_tv = try arena.create(value_mod.TypeValue);
+    res_tv.* = .{ .name = "res-kinds", .descriptor = res_desc };
+    const res_instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = res_tv } }, .line = 0, .column = 0 },
+    });
+
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
-    try m.words.put(arena, "kinds", .{ .action = .{ .compound = instrs } });
+    try m.words.put(arena, "ffi-kinds", .{ .action = .{ .compound = ffi_instrs } });
+    try m.words.put(arena, "res-kinds", .{ .action = .{ .compound = res_instrs } });
     try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
@@ -1963,15 +2006,15 @@ test "emitImageC: descriptor with all five value kinds" {
 
     _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
 
-    // Each value_kind tag appears at least once.
+    // Each value_kind tag the emitter can produce appears at least once.
     try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 1") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 2") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 3") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 4") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 5") != null);
     // Specific payloads survive the round-trip.
-    try testing.expect(std.mem.indexOf(u8, out.items, ".string_value = \"abc\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".string_value = \"hello\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".string_value = \"ffi-struct-type\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".string_value = \"demo-handle\"") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".fixnum_value = 42") != null);
 }
 
@@ -1980,16 +2023,10 @@ test "emitImageC: descriptor entries are sorted by key" {
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
 
-    const desc = try arena.create(value_mod.HashTable);
-    desc.* = .{};
-    // Insert in non-alphabetical order. The emitted output must
-    // still surface the keys alphabetically.
-    try desc.put(arena, "type", .{ .symbol = "virtual:" });
-    try desc.put(arena, "numeric", .{ .boolean = false });
-    try desc.put(arena, "exact", .{ .boolean = true });
-    try desc.put(arena, "integer", .{ .boolean = false });
-    try desc.put(arena, "mutable", .{ .boolean = false });
-
+    // A virtual descriptor with all four universal flags produces the
+    // five base keys (`type`, `numeric`, `exact`, `integer`, `mutable`).
+    // The emitter must surface them in lexicographic order.
+    const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{ .exact = true });
     const tv = try arena.create(value_mod.TypeValue);
     tv.* = .{ .name = "color", .descriptor = desc };
     const instrs = try arena.dupe(Instruction, &.{
@@ -2065,8 +2102,7 @@ test "emitImageC: blob word does not emit body bytecode" {
     // A blob-path word: a single `push_literal: type_val` body. The
     // blob loader rewrites the body at startup, so emission skips the
     // bytecode bytes.
-    const desc = try arena.create(value_mod.HashTable);
-    desc.* = .{};
+    const desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
     const tv = try arena.create(value_mod.TypeValue);
     tv.* = .{ .name = "color", .descriptor = desc };
     const body = try arena.dupe(Instruction, &.{

@@ -74,12 +74,10 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         },
     };
 
-    const desc_map = try value_mod.createTypeDescriptor(alloc, "ffi-struct-type:", .{ .mutable = true });
     const fields_val = src_map.get("fields") orelse {
         helpers.setErrorContext(ctx, "ffi-struct{{ descriptor missing 'fields' key", .{});
         return error.MissingField;
     };
-    try desc_map.put(alloc, "fields", fields_val);
     const fields_array = switch (fields_val) {
         .array => |arr| arr,
         else => {
@@ -87,6 +85,11 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
+    const desc_map = try value_mod.createTypeDescriptor(
+        alloc,
+        .{ .ffi_struct = .{} },
+        .{ .mutable = true },
+    );
 
     const name_val = try ctx.stack.pop();
     const name = switch (name_val) {
@@ -142,17 +145,18 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
                 helpers.setErrorContext(ctx, "ffi-struct{{ unknown field type: {s}", .{token});
                 return error.FFITypeMismatch;
             };
-            const layout_val = desc.get("ffi-layout") orelse {
-                helpers.setErrorContext(ctx, "ffi-struct{{ type '{s}' is not an FFI struct", .{token});
-                return error.FFITypeMismatch;
-            };
-            const layout_ptr = switch (layout_val) {
-                .fixnum => |v| @as(*const FfiStructLayout, @ptrFromInt(@as(usize, @intCast(v)))),
+            const layout_ptr_raw: usize = switch (desc.kind) {
+                .ffi_struct => |fs| fs.ffi_layout,
                 else => {
-                    helpers.setErrorContext(ctx, "ffi-struct{{ invalid ffi-layout descriptor for '{s}'", .{token});
+                    helpers.setErrorContext(ctx, "ffi-struct{{ type '{s}' is not an FFI struct", .{token});
                     return error.FFITypeMismatch;
                 },
             };
+            if (layout_ptr_raw == 0) {
+                helpers.setErrorContext(ctx, "ffi-struct{{ type '{s}' is not an FFI struct", .{token});
+                return error.FFITypeMismatch;
+            }
+            const layout_ptr: *const FfiStructLayout = @ptrFromInt(layout_ptr_raw);
             ffi_tags[i] = null;
             nested_layouts[i] = layout_ptr;
         }
@@ -227,8 +231,17 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
     ctx.virtual_type_count += 1;
     layout.vtype = vtype;
 
+    // Populate the FfiStructData payload now that we have the field
+    // names and the layout pointer.
+    const owned_field_names = try alloc.alloc([]const u8, field_names.len);
+    for (field_names, 0..) |n, i| owned_field_names[i] = n;
+    desc_map.kind = .{ .ffi_struct = .{
+        .fields = owned_field_names,
+        .ffi_layout = @intFromPtr(layout),
+    } };
+
     const tv = try alloc.create(value_mod.TypeValue);
-    tv.* = .{ .name = name, .descriptor = @ptrCast(desc_map) };
+    tv.* = .{ .name = name, .descriptor = desc_map };
     vtype.type_val = tv;
 
     // Define NAME as parse-time const pushing TypeValue
@@ -380,10 +393,10 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     tv.generated_words = gw_slice;
 
-    try desc_map.put(alloc, "ffi-layout", .{ .fixnum = @intCast(@intFromPtr(layout)) });
+    // The ffi_layout pointer was set on desc_map.kind earlier; the
+    // earlier write was unconditional, so this line is now redundant.
 
-    const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
-    try ctx.registerTypeDescriptor(name, frozen_desc);
+    try ctx.registerTypeDescriptor(name, desc_map);
 }
 
 /// ffi-struct-make ( field1..fieldN layout-ptr vtype-ptr -- tagged )

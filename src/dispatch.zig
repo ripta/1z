@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
-const HashTable = value_mod.HashTable;
+const TypeDescriptor = value_mod.TypeDescriptor;
 const Instruction = value_mod.Instruction;
 const dictionary_mod = @import("dictionary.zig");
 const NativeFn = dictionary_mod.NativeFn;
@@ -63,7 +63,7 @@ pub fn dispatchTypeValue(val: Value, ctx: *Context) *value_mod.TypeValue {
 
 /// Returns the dispatch descriptor for a value. Requires a Context for the
 /// builtin type lookup and resource type creation path.
-pub fn dispatchDescriptor(val: Value, ctx: *Context) *const HashTable {
+pub fn dispatchDescriptor(val: Value, ctx: *Context) *const TypeDescriptor {
     const tv = dispatchTypeValue(val, ctx);
     return tv.descriptor orelse unreachable;
 }
@@ -141,8 +141,8 @@ pub fn unwrapBaseType(val: Value) Value {
 /// For unary dispatch, type_b is `&unary_sentinel`.
 pub const DispatchKey = struct {
     dispatch_id: u32,
-    type_a: *const HashTable,
-    type_b: *const HashTable,
+    type_a: *const TypeDescriptor,
+    type_b: *const TypeDescriptor,
 };
 
 /// HashMap context for DispatchKey: hashes dispatch_id as u32, type_a/type_b as pointers.
@@ -225,9 +225,9 @@ pub const DispatchTable = struct {
     pub fn lookupBinary(
         self: *const DispatchTable,
         dispatch_id: u32,
-        type_a: *const HashTable,
-        type_b: *const HashTable,
-        any_sentinel: *const HashTable,
+        type_a: *const TypeDescriptor,
+        type_b: *const TypeDescriptor,
+        any_sentinel: *const TypeDescriptor,
     ) ?DispatchEntry {
         if (self.entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = type_b })) |entry| {
             return entry;
@@ -251,9 +251,9 @@ pub const DispatchTable = struct {
     pub fn lookupUnary(
         self: *const DispatchTable,
         dispatch_id: u32,
-        type_a: *const HashTable,
-        any_sentinel: *const HashTable,
-        unary_sentinel: *const HashTable,
+        type_a: *const TypeDescriptor,
+        any_sentinel: *const TypeDescriptor,
+        unary_sentinel: *const TypeDescriptor,
     ) ?DispatchEntry {
         if (self.entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
             return entry;
@@ -282,16 +282,16 @@ pub const DispatchTable = struct {
         entry: DispatchEntry,
     };
 
-    fn coerceDescriptor(ptr: anytype) *const HashTable {
+    fn coerceDescriptor(ptr: anytype) *const TypeDescriptor {
         const T = @TypeOf(ptr);
         switch (@typeInfo(T)) {
             .pointer => |info| {
-                if (info.child == HashTable) return ptr;
+                if (info.child == TypeDescriptor) return ptr;
                 if (info.child == value_mod.TypeValue) return ptr.descriptor.?;
             },
             else => {},
         }
-        @compileError("expected *const HashTable or *const TypeValue");
+        @compileError("expected *const TypeDescriptor or *const TypeValue");
     }
 
     /// Register a native function dispatch entry with "native" provenance.
@@ -319,9 +319,9 @@ pub const DispatchTable = struct {
     pub fn lookupNativeBinary(
         self: *const DispatchTable,
         dispatch_id: u32,
-        type_a: *const HashTable,
-        type_b: *const HashTable,
-        any_sentinel: *const HashTable,
+        type_a: *const TypeDescriptor,
+        type_b: *const TypeDescriptor,
+        any_sentinel: *const TypeDescriptor,
     ) ?DispatchEntry {
         if (self.native_entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = type_b })) |entry| {
             return entry;
@@ -342,9 +342,9 @@ pub const DispatchTable = struct {
     pub fn lookupNativeUnary(
         self: *const DispatchTable,
         dispatch_id: u32,
-        type_a: *const HashTable,
-        any_sentinel: *const HashTable,
-        unary_sentinel: *const HashTable,
+        type_a: *const TypeDescriptor,
+        any_sentinel: *const TypeDescriptor,
+        unary_sentinel: *const TypeDescriptor,
     ) ?DispatchEntry {
         if (self.native_entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
             return entry;
@@ -386,9 +386,9 @@ const EntriesMap = std.HashMapUnmanaged(DispatchKey, DispatchEntry, DispatchKeyC
 pub fn lookupBinaryInEntries(
     entries: *const EntriesMap,
     dispatch_id: u32,
-    type_a: *const HashTable,
-    type_b: *const HashTable,
-    any_sentinel: *const HashTable,
+    type_a: *const TypeDescriptor,
+    type_b: *const TypeDescriptor,
+    any_sentinel: *const TypeDescriptor,
 ) ?DispatchEntry {
     if (entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = type_b })) |entry| {
         return entry;
@@ -410,9 +410,9 @@ pub fn lookupBinaryInEntries(
 pub fn lookupUnaryInEntries(
     entries: *const EntriesMap,
     dispatch_id: u32,
-    type_a: *const HashTable,
-    any_sentinel: *const HashTable,
-    unary_sentinel: *const HashTable,
+    type_a: *const TypeDescriptor,
+    any_sentinel: *const TypeDescriptor,
+    unary_sentinel: *const TypeDescriptor,
 ) ?DispatchEntry {
     if (entries.get(.{ .dispatch_id = dispatch_id, .type_a = type_a, .type_b = unary_sentinel })) |entry| {
         return entry;
@@ -449,10 +449,9 @@ pub fn collectEntriesForDispatchId(entries: *const EntriesMap, dispatch_id: u32,
 
 fn dummyNativeFn(_: *Context) anyerror!void {}
 
-fn testDescriptor(name: []const u8) !*value_mod.MutableMap {
-    const desc = try value_mod.createTypeDescriptor(std.testing.allocator, "test:", .{});
-    try desc.put(std.testing.allocator, "name", .{ .string = name });
-    return desc;
+fn testDescriptor(_: []const u8) !*value_mod.TypeDescriptor {
+    // Tests rely on pointer identity, not the descriptor's contents.
+    return try value_mod.createBuiltinTypeDescriptor(std.testing.allocator, .{});
 }
 
 test "dispatchTypeName returns correct name for native types" {
@@ -784,7 +783,7 @@ test "dispatchDescriptor returns VirtualType descriptor for tagged values" {
 
     const desc = try testDescriptor("duration");
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, desc);
-    var tv = value_mod.TypeValue{ .name = "duration", .descriptor = @ptrCast(desc) };
+    var tv = value_mod.TypeValue{ .name = "duration", .descriptor = desc };
     const vt = value_mod.VirtualType{ .name = "duration", .inner_type = "fixnum", .type_val = &tv };
     const inner = Value{ .fixnum = 42 };
     const tagged = Value{ .tagged = .{ .tag = &vt, .inner = &inner } };
@@ -811,7 +810,7 @@ test "dispatchDescriptor returns StructType descriptor for struct instances" {
 
     const desc = try testDescriptor("point");
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, desc);
-    var tv = value_mod.TypeValue{ .name = "point", .descriptor = @ptrCast(desc) };
+    var tv = value_mod.TypeValue{ .name = "point", .descriptor = desc };
     const st = value_mod.StructType{ .name = "point", .fields = &.{ "x", "y" }, .type_val = &tv };
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &.{} };
 
