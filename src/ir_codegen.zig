@@ -11614,14 +11614,14 @@ test "emitAotMetadata renders runtime-image fields when present" {
 
     var meta = test_aot_metadata;
     meta.runtime_image_present = true;
-    meta.runtime_image_format_version = 1;
+    meta.runtime_image_format_version = 2;
     meta.runtime_image_blob_present = true;
     meta.runtime_image_word_count = 42;
 
     try emitAotMetadata(testing.allocator, &out, meta, true);
 
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=yes\\n") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-format-version=1\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-format-version=2\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-blob-present=yes\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-word-count=42\\n") != null);
 }
@@ -11647,7 +11647,7 @@ test "emitAotMetadata renders blob-present=no with non-zero word-count" {
 
     var meta = test_aot_metadata;
     meta.runtime_image_present = true;
-    meta.runtime_image_format_version = 1;
+    meta.runtime_image_format_version = 2;
     meta.runtime_image_blob_present = false;
     meta.runtime_image_word_count = 7;
 
