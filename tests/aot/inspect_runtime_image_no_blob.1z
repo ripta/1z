@@ -1,0 +1,6 @@
+\ Test: --emit-runtime-image on a program with no module-private values.
+\ The freeze pass produces zero structural words and the blob path stays
+\ empty, but the runtime image is still emitted. 1z inspect should
+\ report runtime-image present=yes with blob-present=no and word-count=0.
+\ eval-string keeps the interpreter linked.
+"1 2 +" eval-string

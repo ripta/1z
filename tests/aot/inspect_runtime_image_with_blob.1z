@@ -1,0 +1,6 @@
+\ Test: --emit-runtime-image with a fixture that produces module-private
+\ values on both the static-C-data path (compound bodies, enum variants)
+\ and the narrow-C blob fallback path (TypeValues). 1z inspect should
+\ report runtime-image present=yes with blob-present=yes and a non-zero
+\ word-count.
+use "fixtures/dump_image_dep.1z" ;
