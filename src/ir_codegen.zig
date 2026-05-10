@@ -6683,7 +6683,15 @@ pub fn emitProgramC(
                 try image_word_lookup.put(allocator, w.name, w.word_id);
             }
 
-            const stats = try aot_image_emit_mod.emitImageC(&out, allocator, ctx, manifest, &image_word_lookup);
+            const stats = aot_image_emit_mod.emitImageC(&out, allocator, ctx, manifest, &image_word_lookup) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                // The freeze classifier already concluded each
+                // structural body is shaped for static-C-data, so a
+                // NotEncodable here points at a classifier/encoder
+                // mismatch -- surface as NotCompilable so the caller
+                // falls back to the existing codegen-failure pipeline.
+                error.NotEncodable => return IrCodegenError.NotCompilable,
+            };
             diagnostics.image_stats = stats;
 
             // Surface the freshly-emitted image through the embedded

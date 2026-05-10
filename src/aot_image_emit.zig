@@ -24,6 +24,13 @@ const TypeValue = value_mod.TypeValue;
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
+const instruction_bytecode = @import("instruction_bytecode.zig");
+
+/// Error set returned by the runtime-image emitter. `NotEncodable`
+/// surfaces when the bytecode encoder cannot serialize a literal
+/// inside a structural compound body. The freeze classifier should
+/// rule that out, so callers treat it as a hard codegen failure.
+pub const ImageEmitError = Allocator.Error || error{NotEncodable};
 
 /// Sentinel for an image word that has no entry in the AOT dispatch
 /// table. The loader treats this as "this word is metadata-only --
@@ -81,7 +88,7 @@ pub fn emitImageC(
     ctx: *const Context,
     manifest: ImageManifest,
     word_id_lookup: *const std.StringHashMapUnmanaged(u32),
-) Allocator.Error!ImageEmissionStats {
+) ImageEmitError!ImageEmissionStats {
     var stats: ImageEmissionStats = .{};
 
     try emitTypeDeclarations(out, allocator);
@@ -106,6 +113,13 @@ pub fn emitImageC(
         word_to_blob[plan.word_idx] = @intCast(i);
     }
 
+    // Tracks per-word body bytecode emission. When entry is non-zero,
+    // the word references `onez_image_w_<idx>_body` at that length;
+    // zero means the word table emits NULL.
+    const word_body_lens = try allocator.alloc(u32, manifest.entries.len);
+    defer allocator.free(word_body_lens);
+    @memset(word_body_lens, 0);
+
     try emitMarkerPool(out, allocator, &marker_pool, &stats);
     try emitTypeValueSlotTable(out, allocator, &effect_table);
     try emitStackEffectTable(out, allocator, &effect_table);
@@ -114,8 +128,9 @@ pub fn emitImageC(
     // entries below can reference each word's `onez_image_w_<idx>_name`
     // symbol without a forward declaration.
     try emitWordNameStrings(out, allocator, manifest);
+    try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens);
     try emitBlobEntries(out, allocator, blob_plans.items, &stats);
-    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, &marker_pool, &effect_table, blob_plans.items, word_to_blob, &stats);
+    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, &marker_pool, &effect_table, blob_plans.items, word_to_blob, word_body_lens, &stats);
     try emitHeader(out, allocator, manifest, &marker_pool, &effect_table, blob_plans.items, stats);
 
     stats.typevalue_slot_count = effect_table.slotCount();
@@ -953,6 +968,81 @@ fn emitWordNameStrings(
     try out.append(allocator, '\n');
 }
 
+/// Serialize each structural compound word's body to bytecode and
+/// emit it as a `static const uint8_t onez_image_w_<idx>_body[]`
+/// array. Records the per-word byte length in `word_body_lens` so
+/// `emitModuleAndWordTables` can reference the symbol from the
+/// matching word-table row. Words that fall on the blob path, lack a
+/// compound action, or carry an empty body get a length of zero and
+/// the word table emits NULL for `body_bytecode`. The blob loader
+/// still rewrites empty bodies for `type_val` blob entries
+/// downstream, so dropping bytes there avoids redundant work.
+///
+/// Generator-emitted words (those with a non-null `provenance` such
+/// as virtual-type predicates, struct constructors, and FFI
+/// accessors) are also skipped: their bodies encode `@intFromPtr` of
+/// a runtime type as a fixnum literal, which is non-deterministic
+/// across builds and stale across runtime-image load. Such words
+/// still reach runtime through compiled dispatch via `word_id`; the
+/// only fidelity loss is that `>word-info` reports their body as
+/// empty instead of the original instruction stream.
+///
+/// Serialized bytes are owned by the codegen allocator for the
+/// duration of this helper -- they are rendered into `out` and
+/// freed before return -- mirroring the lifetime convention used by
+/// `emitMarkerPool` and `emitBlobEntries`.
+fn emitWordBodyBytecode(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    ctx: *const Context,
+    manifest: ImageManifest,
+    word_body_lens: []u32,
+) ImageEmitError!void {
+    if (manifest.entries.len == 0) return;
+
+    var emitted_any = false;
+    var num_buf: [32]u8 = undefined;
+
+    for (manifest.entries, 0..) |entry, idx| {
+        if (entry.path != .structural) continue;
+        const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
+        const body = switch (mw_ptr.action) {
+            .compound => |b| b,
+            .native, .host_callback => continue,
+        };
+        if (body.len == 0) continue;
+        if (mw_ptr.provenance != null) continue;
+
+        const bytes = instruction_bytecode.serializeQuotationInstructions(body, allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NotEncodable => return error.NotEncodable,
+        };
+        defer allocator.free(bytes);
+
+        try out.appendSlice(allocator, "static const uint8_t ");
+        try writeWordBodySym(out, allocator, idx);
+        try out.appendSlice(allocator, "[] = {");
+        for (bytes, 0..) |byte, bi| {
+            if (bi > 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{byte}) catch unreachable);
+        }
+        try out.appendSlice(allocator, "};\n");
+        word_body_lens[idx] = @intCast(bytes.len);
+        emitted_any = true;
+    }
+    if (emitted_any) try out.append(allocator, '\n');
+}
+
+fn writeWordBodySym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_body", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
 /// Emit `onez_image_modules[]` and `onez_image_words[]` along with
 /// each word's marker pointer array. Word name strings are emitted
 /// up front by `emitWordNameStrings` so the blob entries (emitted
@@ -967,6 +1057,7 @@ fn emitModuleAndWordTables(
     effect_table: *const StackEffectTable,
     blob_plans: []const BlobEntryPlan,
     word_to_blob: []const u32,
+    word_body_lens: []const u32,
     stats: *ImageEmissionStats,
 ) Allocator.Error!void {
     if (manifest.entries.len == 0) {
@@ -1100,8 +1191,17 @@ fn emitModuleAndWordTables(
                 \\
             );
         }
-        try out.appendSlice(allocator, "        .body_bytecode = NULL,\n");
-        try out.appendSlice(allocator, "        .body_bytecode_len = 0,\n");
+        const body_len = word_body_lens[idx];
+        if (body_len > 0) {
+            try out.appendSlice(allocator, "        .body_bytecode = ");
+            try writeWordBodySym(out, allocator, idx);
+            try out.appendSlice(allocator, ",\n        .body_bytecode_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{body_len}) catch unreachable);
+            try out.appendSlice(allocator, ",\n");
+        } else {
+            try out.appendSlice(allocator, "        .body_bytecode = NULL,\n");
+            try out.appendSlice(allocator, "        .body_bytecode_len = 0,\n");
+        }
 
         const blob_idx = word_to_blob[idx];
         try out.appendSlice(allocator, "        .blob_entry_idx = ");
@@ -1923,4 +2023,198 @@ test "emitImageC: descriptor entries are sorted by key" {
     try testing.expect(i_integer < i_mutable);
     try testing.expect(i_mutable < i_numeric);
     try testing.expect(i_numeric < i_type);
+}
+
+test "emitImageC: structural compound emits body bytecode symbol" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const body = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0, .column = 0 },
+        .{ .op = .{ .call_word = "+" }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "twiddle", .{ .action = .{ .compound = body } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // The byte-array definition appears, and the word-table row points
+    // at it with a non-zero length.
+    try testing.expect(std.mem.indexOf(u8, out.items, "static const uint8_t onez_image_w_0_body[] = {") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = onez_image_w_0_body") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL") == null);
+}
+
+test "emitImageC: blob word does not emit body bytecode" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // A blob-path word: a single `push_literal: type_val` body. The
+    // blob loader rewrites the body at startup, so emission skips the
+    // bytecode bytes.
+    const desc = try arena.create(value_mod.HashTable);
+    desc.* = .{};
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "color", .descriptor = desc };
+    const body = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "color", .{ .action = .{ .compound = body } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_body[]") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL") != null);
+}
+
+test "emitImageC: empty compound body emits NULL bytecode" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const empty_body: []const Instruction = &.{};
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "noop", .{ .action = .{ .compound = empty_body } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_body[]") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode_len = 0") != null);
+}
+
+test "emitImageC: structural bytecode round-trips through decoder" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // A purely structural body so classification keeps the word on
+    // the bytecode-emitting path. Confirms the bytes appended to the
+    // C array round-trip through the decoder, not just that a symbol
+    // is referenced from the word table.
+    const body = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 21 } }, .line = 5, .column = 7 },
+        .{ .op = .{ .call_word = "double" }, .line = 5, .column = 9 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "twiddle", .{ .action = .{ .compound = body } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    const sym = "onez_image_w_0_body[] = {";
+    const start = std.mem.indexOf(u8, out.items, sym) orelse return error.TestExpectedSymbol;
+    const after = start + sym.len;
+    const end_offset = std.mem.indexOfPos(u8, out.items, after, "};") orelse return error.TestExpectedTerminator;
+    const list = out.items[after..end_offset];
+
+    var bytes: std.ArrayListUnmanaged(u8) = .{};
+    defer bytes.deinit(testing.allocator);
+    var iter = std.mem.tokenizeScalar(u8, list, ',');
+    while (iter.next()) |raw| {
+        const trimmed = std.mem.trim(u8, raw, " \n\t");
+        if (trimmed.len == 0) continue;
+        const v = try std.fmt.parseInt(u8, trimmed, 10);
+        try bytes.append(testing.allocator, v);
+    }
+
+    const decoded = try instruction_bytecode.deserializeQuotationInstructions(bytes.items, testing.allocator);
+    defer {
+        for (decoded) |instr| {
+            switch (instr.op) {
+                .call_word => |n| testing.allocator.free(n),
+                else => {},
+            }
+        }
+        testing.allocator.free(decoded);
+    }
+    try testing.expectEqual(@as(usize, 2), decoded.len);
+    try testing.expect(decoded[0].op == .push_literal);
+    try testing.expectEqual(@as(i64, 21), decoded[0].op.push_literal.fixnum);
+    try testing.expectEqual(@as(usize, 5), decoded[0].line);
+    try testing.expectEqual(@as(usize, 7), decoded[0].column);
+    try testing.expect(decoded[1].op == .call_word);
+    try testing.expectEqualStrings("double", decoded[1].op.call_word);
+}
+
+test "emitImageC: generator-provenanced word skips body bytecode" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // Generator-emitted words encode @intFromPtr of a runtime type as
+    // a fixnum literal -- non-deterministic across builds. Provenance
+    // is the signal we filter on; the body shape mirrors what
+    // `definePredicate` produces.
+    const body = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 184500376 } }, .line = 0, .column = 0 },
+        .{ .op = .{ .call_word = "native.virtual-type-predicate" }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "color?", .{
+        .action = .{ .compound = body },
+        .provenance = .{ .generator = "virtual", .parent = "color", .role = "predicate" },
+    });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_body[]") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL") != null);
 }

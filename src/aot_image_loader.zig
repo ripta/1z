@@ -17,6 +17,7 @@ const Allocator = std.mem.Allocator;
 const value_mod = @import("value.zig");
 const stack_effect_mod = @import("stack_effect.zig");
 const aot_image_emit = @import("aot_image_emit.zig");
+const instruction_bytecode = @import("instruction_bytecode.zig");
 const Context = @import("context.zig").Context;
 
 /// Errors the loader can surface. The C-side caller maps these to
@@ -227,7 +228,7 @@ fn populateModulesAndWords(ctx: *Context, header: *const Header) LoaderError!voi
 
             const markers_slice = try buildMarkerSlice(arena, w);
             const stack_effect = try decodeStackEffect(arena, header, w.stack_effect_idx);
-            const empty_body: []const value_mod.Instruction = &.{};
+            const body = try decodeWordBody(arena, w);
 
             // Treat `aot_image_emit.word_id_sentinel` (0xFFFFFFFFu) as
             // "no AOT dispatch entry" -- the codegen marker for words
@@ -243,7 +244,7 @@ fn populateModulesAndWords(ctx: *Context, header: *const Header) LoaderError!voi
                 .markers = markers_slice,
                 .source_module = module_ptr,
                 .word_id = word_id_opt,
-                .action = .{ .compound = empty_body },
+                .action = .{ .compound = body },
             };
             module_ptr.words.put(arena, word_name, mw) catch return LoaderError.OutOfMemory;
         }
@@ -251,6 +252,25 @@ fn populateModulesAndWords(ctx: *Context, header: *const Header) LoaderError!voi
         ctx.module_cache_value.put(arena, name, .{ .module = module_ptr }) catch
             return LoaderError.OutOfMemory;
     }
+}
+
+/// Decode a word's body bytecode into a runtime `[]Instruction` slice.
+/// Words emitted with no body bytecode keep the empty-body stub; the
+/// blob loader rewrites that stub for `type_val` blob entries
+/// downstream. The decoder allocates instructions, names, and any
+/// nested literal payloads through the arena, matching the lifetime of
+/// every other loader allocation.
+///
+/// `instruction_bytecode.deserializeQuotationInstructions` collapses
+/// both true OOM and malformed-buffer detections into
+/// `error.OutOfMemory`. We surface that as `LoaderError.OutOfMemory`
+/// here; if the decoder grows a separate format-error path later, this
+/// catch can split apart without disturbing callers.
+fn decodeWordBody(arena: Allocator, w: Word) LoaderError![]const value_mod.Instruction {
+    if (w.body_bytecode == null or w.body_bytecode_len == 0) return &.{};
+    const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
+    return instruction_bytecode.deserializeQuotationInstructions(bytes, arena) catch
+        return LoaderError.OutOfMemory;
 }
 
 /// Walk the marker-pointer array for one word and produce a runtime
@@ -931,5 +951,184 @@ test "loadIntoContext: rejects out-of-range typevalue slot" {
     try testing.expectError(
         LoaderError.BadSlotIndex,
         loadIntoContext(&ctx, &header, &slot_storage, null),
+    );
+}
+
+test "loadIntoContext: bytecode body decodes into compound action" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Hand-built bytecode for `[ push_literal fixnum 7, call_word "+" ]`.
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    const sample = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1, .column = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1, .column = 3 },
+    };
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &sample, testing.allocator);
+
+    const w_name = "twiddle";
+    const m_name = "demo";
+    var w = wordRow(w_name, 100, 0);
+    w.body_bytecode = encoded.items.ptr;
+    w.body_bytecode_len = @intCast(encoded.items.len);
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const header: Header = .{
+        .format_version = aot_image_emit.format_version,
+        .module_count = 1,
+        .word_count = 1,
+        .marker_pool_count = 0,
+        .typevalue_slot_count = 1,
+        .stack_effect_count = 1,
+        .blob_entry_count = 0,
+        ._pad = 0,
+        .modules = &modules,
+        .words = &words,
+        .markers = null,
+        .stack_effects = null,
+        .blob_entries = null,
+    };
+
+    try loadIntoContext(&ctx, &header, null, null);
+
+    const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
+    const module_ptr = entry.module;
+    const mw = module_ptr.words.get(w_name) orelse return error.TestExpectedWord;
+    try testing.expect(mw.action == .compound);
+    const decoded = mw.action.compound;
+    try testing.expectEqual(@as(usize, 2), decoded.len);
+    try testing.expect(decoded[0].op == .push_literal);
+    try testing.expectEqual(@as(i64, 7), decoded[0].op.push_literal.fixnum);
+    try testing.expect(decoded[1].op == .call_word);
+    try testing.expectEqualStrings("+", decoded[1].op.call_word);
+}
+
+test "loadIntoContext: null body bytecode preserves empty compound" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const w_name = "stub";
+    const m_name = "demo";
+    const words = [_]Word{wordRow(w_name, 0, 0)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const header: Header = .{
+        .format_version = aot_image_emit.format_version,
+        .module_count = 1,
+        .word_count = 1,
+        .marker_pool_count = 0,
+        .typevalue_slot_count = 1,
+        .stack_effect_count = 1,
+        .blob_entry_count = 0,
+        ._pad = 0,
+        .modules = &modules,
+        .words = &words,
+        .markers = null,
+        .stack_effects = null,
+        .blob_entries = null,
+    };
+
+    try loadIntoContext(&ctx, &header, null, null);
+
+    const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
+    const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
+    try testing.expect(mw.action == .compound);
+    try testing.expectEqual(@as(usize, 0), mw.action.compound.len);
+}
+
+test "loadIntoContext: nested quotation literal round-trips" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const inner = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 0, .column = 0 },
+    };
+    const outer = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner } } }, .line = 0, .column = 0 },
+        .{ .op = .{ .call_word = "call" }, .line = 0, .column = 0 },
+    };
+
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator);
+
+    const w_name = "wrap";
+    const m_name = "demo";
+    var w = wordRow(w_name, 1, 0);
+    w.body_bytecode = encoded.items.ptr;
+    w.body_bytecode_len = @intCast(encoded.items.len);
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const header: Header = .{
+        .format_version = aot_image_emit.format_version,
+        .module_count = 1,
+        .word_count = 1,
+        .marker_pool_count = 0,
+        .typevalue_slot_count = 1,
+        .stack_effect_count = 1,
+        .blob_entry_count = 0,
+        ._pad = 0,
+        .modules = &modules,
+        .words = &words,
+        .markers = null,
+        .stack_effects = null,
+        .blob_entries = null,
+    };
+
+    try loadIntoContext(&ctx, &header, null, null);
+
+    const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
+    const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
+    const decoded = mw.action.compound;
+    try testing.expectEqual(@as(usize, 2), decoded.len);
+    try testing.expect(decoded[0].op == .push_literal);
+    try testing.expect(decoded[0].op.push_literal == .quotation);
+    const nested = decoded[0].op.push_literal.quotation.instructions;
+    try testing.expectEqual(@as(usize, 1), nested.len);
+    try testing.expectEqual(@as(i64, 3), nested[0].op.push_literal.fixnum);
+}
+
+test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // A single byte is shorter than the 4-byte instruction count
+    // header the decoder reads first; deserialization rejects it.
+    const truncated = [_]u8{0x42};
+
+    const w_name = "broken";
+    const m_name = "demo";
+    var w = wordRow(w_name, 1, 0);
+    w.body_bytecode = &truncated;
+    w.body_bytecode_len = truncated.len;
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const header: Header = .{
+        .format_version = aot_image_emit.format_version,
+        .module_count = 1,
+        .word_count = 1,
+        .marker_pool_count = 0,
+        .typevalue_slot_count = 1,
+        .stack_effect_count = 1,
+        .blob_entry_count = 0,
+        ._pad = 0,
+        .modules = &modules,
+        .words = &words,
+        .markers = null,
+        .stack_effects = null,
+        .blob_entries = null,
+    };
+
+    try testing.expectError(
+        LoaderError.OutOfMemory,
+        loadIntoContext(&ctx, &header, null, null),
     );
 }
