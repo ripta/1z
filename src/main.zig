@@ -2725,45 +2725,49 @@ fn handleInspect(gpa: std.mem.Allocator, args: []const []const u8) u8 {
         },
     };
 
-    out_writer.writeAll("kind: aot-binary\n") catch {};
-    out_writer.print("target: {s}\n", .{fields.target_triple}) catch {};
-    out_writer.print("build-mode: {s}\n", .{fields.build_mode}) catch {};
-    out_writer.print(
+    writeInspectReport(out_writer, fields) catch {};
+    out_writer.flush() catch {};
+    return 0;
+}
+
+fn writeInspectReport(w: anytype, fields: AotInspectFields) !void {
+    try w.writeAll("kind: aot-binary\n");
+    try w.print("target: {s}\n", .{fields.target_triple});
+    try w.print("build-mode: {s}\n", .{fields.build_mode});
+    try w.print(
         "interpreter: linked={s}, fallback={s}, locked={s}\n",
         .{ fields.interpreter_linked, fields.interpreter_fallback_mode, fields.interpreter_setting_locked },
-    ) catch {};
+    );
     if (std.mem.eql(u8, fields.runtime_image_present, "yes") and
         fields.runtime_image_format_version != null and
         fields.runtime_image_blob_present != null and
         fields.runtime_image_word_count != null)
     {
-        out_writer.print(
+        try w.print(
             "runtime-image: present=yes, format-version={s}, blob-present={s}, word-count={s}\n",
             .{
                 fields.runtime_image_format_version.?,
                 fields.runtime_image_blob_present.?,
                 fields.runtime_image_word_count.?,
             },
-        ) catch {};
+        );
     } else {
-        out_writer.print("runtime-image: present={s}\n", .{fields.runtime_image_present}) catch {};
+        try w.print("runtime-image: present={s}\n", .{fields.runtime_image_present});
     }
-    out_writer.print("1z-version: {s}\n", .{fields.onez_version}) catch {};
-    out_writer.print("prelude-hash: {s}\n", .{fields.prelude_hash}) catch {};
+    try w.print("1z-version: {s}\n", .{fields.onez_version});
+    try w.print("prelude-hash: {s}\n", .{fields.prelude_hash});
     if (fields.onez_git_commit) |v| {
-        out_writer.print("1z-git-commit: {s}\n", .{v}) catch {};
+        try w.print("1z-git-commit: {s}\n", .{v});
     }
     if (fields.zig_version) |v| {
-        out_writer.print("zig-version: {s}\n", .{v}) catch {};
+        try w.print("zig-version: {s}\n", .{v});
     }
     if (fields.c_compiler_id) |v| {
-        out_writer.print("c-compiler-id: {s}\n", .{v}) catch {};
+        try w.print("c-compiler-id: {s}\n", .{v});
     }
     if (fields.c_compiler_version) |v| {
-        out_writer.print("c-compiler-version: {s}\n", .{v}) catch {};
+        try w.print("c-compiler-version: {s}\n", .{v});
     }
-    out_writer.flush() catch {};
-    return 0;
 }
 
 fn repl(ctx: *Context, verbosity: Verbosity, max_memory_bytes: usize) void {
@@ -3371,4 +3375,148 @@ test "parseAotMetadata reports malformed line" {
     var err_ctx: AotInspectErrorContext = .{};
     const result = parseAotMetadata(sample, &err_ctx);
     try std.testing.expectError(error.MalformedLine, result);
+}
+
+const test_prelude_hash = "0123456789abcdef" ** 4;
+
+fn baseInspectFields() AotInspectFields {
+    return .{
+        .schema_version = "1",
+        .interpreter_linked = "yes",
+        .interpreter_fallback_mode = "auto",
+        .interpreter_setting_locked = "no",
+        .runtime_image_present = "no",
+        .target_triple = "aarch64-macos",
+        .build_mode = "ReleaseSafe",
+        .onez_version = "0.1.0-dev",
+        .prelude_hash = test_prelude_hash,
+    };
+}
+
+test "writeInspectReport renders required fields with runtime-image absent" {
+    var buf: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try writeInspectReport(fbs.writer(), baseInspectFields());
+    const expected = "kind: aot-binary\n" ++
+        "target: aarch64-macos\n" ++
+        "build-mode: ReleaseSafe\n" ++
+        "interpreter: linked=yes, fallback=auto, locked=no\n" ++
+        "runtime-image: present=no\n" ++
+        "1z-version: 0.1.0-dev\n" ++
+        "prelude-hash: " ++ test_prelude_hash ++ "\n";
+    try std.testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
+test "writeInspectReport renders runtime-image with blob present" {
+    var fields = baseInspectFields();
+    fields.interpreter_linked = "no";
+    fields.runtime_image_present = "yes";
+    fields.runtime_image_format_version = "1";
+    fields.runtime_image_blob_present = "yes";
+    fields.runtime_image_word_count = "8";
+
+    var buf: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try writeInspectReport(fbs.writer(), fields);
+    const expected = "kind: aot-binary\n" ++
+        "target: aarch64-macos\n" ++
+        "build-mode: ReleaseSafe\n" ++
+        "interpreter: linked=no, fallback=auto, locked=no\n" ++
+        "runtime-image: present=yes, format-version=1, blob-present=yes, word-count=8\n" ++
+        "1z-version: 0.1.0-dev\n" ++
+        "prelude-hash: " ++ test_prelude_hash ++ "\n";
+    try std.testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
+test "writeInspectReport renders runtime-image without blob" {
+    var fields = baseInspectFields();
+    fields.runtime_image_present = "yes";
+    fields.runtime_image_format_version = "1";
+    fields.runtime_image_blob_present = "no";
+    fields.runtime_image_word_count = "0";
+
+    var buf: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try writeInspectReport(fbs.writer(), fields);
+    const expected = "kind: aot-binary\n" ++
+        "target: aarch64-macos\n" ++
+        "build-mode: ReleaseSafe\n" ++
+        "interpreter: linked=yes, fallback=auto, locked=no\n" ++
+        "runtime-image: present=yes, format-version=1, blob-present=no, word-count=0\n" ++
+        "1z-version: 0.1.0-dev\n" ++
+        "prelude-hash: " ++ test_prelude_hash ++ "\n";
+    try std.testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
+test "writeInspectReport renders optional toolchain provenance when present" {
+    var fields = baseInspectFields();
+    fields.onez_git_commit = "ab" ** 20;
+    fields.zig_version = "0.15.2";
+    fields.c_compiler_id = "zig clang";
+    fields.c_compiler_version = "Homebrew clang version 20.1.8";
+
+    var buf: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try writeInspectReport(fbs.writer(), fields);
+    const expected = "kind: aot-binary\n" ++
+        "target: aarch64-macos\n" ++
+        "build-mode: ReleaseSafe\n" ++
+        "interpreter: linked=yes, fallback=auto, locked=no\n" ++
+        "runtime-image: present=no\n" ++
+        "1z-version: 0.1.0-dev\n" ++
+        "prelude-hash: " ++ test_prelude_hash ++ "\n" ++
+        "1z-git-commit: " ++ ("ab" ** 20) ++ "\n" ++
+        "zig-version: 0.15.2\n" ++
+        "c-compiler-id: zig clang\n" ++
+        "c-compiler-version: Homebrew clang version 20.1.8\n";
+    try std.testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
+test "writeInspectReport falls back to short form when conditional fields missing" {
+    var fields = baseInspectFields();
+    fields.runtime_image_present = "yes";
+    // format-version, blob-present, and word-count remain null.
+
+    var buf: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try writeInspectReport(fbs.writer(), fields);
+    const expected = "kind: aot-binary\n" ++
+        "target: aarch64-macos\n" ++
+        "build-mode: ReleaseSafe\n" ++
+        "interpreter: linked=yes, fallback=auto, locked=no\n" ++
+        "runtime-image: present=yes\n" ++
+        "1z-version: 0.1.0-dev\n" ++
+        "prelude-hash: " ++ test_prelude_hash ++ "\n";
+    try std.testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
+test "writeInspectReport renders fields in the documented order" {
+    var fields = baseInspectFields();
+    fields.interpreter_linked = "no";
+    fields.interpreter_fallback_mode = "false";
+    fields.interpreter_setting_locked = "yes";
+    fields.runtime_image_present = "yes";
+    fields.runtime_image_format_version = "1";
+    fields.runtime_image_blob_present = "yes";
+    fields.runtime_image_word_count = "412";
+    fields.onez_git_commit = "cd" ** 20;
+    fields.zig_version = "0.15.2";
+    fields.c_compiler_id = "zig clang";
+    fields.c_compiler_version = "Homebrew clang version 20.1.8";
+
+    var buf: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try writeInspectReport(fbs.writer(), fields);
+    const expected = "kind: aot-binary\n" ++
+        "target: aarch64-macos\n" ++
+        "build-mode: ReleaseSafe\n" ++
+        "interpreter: linked=no, fallback=false, locked=yes\n" ++
+        "runtime-image: present=yes, format-version=1, blob-present=yes, word-count=412\n" ++
+        "1z-version: 0.1.0-dev\n" ++
+        "prelude-hash: " ++ test_prelude_hash ++ "\n" ++
+        "1z-git-commit: " ++ ("cd" ** 20) ++ "\n" ++
+        "zig-version: 0.15.2\n" ++
+        "c-compiler-id: zig clang\n" ++
+        "c-compiler-version: Homebrew clang version 20.1.8\n";
+    try std.testing.expectEqualStrings(expected, fbs.getWritten());
 }
