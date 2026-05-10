@@ -6303,7 +6303,8 @@ pub const AotMetadata = struct {
     /// builds.
     interpreter_fallback_mode: InterpreterFallbackMode,
     interpreter_setting_locked: bool,
-    /// Hard-coded false until a runtime image is actually emitted.
+    /// Caller hands in `false`; `emitProgramC` flips it to `true` when
+    /// a runtime image is actually emitted into the binary.
     runtime_image_present: bool,
     /// e.g. "aarch64-macos". Caller-owned slice; lifetime must outlive
     /// the call to emitProgramC.
@@ -6349,6 +6350,12 @@ pub fn emitProgramC(
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .{};
     errdefer out.deinit(allocator);
+
+    // Local mutable copy of the caller's metadata. The runtime-image
+    // fields stay at the caller's defaults (present=false, version=0)
+    // unless `emitImageC` actually emits an image below; the caller has
+    // no visibility into that decision.
+    var meta = metadata;
 
     // Build name->word_id map for compiled words, excluding native words, which must always use jitInterpretedCall
     var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
@@ -6913,6 +6920,16 @@ pub fn emitProgramC(
 
             const stats = try aot_image_emit_mod.emitImageC(&out, allocator, ctx, manifest, &image_word_lookup);
             diagnostics.image_stats = stats;
+
+            // Surface the freshly-emitted image through the embedded
+            // metadata record. `format_version` is the source of truth
+            // shared with `aot_image_emit.zig` and the loader, so the
+            // inspector reports the same number the binary actually
+            // carries in `onez_image_header.format_version`.
+            meta.runtime_image_present = true;
+            meta.runtime_image_format_version = aot_image_emit_mod.format_version;
+            meta.runtime_image_blob_present = stats.blob_present;
+            meta.runtime_image_word_count = stats.word_count;
         }
     }
 
@@ -6957,7 +6974,7 @@ pub fn emitProgramC(
     // inspector a stable byte-scan target. Schema-version is the first
     // key after the open marker so future format changes can flip both
     // the open marker (V2) and the schema-version field together.
-    try emitAotMetadata(allocator, &out, metadata, !interpreter_free);
+    try emitAotMetadata(allocator, &out, meta, !interpreter_free);
 
     // 6. Main entry point. Interpreter-free binaries skip prelude loading
     // since every reachable word was compiled and registered explicitly via
@@ -12082,4 +12099,54 @@ test "rewriteIndexedStackOp: nip-n depth 1 preserves row_region" {
     try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 3 }, stack[2]);
+}
+
+test "emitAotMetadata renders runtime-image fields when present" {
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    var meta = test_aot_metadata;
+    meta.runtime_image_present = true;
+    meta.runtime_image_format_version = 1;
+    meta.runtime_image_blob_present = true;
+    meta.runtime_image_word_count = 42;
+
+    try emitAotMetadata(testing.allocator, &out, meta, true);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=yes\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-format-version=1\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-blob-present=yes\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-word-count=42\\n") != null);
+}
+
+test "emitAotMetadata omits runtime-image conditional fields when absent" {
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    // test_aot_metadata.runtime_image_present is false by default; the
+    // three conditional keys must not appear at all so the inspector
+    // can keep them as nullable optional fields.
+    try emitAotMetadata(testing.allocator, &out, test_aot_metadata, true);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=no\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-format-version=") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-blob-present=") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-word-count=") == null);
+}
+
+test "emitAotMetadata renders blob-present=no with non-zero word-count" {
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    var meta = test_aot_metadata;
+    meta.runtime_image_present = true;
+    meta.runtime_image_format_version = 1;
+    meta.runtime_image_blob_present = false;
+    meta.runtime_image_word_count = 7;
+
+    try emitAotMetadata(testing.allocator, &out, meta, true);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=yes\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-blob-present=no\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-word-count=7\\n") != null);
 }
