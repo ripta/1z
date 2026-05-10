@@ -1,0 +1,3 @@
+do-compile: ( -- ) [ [ 1 1 + ] compile! drop ] ;
+
+do-compile

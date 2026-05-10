@@ -2026,6 +2026,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var freeze_diagnostics: aot_freeze.FreezeDiagnostics = .{};
     var freeze_result = aot_freeze.freezeModuleGraphOpts(ctx, source, &freeze_diagnostics, allocator, .{
         .compile_all_prelude = compile_all_prelude,
+        .runtime_image = emit_runtime_image_flag,
     }) catch |err| {
         if (err == error.MissingStackEffects) {
             for (freeze_diagnostics.missing_stack_effects) |name| {
@@ -2037,10 +2038,17 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             allocator.free(freeze_diagnostics.missing_stack_effects);
         } else if (err == error.DisallowedDynamicFeature) {
             if (freeze_diagnostics.fatal_dynamic_feature) |feature_use| {
-                err_writer.print(
-                    "Error: AOT build disallows dynamic feature '{s}' in '{s}'\n",
-                    .{ feature_use.feature_name, feature_use.caller_name },
-                ) catch {};
+                if (emit_runtime_image_flag and std.mem.eql(u8, feature_use.feature_name, "compile!")) {
+                    err_writer.print(
+                        "Error: 'compile!' is not yet supported in runtime-image AOT (in '{s}'); compiling new code at runtime requires growing the dispatch table, which is not yet implemented for runtime-image builds\n",
+                        .{feature_use.caller_name},
+                    ) catch {};
+                } else {
+                    err_writer.print(
+                        "Error: AOT build disallows dynamic feature '{s}' in '{s}'\n",
+                        .{ feature_use.feature_name, feature_use.caller_name },
+                    ) catch {};
+                }
             } else {
                 err_writer.writeAll("Error: AOT build disallows a dynamic feature\n") catch {};
             }
