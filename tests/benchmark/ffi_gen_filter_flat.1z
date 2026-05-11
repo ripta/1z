@@ -1,0 +1,78 @@
+\ Focused harness for the struct-free ffi-gen line filter.
+\
+\ Mirrors ffi_gen_filter_baseline.1z but runs decls-native-flat exactly
+\ once on toy.h, so the AOT build of this file provides an
+\ apples-to-apples timing anchor against the split-based baseline.
+\ Keep these word definitions in sync with ffi_gen_filter.1z.
+
+use "ffi-gen" ;
+use "strings" ;
+
+native-line-contains?: ( line str -- ? ) [ #index-of f = not ] ;
+
+native-block-start?: ( line -- ? ) [
+  dup "pub const " #starts-with?
+  [
+    dup " = extern struct {" native-line-contains?
+    [ drop t ]
+    [
+      dup " = opaque {};" native-line-contains?
+      [ drop t ]
+      [ " = enum(c_int) {" native-line-contains? ]
+      if
+    ]
+    if
+  ]
+  [ drop f ]
+  if
+] ;
+
+flat-filter-step: ( acc b line -- acc b ) [
+  dup "pub extern fn " #starts-with?
+  [
+    2 pick-n swap #push! drop
+  ]
+  [
+    over
+    [
+      dup 3 pick-n swap #push! drop
+      "};" #starts-with?
+      [ drop f ]
+      [ ]
+      if
+    ]
+    [
+      dup native-block-start?
+      [
+        2 pick-n swap #push! drop
+        drop t
+      ]
+      [ drop ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+translate-c-filtered-flat: ( header-path flags -- filtered-source ) [
+  translate-c
+  "\n" split
+  V{ } f
+  2 <rot-n
+  [ flat-filter-step ] #each
+  drop
+  >array "\n" #join
+] ;
+
+decls-native-flat: ( header-path flags -- decls ) [
+  translate-c-filtered-flat parse-zig-decls
+] ;
+
+toy-header: ( -- str ) [ "/Users/ripta/projects/1z/ext/toy/toy.h" ] ;
+
+"--- timing: flat variant on toy.h (translate-c output ~6000 lines) ---" print-line
+
+[
+  "native-flat (toy.h)" [ toy-header { } decls-native-flat drop ] benchmark-auto
+] run-benchmarks

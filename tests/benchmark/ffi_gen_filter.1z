@@ -120,7 +120,58 @@ translate-c-filtered-index: ( header-path flags -- filtered-source ) [
   acc>> >array "\n" #join
 ] ;
 
-\ --- Three variants of translate-c-decls ---
+\ --- Struct-free state on the outer stack ---
+\
+\ Same filter logic as translate-c-filtered-native, but with no
+\ filter-state struct. The accumulator vector (acc) and the
+\ inside-block flag (b) are carried explicitly on the outer stack
+\ across iterations driven by #each. The step word has stack effect
+\ ( acc b line -- acc b ); replacing acc>>, b>>, and >>b with raw
+\ pick-n / swap / drop operations isolates the cost of mutable struct
+\ field dispatch from the rest of the filter.
+
+flat-filter-step: ( acc b line -- acc b ) [
+  dup "pub extern fn " #starts-with?
+  [
+    \ pub extern fn: push line to acc, b unchanged
+    2 pick-n swap #push! drop
+  ]
+  [
+    over
+    [
+      \ b=true (inside block): emit, then check end-of-block
+      dup 3 pick-n swap #push! drop
+      "};" #starts-with?
+      [ drop f ]
+      [ ]
+      if
+    ]
+    [
+      \ b=false (outside block): check block-start
+      dup native-block-start?
+      [
+        2 pick-n swap #push! drop
+        drop t
+      ]
+      [ drop ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+translate-c-filtered-flat: ( header-path flags -- filtered-source ) [
+  translate-c
+  "\n" split
+  V{ } f    \ Stack: lines V{} f
+  2 <rot-n  \ V{} f lines
+  [ flat-filter-step ] #each
+  drop
+  >array "\n" #join
+] ;
+
+\ --- Four variants of translate-c-decls ---
 
 decls-awk: ( header-path flags -- decls ) [ translate-c-decls ] ;
 
@@ -136,6 +187,10 @@ decls-native-index: ( header-path flags -- decls ) [
   translate-c-filtered-index parse-zig-decls
 ] ;
 
+decls-native-flat: ( header-path flags -- decls ) [
+  translate-c-filtered-flat parse-zig-decls
+] ;
+
 \ --- Correctness check: all three must produce the same declarations ---
 
 toy-header: ( -- str ) [ "/Users/ripta/projects/1z/ext/toy/toy.h" ] ;
@@ -147,12 +202,14 @@ check-equivalence: ( header -- ) [
   over { } decls-no-filter
   2 pick-n { } decls-native
   3 pick-n { } decls-native-index
-  \ Stack: header awk-decls nofilt-decls native-decls native-index-decls
-  "  awk #len:           " print 3 pick-n #len . nl
-  "  no-filt #len:       " print 2 pick-n #len . nl
-  "  native #len:        " print 1 pick-n #len . nl
-  "  native-index #len:  " print dup #len . nl
-  drop drop drop drop drop
+  4 pick-n { } decls-native-flat
+  \ Stack: header awk-decls nofilt-decls native-decls native-index-decls native-flat-decls
+  "  awk #len:           " print 4 pick-n #len . nl
+  "  no-filt #len:       " print 3 pick-n #len . nl
+  "  native #len:        " print 2 pick-n #len . nl
+  "  native-index #len:  " print 1 pick-n #len . nl
+  "  native-flat #len:   " print dup #len . nl
+  drop drop drop drop drop drop
 ] ;
 
 "--- correctness ---" print-line
@@ -168,6 +225,7 @@ nl
   "no-filt      (toy.h)" [ toy-header { } decls-no-filter drop ] benchmark-auto
   "native       (toy.h)" [ toy-header { } decls-native drop ] benchmark-auto
   "native-index (toy.h)" [ toy-header { } decls-native-index drop ] benchmark-auto
+  "native-flat  (toy.h)" [ toy-header { } decls-native-flat drop ] benchmark-auto
 ] run-benchmarks
 
 nl
@@ -179,4 +237,5 @@ nl
   "no-filt      (zlib.h)" [ zlib-header { } decls-no-filter drop ] benchmark-auto
   "native       (zlib.h)" [ zlib-header { } decls-native drop ] benchmark-auto
   "native-index (zlib.h)" [ zlib-header { } decls-native-index drop ] benchmark-auto
+  "native-flat  (zlib.h)" [ zlib-header { } decls-native-flat drop ] benchmark-auto
 ] run-benchmarks

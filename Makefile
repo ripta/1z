@@ -140,10 +140,10 @@ benchmark-quotation: build ## Run quotation sequence benchmark across all execut
 benchmark-scanner: build ## Run scanner vs direct benchmark across interpreter modes
 	@scripts/benchmark-scanner.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/scanner_vs_direct.1z
 
-# NOTE(ripta): The focused split-based and index-based harnesses build
-#              successfully with --emit-runtime-image. Their AOT runtime
-#              currently errors at the first benchmark-auto call because
-#              run-benchmarks does not preserve stack state across
+# NOTE(ripta): The focused split-based, index-based, and flat (struct-free)
+#              harnesses build successfully with --emit-runtime-image. Their
+#              AOT runtime currently errors at the first benchmark-auto call
+#              because run-benchmarks does not preserve stack state across
 #              make-benchmark-report under jitInterpretedCall, so the
 #              .aot.sample captures fall back to whatever stdout the
 #              binary emits before erroring -- typically just the timing
@@ -155,11 +155,15 @@ benchmark-ffi-gen-filter: build ## Capture interpreter profiles and AOT timings 
 		> tests/benchmark/ffi_gen_filter_baseline.profile.sample
 	./$(ZIG_PREFIX)/bin/1z run --max-memory=2G --profile tests/benchmark/ffi_gen_filter_index.1z \
 		> tests/benchmark/ffi_gen_filter_index.profile.sample
+	./$(ZIG_PREFIX)/bin/1z run --max-memory=2G --profile tests/benchmark/ffi_gen_filter_flat.1z \
+		> tests/benchmark/ffi_gen_filter_flat.profile.sample
 	./$(ZIG_PREFIX)/bin/1z build --emit-runtime-image tests/benchmark/ffi_gen_filter_baseline.1z -o tests/benchmark/ffi_gen_filter_baseline.aot
 	./$(ZIG_PREFIX)/bin/1z build --emit-runtime-image tests/benchmark/ffi_gen_filter_index.1z -o tests/benchmark/ffi_gen_filter_index.aot
+	./$(ZIG_PREFIX)/bin/1z build --emit-runtime-image tests/benchmark/ffi_gen_filter_flat.1z -o tests/benchmark/ffi_gen_filter_flat.aot
 	./$(ZIG_PREFIX)/bin/1z build --emit-runtime-image tests/benchmark/ffi_gen_filter.1z -o tests/benchmark/ffi_gen_filter.aot
 	-./tests/benchmark/ffi_gen_filter_baseline.aot > tests/benchmark/ffi_gen_filter_baseline.aot.sample
 	-./tests/benchmark/ffi_gen_filter_index.aot > tests/benchmark/ffi_gen_filter_index.aot.sample
+	-./tests/benchmark/ffi_gen_filter_flat.aot > tests/benchmark/ffi_gen_filter_flat.aot.sample
 
 benchmark: build ## Run benchmarks
 	@for f in $(BENCHMARK_FILES); do echo "--- $$f ---"; ./$(ZIG_PREFIX)/bin/1z "$$f"; echo; done

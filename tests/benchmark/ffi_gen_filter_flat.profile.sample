@@ -1,0 +1,27 @@
+--- timing: flat variant on toy.h (translate-c output ~6000 lines) ---
+Name                  Iters        Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+-------------------   -----   ------------   ------------   -----------   ----------
+native-flat (toy.h)       1   76169.922 ms   76169.922 ms       519,382           19
+
+=== Word Profile (top 20 by total time) ===
+  Word                   Calls    Total time     Self time   Time/call
+  translate-c-filtered-flat 1          74707.014 ms    147.000 us  74707.014 ms
+  split                  78         70167.184 ms     20.168 ms  899.579 ms
+  #index-of-from         6,403      57447.939 ms  57447.939 ms    8.972 ms
+  if                     49,522     26200.104 ms   6269.116 ms  529.059 us
+  #slice                 6,890      11372.606 ms  11372.606 ms    1.650 ms
+  #each                  17          4617.959 ms      5.703 ms  271.644 ms
+  native-block-start?    5,920       2072.589 ms     12.108 ms  350.099 us
+  call                   155          635.736 ms      8.424 ms    4.101 ms
+  dip                    1,447        485.163 ms     45.302 ms  335.288 us
+  trim                   274          479.569 ms     40.287 ms    1.750 ms
+  native-line-contains?  6,859        348.033 ms     10.787 ms   50.741 us
+  keep                   77           337.212 ms      2.663 ms    4.379 ms
+  ltrim                  512          295.303 ms     25.526 ms  576.763 us
+  zig>ffi-type           125          257.166 ms     32.156 ms    2.057 ms
+  whitespace?            782          230.349 ms     56.874 ms  294.563 us
+  (dispatch-line)        52           168.466 ms      2.702 ms    3.239 ms
+  #collect               114          150.352 ms      6.457 ms    1.318 ms
+  (read-all-and-close)   2            145.015 ms    323.000 us   72.507 ms
+  stream-read-all        2            144.508 ms    144.508 ms   72.254 ms
+  or                     2,346        100.672 ms      4.075 ms   42.912 us
