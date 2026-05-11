@@ -1,0 +1,2 @@
+interpreter: not linked (auto: all reachable code compiled)
+runtime-image: words=138 stack-effects=127 typevalue-slots=12 blob-present=true

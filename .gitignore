@@ -3,3 +3,4 @@
 /.zig-cache
 /docs/reference
 /zig-out
+*.aot

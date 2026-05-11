@@ -1,0 +1,16 @@
+\ Build-only regression test: --emit-runtime-image successfully encodes
+\ descriptors for transitively imported lib/process.1z and
+\ lib/scanner.1z. The descriptor encoder previously skipped descriptor
+\ entries (`inner-type`, `variants`, `field-types`, `fields`, `define`)
+\ on these libraries' types (signal, stdio-mode, process, shell-safe,
+\ scanner, etc.), printing `runtime-image-load-note` chains at startup.
+\ The current static-C-data descriptor encoding has no skip surface;
+\ this fixture asserts that the build succeeds with none of the prior
+\ diagnostic notes by pinning an empty stderr in the build golden.
+\
+\ This fixture is build-only because executing the rehydrated lib
+\ TypeValues currently trips a separate runtime SIGSEGV. The companion
+\ runtime_image_lib_descriptors.1z fixture exercises the smaller
+\ "import-only, run to completion" axis that the SIGSEGV does not block.
+use "process" ;
+use "scanner" ;
