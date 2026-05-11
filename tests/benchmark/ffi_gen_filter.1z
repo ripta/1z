@@ -81,6 +81,45 @@ translate-c-filtered-native: ( header-path flags -- filtered-source ) [
   acc>> >array "\n" #join
 ] ;
 
+\ --- Index-based line iteration without upfront vector ---
+\
+\ Same filter logic as translate-c-filtered-native, but the lines are not
+\ pre-materialised into a vector via "\n" split. Instead, a tail-recursive
+\ helper carries (state src pos) on the stack, locates the next "\n" with
+\ #index-of-from, slices a single line out, and feeds it to the unchanged
+\ native-filter-step. Only one line slice is live at any moment.
+
+(filter-loop-index): stack-recursive ( state src pos -- state ) [
+  \ Find next "\n" starting at pos: src "\n" pos #index-of-from -- idx/f
+  over "\n" 2 pick-n #index-of-from
+  dup f =
+  [
+    \ Last fragment: line = src[pos..#len(src)]; one final step then done.
+    drop
+    over over over #len #slice
+    nip nip
+    native-filter-step
+  ]
+  [
+    \ Found at idx: line = src[pos..idx]; step then recurse with pos=idx+1.
+    2 pick-n 2 pick-n 2 pick-n #slice
+    2 rot-n>
+    nip
+    [ swap ] dip
+    [ native-filter-step ] 2dip
+    1 +
+    (filter-loop-index)
+  ]
+  if
+] ;
+
+translate-c-filtered-index: ( header-path flags -- filtered-source ) [
+  translate-c
+  V{ } f make-filter-state swap 0
+  (filter-loop-index)
+  acc>> >array "\n" #join
+] ;
+
 \ --- Three variants of translate-c-decls ---
 
 decls-awk: ( header-path flags -- decls ) [ translate-c-decls ] ;
@@ -93,6 +132,10 @@ decls-native: ( header-path flags -- decls ) [
   translate-c-filtered-native parse-zig-decls
 ] ;
 
+decls-native-index: ( header-path flags -- decls ) [
+  translate-c-filtered-index parse-zig-decls
+] ;
+
 \ --- Correctness check: all three must produce the same declarations ---
 
 toy-header: ( -- str ) [ "/Users/ripta/projects/1z/ext/toy/toy.h" ] ;
@@ -103,11 +146,13 @@ check-equivalence: ( header -- ) [
   dup { } decls-awk
   over { } decls-no-filter
   2 pick-n { } decls-native
-  \ Stack: header awk-decls nofilt-decls native-decls
-  "  awk #len:      " print over #len . nl
-  "  no-filt #len:  " print over #len . nl
-  "  native #len:   " print dup #len . nl
-  drop drop drop drop
+  3 pick-n { } decls-native-index
+  \ Stack: header awk-decls nofilt-decls native-decls native-index-decls
+  "  awk #len:           " print 3 pick-n #len . nl
+  "  no-filt #len:       " print 2 pick-n #len . nl
+  "  native #len:        " print 1 pick-n #len . nl
+  "  native-index #len:  " print dup #len . nl
+  drop drop drop drop drop
 ] ;
 
 "--- correctness ---" print-line
@@ -119,9 +164,10 @@ nl
 "--- timing: toy.h (translate-c output ~6000 lines) ---" print-line
 
 [
-  "awk      (toy.h)" [ toy-header { } decls-awk drop ] benchmark-auto
-  "no-filt  (toy.h)" [ toy-header { } decls-no-filter drop ] benchmark-auto
-  "native   (toy.h)" [ toy-header { } decls-native drop ] benchmark-auto
+  "awk          (toy.h)" [ toy-header { } decls-awk drop ] benchmark-auto
+  "no-filt      (toy.h)" [ toy-header { } decls-no-filter drop ] benchmark-auto
+  "native       (toy.h)" [ toy-header { } decls-native drop ] benchmark-auto
+  "native-index (toy.h)" [ toy-header { } decls-native-index drop ] benchmark-auto
 ] run-benchmarks
 
 nl
@@ -129,7 +175,8 @@ nl
 "--- timing: zlib.h (translate-c output ~6700 lines) ---" print-line
 
 [
-  "awk      (zlib.h)" [ zlib-header { } decls-awk drop ] benchmark-auto
-  "no-filt  (zlib.h)" [ zlib-header { } decls-no-filter drop ] benchmark-auto
-  "native   (zlib.h)" [ zlib-header { } decls-native drop ] benchmark-auto
+  "awk          (zlib.h)" [ zlib-header { } decls-awk drop ] benchmark-auto
+  "no-filt      (zlib.h)" [ zlib-header { } decls-no-filter drop ] benchmark-auto
+  "native       (zlib.h)" [ zlib-header { } decls-native drop ] benchmark-auto
+  "native-index (zlib.h)" [ zlib-header { } decls-native-index drop ] benchmark-auto
 ] run-benchmarks

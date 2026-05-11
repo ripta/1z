@@ -1,0 +1,27 @@
+--- timing: index variant on toy.h (translate-c output ~6000 lines) ---
+Name                   Iters        Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+--------------------   -----   ------------   ------------   -----------   ----------
+native-index (toy.h)       1   77754.828 ms   77754.828 ms       579,781           19
+
+=== Word Profile (top 20 by total time) ===
+  Word                   Calls    Total time     Self time   Time/call
+  #index-of-from         6,403      57482.578 ms  57482.578 ms    8.977 ms
+  if                     49,520     19892.736 ms   4733.085 ms  401.711 us
+  dip                    19,474     11694.714 ms   1938.061 ms  600.529 us
+  #slice                 6,890      11403.845 ms  11403.845 ms    1.655 ms
+  2dip                   6,010       5831.684 ms    239.848 ms  970.330 us
+  native-block-start?    5,920       2277.395 ms     16.164 ms  384.695 us
+  call                   194          650.942 ms      8.777 ms    3.355 ms
+  trim                   274          483.793 ms     40.613 ms    1.765 ms
+  native-line-contains?  6,859        396.964 ms     12.083 ms   57.874 us
+  keep                   116          350.467 ms      4.021 ms    3.021 ms
+  ltrim                  512          297.040 ms     25.817 ms  580.156 us
+  zig>ffi-type           125          257.528 ms     32.394 ms    2.060 ms
+  whitespace?            782          233.140 ms     57.403 ms  298.132 us
+  (dispatch-line)        52           169.963 ms      2.531 ms    3.268 ms
+  #collect               114          154.663 ms      6.430 ms    1.356 ms
+  (read-all-and-close)   2            143.013 ms    320.000 us   71.506 ms
+  stream-read-all        2            142.497 ms    142.497 ms   71.248 ms
+  or                     2,346        102.177 ms      3.880 ms   43.553 us
+  (parse-fn-decl)        38            91.998 ms      1.915 ms    2.421 ms
+  split                  77            86.916 ms     11.127 ms    1.128 ms

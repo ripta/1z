@@ -1,0 +1,98 @@
+\ Focused harness for the index-based ffi-gen line filter.
+\
+\ Mirrors ffi_gen_filter_baseline.1z but runs decls-native-index exactly
+\ once on toy.h, so the AOT build of this file provides an
+\ apples-to-apples timing anchor against the split-based baseline.
+\ Keep these word definitions in sync with ffi_gen_filter.1z.
+
+use "ffi-gen" ;
+use "strings" ;
+
+filter-state: mutable struct{ acc b } ;
+
+native-line-contains?: ( line str -- ? ) [ #index-of f = not ] ;
+
+native-block-start?: ( line -- ? ) [
+  dup "pub const " #starts-with?
+  [
+    dup " = extern struct {" native-line-contains?
+    [ drop t ]
+    [
+      dup " = opaque {};" native-line-contains?
+      [ drop t ]
+      [ " = enum(c_int) {" native-line-contains? ]
+      if
+    ]
+    if
+  ]
+  [ drop f ]
+  if
+] ;
+
+native-filter-step: ( state line -- state ) [
+  dup "pub extern fn " #starts-with?
+  [
+    over acc>> swap #push! drop
+  ]
+  [
+    over b>>
+    [
+      [ over acc>> swap #push! drop ] keep
+      "};" #starts-with?
+      [ f >>b ]
+      [ ]
+      if
+    ]
+    [
+      dup native-block-start?
+      [
+        over acc>> swap #push! drop
+        t >>b
+      ]
+      [ drop ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+(filter-loop-index): stack-recursive ( state src pos -- state ) [
+  over "\n" 2 pick-n #index-of-from
+  dup f =
+  [
+    drop
+    over over over #len #slice
+    nip nip
+    native-filter-step
+  ]
+  [
+    2 pick-n 2 pick-n 2 pick-n #slice
+    2 rot-n>
+    nip
+    [ swap ] dip
+    [ native-filter-step ] 2dip
+    1 +
+    (filter-loop-index)
+  ]
+  if
+] ;
+
+translate-c-filtered-index: ( header-path flags -- filtered-source ) [
+  translate-c
+  V{ } f make-filter-state swap 0
+  (filter-loop-index)
+  acc>> >array "\n" #join
+] ;
+
+decls-native-index: ( header-path flags -- decls ) [
+  translate-c-filtered-index parse-zig-decls
+] ;
+
+toy-header: ( -- str ) [ "/Users/ripta/projects/1z/ext/toy/toy.h" ] ;
+
+"--- timing: index variant on toy.h (translate-c output ~6000 lines) ---" print-line
+
+[
+  "native-index (toy.h)" [ toy-header { } decls-native-index drop ] benchmark-auto
+] run-benchmarks
