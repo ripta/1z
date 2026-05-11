@@ -690,6 +690,7 @@ const VariantHistogramWalker = struct {
             .iterator,
             .doc_string,
             .type_val,
+            .type_descriptor,
             .sandbox_spec,
             .unit,
             => {},

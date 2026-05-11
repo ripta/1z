@@ -4,13 +4,13 @@ use "testing" ;
 
 "Symbol path still works" test-section
 
-"fixnum" native.type-descriptor hash? t "symbol returns hash" assert=
-"string" native.type-descriptor hash? t "string returns hash" assert=
+"fixnum" native.type-descriptor type-of type-descriptor = t "symbol returns type-descriptor" assert=
+"string" native.type-descriptor type-of type-descriptor = t "string returns type-descriptor" assert=
 
 "Type value path works" test-section
 
-fixnum native.type-descriptor hash? t "type value returns hash" assert=
-string native.type-descriptor hash? t "string type value returns hash" assert=
+fixnum native.type-descriptor type-of type-descriptor = t "type value returns type-descriptor" assert=
+string native.type-descriptor type-of type-descriptor = t "string type value returns type-descriptor" assert=
 
 "Both paths return the same descriptor" test-section
 

@@ -55,6 +55,7 @@ channel:  M{ type: builtin-type: numeric: f exact: f integer: f mutable: t } nat
 iterator: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f } native.define-builtin-type ;
 doc-string: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f } native.define-builtin-type ;
 type: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f } native.define-builtin-type ;
+type-descriptor: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f } native.define-builtin-type ;
 unit: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f } native.define-builtin-type ;
 sandbox-spec: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f } native.define-builtin-type ;
 
@@ -103,6 +104,9 @@ match{: parse-time [
 option-payload: struct{ value } ;
 \\ Optional value: either `some` wrapping a value, or `none`.
 option: enum{ some: option-payload none: unit } ;
+\\ A single enum variant as exposed by `descriptor-variants?`: name carries
+\\ the variant's symbol, type carries the variant's inner type.
+descriptor-variant: struct{ name: symbol type: type } ;
 \\ Backing struct for result:ok.
 result-value: struct{ value } ;
 \\ Backing struct for result:err.
@@ -907,4 +911,54 @@ pragma-get: ( name -- value ) [
   [ option:some> ]
   [ drop f "pragma not set" EKeyNotFound make-error throw ]
   if
+] ;
+
+\\ Universal-bool descriptor predicates and kind accessor exposed at the
+\\ global namespace. Pass through to the native implementations.
+descriptor-numeric?: ( descriptor -- ? )      [ native.descriptor-numeric? ] ;
+descriptor-exact?:   ( descriptor -- ? )      [ native.descriptor-exact? ] ;
+descriptor-integer?: ( descriptor -- ? )      [ native.descriptor-integer? ] ;
+descriptor-mutable?: ( descriptor -- ? )      [ native.descriptor-mutable? ] ;
+descriptor-kind:     ( descriptor -- symbol ) [ native.descriptor-kind ] ;
+
+\\ Field names of a descriptor as an array of strings, or option:none if the
+\\ kind has no fields concept.
+descriptor-fields?: ( descriptor -- option ) [
+  [ native.descriptor-fields-raw >option:some ] [ drop option:none ] recover
+] ;
+
+\\ Field type annotations of a descriptor, or option:none if the descriptor
+\\ carries no annotations (e.g., an untyped struct).
+descriptor-field-types?: ( descriptor -- option ) [
+  [ native.descriptor-field-types-raw >option:some ] [ drop option:none ] recover
+] ;
+
+\\ Inner-type for a virtual or enum-variant descriptor, or option:none.
+descriptor-inner-type?: ( descriptor -- option ) [
+  [ native.descriptor-inner-type-raw >option:some ] [ drop option:none ] recover
+] ;
+
+\\ Parent type for an enum-variant descriptor, or option:none.
+descriptor-parent?: ( descriptor -- option ) [
+  [ native.descriptor-parent-raw >option:some ] [ drop option:none ] recover
+] ;
+
+\\ Variants of an enum descriptor as an array of descriptor-variant structs,
+\\ or option:none for non-enum descriptors.
+descriptor-variants?: ( descriptor -- option ) [
+  [
+    native.descriptor-variants-raw
+    [ dup 0 #nth swap 1 #nth make-descriptor-variant ] #map #collect
+    >option:some
+  ] [ drop option:none ] recover
+] ;
+
+\\ Resource-kind string for a resource descriptor, or option:none.
+descriptor-resource-kind?: ( descriptor -- option ) [
+  [ native.descriptor-resource-kind-raw >option:some ] [ drop option:none ] recover
+] ;
+
+\\ FFI layout pointer (as fixnum) for an ffi-struct descriptor, or option:none.
+descriptor-ffi-layout?: ( descriptor -- option ) [
+  [ native.descriptor-ffi-layout-raw >option:some ] [ drop option:none ] recover
 ] ;

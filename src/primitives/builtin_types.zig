@@ -12,6 +12,20 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "type-has-property?", .func = nativeTypeHasProperty, .stack_effect = "type property -- ?" },
     .{ .name = "type-members", .func = nativeTypeMembers, .stack_effect = "type -- array/f" },
     .{ .name = "type-name", .func = nativeTypeName, .stack_effect = "type -- string" },
+
+    .{ .name = "descriptor-numeric?", .func = nativeDescriptorNumeric, .stack_effect = "descriptor -- ?" },
+    .{ .name = "descriptor-exact?", .func = nativeDescriptorExact, .stack_effect = "descriptor -- ?" },
+    .{ .name = "descriptor-integer?", .func = nativeDescriptorInteger, .stack_effect = "descriptor -- ?" },
+    .{ .name = "descriptor-mutable?", .func = nativeDescriptorMutable, .stack_effect = "descriptor -- ?" },
+    .{ .name = "descriptor-kind", .func = nativeDescriptorKind, .stack_effect = "descriptor -- symbol" },
+
+    .{ .name = "descriptor-fields-raw", .func = nativeDescriptorFieldsRaw, .stack_effect = "descriptor -- array" },
+    .{ .name = "descriptor-field-types-raw", .func = nativeDescriptorFieldTypesRaw, .stack_effect = "descriptor -- array" },
+    .{ .name = "descriptor-inner-type-raw", .func = nativeDescriptorInnerTypeRaw, .stack_effect = "descriptor -- type" },
+    .{ .name = "descriptor-parent-raw", .func = nativeDescriptorParentRaw, .stack_effect = "descriptor -- type" },
+    .{ .name = "descriptor-variants-raw", .func = nativeDescriptorVariantsRaw, .stack_effect = "descriptor -- array" },
+    .{ .name = "descriptor-resource-kind-raw", .func = nativeDescriptorResourceKindRaw, .stack_effect = "descriptor -- string" },
+    .{ .name = "descriptor-ffi-layout-raw", .func = nativeDescriptorFfiLayoutRaw, .stack_effect = "descriptor -- fixnum" },
 };
 
 /// define-builtin-type ( descriptor -- marker marker marker type ) - Create a type value from a descriptor,
@@ -186,6 +200,205 @@ fn nativeTypeMembers(ctx: *Context) anyerror!void {
     }
 }
 
+/// Pop a `type_descriptor` value from the stack, reporting a TypeMismatch on
+/// any other variant. Used by the twelve descriptor accessors below.
+fn popDescriptor(ctx: *Context) anyerror!*const value_mod.TypeDescriptor {
+    const val = try ctx.stack.pop();
+    return switch (val) {
+        .type_descriptor => |desc| desc,
+        else => {
+            helpers.setTypeMismatchError(ctx, "type-descriptor", val);
+            return error.TypeMismatch;
+        },
+    };
+}
+
+/// Set the pending error message for a kind-mismatch on a descriptor accessor.
+fn setKindMismatch(ctx: *Context, expected: []const u8, desc: *const value_mod.TypeDescriptor) void {
+    helpers.setErrorContext(
+        ctx,
+        "expected {s} descriptor, got {s}",
+        .{ expected, value_mod.typeKindSymbol(desc.kind) },
+    );
+}
+
+fn nativeDescriptorNumeric(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    try ctx.stack.push(.{ .boolean = desc.numeric });
+}
+
+fn nativeDescriptorExact(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    try ctx.stack.push(.{ .boolean = desc.exact });
+}
+
+fn nativeDescriptorInteger(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    try ctx.stack.push(.{ .boolean = desc.integer });
+}
+
+fn nativeDescriptorMutable(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    try ctx.stack.push(.{ .boolean = desc.mutable });
+}
+
+fn nativeDescriptorKind(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    try ctx.stack.push(.{ .symbol = value_mod.typeKindSymbol(desc.kind) });
+}
+
+/// descriptor-fields-raw ( descriptor -- array )
+/// struct: field names; ffi_struct: field names; virtual with anon_struct:
+/// anon_struct's field names. Throws TypeMismatch on any other kind.
+fn nativeDescriptorFieldsRaw(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    const alloc = ctx.quotationAllocator();
+    const fields: []const []const u8 = switch (desc.kind) {
+        .struct_ => |sd| sd.fields,
+        .ffi_struct => |fsd| fsd.fields,
+        .virtual => |vd| if (vd.anon_struct) |st| st.fields else {
+            setKindMismatch(ctx, "struct, ffi-struct, or struct-backed virtual", desc);
+            return error.TypeMismatch;
+        },
+        else => {
+            setKindMismatch(ctx, "struct, ffi-struct, or struct-backed virtual", desc);
+            return error.TypeMismatch;
+        },
+    };
+    const arr = try alloc.alloc(value_mod.Value, fields.len);
+    for (fields, 0..) |name, i| arr[i] = .{ .string = name };
+    try ctx.stack.push(.{ .array = arr });
+}
+
+/// descriptor-field-types-raw ( descriptor -- array )
+/// Returns an array of type values for the descriptor's field-type
+/// annotations. Throws on kind mismatch and on descriptors that carry no
+/// annotations (e.g., untyped struct).
+fn nativeDescriptorFieldTypesRaw(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    const alloc = ctx.quotationAllocator();
+    const field_types: []const ?*const value_mod.TypeValue = switch (desc.kind) {
+        .struct_ => |sd| sd.field_types,
+        .ffi_struct => |fsd| fsd.field_types,
+        .virtual => |vd| if (vd.anon_struct) |st| st.field_types else {
+            setKindMismatch(ctx, "struct, ffi-struct, or struct-backed virtual", desc);
+            return error.TypeMismatch;
+        },
+        else => {
+            setKindMismatch(ctx, "struct, ffi-struct, or struct-backed virtual", desc);
+            return error.TypeMismatch;
+        },
+    };
+    if (field_types.len == 0) {
+        helpers.setErrorContext(ctx, "descriptor has no field-type annotations", .{});
+        return error.TypeMismatch;
+    }
+    const arr = try alloc.alloc(value_mod.Value, field_types.len);
+    for (field_types, 0..) |t, i| {
+        arr[i] = if (t) |tv| .{ .type_val = @constCast(tv) } else .{ .boolean = false };
+    }
+    try ctx.stack.push(.{ .array = arr });
+}
+
+/// descriptor-inner-type-raw ( descriptor -- type )
+/// virtual with inner_type or enum_variant with inner_type: returns that
+/// TypeValue. Struct-backed virtual (anon_struct without inner_type) throws.
+fn nativeDescriptorInnerTypeRaw(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    const tv: *const value_mod.TypeValue = switch (desc.kind) {
+        .virtual => |vd| vd.inner_type orelse {
+            setKindMismatch(ctx, "virtual with inner-type or enum-variant", desc);
+            return error.TypeMismatch;
+        },
+        .enum_variant => |evd| evd.inner_type orelse {
+            setKindMismatch(ctx, "virtual with inner-type or enum-variant", desc);
+            return error.TypeMismatch;
+        },
+        else => {
+            setKindMismatch(ctx, "virtual with inner-type or enum-variant", desc);
+            return error.TypeMismatch;
+        },
+    };
+    try ctx.stack.push(.{ .type_val = @constCast(tv) });
+}
+
+/// descriptor-parent-raw ( descriptor -- type )
+/// enum_variant with parent: returns that TypeValue. Else throws.
+fn nativeDescriptorParentRaw(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    const tv: *const value_mod.TypeValue = switch (desc.kind) {
+        .enum_variant => |evd| evd.parent orelse {
+            setKindMismatch(ctx, "enum-variant", desc);
+            return error.TypeMismatch;
+        },
+        else => {
+            setKindMismatch(ctx, "enum-variant", desc);
+            return error.TypeMismatch;
+        },
+    };
+    try ctx.stack.push(.{ .type_val = @constCast(tv) });
+}
+
+/// descriptor-variants-raw ( descriptor -- array )
+/// enum_: returns an array of 2-element arrays { name-symbol type-val }.
+/// Variants whose type_val is null get the `unit` TypeValue as the type slot.
+fn nativeDescriptorVariantsRaw(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    const variants = switch (desc.kind) {
+        .enum_ => |ed| ed.variants,
+        else => {
+            setKindMismatch(ctx, "enum", desc);
+            return error.TypeMismatch;
+        },
+    };
+    const alloc = ctx.quotationAllocator();
+    const unit_tv = ctx.lookupBuiltinTypeValueByTag(.unit) orelse unreachable;
+    const arr = try alloc.alloc(value_mod.Value, variants.len);
+    for (variants, 0..) |v, i| {
+        const pair = try alloc.alloc(value_mod.Value, 2);
+        pair[0] = .{ .symbol = v.name };
+        pair[1] = .{ .type_val = if (v.type_val) |tv| @constCast(tv) else unit_tv };
+        arr[i] = .{ .array = pair };
+    }
+    try ctx.stack.push(.{ .array = arr });
+}
+
+/// descriptor-resource-kind-raw ( descriptor -- string )
+/// resource kind with a non-empty resource_kind: returns the string. Else throws.
+fn nativeDescriptorResourceKindRaw(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    const kind_name: []const u8 = switch (desc.kind) {
+        .resource => |rd| rd.resource_kind,
+        else => {
+            setKindMismatch(ctx, "resource", desc);
+            return error.TypeMismatch;
+        },
+    };
+    if (kind_name.len == 0) {
+        setKindMismatch(ctx, "resource with non-empty resource-kind", desc);
+        return error.TypeMismatch;
+    }
+    try ctx.stack.push(.{ .string = kind_name });
+}
+
+/// descriptor-ffi-layout-raw ( descriptor -- fixnum )
+/// ffi_struct with non-zero ffi_layout: returns the layout pointer as fixnum.
+fn nativeDescriptorFfiLayoutRaw(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    const layout: usize = switch (desc.kind) {
+        .ffi_struct => |fsd| fsd.ffi_layout,
+        else => {
+            setKindMismatch(ctx, "ffi-struct", desc);
+            return error.TypeMismatch;
+        },
+    };
+    if (layout == 0) {
+        setKindMismatch(ctx, "ffi-struct with non-zero layout", desc);
+        return error.TypeMismatch;
+    }
+    try ctx.stack.push(.{ .fixnum = @intCast(layout) });
+}
+
 const std = @import("std");
 const testing = std.testing;
 
@@ -205,4 +418,190 @@ test "native type-members returns members for union types" {
     try testing.expectEqual(@as(usize, 2), result.array.len);
     try testing.expect(result.array[0] == .type_val);
     try testing.expect(result.array[1] == .type_val);
+}
+
+fn fixnumDescriptor(ctx: *Context) *const value_mod.TypeDescriptor {
+    return ctx.lookupBuiltinTypeValue("fixnum").?.descriptor.?;
+}
+
+test "descriptor-numeric? returns the descriptor's numeric flag" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(.{ .type_descriptor = fixnumDescriptor(&ctx) });
+    try nativeDescriptorNumeric(&ctx);
+    try testing.expectEqual(true, (try ctx.stack.pop()).boolean);
+
+    const string_desc = ctx.lookupBuiltinTypeValue("string").?.descriptor.?;
+    try ctx.stack.push(.{ .type_descriptor = string_desc });
+    try nativeDescriptorNumeric(&ctx);
+    try testing.expectEqual(false, (try ctx.stack.pop()).boolean);
+}
+
+test "descriptor-numeric? type-mismatches non-descriptors" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try testing.expectError(error.TypeMismatch, nativeDescriptorNumeric(&ctx));
+}
+
+test "descriptor-kind returns the kind symbol" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(.{ .type_descriptor = fixnumDescriptor(&ctx) });
+    try nativeDescriptorKind(&ctx);
+    const result = try ctx.stack.pop();
+    try testing.expectEqualStrings("builtin-type", result.symbol);
+}
+
+test "descriptor-fields-raw returns struct field names" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    const fields = [_][]const u8{ "x", "y" };
+    const no_ft: []const ?*const value_mod.TypeValue = &.{};
+    const desc = try ctx.getOrCreateStructDescriptor(&fields, no_ft, false);
+
+    try ctx.stack.push(.{ .type_descriptor = desc });
+    try nativeDescriptorFieldsRaw(&ctx);
+
+    const result = try ctx.stack.pop();
+    try testing.expect(result == .array);
+    try testing.expectEqual(@as(usize, 2), result.array.len);
+    try testing.expectEqualStrings("x", result.array[0].string);
+    try testing.expectEqualStrings("y", result.array[1].string);
+}
+
+test "descriptor-fields-raw throws on builtin descriptor" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(.{ .type_descriptor = fixnumDescriptor(&ctx) });
+    try testing.expectError(error.TypeMismatch, nativeDescriptorFieldsRaw(&ctx));
+}
+
+test "descriptor-field-types-raw throws on untyped struct" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    const fields = [_][]const u8{ "x", "y" };
+    const no_ft: []const ?*const value_mod.TypeValue = &.{};
+    const desc = try ctx.getOrCreateStructDescriptor(&fields, no_ft, false);
+
+    try ctx.stack.push(.{ .type_descriptor = desc });
+    try testing.expectError(error.TypeMismatch, nativeDescriptorFieldTypesRaw(&ctx));
+}
+
+test "descriptor-field-types-raw returns typed struct field types" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const fields = [_][]const u8{ "x", "y" };
+    const ft = [_]?*const value_mod.TypeValue{ fixnum_tv, string_tv };
+    const desc = try ctx.getOrCreateStructDescriptor(&fields, &ft, false);
+
+    try ctx.stack.push(.{ .type_descriptor = desc });
+    try nativeDescriptorFieldTypesRaw(&ctx);
+
+    const result = try ctx.stack.pop();
+    try testing.expect(result == .array);
+    try testing.expectEqual(@as(usize, 2), result.array.len);
+    try testing.expect(result.array[0] == .type_val);
+    try testing.expect(result.array[1] == .type_val);
+    try testing.expectEqualStrings("fixnum", result.array[0].type_val.name);
+    try testing.expectEqualStrings("string", result.array[1].type_val.name);
+}
+
+test "descriptor-inner-type-raw throws on builtin and on struct" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(.{ .type_descriptor = fixnumDescriptor(&ctx) });
+    try testing.expectError(error.TypeMismatch, nativeDescriptorInnerTypeRaw(&ctx));
+
+    const fields = [_][]const u8{"x"};
+    const no_ft: []const ?*const value_mod.TypeValue = &.{};
+    const struct_desc = try ctx.getOrCreateStructDescriptor(&fields, no_ft, false);
+    try ctx.stack.push(.{ .type_descriptor = struct_desc });
+    try testing.expectError(error.TypeMismatch, nativeDescriptorInnerTypeRaw(&ctx));
+}
+
+test "descriptor-parent-raw throws on non-enum-variant kinds" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(.{ .type_descriptor = fixnumDescriptor(&ctx) });
+    try testing.expectError(error.TypeMismatch, nativeDescriptorParentRaw(&ctx));
+}
+
+test "descriptor-variants-raw throws on non-enum kinds" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(.{ .type_descriptor = fixnumDescriptor(&ctx) });
+    try testing.expectError(error.TypeMismatch, nativeDescriptorVariantsRaw(&ctx));
+}
+
+test "descriptor-resource-kind-raw throws on non-resource kinds" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(.{ .type_descriptor = fixnumDescriptor(&ctx) });
+    try testing.expectError(error.TypeMismatch, nativeDescriptorResourceKindRaw(&ctx));
+}
+
+test "descriptor-ffi-layout-raw throws on non-ffi-struct kinds" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(.{ .type_descriptor = fixnumDescriptor(&ctx) });
+    try testing.expectError(error.TypeMismatch, nativeDescriptorFfiLayoutRaw(&ctx));
+}
+
+test "descriptor-variants-raw returns name/type pair arrays for enums" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const unit_tv = ctx.lookupBuiltinTypeValueByTag(.unit).?;
+    const alloc = ctx.quotationAllocator();
+    const variants = try alloc.alloc(value_mod.Variant, 2);
+    variants[0] = .{ .name = "red", .type_val = fixnum_tv };
+    variants[1] = .{ .name = "blue", .type_val = null };
+    const desc = try value_mod.createTypeDescriptor(
+        alloc,
+        .{ .enum_ = .{ .variants = variants } },
+        .{},
+    );
+
+    try ctx.stack.push(.{ .type_descriptor = desc });
+    try nativeDescriptorVariantsRaw(&ctx);
+
+    const result = try ctx.stack.pop();
+    try testing.expect(result == .array);
+    try testing.expectEqual(@as(usize, 2), result.array.len);
+    const first = result.array[0];
+    try testing.expect(first == .array);
+    try testing.expectEqual(@as(usize, 2), first.array.len);
+    try testing.expectEqualStrings("red", first.array[0].symbol);
+    try testing.expectEqualStrings("fixnum", first.array[1].type_val.name);
+    const second = result.array[1];
+    try testing.expectEqualStrings("blue", second.array[0].symbol);
+    try testing.expect(second.array[1].type_val == unit_tv);
 }

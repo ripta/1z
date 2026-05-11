@@ -1,4 +1,4 @@
-Prelude compilation: 249/299 words compiled (83.3%)
+Prelude compilation: 267/317 words compiled (84.2%)
   word '>option:some' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set

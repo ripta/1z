@@ -178,6 +178,7 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
         .parameter,
         .marker,
         .type_val,
+        .type_descriptor,
         .resource,
         .task,
         .iterator,
@@ -540,91 +541,6 @@ pub fn destroyTypeDescriptor(allocator: std.mem.Allocator, desc: *TypeDescriptor
     allocator.destroy(desc);
 }
 
-/// Transient shim: synthesize a HashTable view of a TypeDescriptor so the
-/// 1z-level `type-descriptor` word can continue to return a hash until
-/// the 1z surface redesign lands a dedicated Value variant and accessor
-/// words. The keys mirror the layout used by the previous
-/// `MutableMap`-backed descriptor: `type`, `numeric`, `exact`, `integer`,
-/// `mutable`, and kind-specific keys.
-pub fn descriptorToHash(allocator: std.mem.Allocator, desc: *const TypeDescriptor) !*HashTable {
-    const hash = try allocator.create(HashTable);
-    hash.* = HashTable{};
-    try hash.put(allocator, "type", .{ .symbol = typeKindSymbol(desc.kind) });
-    try hash.put(allocator, "numeric", .{ .boolean = desc.numeric });
-    try hash.put(allocator, "exact", .{ .boolean = desc.exact });
-    try hash.put(allocator, "integer", .{ .boolean = desc.integer });
-    try hash.put(allocator, "mutable", .{ .boolean = desc.mutable });
-    switch (desc.kind) {
-        .builtin, .sentinel, .union_ => {},
-        .struct_ => |sd| {
-            const fields = try allocator.alloc(Value, sd.fields.len);
-            for (sd.fields, 0..) |f, i| fields[i] = .{ .string = f };
-            try hash.put(allocator, "fields", .{ .array = fields });
-            if (sd.field_types.len != 0) {
-                const ft = try allocator.alloc(Value, sd.field_types.len);
-                for (sd.field_types, 0..) |t, i| ft[i] = .{ .type_val = @constCast(t.?) };
-                try hash.put(allocator, "field-types", .{ .array = ft });
-            }
-        },
-        .virtual => |vd| {
-            if (vd.inner_type) |inner| {
-                const arr = try allocator.alloc(Value, 1);
-                arr[0] = .{ .type_val = @constCast(inner) };
-                try hash.put(allocator, "inner-type", .{ .array = arr });
-            } else if (vd.anon_struct) |st| {
-                // Struct-backed virtuals carry their inner descriptor as
-                // a nested hash; the wrapped fields slice mirrors what
-                // the prior descriptor produced.
-                const inner_hash = try allocator.create(HashTable);
-                inner_hash.* = HashTable{};
-                const fields = try allocator.alloc(Value, st.fields.len);
-                for (st.fields, 0..) |f, i| fields[i] = .{ .string = f };
-                try inner_hash.put(allocator, "fields", .{ .array = fields });
-                if (st.field_types.len != 0) {
-                    const ft = try allocator.alloc(Value, st.field_types.len);
-                    for (st.field_types, 0..) |t, i| {
-                        ft[i] = if (t) |tv| .{ .type_val = @constCast(tv) } else .{ .boolean = false };
-                    }
-                    try inner_hash.put(allocator, "field-types", .{ .array = ft });
-                }
-                const arr = try allocator.alloc(Value, 1);
-                arr[0] = .{ .hash = inner_hash };
-                try hash.put(allocator, "inner-type", .{ .array = arr });
-            }
-            if (vd.type_params.len != 0) {
-                if (vd.type_params.len == 1) {
-                    try hash.put(allocator, "element-type", .{ .type_val = @constCast(vd.type_params[0]) });
-                }
-            }
-        },
-        .enum_ => |ed| {
-            const arr = try allocator.alloc(Value, ed.variants.len * 2);
-            for (ed.variants, 0..) |v, i| {
-                const colon_name = try std.fmt.allocPrint(allocator, "{s}:", .{v.name});
-                arr[i * 2] = .{ .symbol = colon_name };
-                arr[i * 2 + 1] = .{ .type_val = @constCast(v.type_val orelse continue) };
-            }
-            try hash.put(allocator, "variants", .{ .array = arr });
-        },
-        .enum_variant => |evd| {
-            if (evd.parent) |p| try hash.put(allocator, "parent", .{ .type_val = @constCast(p) });
-            if (evd.inner_type) |inner| try hash.put(allocator, "inner-type", .{ .type_val = @constCast(inner) });
-        },
-        .resource => |rd| {
-            try hash.put(allocator, "resource-kind", .{ .string = rd.resource_kind });
-        },
-        .ffi_struct => |fsd| {
-            const fields = try allocator.alloc(Value, fsd.fields.len);
-            for (fsd.fields, 0..) |f, i| fields[i] = .{ .string = f };
-            try hash.put(allocator, "fields", .{ .array = fields });
-            if (fsd.ffi_layout != 0) {
-                try hash.put(allocator, "ffi-layout", .{ .fixnum = @intCast(fsd.ffi_layout) });
-            }
-        },
-    }
-    return hash;
-}
-
 /// Returns the stored symbol name for a TypeKindData variant. The 1z
 /// symbol-literal syntax `name:` produces a symbol whose stored name is
 /// `name` (the trailing colon is syntactic), so these strings omit the
@@ -896,6 +812,7 @@ pub const Value = union(enum) {
     iterator: *Iterator,
     doc_string: []const u8,
     type_val: *TypeValue,
+    type_descriptor: *const TypeDescriptor,
     sandbox_spec: *SandboxSpec,
     unit: void,
 
@@ -1079,6 +996,7 @@ pub const Value = union(enum) {
             },
             .doc_string => |s| try writer.print("<doc-string \"{s}\">", .{s}),
             .type_val => |tv| try writer.print("<type:{s}>", .{tv.name}),
+            .type_descriptor => |desc| try writer.print("<type-descriptor:{s}>", .{typeKindSymbol(desc.kind)}),
             .sandbox_spec => |spec| try spec.writeGranted(writer),
             .unit => try writer.writeAll("unit"),
         }
@@ -1214,6 +1132,7 @@ pub const Value = union(enum) {
                 }
                 return b.descriptor == null and a == b;
             },
+            .type_descriptor => |a| a == other.type_descriptor,
             .sandbox_spec => |a| a == other.sandbox_spec,
             .unit => true,
         };
@@ -1401,6 +1320,10 @@ pub const Value = union(enum) {
             .doc_string => |s| hasher.update(s),
             .type_val => |tv| {
                 const ptr_val = @intFromPtr(tv);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            .type_descriptor => |desc| {
+                const ptr_val = @intFromPtr(desc);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
             .sandbox_spec => |spec| {

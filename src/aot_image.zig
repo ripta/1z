@@ -155,6 +155,7 @@ pub fn classifyValue(val: Value) Classification {
         .channel,
         .iterator,
         .sandbox_spec,
+        .type_descriptor,
         => Classification.blobOf(.unexpected_variant),
     };
 }

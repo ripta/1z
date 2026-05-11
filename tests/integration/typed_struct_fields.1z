@@ -4,15 +4,16 @@ use "testing" ;
 
 typed-point: struct{ x: fixnum y: string } ;
 
-typed-point: native.type-descriptor dup "fields" @get { "x" "y" } "typed struct fields exposed" assert=
-dup "field-types" @get [ native.type-name ] #map #collect { "fixnum" "string" } "typed struct field-types exposed" assert=
-drop
+typed-point: native.type-descriptor dup descriptor-fields? unwrap-or-throw
+{ "x" "y" } "typed struct fields exposed" assert=
+descriptor-field-types? unwrap-or-throw [ native.type-name ] #map #collect
+{ "fixnum" "string" } "typed struct field-types exposed" assert=
 
 "typed struct any metadata" test-section
 
 typed-pair: struct{ left: any right: fixnum } ;
 
-typed-pair: native.type-descriptor "field-types" @get
+typed-pair: native.type-descriptor descriptor-field-types? unwrap-or-throw
 [ native.type-name ] #map #collect { "any" "fixnum" } "any field uses sentinel type name" assert=
 
 "typed struct runtime validation" test-section
@@ -62,7 +63,7 @@ outputs>> 0 #nth type-annotation>> native.type-name
 "untyped struct remains unchanged" test-section
 
 plain-point: struct{ x y } ;
-plain-point: native.type-descriptor "field-types" @has? f "untyped struct omits field-types" assert=
+plain-point: native.type-descriptor descriptor-field-types? option:none? t "untyped struct omits field-types" assert=
 
 "mixed typed and untyped fields error" test-section
 
@@ -73,9 +74,10 @@ plain-point: native.type-descriptor "field-types" @has? f "untyped struct omits 
 
 typed-vec: virtual{ struct{ dx: fixnum dy: any } } ;
 
-typed-vec: native.type-descriptor "inner-type" @get #first
-dup "fields" @get { "dx" "dy" } "virtual inner struct fields exposed" assert=
-"field-types" @get [ native.type-name ] #map #collect { "fixnum" "any" } "virtual inner struct field-types exposed" assert=
+typed-vec: native.type-descriptor dup descriptor-fields? unwrap-or-throw
+{ "dx" "dy" } "virtual inner struct fields exposed" assert=
+descriptor-field-types? unwrap-or-throw [ native.type-name ] #map #collect
+{ "fixnum" "any" } "virtual inner struct field-types exposed" assert=
 
 "any stack effect annotation skips validation" test-section
 

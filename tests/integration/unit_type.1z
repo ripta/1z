@@ -8,5 +8,5 @@ unit fixnum /= "unit /= fixnum" assert-true
 unit boolean /= "unit /= boolean" assert-true
 unit string /= "unit /= string" assert-true
 
-\ unit type descriptor has builtin-type: key
-unit native.type-descriptor type: @get builtin-type: = "unit has builtin-type: descriptor" assert-true
+\ unit type descriptor has builtin-type kind
+unit native.type-descriptor descriptor-kind builtin-type: = "unit has builtin-type descriptor" assert-true

@@ -6,5 +6,5 @@ PASS: unit /= boolean
 Stack: [ ]
 PASS: unit /= string
 Stack: [ ]
-PASS: unit has builtin-type: descriptor
+PASS: unit has builtin-type descriptor
 Stack: [ ]
