@@ -1,0 +1,12 @@
+\ Regression test: building with --emit-runtime-image used to fail at
+\ runtime with "skipping unsupported descriptor entry" notes for types
+\ in lib/process.1z and lib/scanner.1z whose descriptors carry nested
+\ maps, vectors, type-value references, or quotations. The freeze-time
+\ descriptor walk could only encode symbol/boolean/fixnum/string/unit
+\ values, so anything else was silently stripped and the rehydrated
+\ TypeValues reached runtime without the metadata struct-field access,
+\ variant lookup, and virtual wrap need.
+use "process" ;
+use "scanner" ;
+
+"ok" print-line

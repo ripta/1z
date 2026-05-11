@@ -1,13 +1,7 @@
 image-manifest:
   modules: 1
   total: 8
-  structural: 5
-  blob: 3
-  blob breakdown:
-    type-value descriptor: 3
+  structural: 8
+  blob: 0
   per-module:
-    fixtures/dump_image_dep.1z: structural=5 blob=3 total=8
-  blob entries:
-    fixtures/dump_image_dep.1z.>color (type-value descriptor)
-    fixtures/dump_image_dep.1z.color (type-value descriptor)
-    fixtures/dump_image_dep.1z.color? (type-value descriptor)
+    fixtures/dump_image_dep.1z: structural=8 blob=0 total=8

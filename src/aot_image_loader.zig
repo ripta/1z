@@ -1,10 +1,11 @@
 //! Runtime-image loader: rehydrates the AOT runtime image into a Context.
 //!
 //! Companion to `aot_image_emit.zig`. Walks the embedded `onez_image_v1`
-//! header at startup, decodes the static-C-data tables and the narrow-C
-//! blob path into runtime Module/ModuleWord/TypeValue instances, and
-//! patches the shared TypeValue slot table so PIC dispatch and stack-
-//! effect annotations resolve to live pointers.
+//! header at startup, decodes the static C data tables (typevalues,
+//! typedescriptors, struct types, modules, words, stack effects, markers)
+//! into runtime Module/ModuleWord/TypeValue instances, and patches the
+//! shared TypeValue slot table so PIC dispatch and stack-effect
+//! annotations resolve to live pointers.
 //!
 //! The struct layouts here MUST match the C declarations emitted by
 //! `aot_image_emit.emitTypeDeclarations`. Field order, types, and
@@ -28,25 +29,14 @@ pub const LoaderError = error{
     BadSlotIndex,
     BadWordIndex,
     BadStackEffectIndex,
-    BadValueKind,
+    BadTypeKind,
+    BadStructTypeIndex,
     OutOfMemory,
 };
-
-/// `BlobValueKind` constants. Must match the mapping documented in
-/// `aot_image_emit.emitTypeDeclarations`.
-const blob_value_kind_symbol: u8 = 0;
-const blob_value_kind_boolean: u8 = 1;
-const blob_value_kind_fixnum: u8 = 2;
-const blob_value_kind_string: u8 = 3;
-const blob_value_kind_unit: u8 = 4;
-const blob_value_kind_unsupported: u8 = 5;
 
 /// `classification` field values from `onez_image_word`.
 const classification_structural: u8 = 0;
 const classification_blob: u8 = 1;
-
-/// Sentinel for `blob_entry_idx` meaning "no blob entry for this word".
-const no_blob_entry: u32 = 0xFFFFFFFF;
 
 // -- C-layout struct mirrors --------------------------------------------
 
@@ -97,37 +87,76 @@ pub const Word = extern struct {
     marker_count: u32,
     body_bytecode: ?[*]const u8,
     body_bytecode_len: u32,
-    blob_entry_idx: u32,
     typevalue_slot: u32,
 };
 
-pub const BlobDescriptorEntry = extern struct {
-    key: [*]const u8,
-    key_len: u32,
-    value_kind: u8,
-    bool_value: u8,
-    _pad: u16,
-    fixnum_value: i64,
-    string_value: ?[*]const u8,
-    string_value_len: u32,
-};
-
-pub const BlobTypeValue = extern struct {
+/// Zig mirror of the C `onez_image_enum_variant_t` row. The loader walks
+/// these to materialize `value_mod.Variant` records inside an
+/// `EnumData.variants` slice; the variant's `type_slot` indexes the
+/// runtime slot table (0 = no inner type).
+pub const EnumVariant = extern struct {
     name: [*]const u8,
     name_len: u32,
-    typevalue_slot: u32,
-    descriptor_entries: ?[*]const BlobDescriptorEntry,
-    descriptor_entry_count: u32,
+    type_slot: u32,
+};
+
+/// Zig mirror of `onez_image_struct_type_t`. One row per
+/// `StructType` referenced by a struct-backed virtual type's
+/// `anon_struct`. Allocated separately from `TypeValue`s because
+/// the anonymous struct is not itself a first-class TypeValue.
+pub const StructType = extern struct {
+    name: [*]const u8,
+    name_len: u32,
+    field_names: ?[*]const [*]const u8,
+    field_name_lens: ?[*]const u32,
+    field_count: u32,
+    field_type_slots: ?[*]const u32,
+    field_type_count: u32,
+};
+
+/// Zig mirror of `onez_image_typedescriptor_t`. Layout must stay in
+/// lockstep with the C struct emitted in `aot_image_emit.emitTypeDeclarations`.
+/// Fields not relevant to a given `kind` are zero-initialized at emit
+/// time and the loader ignores them.
+pub const TypeDescriptor = extern struct {
+    numeric: u8,
+    exact: u8,
+    integer: u8,
+    mutable: u8,
+    kind: u8,
+    _pad: [3]u8,
+    field_names: ?[*]const [*]const u8,
+    field_name_lens: ?[*]const u32,
+    field_count: u32,
+    field_type_slots: ?[*]const u32,
+    field_type_count: u32,
+    inner_type_slot: u32,
+    anon_struct_idx: u32,
+    type_param_slots: ?[*]const u32,
+    type_param_count: u32,
+    parent_type_slot: u32,
+    variants: ?[*]const EnumVariant,
+    variant_count: u32,
+    resource_kind: ?[*]const u8,
+    resource_kind_len: u32,
+    ffi_layout: u64,
+};
+
+/// Zig mirror of `onez_image_typevalue_t`. One row per slot in
+/// `onez_image_typevalue_slots[]`; `slot` matches the row's index in
+/// the slot table and is used to anchor the loader's slot-table
+/// patching pass.
+pub const TypeValueRow = extern struct {
+    name: [*]const u8,
+    name_len: u32,
+    slot: u32,
+    descriptor: ?*const TypeDescriptor,
     member_type_slots: ?[*]const u32,
     member_type_count: u32,
 };
 
-pub const BlobEntry = extern struct {
-    word_idx: u32,
-    blob_kind: u8,
-    _pad: [3]u8,
-    typevalue: ?*const BlobTypeValue,
-};
+/// Sentinel for absent anon_struct in `TypeDescriptor.anon_struct_idx`.
+pub const anon_struct_absent: u32 = 0xFFFFFFFF;
 
 pub const Header = extern struct {
     format_version: u32,
@@ -136,13 +165,15 @@ pub const Header = extern struct {
     marker_pool_count: u32,
     typevalue_slot_count: u32,
     stack_effect_count: u32,
-    blob_entry_count: u32,
-    _pad: u32,
+    typevalue_count: u32,
+    struct_type_count: u32,
     modules: ?[*]const Module,
     words: ?[*]const Word,
     markers: ?[*]const Marker,
     stack_effects: ?[*]const StackEffect,
-    blob_entries: ?[*]const BlobEntry,
+    typevalues: ?[*]const TypeValueRow,
+    typedescriptors: ?[*]const TypeDescriptor,
+    struct_types: ?[*]const StructType,
 };
 
 /// Slot table type matching the C declaration:
@@ -194,7 +225,7 @@ pub fn loadIntoContext(
     }
 
     try populateModulesAndWords(ctx, header);
-    try rehydrateBlobTypeValues(ctx, header, slots);
+    try populateTypeValueSlots(ctx, header, slots);
     if (pic_relocs) |relocs| {
         try resolvePicRelocations(header, slots, relocs);
     }
@@ -339,160 +370,296 @@ fn decodeStackEffectParams(
     return out;
 }
 
-// -- Blob TypeValue rehydration ----------------------------------------
+// -- Structural TypeValue population -----------------------------------
 
-fn rehydrateBlobTypeValues(
+/// Walk the typevalue + typedescriptor + struct-type tables and
+/// allocate live runtime instances for each row. Four passes:
+///
+///   1. Allocate `*StructType` for each onez_image_struct_type_t.
+///   2. Allocate `*TypeValue` (with a zero-init `*TypeDescriptor`) for
+///      each onez_image_typevalue_t, patching the slot table so
+///      cross-references in pass 3 can resolve through it.
+///   3. Walk the typedescriptor table in lockstep with the typevalue
+///      table; populate kind-specific data using the slot table.
+///   4. Walk the word table; for words with a non-zero typevalue_slot,
+///      rewrite the M1 stub body to push the runtime TypeValue.
+///
+/// Pass 2 allocates TypeValues before their descriptors are populated.
+/// That ordering matters: it lets pass 3 resolve descriptor
+/// cross-references through the slot table for TypeValues that have
+/// not yet had their descriptors filled in (only the pointer identity
+/// is required, not the descriptor contents).
+fn populateTypeValueSlots(
     ctx: *Context,
     header: *const Header,
     slots: ?SlotTable,
 ) LoaderError!void {
-    if (header.blob_entry_count == 0) return;
-    const entries = header.blob_entries orelse return;
+    if (header.typevalue_count == 0 and header.struct_type_count == 0) {
+        return;
+    }
     const arena = ctx.quotationAllocator();
 
-    var i: u32 = 0;
-    while (i < header.blob_entry_count) : (i += 1) {
-        const entry = entries[i];
-        const tv_ptr = entry.typevalue orelse continue;
-        const tv = tv_ptr.*;
+    // Pass 1: allocate runtime StructTypes.
+    var struct_types_out: []*value_mod.StructType = &.{};
+    if (header.struct_type_count > 0) {
+        struct_types_out = arena.alloc(*value_mod.StructType, header.struct_type_count) catch
+            return LoaderError.OutOfMemory;
+        const rows = header.struct_types orelse return LoaderError.OutOfMemory;
+        var i: u32 = 0;
+        while (i < header.struct_type_count) : (i += 1) {
+            const row = rows[i];
+            const st = arena.create(value_mod.StructType) catch return LoaderError.OutOfMemory;
+            st.* = .{
+                .name = nameSlice(row.name, row.name_len),
+                .fields = try decodeFieldNames(arena, row.field_names, row.field_name_lens, row.field_count),
+                .field_types = &.{},
+            };
+            struct_types_out[i] = st;
+        }
+    }
 
-        if (tv.typevalue_slot == 0 or tv.typevalue_slot >= header.typevalue_slot_count) {
+    // Pass 2: allocate TypeValues and patch the slot table.
+    const tv_count = header.typevalue_count;
+    if (tv_count == 0) return;
+    const tv_rows = header.typevalues orelse return LoaderError.OutOfMemory;
+    const tv_out = arena.alloc(*value_mod.TypeValue, tv_count) catch
+        return LoaderError.OutOfMemory;
+    {
+        var i: u32 = 0;
+        while (i < tv_count) : (i += 1) {
+            const row = tv_rows[i];
+            if (row.slot == 0 or row.slot >= header.typevalue_slot_count) {
+                return LoaderError.BadSlotIndex;
+            }
+            const desc = arena.create(value_mod.TypeDescriptor) catch
+                return LoaderError.OutOfMemory;
+            desc.* = .{ .kind = .{ .builtin = {} } };
+            const tv = arena.create(value_mod.TypeValue) catch
+                return LoaderError.OutOfMemory;
+            tv.* = .{
+                .name = nameSlice(row.name, row.name_len),
+                .descriptor = desc,
+            };
+            tv_out[i] = tv;
+            if (slots) |slot_table| slot_table[row.slot] = tv;
+        }
+    }
+
+    // Pass 3: populate descriptor kind-data through the slot table.
+    {
+        const desc_rows = header.typedescriptors orelse return LoaderError.OutOfMemory;
+        var i: u32 = 0;
+        while (i < tv_count) : (i += 1) {
+            const row = tv_rows[i];
+            const drow = desc_rows[i];
+            const tv = tv_out[i];
+            const desc = @constCast(tv.descriptor.?);
+            desc.numeric = drow.numeric != 0;
+            desc.exact = drow.exact != 0;
+            desc.integer = drow.integer != 0;
+            desc.mutable = drow.mutable != 0;
+            desc.kind = try decodeKindData(arena, header, slots, struct_types_out, drow);
+
+            const member_types = try decodeTypeValuePointers(
+                arena,
+                slots,
+                header.typevalue_slot_count,
+                row.member_type_slots,
+                row.member_type_count,
+            );
+            tv.member_types = if (member_types.len == 0) null else member_types;
+        }
+    }
+
+    // Pass 4: rewrite word bodies that publish a TypeValue.
+    if (header.word_count == 0) return;
+    const words = header.words orelse return;
+    var wi: u32 = 0;
+    while (wi < header.word_count) : (wi += 1) {
+        const w = words[wi];
+        if (w.typevalue_slot == 0) continue;
+        if (w.typevalue_slot >= header.typevalue_slot_count) {
             return LoaderError.BadSlotIndex;
         }
-
-        const descriptor = arena.create(value_mod.TypeDescriptor) catch
-            return LoaderError.OutOfMemory;
-        descriptor.* = .{ .kind = .{ .builtin = {} } };
-        try populateDescriptor(ctx, descriptor, tv);
-
-        const runtime_tv = arena.create(value_mod.TypeValue) catch
-            return LoaderError.OutOfMemory;
-        runtime_tv.* = .{
-            .name = nameSlice(tv.name, tv.name_len),
-            .descriptor = descriptor,
-        };
-
-        if (slots) |slot_table| {
-            slot_table[tv.typevalue_slot] = runtime_tv;
-        }
-
-        // Replace the M1 stub for this word with a single
-        // [push_literal {.type_val = runtime_tv}] instruction so
-        // `lookupWordCompoundInstrs` returns the right body for the
-        // existing `jitPushWordLiteral` fast path.
-        try replaceWordBodyWithTypeValuePush(ctx, header, entry.word_idx, runtime_tv);
+        const slot_table = slots orelse continue;
+        const tv_const = slot_table[w.typevalue_slot] orelse continue;
+        const tv: *value_mod.TypeValue = @constCast(tv_const);
+        try replaceWordBodyWithTypeValuePush(ctx, header, wi, tv);
     }
 }
 
-fn populateDescriptor(
-    ctx: *Context,
-    desc: *value_mod.TypeDescriptor,
-    tv: BlobTypeValue,
-) LoaderError!void {
-    if (tv.descriptor_entry_count == 0 or tv.descriptor_entries == null) return;
-    const entries = tv.descriptor_entries.?;
-
-    // First pass: discover the `type` discriminator so the kind-data
-    // variant can be initialized with sensible defaults before the
-    // second pass populates kind-specific fields.
-    var i: u32 = 0;
-    while (i < tv.descriptor_entry_count) : (i += 1) {
-        const e = entries[i];
-        if (e.value_kind != blob_value_kind_symbol) continue;
-        if (!std.mem.eql(u8, nameSlice(e.key, e.key_len), "type")) continue;
-        const sym = if (e.string_value) |p| p[0..e.string_value_len] else "";
-        const kind = typeKindFromSymbol(sym) orelse {
-            recordLoaderNote(
-                ctx,
-                "runtime-image: unrecognized type discriminator '{s}' on type '{s}'",
-                .{ sym, nameSlice(tv.name, tv.name_len) },
-            );
-            continue;
-        };
-        desc.kind = emptyKindData(kind);
-        break;
-    }
-
-    // Second pass: universal flags and kind-specific scalar fields.
-    // Entries with `BlobValueKind.unsupported` (or unrecognized keys
-    // for the kind) record a note rather than abort the load,
-    // preserving the existing behavior the bug-closure test observes.
-    i = 0;
-    while (i < tv.descriptor_entry_count) : (i += 1) {
-        const e = entries[i];
-        const key = nameSlice(e.key, e.key_len);
-        if (std.mem.eql(u8, key, "type")) continue;
-
-        if (std.mem.eql(u8, key, "numeric")) {
-            if (e.value_kind == blob_value_kind_boolean) desc.numeric = e.bool_value != 0;
-            continue;
-        }
-        if (std.mem.eql(u8, key, "exact")) {
-            if (e.value_kind == blob_value_kind_boolean) desc.exact = e.bool_value != 0;
-            continue;
-        }
-        if (std.mem.eql(u8, key, "integer")) {
-            if (e.value_kind == blob_value_kind_boolean) desc.integer = e.bool_value != 0;
-            continue;
-        }
-        if (std.mem.eql(u8, key, "mutable")) {
-            if (e.value_kind == blob_value_kind_boolean) desc.mutable = e.bool_value != 0;
-            continue;
-        }
-
-        switch (desc.kind) {
-            .resource => |*rd| {
-                if (std.mem.eql(u8, key, "resource-kind") and e.value_kind == blob_value_kind_string) {
-                    rd.resource_kind = if (e.string_value) |p| p[0..e.string_value_len] else "";
-                    continue;
-                }
+/// Decode a TypeKindData payload from one typedescriptor row.
+/// Cross-references resolve through the slot table populated by
+/// pass 2; an out-of-range slot index returns `BadSlotIndex`. The
+/// kind field is treated as a closed vocabulary; an unrecognized
+/// kind value returns `BadTypeKind`.
+fn decodeKindData(
+    arena: Allocator,
+    header: *const Header,
+    slots: ?SlotTable,
+    struct_types_out: []*value_mod.StructType,
+    drow: TypeDescriptor,
+) LoaderError!value_mod.TypeKindData {
+    return switch (drow.kind) {
+        0 => .{ .builtin = {} },
+        1 => .{ .sentinel = {} },
+        2 => .{
+            .struct_ = .{
+                .fields = try decodeFieldNames(arena, drow.field_names, drow.field_name_lens, drow.field_count),
+                .field_types = try decodeOptionalTypeValuePointers(
+                    arena,
+                    slots,
+                    header.typevalue_slot_count,
+                    drow.field_type_slots,
+                    drow.field_type_count,
+                ),
             },
-            .ffi_struct => |*fsd| {
-                if (std.mem.eql(u8, key, "ffi-layout") and e.value_kind == blob_value_kind_fixnum) {
-                    fsd.ffi_layout = @intCast(e.fixnum_value);
-                    continue;
-                }
-            },
-            else => {},
-        }
-
-        if (e.value_kind == blob_value_kind_unsupported) {
-            recordLoaderNote(
-                ctx,
-                "runtime-image: skipping unsupported descriptor entry '{s}' on type '{s}'",
-                .{ key, nameSlice(tv.name, tv.name_len) },
+        },
+        3 => blk: {
+            const inner = try lookupSlot(slots, header.typevalue_slot_count, drow.inner_type_slot);
+            const params = try decodeTypeValuePointers(
+                arena,
+                slots,
+                header.typevalue_slot_count,
+                drow.type_param_slots,
+                drow.type_param_count,
             );
-        } else if (e.value_kind > blob_value_kind_unsupported) {
-            return LoaderError.BadValueKind;
-        }
-    }
-}
-
-fn typeKindFromSymbol(sym: []const u8) ?value_mod.TypeKind {
-    if (std.mem.eql(u8, sym, "builtin-type")) return .builtin;
-    if (std.mem.eql(u8, sym, "sentinel")) return .sentinel;
-    if (std.mem.eql(u8, sym, "struct-descriptor")) return .struct_;
-    if (std.mem.eql(u8, sym, "virtual")) return .virtual;
-    if (std.mem.eql(u8, sym, "enum-descriptor")) return .enum_;
-    if (std.mem.eql(u8, sym, "enum-variant")) return .enum_variant;
-    if (std.mem.eql(u8, sym, "resource-type")) return .resource;
-    if (std.mem.eql(u8, sym, "ffi-struct-type")) return .ffi_struct;
-    if (std.mem.eql(u8, sym, "union-type")) return .union_;
-    return null;
-}
-
-fn emptyKindData(kind: value_mod.TypeKind) value_mod.TypeKindData {
-    return switch (kind) {
-        .builtin => .{ .builtin = {} },
-        .sentinel => .{ .sentinel = {} },
-        .struct_ => .{ .struct_ = .{} },
-        .virtual => .{ .virtual = .{} },
-        .enum_ => .{ .enum_ = .{} },
-        .enum_variant => .{ .enum_variant = .{} },
-        .resource => .{ .resource = .{} },
-        .ffi_struct => .{ .ffi_struct = .{} },
-        .union_ => .{ .union_ = {} },
+            const anon_struct: ?*value_mod.StructType = if (drow.anon_struct_idx == anon_struct_absent)
+                null
+            else if (drow.anon_struct_idx < struct_types_out.len)
+                struct_types_out[drow.anon_struct_idx]
+            else
+                return LoaderError.BadStructTypeIndex;
+            break :blk .{ .virtual = .{
+                .inner_type = inner,
+                .type_params = params,
+                .anon_struct = anon_struct,
+            } };
+        },
+        4 => blk: {
+            const variants = try decodeEnumVariants(
+                arena,
+                slots,
+                header.typevalue_slot_count,
+                drow.variants,
+                drow.variant_count,
+            );
+            break :blk .{ .enum_ = .{ .variants = variants } };
+        },
+        5 => .{
+            .enum_variant = .{
+                .parent = try lookupSlot(slots, header.typevalue_slot_count, drow.parent_type_slot),
+                .inner_type = try lookupSlot(slots, header.typevalue_slot_count, drow.inner_type_slot),
+            },
+        },
+        6 => .{
+            .resource = .{
+                .resource_kind = if (drow.resource_kind) |p| p[0..drow.resource_kind_len] else "",
+            },
+        },
+        7 => .{
+            .ffi_struct = .{
+                .fields = try decodeFieldNames(arena, drow.field_names, drow.field_name_lens, drow.field_count),
+                .field_types = try decodeOptionalTypeValuePointers(
+                    arena,
+                    slots,
+                    header.typevalue_slot_count,
+                    drow.field_type_slots,
+                    drow.field_type_count,
+                ),
+                .ffi_layout = drow.ffi_layout,
+            },
+        },
+        8 => .{ .union_ = {} },
+        else => LoaderError.BadTypeKind,
     };
+}
+
+fn decodeFieldNames(
+    arena: Allocator,
+    names: ?[*]const [*]const u8,
+    lens: ?[*]const u32,
+    count: u32,
+) LoaderError![]const []const u8 {
+    if (count == 0 or names == null or lens == null) return &.{};
+    const np = names.?;
+    const lp = lens.?;
+    const out = arena.alloc([]const u8, count) catch return LoaderError.OutOfMemory;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        out[i] = np[i][0..lp[i]];
+    }
+    return out;
+}
+
+fn decodeTypeValuePointers(
+    arena: Allocator,
+    slots: ?SlotTable,
+    slot_count: u32,
+    slot_array: ?[*]const u32,
+    count: u32,
+) LoaderError![]const *const value_mod.TypeValue {
+    if (count == 0 or slot_array == null) return &.{};
+    const sp = slot_array.?;
+    const out = arena.alloc(*const value_mod.TypeValue, count) catch
+        return LoaderError.OutOfMemory;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const tv = try lookupSlot(slots, slot_count, sp[i]) orelse return LoaderError.BadSlotIndex;
+        out[i] = tv;
+    }
+    return out;
+}
+
+fn decodeOptionalTypeValuePointers(
+    arena: Allocator,
+    slots: ?SlotTable,
+    slot_count: u32,
+    slot_array: ?[*]const u32,
+    count: u32,
+) LoaderError![]const ?*const value_mod.TypeValue {
+    if (count == 0 or slot_array == null) return &.{};
+    const sp = slot_array.?;
+    const out = arena.alloc(?*const value_mod.TypeValue, count) catch
+        return LoaderError.OutOfMemory;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        out[i] = try lookupSlot(slots, slot_count, sp[i]);
+    }
+    return out;
+}
+
+fn decodeEnumVariants(
+    arena: Allocator,
+    slots: ?SlotTable,
+    slot_count: u32,
+    variants: ?[*]const EnumVariant,
+    count: u32,
+) LoaderError![]const value_mod.Variant {
+    if (count == 0 or variants == null) return &.{};
+    const vp = variants.?;
+    const out = arena.alloc(value_mod.Variant, count) catch
+        return LoaderError.OutOfMemory;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const v = vp[i];
+        out[i] = .{
+            .name = nameSlice(v.name, v.name_len),
+            .type_val = try lookupSlot(slots, slot_count, v.type_slot),
+        };
+    }
+    return out;
+}
+
+fn lookupSlot(
+    slots: ?SlotTable,
+    slot_count: u32,
+    slot_index: u32,
+) LoaderError!?*const value_mod.TypeValue {
+    if (slot_index == 0) return null;
+    if (slot_index >= slot_count) return LoaderError.BadSlotIndex;
+    const slot_table = slots orelse return null;
+    return slot_table[slot_index];
 }
 
 fn replaceWordBodyWithTypeValuePush(
@@ -581,25 +748,80 @@ fn appendErrorDetail(ctx: *Context, error_type: []const u8, message: []const u8)
 const testing = std.testing;
 const Instruction = value_mod.Instruction;
 
-test "loadIntoContext: rejects unsupported format version" {
-    var ctx = Context.init(testing.allocator);
-    defer ctx.deinit();
-
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version + 1,
+fn emptyHeader() Header {
+    return .{
+        .format_version = aot_image_emit.format_version,
         .module_count = 0,
         .word_count = 0,
         .marker_pool_count = 0,
         .typevalue_slot_count = 1,
         .stack_effect_count = 1,
-        .blob_entry_count = 0,
-        ._pad = 0,
+        .typevalue_count = 0,
+        .struct_type_count = 0,
         .modules = null,
         .words = null,
         .markers = null,
         .stack_effects = null,
-        .blob_entries = null,
+        .typevalues = null,
+        .typedescriptors = null,
+        .struct_types = null,
     };
+}
+
+fn wordRow(name: []const u8, word_id: u32, module_idx: u32) Word {
+    return .{
+        .name = name.ptr,
+        .name_len = @intCast(name.len),
+        .word_id = word_id,
+        .module_idx = module_idx,
+        .classification = classification_structural,
+        .blob_reason = 0,
+        .flags = 0,
+        ._reserved = 0,
+        .input_count = 0,
+        .output_count = 0,
+        ._pad = 0,
+        .stack_effect_idx = 0,
+        .markers = null,
+        .marker_count = 0,
+        .body_bytecode = null,
+        .body_bytecode_len = 0,
+        .typevalue_slot = 0,
+    };
+}
+
+fn zeroDescriptor() TypeDescriptor {
+    return .{
+        .numeric = 0,
+        .exact = 0,
+        .integer = 0,
+        .mutable = 0,
+        .kind = 0,
+        ._pad = .{ 0, 0, 0 },
+        .field_names = null,
+        .field_name_lens = null,
+        .field_count = 0,
+        .field_type_slots = null,
+        .field_type_count = 0,
+        .inner_type_slot = 0,
+        .anon_struct_idx = anon_struct_absent,
+        .type_param_slots = null,
+        .type_param_count = 0,
+        .parent_type_slot = 0,
+        .variants = null,
+        .variant_count = 0,
+        .resource_kind = null,
+        .resource_kind_len = 0,
+        .ffi_layout = 0,
+    };
+}
+
+test "loadIntoContext: rejects unsupported format version" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    var header = emptyHeader();
+    header.format_version = aot_image_emit.format_version + 1;
 
     try testing.expectError(
         LoaderError.UnsupportedFormat,
@@ -611,26 +833,10 @@ test "loadIntoContext: empty header populates nothing" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version,
-        .module_count = 0,
-        .word_count = 0,
-        .marker_pool_count = 0,
-        .typevalue_slot_count = 1,
-        .stack_effect_count = 1,
-        .blob_entry_count = 0,
-        ._pad = 0,
-        .modules = null,
-        .words = null,
-        .markers = null,
-        .stack_effects = null,
-        .blob_entries = null,
-    };
+    const header = emptyHeader();
 
     try loadIntoContext(&ctx, &header, null, null);
 
-    // Only the prelude module (if any test setup populated one) plus
-    // anything Context.init creates. Our empty image must add nothing.
     var iter = ctx.module_cache_value.iterator();
     var seen: u32 = 0;
     while (iter.next()) |_| seen += 1;
@@ -652,21 +858,11 @@ test "loadIntoContext: structural-only image populates module cache" {
     const modules = [_]Module{
         .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 2 },
     };
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version,
-        .module_count = 1,
-        .word_count = 2,
-        .marker_pool_count = 0,
-        .typevalue_slot_count = 1,
-        .stack_effect_count = 1,
-        .blob_entry_count = 0,
-        ._pad = 0,
-        .modules = &modules,
-        .words = &words,
-        .markers = null,
-        .stack_effects = null,
-        .blob_entries = null,
-    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 2;
+    header.modules = &modules;
+    header.words = &words;
 
     try loadIntoContext(&ctx, &header, null, null);
 
@@ -692,29 +888,6 @@ test "loadIntoContext: structural-only image populates module cache" {
     try testing.expectEqual(@as(?u32, 101), b.word_id);
 }
 
-fn wordRow(name: []const u8, word_id: u32, module_idx: u32) Word {
-    return .{
-        .name = name.ptr,
-        .name_len = @intCast(name.len),
-        .word_id = word_id,
-        .module_idx = module_idx,
-        .classification = classification_structural,
-        .blob_reason = 0,
-        .flags = 0,
-        ._reserved = 0,
-        .input_count = 0,
-        .output_count = 0,
-        ._pad = 0,
-        .stack_effect_idx = 0,
-        .markers = null,
-        .marker_count = 0,
-        .body_bytecode = null,
-        .body_bytecode_len = 0,
-        .blob_entry_idx = no_blob_entry,
-        .typevalue_slot = 0,
-    };
-}
-
 test "loadIntoContext: resource TypeValue rehydrates kind + universal bools + resource_kind" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
@@ -723,99 +896,31 @@ test "loadIntoContext: resource TypeValue rehydrates kind + universal bools + re
     const w_name = "DemoResource";
     const m_name = "demo";
 
-    // Realistic descriptor schema: `type` discriminator (symbol),
-    // four universal boolean flags, the kind-specific `resource-kind`
-    // string, plus one unsupported entry to verify the note path.
-    const entries = [_]BlobDescriptorEntry{
-        .{
-            .key = "type".ptr,
-            .key_len = 4,
-            .value_kind = blob_value_kind_symbol,
-            .bool_value = 0,
-            ._pad = 0,
-            .fixnum_value = 0,
-            .string_value = "resource-type".ptr,
-            .string_value_len = 13,
-        },
-        .{
-            .key = "numeric".ptr,
-            .key_len = 7,
-            .value_kind = blob_value_kind_boolean,
-            .bool_value = 1,
-            ._pad = 0,
-            .fixnum_value = 0,
-            .string_value = null,
-            .string_value_len = 0,
-        },
-        .{
-            .key = "exact".ptr,
-            .key_len = 5,
-            .value_kind = blob_value_kind_boolean,
-            .bool_value = 1,
-            ._pad = 0,
-            .fixnum_value = 0,
-            .string_value = null,
-            .string_value_len = 0,
-        },
-        .{
-            .key = "integer".ptr,
-            .key_len = 7,
-            .value_kind = blob_value_kind_boolean,
-            .bool_value = 0,
-            ._pad = 0,
-            .fixnum_value = 0,
-            .string_value = null,
-            .string_value_len = 0,
-        },
-        .{
-            .key = "mutable".ptr,
-            .key_len = 7,
-            .value_kind = blob_value_kind_boolean,
-            .bool_value = 1,
-            ._pad = 0,
-            .fixnum_value = 0,
-            .string_value = null,
-            .string_value_len = 0,
-        },
-        .{
-            .key = "resource-kind".ptr,
-            .key_len = 13,
-            .value_kind = blob_value_kind_string,
-            .bool_value = 0,
-            ._pad = 0,
-            .fixnum_value = 0,
-            .string_value = "demo-handle".ptr,
-            .string_value_len = 11,
-        },
-        .{
-            .key = "fields".ptr,
-            .key_len = 6,
-            .value_kind = blob_value_kind_unsupported,
-            .bool_value = 0,
-            ._pad = 0,
-            .fixnum_value = 0,
-            .string_value = null,
-            .string_value_len = 0,
-        },
-    };
+    const resource_kind = "demo-handle";
 
-    const blob_tv: BlobTypeValue = .{
-        .name = tv_name.ptr,
-        .name_len = tv_name.len,
-        .typevalue_slot = 1,
-        .descriptor_entries = &entries,
-        .descriptor_entry_count = entries.len,
-        .member_type_slots = null,
-        .member_type_count = 0,
-    };
-    const blob_entries = [_]BlobEntry{
-        .{ .word_idx = 0, .blob_kind = 1, ._pad = .{ 0, 0, 0 }, .typevalue = &blob_tv },
+    var drow = zeroDescriptor();
+    drow.numeric = 1;
+    drow.exact = 1;
+    drow.integer = 0;
+    drow.mutable = 1;
+    drow.kind = 6;
+    drow.resource_kind = resource_kind.ptr;
+    drow.resource_kind_len = resource_kind.len;
+
+    const descriptors = [_]TypeDescriptor{drow};
+    const typevalues = [_]TypeValueRow{
+        .{
+            .name = tv_name.ptr,
+            .name_len = tv_name.len,
+            .slot = 1,
+            .descriptor = &descriptors[0],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
     };
     const words = [_]Word{
         blk: {
             var w = wordRow(w_name, 200, 0);
-            w.classification = classification_blob;
-            w.blob_entry_idx = 0;
             w.typevalue_slot = 1;
             break :blk w;
         },
@@ -825,25 +930,18 @@ test "loadIntoContext: resource TypeValue rehydrates kind + universal bools + re
     };
 
     var slot_storage: [2]?*const value_mod.TypeValue = .{ null, null };
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version,
-        .module_count = 1,
-        .word_count = 1,
-        .marker_pool_count = 0,
-        .typevalue_slot_count = 2,
-        .stack_effect_count = 1,
-        .blob_entry_count = blob_entries.len,
-        ._pad = 0,
-        .modules = &modules,
-        .words = &words,
-        .markers = null,
-        .stack_effects = null,
-        .blob_entries = &blob_entries,
-    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = typevalues.len;
+    header.modules = &modules;
+    header.words = &words;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
 
     try loadIntoContext(&ctx, &header, &slot_storage, null);
 
-    // Slot 1 must be patched to a freshly allocated TypeValue.
     const tv = slot_storage[1] orelse {
         try testing.expect(false);
         return;
@@ -858,8 +956,6 @@ test "loadIntoContext: resource TypeValue rehydrates kind + universal bools + re
     try testing.expectEqual(true, desc.mutable);
     try testing.expectEqualStrings("demo-handle", desc.kind.resource.resource_kind);
 
-    // The corresponding word's compound body must now push the
-    // freshly-allocated TypeValue.
     const cache_entry = ctx.module_cache_value.get(m_name) orelse return error.TestUnexpectedResult;
     const module_ptr = cache_entry.module;
     const w = module_ptr.words.get(w_name) orelse return error.TestUnexpectedResult;
@@ -867,73 +963,231 @@ test "loadIntoContext: resource TypeValue rehydrates kind + universal bools + re
     try testing.expectEqual(@as(usize, 1), w.action.compound.len);
     try testing.expect(w.action.compound[0].op == .push_literal);
     try testing.expectEqual(tv, w.action.compound[0].op.push_literal.type_val);
+}
 
-    // The skipped entry recorded a note in error_details.
-    var saw_note = false;
-    for (ctx.error_details.items) |d| {
-        if (std.mem.eql(u8, d.error_type, "runtime-image-load-note")) {
-            saw_note = true;
-            break;
-        }
-    }
-    try testing.expect(saw_note);
+test "loadIntoContext: struct TypeDescriptor with field-types resolves cross-references" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const a_name = "A";
+    const b_name = "B";
+
+    var a_desc = zeroDescriptor();
+    a_desc.kind = 0; // builtin
+    var b_desc = zeroDescriptor();
+    b_desc.kind = 2; // struct_
+
+    const b_field_names = [_][*]const u8{"x".ptr};
+    const b_field_lens = [_]u32{1};
+    const b_field_slots = [_]u32{1}; // points at A
+    b_desc.field_names = &b_field_names;
+    b_desc.field_name_lens = &b_field_lens;
+    b_desc.field_count = 1;
+    b_desc.field_type_slots = &b_field_slots;
+    b_desc.field_type_count = 1;
+
+    const descriptors = [_]TypeDescriptor{ a_desc, b_desc };
+    const typevalues = [_]TypeValueRow{
+        .{
+            .name = a_name.ptr,
+            .name_len = a_name.len,
+            .slot = 1,
+            .descriptor = &descriptors[0],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
+        .{
+            .name = b_name.ptr,
+            .name_len = b_name.len,
+            .slot = 2,
+            .descriptor = &descriptors[1],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
+    };
+
+    var slot_storage: [3]?*const value_mod.TypeValue = .{ null, null, null };
+    var header = emptyHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+
+    try loadIntoContext(&ctx, &header, &slot_storage, null);
+
+    const tv_a = slot_storage[1] orelse return error.TestUnexpectedResult;
+    const tv_b = slot_storage[2] orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("A", tv_a.name);
+    try testing.expectEqualStrings("B", tv_b.name);
+    const b_kind = tv_b.descriptor.?.kind;
+    try testing.expect(b_kind == .struct_);
+    try testing.expectEqual(@as(usize, 1), b_kind.struct_.field_types.len);
+    try testing.expectEqual(@as(?*const value_mod.TypeValue, tv_a), b_kind.struct_.field_types[0]);
+}
+
+test "loadIntoContext: enum descriptor decodes variants and cross-references" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const color_name = "Color";
+    const red_name = "red";
+
+    var color_desc = zeroDescriptor();
+    color_desc.kind = 4; // enum_
+    var red_desc = zeroDescriptor();
+    red_desc.kind = 5; // enum_variant
+    red_desc.parent_type_slot = 1; // -> Color
+
+    const variants = [_]EnumVariant{
+        .{ .name = red_name.ptr, .name_len = red_name.len, .type_slot = 2 },
+    };
+    color_desc.variants = &variants;
+    color_desc.variant_count = variants.len;
+
+    const descriptors = [_]TypeDescriptor{ color_desc, red_desc };
+    const typevalues = [_]TypeValueRow{
+        .{
+            .name = color_name.ptr,
+            .name_len = color_name.len,
+            .slot = 1,
+            .descriptor = &descriptors[0],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
+        .{
+            .name = red_name.ptr,
+            .name_len = red_name.len,
+            .slot = 2,
+            .descriptor = &descriptors[1],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
+    };
+
+    var slot_storage: [3]?*const value_mod.TypeValue = .{ null, null, null };
+    var header = emptyHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+
+    try loadIntoContext(&ctx, &header, &slot_storage, null);
+
+    const color = slot_storage[1] orelse return error.TestUnexpectedResult;
+    const red = slot_storage[2] orelse return error.TestUnexpectedResult;
+    const color_kind = color.descriptor.?.kind;
+    try testing.expect(color_kind == .enum_);
+    try testing.expectEqual(@as(usize, 1), color_kind.enum_.variants.len);
+    try testing.expectEqualStrings("red", color_kind.enum_.variants[0].name);
+    try testing.expectEqual(@as(?*const value_mod.TypeValue, red), color_kind.enum_.variants[0].type_val);
+    const red_kind = red.descriptor.?.kind;
+    try testing.expect(red_kind == .enum_variant);
+    try testing.expectEqual(@as(?*const value_mod.TypeValue, color), red_kind.enum_variant.parent);
+}
+
+test "loadIntoContext: virtual with anon_struct allocates StructType" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const inner_name = "Pair";
+    const outer_name = "Wrapper";
+
+    var inner_desc = zeroDescriptor();
+    inner_desc.kind = 0; // builtin
+    var outer_desc = zeroDescriptor();
+    outer_desc.kind = 3; // virtual
+    outer_desc.anon_struct_idx = 0;
+
+    const struct_field_names = [_][*]const u8{"value".ptr};
+    const struct_field_lens = [_]u32{5};
+    const struct_field_slots = [_]u32{1};
+    const struct_types = [_]StructType{
+        .{
+            .name = "pair-fields".ptr,
+            .name_len = 11,
+            .field_names = &struct_field_names,
+            .field_name_lens = &struct_field_lens,
+            .field_count = 1,
+            .field_type_slots = &struct_field_slots,
+            .field_type_count = 1,
+        },
+    };
+
+    const descriptors = [_]TypeDescriptor{ inner_desc, outer_desc };
+    const typevalues = [_]TypeValueRow{
+        .{
+            .name = inner_name.ptr,
+            .name_len = inner_name.len,
+            .slot = 1,
+            .descriptor = &descriptors[0],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
+        .{
+            .name = outer_name.ptr,
+            .name_len = outer_name.len,
+            .slot = 2,
+            .descriptor = &descriptors[1],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
+    };
+
+    var slot_storage: [3]?*const value_mod.TypeValue = .{ null, null, null };
+    var header = emptyHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = typevalues.len;
+    header.struct_type_count = struct_types.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+    header.struct_types = &struct_types;
+
+    try loadIntoContext(&ctx, &header, &slot_storage, null);
+
+    const outer = slot_storage[2] orelse return error.TestUnexpectedResult;
+    const outer_kind = outer.descriptor.?.kind;
+    try testing.expect(outer_kind == .virtual);
+    const anon = outer_kind.virtual.anon_struct orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("pair-fields", anon.name);
+    try testing.expectEqual(@as(usize, 1), anon.fields.len);
+    try testing.expectEqualStrings("value", anon.fields[0]);
 }
 
 test "loadIntoContext: PIC relocation rewrites snapshot slot to runtime TypeValue" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    // One blob TypeValue at slot 1; the loader allocates it and
-    // patches the slot table.
-    const blob_tv: BlobTypeValue = .{
-        .name = "color".ptr,
-        .name_len = 5,
-        .typevalue_slot = 1,
-        .descriptor_entries = null,
-        .descriptor_entry_count = 0,
-        .member_type_slots = null,
-        .member_type_count = 0,
-    };
-    const blob_entries = [_]BlobEntry{
-        .{ .word_idx = 0, .blob_kind = 1, ._pad = .{ 0, 0, 0 }, .typevalue = &blob_tv },
-    };
-    const w_name = "color";
-    const m_name = "demo";
-    const words = [_]Word{wordRow(w_name, 7, 0)};
-    const modules = [_]Module{
-        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    const tv_name = "color";
+
+    var desc = zeroDescriptor();
+    desc.kind = 0;
+    const descriptors = [_]TypeDescriptor{desc};
+    const typevalues = [_]TypeValueRow{
+        .{
+            .name = tv_name.ptr,
+            .name_len = tv_name.len,
+            .slot = 1,
+            .descriptor = &descriptors[0],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
     };
     var slot_storage: [2]?*const value_mod.TypeValue = .{ null, null };
 
-    // Synthetic PIC snapshot slot pre-populated with NULL. The
-    // loader writes the runtime TypeValue address here after the
-    // blob path fills slot 1.
     var snapshot_slot: ?*const value_mod.TypeValue = null;
     const relocs = [_]PicRelocation{
         .{ .target = &snapshot_slot, .slot_index = 1 },
     };
     const reloc_table: PicRelocationTable = .{ .items = &relocs };
 
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version,
-        .module_count = 1,
-        .word_count = 1,
-        .marker_pool_count = 0,
-        .typevalue_slot_count = 2,
-        .stack_effect_count = 1,
-        .blob_entry_count = blob_entries.len,
-        ._pad = 0,
-        .modules = &modules,
-        .words = &words,
-        .markers = null,
-        .stack_effects = null,
-        .blob_entries = &blob_entries,
-    };
+    var header = emptyHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
 
     try loadIntoContext(&ctx, &header, &slot_storage, reloc_table);
 
-    // Both the slot table and the snapshot must point at the same
-    // runtime TypeValue.
     const tv = slot_storage[1] orelse return error.TestUnexpectedResult;
     try testing.expectEqual(tv, snapshot_slot);
     try testing.expectEqualStrings("color", tv.name);
@@ -950,21 +1204,8 @@ test "loadIntoContext: PIC relocation with out-of-range slot index errors" {
     };
     const reloc_table: PicRelocationTable = .{ .items = &relocs };
 
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version,
-        .module_count = 0,
-        .word_count = 0,
-        .marker_pool_count = 0,
-        .typevalue_slot_count = 2,
-        .stack_effect_count = 1,
-        .blob_entry_count = 0,
-        ._pad = 0,
-        .modules = null,
-        .words = null,
-        .markers = null,
-        .stack_effects = null,
-        .blob_entries = null,
-    };
+    var header = emptyHeader();
+    header.typevalue_slot_count = 2;
 
     try testing.expectError(
         LoaderError.BadSlotIndex,
@@ -976,41 +1217,27 @@ test "loadIntoContext: rejects out-of-range typevalue slot" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    const blob_tv: BlobTypeValue = .{
-        .name = "x".ptr,
-        .name_len = 1,
-        .typevalue_slot = 99, // out of range vs typevalue_slot_count below
-        .descriptor_entries = null,
-        .descriptor_entry_count = 0,
-        .member_type_slots = null,
-        .member_type_count = 0,
-    };
-    const blob_entries = [_]BlobEntry{
-        .{ .word_idx = 0, .blob_kind = 1, ._pad = .{ 0, 0, 0 }, .typevalue = &blob_tv },
-    };
-    const w_name = "X";
-    const m_name = "demo";
-    const words = [_]Word{wordRow(w_name, 1, 0)};
-    const modules = [_]Module{
-        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    const tv_name = "x";
+    var desc = zeroDescriptor();
+    desc.kind = 0;
+    const descriptors = [_]TypeDescriptor{desc};
+    const typevalues = [_]TypeValueRow{
+        .{
+            .name = tv_name.ptr,
+            .name_len = tv_name.len,
+            .slot = 99, // out of range vs typevalue_slot_count below
+            .descriptor = &descriptors[0],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
     };
 
     var slot_storage: [2]?*const value_mod.TypeValue = .{ null, null };
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version,
-        .module_count = 1,
-        .word_count = 1,
-        .marker_pool_count = 0,
-        .typevalue_slot_count = 2,
-        .stack_effect_count = 1,
-        .blob_entry_count = blob_entries.len,
-        ._pad = 0,
-        .modules = &modules,
-        .words = &words,
-        .markers = null,
-        .stack_effects = null,
-        .blob_entries = &blob_entries,
-    };
+    var header = emptyHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
 
     try testing.expectError(
         LoaderError.BadSlotIndex,
@@ -1022,7 +1249,6 @@ test "loadIntoContext: bytecode body decodes into compound action" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    // Hand-built bytecode for `[ push_literal fixnum 7, call_word "+" ]`.
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
     const sample = [_]value_mod.Instruction{
@@ -1040,21 +1266,11 @@ test "loadIntoContext: bytecode body decodes into compound action" {
     const modules = [_]Module{
         .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
     };
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version,
-        .module_count = 1,
-        .word_count = 1,
-        .marker_pool_count = 0,
-        .typevalue_slot_count = 1,
-        .stack_effect_count = 1,
-        .blob_entry_count = 0,
-        ._pad = 0,
-        .modules = &modules,
-        .words = &words,
-        .markers = null,
-        .stack_effects = null,
-        .blob_entries = null,
-    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
 
     try loadIntoContext(&ctx, &header, null, null);
 
@@ -1080,21 +1296,11 @@ test "loadIntoContext: null body bytecode preserves empty compound" {
     const modules = [_]Module{
         .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
     };
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version,
-        .module_count = 1,
-        .word_count = 1,
-        .marker_pool_count = 0,
-        .typevalue_slot_count = 1,
-        .stack_effect_count = 1,
-        .blob_entry_count = 0,
-        ._pad = 0,
-        .modules = &modules,
-        .words = &words,
-        .markers = null,
-        .stack_effects = null,
-        .blob_entries = null,
-    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
 
     try loadIntoContext(&ctx, &header, null, null);
 
@@ -1129,21 +1335,11 @@ test "loadIntoContext: nested quotation literal round-trips" {
     const modules = [_]Module{
         .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
     };
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version,
-        .module_count = 1,
-        .word_count = 1,
-        .marker_pool_count = 0,
-        .typevalue_slot_count = 1,
-        .stack_effect_count = 1,
-        .blob_entry_count = 0,
-        ._pad = 0,
-        .modules = &modules,
-        .words = &words,
-        .markers = null,
-        .stack_effects = null,
-        .blob_entries = null,
-    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
 
     try loadIntoContext(&ctx, &header, null, null);
 
@@ -1162,8 +1358,6 @@ test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
 
-    // A single byte is shorter than the 4-byte instruction count
-    // header the decoder reads first; deserialization rejects it.
     const truncated = [_]u8{0x42};
 
     const w_name = "broken";
@@ -1175,21 +1369,11 @@ test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {
     const modules = [_]Module{
         .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
     };
-    const header: Header = .{
-        .format_version = aot_image_emit.format_version,
-        .module_count = 1,
-        .word_count = 1,
-        .marker_pool_count = 0,
-        .typevalue_slot_count = 1,
-        .stack_effect_count = 1,
-        .blob_entry_count = 0,
-        ._pad = 0,
-        .modules = &modules,
-        .words = &words,
-        .markers = null,
-        .stack_effects = null,
-        .blob_entries = null,
-    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
 
     try testing.expectError(
         LoaderError.OutOfMemory,

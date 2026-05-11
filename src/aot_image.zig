@@ -47,9 +47,6 @@ pub const ImagePath = enum {
 /// structural path.
 pub const BlobReason = enum {
     none,
-    /// The value is a `type_val`. The `descriptor` field is a `MutableMap`
-    /// that cannot be frozen as a static initializer.
-    type_val_descriptor,
     /// A bare `hash` or `mutable_map` literal.
     mutable_map,
     /// A `vector`, `byte_array`, or `set` literal -- dynamically sized
@@ -133,8 +130,13 @@ pub fn classifyValue(val: Value) Classification {
 
         .tagged => |t| classifyValue(t.inner.*),
 
+        // `type_val` is routed structurally via the static C data path
+        // emitted by `aot_image_emit.emitTypeValueData`. Each TypeValue's
+        // descriptor renders as a C struct initializer with slot-indexed
+        // cross-references resolved by the loader.
+        .type_val => Classification.structural_unit,
+
         // Blob path: leaf reasons.
-        .type_val => Classification.blobOf(.type_val_descriptor),
         .hash, .mutable_map => Classification.blobOf(.mutable_map),
         .vector, .byte_array, .set => Classification.blobOf(.dynamic_container),
         .parameter => Classification.blobOf(.parameter_runtime_state),
@@ -409,7 +411,6 @@ pub fn writeManifestDump(
 fn blobReasonLabel(reason: BlobReason) []const u8 {
     return switch (reason) {
         .none => "none",
-        .type_val_descriptor => "type-value descriptor",
         .mutable_map => "mutable-map literal",
         .dynamic_container => "dynamic container",
         .parameter_runtime_state => "parameter runtime state",
@@ -453,24 +454,20 @@ test "classifyValue: array of structurals is structural" {
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .array = &elems }).path);
 }
 
-test "classifyValue: array containing a blob element propagates the leaf reason" {
+test "classifyValue: array of structural values is structural" {
     var desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
     var tv = value_mod.TypeValue{ .name = "t", .descriptor = &desc };
     const elems = [_]Value{
         .{ .fixnum = 1 },
         .{ .type_val = &tv },
     };
-    const c = classifyValue(.{ .array = &elems });
-    try testing.expectEqual(ImagePath.blob, c.path);
-    try testing.expectEqual(BlobReason.type_val_descriptor, c.reason);
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .array = &elems }).path);
 }
 
-test "classifyValue: type_val is blob with type_val_descriptor reason" {
+test "classifyValue: type_val is structural via the static C data path" {
     var desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
     var tv = value_mod.TypeValue{ .name = "color", .descriptor = &desc };
-    const c = classifyValue(.{ .type_val = &tv });
-    try testing.expectEqual(ImagePath.blob, c.path);
-    try testing.expectEqual(BlobReason.type_val_descriptor, c.reason);
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .type_val = &tv }).path);
 }
 
 test "classifyValue: tagged with structural inner is structural" {
@@ -480,14 +477,13 @@ test "classifyValue: tagged with structural inner is structural" {
     try testing.expectEqual(ImagePath.structural, c.path);
 }
 
-test "classifyValue: tagged with blob inner propagates the leaf reason" {
+test "classifyValue: tagged wrapping a type_val is structural" {
     var virt = value_mod.VirtualType{ .name = "wrapper", .inner_type = "type" };
     var desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
     var tv = value_mod.TypeValue{ .name = "inner-type", .descriptor = &desc };
     const inner: Value = .{ .type_val = &tv };
     const c = classifyValue(.{ .tagged = .{ .tag = &virt, .inner = &inner } });
-    try testing.expectEqual(ImagePath.blob, c.path);
-    try testing.expectEqual(BlobReason.type_val_descriptor, c.reason);
+    try testing.expectEqual(ImagePath.structural, c.path);
 }
 
 test "classifyValue: empty quotation is structural" {
@@ -504,11 +500,20 @@ test "classifyValue: quotation with only call_word and structural literals is st
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .quotation = q }).path);
 }
 
-test "classifyValue: quotation with blob literal is blob" {
+test "classifyValue: quotation with type_val literal is structural" {
     var desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
     var tv = value_mod.TypeValue{ .name = "t", .descriptor = &desc };
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .type_val = &tv } }, .line = 0, .column = 0 },
+    };
+    const q = value_mod.Quotation{ .instructions = &instrs };
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .quotation = q }).path);
+}
+
+test "classifyValue: quotation with blob literal is blob" {
+    var mm = value_mod.MutableMap{};
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .mutable_map = &mm } }, .line = 0, .column = 0 },
     };
     const q = value_mod.Quotation{ .instructions = &instrs };
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .quotation = q }).path);
@@ -561,7 +566,7 @@ test "classifyModuleWord: compound with structural body is structural" {
     try testing.expectEqual(ImagePath.structural, c.path);
 }
 
-test "classifyModuleWord: compound containing a type_val literal is blob" {
+test "classifyModuleWord: compound containing a type_val literal is structural" {
     var desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
     var tv = value_mod.TypeValue{ .name = "t", .descriptor = &desc };
     const instrs = [_]Instruction{
@@ -569,7 +574,7 @@ test "classifyModuleWord: compound containing a type_val literal is blob" {
     };
     const mw = ModuleWord{ .action = .{ .compound = &instrs } };
     const c = classifyModuleWord(mw) orelse return error.TestUnexpectedNull;
-    try testing.expectEqual(ImagePath.blob, c.path);
+    try testing.expectEqual(ImagePath.structural, c.path);
 }
 
 test "buildImageManifest: empty cache yields empty manifest" {
@@ -593,11 +598,13 @@ test "buildImageManifest: synthetic modules produce sorted, classified entries" 
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
 
-    const blob_desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
-    const blob_tv = try arena.create(value_mod.TypeValue);
-    blob_tv.* = .{ .name = "t", .descriptor = blob_desc };
+    // A bare mutable_map literal forces the blob path: dynamic
+    // containers carry heap state that no static initializer can
+    // express.
+    const blob_mm = try arena.create(value_mod.MutableMap);
+    blob_mm.* = .{};
     const blob_instrs = try arena.dupe(Instruction, &.{
-        .{ .op = .{ .push_literal = .{ .type_val = blob_tv } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .mutable_map = blob_mm } }, .line = 0, .column = 0 },
     });
 
     // Module "zeta" -- comes second alphabetically, both words structural.
@@ -634,7 +641,7 @@ test "buildImageManifest: synthetic modules produce sorted, classified entries" 
     try testing.expectEqualStrings("alpha", manifest.entries[1].module_name);
     try testing.expectEqualStrings("needs-blob", manifest.entries[1].word_name);
     try testing.expectEqual(ImagePath.blob, manifest.entries[1].path);
-    try testing.expectEqual(BlobReason.type_val_descriptor, manifest.entries[1].blob_reason);
+    try testing.expectEqual(BlobReason.mutable_map, manifest.entries[1].blob_reason);
 
     try testing.expectEqualStrings("zeta", manifest.entries[2].module_name);
     try testing.expectEqualStrings("alpha", manifest.entries[2].word_name);
@@ -670,11 +677,10 @@ test "writeManifestDump: deterministic output" {
     const struct_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
-    const blob_desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
-    const blob_tv = try arena.create(value_mod.TypeValue);
-    blob_tv.* = .{ .name = "t", .descriptor = blob_desc };
+    const blob_mm = try arena.create(value_mod.MutableMap);
+    blob_mm.* = .{};
     const blob_instrs = try arena.dupe(Instruction, &.{
-        .{ .op = .{ .push_literal = .{ .type_val = blob_tv } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .mutable_map = blob_mm } }, .line = 0, .column = 0 },
     });
 
     const m = try arena.create(Module);
@@ -697,11 +703,11 @@ test "writeManifestDump: deterministic output" {
         "  structural: 1\n" ++
         "  blob: 1\n" ++
         "  blob breakdown:\n" ++
-        "    type-value descriptor: 1\n" ++
+        "    mutable-map literal: 1\n" ++
         "  per-module:\n" ++
         "    demo: structural=1 blob=1 total=2\n" ++
         "  blob entries:\n" ++
-        "    demo.needs-blob (type-value descriptor)\n";
+        "    demo.needs-blob (mutable-map literal)\n";
 
     try testing.expectEqualStrings(expected, buf.items);
 }

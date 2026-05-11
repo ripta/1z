@@ -1,2 +1,2 @@
 interpreter: linked (auto: compiled code calls interpreter)
-runtime-image: words=0 stack-effects=1 typevalue-slots=1 blob-present=false blob-typevalues=0
+runtime-image: words=0 stack-effects=1 typevalue-slots=1 blob-present=false

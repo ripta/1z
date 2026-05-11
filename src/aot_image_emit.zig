@@ -47,7 +47,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 2;
+pub const format_version: u32 = 3;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -57,7 +57,10 @@ pub const ImageEmissionStats = struct {
     /// `runtime-image-word-count`.
     word_count: u32 = 0,
     /// Whether any blob-path entries are present. Maps to
-    /// `runtime-image-blob-present`.
+    /// `runtime-image-blob-present`. Always false after the
+    /// `type_val` migration to the static C data path; retained as a
+    /// reserved-for-future-use flag so the metadata schema stays
+    /// stable.
     blob_present: bool = false,
     /// Size of the shared TypeValue slot table. May grow as later
     /// emission passes discover PIC snapshot references.
@@ -65,10 +68,6 @@ pub const ImageEmissionStats = struct {
     /// Number of distinct stack-effect entries (excluding the
     /// reserved sentinel at index 0).
     stack_effect_count: u32 = 0,
-    /// Number of `type_val` blob entries actually emitted. Upperbound
-    /// is `manifest.blob_count`. Non-`type_val` blob reasons emit a
-    /// sentinel and don't contribute to this count.
-    blob_typevalues_emitted: u32 = 0,
 };
 
 /// Emit the runtime image as static C data into `out`. Returns counts
@@ -101,17 +100,28 @@ pub fn emitImageC(
     defer effect_table.deinit();
     try collectStackEffects(&effect_table, ctx, manifest);
 
-    var blob_plans: std.ArrayListUnmanaged(BlobEntryPlan) = .{};
-    defer blob_plans.deinit(allocator);
-    try collectBlobEntries(&blob_plans, &effect_table, ctx, manifest);
-
-    const no_blob_entry: u32 = 0xFFFFFFFF;
-    const word_to_blob = try allocator.alloc(u32, manifest.entries.len);
-    defer allocator.free(word_to_blob);
-    @memset(word_to_blob, no_blob_entry);
-    for (blob_plans.items, 0..) |plan, i| {
-        word_to_blob[plan.word_idx] = @intCast(i);
+    // Per-word TypeValue-slot map. For every word whose body pushes a
+    // `type_val` literal, intern the TypeValue into the shared slot
+    // table and record the slot index here. The loader uses the slot
+    // index to look up the runtime TypeValue after `populateTypeValueSlots`
+    // has filled the table, then rewrites the word body to push that
+    // TypeValue directly. Zero means "this word does not publish a
+    // TypeValue".
+    const word_to_typevalue_slot = try allocator.alloc(u32, manifest.entries.len);
+    defer allocator.free(word_to_typevalue_slot);
+    @memset(word_to_typevalue_slot, 0);
+    for (manifest.entries, 0..) |entry, idx| {
+        const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
+        if (findTypeValueLiteral(mw_ptr)) |tv| {
+            word_to_typevalue_slot[idx] = try effect_table.internType(tv);
+        }
     }
+
+    var struct_plans: std.ArrayListUnmanaged(StructTypePlan) = .{};
+    defer struct_plans.deinit(allocator);
+    var struct_index: std.AutoHashMapUnmanaged(*const value_mod.StructType, u32) = .{};
+    defer struct_index.deinit(allocator);
+    try collectDescriptorCrossRefs(&struct_plans, &struct_index, &effect_table);
 
     // Tracks per-word body bytecode emission. When entry is non-zero,
     // the word references `onez_image_w_<idx>_body` at that length;
@@ -123,15 +133,12 @@ pub fn emitImageC(
     try emitMarkerPool(out, allocator, &marker_pool, &stats);
     try emitTypeValueSlotTable(out, allocator, &effect_table);
     try emitStackEffectTable(out, allocator, &effect_table);
+    try emitTypeValueData(out, allocator, &effect_table, struct_plans.items, &struct_index);
 
-    // Word name string literals are emitted up front so the blob
-    // entries below can reference each word's `onez_image_w_<idx>_name`
-    // symbol without a forward declaration.
     try emitWordNameStrings(out, allocator, manifest);
     try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens);
-    try emitBlobEntries(out, allocator, blob_plans.items, &stats);
-    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, &marker_pool, &effect_table, blob_plans.items, word_to_blob, word_body_lens, &stats);
-    try emitHeader(out, allocator, manifest, &marker_pool, &effect_table, blob_plans.items, stats);
+    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, &marker_pool, &effect_table, word_to_typevalue_slot, word_body_lens, &stats);
+    try emitHeader(out, allocator, manifest, &marker_pool, &effect_table, struct_plans.items, stats);
 
     stats.typevalue_slot_count = effect_table.slotCount();
     stats.stack_effect_count = effect_table.effectCount();
@@ -204,57 +211,102 @@ const StackEffectTable = struct {
     }
 };
 
-/// Pre-resolved data for one blob entry. Built before emission so the
-/// slot-table sizing pass can run in lockstep with the manifest walk
-/// while the actual blob emission consumes the same plan.
-const BlobEntryPlan = struct {
-    /// Index into `manifest.entries` (also matches the word's index in
-    /// `onez_image_words_storage`).
-    word_idx: u32,
-    /// Mirrors `manifest.entries[word_idx].blob_reason`. Non-`type_val`
-    /// reasons emit with `typevalue == null` so the loader can route to
-    /// the appropriate (still-missing) decoder.
-    blob_kind: BlobReason,
-    /// Resolved blob-path TypeValue for `.type_val_descriptor`.
-    typevalue: ?*const TypeValue = null,
-    /// Slot index assigned by `internType`; `0` when no slot was
-    /// reserved (non-`type_val` blob reasons).
-    typevalue_slot: u32 = 0,
+/// Pre-resolved data for one image-side StructType. StructTypes are
+/// reached through `virtual.anon_struct` and have no slot of their own
+/// in the TypeValue slot table -- the loader allocates a parallel
+/// `*StructType` per row in `onez_image_struct_types_storage[]` and
+/// references it from the owning virtual descriptor by index.
+const StructTypePlan = struct {
+    struct_type: *const value_mod.StructType,
 };
 
-/// Walk the manifest, classify each blob entry, intern any blob-path
-/// TypeValues into the shared slot table, and return the plan list.
-/// The plan list is sized by the blob count; the caller frees it.
+/// Walk every interned TypeValue's descriptor and `member_types` slice,
+/// interning each cross-referenced TypeValue back into the slot table.
+/// The walk runs to a fixed point: newly interned TypeValues may
+/// themselves carry cross-references through their own descriptors, so
+/// the cursor extends past the original slot count and the loop only
+/// terminates when no new slot is added.
 ///
-/// For `.type_val_descriptor` entries, the blob-path TypeValue is
-/// located by inspecting the live `ModuleWord` body for its first
-/// `push_literal: type_val` instruction. The fixture pattern (an enum
-/// type word, its constructor, and its predicate all push the same
-/// `*TypeValue`) makes this a single dedup-friendly lookup; the
-/// `internType` call is identity-keyed and idempotent against any
-/// stack-effect-discovered slot.
-fn collectBlobEntries(
-    plans: *std.ArrayListUnmanaged(BlobEntryPlan),
+/// Cross-references through `virtual.anon_struct` populate the
+/// `struct_plans` list; the anon-struct's `field_types` cross-references
+/// intern back into the TypeValue slot table on the way through. Each
+/// StructType is interned once via `struct_index` regardless of how
+/// many virtual TypeValues point at it.
+fn collectDescriptorCrossRefs(
+    struct_plans: *std.ArrayListUnmanaged(StructTypePlan),
+    struct_index: *std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
     effect_table: *StackEffectTable,
-    ctx: *const Context,
-    manifest: ImageManifest,
 ) Allocator.Error!void {
-    for (manifest.entries, 0..) |entry, idx| {
-        if (entry.path != .blob) continue;
-        var plan: BlobEntryPlan = .{
-            .word_idx = @intCast(idx),
-            .blob_kind = entry.blob_reason,
-        };
-        if (entry.blob_reason == .type_val_descriptor) {
-            if (lookupModuleWord(ctx, entry)) |mw_ptr| {
-                if (findTypeValueLiteral(mw_ptr)) |tv| {
-                    plan.typevalue = tv;
-                    plan.typevalue_slot = try effect_table.internType(tv);
-                }
+    var cursor: usize = 0;
+    while (cursor < effect_table.type_slots.items.len) {
+        const tv = effect_table.type_slots.items[cursor];
+        cursor += 1;
+        if (tv.member_types) |members| {
+            for (members) |m| {
+                _ = try effect_table.internType(m);
             }
         }
-        try plans.append(effect_table.allocator, plan);
+        const desc = tv.descriptor orelse continue;
+        try internDescriptorCrossRefs(struct_plans, struct_index, effect_table, desc);
     }
+}
+
+/// Intern every TypeValue and StructType reachable from `desc` into
+/// the slot table / struct-plan list. Recursive only into StructType
+/// field_types (the StructType itself is interned just once via
+/// `struct_index`); reachable TypeValues feed back through the
+/// fixed-point cursor in `collectDescriptorCrossRefs`.
+fn internDescriptorCrossRefs(
+    struct_plans: *std.ArrayListUnmanaged(StructTypePlan),
+    struct_index: *std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    effect_table: *StackEffectTable,
+    desc: *const value_mod.TypeDescriptor,
+) Allocator.Error!void {
+    switch (desc.kind) {
+        .builtin, .sentinel, .union_, .resource => {},
+        .struct_ => |sd| {
+            for (sd.field_types) |maybe| {
+                if (maybe) |tv| _ = try effect_table.internType(tv);
+            }
+        },
+        .virtual => |vd| {
+            if (vd.inner_type) |tv| _ = try effect_table.internType(tv);
+            for (vd.type_params) |tv| _ = try effect_table.internType(tv);
+            if (vd.anon_struct) |st| {
+                _ = try internStructType(struct_plans, struct_index, effect_table, st);
+            }
+        },
+        .enum_ => |ed| {
+            for (ed.variants) |v| {
+                if (v.type_val) |tv| _ = try effect_table.internType(tv);
+            }
+        },
+        .enum_variant => |evd| {
+            if (evd.parent) |tv| _ = try effect_table.internType(tv);
+            if (evd.inner_type) |tv| _ = try effect_table.internType(tv);
+        },
+        .ffi_struct => |fsd| {
+            for (fsd.field_types) |maybe| {
+                if (maybe) |tv| _ = try effect_table.internType(tv);
+            }
+        },
+    }
+}
+
+fn internStructType(
+    struct_plans: *std.ArrayListUnmanaged(StructTypePlan),
+    struct_index: *std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    effect_table: *StackEffectTable,
+    st: *const value_mod.StructType,
+) Allocator.Error!u32 {
+    if (struct_index.get(st)) |idx| return idx;
+    const idx: u32 = @intCast(struct_plans.items.len);
+    try struct_plans.append(effect_table.allocator, .{ .struct_type = st });
+    try struct_index.put(effect_table.allocator, st, idx);
+    for (st.field_types) |maybe| {
+        if (maybe) |tv| _ = try effect_table.internType(tv);
+    }
+    return idx;
 }
 
 /// Inspect a compound body for its first `push_literal: type_val`
@@ -471,6 +523,643 @@ fn emitStackEffectTable(
     try out.appendSlice(allocator, "};\n\n");
 }
 
+/// Emit the static C data tables that carry TypeValue and
+/// TypeDescriptor metadata: enum-variant pool, struct-type pool,
+/// typedescriptor table, and the typevalue table itself. Cross-
+/// references between TypeValues encode as slot indices into the
+/// `onez_image_typevalue_slots[]` table that the loader fills at
+/// startup; cross-references to `StructType` (anonymous structs
+/// backing virtual TypeValues) encode as indices into
+/// `onez_image_struct_types_storage[]`.
+///
+/// Marked `__attribute__((used))` so the C compiler does not strip
+/// them while the header still references the (in-tree-deprecated)
+/// blob tables. Header restructuring in a follow-up step removes the
+/// attribute by making the new tables reachable from
+/// `onez_image_v1`.
+fn emitTypeValueData(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    effect_table: *const StackEffectTable,
+    struct_plans: []const StructTypePlan,
+    struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+) Allocator.Error!void {
+    if (effect_table.type_slots.items.len == 0 and struct_plans.len == 0) return;
+
+    var num_buf: [32]u8 = undefined;
+
+    // -- 1. Struct types (referenced by virtual.anon_struct) ----------
+    if (struct_plans.len > 0) {
+        for (struct_plans, 0..) |plan, i| {
+            try emitStructTypeStrings(out, allocator, plan.struct_type, i, effect_table);
+        }
+        try out.appendSlice(allocator, "\n__attribute__((used)) static const onez_image_struct_type_t onez_image_struct_types_storage[] = {\n");
+        for (struct_plans, 0..) |plan, i| {
+            const st = plan.struct_type;
+            try out.appendSlice(allocator, "    { .name = ");
+            try writeStructTypeNameSym(out, allocator, i);
+            try out.appendSlice(allocator, ", .name_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{st.name.len}) catch unreachable);
+            if (st.fields.len > 0) {
+                try out.appendSlice(allocator, ", .field_names = ");
+                try writeStructFieldNamesSym(out, allocator, i);
+                try out.appendSlice(allocator, ", .field_name_lens = ");
+                try writeStructFieldNameLensSym(out, allocator, i);
+            } else {
+                try out.appendSlice(allocator, ", .field_names = NULL, .field_name_lens = NULL");
+            }
+            try out.appendSlice(allocator, ", .field_count = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{st.fields.len}) catch unreachable);
+            if (st.field_types.len > 0) {
+                try out.appendSlice(allocator, ", .field_type_slots = ");
+                try writeStructFieldTypeSlotsSym(out, allocator, i);
+            } else {
+                try out.appendSlice(allocator, ", .field_type_slots = NULL");
+            }
+            try out.appendSlice(allocator, ", .field_type_count = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{st.field_types.len}) catch unreachable);
+            try out.appendSlice(allocator, " },\n");
+        }
+        try out.appendSlice(allocator, "};\n\n");
+    }
+
+    // -- 2. Type descriptors + enum variant pools ---------------------
+    for (effect_table.type_slots.items, 0..) |tv, i| {
+        try emitTypeDescriptorStrings(out, allocator, tv, i, effect_table, struct_index);
+    }
+
+    try out.appendSlice(allocator, "\n__attribute__((used)) static const onez_image_typedescriptor_t onez_image_typedescriptors_storage[] = {\n");
+    for (effect_table.type_slots.items, 0..) |tv, i| {
+        try emitTypeDescriptorRow(out, allocator, tv, i, effect_table, struct_index);
+    }
+    try out.appendSlice(allocator, "};\n\n");
+
+    // -- 3. Member-type slot arrays + TypeValue table -----------------
+    for (effect_table.type_slots.items, 0..) |tv, i| {
+        try emitTypeValueStrings(out, allocator, tv, i, effect_table);
+    }
+
+    try out.appendSlice(allocator, "\n__attribute__((used)) static const onez_image_typevalue_t onez_image_typevalues_storage[] = {\n");
+    for (effect_table.type_slots.items, 0..) |tv, i| {
+        const slot = i + 1;
+        try out.appendSlice(allocator, "    { .name = ");
+        try writeTypeValueNameSym(out, allocator, i);
+        try out.appendSlice(allocator, ", .name_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{tv.name.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{slot}) catch unreachable);
+        try out.appendSlice(allocator, ", .descriptor = ");
+        if (tv.descriptor != null) {
+            try out.appendSlice(allocator, "&onez_image_typedescriptors_storage[");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+            try out.appendSlice(allocator, "]");
+        } else {
+            try out.appendSlice(allocator, "NULL");
+        }
+        const mt_len: usize = if (tv.member_types) |m| m.len else 0;
+        if (mt_len > 0) {
+            try out.appendSlice(allocator, ", .member_type_slots = ");
+            try writeTypeValueMembersSym(out, allocator, i);
+        } else {
+            try out.appendSlice(allocator, ", .member_type_slots = NULL");
+        }
+        try out.appendSlice(allocator, ", .member_type_count = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{mt_len}) catch unreachable);
+        try out.appendSlice(allocator, " },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+fn typeKindIndex(kind: value_mod.TypeKindData) u8 {
+    return switch (kind) {
+        .builtin => 0,
+        .sentinel => 1,
+        .struct_ => 2,
+        .virtual => 3,
+        .enum_ => 4,
+        .enum_variant => 5,
+        .resource => 6,
+        .ffi_struct => 7,
+        .union_ => 8,
+    };
+}
+
+fn lookupTypeSlot(
+    effect_table: *const StackEffectTable,
+    maybe_tv: ?*const value_mod.TypeValue,
+) u32 {
+    const tv = maybe_tv orelse return 0;
+    return effect_table.type_slot_index.get(tv) orelse 0;
+}
+
+/// Emit auxiliary strings + arrays needed by one struct-type row.
+fn emitStructTypeStrings(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    st: *const value_mod.StructType,
+    idx: usize,
+    effect_table: *const StackEffectTable,
+) Allocator.Error!void {
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "static const char ");
+    try writeStructTypeNameSym(out, allocator, idx);
+    try out.appendSlice(allocator, "[] = ");
+    try emitCStringLiteral(out, allocator, st.name);
+    try out.appendSlice(allocator, ";\n");
+
+    if (st.fields.len > 0) {
+        for (st.fields, 0..) |fname, fi| {
+            try out.appendSlice(allocator, "static const char ");
+            try writeStructFieldNameSym(out, allocator, idx, fi);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, fname);
+            try out.appendSlice(allocator, ";\n");
+        }
+
+        try out.appendSlice(allocator, "static const char *const ");
+        try writeStructFieldNamesSym(out, allocator, idx);
+        try out.appendSlice(allocator, "[] = {");
+        for (st.fields, 0..) |_, fi| {
+            if (fi > 0) try out.append(allocator, ',');
+            try out.append(allocator, ' ');
+            try writeStructFieldNameSym(out, allocator, idx, fi);
+        }
+        try out.appendSlice(allocator, " };\n");
+
+        try out.appendSlice(allocator, "static const uint32_t ");
+        try writeStructFieldNameLensSym(out, allocator, idx);
+        try out.appendSlice(allocator, "[] = {");
+        for (st.fields, 0..) |fname, fi| {
+            if (fi > 0) try out.append(allocator, ',');
+            try out.append(allocator, ' ');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{fname.len}) catch unreachable);
+        }
+        try out.appendSlice(allocator, " };\n");
+    }
+
+    if (st.field_types.len > 0) {
+        try out.appendSlice(allocator, "static const uint32_t ");
+        try writeStructFieldTypeSlotsSym(out, allocator, idx);
+        try out.appendSlice(allocator, "[] = {");
+        for (st.field_types, 0..) |maybe_tv, fi| {
+            if (fi > 0) try out.append(allocator, ',');
+            try out.append(allocator, ' ');
+            const slot = lookupTypeSlot(effect_table, maybe_tv);
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{slot}) catch unreachable);
+        }
+        try out.appendSlice(allocator, " };\n");
+    }
+}
+
+fn writeStructTypeNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_st_{d}_name", .{idx}) catch unreachable);
+}
+
+fn writeStructFieldNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    st_idx: usize,
+    fi: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_st_{d}_f{d}_name", .{ st_idx, fi }) catch unreachable);
+}
+
+fn writeStructFieldNamesSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_st_{d}_field_names", .{idx}) catch unreachable);
+}
+
+fn writeStructFieldNameLensSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_st_{d}_field_name_lens", .{idx}) catch unreachable);
+}
+
+fn writeStructFieldTypeSlotsSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_st_{d}_field_type_slots", .{idx}) catch unreachable);
+}
+
+/// Emit per-descriptor auxiliary strings and arrays.
+fn emitTypeDescriptorStrings(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    tv: *const value_mod.TypeValue,
+    idx: usize,
+    effect_table: *const StackEffectTable,
+    struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+) Allocator.Error!void {
+    _ = struct_index;
+    var num_buf: [32]u8 = undefined;
+    const desc = tv.descriptor orelse return;
+    switch (desc.kind) {
+        .builtin, .sentinel, .union_ => {},
+        .struct_ => |sd| try emitFieldArrays(out, allocator, idx, sd.fields, sd.field_types, effect_table),
+        .ffi_struct => |fsd| try emitFieldArrays(out, allocator, idx, fsd.fields, fsd.field_types, effect_table),
+        .virtual => |vd| {
+            if (vd.type_params.len > 0) {
+                try out.appendSlice(allocator, "static const uint32_t ");
+                try writeTypeParamSlotsSym(out, allocator, idx);
+                try out.appendSlice(allocator, "[] = {");
+                for (vd.type_params, 0..) |tp, ti| {
+                    if (ti > 0) try out.append(allocator, ',');
+                    try out.append(allocator, ' ');
+                    const slot = effect_table.type_slot_index.get(tp) orelse 0;
+                    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{slot}) catch unreachable);
+                }
+                try out.appendSlice(allocator, " };\n");
+            }
+        },
+        .enum_ => |ed| {
+            if (ed.variants.len > 0) {
+                for (ed.variants, 0..) |v, vi| {
+                    try out.appendSlice(allocator, "static const char ");
+                    try writeEnumVariantNameSym(out, allocator, idx, vi);
+                    try out.appendSlice(allocator, "[] = ");
+                    try emitCStringLiteral(out, allocator, v.name);
+                    try out.appendSlice(allocator, ";\n");
+                }
+                try out.appendSlice(allocator, "static const onez_image_enum_variant_t ");
+                try writeEnumVariantsSym(out, allocator, idx);
+                try out.appendSlice(allocator, "[] = {\n");
+                for (ed.variants, 0..) |v, vi| {
+                    const slot = lookupTypeSlot(effect_table, v.type_val);
+                    try out.appendSlice(allocator, "    { .name = ");
+                    try writeEnumVariantNameSym(out, allocator, idx, vi);
+                    try out.appendSlice(allocator, ", .name_len = ");
+                    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{v.name.len}) catch unreachable);
+                    try out.appendSlice(allocator, ", .type_slot = ");
+                    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{slot}) catch unreachable);
+                    try out.appendSlice(allocator, " },\n");
+                }
+                try out.appendSlice(allocator, "};\n");
+            }
+        },
+        .enum_variant => {},
+        .resource => |rd| {
+            try out.appendSlice(allocator, "static const char ");
+            try writeResourceKindSym(out, allocator, idx);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, rd.resource_kind);
+            try out.appendSlice(allocator, ";\n");
+        },
+    }
+}
+
+fn emitFieldArrays(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+    fields: []const []const u8,
+    field_types: []const ?*const value_mod.TypeValue,
+    effect_table: *const StackEffectTable,
+) Allocator.Error!void {
+    var num_buf: [32]u8 = undefined;
+    if (fields.len > 0) {
+        for (fields, 0..) |fname, fi| {
+            try out.appendSlice(allocator, "static const char ");
+            try writeDescFieldNameSym(out, allocator, idx, fi);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, fname);
+            try out.appendSlice(allocator, ";\n");
+        }
+        try out.appendSlice(allocator, "static const char *const ");
+        try writeDescFieldNamesSym(out, allocator, idx);
+        try out.appendSlice(allocator, "[] = {");
+        for (fields, 0..) |_, fi| {
+            if (fi > 0) try out.append(allocator, ',');
+            try out.append(allocator, ' ');
+            try writeDescFieldNameSym(out, allocator, idx, fi);
+        }
+        try out.appendSlice(allocator, " };\n");
+
+        try out.appendSlice(allocator, "static const uint32_t ");
+        try writeDescFieldNameLensSym(out, allocator, idx);
+        try out.appendSlice(allocator, "[] = {");
+        for (fields, 0..) |fname, fi| {
+            if (fi > 0) try out.append(allocator, ',');
+            try out.append(allocator, ' ');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{fname.len}) catch unreachable);
+        }
+        try out.appendSlice(allocator, " };\n");
+    }
+    if (field_types.len > 0) {
+        try out.appendSlice(allocator, "static const uint32_t ");
+        try writeDescFieldTypeSlotsSym(out, allocator, idx);
+        try out.appendSlice(allocator, "[] = {");
+        for (field_types, 0..) |maybe_tv, fi| {
+            if (fi > 0) try out.append(allocator, ',');
+            try out.append(allocator, ' ');
+            const slot = lookupTypeSlot(effect_table, maybe_tv);
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{slot}) catch unreachable);
+        }
+        try out.appendSlice(allocator, " };\n");
+    }
+}
+
+fn writeDescFieldNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+    fi: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_td_{d}_f{d}_name", .{ idx, fi }) catch unreachable);
+}
+
+fn writeDescFieldNamesSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_td_{d}_field_names", .{idx}) catch unreachable);
+}
+
+fn writeDescFieldNameLensSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_td_{d}_field_name_lens", .{idx}) catch unreachable);
+}
+
+fn writeDescFieldTypeSlotsSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_td_{d}_field_type_slots", .{idx}) catch unreachable);
+}
+
+fn writeTypeParamSlotsSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_td_{d}_type_param_slots", .{idx}) catch unreachable);
+}
+
+fn writeEnumVariantsSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_td_{d}_variants", .{idx}) catch unreachable);
+}
+
+fn writeEnumVariantNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+    vi: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_td_{d}_v{d}_name", .{ idx, vi }) catch unreachable);
+}
+
+fn writeResourceKindSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_td_{d}_resource_kind", .{idx}) catch unreachable);
+}
+
+/// Emit one row of the `onez_image_typedescriptors_storage[]` table.
+fn emitTypeDescriptorRow(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    tv: *const value_mod.TypeValue,
+    idx: usize,
+    effect_table: *const StackEffectTable,
+    struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+) Allocator.Error!void {
+    var num_buf: [32]u8 = undefined;
+    // Zero-default descriptor for TypeValues with desc == null.
+    if (tv.descriptor == null) {
+        try out.appendSlice(allocator, "    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0 },\n");
+        return;
+    }
+    const desc = tv.descriptor.?;
+
+    try out.appendSlice(allocator, "    { .numeric = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{@intFromBool(desc.numeric)}) catch unreachable);
+    try out.appendSlice(allocator, ", .exact = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{@intFromBool(desc.exact)}) catch unreachable);
+    try out.appendSlice(allocator, ", .integer = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{@intFromBool(desc.integer)}) catch unreachable);
+    try out.appendSlice(allocator, ", .mutable = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{@intFromBool(desc.mutable)}) catch unreachable);
+    try out.appendSlice(allocator, ", .kind = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{typeKindIndex(desc.kind)}) catch unreachable);
+    try out.appendSlice(allocator, ", ._pad = {0,0,0}");
+
+    // Initialize fields/field_types based on kind.
+    var field_count: usize = 0;
+    var field_type_count: usize = 0;
+    var has_field_names = false;
+    var has_field_type_slots = false;
+    switch (desc.kind) {
+        .struct_ => |sd| {
+            field_count = sd.fields.len;
+            field_type_count = sd.field_types.len;
+            has_field_names = sd.fields.len > 0;
+            has_field_type_slots = sd.field_types.len > 0;
+        },
+        .ffi_struct => |fsd| {
+            field_count = fsd.fields.len;
+            field_type_count = fsd.field_types.len;
+            has_field_names = fsd.fields.len > 0;
+            has_field_type_slots = fsd.field_types.len > 0;
+        },
+        else => {},
+    }
+    if (has_field_names) {
+        try out.appendSlice(allocator, ", .field_names = ");
+        try writeDescFieldNamesSym(out, allocator, idx);
+        try out.appendSlice(allocator, ", .field_name_lens = ");
+        try writeDescFieldNameLensSym(out, allocator, idx);
+    } else {
+        try out.appendSlice(allocator, ", .field_names = NULL, .field_name_lens = NULL");
+    }
+    try out.appendSlice(allocator, ", .field_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{field_count}) catch unreachable);
+    if (has_field_type_slots) {
+        try out.appendSlice(allocator, ", .field_type_slots = ");
+        try writeDescFieldTypeSlotsSym(out, allocator, idx);
+    } else {
+        try out.appendSlice(allocator, ", .field_type_slots = NULL");
+    }
+    try out.appendSlice(allocator, ", .field_type_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{field_type_count}) catch unreachable);
+
+    // inner_type_slot
+    var inner_type_slot: u32 = 0;
+    switch (desc.kind) {
+        .virtual => |vd| inner_type_slot = lookupTypeSlot(effect_table, vd.inner_type),
+        .enum_variant => |evd| inner_type_slot = lookupTypeSlot(effect_table, evd.inner_type),
+        else => {},
+    }
+    try out.appendSlice(allocator, ", .inner_type_slot = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{inner_type_slot}) catch unreachable);
+
+    // anon_struct_idx
+    var anon_idx_str: []const u8 = "0xFFFFFFFFu";
+    var anon_idx_buf: [32]u8 = undefined;
+    switch (desc.kind) {
+        .virtual => |vd| if (vd.anon_struct) |st| {
+            if (struct_index.get(st)) |i| {
+                anon_idx_str = std.fmt.bufPrint(&anon_idx_buf, "{d}u", .{i}) catch unreachable;
+            }
+        },
+        else => {},
+    }
+    try out.appendSlice(allocator, ", .anon_struct_idx = ");
+    try out.appendSlice(allocator, anon_idx_str);
+
+    // type_param_slots
+    var type_param_count: usize = 0;
+    var has_type_param_slots = false;
+    switch (desc.kind) {
+        .virtual => |vd| {
+            type_param_count = vd.type_params.len;
+            has_type_param_slots = vd.type_params.len > 0;
+        },
+        else => {},
+    }
+    if (has_type_param_slots) {
+        try out.appendSlice(allocator, ", .type_param_slots = ");
+        try writeTypeParamSlotsSym(out, allocator, idx);
+    } else {
+        try out.appendSlice(allocator, ", .type_param_slots = NULL");
+    }
+    try out.appendSlice(allocator, ", .type_param_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{type_param_count}) catch unreachable);
+
+    // parent_type_slot
+    var parent_slot: u32 = 0;
+    switch (desc.kind) {
+        .enum_variant => |evd| parent_slot = lookupTypeSlot(effect_table, evd.parent),
+        else => {},
+    }
+    try out.appendSlice(allocator, ", .parent_type_slot = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{parent_slot}) catch unreachable);
+
+    // variants
+    var variant_count: usize = 0;
+    var has_variants = false;
+    switch (desc.kind) {
+        .enum_ => |ed| {
+            variant_count = ed.variants.len;
+            has_variants = ed.variants.len > 0;
+        },
+        else => {},
+    }
+    if (has_variants) {
+        try out.appendSlice(allocator, ", .variants = ");
+        try writeEnumVariantsSym(out, allocator, idx);
+    } else {
+        try out.appendSlice(allocator, ", .variants = NULL");
+    }
+    try out.appendSlice(allocator, ", .variant_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{variant_count}) catch unreachable);
+
+    // resource_kind
+    switch (desc.kind) {
+        .resource => |rd| {
+            try out.appendSlice(allocator, ", .resource_kind = ");
+            try writeResourceKindSym(out, allocator, idx);
+            try out.appendSlice(allocator, ", .resource_kind_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{rd.resource_kind.len}) catch unreachable);
+        },
+        else => {
+            try out.appendSlice(allocator, ", .resource_kind = NULL, .resource_kind_len = 0");
+        },
+    }
+
+    // ffi_layout
+    var ffi_layout: u64 = 0;
+    switch (desc.kind) {
+        .ffi_struct => |fsd| ffi_layout = @intCast(fsd.ffi_layout),
+        else => {},
+    }
+    try out.appendSlice(allocator, ", .ffi_layout = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{ffi_layout}) catch unreachable);
+    try out.appendSlice(allocator, "u },\n");
+}
+
+/// Emit per-TypeValue auxiliary strings: the name and (if present)
+/// the member_type_slots array.
+fn emitTypeValueStrings(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    tv: *const value_mod.TypeValue,
+    idx: usize,
+    effect_table: *const StackEffectTable,
+) Allocator.Error!void {
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "static const char ");
+    try writeTypeValueNameSym(out, allocator, idx);
+    try out.appendSlice(allocator, "[] = ");
+    try emitCStringLiteral(out, allocator, tv.name);
+    try out.appendSlice(allocator, ";\n");
+
+    const mts: []const *const value_mod.TypeValue = if (tv.member_types) |m| m else &.{};
+    if (mts.len > 0) {
+        try out.appendSlice(allocator, "static const uint32_t ");
+        try writeTypeValueMembersSym(out, allocator, idx);
+        try out.appendSlice(allocator, "[] = {");
+        for (mts, 0..) |m, mi| {
+            if (mi > 0) try out.append(allocator, ',');
+            try out.append(allocator, ' ');
+            const slot = effect_table.type_slot_index.get(m) orelse 0;
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{slot}) catch unreachable);
+        }
+        try out.appendSlice(allocator, " };\n");
+    }
+}
+
+fn writeTypeValueNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_tv_{d}_name", .{idx}) catch unreachable);
+}
+
+fn writeTypeValueMembersSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_tv_{d}_members", .{idx}) catch unreachable);
+}
+
 fn emitEffectParamStrings(
     out: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
@@ -562,238 +1251,6 @@ fn writeEffectParamArraySym(
     try out.appendSlice(allocator, s);
 }
 
-/// Value-kind tags emitted into `onez_image_blob_descriptor_entry.value_kind`.
-/// The set covers exactly what `createTypeDescriptor` produces (symbols,
-/// booleans, fixnums, strings, unit). The `unsupported` sentinel keeps
-/// codegen total when a TypeValue carries a descriptor entry the loader
-/// is not prepared to decode; the loader will drop it with a diagnostic.
-const BlobValueKind = enum(u8) {
-    symbol = 0,
-    boolean = 1,
-    fixnum = 2,
-    string = 3,
-    unit = 4,
-    unsupported = 5,
-};
-
-const BlobDescriptorEntry = struct {
-    key: []const u8,
-    kind: BlobValueKind,
-    bool_value: bool = false,
-    fixnum_value: i64 = 0,
-    string_value: []const u8 = "",
-};
-
-/// Emit per-blob descriptor arrays plus the
-/// `onez_image_blob_typevalues_storage[]` and
-/// `onez_image_blob_entries_storage[]` tables. No-op when no blob
-/// entries are present (the header still emits a NULL pointer so the
-/// loader can branch on count).
-fn emitBlobEntries(
-    out: *std.ArrayListUnmanaged(u8),
-    allocator: Allocator,
-    plans: []const BlobEntryPlan,
-    stats: *ImageEmissionStats,
-) Allocator.Error!void {
-    if (plans.len == 0) return;
-
-    var num_buf: [32]u8 = undefined;
-
-    // Per-blob descriptor entry arrays. Indexed by position in
-    // `plans` so the typevalue struct below can reference each by
-    // its symbol. Non-`type_val` plans contribute no descriptor
-    // array.
-    const descriptor_entry_counts = try allocator.alloc(u32, plans.len);
-    defer allocator.free(descriptor_entry_counts);
-    @memset(descriptor_entry_counts, 0);
-
-    var emitted_typevalues: u32 = 0;
-    for (plans, 0..) |plan, i| {
-        const tv = plan.typevalue orelse continue;
-        emitted_typevalues += 1;
-
-        var descriptor_entries: std.ArrayListUnmanaged(BlobDescriptorEntry) = .{};
-        defer descriptor_entries.deinit(allocator);
-
-        if (tv.descriptor) |desc| {
-            try collectDescriptorEntries(&descriptor_entries, allocator, desc);
-        }
-        descriptor_entry_counts[i] = @intCast(descriptor_entries.items.len);
-
-        // Lex sort by key; StringHashMap iteration is unstable.
-        std.mem.sort(BlobDescriptorEntry, descriptor_entries.items, {}, struct {
-            fn lessThan(_: void, a: BlobDescriptorEntry, b: BlobDescriptorEntry) bool {
-                return std.mem.lessThan(u8, a.key, b.key);
-            }
-        }.lessThan);
-
-        if (descriptor_entries.items.len > 0) {
-            try out.appendSlice(allocator, "static const onez_image_blob_descriptor_entry_t ");
-            try writeBlobDescSym(out, allocator, i);
-            try out.appendSlice(allocator, "[] = {\n");
-            for (descriptor_entries.items) |de| {
-                try out.appendSlice(allocator, "    { .key = ");
-                try emitCStringLiteral(out, allocator, de.key);
-                try out.appendSlice(allocator, ", .key_len = ");
-                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{de.key.len}) catch unreachable);
-                try out.appendSlice(allocator, ", .value_kind = ");
-                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{@intFromEnum(de.kind)}) catch unreachable);
-                try out.appendSlice(allocator, ", .bool_value = ");
-                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{@intFromBool(de.bool_value)}) catch unreachable);
-                try out.appendSlice(allocator, ", ._pad = 0, .fixnum_value = ");
-                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{de.fixnum_value}) catch unreachable);
-                try out.appendSlice(allocator, ", .string_value = ");
-                if (de.kind == .symbol or de.kind == .string) {
-                    try emitCStringLiteral(out, allocator, de.string_value);
-                } else {
-                    try out.appendSlice(allocator, "NULL");
-                }
-                try out.appendSlice(allocator, ", .string_value_len = ");
-                if (de.kind == .symbol or de.kind == .string) {
-                    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{de.string_value.len}) catch unreachable);
-                } else {
-                    try out.appendSlice(allocator, "0");
-                }
-                try out.appendSlice(allocator, " },\n");
-            }
-            try out.appendSlice(allocator, "};\n");
-        }
-    }
-    if (emitted_typevalues > 0) try out.append(allocator, '\n');
-    stats.blob_typevalues_emitted = emitted_typevalues;
-
-    // Per-blob TypeValue records. One per `type_val` plan. The
-    // `name`/`name_len` mirror the word's name symbol that
-    // `emitModuleAndWordTables` already emits, so we can reuse that
-    // pool by referencing `onez_image_w_<idx>_name`.
-    if (emitted_typevalues > 0) {
-        try out.appendSlice(allocator, "static const onez_image_blob_typevalue_t onez_image_blob_typevalues_storage[] = {\n");
-        for (plans, 0..) |plan, i| {
-            const tv = plan.typevalue orelse continue;
-            try out.appendSlice(allocator, "    { .name = ");
-            try writeWordNameSym(out, allocator, plan.word_idx);
-            try out.appendSlice(allocator, ", .name_len = ");
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{tv.name.len}) catch unreachable);
-            try out.appendSlice(allocator, ", .typevalue_slot = ");
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{plan.typevalue_slot}) catch unreachable);
-
-            // Descriptor entry array reference + count. The per-blob
-            // symbol exists iff the first-loop count is non-zero.
-            const entry_count = descriptor_entry_counts[i];
-            if (entry_count > 0) {
-                try out.appendSlice(allocator, ", .descriptor_entries = ");
-                try writeBlobDescSym(out, allocator, i);
-                try out.appendSlice(allocator, ", .descriptor_entry_count = ");
-                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{entry_count}) catch unreachable);
-            } else {
-                try out.appendSlice(allocator, ", .descriptor_entries = NULL, .descriptor_entry_count = 0");
-            }
-            try out.appendSlice(allocator, ", .member_type_slots = NULL, .member_type_count = 0 },\n");
-        }
-        try out.appendSlice(allocator, "};\n\n");
-    }
-
-    // Top-level blob entry table. One per plan (covers both `type_val`
-    // and non-`type_val` reasons; the latter emit `typevalue = NULL`
-    // so the loader can route by `blob_kind`).
-    try out.appendSlice(allocator, "static const onez_image_blob_entry_t onez_image_blob_entries_storage[] = {\n");
-    var emitted_typevalue_idx: u32 = 0;
-    for (plans) |plan| {
-        try out.appendSlice(allocator, "    { .word_idx = ");
-        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{plan.word_idx}) catch unreachable);
-        try out.appendSlice(allocator, ", .blob_kind = ");
-        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{@intFromEnum(plan.blob_kind)}) catch unreachable);
-        try out.appendSlice(allocator, ", ._pad = {0,0,0}, .typevalue = ");
-        if (plan.typevalue != null) {
-            try out.appendSlice(allocator, "&onez_image_blob_typevalues_storage[");
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{emitted_typevalue_idx}) catch unreachable);
-            try out.appendSlice(allocator, "]");
-            emitted_typevalue_idx += 1;
-        } else {
-            try out.appendSlice(allocator, "NULL");
-        }
-        try out.appendSlice(allocator, " },\n");
-    }
-    try out.appendSlice(allocator, "};\n\n");
-}
-
-fn writeBlobDescSym(
-    out: *std.ArrayListUnmanaged(u8),
-    allocator: Allocator,
-    plan_idx: usize,
-) Allocator.Error!void {
-    var buf: [48]u8 = undefined;
-    const s = std.fmt.bufPrint(&buf, "onez_image_blob_desc_{d}", .{plan_idx}) catch unreachable;
-    try out.appendSlice(allocator, s);
-}
-
-/// Walk a TypeDescriptor and append blob entries to `out`. Always emits the
-/// `type` discriminator and the four universal booleans, then per-kind
-/// fields. Kind-specific fields whose runtime payload would require a
-/// type_val reference (struct/virtual/enum cross-links) land on
-/// `BlobValueKind.unsupported` so the loader can skip them with a
-/// diagnostic; primitive fields (`resource-kind`, `ffi-layout`) round-trip.
-fn collectDescriptorEntries(
-    out: *std.ArrayListUnmanaged(BlobDescriptorEntry),
-    allocator: Allocator,
-    desc: *const value_mod.TypeDescriptor,
-) Allocator.Error!void {
-    try out.append(allocator, .{
-        .key = "type",
-        .kind = .symbol,
-        .string_value = value_mod.typeKindSymbol(desc.kind),
-    });
-    try out.append(allocator, .{ .key = "numeric", .kind = .boolean, .bool_value = desc.numeric });
-    try out.append(allocator, .{ .key = "exact", .kind = .boolean, .bool_value = desc.exact });
-    try out.append(allocator, .{ .key = "integer", .kind = .boolean, .bool_value = desc.integer });
-    try out.append(allocator, .{ .key = "mutable", .kind = .boolean, .bool_value = desc.mutable });
-    switch (desc.kind) {
-        .builtin, .sentinel, .union_ => {},
-        .struct_ => |sd| {
-            try out.append(allocator, .{ .key = "fields", .kind = .unsupported });
-            if (sd.field_types.len != 0) {
-                try out.append(allocator, .{ .key = "field-types", .kind = .unsupported });
-            }
-        },
-        .virtual => |vd| {
-            if (vd.inner_type != null or vd.anon_struct != null) {
-                try out.append(allocator, .{ .key = "inner-type", .kind = .unsupported });
-            }
-            if (vd.type_params.len == 1) {
-                try out.append(allocator, .{ .key = "element-type", .kind = .unsupported });
-            }
-        },
-        .enum_ => {
-            try out.append(allocator, .{ .key = "variants", .kind = .unsupported });
-        },
-        .enum_variant => |evd| {
-            if (evd.parent != null) {
-                try out.append(allocator, .{ .key = "parent", .kind = .unsupported });
-            }
-            if (evd.inner_type != null) {
-                try out.append(allocator, .{ .key = "inner-type", .kind = .unsupported });
-            }
-        },
-        .resource => |rd| {
-            try out.append(allocator, .{
-                .key = "resource-kind",
-                .kind = .string,
-                .string_value = rd.resource_kind,
-            });
-        },
-        .ffi_struct => |fsd| {
-            try out.append(allocator, .{ .key = "fields", .kind = .unsupported });
-            if (fsd.ffi_layout != 0) {
-                try out.append(allocator, .{
-                    .key = "ffi-layout",
-                    .kind = .fixnum,
-                    .fixnum_value = @intCast(fsd.ffi_layout),
-                });
-            }
-        },
-    }
-}
-
 fn writeMarkerNameSym(
     out: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
@@ -876,7 +1333,7 @@ fn emitTypeDeclarations(
     allocator: Allocator,
 ) Allocator.Error!void {
     try out.appendSlice(allocator,
-        \\/* AOT runtime image: static-C-data layout. */
+        \\/* AOT runtime image: static C data layout. */
         \\/* The loader walks `onez_image_v1` to populate the runtime */
         \\/* Context's dictionary, modules, and slot tables. */
         \\
@@ -929,50 +1386,77 @@ fn emitTypeDeclarations(
         \\    uint32_t marker_count;
         \\    const uint8_t *body_bytecode;
         \\    uint32_t body_bytecode_len;
-        \\    uint32_t blob_entry_idx;          /* 0xFFFFFFFFu when no blob entry. */
-        \\    uint32_t typevalue_slot;          /* 0 when this word does not publish a slot. */
+        \\    uint32_t typevalue_slot;          /* 0 when this word does not publish a TypeValue. */
         \\} onez_image_word_t;
         \\
-        \\/* Blob-path schema. The structural-C-data structs above ARE the */
-        \\/* runtime values; these blob structs DESCRIBE values that the   */
-        \\/* loader must allocate at startup (TypeValue.descriptor is a    */
-        \\/* StringHashMapUnmanaged whose layout is allocator-dependent).  */
-        \\/* value_kind in onez_image_blob_descriptor_entry: */
-        \\/*   0 = symbol  (string_value points to interned name)         */
-        \\/*   1 = boolean (bool_value carries 0 or 1)                    */
-        \\/*   2 = fixnum  (fixnum_value carries the i64)                 */
-        \\/*   3 = string  (string_value points to the literal)           */
-        \\/*   4 = unit    (no payload)                                   */
-        \\/*   5 = unsupported (loader skips with diagnostic)             */
-        \\typedef struct onez_image_blob_descriptor_entry {
-        \\    const char *key;
-        \\    uint32_t key_len;
-        \\    uint8_t  value_kind;
-        \\    uint8_t  bool_value;
-        \\    uint16_t _pad;
-        \\    int64_t  fixnum_value;
-        \\    const char *string_value;
-        \\    uint32_t string_value_len;
-        \\} onez_image_blob_descriptor_entry_t;
-        \\
-        \\typedef struct onez_image_blob_typevalue {
+        \\/* TypeValue static C data schema. Every TypeValue reachable from any */
+        \\/* module-private word's body or from another descriptor's cross-     */
+        \\/* references gets a row in onez_image_typevalues_storage[] and a    */
+        \\/* paired row in onez_image_typedescriptors_storage[] indexed by the */
+        \\/* same slot number. Cross-references between TypeValues encode as   */
+        \\/* slot indices into onez_image_typevalue_slots[]; the loader fills  */
+        \\/* the slot table during pass 2 of the load and reads it during      */
+        \\/* pass 3 when materializing each descriptor's kind-specific data.   */
+        \\/* `kind` matches Zig TypeKind: 0=builtin, 1=sentinel, 2=struct_,    */
+        \\/* 3=virtual, 4=enum_, 5=enum_variant, 6=resource, 7=ffi_struct,     */
+        \\/* 8=union_.                                                          */
+        \\typedef struct onez_image_enum_variant {
         \\    const char *name;
         \\    uint32_t name_len;
-        \\    uint32_t typevalue_slot;          /* index into onez_image_typevalue_slots */
-        \\    const struct onez_image_blob_descriptor_entry *descriptor_entries;
-        \\    uint32_t descriptor_entry_count;
-        \\    /* Reserved for deeper type-graph rehydration. */
-        \\    const uint32_t *member_type_slots;
-        \\    uint32_t member_type_count;
-        \\} onez_image_blob_typevalue_t;
+        \\    uint32_t type_slot;               /* 0 if variant has no inner type. */
+        \\} onez_image_enum_variant_t;
         \\
-        \\typedef struct onez_image_blob_entry {
-        \\    uint32_t word_idx;                /* back-pointer into onez_image_words_storage */
-        \\    uint8_t  blob_kind;               /* matches BlobReason; today always type_val_descriptor */
+        \\typedef struct onez_image_struct_type {
+        \\    const char *name;
+        \\    uint32_t name_len;
+        \\    const char *const *field_names;
+        \\    const uint32_t    *field_name_lens;
+        \\    uint32_t           field_count;
+        \\    const uint32_t    *field_type_slots;
+        \\    uint32_t           field_type_count;
+        \\} onez_image_struct_type_t;
+        \\
+        \\typedef struct onez_image_typedescriptor {
+        \\    uint8_t  numeric;
+        \\    uint8_t  exact;
+        \\    uint8_t  integer;
+        \\    uint8_t  mutable;
+        \\    uint8_t  kind;
         \\    uint8_t  _pad[3];
-        \\    /* typevalue is non-NULL for type_val blob entries; NULL for other blob kinds. */
-        \\    const struct onez_image_blob_typevalue *typevalue;
-        \\} onez_image_blob_entry_t;
+        \\    /* struct_, ffi_struct: field names + optional type slots. */
+        \\    const char *const *field_names;
+        \\    const uint32_t    *field_name_lens;
+        \\    uint32_t           field_count;
+        \\    const uint32_t    *field_type_slots;
+        \\    uint32_t           field_type_count;
+        \\    /* virtual, enum_variant: inner type slot (0 = absent). */
+        \\    uint32_t inner_type_slot;
+        \\    /* virtual: anon_struct_idx into onez_image_struct_types_storage    */
+        \\    /* (0xFFFFFFFFu when absent).                                       */
+        \\    uint32_t anon_struct_idx;
+        \\    /* virtual: parameterized type-parameter slots. */
+        \\    const uint32_t *type_param_slots;
+        \\    uint32_t        type_param_count;
+        \\    /* enum_variant: parent type slot (0 = absent). */
+        \\    uint32_t parent_type_slot;
+        \\    /* enum_: variants array. */
+        \\    const struct onez_image_enum_variant *variants;
+        \\    uint32_t variant_count;
+        \\    /* resource: kind name. */
+        \\    const char *resource_kind;
+        \\    uint32_t    resource_kind_len;
+        \\    /* ffi_struct: layout pointer-as-fixnum. */
+        \\    uint64_t ffi_layout;
+        \\} onez_image_typedescriptor_t;
+        \\
+        \\typedef struct onez_image_typevalue {
+        \\    const char *name;
+        \\    uint32_t    name_len;
+        \\    uint32_t    slot;                 /* index into onez_image_typevalue_slots */
+        \\    const struct onez_image_typedescriptor *descriptor;
+        \\    const uint32_t *member_type_slots;
+        \\    uint32_t        member_type_count;
+        \\} onez_image_typevalue_t;
         \\
         \\typedef struct onez_image_header {
         \\    uint32_t format_version;
@@ -981,13 +1465,15 @@ fn emitTypeDeclarations(
         \\    uint32_t marker_pool_count;
         \\    uint32_t typevalue_slot_count;
         \\    uint32_t stack_effect_count;
-        \\    uint32_t blob_entry_count;
-        \\    uint32_t _pad;
+        \\    uint32_t typevalue_count;
+        \\    uint32_t struct_type_count;
         \\    const struct onez_image_module *modules;
         \\    const struct onez_image_word *words;
         \\    const struct onez_image_marker *markers;
         \\    const struct onez_image_stack_effect *stack_effects;
-        \\    const struct onez_image_blob_entry *blob_entries;
+        \\    const struct onez_image_typevalue *typevalues;
+        \\    const struct onez_image_typedescriptor *typedescriptors;
+        \\    const struct onez_image_struct_type *struct_types;
         \\} onez_image_header_t;
         \\
         \\
@@ -1058,6 +1544,14 @@ fn emitWordBodyBytecode(
         };
         if (body.len == 0) continue;
         if (mw_ptr.provenance != null) continue;
+        // Words that push a TypeValue have their body rewritten by the
+        // runtime-image loader after it allocates the runtime
+        // TypeValue. Encoding the body as bytecode would lower the
+        // `push_literal: type_val` to `call_word value.name`, which for
+        // a type-defining word is the word itself -- infinite
+        // recursion at runtime. Skip emission and let the loader
+        // populate the body from `typevalue_slot`.
+        if (findTypeValueLiteral(mw_ptr) != null) continue;
 
         const bytes = instruction_bytecode.serializeQuotationInstructions(body, allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -1091,7 +1585,7 @@ fn writeWordBodySym(
 
 /// Emit `onez_image_modules[]` and `onez_image_words[]` along with
 /// each word's marker pointer array. Word name strings are emitted
-/// up front by `emitWordNameStrings` so the blob entries (emitted
+/// up front by `emitWordNameStrings` so the typevalue table (emitted
 /// earlier) can reference them.
 fn emitModuleAndWordTables(
     out: *std.ArrayListUnmanaged(u8),
@@ -1101,8 +1595,7 @@ fn emitModuleAndWordTables(
     word_id_lookup: *const std.StringHashMapUnmanaged(u32),
     pool: *const MarkerPool,
     effect_table: *const StackEffectTable,
-    blob_plans: []const BlobEntryPlan,
-    word_to_blob: []const u32,
+    word_to_typevalue_slot: []const u32,
     word_body_lens: []const u32,
     stats: *ImageEmissionStats,
 ) Allocator.Error!void {
@@ -1169,13 +1662,11 @@ fn emitModuleAndWordTables(
     );
     var current_module_idx: u32 = 0;
     var current_module_name: []const u8 = manifest.entries[0].module_name;
-    var blob_present = false;
     for (manifest.entries, 0..) |entry, idx| {
         if (!std.mem.eql(u8, entry.module_name, current_module_name)) {
             current_module_idx += 1;
             current_module_name = entry.module_name;
         }
-        if (entry.path == .blob) blob_present = true;
 
         const fallback_mw = ModuleWord{ .action = .{ .compound = &.{} } };
         const mw_ptr: *const ModuleWord = lookupModuleWord(ctx, entry) orelse &fallback_mw;
@@ -1249,16 +1740,8 @@ fn emitModuleAndWordTables(
             try out.appendSlice(allocator, "        .body_bytecode_len = 0,\n");
         }
 
-        const blob_idx = word_to_blob[idx];
-        try out.appendSlice(allocator, "        .blob_entry_idx = ");
-        if (blob_idx == 0xFFFFFFFF) {
-            try out.appendSlice(allocator, "0xFFFFFFFFu");
-        } else {
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{blob_idx}) catch unreachable);
-        }
-        try out.appendSlice(allocator, ",\n        .typevalue_slot = ");
-        const tv_slot: u32 = if (blob_idx == 0xFFFFFFFF) 0 else blob_plans[blob_idx].typevalue_slot;
-        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{tv_slot}) catch unreachable);
+        try out.appendSlice(allocator, "        .typevalue_slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{word_to_typevalue_slot[idx]}) catch unreachable);
         try out.appendSlice(allocator,
             \\,
             \\    },
@@ -1298,7 +1781,7 @@ fn emitModuleAndWordTables(
     try out.appendSlice(allocator, "};\n\n");
 
     stats.word_count = @intCast(manifest.entries.len);
-    stats.blob_present = blob_present;
+    stats.blob_present = manifest.blob_count > 0;
 
     _ = module_count;
 }
@@ -1373,7 +1856,7 @@ fn emitHeader(
     manifest: ImageManifest,
     pool: *const MarkerPool,
     effect_table: *const StackEffectTable,
-    blob_plans: []const BlobEntryPlan,
+    struct_plans: []const StructTypePlan,
     stats: ImageEmissionStats,
 ) Allocator.Error!void {
     var num_buf: [32]u8 = undefined;
@@ -1390,12 +1873,17 @@ fn emitHeader(
         }
     }
 
+    const typevalue_count: u32 = @intCast(effect_table.type_slots.items.len);
+    const struct_type_count: u32 = @intCast(struct_plans.len);
+
     const has_entries = manifest.entries.len > 0;
     const modules_ref: []const u8 = if (has_entries) "onez_image_modules_storage" else "NULL";
     const words_ref: []const u8 = if (has_entries) "onez_image_words_storage" else "NULL";
     const markers_ref: []const u8 = if (pool.count() > 0) "onez_image_markers_storage" else "NULL";
     const effects_ref: []const u8 = if (effect_table.effectCount() > 1) "onez_image_stack_effects_storage" else "NULL";
-    const blobs_ref: []const u8 = if (blob_plans.len > 0) "onez_image_blob_entries_storage" else "NULL";
+    const typevalues_ref: []const u8 = if (typevalue_count > 0) "onez_image_typevalues_storage" else "NULL";
+    const typedescriptors_ref: []const u8 = if (typevalue_count > 0) "onez_image_typedescriptors_storage" else "NULL";
+    const struct_types_ref: []const u8 = if (struct_type_count > 0) "onez_image_struct_types_storage" else "NULL";
 
     try out.appendSlice(allocator,
         \\__attribute__((used)) const onez_image_header_t onez_image_v1 = {
@@ -1412,9 +1900,11 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{effect_table.slotCount()}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .stack_effect_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{effect_table.effectCount()}) catch unreachable);
-    try out.appendSlice(allocator, ",\n    .blob_entry_count = ");
-    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{blob_plans.len}) catch unreachable);
-    try out.appendSlice(allocator, ",\n    ._pad = 0,\n    .modules = ");
+    try out.appendSlice(allocator, ",\n    .typevalue_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{typevalue_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .struct_type_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{struct_type_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .modules = ");
     try out.appendSlice(allocator, modules_ref);
     try out.appendSlice(allocator, ",\n    .words = ");
     try out.appendSlice(allocator, words_ref);
@@ -1422,8 +1912,12 @@ fn emitHeader(
     try out.appendSlice(allocator, markers_ref);
     try out.appendSlice(allocator, ",\n    .stack_effects = ");
     try out.appendSlice(allocator, effects_ref);
-    try out.appendSlice(allocator, ",\n    .blob_entries = ");
-    try out.appendSlice(allocator, blobs_ref);
+    try out.appendSlice(allocator, ",\n    .typevalues = ");
+    try out.appendSlice(allocator, typevalues_ref);
+    try out.appendSlice(allocator, ",\n    .typedescriptors = ");
+    try out.appendSlice(allocator, typedescriptors_ref);
+    try out.appendSlice(allocator, ",\n    .struct_types = ");
+    try out.appendSlice(allocator, struct_types_ref);
     try out.appendSlice(allocator,
         \\,
         \\};
@@ -1466,7 +1960,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 2") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 3") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
@@ -1497,9 +1991,10 @@ test "emitImageC: type declarations include all schema structs" {
         "struct onez_image_marker",
         "struct onez_image_stack_effect",
         "struct onez_image_stack_effect_param",
-        "struct onez_image_blob_descriptor_entry",
-        "struct onez_image_blob_typevalue",
-        "struct onez_image_blob_entry",
+        "struct onez_image_typevalue",
+        "struct onez_image_typedescriptor",
+        "struct onez_image_struct_type",
+        "struct onez_image_enum_variant",
         "struct onez_image_header",
     };
     for (required_structs) |needle| {
@@ -1516,11 +2011,10 @@ fn buildSyntheticImageContext(ctx: *Context) !void {
     const struct_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
-    const blob_desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
-    const blob_tv = try arena.create(value_mod.TypeValue);
-    blob_tv.* = .{ .name = "t", .descriptor = blob_desc };
+    const blob_mm = try arena.create(value_mod.MutableMap);
+    blob_mm.* = .{};
     const blob_instrs = try arena.dupe(Instruction, &.{
-        .{ .op = .{ .push_literal = .{ .type_val = blob_tv } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .mutable_map = blob_mm } }, .line = 0, .column = 0 },
     });
 
     const zeta = try arena.create(Module);
@@ -1586,9 +2080,9 @@ test "emitImageC: module and word tables match the manifest order" {
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = onez_image_modules_storage") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".words = onez_image_words_storage") != null);
 
-    // Blob entry classification = 1 with type-value descriptor reason.
+    // The blob word (`needs-blob` pushes a mutable_map) classifies as blob.
     try testing.expect(std.mem.indexOf(u8, out.items, ".classification = 1") != null);
-    const blob_reason_value = @intFromEnum(BlobReason.type_val_descriptor);
+    const blob_reason_value = @intFromEnum(BlobReason.mutable_map);
     var reason_buf: [32]u8 = undefined;
     const reason_needle = std.fmt.bufPrint(&reason_buf, ".blob_reason = {d}", .{blob_reason_value}) catch unreachable;
     try testing.expect(std.mem.indexOf(u8, out.items, reason_needle) != null);
@@ -1797,13 +2291,11 @@ test "emitImageC: required runtime-image symbols all appear" {
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typevalue_slots") != null);
 }
 
-test "emitImageC: type_val blob produces descriptor entry table and slot reservation" {
+test "emitImageC: type_val word writes typevalue_slot and reserves a slot" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
 
-    // Synthesize a single blob word whose body pushes a TypeValue with
-    // a fully populated TypeDescriptor.
     const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{ .exact = true });
     const tv = try arena.create(value_mod.TypeValue);
     tv.* = .{ .name = "color", .descriptor = desc };
@@ -1827,22 +2319,14 @@ test "emitImageC: type_val blob produces descriptor entry table and slot reserva
 
     const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
 
-    try testing.expectEqual(@as(u32, 1), stats.blob_typevalues_emitted);
-    try testing.expectEqual(true, stats.blob_present);
-    // Sentinel + the one blob TypeValue.
+    try testing.expectEqual(false, stats.blob_present);
     try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
-
-    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_blob_desc_0[]") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_blob_typevalues_storage") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_blob_entries_storage") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".blob_entries = onez_image_blob_entries_storage") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".blob_entry_count = 1") != null);
-    // Word entry references blob entry index 0 and slot 1.
-    try testing.expect(std.mem.indexOf(u8, out.items, ".blob_entry_idx = 0u") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typevalues_storage") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typedescriptors_storage") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".typevalue_slot = 1u") != null);
 }
 
-test "emitImageC: same TypeValue across multiple blob words shares one slot" {
+test "emitImageC: same TypeValue across multiple words shares one slot" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
@@ -1872,13 +2356,8 @@ test "emitImageC: same TypeValue across multiple blob words shares one slot" {
 
     const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
 
-    // Three blob words share one slot, so we get three blob entries
-    // but the slot table only grew by 1 (sentinel + 1 = 2).
-    try testing.expectEqual(@as(u32, 3), stats.blob_typevalues_emitted);
     try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".blob_entry_count = 3") != null);
 
-    // All three words reference slot 1.
     var occurrences: usize = 0;
     var search_idx: usize = 0;
     while (std.mem.indexOfPos(u8, out.items, search_idx, ".typevalue_slot = 1u")) |pos| {
@@ -1888,7 +2367,7 @@ test "emitImageC: same TypeValue across multiple blob words shares one slot" {
     try testing.expect(occurrences == 3);
 }
 
-test "emitImageC: structural words have sentinel blob_entry_idx" {
+test "emitImageC: structural words without a type_val write typevalue_slot = 0" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     try buildSyntheticImageContext(&ctx);
@@ -1904,26 +2383,24 @@ test "emitImageC: structural words have sentinel blob_entry_idx" {
 
     _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
 
-    // Three structural words plus one blob word; the structurals carry
-    // the sentinel and the blob carries the live index.
-    var sentinel_occurrences: usize = 0;
+    // Four words; none push a type_val, so every row's typevalue_slot is 0.
+    var occurrences: usize = 0;
     var search_idx: usize = 0;
-    while (std.mem.indexOfPos(u8, out.items, search_idx, ".blob_entry_idx = 0xFFFFFFFFu")) |pos| {
-        sentinel_occurrences += 1;
+    while (std.mem.indexOfPos(u8, out.items, search_idx, ".typevalue_slot = 0u")) |pos| {
+        occurrences += 1;
         search_idx = pos + 1;
     }
-    try testing.expectEqual(@as(usize, 3), sentinel_occurrences);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".blob_entry_idx = 0u") != null);
+    try testing.expectEqual(@as(usize, 4), occurrences);
 }
 
-test "collectBlobEntries dedupes against stack-effect-discovered TypeValues" {
+test "collectTypeValueData dedupes against stack-effect-discovered TypeValues" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
 
     // One TypeValue referenced by both a stack-effect param and a
-    // blob word's body. The slot pool should collapse it to a single
-    // entry; both sites read slot 1.
+    // word's body. The slot pool should collapse it to a single entry;
+    // both sites read slot 1.
     const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
     const tv = try arena.create(value_mod.TypeValue);
     tv.* = .{ .name = "color", .descriptor = desc };
@@ -1958,41 +2435,171 @@ test "collectBlobEntries dedupes against stack-effect-discovered TypeValues" {
 
     // Sentinel + 1 TV = 2 slots, regardless of the two reference sites.
     try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
-    try testing.expectEqual(@as(u32, 1), stats.blob_typevalues_emitted);
 }
 
-test "emitImageC: descriptor surfaces symbol, boolean, fixnum, string, unsupported value_kind tags" {
+test "collectDescriptorCrossRefs interns struct field_types into the slot table" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
 
-    // An ffi_struct descriptor exercises three value kinds in one
-    // record: symbol (the `type` discriminator), boolean (the four
-    // universal flags), fixnum (`ffi-layout`), and unsupported (the
-    // `fields` placeholder for the type_val array). A resource
-    // TypeValue follows below to add the string kind.
-    const ffi_desc = try value_mod.createTypeDescriptor(arena, .{
-        .ffi_struct = .{ .ffi_layout = 42 },
-    }, .{});
-    const ffi_tv = try arena.create(value_mod.TypeValue);
-    ffi_tv.* = .{ .name = "ffi-kinds", .descriptor = ffi_desc };
-    const ffi_instrs = try arena.dupe(Instruction, &.{
-        .{ .op = .{ .push_literal = .{ .type_val = ffi_tv } }, .line = 0, .column = 0 },
-    });
+    // Two field-type TypeValues that are NOT pushed by any module-private
+    // word. They should still land in the slot table by virtue of being
+    // descriptor cross-references on a struct TypeValue that is pushed.
+    const tv_fix = try arena.create(value_mod.TypeValue);
+    tv_fix.* = .{ .name = "fixnum", .descriptor = null };
+    const tv_str = try arena.create(value_mod.TypeValue);
+    tv_str.* = .{ .name = "string", .descriptor = null };
 
-    const res_desc = try value_mod.createTypeDescriptor(arena, .{
-        .resource = .{ .resource_kind = "demo-handle" },
+    const fields = try arena.dupe([]const u8, &.{ "x", "y" });
+    const field_types = try arena.alloc(?*const value_mod.TypeValue, 2);
+    field_types[0] = tv_fix;
+    field_types[1] = tv_str;
+    const desc = try value_mod.createTypeDescriptor(arena, .{
+        .struct_ = .{ .fields = fields, .field_types = field_types },
     }, .{});
-    const res_tv = try arena.create(value_mod.TypeValue);
-    res_tv.* = .{ .name = "res-kinds", .descriptor = res_desc };
-    const res_instrs = try arena.dupe(Instruction, &.{
-        .{ .op = .{ .push_literal = .{ .type_val = res_tv } }, .line = 0, .column = 0 },
-    });
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "point", .descriptor = desc };
 
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
-    try m.words.put(arena, "ffi-kinds", .{ .action = .{ .compound = ffi_instrs } });
-    try m.words.put(arena, "res-kinds", .{ .action = .{ .compound = res_instrs } });
+    try m.words.put(arena, "point", .{ .action = .{ .compound = instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // Sentinel + (point, fixnum, string) = 4 slots. The two field
+    // types were collected by the descriptor cross-ref walk even
+    // though no word pushes them.
+    try testing.expectEqual(@as(u32, 4), stats.typevalue_slot_count);
+}
+
+test "collectDescriptorCrossRefs interns enum variant inner_types" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // Two variant inner-types that are not pushed by any word.
+    const tv_unit = try arena.create(value_mod.TypeValue);
+    tv_unit.* = .{ .name = "unit", .descriptor = null };
+    const tv_str = try arena.create(value_mod.TypeValue);
+    tv_str.* = .{ .name = "string", .descriptor = null };
+
+    const variants = try arena.alloc(value_mod.Variant, 2);
+    variants[0] = .{ .name = "none", .type_val = tv_unit };
+    variants[1] = .{ .name = "some", .type_val = tv_str };
+    const desc = try value_mod.createTypeDescriptor(arena, .{
+        .enum_ = .{ .variants = variants },
+    }, .{});
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "option", .descriptor = desc };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "option", .{ .action = .{ .compound = instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // Sentinel + (option, unit, string).
+    try testing.expectEqual(@as(u32, 4), stats.typevalue_slot_count);
+}
+
+test "collectDescriptorCrossRefs reaches transitively through multiple descriptors" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // A -> B -> C. Only A is pushed; B and C must be reached
+    // transitively through the fixed-point walk over the slot list.
+    const tv_c = try arena.create(value_mod.TypeValue);
+    tv_c.* = .{ .name = "C", .descriptor = null };
+
+    const b_desc = try value_mod.createTypeDescriptor(arena, .{
+        .virtual = .{ .inner_type = tv_c },
+    }, .{});
+    const tv_b = try arena.create(value_mod.TypeValue);
+    tv_b.* = .{ .name = "B", .descriptor = b_desc };
+
+    const a_desc = try value_mod.createTypeDescriptor(arena, .{
+        .virtual = .{ .inner_type = tv_b },
+    }, .{});
+    const tv_a = try arena.create(value_mod.TypeValue);
+    tv_a.* = .{ .name = "A", .descriptor = a_desc };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv_a } }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "A", .{ .action = .{ .compound = instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // Sentinel + (A, B, C) = 4. Transitive walk reaches C through
+    // B's descriptor even though no word pushes B or C directly.
+    try testing.expectEqual(@as(u32, 4), stats.typevalue_slot_count);
+}
+
+test "emitTypeValueData emits typevalue/descriptor tables with slot-indexed cross-refs" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // A struct TypeValue with two field_types. Cross-references resolve
+    // through onez_image_typevalue_slots[] -- the loader walks the
+    // table at startup.
+    const tv_fix = try arena.create(value_mod.TypeValue);
+    tv_fix.* = .{ .name = "fixnum", .descriptor = null };
+
+    const fields = try arena.dupe([]const u8, &.{"x"});
+    const field_types = try arena.alloc(?*const value_mod.TypeValue, 1);
+    field_types[0] = tv_fix;
+    const desc = try value_mod.createTypeDescriptor(arena, .{
+        .struct_ = .{ .fields = fields, .field_types = field_types },
+    }, .{});
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "point", .descriptor = desc };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "point", .{ .action = .{ .compound = instrs } });
     try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
@@ -2006,29 +2613,33 @@ test "emitImageC: descriptor surfaces symbol, boolean, fixnum, string, unsupport
 
     _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
 
-    // Each value_kind tag the emitter can produce appears at least once.
-    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 0") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 1") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 2") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 3") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".value_kind = 5") != null);
-    // Specific payloads survive the round-trip.
-    try testing.expect(std.mem.indexOf(u8, out.items, ".string_value = \"ffi-struct-type\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".string_value = \"demo-handle\"") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".fixnum_value = 42") != null);
+    // The new typevalue + typedescriptor tables appear.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typevalues_storage[] = {") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typedescriptors_storage[] = {") != null);
+    // Struct field array references appear (the struct descriptor
+    // emits field_names + field_type_slots).
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_td_") != null);
+    // Per-name symbols match.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_tv_0_name") != null);
 }
 
-test "emitImageC: descriptor entries are sorted by key" {
+test "emitTypeValueData emits enum variant pool referenced from descriptor row" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
 
-    // A virtual descriptor with all four universal flags produces the
-    // five base keys (`type`, `numeric`, `exact`, `integer`, `mutable`).
-    // The emitter must surface them in lexicographic order.
-    const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{ .exact = true });
+    const tv_unit = try arena.create(value_mod.TypeValue);
+    tv_unit.* = .{ .name = "unit", .descriptor = null };
+
+    const variants = try arena.alloc(value_mod.Variant, 2);
+    variants[0] = .{ .name = "red", .type_val = tv_unit };
+    variants[1] = .{ .name = "blue", .type_val = tv_unit };
+    const desc = try value_mod.createTypeDescriptor(arena, .{
+        .enum_ = .{ .variants = variants },
+    }, .{});
     const tv = try arena.create(value_mod.TypeValue);
     tv.* = .{ .name = "color", .descriptor = desc };
+
     const instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
     });
@@ -2048,18 +2659,182 @@ test "emitImageC: descriptor entries are sorted by key" {
 
     _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
 
-    // The expected positions follow the lex order: exact, integer,
-    // mutable, numeric, type.
-    const i_exact = std.mem.indexOf(u8, out.items, ".key = \"exact\"").?;
-    const i_integer = std.mem.indexOf(u8, out.items, ".key = \"integer\"").?;
-    const i_mutable = std.mem.indexOf(u8, out.items, ".key = \"mutable\"").?;
-    const i_numeric = std.mem.indexOf(u8, out.items, ".key = \"numeric\"").?;
-    const i_type = std.mem.indexOf(u8, out.items, ".key = \"type\"").?;
+    // The enum variants pool exists; both variant names appear.
+    try testing.expect(std.mem.indexOf(u8, out.items, "_variants[] = {") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "\"red\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "\"blue\"") != null);
+    // The descriptor row references the variant pool via .variants =.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".variants = onez_image_td_") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".variant_count = 2") != null);
+}
 
-    try testing.expect(i_exact < i_integer);
-    try testing.expect(i_integer < i_mutable);
-    try testing.expect(i_mutable < i_numeric);
-    try testing.expect(i_numeric < i_type);
+test "emitTypeValueData emits struct-type table for virtual anon_struct" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const tv_int = try arena.create(value_mod.TypeValue);
+    tv_int.* = .{ .name = "int", .descriptor = null };
+
+    const st_fields = try arena.dupe([]const u8, &.{"n"});
+    const st_field_types = try arena.alloc(?*const value_mod.TypeValue, 1);
+    st_field_types[0] = tv_int;
+    const st = try arena.create(value_mod.StructType);
+    st.* = .{
+        .name = "wrap-inner",
+        .fields = st_fields,
+        .field_types = st_field_types,
+    };
+
+    const desc = try value_mod.createTypeDescriptor(arena, .{
+        .virtual = .{ .anon_struct = st },
+    }, .{});
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "wrap", .descriptor = desc };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "wrap", .{ .action = .{ .compound = instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // The struct-type table exists with the StructType's name.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_struct_types_storage[] = {") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "\"wrap-inner\"") != null);
+    // The descriptor row references the struct-type by index.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".anon_struct_idx = 0u") != null);
+}
+
+test "collectDescriptorCrossRefs collects virtual anon_struct and its field types" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const tv_int = try arena.create(value_mod.TypeValue);
+    tv_int.* = .{ .name = "int", .descriptor = null };
+
+    const st_fields = try arena.dupe([]const u8, &.{"n"});
+    const st_field_types = try arena.alloc(?*const value_mod.TypeValue, 1);
+    st_field_types[0] = tv_int;
+    const st = try arena.create(value_mod.StructType);
+    st.* = .{
+        .name = "wrapper-inner",
+        .fields = st_fields,
+        .field_types = st_field_types,
+    };
+
+    const desc = try value_mod.createTypeDescriptor(arena, .{
+        .virtual = .{ .anon_struct = st },
+    }, .{});
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "wrapper", .descriptor = desc };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "wrapper", .{ .action = .{ .compound = instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    // Sentinel + (wrapper, int) = 3 slots. The StructType "wrapper-inner"
+    // is not in the TypeValue slot table; its field types intern back.
+    try testing.expectEqual(@as(u32, 3), stats.typevalue_slot_count);
+}
+
+test "emitTypeValueData renders resource descriptor with resource_kind string" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const res_desc = try value_mod.createTypeDescriptor(arena, .{
+        .resource = .{ .resource_kind = "demo-handle" },
+    }, .{});
+    const res_tv = try arena.create(value_mod.TypeValue);
+    res_tv.* = .{ .name = "res-kinds", .descriptor = res_desc };
+    const res_instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = res_tv } }, .line = 0, .column = 0 },
+    });
+
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "res-kinds", .{ .action = .{ .compound = res_instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typedescriptors_storage") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "demo-handle") != null);
+    // kind index 6 is `resource` in the TypeKindData encoding.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".kind = 6") != null);
+}
+
+test "emitTypeValueData renders ffi_struct descriptor with ffi_layout" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const ffi_desc = try value_mod.createTypeDescriptor(arena, .{
+        .ffi_struct = .{ .ffi_layout = 42 },
+    }, .{});
+    const ffi_tv = try arena.create(value_mod.TypeValue);
+    ffi_tv.* = .{ .name = "ffi-kinds", .descriptor = ffi_desc };
+    const ffi_instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = ffi_tv } }, .line = 0, .column = 0 },
+    });
+
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "ffi-kinds", .{ .action = .{ .compound = ffi_instrs } });
+    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, ".ffi_layout = 42") != null);
+    // kind index 7 is `ffi_struct` in the TypeKindData encoding.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".kind = 7") != null);
 }
 
 test "emitImageC: structural compound emits body bytecode symbol" {

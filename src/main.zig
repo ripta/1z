@@ -2269,12 +2269,11 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     printInterpreterLinkSummary(interpreter_fallback, lock_interpreter_setting, &codegen_diagnostics, err_writer);
 
     if (codegen_diagnostics.image_stats) |stats| {
-        err_writer.print("runtime-image: words={d} stack-effects={d} typevalue-slots={d} blob-present={s} blob-typevalues={d}\n", .{
+        err_writer.print("runtime-image: words={d} stack-effects={d} typevalue-slots={d} blob-present={s}\n", .{
             stats.word_count,
             stats.stack_effect_count,
             stats.typevalue_slot_count,
             if (stats.blob_present) "true" else "false",
-            stats.blob_typevalues_emitted,
         }) catch {};
         err_writer.flush() catch {};
     }
@@ -3288,14 +3287,14 @@ test "parseAotMetadata captures runtime-image conditional fields" {
         "build-mode=ReleaseSafe\n" ++
         "onez-version=0.1.0-dev\n" ++
         "prelude-hash=" ++ ("0123456789abcdef" ** 4) ++ "\n" ++
-        "runtime-image-format-version=2\n" ++
+        "runtime-image-format-version=3\n" ++
         "runtime-image-blob-present=yes\n" ++
         "runtime-image-word-count=412\n" ++
         ">>\n";
     var err_ctx: AotInspectErrorContext = .{};
     const fields = try parseAotMetadata(sample, &err_ctx);
     try std.testing.expectEqualStrings("yes", fields.runtime_image_present);
-    try std.testing.expectEqualStrings("2", fields.runtime_image_format_version.?);
+    try std.testing.expectEqualStrings("3", fields.runtime_image_format_version.?);
     try std.testing.expectEqualStrings("yes", fields.runtime_image_blob_present.?);
     try std.testing.expectEqualStrings("412", fields.runtime_image_word_count.?);
 }
@@ -3411,7 +3410,7 @@ test "writeInspectReport renders runtime-image with blob present" {
     var fields = baseInspectFields();
     fields.interpreter_linked = "no";
     fields.runtime_image_present = "yes";
-    fields.runtime_image_format_version = "2";
+    fields.runtime_image_format_version = "3";
     fields.runtime_image_blob_present = "yes";
     fields.runtime_image_word_count = "8";
 
@@ -3422,7 +3421,7 @@ test "writeInspectReport renders runtime-image with blob present" {
         "target: aarch64-macos\n" ++
         "build-mode: ReleaseSafe\n" ++
         "interpreter: linked=no, fallback=auto, locked=no\n" ++
-        "runtime-image: present=yes, format-version=2, blob-present=yes, word-count=8\n" ++
+        "runtime-image: present=yes, format-version=3, blob-present=yes, word-count=8\n" ++
         "1z-version: 0.1.0-dev\n" ++
         "prelude-hash: " ++ test_prelude_hash ++ "\n";
     try std.testing.expectEqualStrings(expected, fbs.getWritten());
@@ -3431,7 +3430,7 @@ test "writeInspectReport renders runtime-image with blob present" {
 test "writeInspectReport renders runtime-image without blob" {
     var fields = baseInspectFields();
     fields.runtime_image_present = "yes";
-    fields.runtime_image_format_version = "2";
+    fields.runtime_image_format_version = "3";
     fields.runtime_image_blob_present = "no";
     fields.runtime_image_word_count = "0";
 
@@ -3442,7 +3441,7 @@ test "writeInspectReport renders runtime-image without blob" {
         "target: aarch64-macos\n" ++
         "build-mode: ReleaseSafe\n" ++
         "interpreter: linked=yes, fallback=auto, locked=no\n" ++
-        "runtime-image: present=yes, format-version=2, blob-present=no, word-count=0\n" ++
+        "runtime-image: present=yes, format-version=3, blob-present=no, word-count=0\n" ++
         "1z-version: 0.1.0-dev\n" ++
         "prelude-hash: " ++ test_prelude_hash ++ "\n";
     try std.testing.expectEqualStrings(expected, fbs.getWritten());
@@ -3496,7 +3495,7 @@ test "writeInspectReport renders fields in the documented order" {
     fields.interpreter_fallback_mode = "false";
     fields.interpreter_setting_locked = "yes";
     fields.runtime_image_present = "yes";
-    fields.runtime_image_format_version = "2";
+    fields.runtime_image_format_version = "3";
     fields.runtime_image_blob_present = "yes";
     fields.runtime_image_word_count = "412";
     fields.onez_git_commit = "cd" ** 20;
@@ -3511,7 +3510,7 @@ test "writeInspectReport renders fields in the documented order" {
         "target: aarch64-macos\n" ++
         "build-mode: ReleaseSafe\n" ++
         "interpreter: linked=no, fallback=false, locked=yes\n" ++
-        "runtime-image: present=yes, format-version=2, blob-present=yes, word-count=412\n" ++
+        "runtime-image: present=yes, format-version=3, blob-present=yes, word-count=412\n" ++
         "1z-version: 0.1.0-dev\n" ++
         "prelude-hash: " ++ test_prelude_hash ++ "\n" ++
         "1z-git-commit: " ++ ("cd" ** 20) ++ "\n" ++

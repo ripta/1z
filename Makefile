@@ -140,12 +140,13 @@ benchmark-quotation: build ## Run quotation sequence benchmark across all execut
 benchmark-scanner: build ## Run scanner vs direct benchmark across interpreter modes
 	@scripts/benchmark-scanner.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/scanner_vs_direct.1z
 
-# The runtime-image loader cannot rehydrate descriptor entries (`field-types`, `variants`, etc.)
-# on types from lib/process.1z and lib/scanner.1z, both pulled in transitively via `use "ffi-gen"`.
-# When that bug is fixed, restore the AOT capture portion of this target.
-benchmark-ffi-gen-filter: build ## Capture baseline interpreter profile for the native ffi-gen filter on toy.h
+# NOTE(ripta): While the descriptor walk failure is fixed, the parent benchmark
+#              exposed a runtime SIGSEGV further into execution. The AOT build
+#              step is restored for now.
+benchmark-ffi-gen-filter: build ## Capture baseline interpreter profile and AOT build for the native ffi-gen filter on toy.h
 	./$(ZIG_PREFIX)/bin/1z run --max-memory=2G --profile tests/benchmark/ffi_gen_filter_baseline.1z \
 		> tests/benchmark/ffi_gen_filter_baseline.profile.sample
+	./$(ZIG_PREFIX)/bin/1z build --emit-runtime-image tests/benchmark/ffi_gen_filter_baseline.1z -o tests/benchmark/ffi_gen_filter_baseline.aot
 
 benchmark: build ## Run benchmarks
 	@for f in $(BENCHMARK_FILES); do echo "--- $$f ---"; ./$(ZIG_PREFIX)/bin/1z "$$f"; echo; done
