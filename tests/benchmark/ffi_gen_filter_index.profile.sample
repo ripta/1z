@@ -1,27 +1,27 @@
 --- timing: index variant on toy.h (translate-c output ~6000 lines) ---
 Name                   Iters        Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
 --------------------   -----   ------------   ------------   -----------   ----------
-native-index (toy.h)       1   77159.426 ms   77159.426 ms       579,781           19
+native-index (toy.h)       1   77717.416 ms   77717.416 ms       579,781           19
 
 === Word Profile (top 20 by total time) ===
   Word                   Calls    Total time     Self time   Time/call
-  #index-of-from         6,403      57208.394 ms  57208.394 ms    8.934 ms
-  if                     49,520     19237.208 ms   4571.667 ms  388.473 us
-  #slice                 6,890      11362.250 ms  11362.250 ms    1.649 ms
-  dip                    19,474     11327.798 ms   1883.926 ms  581.688 us
-  2dip                   6,010       5644.960 ms    229.446 ms  939.261 us
-  native-block-start?    5,920       2191.714 ms     13.815 ms  370.221 us
-  call                   194          636.038 ms      8.655 ms    3.278 ms
-  trim                   274          480.313 ms     40.453 ms    1.752 ms
-  native-line-contains?  6,859        375.534 ms     11.451 ms   54.750 us
-  keep                   116          342.009 ms      4.027 ms    2.948 ms
-  ltrim                  512          293.029 ms     25.710 ms  572.322 us
-  zig>ffi-type           125          253.893 ms     31.662 ms    2.031 ms
-  whitespace?            782          232.454 ms     57.019 ms  297.255 us
-  (dispatch-line)        52           166.937 ms      2.490 ms    3.210 ms
-  #collect               114          152.722 ms      6.175 ms    1.339 ms
-  (read-all-and-close)   2            144.123 ms    356.000 us   72.061 ms
-  stream-read-all        2            143.554 ms    143.554 ms   71.777 ms
-  or                     2,346        101.776 ms      3.937 ms   43.382 us
-  (parse-fn-decl)        38            90.453 ms      1.865 ms    2.380 ms
-  split                  77            86.010 ms     11.024 ms    1.117 ms
+  #index-of-from         6,403      57334.630 ms  57334.630 ms    8.954 ms
+  if                     49,520     19800.440 ms   4710.747 ms  399.847 us
+  dip                    19,474     11711.388 ms   1971.761 ms  601.385 us
+  #slice                 6,890      11434.266 ms  11434.266 ms    1.659 ms
+  2dip                   6,010       5845.057 ms    242.675 ms  972.555 us
+  native-block-start?    5,920       2247.676 ms     14.480 ms  379.675 us
+  call                   194          641.142 ms      8.570 ms    3.304 ms
+  trim                   274          479.403 ms     40.221 ms    1.749 ms
+  native-line-contains?  6,859        388.507 ms     11.919 ms   56.641 us
+  keep                   116          344.655 ms      4.134 ms    2.971 ms
+  ltrim                  512          294.169 ms     25.747 ms  574.548 us
+  zig>ffi-type           125          256.081 ms     31.632 ms    2.048 ms
+  whitespace?            782          231.245 ms     56.943 ms  295.709 us
+  (dispatch-line)        52           168.010 ms      2.440 ms    3.230 ms
+  #collect               114          152.732 ms      6.325 ms    1.339 ms
+  (read-all-and-close)   2            150.625 ms    360.000 us   75.312 ms
+  stream-read-all        2            150.010 ms    150.010 ms   75.005 ms
+  or                     2,346        101.257 ms      4.024 ms   43.161 us
+  (parse-fn-decl)        38            90.672 ms      1.907 ms    2.386 ms
+  split                  77            87.628 ms     11.399 ms    1.138 ms

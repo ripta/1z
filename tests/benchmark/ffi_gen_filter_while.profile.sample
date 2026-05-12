@@ -1,0 +1,27 @@
+--- timing: while variant on toy.h (translate-c output ~6000 lines) ---
+Name                   Iters        Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+--------------------   -----   ------------   ------------   -----------   ----------
+native-while (toy.h)       1   78410.913 ms   78410.913 ms       729,765           19
+
+=== Word Profile (top 20 by total time) ===
+  Word                   Calls    Total time     Self time   Time/call
+  split                  78         69975.770 ms     23.965 ms  897.125 ms
+  #index-of-from         6,403      57261.759 ms  57261.759 ms    8.942 ms
+  if                     55,520     26341.205 ms   5925.661 ms  474.445 us
+  call                   12,188     11384.886 ms    341.771 ms  934.106 us
+  #slice                 6,890      11364.130 ms  11364.130 ms    1.649 ms
+  dip                    13,482      6556.960 ms    460.303 ms  486.349 us
+  keep                   6,113       6406.181 ms    211.462 ms    1.047 ms
+  native-filter-step     5,997       5010.493 ms   1320.704 ms  835.499 us
+  native-block-start?    5,920       2131.692 ms     14.336 ms  360.083 us
+  trim                   274          474.554 ms     40.065 ms    1.731 ms
+  native-line-contains?  6,859        364.638 ms     10.964 ms   53.161 us
+  ltrim                  512          290.950 ms     25.580 ms  568.261 us
+  zig>ffi-type           125          253.606 ms     31.680 ms    2.028 ms
+  whitespace?            782          228.615 ms     56.237 ms  292.346 us
+  (dispatch-line)        52           167.829 ms      2.517 ms    3.227 ms
+  loop                   6,074        153.572 ms    153.572 ms   25.283 us
+  #collect               114          152.052 ms      6.381 ms    1.333 ms
+  (read-all-and-close)   2            145.730 ms    332.000 us   72.865 ms
+  stream-read-all        2            145.197 ms    145.197 ms   72.598 ms
+  or                     2,346        100.336 ms      4.036 ms   42.768 us

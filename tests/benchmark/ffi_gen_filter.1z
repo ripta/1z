@@ -171,7 +171,32 @@ translate-c-filtered-flat: ( header-path flags -- filtered-source ) [
   >array "\n" #join
 ] ;
 
-\ --- Four variants of translate-c-decls ---
+\ --- Hand-written while loop driving the same native-filter-step ---
+\
+\ Same filter logic as translate-c-filtered-native (split + filter-state
+\ struct + native-filter-step), but the loop is driven by a hand-written
+\ `while` over an index instead of by `#reduce`. Isolates the cost of
+\ #reduce's per-element dispatch/stack-frame wrapping from the rest of
+\ the filter; H1 (allocation) and H2 (struct fields) are held fixed.
+
+translate-c-filtered-while: ( header-path flags -- filtered-source ) [
+  translate-c
+  "\n" split  \ lines
+  V{ } f make-filter-state  \ lines state
+  0                         \ lines state i
+  [ dup 3 pick-n #len < ]
+  [
+    2 pick-n 1 pick-n #nth
+    [ swap ] dip
+    native-filter-step
+    swap 1 +
+  ] while
+  \ Stack after while: lines state i
+  drop nip  \ state
+  acc>> >array "\n" #join
+] ;
+
+\ --- Five variants of translate-c-decls ---
 
 decls-awk: ( header-path flags -- decls ) [ translate-c-decls ] ;
 
@@ -191,7 +216,11 @@ decls-native-flat: ( header-path flags -- decls ) [
   translate-c-filtered-flat parse-zig-decls
 ] ;
 
-\ --- Correctness check: all three must produce the same declarations ---
+decls-native-while: ( header-path flags -- decls ) [
+  translate-c-filtered-while parse-zig-decls
+] ;
+
+\ --- Correctness check: all variants must produce the same declarations ---
 
 toy-header: ( -- str ) [ "/Users/ripta/projects/1z/ext/toy/toy.h" ] ;
 zlib-header: ( -- str ) [ "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/zlib.h" ] ;
@@ -203,13 +232,15 @@ check-equivalence: ( header -- ) [
   2 pick-n { } decls-native
   3 pick-n { } decls-native-index
   4 pick-n { } decls-native-flat
-  \ Stack: header awk-decls nofilt-decls native-decls native-index-decls native-flat-decls
-  "  awk #len:           " print 4 pick-n #len . nl
-  "  no-filt #len:       " print 3 pick-n #len . nl
-  "  native #len:        " print 2 pick-n #len . nl
-  "  native-index #len:  " print 1 pick-n #len . nl
-  "  native-flat #len:   " print dup #len . nl
-  drop drop drop drop drop drop
+  5 pick-n { } decls-native-while
+  \ Stack: header awk-decls nofilt-decls native-decls native-index-decls native-flat-decls native-while-decls
+  "  awk #len:           " print 5 pick-n #len . nl
+  "  no-filt #len:       " print 4 pick-n #len . nl
+  "  native #len:        " print 3 pick-n #len . nl
+  "  native-index #len:  " print 2 pick-n #len . nl
+  "  native-flat #len:   " print 1 pick-n #len . nl
+  "  native-while #len:  " print dup #len . nl
+  drop drop drop drop drop drop drop
 ] ;
 
 "--- correctness ---" print-line
@@ -226,6 +257,7 @@ nl
   "native       (toy.h)" [ toy-header { } decls-native drop ] benchmark-auto
   "native-index (toy.h)" [ toy-header { } decls-native-index drop ] benchmark-auto
   "native-flat  (toy.h)" [ toy-header { } decls-native-flat drop ] benchmark-auto
+  "native-while (toy.h)" [ toy-header { } decls-native-while drop ] benchmark-auto
 ] run-benchmarks
 
 nl
@@ -238,4 +270,5 @@ nl
   "native       (zlib.h)" [ zlib-header { } decls-native drop ] benchmark-auto
   "native-index (zlib.h)" [ zlib-header { } decls-native-index drop ] benchmark-auto
   "native-flat  (zlib.h)" [ zlib-header { } decls-native-flat drop ] benchmark-auto
+  "native-while (zlib.h)" [ zlib-header { } decls-native-while drop ] benchmark-auto
 ] run-benchmarks
