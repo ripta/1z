@@ -72,7 +72,7 @@ fn makeBinaryBitwiseEntry(comptime op: BitwiseOp, comptime type_a: BitType, comp
                 var bb = try ensureBignum(alloc, b);
                 try bignumBitwiseOp(op, &ba, &bb);
                 bb.deinit();
-                try ctx.stack.push(demoteBignum(ba));
+                try ctx.stack.push(try demoteBignum(alloc, ba));
             }
         }
     }.func;
@@ -91,7 +91,7 @@ fn makeBitnotEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
                 defer one.deinit();
                 try result.add(&result, &one);
                 result.negate();
-                try ctx.stack.push(demoteBignum(result));
+                try ctx.stack.push(try demoteBignum(alloc, result));
             }
         }
     }.func;
@@ -105,7 +105,7 @@ fn makeShiftLeftEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
             const alloc = ctx.arena.allocator();
             var big = try ensureBignum(alloc, if (t == .fixnum) val else val);
             try big.shiftLeft(&big, count);
-            try ctx.stack.push(demoteBignum(big));
+            try ctx.stack.push(try demoteBignum(alloc, big));
         }
     }.func;
 }
@@ -125,7 +125,7 @@ fn makeShiftRightEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
                 const alloc = ctx.arena.allocator();
                 var big = try ensureBignum(alloc, val);
                 try big.shiftRight(&big, count);
-                try ctx.stack.push(demoteBignum(big));
+                try ctx.stack.push(try demoteBignum(alloc, big));
             }
         }
     }.func;
@@ -157,7 +157,7 @@ fn makeShiftEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
                 const alloc = ctx.arena.allocator();
                 var big = try ensureBignum(alloc, val);
                 try big.shiftLeft(&big, @intCast(count));
-                try ctx.stack.push(demoteBignum(big));
+                try ctx.stack.push(try demoteBignum(alloc, big));
             } else {
                 const abs_count: usize = @intCast(-count);
                 if (t == .fixnum) {
@@ -170,7 +170,7 @@ fn makeShiftEntry(comptime t: BitType) *const fn (*Context) anyerror!void {
                     const alloc = ctx.arena.allocator();
                     var big = try ensureBignum(alloc, val);
                     try big.shiftRight(&big, abs_count);
-                    try ctx.stack.push(demoteBignum(big));
+                    try ctx.stack.push(try demoteBignum(alloc, big));
                 }
             }
         }

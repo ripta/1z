@@ -466,10 +466,10 @@ const ValueLayout = struct {
             .fixnum => .i64_,
             .float => .f64_,
             .boolean => .bool_,
-            .hash, .vector, .byte_array, .set, .mutable_map, .stream, .resource, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report, .task, .channel, .iterator, .type_val, .sandbox_spec, .error_value => .ptr,
+            .hash, .vector, .byte_array, .set, .mutable_map, .stream, .resource, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report, .task, .channel, .iterator, .type_val, .sandbox_spec, .error_value, .bignum => .ptr,
             .string, .symbol, .array, .doc_string, .template => .slice,
             .tagged => .dual_ptr,
-            .bignum, .quotation, .stack_effect => .inline_,
+            .quotation, .stack_effect => .inline_,
         };
     }
 
@@ -2907,7 +2907,6 @@ fn compilePredBodyLoop(
     negate_cond: bool,
 ) IrCodegenError!void {
     const ctx = state.ctx;
-    const base_addr = state.base_addr;
 
     flushToPhysicalStack(state, stack, sp.*);
 
@@ -2948,7 +2947,7 @@ fn compilePredBodyLoop(
     const cond_entry = stack[sp.*];
     if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
 
-    const truthy = try emitTruthiness(state, cond_entry, base_addr);
+    const truthy = try emitTruthiness(state, cond_entry, state.base_addr);
     const continue_cond = if (negate_cond)
         c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), truthy, c.ir_const_bool(ctx, false))
     else

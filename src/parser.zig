@@ -369,7 +369,7 @@ fn classifyLiteral(allocator: Allocator, token: []const u8) Allocator.Error!Clas
         return .{ .value = .{ .fixnum = n } };
     }
     if (parseBigNum(allocator, token)) |big| {
-        return .{ .value = .{ .bignum = big } };
+        return .{ .value = .{ .bignum = try value_mod.boxBigInt(allocator, big) } };
     }
     if (parseFloat(token)) |f| {
         return .{ .value = .{ .float = f } };

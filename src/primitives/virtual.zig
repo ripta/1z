@@ -697,7 +697,11 @@ fn tryPromoteElement(alloc: Allocator, elem: Value, expected: []const u8) ?Value
     }
     if (std.mem.eql(u8, expected, "bignum")) {
         return switch (elem) {
-            .fixnum => |i| .{ .bignum = BigIntManaged.initSet(alloc, i) catch return null },
+            .fixnum => |i| blk: {
+                const big = BigIntManaged.initSet(alloc, i) catch return null;
+                const ptr = value_mod.boxBigInt(alloc, big) catch return null;
+                break :blk .{ .bignum = ptr };
+            },
             else => null,
         };
     }

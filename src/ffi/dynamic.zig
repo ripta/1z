@@ -933,7 +933,7 @@ fn pushCInt(ctx: *Context, comptime tag: FfiTypeTag, val: ffiTagToZigType(tag)) 
         if (val > std.math.maxInt(i64)) {
             const alloc = ctx.arena.allocator();
             const big = try BigIntManaged.initSet(alloc, val);
-            try ctx.stack.push(helpers.demoteBignum(big));
+            try ctx.stack.push(try helpers.demoteBignum(alloc, big));
         } else {
             try ctx.stack.push(.{ .fixnum = @intCast(val) });
         }

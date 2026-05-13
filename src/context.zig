@@ -865,8 +865,9 @@ pub const Context = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.pic_cache.deinit(self.allocator);
-        // thrown_error, error_value boxes, and task error_obj/failed_error
-        // boxes are all arena-allocated; they are reclaimed by arena.deinit.
+        // thrown_error, error_value boxes, bignum boxes (header and limbs),
+        // and task error_obj/failed_error boxes are all arena-allocated;
+        // they are reclaimed by arena.deinit.
         self.thrown_error = null;
         self.arena.deinit();
         if (self.parent_context == null) {

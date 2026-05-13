@@ -2488,7 +2488,7 @@ fn nativePeekByteArray(ctx: *Context) anyerror!void {
             } else {
                 const alloc = ctx.arena.allocator();
                 const big = try BigIntManaged.initSet(alloc, bits);
-                try ctx.stack.push(.{ .bignum = big });
+                try ctx.stack.push(.{ .bignum = try value_mod.boxBigInt(alloc, big) });
             }
         },
         else => unreachable,

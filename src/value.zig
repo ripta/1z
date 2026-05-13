@@ -694,6 +694,16 @@ pub fn boxErrorObject(alloc: std.mem.Allocator, obj: ErrorObject) !*ErrorObject 
     return ptr;
 }
 
+/// Allocate a `BigIntManaged` box on the given allocator and return its
+/// pointer. The `bignum` `Value` variant stores this pointer; the limb
+/// array is still owned by `obj.allocator` (which is typically the same
+/// per-context arena). The box itself leaks until the arena is reclaimed.
+pub fn boxBigInt(alloc: std.mem.Allocator, obj: BigIntManaged) !*BigIntManaged {
+    const ptr = try alloc.create(BigIntManaged);
+    ptr.* = obj;
+    return ptr;
+}
+
 fn formatSpecEql(a: FormatSpec, b: FormatSpec) bool {
     return a.width == b.width and a.fill == b.fill and a.align_left == b.align_left;
 }
@@ -795,7 +805,7 @@ fn writeFormatSpec(writer: anytype, spec: FormatSpec) !void {
 pub const Value = union(enum) {
     fixnum: i64,
     float: f64,
-    bignum: BigIntManaged,
+    bignum: *BigIntManaged,
     boolean: bool,
     string: []const u8,
     symbol: []const u8,
@@ -1022,7 +1032,7 @@ pub const Value = union(enum) {
         return switch (self) {
             .fixnum => |a| a == other.fixnum,
             .float => |a| a == other.float,
-            .bignum => |a| a.toConst().eql(other.bignum.toConst()),
+            .bignum => |a| a.toConst().eql(other.bignum.*.toConst()),
             .boolean => |a| a == other.boolean,
             .string => |a| simd.eqlBytes(a, other.string),
             .symbol => |a| simd.eqlBytes(a, other.symbol),

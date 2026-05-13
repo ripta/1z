@@ -640,7 +640,9 @@ fn nativeFfiStructFieldGet(ctx: *Context) anyerror!void {
         .u64 => blk: {
             const v = std.mem.readInt(u64, buf[0..8], .little);
             if (v > @as(u64, @intCast(std.math.maxInt(i64)))) {
-                break :blk .{ .bignum = try BigIntManaged.initSet(ctx.quotationAllocator(), v) };
+                const alloc = ctx.quotationAllocator();
+                const big = try BigIntManaged.initSet(alloc, v);
+                break :blk .{ .bignum = try value_mod.boxBigInt(alloc, big) };
             }
             break :blk .{ .fixnum = @intCast(v) };
         },

@@ -509,12 +509,15 @@ pub fn popDuration(ctx: *Context) !struct { ns: i128, val: Value } {
     };
 }
 
-/// Return fixnum if the bignum fits in i64, otherwise bignum.
-pub fn demoteBignum(big: BigIntManaged) Value {
+/// Return fixnum if the bignum fits in i64, otherwise box the bignum on
+/// `alloc` and wrap it as a `bignum` Value. The boxed `BigIntManaged`
+/// header lives on `alloc`; its limb array continues to be owned by
+/// `big.allocator`. Both are typically `ctx.arena.allocator()`.
+pub fn demoteBignum(alloc: Allocator, big: BigIntManaged) !Value {
     if (big.fits(i64)) {
         return .{ .fixnum = big.toInt(i64) catch unreachable };
     }
-    return .{ .bignum = big };
+    return .{ .bignum = try value_mod.boxBigInt(alloc, big) };
 }
 
 /// Promote a fixnum to a Managed bignum. Bignums are cloned so the result

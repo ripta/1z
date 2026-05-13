@@ -148,7 +148,7 @@ fn makeBinaryArithEntry(comptime op: ArithOp, comptime type_a: NumType, comptime
                     var bb = try BigIntManaged.initSet(alloc, b.fixnum);
                     try bignumOp(op, &ba, &bb);
                     bb.deinit();
-                    try ctx.stack.push(demoteBignum(ba));
+                    try ctx.stack.push(try demoteBignum(alloc, ba));
                 } else {
                     try ctx.stack.push(.{ .fixnum = result[0] });
                 }
@@ -157,7 +157,7 @@ fn makeBinaryArithEntry(comptime op: ArithOp, comptime type_a: NumType, comptime
                 var bb = try ensureBignum(alloc, b);
                 try bignumOp(op, &ba, &bb);
                 bb.deinit();
-                try ctx.stack.push(demoteBignum(ba));
+                try ctx.stack.push(try demoteBignum(alloc, ba));
             } else {
                 const fa = valToFloat(alloc, a);
                 const fb = valToFloat(alloc, b);
@@ -190,7 +190,7 @@ fn makeDivEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*
                     ba.deinit();
                     bb.deinit();
                     r.deinit();
-                    try ctx.stack.push(demoteBignum(q));
+                    try ctx.stack.push(try demoteBignum(alloc, q));
                 } else {
                     try ctx.stack.push(.{ .fixnum = @divTrunc(a.fixnum, b.fixnum) });
                 }
@@ -208,7 +208,7 @@ fn makeDivEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*
                 ba.deinit();
                 bb.deinit();
                 r.deinit();
-                try ctx.stack.push(demoteBignum(q));
+                try ctx.stack.push(try demoteBignum(alloc, q));
             } else {
                 try ctx.stack.push(.{ .float = valToFloat(alloc, a) / valToFloat(alloc, b) });
             }
@@ -241,7 +241,7 @@ fn makeModEntry(comptime type_a: NumType, comptime type_b: NumType) *const fn (*
                 ba.deinit();
                 bb.deinit();
                 q.deinit();
-                try ctx.stack.push(demoteBignum(r));
+                try ctx.stack.push(try demoteBignum(alloc, r));
             } else {
                 try ctx.stack.push(.{ .float = @rem(valToFloat(alloc, a), valToFloat(alloc, b)) });
             }
@@ -423,9 +423,10 @@ fn nativeAbsFixnum(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const i = val.fixnum;
     if (i == std.math.minInt(i64)) {
-        var big = try BigIntManaged.initSet(ctx.arena.allocator(), i);
+        const alloc = ctx.arena.allocator();
+        var big = try BigIntManaged.initSet(alloc, i);
         big.abs();
-        try ctx.stack.push(demoteBignum(big));
+        try ctx.stack.push(try demoteBignum(alloc, big));
     } else {
         try ctx.stack.push(.{ .fixnum = if (i < 0) -i else i });
     }
@@ -435,7 +436,7 @@ fn nativeAbsBignum(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     var big = try val.bignum.clone();
     big.abs();
-    try ctx.stack.push(demoteBignum(big));
+    try ctx.stack.push(try demoteBignum(ctx.arena.allocator(), big));
 }
 
 fn nativeAbsFloat(ctx: *Context) anyerror!void {
@@ -832,7 +833,7 @@ fn nativeTruncDiv(ctx: *Context) anyerror!void {
             ba.deinit();
             bb.deinit();
             r.deinit();
-            try ctx.stack.push(demoteBignum(q));
+            try ctx.stack.push(try demoteBignum(alloc, q));
         } else {
             try ctx.stack.push(.{ .fixnum = @divTrunc(a.fixnum, b.fixnum) });
         }
@@ -851,7 +852,7 @@ fn nativeTruncDiv(ctx: *Context) anyerror!void {
         ba.deinit();
         bb.deinit();
         r.deinit();
-        try ctx.stack.push(demoteBignum(q));
+        try ctx.stack.push(try demoteBignum(alloc, q));
     } else {
         helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (a != .fixnum and a != .bignum) a else b);
         return error.TypeMismatch;
@@ -884,7 +885,7 @@ fn nativeTruncRem(ctx: *Context) anyerror!void {
         ba.deinit();
         bb.deinit();
         q.deinit();
-        try ctx.stack.push(demoteBignum(r));
+        try ctx.stack.push(try demoteBignum(alloc, r));
     } else {
         helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (a != .fixnum and a != .bignum) a else b);
         return error.TypeMismatch;
@@ -959,7 +960,7 @@ fn nativeGcd(ctx: *Context) anyerror!void {
             try result.gcd(&ba, &bb);
             ba.deinit();
             bb.deinit();
-            try ctx.stack.push(demoteBignum(result));
+            try ctx.stack.push(try demoteBignum(alloc, result));
         } else {
             const abs_a: u64 = @intCast(if (av < 0) -av else av);
             const abs_b: u64 = @intCast(if (bv < 0) -bv else bv);
@@ -987,7 +988,7 @@ fn nativeGcd(ctx: *Context) anyerror!void {
             try result.gcd(&ba, &bb);
             ba.deinit();
             bb.deinit();
-            try ctx.stack.push(demoteBignum(result));
+            try ctx.stack.push(try demoteBignum(alloc, result));
         }
     } else {
         helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (a != .fixnum and a != .bignum) a else b);

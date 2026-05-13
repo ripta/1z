@@ -105,7 +105,7 @@ fn resolveScalarLiteral(alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator
     }
 
     if (tokenizer_mod.parseBigNum(arena_alloc, token)) |big| {
-        return .{ .bignum = big };
+        return .{ .bignum = try value_mod.boxBigInt(arena_alloc, big) };
     }
 
     if (tokenizer_mod.parseFloat(token)) |f| {
