@@ -258,10 +258,10 @@ fn enforceRequireDoc(ctx: *Context, name: []const u8, has_doc: bool, is_parse_ti
     if (mask & bit == 0) return;
 
     const alloc = ctx.quotationAllocator();
-    ctx.thrown_error = .{
+    ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
         .error_type = "missing-doc-comment",
         .message = std.fmt.allocPrint(alloc, "word '{s}' defined without a doc-comment", .{name}) catch "word defined without a doc-comment",
-    };
+    });
     return error.UserThrown;
 }
 

@@ -560,10 +560,10 @@ pub fn checkCancellation(ctx: *Context) error{UserThrown}!void {
     // point and unwind immediately.
     if (current.cancellation_phase == .pending) {
         current.cancellation_phase = .unwinding;
-        ctx.thrown_error = .{
+        ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
             .error_type = "task-cancelled",
             .message = "task was cancelled",
-        };
+        }) catch return error.UserThrown;
         return error.UserThrown;
     }
 
@@ -575,10 +575,10 @@ pub fn checkCancellation(ctx: *Context) error{UserThrown}!void {
         current != (current.scope.scope_task orelse current))
     {
         current.cancellation_phase = .unwinding;
-        ctx.thrown_error = .{
+        ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
             .error_type = "task-cancelled",
             .message = "task was cancelled",
-        };
+        }) catch return error.UserThrown;
         return error.UserThrown;
     }
 }

@@ -62,10 +62,10 @@ pub fn nativeNext(ctx: *Context) anyerror!void {
             if (try iter.next(ctx)) |elem| {
                 try ctx.stack.push(elem);
             } else {
-                ctx.thrown_error = .{
+                ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "iterator-exhausted",
                     .message = "iterator has no more elements",
-                };
+                });
                 return error.UserThrown;
             }
         },

@@ -386,8 +386,8 @@ fn throwProtocolError(ctx: *Context, type_name: []const u8, method_name: []const
         .{ type_name, method_name, protocol_name },
     ) catch "protocol validation failed";
 
-    ctx.thrown_error = .{
+    ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
         .error_type = "protocol-error",
         .message = msg,
-    };
+    }) catch null;
 }

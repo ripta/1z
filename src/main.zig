@@ -88,13 +88,13 @@ fn printErrorDetails(ctx: *Context, writer: anytype, err: anyerror) void {
         var kebab_buf: [128]u8 = undefined;
         const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
         const duped_name = alloc.dupe(u8, kebab_name) catch @errorName(err);
-        const error_obj = ErrorObject{
+        var error_obj = ErrorObject{
             .error_type = duped_name,
             .message = duped_name,
             .data = null,
             .stack_trace = stack_trace,
         };
-        hooks.fireHooks(ctx, "on:unhandled-error", &.{.{ .error_value = error_obj }});
+        hooks.fireHooks(ctx, "on:unhandled-error", &.{.{ .error_value = &error_obj }});
     }
 
     const details = ctx.error_details.items;

@@ -683,6 +683,17 @@ pub const ErrorObject = struct {
     }
 };
 
+/// Allocate an `ErrorObject` box on the given allocator and return its
+/// pointer. The `error_value` `Value` variant stores this pointer; the
+/// inner `error_type`, `message`, `data`, and `stack_trace` fields remain
+/// owned by whatever allocator the caller used for them (typically the
+/// per-context arena).
+pub fn boxErrorObject(alloc: std.mem.Allocator, obj: ErrorObject) !*ErrorObject {
+    const ptr = try alloc.create(ErrorObject);
+    ptr.* = obj;
+    return ptr;
+}
+
 fn formatSpecEql(a: FormatSpec, b: FormatSpec) bool {
     return a.width == b.width and a.fill == b.fill and a.align_left == b.align_left;
 }
@@ -806,7 +817,7 @@ pub const Value = union(enum) {
     template: []const TemplateSegment,
     benchmark_report: *BenchmarkReportHandle,
     stack_effect: StackEffect,
-    error_value: ErrorObject,
+    error_value: *ErrorObject,
     task: *Task,
     channel: *Channel,
     iterator: *Iterator,
@@ -1120,7 +1131,7 @@ pub const Value = union(enum) {
             // Benchmark reports are equal if they refer to the same object
             .benchmark_report => |a| a == other.benchmark_report,
             .stack_effect => |a| a.eql(other.stack_effect),
-            .error_value => |a| a.eql(other.error_value),
+            .error_value => |a| a.eql(other.error_value.*),
             .task => |a| a == other.task,
             .channel => |a| a == other.channel,
             .iterator => |a| a == other.iterator,
@@ -1648,7 +1659,7 @@ test "valueContainsBorrowedBuffer detects direct packed and nested borrowed buff
     };
 
     var err_data = borrowed_inner;
-    const err_obj = ErrorObject{
+    var err_obj = ErrorObject{
         .error_type = "borrowed-buffer-escape",
         .message = "test",
         .data = &err_data,
@@ -1659,7 +1670,7 @@ test "valueContainsBorrowedBuffer detects direct packed and nested borrowed buff
     try std.testing.expect(valueContainsBorrowedBuffer(packed_borrowed));
     try std.testing.expect(valueContainsBorrowedBuffer(.{ .array = nested_array[0..] }));
     try std.testing.expect(valueContainsBorrowedBuffer(.{ .struct_instance = &struct_instance }));
-    try std.testing.expect(valueContainsBorrowedBuffer(.{ .error_value = err_obj }));
+    try std.testing.expect(valueContainsBorrowedBuffer(.{ .error_value = &err_obj }));
     try std.testing.expect(!valueContainsBorrowedBuffer(.{ .fixnum = 42 }));
 }
 

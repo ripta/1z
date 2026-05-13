@@ -466,10 +466,10 @@ const ValueLayout = struct {
             .fixnum => .i64_,
             .float => .f64_,
             .boolean => .bool_,
-            .hash, .vector, .byte_array, .set, .mutable_map, .stream, .resource, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report, .task, .channel, .iterator, .type_val, .sandbox_spec => .ptr,
+            .hash, .vector, .byte_array, .set, .mutable_map, .stream, .resource, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report, .task, .channel, .iterator, .type_val, .sandbox_spec, .error_value => .ptr,
             .string, .symbol, .array, .doc_string, .template => .slice,
             .tagged => .dual_ptr,
-            .bignum, .quotation, .stack_effect, .error_value => .inline_,
+            .bignum, .quotation, .stack_effect => .inline_,
         };
     }
 
@@ -3440,7 +3440,6 @@ fn compileInstructions(
     sp: *usize,
 ) IrCodegenError!void {
     const ctx = state.ctx;
-    const base_addr = state.base_addr;
     const bail_status = state.bail_status;
 
     for (instructions, 0..) |instr, idx| {
@@ -3658,7 +3657,7 @@ fn compileInstructions(
                     return IrCodegenError.NotCompilable;
                 } else {
                     const sp_byte_offset = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, sp_byte_offset);
+                    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, sp_byte_offset);
                     emitPushValue(ctx, &val, dest_addr);
                     stack[sp.*] = .{ .raw_at_slot = sp.* };
                     sp.* += 1;
@@ -3667,7 +3666,7 @@ fn compileInstructions(
             .call_word => |name| {
                 if (std.mem.eql(u8, name, "dup")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
-                    stack[sp.*] = try cloneStackEntry(state, base_addr, stack[sp.* - 1], sp.*);
+                    stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 1], sp.*);
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "drop")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
@@ -3682,7 +3681,7 @@ fn compileInstructions(
                     stack[sp.* - 1] = second;
                 } else if (std.mem.eql(u8, name, "over")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
-                    stack[sp.*] = try cloneStackEntry(state, base_addr, stack[sp.* - 2], sp.*);
+                    stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 2], sp.*);
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "t")) {
                     stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, true) };
@@ -3867,7 +3866,7 @@ fn compileInstructions(
                             }
                             continue;
                         },
-                        .raw_at_slot => |s| emitSlotTruthiness(ctx, base_addr, s, state),
+                        .raw_at_slot => |s| emitSlotTruthiness(ctx, state.base_addr, s, state),
                         .row_region => {
                             state.not_compilable_reason = .quotation_truthiness;
                             return IrCodegenError.NotCompilable;
@@ -4023,7 +4022,7 @@ fn compileInstructions(
                         .raw_at_slot => |s| {
                             {
                                 const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
-                                const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
+                                const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_byte_offset);
 
                                 // Check tag is quotation
                                 const quotation_tag_const = emitTagConst(ctx, .quotation);
@@ -4227,7 +4226,7 @@ fn compileInstructions(
                     const cond_entry = stack[sp.*];
                     if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
 
-                    const continue_cond = try emitTruthiness(state, cond_entry, base_addr);
+                    const continue_cond = try emitTruthiness(state, cond_entry, state.base_addr);
 
                     flushToPhysicalStack(state, stack, sp.*);
                     resetStackToPhysicalPreservingRows(stack, sp.*);
@@ -4273,8 +4272,8 @@ fn compileInstructions(
                             flushToPhysicalStack(state, stack, sp.*);
 
                             // Copy a1/a2 for quotation consumption.
-                            emitCopySlot(ctx, base_addr, output_slot, output_slot + 2);
-                            emitCopySlot(ctx, base_addr, output_slot + 1, output_slot + 3);
+                            emitCopySlot(ctx, state.base_addr, output_slot, output_slot + 2);
+                            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot + 3);
                             stack[output_slot + 2] = .{ .raw_at_slot = output_slot + 2 };
                             stack[output_slot + 3] = .{ .raw_at_slot = output_slot + 3 };
                             sp.* = output_slot + 4;
@@ -4287,7 +4286,7 @@ fn compileInstructions(
                             // Pop the result and compute truthiness.
                             sp.* -= 1;
                             const result_entry = stack[sp.*];
-                            const cond_ref = try emitTruthiness(state, result_entry, base_addr);
+                            const cond_ref = try emitTruthiness(state, result_entry, state.base_addr);
 
                             // Branch: truthy keeps a1, falsy keeps a2.
                             const if_ref = c._ir_IF(ctx, cond_ref);
@@ -4297,7 +4296,7 @@ fn compileInstructions(
                             const true_end = c._ir_END(ctx);
 
                             c._ir_IF_FALSE(ctx, if_ref);
-                            emitCopySlot(ctx, base_addr, output_slot + 1, output_slot);
+                            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot);
                             const false_end = c._ir_END(ctx);
 
                             c._ir_MERGE_2(ctx, true_end, false_end);
@@ -4308,7 +4307,7 @@ fn compileInstructions(
                         .raw_at_slot => |quot_slot| {
                             // Dynamic quotation: load code_ptr before rearranging.
                             const quot_byte_offset = c.ir_const_addr(ctx, quot_slot * ValueLayout.value_size);
-                            const quot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, quot_byte_offset);
+                            const quot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, quot_byte_offset);
 
                             // Tag-check: must be a quotation.
                             const quotation_tag_const = emitTagConst(ctx, .quotation);
@@ -4326,10 +4325,10 @@ fn compileInstructions(
                             flushToPhysicalStack(state, stack, sp.*);
 
                             // Copy a1/a2 for quotation consumption.
-                            emitCopySlot(ctx, base_addr, output_slot, output_slot + 2);
-                            emitCopySlot(ctx, base_addr, output_slot + 1, output_slot + 3);
+                            emitCopySlot(ctx, state.base_addr, output_slot, output_slot + 2);
+                            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot + 3);
                             // Copy quotation to slot after the copies.
-                            emitCopySlot(ctx, base_addr, quot_slot, output_slot + 4);
+                            emitCopySlot(ctx, state.base_addr, quot_slot, output_slot + 4);
 
                             sp.* = output_slot + 4;
                             if (sp.* + 1 > state.peak_sp) state.peak_sp = @intCast(sp.* + 1);
@@ -4439,7 +4438,7 @@ fn compileInstructions(
                         const scratch = @max(dest_slot, @max(entry_a.raw_at_slot, entry_b.raw_at_slot)) + 1;
                         for (0..sp.*) |j| {
                             if (stack[j] == .raw_at_slot and stack[j].raw_at_slot == dest_slot) {
-                                emitCopySlot(ctx, base_addr, dest_slot, scratch);
+                                emitCopySlot(ctx, state.base_addr, dest_slot, scratch);
                                 stack[j] = .{ .raw_at_slot = scratch };
                                 break;
                             }
@@ -4580,7 +4579,7 @@ fn compileInstructions(
                     const arg_base = sp.* - ic;
                     if (arg_base > 0) {
                         for (0..ic) |i| {
-                            emitCopySlot(ctx, base_addr, arg_base + i, i);
+                            emitCopySlot(ctx, state.base_addr, arg_base + i, i);
                         }
                     }
 
@@ -4616,7 +4615,7 @@ fn compileInstructions(
                     const arg_base = sp.* - ic;
                     if (arg_base > 0) {
                         for (0..ic) |i| {
-                            emitCopySlot(ctx, base_addr, arg_base + i, i);
+                            emitCopySlot(ctx, state.base_addr, arg_base + i, i);
                         }
                     }
 

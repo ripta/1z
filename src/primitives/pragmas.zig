@@ -219,9 +219,9 @@ fn hasValidator(reg: PragmaRegistration) bool {
 /// Set up a thrown error and return UserThrown for clean parse-time error display.
 fn throwPragmaError(ctx: *Context, alloc: std.mem.Allocator, error_type: []const u8, message: []const u8) anyerror {
     _ = alloc;
-    ctx.thrown_error = .{
+    ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
         .error_type = error_type,
         .message = message,
-    };
+    });
     return error.UserThrown;
 }

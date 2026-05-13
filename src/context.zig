@@ -334,7 +334,10 @@ pub const Context = struct {
     /// Stored as an M{} value so it can be exposed as a dynamic parameter.
     module_cache_value: *value_mod.MutableMap = undefined,
     /// Stashed error object from user `throw`, consumed by `recover`.
-    thrown_error: ?value_mod.ErrorObject = null,
+    /// Arena-allocated; owned by the context arena and freed at context
+    /// teardown. The `recover` primitive can clear the slot but does not
+    /// individually free the box because the arena does not support it.
+    thrown_error: ?*value_mod.ErrorObject = null,
     /// Parse-time error diagnostics, populated by the parser catch blocks
     /// and consumed by the display sites in main.zig.
     parse_diagnostics: ?ParseDiagnostics = null,
@@ -862,6 +865,9 @@ pub const Context = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.pic_cache.deinit(self.allocator);
+        // thrown_error, error_value boxes, and task error_obj/failed_error
+        // boxes are all arena-allocated; they are reclaimed by arena.deinit.
+        self.thrown_error = null;
         self.arena.deinit();
         if (self.parent_context == null) {
             self.allocator.destroy(self.lock_order_tracker);

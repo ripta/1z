@@ -10,6 +10,7 @@ const IoEvent = @import("multiplexer.zig").IoEvent;
 const ProcessWaitHandle = @import("multiplexer.zig").ProcessWaitHandle;
 const processWaitHandleKey = @import("multiplexer.zig").processWaitHandleKey;
 const trace = @import("trace.zig");
+const value_mod = @import("value.zig");
 
 /// Entry in the sleep queue: a task and its absolute monotonic wake time in nanoseconds.
 pub const SleepEntry = struct {
@@ -604,10 +605,13 @@ pub const Scheduler = struct {
         }
 
         if (task.getStatus() == .failed and task.scope.failed_error == null) {
-            task.scope.failed_error = task.error_obj orelse .{
-                .error_type = "task-error",
-                .message = "task failed without error details",
-            };
+            if (task.error_obj == null) {
+                task.error_obj = value_mod.boxErrorObject(task.ctx.quotationAllocator(), .{
+                    .error_type = "task-error",
+                    .message = "task failed without error details",
+                }) catch null;
+            }
+            task.scope.failed_error = task.error_obj;
 
             // NOTE(ripta): When a task fails, convey the cancellation to siblings in the same scope.
             //              This is a best-effort attempt to prevent siblings from doing more work after

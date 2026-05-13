@@ -27,7 +27,7 @@ pub const primitives = [_]Primitive{
 };
 
 /// Helper to get error object field value
-fn getErrorField(ctx: *Context, err: ErrorObject, field_name: []const u8) !Value {
+fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8) !Value {
     if (std.mem.eql(u8, field_name, "error-type")) {
         return Value{ .symbol = err.error_type };
     } else if (std.mem.eql(u8, field_name, "message")) {

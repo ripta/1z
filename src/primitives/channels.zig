@@ -24,18 +24,18 @@ fn releaseChannel(ctx: *Context, ch: *Channel) void {
 }
 
 fn throwChannelClosed(ctx: *Context, message: []const u8) anyerror {
-    ctx.thrown_error = .{
+    ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
         .error_type = "channel-closed",
         .message = message,
-    };
+    });
     return error.UserThrown;
 }
 
 fn throwBorrowedBufferEscape(ctx: *Context, message: []const u8) anyerror {
-    ctx.thrown_error = .{
+    ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
         .error_type = "borrowed-buffer-escape",
         .message = message,
-    };
+    });
     return error.UserThrown;
 }
 

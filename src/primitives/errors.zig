@@ -121,12 +121,11 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
     ctx.executeQuotationWithFrame(try_quot) catch |err| {
         // Check if this is a user-thrown error with a stashed ErrorObject
         if (err == error.UserThrown) {
-            if (ctx.thrown_error) |thrown| {
-                var error_obj = thrown;
+            if (ctx.thrown_error) |thrown_ptr| {
                 ctx.thrown_error = null;
 
                 // Capture stack trace from error_details if not already present
-                if (error_obj.stack_trace == null and ctx.error_details.items.len > 0) {
+                if (thrown_ptr.stack_trace == null and ctx.error_details.items.len > 0) {
                     const alloc = ctx.quotationAllocator();
                     const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
                     if (frames) |f| {
@@ -137,11 +136,11 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
                                 .line = detail.line,
                             };
                         }
-                        error_obj.stack_trace = f;
+                        thrown_ptr.stack_trace = f;
                     }
                 }
 
-                try ctx.stack.push(.{ .error_value = error_obj });
+                try ctx.stack.push(.{ .error_value = thrown_ptr });
                 ctx.clearExecutionDetails();
                 try ctx.executeQuotationWithFrame(recover_quot);
                 return;
@@ -168,13 +167,13 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
         var kebab_buf: [128]u8 = undefined;
         const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
         const duped_name = alloc.dupe(u8, kebab_name) catch @errorName(err);
-        const error_obj = ErrorObject{
+        const error_ptr = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
             .error_type = duped_name,
             .message = duped_name,
             .data = null,
             .stack_trace = stack_trace,
-        };
-        try ctx.stack.push(.{ .error_value = error_obj });
+        });
+        try ctx.stack.push(.{ .error_value = error_ptr });
 
         // Clear error details after capturing, and execute recovery
         ctx.clearExecutionDetails();
@@ -286,12 +285,12 @@ fn nativeMakeError(ctx: *Context) anyerror!void {
         },
     };
 
-    const error_obj = ErrorObject{
+    const error_ptr = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
         .error_type = try ctx.quotationAllocator().dupe(u8, error_type),
         .message = try ctx.quotationAllocator().dupe(u8, message),
         .data = data,
-    };
-    try ctx.stack.push(.{ .error_value = error_obj });
+    });
+    try ctx.stack.push(.{ .error_value = error_ptr });
 }
 
 /// throw ( error -- ) - Raise an error object as an actual error.
@@ -301,7 +300,11 @@ fn nativeThrow(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
         .error_value => |err_obj| {
-            ctx.thrown_error = err_obj;
+            // Clone the box so the stashed pointer is exclusive to the
+            // throw path. The stack-resident original (from `dup` before
+            // throw, or survival above the unwind frame) keeps its own
+            // box, which is freed at context teardown.
+            ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), err_obj.*);
             return error.UserThrown;
         },
         else => {

@@ -123,7 +123,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         try helpers.checkCancellation(ctx);
 
         if (scope.failed_error) |err_obj| {
-            ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator());
+            ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
             return error.UserThrown;
         }
 
@@ -161,7 +161,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     }
 
     if (scope.failed_error) |err_obj| {
-        ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator());
+        ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
         return error.UserThrown;
     }
 }
@@ -352,20 +352,20 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
         },
         .failed => {
             if (main_task.error_obj) |err_obj| {
-                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator());
+                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
             } else {
-                ctx.thrown_error = .{
+                ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "task-error",
                     .message = "task failed without error details",
-                };
+                });
             }
             return error.UserThrown;
         },
         .cancelled => {
-            ctx.thrown_error = .{
+            ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                 .error_type = "timeout",
                 .message = "operation timed out",
-            };
+            });
             return error.UserThrown;
         },
         .pending, .running => unreachable,
@@ -388,6 +388,7 @@ fn timerTaskEntryPoint() callconv(.c) void {
         }
         if (task.ctx.thrown_error) |thrown| {
             task.error_obj = thrown;
+            task.ctx.thrown_error = null;
         }
         return;
     };
@@ -396,10 +397,10 @@ fn timerTaskEntryPoint() callconv(.c) void {
     // finished. Mark the timer as failed with a timeout error to trigger sibling
     // cancellation of the main task.
     task.setStatus(.failed);
-    task.error_obj = .{
+    task.error_obj = value_mod.boxErrorObject(task.ctx.quotationAllocator(), .{
         .error_type = "timeout",
         .message = "operation timed out",
-    };
+    }) catch null;
 }
 
 /// cancel-task ( task -- )
@@ -519,20 +520,20 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
         switch (task.getStatus()) {
             .failed => {
                 if (task.error_obj) |err_obj| {
-                    ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator());
+                    ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
                 } else {
-                    ctx.thrown_error = .{
+                    ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                         .error_type = "task-error",
                         .message = "task failed without error details",
-                    };
+                    });
                 }
                 return error.UserThrown;
             },
             .cancelled => {
-                ctx.thrown_error = .{
+                ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "task-cancelled",
                     .message = "awaited task was cancelled",
-                };
+                });
                 return error.UserThrown;
             },
             .completed => {},
@@ -571,20 +572,20 @@ fn handleAwaitResult(ctx: *Context, task: *Task) anyerror!void {
         },
         .failed => {
             if (task.error_obj) |err_obj| {
-                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator());
+                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
             } else {
-                ctx.thrown_error = .{
+                ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "task-error",
                     .message = "task failed without error details",
-                };
+                });
             }
             return error.UserThrown;
         },
         .cancelled => {
-            ctx.thrown_error = .{
+            ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                 .error_type = "task-cancelled",
                 .message = "awaited task was cancelled",
-            };
+            });
             return error.UserThrown;
         },
         .pending, .running => unreachable,
@@ -697,7 +698,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         },
 
         .stack_effect => |effect| .{ .stack_effect = try deepCopyStackEffect(effect, alloc) },
-        .error_value => |err| .{ .error_value = try deepCopyErrorObject(err, alloc) },
+        .error_value => |err| .{ .error_value = try deepCopyErrorObject(err, alloc, alloc) },
 
         .doc_string => |s| .{ .doc_string = try alloc.dupe(u8, s) },
 
@@ -755,7 +756,7 @@ fn deepCopyTemplateSegment(seg: value_mod.TemplateSegment, alloc: Allocator) Dee
     };
 }
 
-fn deepCopyErrorObject(err: ErrorObject, alloc: Allocator) DeepCopyError!ErrorObject {
+fn deepCopyErrorObjectValue(err: ErrorObject, alloc: Allocator) DeepCopyError!ErrorObject {
     const new_data: ?*const Value = if (err.data) |data| blk: {
         const new_d = try alloc.create(Value);
         new_d.* = try deepCopyValue(data.*, alloc);
@@ -780,6 +781,16 @@ fn deepCopyErrorObject(err: ErrorObject, alloc: Allocator) DeepCopyError!ErrorOb
         .data = new_data,
         .stack_trace = new_trace,
     };
+}
+
+/// Deep-copy an `ErrorObject` and box it. The box is allocated on
+/// `box_alloc` (typically GPA); the inner strings, data, and stack-trace
+/// frames are allocated on `inner_alloc` (typically the per-context arena).
+fn deepCopyErrorObject(err: *const ErrorObject, box_alloc: Allocator, inner_alloc: Allocator) DeepCopyError!*ErrorObject {
+    const inner = try deepCopyErrorObjectValue(err.*, inner_alloc);
+    const ptr = try box_alloc.create(ErrorObject);
+    ptr.* = inner;
+    return ptr;
 }
 
 /// cancelled? ( -- bool )
@@ -871,14 +882,15 @@ test "handleAwaitResult rethrows borrowed buffer escape" {
     var scope = TaskScope.init(std.testing.allocator);
     defer scope.deinit();
 
+    var err_obj = value_mod.ErrorObject{
+        .error_type = "borrowed-buffer-escape",
+        .message = "borrowed buffer cannot cross task boundary via task result; call >byte-array first",
+    };
     var task = Task{
         .id = 1,
         .name = null,
         .status = std.atomic.Value(task_mod.TaskStatus).init(.failed),
-        .error_obj = .{
-            .error_type = "borrowed-buffer-escape",
-            .message = "borrowed buffer cannot cross task boundary via task result; call >byte-array first",
-        },
+        .error_obj = &err_obj,
         .ctx = &ctx,
         .scope = &scope,
         .quotation = .{ .instructions = &.{}, .effect = null },
@@ -912,14 +924,15 @@ test "await-all propagates borrowed buffer escape from failed child" {
     };
     scheduler.current_task = &parent_task;
 
+    var err_obj = value_mod.ErrorObject{
+        .error_type = "borrowed-buffer-escape",
+        .message = "borrowed buffer cannot cross task boundary via task result; call >byte-array first",
+    };
     var failed_child = Task{
         .id = 2,
         .name = null,
         .status = std.atomic.Value(task_mod.TaskStatus).init(.failed),
-        .error_obj = .{
-            .error_type = "borrowed-buffer-escape",
-            .message = "borrowed buffer cannot cross task boundary via task result; call >byte-array first",
-        },
+        .error_obj = &err_obj,
         .ctx = &ctx,
         .scope = &child_scope,
         .quotation = .{ .instructions = &.{}, .effect = null },

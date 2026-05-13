@@ -39,10 +39,10 @@ pub fn taskEntryPoint() callconv(.c) void {
     task.ctx.executeQuotation(task.quotation) catch {
         if (task.ctx.error_details.items.len > 0) {
             const detail = task.ctx.error_details.items[0];
-            task.error_obj = .{
+            task.error_obj = value_mod.boxErrorObject(task.ctx.quotationAllocator(), .{
                 .error_type = detail.error_type,
                 .message = detail.message,
-            };
+            }) catch null;
             if (task.cancellation_phase != .none and std.mem.eql(u8, detail.error_type, "task-cancelled")) {
                 task.setStatus(.cancelled);
             } else {
@@ -50,6 +50,7 @@ pub fn taskEntryPoint() callconv(.c) void {
             }
         } else if (task.ctx.thrown_error) |thrown| {
             task.error_obj = thrown;
+            task.ctx.thrown_error = null;
             if (task.cancellation_phase != .none and std.mem.eql(u8, thrown.error_type, "task-cancelled")) {
                 task.setStatus(.cancelled);
             } else {
@@ -98,7 +99,7 @@ pub const Task = struct {
     name: ?[]const u8,
     status: std.atomic.Value(TaskStatus),
     result: ?Value = null,
-    error_obj: ?ErrorObject = null,
+    error_obj: ?*ErrorObject = null,
     uctx: std.c.ucontext_t = undefined,
     stack_mem: ?[]align(std.heap.page_size_min) u8 = null,
     ctx: *Context,
@@ -132,10 +133,10 @@ pub fn publishTaskResult(task: *Task) void {
         const result = task.ctx.stack.pop() catch null;
         if (result) |val| {
             if (value_mod.valueContainsBorrowedBuffer(val)) {
-                task.error_obj = .{
+                task.error_obj = value_mod.boxErrorObject(task.ctx.quotationAllocator(), .{
                     .error_type = "borrowed-buffer-escape",
                     .message = "borrowed buffer cannot cross task boundary via task result; call >byte-array first",
-                };
+                }) catch null;
                 task.result = null;
                 task.setStatus(.failed);
                 return;
@@ -155,7 +156,7 @@ pub const TaskScope = struct {
     /// Task that is waiting for the entire scope to complete.
     waiting_task: ?*Task = null,
     /// First child error, propagated to parent on scope exit.
-    failed_error: ?ErrorObject = null,
+    failed_error: ?*ErrorObject = null,
     allocator: Allocator,
     /// Atomic count of children that have not yet finished.
     active_children: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),

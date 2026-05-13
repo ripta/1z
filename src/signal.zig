@@ -118,10 +118,10 @@ pub fn checkPendingSignals(ctx: *Context) error{UserThrown}!void {
                     }
                 };
             } else if (i == @as(usize, @intCast(SIG.INT))) {
-                ctx.thrown_error = .{
+                ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "interrupted",
                     .message = "interrupted by signal",
-                };
+                }) catch return error.UserThrown;
                 return error.UserThrown;
             }
             // Other signals with no handler: consume and ignore.
