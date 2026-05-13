@@ -2922,6 +2922,11 @@ fn compilePredBodyLoop(
 
     const entry_end = c._ir_END(ctx);
     const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+    // AOT loop back-edges can arrive after callbacks moved ctx.stack.items.
+    // Refresh at the header so predicate/body slot accesses use the live base.
+    if (state.aot_mode and state.refresh_stack_fn != c.IR_UNUSED) {
+        refreshCachedStackPointer(state);
+    }
 
     // Execute predicate
     const pre_body_sp = sp.*;
@@ -4200,6 +4205,11 @@ fn compileInstructions(
 
                     const entry_end = c._ir_END(ctx);
                     const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+                    // AOT loop back-edges can arrive after callbacks moved ctx.stack.items.
+                    // Refresh at the header so predicate slot accesses use the live base.
+                    if (state.aot_mode and state.refresh_stack_fn != c.IR_UNUSED) {
+                        refreshCachedStackPointer(state);
+                    }
 
                     // Execute predicate body
                     const pre_body_sp = sp.*;
