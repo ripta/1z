@@ -10,3 +10,4 @@ AOT interpreter fallbacks: 5 total
     compound-uncompiled: stream-write-string -> >bytes (line 484)
     compound-uncompiled: stream-write-string -> stream-write (line 484)
     compound-uncompiled: keep -> dip (line 382)
+  static-check: jitInterpretedCall=5/5 jitCallQuotation=0/0 (matches build-time inventory)

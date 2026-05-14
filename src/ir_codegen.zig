@@ -228,11 +228,81 @@ pub const AotFallbackSite = struct {
     line: u32,
 };
 
+/// Result of cross-checking the build-time fallback inventory against the
+/// assembled C source. `expected_*` mirrors the build-time totals from
+/// `AotFallbackReportBuilder`; `observed_*` comes from a single scan of
+/// the assembled C output. A mismatch indicates a codegen path that
+/// emits an interpreter callback without going through
+/// `noteAotFallbackEmission`, or vice versa.
+pub const AotFallbackStaticCheck = struct {
+    /// Whether the cross-check has been run. Default-initialized reports
+    /// (e.g. before `emitProgramC` finishes assembling output) carry an
+    /// unpopulated check that printers should skip.
+    populated: bool = false,
+    expected_jit_interpreted_calls: u32 = 0,
+    observed_jit_interpreted_calls: u32 = 0,
+    expected_jit_call_quotation: u32 = 0,
+    observed_jit_call_quotation: u32 = 0,
+
+    pub fn matches(self: AotFallbackStaticCheck) bool {
+        return self.expected_jit_interpreted_calls == self.observed_jit_interpreted_calls and
+            self.expected_jit_call_quotation == self.observed_jit_call_quotation;
+    }
+};
+
+/// Count non-overlapping occurrences of `needle` in `haystack`.
+fn countOccurrences(haystack: []const u8, needle: []const u8) u32 {
+    if (needle.len == 0 or haystack.len < needle.len) return 0;
+    var count: u32 = 0;
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) {
+        if (std.mem.eql(u8, haystack[i .. i + needle.len], needle)) {
+            count += 1;
+            i += needle.len;
+        } else {
+            i += 1;
+        }
+    }
+    return count;
+}
+
+/// Cross-check the build-time fallback inventory against the assembled C
+/// source. The two `extern` declarations of `jitInterpretedCall(...)` and
+/// `jitCallQuotation(...)` are emitted unconditionally for every AOT
+/// program, so the call-site count is the raw match count minus one for
+/// each callback when at least one occurrence appears.
+pub fn verifyAotFallbackInventory(
+    source: []const u8,
+    report: *const AotFallbackReport,
+) AotFallbackStaticCheck {
+    const raw_jic = countOccurrences(source, "jitInterpretedCall(");
+    const raw_jcq = countOccurrences(source, "jitCallQuotation(");
+    const observed_jic = if (raw_jic > 0) raw_jic - 1 else 0;
+    const observed_jcq = if (raw_jcq > 0) raw_jcq - 1 else 0;
+
+    const expected_jic =
+        report.totals[@intFromEnum(AotFallbackCategory.native)] +
+        report.totals[@intFromEnum(AotFallbackCategory.per_op_native)] +
+        report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)];
+    const expected_jcq = report.totals[@intFromEnum(AotFallbackCategory.quotation)];
+
+    return .{
+        .populated = true,
+        .expected_jit_interpreted_calls = expected_jic,
+        .observed_jit_interpreted_calls = observed_jic,
+        .expected_jit_call_quotation = expected_jcq,
+        .observed_jit_call_quotation = observed_jcq,
+    };
+}
+
 /// Snapshot of all AOT fallback emissions for one program. Owned by
 /// `CodegenDiagnostics` once finalized.
 pub const AotFallbackReport = struct {
     totals: [aot_fallback_category_count]u32 = [_]u32{0} ** aot_fallback_category_count,
     sites: []const AotFallbackSite = &.{},
+    /// Populated by `emitProgramC` once the C output has been fully
+    /// assembled. Default-initialized reports leave this unpopulated.
+    static_check: AotFallbackStaticCheck = .{},
 
     pub fn total(self: *const AotFallbackReport) u32 {
         var sum: u32 = 0;
@@ -6857,6 +6927,16 @@ pub fn emitProgramC(
     // mode confirmed no fallback was emitted.
     const interpreter_callbacks_emitted = aot_fallback_emit_count > 0;
 
+    // Static cross-check: independently scan the assembled C source for
+    // `jitInterpretedCall(` and `jitCallQuotation(` call sites and confirm
+    // the count agrees with what the build-time inventory recorded. Run
+    // it after compiled bodies are appended so the call sites the bodies
+    // contain are visible, and before the locked-fallback return so that
+    // the diagnostic is available on both the success path and the
+    // build-error path.
+    diagnostics.aot_fallback_report.static_check =
+        verifyAotFallbackInventory(out.items, &diagnostics.aot_fallback_report);
+
     // mode=false + lock=true + an emitted fallback is a build error: the user
     // asked for a binary that can never call the interpreter, but codegen
     // needed it. Without this check the binary would crash at runtime via
@@ -11844,4 +11924,60 @@ test "AotFallbackReportBuilder records and snapshots site categories" {
     try testing.expectEqualStrings("<", report.sites[0].callee_word);
     try testing.expectEqualStrings("stream-write", report.sites[1].callee_word);
     try testing.expectEqual(AotFallbackCategory.native, report.sites[2].category);
+}
+
+test "verifyAotFallbackInventory matches when source agrees with builder" {
+    // Source includes one extern declaration plus two real call sites for
+    // jitInterpretedCall, and one extern declaration plus one real call
+    // site for jitCallQuotation.
+    const source =
+        "extern int32_t jitInterpretedCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
+        "extern int32_t jitCallQuotation(uintptr_t);\n" ++
+        "int32_t f(void) { jitInterpretedCall(0,1,2); jitInterpretedCall(0,3,4); return 0; }\n" ++
+        "int32_t g(void) { jitCallQuotation(0); return 0; }\n";
+
+    var report: AotFallbackReport = .{};
+    report.totals[@intFromEnum(AotFallbackCategory.native)] = 1;
+    report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)] = 1;
+    report.totals[@intFromEnum(AotFallbackCategory.quotation)] = 1;
+
+    const check = verifyAotFallbackInventory(source, &report);
+    try testing.expect(check.populated);
+    try testing.expect(check.matches());
+    try testing.expectEqual(@as(u32, 2), check.expected_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 2), check.observed_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 1), check.expected_jit_call_quotation);
+    try testing.expectEqual(@as(u32, 1), check.observed_jit_call_quotation);
+}
+
+test "verifyAotFallbackInventory flags mismatch when builder undercounts" {
+    // Three real jitInterpretedCall sites plus the extern declaration but
+    // the builder only recorded two.
+    const source =
+        "extern int32_t jitInterpretedCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
+        "extern int32_t jitCallQuotation(uintptr_t);\n" ++
+        "int32_t f(void) { jitInterpretedCall(0,1,2); jitInterpretedCall(0,3,4); jitInterpretedCall(0,5,6); return 0; }\n";
+
+    var report: AotFallbackReport = .{};
+    report.totals[@intFromEnum(AotFallbackCategory.native)] = 2;
+
+    const check = verifyAotFallbackInventory(source, &report);
+    try testing.expect(check.populated);
+    try testing.expect(!check.matches());
+    try testing.expectEqual(@as(u32, 2), check.expected_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 3), check.observed_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 0), check.expected_jit_call_quotation);
+    try testing.expectEqual(@as(u32, 0), check.observed_jit_call_quotation);
+}
+
+test "verifyAotFallbackInventory ignores absent callbacks" {
+    // No extern declaration, no calls -- nothing to subtract.
+    const source = "int32_t f(void) { return 0; }\n";
+
+    var report: AotFallbackReport = .{};
+
+    const check = verifyAotFallbackInventory(source, &report);
+    try testing.expect(check.matches());
+    try testing.expectEqual(@as(u32, 0), check.observed_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 0), check.observed_jit_call_quotation);
 }

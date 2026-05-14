@@ -1,2 +1,4 @@
 Warning: AOT build may diverge at runtime: '>quotation' in 'make-word'
+AOT interpreter fallbacks: 1 total (compound-uncompiled=1)
+  static-check: jitInterpretedCall=1/1 jitCallQuotation=0/0 (matches build-time inventory)
 interpreter: linked (auto: compiled code calls interpreter)

@@ -1795,7 +1795,81 @@ fn printAotFallbackReport(
             err_writer.print("    ... {d} more\n", .{report.sites.len - shown}) catch {};
         }
     }
+    printAotFallbackStaticCheck(&report.static_check, err_writer);
     err_writer.flush() catch {};
+}
+
+/// One-line per-category roll-up plus static-check parity. Emitted on
+/// every successful AOT build when the report has any sites; the
+/// verbose `printAotFallbackReport` is reserved for `--compilation-stats`
+/// and the locked-fallback error path. This is the "AOT build report
+/// line summarizing remaining fallbacks per category" called out by
+/// 255.2.
+fn printAotFallbackSummary(
+    report: *const ir_codegen.AotFallbackReport,
+    err_writer: anytype,
+) void {
+    if (report.total() == 0) {
+        // Skip emitting anything for builds that never reached the
+        // interpreter. The static-check parity is also implicitly zero
+        // and would only add noise to clean builds. A mismatch will
+        // still surface through `warnAotFallbackMismatch`.
+        return;
+    }
+    err_writer.print("AOT interpreter fallbacks: {d} total (", .{report.total()}) catch {};
+    var emitted: u32 = 0;
+    inline for (@typeInfo(ir_codegen.AotFallbackCategory).@"enum".fields) |field| {
+        const cat: ir_codegen.AotFallbackCategory = @enumFromInt(field.value);
+        const count = report.totals[field.value];
+        if (count != 0) {
+            if (emitted > 0) err_writer.writeAll(" ") catch {};
+            err_writer.print("{s}={d}", .{ cat.label(), count }) catch {};
+            emitted += 1;
+        }
+    }
+    err_writer.writeAll(")\n") catch {};
+    printAotFallbackStaticCheck(&report.static_check, err_writer);
+    err_writer.flush() catch {};
+}
+
+fn printAotFallbackStaticCheck(
+    check: *const ir_codegen.AotFallbackStaticCheck,
+    err_writer: anytype,
+) void {
+    if (!check.populated) return;
+    err_writer.print(
+        "  static-check: jitInterpretedCall={d}/{d} jitCallQuotation={d}/{d} ({s})\n",
+        .{
+            check.observed_jit_interpreted_calls,
+            check.expected_jit_interpreted_calls,
+            check.observed_jit_call_quotation,
+            check.expected_jit_call_quotation,
+            if (check.matches()) "matches build-time inventory" else "MISMATCH",
+        },
+    ) catch {};
+}
+
+/// Emit a warning line when the static cross-check disagrees with the
+/// build-time inventory. The build still succeeds: the goal at this
+/// stage is observability so codegen drift surfaces in normal builds
+/// without breaking unrelated work.
+fn warnAotFallbackMismatch(
+    check: *const ir_codegen.AotFallbackStaticCheck,
+    err_writer: anytype,
+) void {
+    if (!check.populated or check.matches()) return;
+    err_writer.print(
+        "Warning: AOT fallback inventory mismatch: " ++
+            "jitInterpretedCall observed={d} expected={d}, " ++
+            "jitCallQuotation observed={d} expected={d}; " ++
+            "a codegen path is emitting an interpreter callback without classifying it.\n",
+        .{
+            check.observed_jit_interpreted_calls,
+            check.expected_jit_interpreted_calls,
+            check.observed_jit_call_quotation,
+            check.expected_jit_call_quotation,
+        },
+    ) catch {};
 }
 
 fn handleHighlight(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
@@ -2218,6 +2292,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         allocator,
     ) catch |err| {
         printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
+        const printed_full_report =
+            err == error.InterpreterRequiredButLocked or compilation_stats;
         if (compilation_stats) {
             printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
             printQuotationStats(freeze_result.quotations, err_writer);
@@ -2256,10 +2332,16 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                     "      hint: drop --lock-interpreter-setting, switch to --interpreter-fallback=true, " ++
                     "or rewrite the offending words so they compile without fallback.\n",
             ) catch {};
-            printAotFallbackReport(&codegen_diagnostics.aot_fallback_report, err_writer);
+            if (!compilation_stats) {
+                printAotFallbackReport(&codegen_diagnostics.aot_fallback_report, err_writer);
+            }
         } else {
             err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
         }
+        if (!printed_full_report) {
+            printAotFallbackSummary(&codegen_diagnostics.aot_fallback_report, err_writer);
+        }
+        warnAotFallbackMismatch(&codegen_diagnostics.aot_fallback_report.static_check, err_writer);
         err_writer.flush() catch {};
         return 1;
     };
@@ -2270,7 +2352,10 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         printQuotationStats(freeze_result.quotations, err_writer);
         printPicStats(&codegen_diagnostics, err_writer);
         printAotFallbackReport(&codegen_diagnostics.aot_fallback_report, err_writer);
+    } else {
+        printAotFallbackSummary(&codegen_diagnostics.aot_fallback_report, err_writer);
     }
+    warnAotFallbackMismatch(&codegen_diagnostics.aot_fallback_report.static_check, err_writer);
 
     printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
 
