@@ -1,3 +1,9 @@
 Prelude compilation: 5/5 words compiled (100.0%)
 Quotation bodies compiled: 0
+AOT interpreter fallbacks: 3 total
+  compound-uncompiled: 3
+  sites:
+    compound-uncompiled: flush -> stream-flush (line 520)
+    compound-uncompiled: stream-write-string -> >bytes (line 484)
+    compound-uncompiled: stream-write-string -> stream-write (line 484)
 interpreter: linked (auto: compiled code calls interpreter)

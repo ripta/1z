@@ -1,3 +1,12 @@
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Error: --interpreter-fallback=false --lock-interpreter-setting was set, but at least one compiled word emitted an interpreter fallback call.
       hint: drop --lock-interpreter-setting, switch to --interpreter-fallback=true, or rewrite the offending words so they compile without fallback.
+AOT interpreter fallbacks: 5 total
+  native: 1
+  compound-uncompiled: 4
+  sites:
+    native: . -> inspect (line 526)
+    compound-uncompiled: flush -> stream-flush (line 520)
+    compound-uncompiled: stream-write-string -> >bytes (line 484)
+    compound-uncompiled: stream-write-string -> stream-write (line 484)
+    compound-uncompiled: keep -> dip (line 382)

@@ -1766,6 +1766,38 @@ fn printPicStats(
     err_writer.flush() catch {};
 }
 
+fn printAotFallbackReport(
+    report: *const ir_codegen.AotFallbackReport,
+    err_writer: anytype,
+) void {
+    if (report.total() == 0) return;
+    err_writer.print("AOT interpreter fallbacks: {d} total\n", .{report.total()}) catch {};
+    inline for (@typeInfo(ir_codegen.AotFallbackCategory).@"enum".fields) |field| {
+        const cat: ir_codegen.AotFallbackCategory = @enumFromInt(field.value);
+        const count = report.totals[field.value];
+        if (count != 0) {
+            err_writer.print("  {s}: {d}\n", .{ cat.label(), count }) catch {};
+        }
+    }
+    const max_sites: usize = 16;
+    const shown = @min(report.sites.len, max_sites);
+    if (shown > 0) {
+        err_writer.writeAll("  sites:\n") catch {};
+        for (report.sites[0..shown]) |site| {
+            err_writer.print("    {s}: {s} -> {s} (line {d})\n", .{
+                site.category.label(),
+                site.caller_word,
+                site.callee_word,
+                site.line,
+            }) catch {};
+        }
+        if (report.sites.len > shown) {
+            err_writer.print("    ... {d} more\n", .{report.sites.len - shown}) catch {};
+        }
+    }
+    err_writer.flush() catch {};
+}
+
 fn handleHighlight(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
@@ -2132,6 +2164,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var codegen_diagnostics: ir_codegen.CodegenDiagnostics = .{};
     defer if (codegen_diagnostics.prelude_stats.uncompiled.len > 0)
         allocator.free(codegen_diagnostics.prelude_stats.uncompiled);
+    defer if (codegen_diagnostics.aot_fallback_report.sites.len > 0)
+        allocator.free(codegen_diagnostics.aot_fallback_report.sites);
 
     // Hash the embedded prelude source unconditionally: the build path's
     // `--prelude=` handling above passes the path string directly to
@@ -2188,6 +2222,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
             printQuotationStats(freeze_result.quotations, err_writer);
             printPicStats(&codegen_diagnostics, err_writer);
+            printAotFallbackReport(&codegen_diagnostics.aot_fallback_report, err_writer);
         }
         if (err == error.UncompiledWords) {
             const items = codegen_diagnostics.uncompiled_words;
@@ -2221,6 +2256,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                     "      hint: drop --lock-interpreter-setting, switch to --interpreter-fallback=true, " ++
                     "or rewrite the offending words so they compile without fallback.\n",
             ) catch {};
+            printAotFallbackReport(&codegen_diagnostics.aot_fallback_report, err_writer);
         } else {
             err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
         }
@@ -2233,6 +2269,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         printPreludeStats(&codegen_diagnostics.prelude_stats, err_writer);
         printQuotationStats(freeze_result.quotations, err_writer);
         printPicStats(&codegen_diagnostics, err_writer);
+        printAotFallbackReport(&codegen_diagnostics.aot_fallback_report, err_writer);
     }
 
     printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);

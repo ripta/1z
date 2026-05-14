@@ -1,4 +1,12 @@
 Quotation bodies compiled: 10/10 (100.0%)
+AOT interpreter fallbacks: 4 total
+  native: 1
+  compound-uncompiled: 3
+  sites:
+    compound-uncompiled: flush -> stream-flush (line 520)
+    compound-uncompiled: stream-write-string -> >bytes (line 484)
+    compound-uncompiled: stream-write-string -> stream-write (line 484)
+    native: . -> inspect (line 526)
 Error: 1 word could not be compiled to C
   word '__entry__': NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect

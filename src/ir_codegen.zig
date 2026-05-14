@@ -181,6 +181,97 @@ pub const PicStats = struct {
     sites_emitted: u32 = 0,
 };
 
+/// Classification of an AOT-mode interpreter-callback emission. Covers both
+/// `jitInterpretedCall` (native and compound fallback) and `jitCallQuotation`
+/// (quotation fallback). Each emission site supplies one of these so
+/// `--compilation-stats` and the locked-fallback error can show why the
+/// interpreter is still being reached at runtime, and so a follow-up static
+/// cross-check can confirm the inventory matches the generated C.
+pub const AotFallbackCategory = enum {
+    /// Native word reached without an inline emitter applying.
+    native,
+    /// Per-operation polymorphic native fallback for arithmetic/comparison.
+    per_op_native,
+    /// Compound word whose body did not compile; AOT C dispatches through
+    /// the interpreter instead of emitting a direct call.
+    compound_uncompiled,
+    /// Quotation lacking a compiled `code_ptr`; AOT C falls back through
+    /// `jitCallQuotation`. Tracked alongside `jitInterpretedCall` because
+    /// both keep the interpreter linked and contribute to the
+    /// `aot_fallback_emit_count` decision.
+    quotation,
+    /// Sentinel for emission paths that have not been classified yet. A
+    /// non-zero count here means a new codegen path was added without a
+    /// category and should be triaged.
+    unexpected,
+
+    pub fn label(self: AotFallbackCategory) []const u8 {
+        return switch (self) {
+            .native => "native",
+            .per_op_native => "per-op-native",
+            .compound_uncompiled => "compound-uncompiled",
+            .quotation => "quotation",
+            .unexpected => "unexpected",
+        };
+    }
+};
+
+pub const aot_fallback_category_count: usize = @typeInfo(AotFallbackCategory).@"enum".fields.len;
+
+/// One AOT `jitInterpretedCall` emission, attributed back to the caller and
+/// callee that produced it.
+pub const AotFallbackSite = struct {
+    category: AotFallbackCategory,
+    caller_word: []const u8,
+    callee_word: []const u8,
+    callee_word_id: u32,
+    line: u32,
+};
+
+/// Snapshot of all AOT fallback emissions for one program. Owned by
+/// `CodegenDiagnostics` once finalized.
+pub const AotFallbackReport = struct {
+    totals: [aot_fallback_category_count]u32 = [_]u32{0} ** aot_fallback_category_count,
+    sites: []const AotFallbackSite = &.{},
+
+    pub fn total(self: *const AotFallbackReport) u32 {
+        var sum: u32 = 0;
+        for (self.totals) |count| sum += count;
+        return sum;
+    }
+};
+
+/// Per-compilation builder that codegen pushes into. The finalized
+/// `AotFallbackReport` is built from this at the end of `emitProgramC`.
+pub const AotFallbackReportBuilder = struct {
+    totals: [aot_fallback_category_count]u32 = [_]u32{0} ** aot_fallback_category_count,
+    sites: std.ArrayListUnmanaged(AotFallbackSite) = .{},
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) AotFallbackReportBuilder {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(self: *AotFallbackReportBuilder) void {
+        self.sites.deinit(self.allocator);
+    }
+
+    pub fn record(self: *AotFallbackReportBuilder, site: AotFallbackSite) void {
+        self.totals[@intFromEnum(site.category)] += 1;
+        self.sites.append(self.allocator, site) catch {
+            // Memory pressure: drop the per-site detail but keep the
+            // total accurate so the locked-fallback error and stats line
+            // still surface the category breakdown.
+        };
+    }
+
+    pub fn snapshot(self: *const AotFallbackReportBuilder, allocator: std.mem.Allocator) !AotFallbackReport {
+        const sites_copy = try allocator.alloc(AotFallbackSite, self.sites.items.len);
+        @memcpy(sites_copy, self.sites.items);
+        return .{ .totals = self.totals, .sites = sites_copy };
+    }
+};
+
 pub const CodegenDiagnostics = struct {
     uncompiled_words: []const UncompiledWord = &.{},
     uncompiled_quotations: []const UncompiledQuotation = &.{},
@@ -193,6 +284,11 @@ pub const CodegenDiagnostics = struct {
     /// `runtime-image-*` metadata fields and lets tests confirm the
     /// emission wiring without inspecting the generated C source.
     image_stats: ?aot_image_emit_mod.ImageEmissionStats = null,
+    /// Per-category breakdown of AOT-mode `jitInterpretedCall` emissions.
+    /// Always populated for AOT builds so the locked-fallback error and
+    /// `--compilation-stats` output can attribute interpreter calls to the
+    /// site that produced them.
+    aot_fallback_report: AotFallbackReport = .{},
 };
 
 pub const CompiledWord = struct {
@@ -972,7 +1068,7 @@ fn emitPerOperationFallback(
     } else {
         const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
         const line_const = c.ir_const_addr(ctx, line);
-        state.noteAotFallbackEmission();
+        state.noteAotFallbackEmission(.per_op_native, op_name, resolved.word_id, line);
         const call_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
         emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
     }
@@ -1486,6 +1582,16 @@ const CompileState = struct {
     /// call_quotation_fn. The substring scan that decides interpreter-free
     /// linking reads this counter instead of grepping the generated C.
     aot_fallback_emit_count: ?*u32 = null,
+    /// Optional per-compilation report builder. When set, every AOT-mode
+    /// `jitInterpretedCall` emission appends a classified site record so
+    /// build-time diagnostics can attribute interpreter calls to the
+    /// caller/callee/line that produced them.
+    aot_fallback_report: ?*AotFallbackReportBuilder = null,
+    /// Caller word name used for fallback report attribution. Always set
+    /// for AOT compilations regardless of whether the word has a
+    /// self-tail-call (`self_name` is only populated for the tail-call
+    /// optimization path).
+    caller_name_for_report: ?[]const u8 = null,
     error_propagate_status: c.ir_ref = c.IR_UNUSED,
     self_name: ?[]const u8 = null,
     loop_begin_ref: c.ir_ref = c.IR_UNUSED,
@@ -1565,9 +1671,29 @@ const CompileState = struct {
     /// call_quotation_fn. Only AOT-mode emissions produce textual
     /// `jitInterpretedCall` / `jitCallQuotation` references in the
     /// generated C; JIT mode bakes addresses instead.
-    fn noteAotFallbackEmission(state: *CompileState) void {
+    ///
+    /// `category` classifies the emission so build-time diagnostics can
+    /// show which kind of fallback the interpreter is being reached for.
+    /// The remaining parameters attribute the emission back to the
+    /// caller, callee, and source location.
+    fn noteAotFallbackEmission(
+        state: *CompileState,
+        category: AotFallbackCategory,
+        callee_word: []const u8,
+        callee_word_id: u32,
+        line: usize,
+    ) void {
         if (!state.aot_mode) return;
         if (state.aot_fallback_emit_count) |counter| counter.* += 1;
+        if (state.aot_fallback_report) |report| {
+            report.record(.{
+                .category = category,
+                .caller_word = state.caller_name_for_report orelse state.self_name orelse "<unknown>",
+                .callee_word = callee_word,
+                .callee_word_id = callee_word_id,
+                .line = @intCast(line),
+            });
+        }
     }
 };
 
@@ -2794,7 +2920,7 @@ fn emitIndirectQuotCall(
             state.call_quotation_fn
         else
             c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-        state.noteAotFallbackEmission();
+        state.noteAotFallbackEmission(.quotation, "<quotation>", 0, line);
         const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
         emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .{ .builtin = .{ .kind = .call, .line = line } });
     }
@@ -2866,7 +2992,7 @@ fn emitIfBranchDispatch(
             state.call_quotation_fn
         else
             c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-        state.noteAotFallbackEmission();
+        state.noteAotFallbackEmission(.quotation, "<quotation>", 0, 0);
         const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
         emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
     }
@@ -3384,7 +3510,7 @@ fn emitChooseBuiltin(
             state.call_quotation_fn
         else
             c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-        state.noteAotFallbackEmission();
+        state.noteAotFallbackEmission(.quotation, "<choose>", 0, 0);
         const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
         emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
     }
@@ -4054,7 +4180,7 @@ fn compileInstructions(
                                         state.call_quotation_fn
                                     else
                                         c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-                                    state.noteAotFallbackEmission();
+                                    state.noteAotFallbackEmission(.quotation, "<quotation>", 0, instr.line);
                                     const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
                                     emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .{ .builtin = .{ .kind = .call, .line = instr.line } });
                                 }
@@ -4368,7 +4494,7 @@ fn compileInstructions(
                                     state.call_quotation_fn
                                 else
                                     c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-                                state.noteAotFallbackEmission();
+                                state.noteAotFallbackEmission(.quotation, "<quotation>", 0, instr.line);
                                 const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
                                 emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
                             }
@@ -4867,7 +4993,7 @@ fn compileInstructions(
                             const ctx_val2 = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
                             const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
                             const line_const = c.ir_const_addr(ctx, instr.line);
-                            state.noteAotFallbackEmission();
+                            state.noteAotFallbackEmission(.compound_uncompiled, name, resolved.word_id, instr.line);
                             const fb_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, line_const);
                             emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
                         }
@@ -5653,8 +5779,9 @@ pub fn emitWordCAot(
     interp_ctx: ?*const Context,
     pic_stats_out: ?*PicStats,
     aot_fallback_emit_count_out: ?*u32,
+    aot_fallback_report_out: ?*AotFallbackReportBuilder,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -5680,15 +5807,16 @@ fn emitWordCAotWithCName(
     interp_ctx: ?*const Context,
     pic_stats_out: ?*PicStats,
     aot_fallback_emit_count_out: ?*u32,
+    aot_fallback_report_out: ?*AotFallbackReportBuilder,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -5721,6 +5849,7 @@ fn emitWordCAotPass(
     interp_ctx_param: ?*const Context,
     pic_stats_out: ?*PicStats,
     aot_fallback_emit_count_out: ?*u32,
+    aot_fallback_report_out: ?*AotFallbackReportBuilder,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
@@ -5945,6 +6074,8 @@ fn emitWordCAotPass(
         .pic_table = pic_table,
         .pic_stats = pic_stats_out,
         .aot_fallback_emit_count = aot_fallback_emit_count_out,
+        .aot_fallback_report = aot_fallback_report_out,
+        .caller_name_for_report = name,
         .interp_ctx = interp_ctx_param,
         .error_propagate_status = error_propagate_status,
         .type_mismatch_error_fn = type_mismatch_error_fn,
@@ -6273,6 +6404,7 @@ pub fn emitProgramC(
             interp_ctx,
             null,
             null,
+            null,
         ) catch |err| {
             if (reason) |r| {
                 try failure_reasons.put(allocator, w.name, r);
@@ -6308,6 +6440,7 @@ pub fn emitProgramC(
             null,
             null,
             interp_ctx,
+            null,
             null,
             null,
         ) catch continue;
@@ -6347,6 +6480,8 @@ pub fn emitProgramC(
 
     var pic_stats = PicStats{};
     var aot_fallback_emit_count: u32 = 0;
+    var aot_fallback_builder = AotFallbackReportBuilder.init(allocator);
+    defer aot_fallback_builder.deinit();
 
     for (words) |*w| {
         if (!compilable_names.contains(w.name)) continue;
@@ -6369,6 +6504,7 @@ pub fn emitProgramC(
             interp_ctx,
             &pic_stats,
             &aot_fallback_emit_count,
+            &aot_fallback_builder,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -6408,6 +6544,7 @@ pub fn emitProgramC(
             interp_ctx,
             null,
             &aot_fallback_emit_count,
+            &aot_fallback_builder,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -6419,6 +6556,7 @@ pub fn emitProgramC(
     }
 
     diagnostics.pic_stats = pic_stats;
+    diagnostics.aot_fallback_report = try aot_fallback_builder.snapshot(allocator);
 
     // Collect quotation fallback warnings for all words with stack effects.
     {
@@ -7505,7 +7643,7 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
     if (state.aot_mode) {
         const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
         const line_const = c.ir_const_addr(ictx, line);
-        state.noteAotFallbackEmission();
+        state.noteAotFallbackEmission(.native, name, resolved.word_id, line);
         const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
         emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
     } else {
@@ -7534,7 +7672,7 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
     // Fall through to interpreter for uncompiled words
     const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
     const line_const = c.ir_const_addr(ictx, line);
-    state.noteAotFallbackEmission();
+    state.noteAotFallbackEmission(.compound_uncompiled, name, resolved.word_id, line);
     const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
 }
@@ -10101,6 +10239,7 @@ test "emitWordCAot emits named callback for safepoint" {
         null,
         null,
         null,
+        null,
     ) catch |err| {
         // times requires a quotation on stack which we don't have in this
         // minimal test -- NotCompilable is expected. Skip this test case
@@ -10140,6 +10279,7 @@ test "emitWordCAot basic arithmetic" {
         null,
         null,
         null,
+        null,
     );
     defer testing.allocator.free(source);
 
@@ -10169,6 +10309,7 @@ test "emitWordCAot quotation call emits code_ptr dispatch" {
         null,
         null,
         testing.allocator,
+        null,
         null,
         null,
         null,
@@ -11664,4 +11805,43 @@ test "emitAotMetadata renders blob-present=no with non-zero word-count" {
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=yes\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-blob-present=no\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-word-count=7\\n") != null);
+}
+
+test "AotFallbackReportBuilder records and snapshots site categories" {
+    var builder = AotFallbackReportBuilder.init(testing.allocator);
+    defer builder.deinit();
+
+    builder.record(.{
+        .category = .native,
+        .caller_word = "lt",
+        .callee_word = "<",
+        .callee_word_id = 42,
+        .line = 1,
+    });
+    builder.record(.{
+        .category = .compound_uncompiled,
+        .caller_word = "stream-write-string",
+        .callee_word = "stream-write",
+        .callee_word_id = 99,
+        .line = 484,
+    });
+    builder.record(.{
+        .category = .native,
+        .caller_word = "eq",
+        .callee_word = "=",
+        .callee_word_id = 43,
+        .line = 1,
+    });
+
+    var report = try builder.snapshot(testing.allocator);
+    defer testing.allocator.free(report.sites);
+
+    try testing.expectEqual(@as(u32, 3), report.total());
+    try testing.expectEqual(@as(u32, 2), report.totals[@intFromEnum(AotFallbackCategory.native)]);
+    try testing.expectEqual(@as(u32, 1), report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)]);
+    try testing.expectEqual(@as(u32, 0), report.totals[@intFromEnum(AotFallbackCategory.per_op_native)]);
+    try testing.expectEqual(@as(usize, 3), report.sites.len);
+    try testing.expectEqualStrings("<", report.sites[0].callee_word);
+    try testing.expectEqualStrings("stream-write", report.sites[1].callee_word);
+    try testing.expectEqual(AotFallbackCategory.native, report.sites[2].category);
 }
