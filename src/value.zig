@@ -1358,6 +1358,16 @@ pub const Value = union(enum) {
     }
 };
 
+// Size budget for the Value union. The largest variants, which are currently ErrorObject and BigIntManaged,
+// are heap-indirected, so the union body is currently driven by Quotation and StackEffect at 32 bytes plus
+// the 4-byte tag and padding.
+//
+// A regression here multiplies across every stack slot, every array element, every hash bucket value, and
+// every push_literal instruction. If a new variant pushes the union wider, change this assertion deliberately.
+comptime {
+    std.debug.assert(@sizeOf(Value) == 40);
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
