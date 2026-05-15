@@ -241,11 +241,14 @@ pub const AotFallbackStaticCheck = struct {
     populated: bool = false,
     expected_jit_interpreted_calls: u32 = 0,
     observed_jit_interpreted_calls: u32 = 0,
+    expected_jit_native_word_calls: u32 = 0,
+    observed_jit_native_word_calls: u32 = 0,
     expected_jit_call_quotation: u32 = 0,
     observed_jit_call_quotation: u32 = 0,
 
     pub fn matches(self: AotFallbackStaticCheck) bool {
         return self.expected_jit_interpreted_calls == self.observed_jit_interpreted_calls and
+            self.expected_jit_native_word_calls == self.observed_jit_native_word_calls and
             self.expected_jit_call_quotation == self.observed_jit_call_quotation;
     }
 };
@@ -267,29 +270,34 @@ fn countOccurrences(haystack: []const u8, needle: []const u8) u32 {
 }
 
 /// Cross-check the build-time fallback inventory against the assembled C
-/// source. The two `extern` declarations of `jitInterpretedCall(...)` and
-/// `jitCallQuotation(...)` are emitted unconditionally for every AOT
-/// program, so the call-site count is the raw match count minus one for
-/// each callback when at least one occurrence appears.
+/// source. The `extern` declarations of `jitInterpretedCall(...)`,
+/// `jitNativeWordCall(...)`, and `jitCallQuotation(...)` are emitted
+/// unconditionally for every AOT program, so the call-site count is the
+/// raw match count minus one for each callback when at least one
+/// occurrence appears.
 pub fn verifyAotFallbackInventory(
     source: []const u8,
     report: *const AotFallbackReport,
 ) AotFallbackStaticCheck {
     const raw_jic = countOccurrences(source, "jitInterpretedCall(");
+    const raw_jnwc = countOccurrences(source, "jitNativeWordCall(");
     const raw_jcq = countOccurrences(source, "jitCallQuotation(");
     const observed_jic = if (raw_jic > 0) raw_jic - 1 else 0;
+    const observed_jnwc = if (raw_jnwc > 0) raw_jnwc - 1 else 0;
     const observed_jcq = if (raw_jcq > 0) raw_jcq - 1 else 0;
 
-    const expected_jic =
+    const expected_jic = report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)];
+    const expected_jnwc =
         report.totals[@intFromEnum(AotFallbackCategory.native)] +
-        report.totals[@intFromEnum(AotFallbackCategory.per_op_native)] +
-        report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)];
+        report.totals[@intFromEnum(AotFallbackCategory.per_op_native)];
     const expected_jcq = report.totals[@intFromEnum(AotFallbackCategory.quotation)];
 
     return .{
         .populated = true,
         .expected_jit_interpreted_calls = expected_jic,
         .observed_jit_interpreted_calls = observed_jic,
+        .expected_jit_native_word_calls = expected_jnwc,
+        .observed_jit_native_word_calls = observed_jnwc,
         .expected_jit_call_quotation = expected_jcq,
         .observed_jit_call_quotation = observed_jcq,
     };
@@ -1130,7 +1138,7 @@ fn emitPerOperationFallback(
     };
 
     // Call the polymorphic native: use jitNativeCall when a function pointer
-    // is available (JIT mode), jitInterpretedCall with word_id otherwise (AOT).
+    // is available (JIT mode), jitNativeWordCall with word_id otherwise (AOT).
     if (!state.aot_mode and resolved.native_fn_ptr != null) {
         const fn_ptr_const = c.ir_const_addr(ctx, resolved.native_fn_ptr.?);
         const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.native_call_fn, ctx_val, fn_ptr_const);
@@ -1139,7 +1147,7 @@ fn emitPerOperationFallback(
         const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
         const line_const = c.ir_const_addr(ctx, line);
         state.noteAotFallbackEmission(.per_op_native, op_name, resolved.word_id, line);
-        const call_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
+        const call_result = c._ir_CALL_3(ctx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, line_const);
         emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
     }
 
@@ -1633,6 +1641,10 @@ const CompileState = struct {
     iterator_fn: c.ir_ref = c.IR_UNUSED,
     native_call_fn: c.ir_ref = c.IR_UNUSED,
     interpreted_call_fn: c.ir_ref = c.IR_UNUSED,
+    /// Callback ref for `jitNativeWordCall`: dispatches a native word by
+    /// `word_id` using the cached `native_fn_ptr` on the JIT dispatch
+    /// entry. AOT-mode replaces `interpreted_call_fn` for native targets.
+    native_word_call_fn: c.ir_ref = c.IR_UNUSED,
     /// Reference to jitRefreshStack: re-LOADs ctx.stack.items.items.ptr and
     /// capacity into the JitContext after a callback may have reallocated
     /// the stack. Emitted from emitCallbackPostCheck on the hot-path continue
@@ -1754,6 +1766,11 @@ const CompileState = struct {
         line: usize,
     ) void {
         if (!state.aot_mode) return;
+        // The counter feeds the "interpreter linked" decision in
+        // `emitProgramC`. Native and per-op-native emissions now route
+        // through `jitNativeWordCall`, which does not require the
+        // interpreter, but they still increment the counter here to
+        // preserve the existing linkage behavior.
         if (state.aot_fallback_emit_count) |counter| counter.* += 1;
         if (state.aot_fallback_report) |report| {
             report.record(.{
@@ -2826,8 +2843,9 @@ fn emitResolvedNativeCallback(
             resetStackToPhysical(stack, sp.*);
         }
     } else if (state.aot_mode) {
-        // AOT mode: native_fn_ptr is unavailable; fall back to
-        // jitInterpretedCall via the AOT word call path.
+        // AOT mode: native_fn_ptr is unavailable at compile time; route the
+        // native call through jitNativeWordCall, which resolves the native
+        // function pointer at runtime via lookupWord.
         if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
         try materializeQuotations(state, stack, sp.*);
@@ -2838,7 +2856,7 @@ fn emitResolvedNativeCallback(
             emitParamValidation(state, eff_ptr);
         }
 
-        emitAotWordCall(state, ctx_val, name, resolved, line);
+        emitNativeWordCall(state, ctx_val, name, resolved, line);
 
         if (exitFallsThrough(state.exit_kind)) {
             sp.* = sp.* - resolved.input_count + resolved.output_count;
@@ -5422,6 +5440,11 @@ fn compileWordPass(
     else
         c.IR_UNUSED;
 
+    // JIT mode never emits jitNativeWordCall: native words use jitNativeCall
+    // with a baked function pointer instead. The CompileState field is
+    // present for parity with AOT mode but stays IR_UNUSED here.
+    const native_word_call_fn: c.ir_ref = c.IR_UNUSED;
+
     // Error-reporting callbacks: set jit_pending_error and return 2.
     const type_mismatch_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitTypeMismatchError));
     const overflow_error_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitOverflowError));
@@ -5546,6 +5569,7 @@ fn compileWordPass(
         .iterator_fn = iterator_fn,
         .native_call_fn = native_call_fn,
         .interpreted_call_fn = interpreted_call_fn,
+        .native_word_call_fn = native_word_call_fn,
         .refresh_stack_fn = refresh_stack_fn,
         .validate_params_fn = validate_params_fn,
         .interp_ctx = interp_ctx,
@@ -6007,6 +6031,12 @@ fn emitWordCAotPass(
     else
         c.IR_UNUSED;
 
+    // Always declare jitNativeWordCall as a named extern in AOT mode: the
+    // two-pass codegen may introduce native call sites that the pre-scan
+    // didn't predict, and an unset reference would let ir_emit_c emit a
+    // phantom LOAD that collides with vreg 0.
+    const native_word_call_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNativeWordCall"), proto_3arg);
+
     const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
     const pic_dispatch_fn = if (scan_flags.needs_native_call or interp_ctx_param != null)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicDispatch"), proto_4arg)
@@ -6137,6 +6167,7 @@ fn emitWordCAotPass(
         .iterator_fn = iterator_fn,
         .native_call_fn = native_call_fn,
         .interpreted_call_fn = interpreted_call_fn,
+        .native_word_call_fn = native_word_call_fn,
         .pic_dispatch_fn = pic_dispatch_fn,
         .pic_match_fn = pic_match_fn,
         .refresh_stack_fn = refresh_stack_fn,
@@ -6364,6 +6395,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitPicTopTagsMatch(uintptr_t ctx, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitEnsureStackCapacity(uintptr_t jit_ctx, uintptr_t needed);\n");
     try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
@@ -7715,7 +7747,7 @@ fn emitInlineDispatchTableCheck(
 }
 
 /// Emit a native word call. In JIT mode, calls through jitNativeCall with
-/// the baked function pointer. In AOT mode, calls through jitInterpretedCall
+/// the baked function pointer. In AOT mode, calls through jitNativeWordCall
 /// with the word ID since native function pointers are not available at C
 /// compile time.
 fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord, line: usize) void {
@@ -7724,7 +7756,7 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
         const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
         const line_const = c.ir_const_addr(ictx, line);
         state.noteAotFallbackEmission(.native, name, resolved.word_id, line);
-        const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
+        const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.native_word_call_fn, ctx_val, word_id_const, line_const);
         emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
     } else {
         const fn_ptr_const = c.ir_const_addr(ictx, resolved.native_fn_ptr.?);
@@ -8458,6 +8490,113 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
             if (rc != 0) return error.HostCallbackFailed;
         },
         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+    }
+}
+
+/// Compiled-code entry point for native words. Resolves the native
+/// function via `lookupWord` and invokes it directly. Generic-marker
+/// natives still re-dispatch through `tryDispatchGenericWithPic` so
+/// polymorphic operands resolve correctly. The C ABI mirrors
+/// `jitInterpretedCall` so callers can swap one for the other in
+/// generated code.
+export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const word_id: u32 = @intCast(word_id_raw);
+    const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
+        var parent = ctx.parent_context;
+        while (parent) |p| : (parent = p.parent_context) {
+            if (p.jit_dispatch.get(word_id)) |e| break :blk e;
+        }
+        return 1;
+    };
+    const word_name = entry.word_name;
+    if (bail_stats_mod.enabled) {
+        bail_stats_mod.global.recordInterpretedCall(word_id, word_name);
+    }
+
+    ctx.pushCallFrame(word_name, ctx.current_source, @intCast(line_raw), 0);
+
+    const looked_up_word = ctx.lookupWord(word_name);
+    const module_hit = if (looked_up_word == null) lookupAnyModuleWord(ctx, word_name) else null;
+
+    const result = if (looked_up_word) |word| blk: {
+        if (word.stack_effect) |effect| {
+            ctx.validateParameterEffects(&effect) catch |err| {
+                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                return 2;
+            };
+            if (!shouldSkipTypeAnnotationValidation(word)) {
+                ctx.validateTypeAnnotations(&effect) catch |err| {
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                    return 2;
+                };
+            }
+        }
+
+        const has_generic = for (word.markers) |mk| {
+            if (markers_mod.isGenericMarker(mk)) break true;
+        } else false;
+
+        if (has_generic) {
+            const dispatch_pic: ?*pic_mod.PolymorphicCache = blk2: {
+                const em = ctx.jit_dispatch.getMut(word_id) orelse break :blk2 null;
+                if (em.dispatch_pic) |p| break :blk2 p;
+                const p = ctx.allocator.create(pic_mod.PolymorphicCache) catch break :blk2 null;
+                p.* = .{};
+                em.dispatch_pic = p;
+                break :blk2 p;
+            };
+            const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
+                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                return 2;
+            };
+            if (dispatched) {
+                ctx.wordSuccessCleanup(word_name, null) catch |err| {
+                    ctx.jit_pending_error = err;
+                    return 2;
+                };
+                return 0;
+            }
+        }
+
+        if (word.source_file) |sf| ctx.current_source = sf;
+        switch (word.action) {
+            .native => |func| break :blk func(ctx),
+            .host_callback => |host| {
+                const rc = host.callback(host.handle, host.user_data);
+                if (rc != 0) break :blk @as(anyerror!void, error.HostCallbackFailed);
+                break :blk @as(anyerror!void, {});
+            },
+            .compound => {
+                const stderr_file: std.fs.File = .stderr();
+                stderr_file.writeAll("Fatal: jitNativeWordCall invoked for non-native word '") catch {};
+                stderr_file.writeAll(word_name) catch {};
+                stderr_file.writeAll("'\n") catch {};
+                ctx.jit_pending_error = error.InternalError;
+                return 2;
+            },
+        }
+    } else if (module_hit) |hit| blk: {
+        break :blk invokeModuleWord(ctx, hit);
+    } else {
+        return 1;
+    };
+
+    if (result) |_| {
+        ctx.consumePropagatedTailCall(word_name) catch |err| {
+            ctx.jit_pending_error = err;
+            return 2;
+        };
+        const cleanup_effect = if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null;
+        ctx.wordSuccessCleanup(word_name, cleanup_effect) catch |err| {
+            ctx.jit_pending_error = err;
+            return 2;
+        };
+        return 0;
+    } else |err| {
+        ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+        return 2;
     }
 }
 
@@ -11927,36 +12066,43 @@ test "AotFallbackReportBuilder records and snapshots site categories" {
 }
 
 test "verifyAotFallbackInventory matches when source agrees with builder" {
-    // Source includes one extern declaration plus two real call sites for
-    // jitInterpretedCall, and one extern declaration plus one real call
-    // site for jitCallQuotation.
+    // Source includes one extern declaration plus one real call site for
+    // jitInterpretedCall (compound), one extern plus two real call sites
+    // for jitNativeWordCall (native and per-op-native), and one extern
+    // plus one real call site for jitCallQuotation.
     const source =
         "extern int32_t jitInterpretedCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
+        "extern int32_t jitNativeWordCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
         "extern int32_t jitCallQuotation(uintptr_t);\n" ++
-        "int32_t f(void) { jitInterpretedCall(0,1,2); jitInterpretedCall(0,3,4); return 0; }\n" ++
+        "int32_t f(void) { jitInterpretedCall(0,1,2); return 0; }\n" ++
+        "int32_t h(void) { jitNativeWordCall(0,1,2); jitNativeWordCall(0,3,4); return 0; }\n" ++
         "int32_t g(void) { jitCallQuotation(0); return 0; }\n";
 
     var report: AotFallbackReport = .{};
     report.totals[@intFromEnum(AotFallbackCategory.native)] = 1;
+    report.totals[@intFromEnum(AotFallbackCategory.per_op_native)] = 1;
     report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)] = 1;
     report.totals[@intFromEnum(AotFallbackCategory.quotation)] = 1;
 
     const check = verifyAotFallbackInventory(source, &report);
     try testing.expect(check.populated);
     try testing.expect(check.matches());
-    try testing.expectEqual(@as(u32, 2), check.expected_jit_interpreted_calls);
-    try testing.expectEqual(@as(u32, 2), check.observed_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 1), check.expected_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 1), check.observed_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 2), check.expected_jit_native_word_calls);
+    try testing.expectEqual(@as(u32, 2), check.observed_jit_native_word_calls);
     try testing.expectEqual(@as(u32, 1), check.expected_jit_call_quotation);
     try testing.expectEqual(@as(u32, 1), check.observed_jit_call_quotation);
 }
 
 test "verifyAotFallbackInventory flags mismatch when builder undercounts" {
-    // Three real jitInterpretedCall sites plus the extern declaration but
-    // the builder only recorded two.
+    // Three real jitNativeWordCall sites plus the extern declaration but
+    // the builder only recorded two native emissions.
     const source =
         "extern int32_t jitInterpretedCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
+        "extern int32_t jitNativeWordCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
         "extern int32_t jitCallQuotation(uintptr_t);\n" ++
-        "int32_t f(void) { jitInterpretedCall(0,1,2); jitInterpretedCall(0,3,4); jitInterpretedCall(0,5,6); return 0; }\n";
+        "int32_t f(void) { jitNativeWordCall(0,1,2); jitNativeWordCall(0,3,4); jitNativeWordCall(0,5,6); return 0; }\n";
 
     var report: AotFallbackReport = .{};
     report.totals[@intFromEnum(AotFallbackCategory.native)] = 2;
@@ -11964,8 +12110,10 @@ test "verifyAotFallbackInventory flags mismatch when builder undercounts" {
     const check = verifyAotFallbackInventory(source, &report);
     try testing.expect(check.populated);
     try testing.expect(!check.matches());
-    try testing.expectEqual(@as(u32, 2), check.expected_jit_interpreted_calls);
-    try testing.expectEqual(@as(u32, 3), check.observed_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 0), check.expected_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 0), check.observed_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 2), check.expected_jit_native_word_calls);
+    try testing.expectEqual(@as(u32, 3), check.observed_jit_native_word_calls);
     try testing.expectEqual(@as(u32, 0), check.expected_jit_call_quotation);
     try testing.expectEqual(@as(u32, 0), check.observed_jit_call_quotation);
 }
@@ -11979,5 +12127,6 @@ test "verifyAotFallbackInventory ignores absent callbacks" {
     const check = verifyAotFallbackInventory(source, &report);
     try testing.expect(check.matches());
     try testing.expectEqual(@as(u32, 0), check.observed_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 0), check.observed_jit_native_word_calls);
     try testing.expectEqual(@as(u32, 0), check.observed_jit_call_quotation);
 }

@@ -151,14 +151,14 @@ Prelude compilation: 267/317 words compiled (84.2%)
       hint: blocked until the AOT resolver includes this word
 Quotation bodies compiled: 0
 AOT interpreter fallbacks: 223 total
-  native: 36
-  compound-uncompiled: 180
+  native: 68
+  compound-uncompiled: 148
   quotation: 7
   sites:
     compound-uncompiled: flush -> stream-flush (line 520)
     compound-uncompiled: stream-write-string -> >bytes (line 484)
     compound-uncompiled: stream-write-string -> stream-write (line 484)
-    compound-uncompiled: provenance? -> native.struct-type-predicate (line 0)
+    native: provenance? -> native.struct-type-predicate (line 0)
     native: nan? -> = (line 318)
     compound-uncompiled: run-benchmarks -> make-benchmark-report (line 714)
     quotation: run-benchmarks -> <quotation> (line 714)
@@ -170,9 +170,9 @@ AOT interpreter fallbacks: 223 total
     compound-uncompiled: >iterator -> curry (line 770)
     compound-uncompiled: >iterator -> native.make-callback-iter (line 771)
     compound-uncompiled: >iterator -> native.>iterator (line 773)
-    compound-uncompiled: >dispatch-provenance -> native.hash-to-struct (line 0)
+    native: >dispatch-provenance -> native.hash-to-struct (line 0)
     ... 207 more
-  static-check: jitInterpretedCall=216/216 jitCallQuotation=7/7 (matches build-time inventory)
+  static-check: jitInterpretedCall=148/148 jitNativeWordCall=68/68 jitCallQuotation=7/7 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter

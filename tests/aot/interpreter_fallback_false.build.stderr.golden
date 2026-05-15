@@ -1,5 +1,5 @@
-AOT interpreter fallbacks: 223 total (native=36 compound-uncompiled=180 quotation=7)
-  static-check: jitInterpretedCall=216/216 jitCallQuotation=7/7 (matches build-time inventory)
+AOT interpreter fallbacks: 223 total (native=68 compound-uncompiled=148 quotation=7)
+  static-check: jitInterpretedCall=148/148 jitNativeWordCall=68/68 jitCallQuotation=7/7 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter

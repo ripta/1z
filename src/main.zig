@@ -1838,10 +1838,12 @@ fn printAotFallbackStaticCheck(
 ) void {
     if (!check.populated) return;
     err_writer.print(
-        "  static-check: jitInterpretedCall={d}/{d} jitCallQuotation={d}/{d} ({s})\n",
+        "  static-check: jitInterpretedCall={d}/{d} jitNativeWordCall={d}/{d} jitCallQuotation={d}/{d} ({s})\n",
         .{
             check.observed_jit_interpreted_calls,
             check.expected_jit_interpreted_calls,
+            check.observed_jit_native_word_calls,
+            check.expected_jit_native_word_calls,
             check.observed_jit_call_quotation,
             check.expected_jit_call_quotation,
             if (check.matches()) "matches build-time inventory" else "MISMATCH",
@@ -1861,11 +1863,14 @@ fn warnAotFallbackMismatch(
     err_writer.print(
         "Warning: AOT fallback inventory mismatch: " ++
             "jitInterpretedCall observed={d} expected={d}, " ++
+            "jitNativeWordCall observed={d} expected={d}, " ++
             "jitCallQuotation observed={d} expected={d}; " ++
             "a codegen path is emitting an interpreter callback without classifying it.\n",
         .{
             check.observed_jit_interpreted_calls,
             check.expected_jit_interpreted_calls,
+            check.observed_jit_native_word_calls,
+            check.expected_jit_native_word_calls,
             check.observed_jit_call_quotation,
             check.expected_jit_call_quotation,
         },

@@ -11,5 +11,5 @@ AOT interpreter fallbacks: 6 total
     compound-uncompiled: stream-write-string -> stream-write (line 484)
     native: nth-elem -> #nth (line 1)
     native: nth-elem -> #nth (line 1)
-  static-check: jitInterpretedCall=6/6 jitCallQuotation=0/0 (matches build-time inventory)
+  static-check: jitInterpretedCall=3/3 jitNativeWordCall=3/3 jitCallQuotation=0/0 (matches build-time inventory)
 interpreter: linked (auto: compiled code calls interpreter)
