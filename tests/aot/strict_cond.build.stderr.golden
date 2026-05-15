@@ -1,0 +1,6 @@
+Error: --interpreter-fallback=false rejects compound-fallback dispatch; 1 call site still route through the interpreter
+  '__entry__' -> 'cond' (line 1)
+      callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+AOT interpreter fallbacks: 5 total (native=4 compound-uncompiled=1)
+  static-check: jitInterpretedCall=1/1 jitNativeWordCall=4/4 jitCallQuotation=0/0 (matches build-time inventory)

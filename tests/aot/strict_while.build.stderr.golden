@@ -1,0 +1,12 @@
+AOT interpreter fallbacks: 3 total (native=2 quotation=1)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=2/2 jitCallQuotation=1/1 (matches build-time inventory)
+Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+Warning: 'while' parameter 'body' has row-variable effect; quotation call falls back to interpreter
+Warning: 'loop' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Error: --interpreter-fallback=false requires all words to compile; 2 words need the interpreter
+  word 'while' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word 'loop' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled

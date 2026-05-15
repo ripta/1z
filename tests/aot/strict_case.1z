@@ -1,0 +1,5 @@
+\ Strict-mode rejection of `case`: same shape as `cond`, dispatches on
+\ a quotation extracted from an array at runtime. The strict build
+\ must reject the compound fallback rather than producing a binary
+\ that calls the interpreter at runtime.
+1 { { 1 [ "match" print-line ] } } case

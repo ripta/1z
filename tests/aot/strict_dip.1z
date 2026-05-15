@@ -1,0 +1,4 @@
+\ Strict-mode positive case: `dip` with a literal quotation. The
+\ row-variable parameter specializes against the concrete quotation
+\ body, so the strict build succeeds.
+1 2 [ 3 + ] dip . .

@@ -1,0 +1,5 @@
+\ Strict-mode rejection of `while`: loop-combinator whose predicate
+\ and body carry row-variable effects. The recursive call into `loop`
+\ underflows the abstract stack and the strict build must reject the
+\ fallback emitted by `__entry__` -> `while`.
+0 [ dup 3 < ] [ 1 + ] while drop

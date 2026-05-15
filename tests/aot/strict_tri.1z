@@ -1,0 +1,5 @@
+\ Strict-mode rejection of `tri`: shares `bi`'s shape with three
+\ row-variable quotation parameters. Compiling its body requires
+\ reifying abstract quotations, so the strict build must reject the
+\ compound fallback at `__entry__` -> `tri`.
+1 [ 2 + ] [ 3 + ] [ 4 + ] tri . . .

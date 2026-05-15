@@ -1,0 +1,6 @@
+\ Strict-mode positive case: `keep` with a literal quotation. The
+\ caller provides a concrete quotation body, so `resolveRowVariableEffect`
+\ specializes `keep`'s row-variable parameter and the call site avoids
+\ the compound fallback. The build must succeed under
+\ --interpreter-fallback=false.
+1 [ 2 + ] keep . .

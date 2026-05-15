@@ -1,0 +1,5 @@
+\ Strict-mode rejection of `times`: recursive loop combinator with a
+\ row-variable quotation body. The abstract stack cannot be modeled
+\ through the recursive call, so the strict build must reject the
+\ compound fallback.
+3 [ "tick" print-line ] times

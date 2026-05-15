@@ -1,0 +1,5 @@
+\ Strict-mode positive case: a compiled quotation invoked through
+\ `call`. The hot path in `emitIndirectQuotCall` dispatches directly
+\ through the loaded `code_ptr`, so the strict build succeeds without
+\ producing a compound fallback site.
+[ 7 8 + ] call .

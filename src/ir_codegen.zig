@@ -188,6 +188,54 @@ pub const PicStats = struct {
 /// `--compilation-stats` and the locked-fallback error can show why the
 /// interpreter is still being reached at runtime, and so a follow-up static
 /// cross-check can confirm the inventory matches the generated C.
+///
+/// Strict-AOT policy (`--interpreter-fallback=false`):
+///
+///   category               | strict build       | runtime callback
+///   -----------------------+--------------------+----------------------
+///   native                 | allowed            | jitNativeWordCall
+///   per_op_native          | allowed            | jitNativeWordCall
+///   quotation              | allowed            | jitCallQuotation
+///   compound_uncompiled    | REJECTED at build  | jitInterpretedCall
+///   unexpected             | REJECTED at build  | (triage sentinel)
+///
+/// `native` and `per_op_native` were redirected to `jitNativeWordCall` by
+/// the work that closed the native fallback track, so neither category
+/// reaches `jitInterpretedCall` anymore. `quotation` remains allowed
+/// because removing `jitCallQuotation` is intentionally out of scope for
+/// the current removal effort. `compound_uncompiled` is the one
+/// strict-mode rejection enforced today; see
+/// `printCompoundFallbackRequiredError` in `main.zig`.
+///
+/// Emission sites in this file (kept in sync with
+/// `AotFallbackStaticCheck`); each one calls `noteAotFallbackEmission`
+/// once per emission:
+///
+///   category            | site
+///   --------------------+----------------------------------------------
+///   per_op_native       | polymorphic arithmetic/comparison cold path
+///   quotation           | emitIndirectQuotCall (raw quotation slot)
+///   quotation           | emitIfBranchDispatch (if branch on raw slot)
+///   quotation           | `<choose>` indirect dispatch
+///   quotation           | dynamic `call` inside a compiled word
+///   quotation           | with-parameter dispatch
+///   compound_uncompiled | row-variable failure -> emitAotWordCall
+///   compound_uncompiled | dispatch-table indirect cold path
+///   native              | emitNativeWordCall (AOT path)
+///   compound_uncompiled | emitAotWordCall uncompiled fallthrough
+///
+/// Symbolic-row machinery is consumed at:
+///
+///   - `fixupBranchMergeRowRegions` for branch merge,
+///   - the `call`-on-raw-slot path that inserts a fresh `row_region`
+///     after dispatch when the quotation's effect is unresolved,
+///   - `rewriteIndexedStackOp` for compile-time rewrite of indexed stack
+///     ops (`pick-n`, `<rot-n`, `rot-n>`, `nip-n`) whose literal depth
+///     lands on known slots above the row.
+///
+/// `dynamic_call_emitted` is a compilation abandon signal, not a
+/// fallback emission: the affected body returns early without emitting
+/// `jitInterpretedCall`.
 pub const AotFallbackCategory = enum {
     /// Native word reached without an inline emitter applying.
     native,
@@ -4957,6 +5005,18 @@ fn compileInstructions(
                             // Emit an interpreter call and insert a row_region so subsequent
                             // instructions above the region can continue compiling.
                             // Same model as quotation `call` with unresolved effects.
+                            //
+                            // The symbolic-row machinery used in the call sequel
+                            // (`reloadBaseAfterDynamicCall` + a fresh `row_region`) is what
+                            // lets compilation continue past this fallback. Strict-mode
+                            // rejection is intentionally handled out-of-line:
+                            // `emitNativeWordCall` and the uncompiled fallthrough in
+                            // `emitAotWordCall` register their emission via
+                            // `noteAotFallbackEmission`, and the compound-fallback
+                            // diagnostic in `main.zig` rejects the build when
+                            // `compound_uncompiled` is non-zero. The static cross-check in
+                            // `AotFallbackStaticCheck` guards the classification contract by
+                            // comparing the build-time inventory against the assembled C.
                             try materializeQuotations(state, stack, sp.*);
                             flushToPhysicalStack(state, stack, sp.*);
                             const ctx_val = emitCallbackPreamble(state, sp.*);
