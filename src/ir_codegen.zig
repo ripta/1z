@@ -55,6 +55,7 @@ pub const IrCodegenError = error{
     UncompiledWords,
     UncompiledQuotations,
     InterpreterRequiredButLocked,
+    CompoundFallbackRequired,
     OutOfMemory,
 };
 
@@ -219,13 +220,21 @@ pub const AotFallbackCategory = enum {
 pub const aot_fallback_category_count: usize = @typeInfo(AotFallbackCategory).@"enum".fields.len;
 
 /// One AOT `jitInterpretedCall` emission, attributed back to the caller and
-/// callee that produced it.
+/// callee that produced it. `callee_reason` and `callee_is_native` are
+/// filled by a post-pass once every word has been considered for
+/// compilation; they are unset at the emission site because the callee's
+/// classification may not be known yet. The strict-AOT compound-fallback
+/// diagnostic uses both fields to distinguish compound words that failed
+/// to compile (reason known) from native words that the AOT resolver
+/// cannot dispatch directly (native flag set).
 pub const AotFallbackSite = struct {
     category: AotFallbackCategory,
     caller_word: []const u8,
     callee_word: []const u8,
     callee_word_id: u32,
     line: u32,
+    callee_reason: ?NotCompilableReason = null,
+    callee_is_native: bool = false,
 };
 
 /// Result of cross-checking the build-time fallback inventory against the
@@ -6658,6 +6667,28 @@ pub fn emitProgramC(
     }
 
     diagnostics.pic_stats = pic_stats;
+
+    // Enrich each `compound_uncompiled` fallback site with the callee's
+    // failure reason and native flag. Recording happens during Pass 2
+    // codegen, when the classification of a particular callee may not yet
+    // be known; by this point Pass 1a has populated every `failure_reasons`
+    // entry it is going to, and the `is_native` flag on each `AotWordDesc`
+    // is final. Native callees never have a `NotCompilableReason` because
+    // Pass 1a skips them; the strict-fallback diagnostic uses the flag to
+    // emit a distinct message instead of saying "reason not categorized."
+    var words_by_name: std.StringHashMapUnmanaged(*const AotWordDesc) = .{};
+    defer words_by_name.deinit(allocator);
+    for (words) |*w| {
+        try words_by_name.put(allocator, w.name, w);
+    }
+    for (aot_fallback_builder.sites.items) |*site| {
+        if (site.category != .compound_uncompiled) continue;
+        site.callee_reason = failure_reasons.get(site.callee_word);
+        if (words_by_name.get(site.callee_word)) |desc| {
+            site.callee_is_native = desc.is_native;
+        }
+    }
+
     diagnostics.aot_fallback_report = try aot_fallback_builder.snapshot(allocator);
 
     // Collect quotation fallback warnings for all words with stack effects.
@@ -6968,6 +6999,19 @@ pub fn emitProgramC(
     // build-error path.
     diagnostics.aot_fallback_report.static_check =
         verifyAotFallbackInventory(out.items, &diagnostics.aot_fallback_report);
+
+    // Strict AOT cannot tolerate compound-word fallback to the interpreter:
+    // a compiled caller reaching `jitInterpretedCall` for an uncompiled
+    // compound callee is the exact shape this check rejects. Surface every
+    // blocking site with its caller, callee, and the callee's
+    // `NotCompilableReason` so the build report names the punch list to
+    // fix. Fires regardless of `--lock-interpreter-setting`; the lock gate
+    // below still covers the residual native / quotation cases.
+    if (interpreter_fallback == .false and
+        diagnostics.aot_fallback_report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)] > 0)
+    {
+        return IrCodegenError.CompoundFallbackRequired;
+    }
 
     // mode=false + lock=true + an emitted fallback is a build error: the user
     // asked for a binary that can never call the interpreter, but codegen

@@ -1,5 +1,4 @@
-Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: --interpreter-fallback=false rejects compound-fallback dispatch; 4 call sites still route through the interpreter
+Error: --interpreter-fallback=false rejects compound-fallback dispatch; 3 call sites still route through the interpreter
   'flush' -> 'stream-flush' (line 520)
       callee is a native primitive without compiled AOT dispatch
       hint: blocked until the AOT resolver provides a compiled native entry for this word
@@ -9,8 +8,5 @@ Error: --interpreter-fallback=false rejects compound-fallback dispatch; 4 call s
   'stream-write-string' -> 'stream-write' (line 484)
       callee is a native primitive without compiled AOT dispatch
       hint: blocked until the AOT resolver provides a compiled native entry for this word
-  'keep' -> 'dip' (line 382)
-      callee is a native primitive without compiled AOT dispatch
-      hint: blocked until the AOT resolver provides a compiled native entry for this word
-AOT interpreter fallbacks: 5 total (native=1 compound-uncompiled=4)
-  static-check: jitInterpretedCall=4/4 jitNativeWordCall=1/1 jitCallQuotation=0/0 (matches build-time inventory)
+AOT interpreter fallbacks: 3 total (compound-uncompiled=3)
+  static-check: jitInterpretedCall=3/3 jitNativeWordCall=0/0 jitCallQuotation=0/0 (matches build-time inventory)

@@ -1877,6 +1877,48 @@ fn warnAotFallbackMismatch(
     ) catch {};
 }
 
+/// Render the strict-AOT compound-fallback build error. Lists every
+/// `compound_uncompiled` site with its caller, callee, line, and the
+/// callee's `NotCompilableReason` (when known) so the build report names
+/// exactly which compound words still need to compile before strict AOT
+/// can succeed. Native and quotation fallbacks are still surfaced by the
+/// summary line that the tail of the error handler emits.
+fn printCompoundFallbackRequiredError(
+    report: *const ir_codegen.AotFallbackReport,
+    err_writer: anytype,
+) void {
+    const total = report.totals[@intFromEnum(ir_codegen.AotFallbackCategory.compound_uncompiled)];
+    err_writer.print(
+        "Error: --interpreter-fallback=false rejects compound-fallback dispatch; " ++
+            "{d} call site{s} still route through the interpreter\n",
+        .{ total, if (total == 1) @as([]const u8, "") else "s" },
+    ) catch {};
+    for (report.sites) |site| {
+        if (site.category != .compound_uncompiled) continue;
+        err_writer.print("  '{s}' -> '{s}' (line {d})\n", .{
+            site.caller_word,
+            site.callee_word,
+            site.line,
+        }) catch {};
+        if (site.callee_reason) |reason| {
+            err_writer.print("      callee uncompiled: {s}: {s}\n", .{
+                reason.code(),
+                reason.message(),
+            }) catch {};
+            if (reason.hint()) |h| {
+                err_writer.print("      hint: {s}\n", .{h}) catch {};
+            }
+        } else if (site.callee_is_native) {
+            err_writer.writeAll(
+                "      callee is a native primitive without compiled AOT dispatch\n" ++
+                    "      hint: blocked until the AOT resolver provides a compiled native entry for this word\n",
+            ) catch {};
+        } else {
+            err_writer.writeAll("      callee uncompiled: NC.?: reason not categorized\n") catch {};
+        }
+    }
+}
+
 fn handleHighlight(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
@@ -2340,6 +2382,11 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             if (!compilation_stats) {
                 printAotFallbackReport(&codegen_diagnostics.aot_fallback_report, err_writer);
             }
+        } else if (err == error.CompoundFallbackRequired) {
+            printCompoundFallbackRequiredError(
+                &codegen_diagnostics.aot_fallback_report,
+                err_writer,
+            );
         } else {
             err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
         }

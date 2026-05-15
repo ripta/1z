@@ -1,0 +1,9 @@
+\ Exercise the strict-AOT compound-fallback build error: in
+\ --interpreter-fallback=false mode, a compiled caller that dispatches
+\ to an uncompiled compound callee must fail the build with a diagnostic
+\ that names the caller, the callee, the line, and the callee's
+\ NotCompilableReason. `print-line` reaches `stream-write-string`, whose
+\ compiled body falls back to `>bytes` and `stream-write`; `flush` calls
+\ `stream-flush`. Today those callees are uncompilable, so this test
+\ asserts they surface as build errors instead of runtime fallback.
+"ok" print-line

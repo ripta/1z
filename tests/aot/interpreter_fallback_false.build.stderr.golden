@@ -1,5 +1,3 @@
-AOT interpreter fallbacks: 223 total (native=68 compound-uncompiled=148 quotation=7)
-  static-check: jitInterpretedCall=148/148 jitNativeWordCall=68/68 jitCallQuotation=7/7 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
@@ -20,104 +18,450 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: --interpreter-fallback=false requires all words to compile; 50 words need the interpreter
-  word '>option:some' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'option:some>' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word '>result:err' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'ordering:lt?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word '#all' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'times' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
+Error: --interpreter-fallback=false rejects compound-fallback dispatch; 148 call sites still route through the interpreter
+  'run-benchmarks' -> 'make-benchmark-report' (line 714)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'run-benchmarks' -> 'print-benchmark-report' (line 714)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '4nip' -> 'nip-n' (line 376)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'quotation?' -> 'type-of' (line 282)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-descriptor-variant' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '>iterator' -> 'curry' (line 770)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '>iterator' -> 'native.make-callback-iter' (line 771)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '>iterator' -> 'native.>iterator' (line 773)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '>on' -> 'native.enum-from-symbol' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'all-words' -> 'native.all-words' (line 899)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '>iterator(with-cleanup)' -> 'curry' (line 781)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '>iterator(with-cleanup)' -> 'native.make-callback-iter-with-cleanup' (line 783)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'load' -> 'native.resolve-load-path' (line 201)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'load' -> '@has?' (line 202)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'load' -> '@get' (line 203)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'load' -> 'load-file' (line 204)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'reload' -> 'load-file' (line 210)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'set?' -> 'type-of' (line 286)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '>option' -> 'native.enum-from-symbol' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '4keep' -> 'dip' (line 388)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'make-descriptor-variant' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'make-method-info' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'module?' -> 'type-of' (line 290)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'make-result-error' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'string?' -> 'type-of' (line 279)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '3keep' -> 'dip' (line 386)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'pragma-get' -> 'pragma-get?' (line 909)
+      callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-  word 'bi' (prelude): NC.8: a quotation in abstract form must become a concrete runtime value
-      hint: blocked until quotation bodies can be compiled
-  word 'make-option:some' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'parse-quotation' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'cond' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word 'make-result:ok' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'on:unhandled-error?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
+  'pragma-get' -> 'option:some?' (line 910)
+      callee uncompiled: NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'native?' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  'pragma-get' -> 'option:some>' (line 911)
+      callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  word 'bytes-alloc-ptr' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  'pragma-get' -> 'make-error' (line 912)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'pragma-get' -> 'throw' (line 912)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'bignum?' -> 'type-of' (line 295)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'type-name' -> 'type-of' (line 258)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'type-name' -> 'native.type-name' (line 258)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'make-stack-effect-info' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'keep' -> 'dip' (line 382)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'ordering?' -> 'native.enum-aggregate-predicate' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'descriptor-numeric?' -> 'native.descriptor-numeric?' (line 918)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '6nip' -> 'nip-n' (line 380)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-word-info' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-provenance' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '2apply' -> 'apply-n' (line 433)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '3nip' -> 'nip-n' (line 374)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'read-line' -> 'stream-read-line' (line 523)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'make-stack-effect-param' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'type-has-property?' -> 'type-of' (line 261)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'type-has-property?' -> 'native.type-has-property?' (line 261)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'result?' -> 'native.enum-aggregate-predicate' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'option?' -> 'native.enum-aggregate-predicate' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '#resize!' -> 'dip' (line 338)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '#resize!' -> 'native.#grow!' (line 338)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '#resize!' -> 'dip' (line 338)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '#resize!' -> 'native.#shrink!' (line 338)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-stack-effect-param' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'error?' -> 'type-of' (line 223)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'make-source-loc' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '#none' -> '#any' (line 353)
+      callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  word 'on:module-loaded?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'unmake-result:err' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  'descriptor-kind' -> 'native.descriptor-kind' (line 922)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'descriptor-exact?' -> 'native.descriptor-exact?' (line 919)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '>result' -> 'native.enum-from-symbol' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'reexport' -> 'native.module-name' (line 629)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'reexport' -> '@keys' (line 630)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'reexport' -> 'import' (line 630)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'reexport' -> 'native.record-import' (line 633)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'with-iterator' -> 'curry' (line 795)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-option-payload' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'descriptor-mutable?' -> 'native.descriptor-mutable?' (line 921)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'symbol?' -> 'type-of' (line 280)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '2swap' -> '<rot-n' (line 427)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '2swap' -> '<rot-n' (line 427)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'descriptor-integer?' -> 'native.descriptor-integer?' (line 920)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'fmt' -> '>template' (line 706)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'fmt' -> 'interpolate' (line 706)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '2keep' -> 'dip' (line 384)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '2over' -> 'pick-n' (line 429)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '2over' -> 'pick-n' (line 429)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> 'make-mutable-map' (line 270)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> '@set!' (line 270)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> '@set!' (line 270)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> '@set!' (line 270)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> '@get' (line 271)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> '@get' (line 271)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> '#append' (line 272)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> '#append' (line 272)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> '#append' (line 272)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> 'make-error' (line 273)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'throw-type-error' -> 'throw' (line 273)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'iterator?' -> 'type-of' (line 293)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'emit' -> '>char' (line 514)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'until' -> 'dip' (line 654)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'no-matching-branch' -> 'make-error' (line 255)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '3dup' -> 'pick-n' (line 398)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '3dup' -> 'pick-n' (line 398)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '3dup' -> 'pick-n' (line 398)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'on?' -> 'native.enum-aggregate-predicate' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'borrowed?' -> 'native.borrowed?' (line 308)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'error-type?' -> '@get' (line 226)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'fixnum?' -> 'type-of' (line 277)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'generic?' -> 'word-markers' (line 330)
+      callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  word 'result:err>' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  'generic?' -> '#any' (line 330)
+      callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  word 'bytes>ffi-ptr' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
+  '4dip' -> 'dip' (line 412)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '>ordering' -> 'native.enum-from-symbol' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'type-members' -> 'native.type-members' (line 263)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'vector?' -> 'type-of' (line 284)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'boolean?' -> 'type-of' (line 278)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '3dip' -> 'dip' (line 410)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'mutable-map?' -> 'type-of' (line 287)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'make-result-value' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'bytes-resize!' -> 'native.#grow!' (line 336)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'bytes-resize!' -> 'native.#shrink!' (line 336)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'parameter?' -> 'type-of' (line 289)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'float?' -> 'type-of' (line 294)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'make-provenance' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'array?' -> 'type-of' (line 281)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-result-error' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'stream?' -> 'type-of' (line 288)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '4dup' -> 'pick-n' (line 400)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '4dup' -> 'pick-n' (line 400)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '<rot-' -> 'dip' (line 414)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-result-value' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-dispatch-provenance' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'bytes-alloc' -> 'native.bytes-alloc' (line 334)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'assert-no-shadow' -> '#empty?' (line 555)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'assert-no-shadow' -> '#append' (line 567)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'assert-no-shadow' -> 'make-error' (line 568)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'assert-no-shadow' -> 'throw' (line 568)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'hash?' -> 'type-of' (line 283)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '-rot>' -> 'dip' (line 416)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '3apply' -> 'apply-n' (line 435)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-source-loc' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '5nip' -> 'nip-n' (line 378)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '2dip' -> 'dip' (line 408)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'byte-array?' -> 'type-of' (line 285)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'stream-write-string' -> '>bytes' (line 484)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'stream-write-string' -> 'stream-write' (line 484)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'make-option-payload' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-stack-effect-info' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'ffi-ptr+len>bytes' -> 'native.ffi-ptr+len>bytes' (line 802)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '@get?' -> '@has?' (line 752)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '@get?' -> '@get' (line 752)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  '@get?' -> '>option:some' (line 752)
+      callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  word 'benchmark-report?' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'trace-stack' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word 'unmake-result:ok' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'result:ok>' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word '1check' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word 'result:err?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'defined?' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'tri' (prelude): NC.8: a quotation in abstract form must become a concrete runtime value
-      hint: blocked until quotation bodies can be compiled
-  word 'unmake-option:some' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'word-markers' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word '>word-info' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'ordering:eq?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'option:some?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'loop' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word 'option:some>hash' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'cmp' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'result:err>hash' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word '#any' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'ordering:gt?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'on:word-defined?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'make-result:err' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'option:none?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'while' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word 'on:exit?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'result:ok?' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word 'pragma-get?' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word 'drop-at' (prelude): NC.17: indexed stack access targets the symbolic row region
-      hint: only literal depths into known stack slots above the row are supported
-  word 'result:ok>hash' (prelude): NC.4: word pushes a value that cannot be embedded in an AOT binary
-      hint: blocked until AOT literals can be serialized
-  word '>result:ok' (prelude): NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'case' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word 'acquire' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word 'add-hook' (prelude): NC.6: calls a word that is not available in the AOT compilation set
-      hint: blocked until the AOT resolver includes this word
+  'make-word-info' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'unmake-method-info' -> 'native.struct-instance-destructure' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'marker?' -> 'type-of' (line 291)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'pick' -> 'dip' (line 423)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'close-iterator' -> 'native.close-iterator' (line 792)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'flush' -> 'stream-flush' (line 520)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+  'make-dispatch-provenance' -> 'native.make-struct-instance' (line 0)
+      callee is a native primitive without compiled AOT dispatch
+      hint: blocked until the AOT resolver provides a compiled native entry for this word
+AOT interpreter fallbacks: 223 total (native=68 compound-uncompiled=148 quotation=7)
+  static-check: jitInterpretedCall=148/148 jitNativeWordCall=68/68 jitCallQuotation=7/7 (matches build-time inventory)
