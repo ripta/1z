@@ -1,0 +1,40 @@
+\ Exercise the AOT native fallback paths reached through compiled words.
+\ Two emission sites are covered:
+\
+\   1. `emitNativeWordCall` (category `native`) when the inline fast
+\      path can prove only one operand type and the comparison resolves
+\      via the polymorphic native (e.g. string / type-value / boolean
+\      operands of `=` or `<`).
+\   2. `emitPerOperationFallback` (category `per-op-native`) when both
+\      operands look numeric but the three-way arithmetic path falls
+\      through to the polymorphic native (mixed fixnum/float `+`).
+\
+\ In AOT mode both sites now route through `jitNativeWordCall`, so the
+\ `--compilation-stats` static-check should report
+\ `jitInterpretedCall=0/0` with a non-zero `jitNativeWordCall` count.
+\
+\ Results are dropped to keep the program free of stream-write / print
+\ compound chains; runtime correctness is asserted by exit code rather
+\ than printed output.
+
+add:    ( a b -- c ) [ + ] ;
+cmp-eq: ( a b -- ? ) [ = ] ;
+cmp-lt: ( a b -- ? ) [ < ] ;
+
+\ Mixed fixnum/float arithmetic: drives `emitPerOperationFallback`.
+3 2.5 add drop
+2.5 3 add drop
+
+\ String comparisons: drive `emitResolvedNativeCallback` in the
+\ compiled body of `cmp-eq` / `cmp-lt`.
+"abc" "abc" cmp-eq drop
+"abc" "xyz" cmp-eq drop
+"abc" "xyz" cmp-lt drop
+
+\ Type-value comparisons take the same resolved-native path.
+fixnum fixnum cmp-eq drop
+fixnum float cmp-eq drop
+
+\ Boolean comparisons.
+t t cmp-eq drop
+t f cmp-eq drop

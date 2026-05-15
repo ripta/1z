@@ -10349,6 +10349,87 @@ test "inline typed-validate-and-promote then arithmetic" {
     try testing.expectEqual(@as(i64, 15), values[0].fixnum);
 }
 
+// AOT mode rejects natives whose preceding fixnum literal is a
+// process-local VirtualType pointer. Those pointers do not survive into
+// the AOT binary's runtime process, so the only valid lowering is the
+// JIT-only inline emitter (`tryEmitInlineVirtualUnwrap` and
+// `tryEmitInlineTypedValidateAndPromote`). In AOT mode the dispatch
+// branch falls through to `state.not_compilable_reason =
+// .non_serializable_literal; return IrCodegenError.NotCompilable` before
+// the inline emitter is consulted, which is why the failed-inline AOT
+// path for these two natives is unreachable and not covered by an AOT
+// integration test.
+
+test "AOT mode rejects native.virtual-unwrap with non-serializable-literal" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 1 },
+    };
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    var reason: ?NotCompilableReason = null;
+    try testing.expectError(
+        IrCodegenError.NotCompilable,
+        emitWordCAot(
+            &instrs,
+            2,
+            1,
+            "test-aot-virtual-unwrap",
+            null,
+            null,
+            &compiled_names,
+            null,
+            null,
+            null,
+            testing.allocator,
+            null,
+            &reason,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+        ),
+    );
+    try testing.expectEqual(NotCompilableReason.non_serializable_literal, reason.?);
+}
+
+test "AOT mode rejects native.typed-validate-and-promote with non-serializable-literal" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 1 },
+    };
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    var reason: ?NotCompilableReason = null;
+    try testing.expectError(
+        IrCodegenError.NotCompilable,
+        emitWordCAot(
+            &instrs,
+            2,
+            1,
+            "test-aot-typed-validate",
+            null,
+            null,
+            &compiled_names,
+            null,
+            null,
+            null,
+            testing.allocator,
+            null,
+            &reason,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+        ),
+    );
+    try testing.expectEqual(NotCompilableReason.non_serializable_literal, reason.?);
+}
+
 // --- C emission tests ---
 
 test "mangle simple word name" {
