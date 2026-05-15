@@ -107,8 +107,8 @@ pub const primitives = [_]Primitive{
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "word-markers", .func = nativeWordMarkers, .stack_effect = "name -- array" },
-    .{ .name = "native?", .func = nativeIsNative, .stack_effect = "name -- ?" },
+    .{ .name = "word-markers", .func = nativeWordMarkers, .stack_effect = "module name -- array" },
+    .{ .name = "native?", .func = nativeIsNative, .stack_effect = "module name -- ?" },
 };
 
 /// marker ( -- marker ) - Create an anonymous marker value

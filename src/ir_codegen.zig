@@ -775,6 +775,11 @@ pub const ResolvedWord = struct {
     word_id: u32,
     input_count: u8,
     output_count: u8,
+    /// True when the underlying word definition is a native primitive.
+    /// Drives routing between `emitNativeWordCall` and `emitAotWordCall`
+    /// in AOT mode; in JIT mode, native sites that participate in PIC
+    /// inline dispatch additionally set `native_fn_ptr`.
+    is_native: bool = false,
     native_fn_ptr: ?usize = null,
     stack_effect_ptr: ?usize = null,
     /// When non-null, the callee has row-variable quotation parameters.
@@ -2834,27 +2839,7 @@ fn emitResolvedNativeCallback(
         return IrCodegenError.NotCompilable;
     };
 
-    if (resolved.native_fn_ptr != null) {
-        if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
-
-        try materializeQuotations(state, stack, sp.*);
-        flushToPhysicalStack(state, stack, sp.*);
-        const ctx_val = emitCallbackPreamble(state, sp.*);
-
-        if (resolved.stack_effect_ptr) |eff_ptr| {
-            emitParamValidation(state, eff_ptr);
-        }
-
-        emitNativeWordCall(state, ctx_val, name, resolved, line);
-
-        if (exitFallsThrough(state.exit_kind)) {
-            sp.* = sp.* - resolved.input_count + resolved.output_count;
-            resetStackToPhysical(stack, sp.*);
-        }
-    } else if (state.aot_mode) {
-        // AOT mode: native_fn_ptr is unavailable at compile time; route the
-        // native call through jitNativeWordCall, which resolves the native
-        // function pointer at runtime via lookupWord.
+    if (resolved.is_native) {
         if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
         try materializeQuotations(state, stack, sp.*);
@@ -2928,7 +2913,7 @@ fn emitStructNativeCall(
         return IrCodegenError.NotCompilable;
     };
 
-    emitAotWordCall(state, ctx_val, name, resolved, line);
+    emitNativeWordCall(state, ctx_val, name, resolved, line);
 
     if (exitFallsThrough(state.exit_kind)) {
         sp.* = sp.* - effective_in + effective_out;
@@ -4975,7 +4960,11 @@ fn compileInstructions(
                             try materializeQuotations(state, stack, sp.*);
                             flushToPhysicalStack(state, stack, sp.*);
                             const ctx_val = emitCallbackPreamble(state, sp.*);
-                            emitAotWordCall(state, ctx_val, name, resolved, instr.line);
+                            if (resolved.is_native) {
+                                emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
+                            } else {
+                                emitAotWordCall(state, ctx_val, name, resolved, instr.line);
+                            }
                             if (exitFallsThrough(state.exit_kind)) {
                                 reloadBaseAfterDynamicCall(state);
                                 sp.* = 1;
@@ -4989,7 +4978,7 @@ fn compileInstructions(
                         }
                     }
 
-                    if (resolved.native_fn_ptr != null) {
+                    if (resolved.is_native) {
                         // Generic native word callback
                         if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
@@ -5301,7 +5290,7 @@ fn preScanInstructions(
                 } else if (!isSupportedOp(name) and !isStackOp(name)) {
                     if (resolver) |res| {
                         if (res.resolve(name, res.user_data)) |resolved| {
-                            if (resolved.native_fn_ptr != null) {
+                            if (resolved.is_native) {
                                 flags.needs_native_call = true;
                             } else {
                                 flags.needs_dispatch = true;
@@ -6466,6 +6455,7 @@ pub fn emitProgramC(
                 .input_count = entry.input_count,
                 .output_count = entry.output_count,
                 .never_returns = entry.never_returns,
+                .is_native = entry.is_native,
                 .native_fn_ptr = entry.native_fn_ptr,
             };
             if (entry.stack_effect) |*eff| {
@@ -6712,9 +6702,14 @@ pub fn emitProgramC(
         fallbacks.deinit(allocator);
     }
 
-    // Strict codegen: verify all non-prelude input words were compiled.
-    // Prelude words can safely fall back to jitInterpretedCall since they
-    // exist in the AOT runtime dictionary.
+    // Non-prelude reachable words must compile: this is the
+    // "user code must compile" backstop, separate from the strict
+    // compound-fallback gate above and from the strict prelude check
+    // that runs in `main.zig` when `--interpreter-fallback=false`.
+    // Prelude words that fail to compile are surfaced as warnings or
+    // through `prelude_stats` instead of stopping the build here;
+    // strict mode upgrades those surfaces into hard errors via the
+    // dedicated checks, not via this gate.
     {
         var uncompiled: std.ArrayListUnmanaged(UncompiledWord) = .{};
         for (words) |w| {

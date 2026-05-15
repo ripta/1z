@@ -1,11 +1,11 @@
 Quotation bodies compiled: 10/10 (100.0%)
+Inline PIC sites: 0/1 generic call sites preseeded
 AOT interpreter fallbacks: 4 total
-  native: 1
-  compound-uncompiled: 3
+  native: 4
   sites:
-    compound-uncompiled: flush -> stream-flush (line 520)
-    compound-uncompiled: stream-write-string -> >bytes (line 484)
-    compound-uncompiled: stream-write-string -> stream-write (line 484)
+    native: flush -> stream-flush (line 520)
+    native: stream-write-string -> >bytes (line 484)
+    native: stream-write-string -> stream-write (line 484)
     native: . -> inspect (line 526)
 Error: 1 word could not be compiled to C
   word '__entry__': NC.5: calls a quotation whose stack effect is unknown

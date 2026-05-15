@@ -1,0 +1,8 @@
+\ Regression: in --interpreter-fallback=false mode, a program that reaches
+\ only plain native primitives must build cleanly. When the AOT resolver
+\ dropped `native_fn_ptr` for non-generic natives, callers like
+\ `print-line` -> `>bytes` / `stream-write` / `stream-flush` miscompiled
+\ as compound-uncompiled emissions and the strict build rejected them.
+\ Routing those native call sites through `jitNativeWordCall` by word_id
+\ makes the build succeed.
+"ok" print-line

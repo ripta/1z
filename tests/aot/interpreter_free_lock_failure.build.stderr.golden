@@ -1,16 +1,12 @@
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: --interpreter-fallback=false rejects compound-fallback dispatch; 4 call sites still route through the interpreter
-  'flush' -> 'stream-flush' (line 520)
-      callee is a native primitive without compiled AOT dispatch
-      hint: blocked until the AOT resolver provides a compiled native entry for this word
-  'stream-write-string' -> '>bytes' (line 484)
-      callee is a native primitive without compiled AOT dispatch
-      hint: blocked until the AOT resolver provides a compiled native entry for this word
-  'stream-write-string' -> 'stream-write' (line 484)
-      callee is a native primitive without compiled AOT dispatch
-      hint: blocked until the AOT resolver provides a compiled native entry for this word
-  'keep' -> 'dip' (line 382)
-      callee is a native primitive without compiled AOT dispatch
-      hint: blocked until the AOT resolver provides a compiled native entry for this word
-AOT interpreter fallbacks: 5 total (native=1 compound-uncompiled=4)
-  static-check: jitInterpretedCall=4/4 jitNativeWordCall=1/1 jitCallQuotation=0/0 (matches build-time inventory)
+Error: --interpreter-fallback=false --lock-interpreter-setting was set, but at least one compiled word emitted an interpreter fallback call.
+      hint: drop --lock-interpreter-setting, switch to --interpreter-fallback=true, or rewrite the offending words so they compile without fallback.
+AOT interpreter fallbacks: 5 total
+  native: 5
+  sites:
+    native: . -> inspect (line 526)
+    native: flush -> stream-flush (line 520)
+    native: stream-write-string -> >bytes (line 484)
+    native: stream-write-string -> stream-write (line 484)
+    native: keep -> dip (line 382)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=5/5 jitCallQuotation=0/0 (matches build-time inventory)

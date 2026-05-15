@@ -1,4 +1,4 @@
-AOT interpreter fallbacks: 6 total (compound-uncompiled=6)
-  static-check: jitInterpretedCall=6/6 jitNativeWordCall=0/0 jitCallQuotation=0/0 (matches build-time inventory)
+AOT interpreter fallbacks: 6 total (native=6)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=6/6 jitCallQuotation=0/0 (matches build-time inventory)
 interpreter: linked (auto: compiled code calls interpreter)
 runtime-image: words=0 stack-effects=1 typevalue-slots=1 blob-present=false

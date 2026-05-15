@@ -1,15 +1,14 @@
 Prelude compilation: 6/6 words compiled (100.0%)
 Quotation bodies compiled: 0
-Inline PIC sites: 1/1 generic call sites preseeded
+Inline PIC sites: 1/2 generic call sites preseeded
 AOT interpreter fallbacks: 6 total
-  native: 3
-  compound-uncompiled: 3
+  native: 6
   sites:
     native: . -> inspect (line 526)
-    compound-uncompiled: flush -> stream-flush (line 520)
-    compound-uncompiled: stream-write-string -> >bytes (line 484)
-    compound-uncompiled: stream-write-string -> stream-write (line 484)
+    native: flush -> stream-flush (line 520)
+    native: stream-write-string -> >bytes (line 484)
+    native: stream-write-string -> stream-write (line 484)
     native: nth-elem -> #nth (line 1)
     native: nth-elem -> #nth (line 1)
-  static-check: jitInterpretedCall=3/3 jitNativeWordCall=3/3 jitCallQuotation=0/0 (matches build-time inventory)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=6/6 jitCallQuotation=0/0 (matches build-time inventory)
 interpreter: linked (auto: compiled code calls interpreter)

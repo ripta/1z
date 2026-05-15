@@ -1,0 +1,9 @@
+\ Regression: the prelude introspection words `defined?`, `native?`,
+\ `word-markers`, and `>word-info` all call `native.current-scope`. When
+\ that registry entry lacked a stack effect, the AOT resolver dropped it
+\ and pre-scan rejected the four prelude wrappers with NC.11. With the
+\ stack effect declared and polymorphic natives surfaced to the resolver,
+\ these words now compile and run under --interpreter-fallback=false.
+print: defined? .
+print: native? .
+print: word-markers #len .

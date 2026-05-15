@@ -28,9 +28,9 @@ pub const primitives = [_]Primitive{};
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">word", .func = nativeToWord, .stack_effect = "module name -- word-info" },
     .{ .name = "all-words", .func = nativeAllWords, .stack_effect = "-- array" },
-    .{ .name = "current-scope", .func = nativeCurrentScope },
+    .{ .name = "current-scope", .func = nativeCurrentScope, .stack_effect = "-- module" },
     .{ .name = "dead-definitions", .func = nativeDeadDefinitions },
-    .{ .name = "defined?", .func = nativeDefined, .stack_effect = "name -- ?" },
+    .{ .name = "defined?", .func = nativeDefined, .stack_effect = "module name -- ?" },
     .{ .name = "locally-defined?", .func = nativeLocallyDefined },
     .{ .name = "scope-frames", .func = nativeScopeFrames },
     .{ .name = "stack-snapshot", .func = nativeStackSnapshot },

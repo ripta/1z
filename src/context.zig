@@ -4157,6 +4157,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .word_id = 0,
                 .input_count = @intCast(effect.inputs.len),
                 .output_count = @intCast(effect.outputs.len),
+                .is_native = true,
                 .native_fn_ptr = @intFromPtr(func),
                 .never_returns = hasNeverReturnsMarker(callee.markers),
             };

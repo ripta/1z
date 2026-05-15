@@ -2,8 +2,7 @@
 \ --interpreter-fallback=false mode, a compiled caller that dispatches
 \ to an uncompiled compound callee must fail the build with a diagnostic
 \ that names the caller, the callee, the line, and the callee's
-\ NotCompilableReason. `print-line` reaches `stream-write-string`, whose
-\ compiled body falls back to `>bytes` and `stream-write`; `flush` calls
-\ `stream-flush`. Today those callees are uncompilable, so this test
-\ asserts they surface as build errors instead of runtime fallback.
-"ok" print-line
+\ NotCompilableReason. `bi` carries row-variable parameter effects, so
+\ its body still fails to compile (NC.13). Calling it from compiled
+\ code must surface as a build error rather than a runtime fallback.
+1 [ 2 + ] [ 3 + ] bi . .

@@ -1,6 +1,7 @@
 \ Test: ONEZ_INTERPRETER_FALLBACK=0 disables fallback at runtime.
-\ The word `keep` has a row-variable quotation parameter, so it
-\ falls back to jitCallQuotation.  With fallback disabled, this
-\ should crash with a diagnostic.
-1 [ 2 + ] keep
+\ The word `bi` carries row-variable quotation parameters and its body
+\ remains uncompilable (NC.8), so a caller reaches it through the
+\ interpreter fallback path. With fallback disabled, this should crash
+\ with a diagnostic.
+1 [ 2 + ] [ 3 + ] bi
 . .

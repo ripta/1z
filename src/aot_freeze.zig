@@ -429,13 +429,13 @@ fn discoverReachableWords(
             if (resolveQualifiedModuleWord(ctx, name)) |mod_word| {
                 switch (mod_word.action) {
                     .native, .host_callback => {
-                        // Only add natives with declared stack effects.
-                        // Polymorphic natives (no fixed effect) cannot be
-                        // given correct input/output counts in the resolver.
-                        if (mod_word.stack_effect != null) {
-                            try result.native_names.append(temp_allocator, name);
-                            try result.native_defs.append(temp_allocator, wordDefFromModuleWord(name, mod_word));
-                        }
+                        // Polymorphic natives without a declared stack effect
+                        // are also registered so pre-scan can resolve every
+                        // reachable native; `buildAotDescs` enters them with
+                        // zero input/output counts and the codegen either
+                        // special-cases or bails out per native.
+                        try result.native_names.append(temp_allocator, name);
+                        try result.native_defs.append(temp_allocator, wordDefFromModuleWord(name, mod_word));
                     },
                     .compound => |compound_instrs| {
                         try result.names.append(temp_allocator, name);
@@ -593,10 +593,8 @@ fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *D
     if (resolveQualifiedModuleWord(ctx, call_name)) |mod_word| {
         switch (mod_word.action) {
             .native, .host_callback => {
-                if (mod_word.stack_effect != null or isPolymorphicStructNative(call_name)) {
-                    try discovered.native_names.append(allocator, call_name);
-                    try discovered.native_defs.append(allocator, wordDefFromModuleWord(call_name, mod_word));
-                }
+                try discovered.native_names.append(allocator, call_name);
+                try discovered.native_defs.append(allocator, wordDefFromModuleWord(call_name, mod_word));
             },
             .compound => {},
         }
@@ -607,13 +605,16 @@ fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *D
     // This catches native words called by prelude words that were added
     // via compile_all_prelude but never went through the BFS.
     const word = ctx.lookupWord(call_name) orelse return;
-    if (word.stack_effect == null and !isPolymorphicStructNative(call_name)) return;
     switch (word.action) {
         .native, .host_callback => {
             try discovered.native_names.append(allocator, call_name);
             try discovered.native_defs.append(allocator, word);
         },
         .compound => {
+            // Compound words without a stack effect cannot be assigned
+            // input/output counts; let `buildAotDescs` route them to
+            // the missing-stack-effects error path.
+            if (word.stack_effect == null) return;
             try discovered.names.append(allocator, call_name);
             try discovered.defs.append(allocator, word);
         },
@@ -672,13 +673,6 @@ fn hasGenericMarker(def: WordDefinition) bool {
 /// jitInterpretedCall, which then routes through tryDispatchGenericWithPic.
 fn isDispatchOnlyGeneric(def: WordDefinition) bool {
     return def.action == .compound and def.action.compound.len == 0 and hasGenericMarker(def);
-}
-
-/// Polymorphic struct native words that have no fixed stack_effect but must
-/// be included in the AOT word list for resolver access.
-fn isPolymorphicStructNative(name: []const u8) bool {
-    return std.mem.eql(u8, name, "native.make-struct-instance") or
-        std.mem.eql(u8, name, "native.struct-instance-destructure");
 }
 
 /// Assign word IDs and build the AotWordDesc array. When `ctx` is
@@ -760,30 +754,27 @@ fn buildAotDescs(
         });
     }
 
-    // Assign IDs to discovered native words. These get is_prelude = true
-    // so the strict codegen check allows interpreter fallback.
+    // Assign IDs to discovered native words. Polymorphic natives (no
+    // declared stack effect) are registered with zero input/output counts
+    // so pre-scan accepts every reachable native referenced by frozen
+    // compound bodies. The codegen either special-cases the native (e.g.,
+    // `native.make-struct-instance` via `emitStructNativeCall`) or routes
+    // it through `jitNativeWordCall` by word_id; runtime-virtual-pointer
+    // natives still bail out in AOT mode via `isRuntimeVirtualPtrNative`.
     for (discovered.native_names.items, discovered.native_defs.items) |name, def| {
         const effect = def.stack_effect orelse {
-            // Polymorphic native words (no fixed stack_effect) are still
-            // included so the AOT resolver can find them by word ID. The
-            // emit path derives the correct input/output counts from
-            // compile-time context (e.g., struct field count).
-            if (isPolymorphicStructNative(name)) {
-                const id = next_id;
-                next_id += 1;
-                try words.append(allocator, .{
-                    .name = name,
-                    .instructions = &.{},
-                    .input_count = 0,
-                    .output_count = 0,
-                    .word_id = id,
-                    .is_prelude = true,
-                    .is_native = true,
-                    .never_returns = hasNeverReturnsMarker(def),
-                });
-                continue;
-            }
-            try skipped.append(allocator, name);
+            const id = next_id;
+            next_id += 1;
+            try words.append(allocator, .{
+                .name = name,
+                .instructions = &.{},
+                .input_count = 0,
+                .output_count = 0,
+                .word_id = id,
+                .is_prelude = true,
+                .is_native = true,
+                .never_returns = hasNeverReturnsMarker(def),
+            });
             continue;
         };
         const id = next_id;
@@ -828,6 +819,8 @@ fn buildAotDescs(
                 .input_count = entry.input_count,
                 .output_count = entry.output_count,
                 .never_returns = entry.never_returns,
+                .is_native = entry.is_native,
+                .native_fn_ptr = entry.native_fn_ptr,
             };
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
