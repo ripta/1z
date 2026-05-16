@@ -4,9 +4,9 @@ Inline PIC sites: 0/1 generic call sites preseeded
 AOT interpreter fallbacks: 3 total
   native: 3
   sites:
-    native: flush -> stream-flush (line 520)
-    native: stream-write-string -> >bytes (line 484)
-    native: stream-write-string -> stream-write (line 484)
+    native: flush -> stream-flush (line 526)
+    native: stream-write-string -> >bytes (line 490)
+    native: stream-write-string -> stream-write (line 490)
   static-check: jitInterpretedCall=0/0 jitNativeWordCall=3/3 jitCallQuotation=0/0 (matches build-time inventory)
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: not linked

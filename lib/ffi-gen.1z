@@ -618,7 +618,7 @@ decl>ffi-binding: ( decl -- str ) [
 \\   flags: -- array of extra CLI flags for zig translate-c (default { })
 \\   strip-prefix: -- string prefix to strip from C function names (default f)
 generate-bindings: ( header-path lib-name opts -- str ) [
-  gb-lib-name: define-parameter [ "" ] ;
+  gb-lib-name: parameter{ [ "" ] } ;
 
   \ Extract options
   dup flags: @has? [ dup flags: @get ] [ { } ] if

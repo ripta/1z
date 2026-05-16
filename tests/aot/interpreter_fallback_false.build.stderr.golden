@@ -19,22 +19,22 @@ Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Error: --interpreter-fallback=false rejects compound-fallback dispatch; 6 call sites still route through the interpreter
-  'pragma-get' -> 'pragma-get?' (line 909)
+  'pragma-get' -> 'pragma-get?' (line 915)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-  'pragma-get' -> 'option:some?' (line 910)
+  'pragma-get' -> 'option:some?' (line 916)
       callee uncompiled: NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  'pragma-get' -> 'option:some>' (line 911)
+  'pragma-get' -> 'option:some>' (line 917)
       callee uncompiled: NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  '#none' -> '#any' (line 353)
+  '#none' -> '#any' (line 359)
       callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  'generic?' -> '#any' (line 330)
+  'generic?' -> '#any' (line 336)
       callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  '@get?' -> '>option:some' (line 752)
+  '@get?' -> '>option:some' (line 758)
       callee uncompiled: NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
 AOT interpreter fallbacks: 231 total (native=218 compound-uncompiled=6 quotation=7)

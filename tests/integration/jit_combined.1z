@@ -2,7 +2,7 @@ use "testing" ;
 
 "TCO + dynamic variables: compiled get after TCO recursion" test-section
 
-tco-dv-param: define-parameter [ 1 ] ;
+tco-dv-param: parameter{ [ 1 ] } ;
 compiled-get-param: ( param -- n ) [ get ] ;
 compiled-get-param: compile!
 
@@ -42,7 +42,7 @@ tco-add-acc-i: ( n acc -- acc ) [
 
 "iterators + dynamic variables: #each with parameter" test-section
 
-iter-dv-param: define-parameter [ 0 ] ;
+iter-dv-param: parameter{ [ 0 ] } ;
 compiled-each-dv: ( arr quot -- ) [ #each ] ;
 compiled-each-dv: compile!
 compiled-get-iter: ( param -- n ) [ get ] ;
@@ -89,7 +89,7 @@ compiled-collect-it: compile!
 
 "all three: compiled with-parameter + reduce + get + TCO" test-section
 
-all-param: define-parameter [ 1 ] ;
+all-param: parameter{ [ 1 ] } ;
 compiled-wp-all: ( val param quot -- ) [ with-parameter ] ;
 compiled-wp-all: compile!
 compiled-get-all: ( param -- n ) [ get ] ;

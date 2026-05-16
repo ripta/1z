@@ -14,7 +14,7 @@ CALC-LEXER: const [
   >array <lexer>
 ] ;
 
-calc-expr: define-parameter [ "" ] ;
+calc-expr: parameter{ [ "" ] } ;
 report-msg: M{ value: "" } ;
 
 (extract-byte-pos): ( msg expr -- pos ) [

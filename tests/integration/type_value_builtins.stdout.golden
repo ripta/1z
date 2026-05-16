@@ -69,7 +69,7 @@ Stack: [ ]
 PASS: >template still works
 Stack: [ ]
 Stack: [ ]
-PASS: define-parameter still works
+PASS: parameter{ still works
 Stack: [ ]
 PASS: stack-effect-info struct exists
 Stack: [ ]

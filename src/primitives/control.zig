@@ -347,7 +347,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
                 defer collected_markers.deinit(alloc);
-                var has_doc = false;
+                var captured_doc: ?[]const u8 = null;
 
                 while (true) {
                     const next_val = try ctx.stack.peek();
@@ -356,9 +356,9 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                             _ = try ctx.stack.pop();
                             try collected_markers.append(alloc, mk);
                         },
-                        .doc_string => {
+                        .doc_string => |d| {
                             _ = try ctx.stack.pop();
-                            has_doc = true;
+                            if (captured_doc == null) captured_doc = d;
                         },
                         .symbol => break,
                         else => {
@@ -369,7 +369,12 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 }
 
                 const name = try popSymbol(ctx);
-                try enforceRequireDoc(ctx, name, has_doc, false, true, false);
+                try enforceRequireDoc(ctx, name, captured_doc != null, false, true, false);
+                if (captured_doc) |doc_text| {
+                    if (!desc_map.contains("doc")) {
+                        try desc_map.put(alloc, "doc", .{ .doc_string = doc_text });
+                    }
+                }
                 try ctx.stack.push(.{ .symbol = name });
 
                 try ctx.stack.push(top_val);
@@ -402,9 +407,6 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     if (top_val.quotation.effect) |eff| {
                         stack_effect_val = eff.*;
                     }
-                } else if (top_val == .parameter) {
-                    // Parameter words always push one value: ( -- param )
-                    stack_effect_val = .{ .inputs = &.{}, .outputs = &.{.{ .name = "param" }} };
                 }
 
                 while (true) {

@@ -135,7 +135,7 @@ parse-flags: ( args description -- result-hash ) [
     [ print-flag-help ] #each
   ] ;
 
-  mth-src: define-parameter [ [ ] make-mutable-map ] ;
+  mth-src: parameter{ [ [ ] make-mutable-map ] } ;
   mth-copy-key: ( hash key -- hash' ) [
     dup mth-src get swap @get
     @set
@@ -267,8 +267,8 @@ parse-flags: ( args description -- result-hash ) [
     ] #each
   ] ;
 
-  pf-result:    define-parameter [ [ ] make-mutable-map ] ;
-  pf-desc:      define-parameter [ "" ] ;
+  pf-result:    parameter{ [ [ ] make-mutable-map ] } ;
+  pf-desc:      parameter{ [ "" ] } ;
   pf-pos-state: M{ idx: 0 } ;
 
   \

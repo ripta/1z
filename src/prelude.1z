@@ -180,21 +180,27 @@ inspectable: protocol{ inspect: } ;
 \\ Protocol for types that support human-friendly display via >string.
 stringable: protocol{ >string: } ;
 
-\\ Dynamic variable definition syntax.
-define-parameter: parse-time [ dup parse-quotation make-parameter ] ;
+\\ Dynamic variable definition syntax. Reads a default quotation between `{` and
+\\ `}` and produces a definition descriptor that `;` hands to `define-parameter`.
+parameter{: parse-time [
+  "}" parse-values-until 0 #nth
+  [ ] make-mutable-map
+  swap default: swap @set!
+  [ define-parameter ] define: swap @set!
+] ;
 
 \\ The current output stream, defaulting to `stdout`.
-output-stream: define-parameter [ stdout ] ;
+output-stream: parameter{ [ stdout ] } ;
 \\ The current input stream, defaulting to `stdin`.
-input-stream: define-parameter [ stdin ] ;
+input-stream: parameter{ [ stdin ] } ;
 \\ The current error stream, defaulting to `stderr`.
-error-stream: define-parameter [ stderr ] ;
+error-stream: parameter{ [ stderr ] } ;
 \\ The module cache M{}, used by `load` and `use` for caching loaded modules.
-module-cache: define-parameter [ native.module-cache-value ] ;
+module-cache: parameter{ [ native.module-cache-value ] } ;
 \\ Scoped hooks for word-defined events (array of quotations).
-word-defined-hooks: define-parameter [ { } ] ;
+word-defined-hooks: parameter{ [ { } ] } ;
 \\ Scoped hooks for module-loaded events (array of quotations).
-module-loaded-hooks: define-parameter [ { } ] ;
+module-loaded-hooks: parameter{ [ { } ] } ;
 
 \\ Load a module by name or file path, returning a cached copy if available.
 load: ( filename -- module ) [

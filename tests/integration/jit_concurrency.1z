@@ -81,7 +81,7 @@ jit-div: compile!
 \ pointer must still be correct for each task. Here compiled arithmetic
 \ runs alongside uncompiled param reads in the same task.
 
-jit-param: define-parameter [ 0 ] ;
+jit-param: parameter{ [ 0 ] } ;
 
 42 jit-param [
   [

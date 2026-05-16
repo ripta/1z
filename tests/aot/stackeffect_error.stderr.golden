@@ -1,2 +1,2 @@
-<aot>:484: error 'type-mismatch' expected string, got fixnum 42 at word '>bytes'
+<aot>:490: error 'type-mismatch' expected string, got fixnum 42 at word '>bytes'
   stack effect: ( string -- byte-array )
