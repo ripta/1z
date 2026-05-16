@@ -1,4 +1,5 @@
 kind: aot-binary
+artifact: interpreter-free-aot
 target: <target>
 build-mode: <build-mode>
 interpreter: linked=no, fallback=auto, locked=no

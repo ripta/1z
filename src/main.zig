@@ -638,8 +638,22 @@ fn printInspectHelp() void {
     const w = &stdout.interface;
     w.writeAll("Usage: 1z inspect <binary>\n\n") catch {};
     w.writeAll("Report metadata embedded in a 1z AOT binary, including target,\n") catch {};
-    w.writeAll("build mode, interpreter linkage and fallback policy, runtime\n") catch {};
-    w.writeAll("image presence, 1z version, and prelude content hash.\n") catch {};
+    w.writeAll("build mode, artifact class, interpreter linkage and fallback\n") catch {};
+    w.writeAll("policy, runtime image presence, 1z version, and prelude content\n") catch {};
+    w.writeAll("hash.\n\n") catch {};
+    w.writeAll("Artifact classes:\n") catch {};
+    w.writeAll("  interpreter          binary links the full interpreter; dynamic\n") catch {};
+    w.writeAll("                       runtime code features (eval-string, runtime\n") catch {};
+    w.writeAll("                       load, compile!) are available.\n") catch {};
+    w.writeAll("  runtime-image-aot    AOT binary with no interpreter but a\n") catch {};
+    w.writeAll("                       runtime program image; may rehydrate the\n") catch {};
+    w.writeAll("                       dictionary but cannot evaluate new source.\n") catch {};
+    w.writeAll("  interpreter-free-aot AOT binary with neither the interpreter nor\n") catch {};
+    w.writeAll("                       a runtime image; executes only the frozen\n") catch {};
+    w.writeAll("                       compiled graph.\n\n") catch {};
+    w.writeAll("Classification rule: interpreter-linked binaries are reported as\n") catch {};
+    w.writeAll("`interpreter` even when a runtime image is also present; the class\n") catch {};
+    w.writeAll("reflects the binary's maximum runtime capability.\n") catch {};
     w.flush() catch {};
 }
 
@@ -1737,6 +1751,9 @@ fn printInterpreterLinkSummary(
         .false => lock_interpreter_setting,
         .auto => !diagnostics.has_interpreter_callbacks,
     };
+    const runtime_image_present = diagnostics.image_stats != null;
+    const artifact_class = ir_codegen.classifyArtifact(!interpreter_free, runtime_image_present);
+    err_writer.print("artifact: {s}\n", .{artifact_class.label()}) catch {};
     const status: []const u8 = if (interpreter_free) "not linked" else "linked";
     const reason: []const u8 = switch (interpreter_fallback) {
         .true => "--interpreter-fallback=true",
@@ -2701,6 +2718,12 @@ const AotInspectFields = struct {
     build_mode: []const u8,
     onez_version: []const u8,
     prelude_hash: []const u8,
+    // Artifact class names the binary's maximum semantic capability
+    // (`interpreter`, `runtime-image-aot`, or `interpreter-free-aot`).
+    // Required at schema-version=2; absent on legacy v1 binaries, in
+    // which case the inspector derives the class from
+    // `interpreter_linked` and `runtime_image_present`.
+    artifact_class: ?[]const u8 = null,
     // Per-callback linkage breakdown. Optional so binaries built
     // before the field existed parse cleanly; absent values are
     // omitted from the rendered report rather than printed as
@@ -2752,6 +2775,7 @@ fn parseAotMetadata(
     var build_mode: ?[]const u8 = null;
     var onez_version: ?[]const u8 = null;
     var prelude_hash: ?[]const u8 = null;
+    var artifact_class: ?[]const u8 = null;
     var jit_interpreted_call_linked: ?[]const u8 = null;
     var runtime_image_format_version: ?[]const u8 = null;
     var runtime_image_blob_present: ?[]const u8 = null;
@@ -2771,6 +2795,8 @@ fn parseAotMetadata(
             schema_version = value;
         } else if (std.mem.eql(u8, key, "interpreter-linked")) {
             interpreter_linked = value;
+        } else if (std.mem.eql(u8, key, "artifact-class")) {
+            artifact_class = value;
         } else if (std.mem.eql(u8, key, "jit-interpreted-call-linked")) {
             jit_interpreted_call_linked = value;
         } else if (std.mem.eql(u8, key, "interpreter-fallback-mode")) {
@@ -2802,7 +2828,7 @@ fn parseAotMetadata(
         } else if (std.mem.eql(u8, key, "c-compiler-version")) {
             c_compiler_version = value;
         }
-        // Unknown keys are ignored so the parser can read newer schema-1
+        // Unknown keys are ignored so the parser can read newer
         // binaries that add forward-compatible optional fields.
     }
 
@@ -2810,7 +2836,10 @@ fn parseAotMetadata(
         err_ctx.missing_field = "schema-version";
         return error.MissingField;
     };
-    if (!std.mem.eql(u8, sv, "1")) {
+    // Schema v1 omits `artifact-class`; the inspector derives it from
+    // the other fields. v2 adds `artifact-class` as a required key.
+    const is_v2 = std.mem.eql(u8, sv, "2");
+    if (!std.mem.eql(u8, sv, "1") and !is_v2) {
         err_ctx.schema_version = sv;
         return error.UnsupportedSchemaVersion;
     }
@@ -2831,6 +2860,10 @@ fn parseAotMetadata(
             return error.MissingField;
         }
     }
+    if (is_v2 and artifact_class == null) {
+        err_ctx.missing_field = "artifact-class";
+        return error.MissingField;
+    }
 
     return AotInspectFields{
         .schema_version = sv,
@@ -2842,6 +2875,7 @@ fn parseAotMetadata(
         .build_mode = build_mode.?,
         .onez_version = onez_version.?,
         .prelude_hash = prelude_hash.?,
+        .artifact_class = artifact_class,
         .jit_interpreted_call_linked = jit_interpreted_call_linked,
         .runtime_image_format_version = runtime_image_format_version,
         .runtime_image_blob_present = runtime_image_blob_present,
@@ -2938,8 +2972,22 @@ fn handleInspect(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     return 0;
 }
 
+/// Resolve the artifact-class string for the inspect report. v2
+/// binaries embed the class directly; v1 binaries don't, so the
+/// inspector recomputes it from the boolean fields using the same
+/// "interpreter wins" rule the build uses.
+fn deriveArtifactClass(fields: AotInspectFields) []const u8 {
+    if (fields.artifact_class) |v| return v;
+    const interp_linked = std.mem.eql(u8, fields.interpreter_linked, "yes");
+    const image_present = std.mem.eql(u8, fields.runtime_image_present, "yes");
+    if (interp_linked) return "interpreter";
+    if (image_present) return "runtime-image-aot";
+    return "interpreter-free-aot";
+}
+
 fn writeInspectReport(w: anytype, fields: AotInspectFields) !void {
     try w.writeAll("kind: aot-binary\n");
+    try w.print("artifact: {s}\n", .{deriveArtifactClass(fields)});
     try w.print("target: {s}\n", .{fields.target_triple});
     try w.print("build-mode: {s}\n", .{fields.build_mode});
     try w.print(
@@ -3451,6 +3499,7 @@ test "parseAotMetadata happy path" {
     try std.testing.expectEqualStrings("ReleaseSafe", fields.build_mode);
     try std.testing.expectEqualStrings("0.1.0-dev", fields.onez_version);
     try std.testing.expectEqualStrings("0123456789abcdef" ** 4, fields.prelude_hash);
+    try std.testing.expectEqual(@as(?[]const u8, null), fields.artifact_class);
     try std.testing.expectEqual(@as(?[]const u8, null), fields.runtime_image_format_version);
     try std.testing.expectEqual(@as(?[]const u8, null), fields.runtime_image_blob_present);
     try std.testing.expectEqual(@as(?[]const u8, null), fields.runtime_image_word_count);
@@ -3534,12 +3583,51 @@ test "parseAotMetadata ignores unknown forward-compat keys" {
 test "parseAotMetadata reports unsupported schema version" {
     const sample =
         "<<1Z_AOT_META_V1\n" ++
-        "schema-version=2\n" ++
+        "schema-version=99\n" ++
         ">>\n";
     var err_ctx: AotInspectErrorContext = .{};
     const result = parseAotMetadata(sample, &err_ctx);
     try std.testing.expectError(error.UnsupportedSchemaVersion, result);
-    try std.testing.expectEqualStrings("2", err_ctx.schema_version);
+    try std.testing.expectEqualStrings("99", err_ctx.schema_version);
+}
+
+test "parseAotMetadata parses schema v2 with artifact-class" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=2\n" ++
+        "artifact-class=interpreter-free-aot\n" ++
+        "interpreter-linked=no\n" ++
+        "interpreter-fallback-mode=false\n" ++
+        "interpreter-setting-locked=yes\n" ++
+        "runtime-image-present=no\n" ++
+        "target-triple=aarch64-macos\n" ++
+        "build-mode=ReleaseSafe\n" ++
+        "onez-version=0.1.0-dev\n" ++
+        "prelude-hash=" ++ ("0123456789abcdef" ** 4) ++ "\n" ++
+        ">>\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const fields = try parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectEqualStrings("2", fields.schema_version);
+    try std.testing.expectEqualStrings("interpreter-free-aot", fields.artifact_class.?);
+}
+
+test "parseAotMetadata reports missing artifact-class at schema v2" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=2\n" ++
+        "interpreter-linked=no\n" ++
+        "interpreter-fallback-mode=false\n" ++
+        "interpreter-setting-locked=yes\n" ++
+        "runtime-image-present=no\n" ++
+        "target-triple=aarch64-macos\n" ++
+        "build-mode=ReleaseSafe\n" ++
+        "onez-version=0.1.0-dev\n" ++
+        "prelude-hash=" ++ ("0123456789abcdef" ** 4) ++ "\n" ++
+        ">>\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const result = parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectError(error.MissingField, result);
+    try std.testing.expectEqualStrings("artifact-class", err_ctx.missing_field);
 }
 
 test "parseAotMetadata reports missing required field" {
@@ -3609,6 +3697,7 @@ test "writeInspectReport renders required fields with runtime-image absent" {
     var fbs = std.io.fixedBufferStream(&buf);
     try writeInspectReport(fbs.writer(), baseInspectFields());
     const expected = "kind: aot-binary\n" ++
+        "artifact: interpreter\n" ++
         "target: aarch64-macos\n" ++
         "build-mode: ReleaseSafe\n" ++
         "interpreter: linked=yes, fallback=auto, locked=no\n" ++
@@ -3630,6 +3719,7 @@ test "writeInspectReport renders runtime-image with blob present" {
     var fbs = std.io.fixedBufferStream(&buf);
     try writeInspectReport(fbs.writer(), fields);
     const expected = "kind: aot-binary\n" ++
+        "artifact: runtime-image-aot\n" ++
         "target: aarch64-macos\n" ++
         "build-mode: ReleaseSafe\n" ++
         "interpreter: linked=no, fallback=auto, locked=no\n" ++
@@ -3650,6 +3740,7 @@ test "writeInspectReport renders runtime-image without blob" {
     var fbs = std.io.fixedBufferStream(&buf);
     try writeInspectReport(fbs.writer(), fields);
     const expected = "kind: aot-binary\n" ++
+        "artifact: interpreter\n" ++
         "target: aarch64-macos\n" ++
         "build-mode: ReleaseSafe\n" ++
         "interpreter: linked=yes, fallback=auto, locked=no\n" ++
@@ -3670,6 +3761,7 @@ test "writeInspectReport renders optional toolchain provenance when present" {
     var fbs = std.io.fixedBufferStream(&buf);
     try writeInspectReport(fbs.writer(), fields);
     const expected = "kind: aot-binary\n" ++
+        "artifact: interpreter\n" ++
         "target: aarch64-macos\n" ++
         "build-mode: ReleaseSafe\n" ++
         "interpreter: linked=yes, fallback=auto, locked=no\n" ++
@@ -3692,6 +3784,7 @@ test "writeInspectReport falls back to short form when conditional fields missin
     var fbs = std.io.fixedBufferStream(&buf);
     try writeInspectReport(fbs.writer(), fields);
     const expected = "kind: aot-binary\n" ++
+        "artifact: interpreter\n" ++
         "target: aarch64-macos\n" ++
         "build-mode: ReleaseSafe\n" ++
         "interpreter: linked=yes, fallback=auto, locked=no\n" ++
@@ -3719,6 +3812,7 @@ test "writeInspectReport renders fields in the documented order" {
     var fbs = std.io.fixedBufferStream(&buf);
     try writeInspectReport(fbs.writer(), fields);
     const expected = "kind: aot-binary\n" ++
+        "artifact: runtime-image-aot\n" ++
         "target: aarch64-macos\n" ++
         "build-mode: ReleaseSafe\n" ++
         "interpreter: linked=no, fallback=false, locked=yes\n" ++
@@ -3730,4 +3824,28 @@ test "writeInspectReport renders fields in the documented order" {
         "c-compiler-id: zig clang\n" ++
         "c-compiler-version: Homebrew clang version 20.1.8\n";
     try std.testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
+test "writeInspectReport prefers embedded artifact-class over derived" {
+    var fields = baseInspectFields();
+    fields.schema_version = "2";
+    fields.artifact_class = "interpreter-free-aot";
+    // Note: interpreter_linked=yes would normally derive to "interpreter",
+    // but the embedded class overrides the derivation.
+
+    var buf: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try writeInspectReport(fbs.writer(), fields);
+    try std.testing.expect(std.mem.indexOf(u8, fbs.getWritten(), "artifact: interpreter-free-aot\n") != null);
+}
+
+test "writeInspectReport derives interpreter-free-aot when neither flag set" {
+    var fields = baseInspectFields();
+    fields.interpreter_linked = "no";
+    fields.runtime_image_present = "no";
+
+    var buf: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try writeInspectReport(fbs.writer(), fields);
+    try std.testing.expect(std.mem.indexOf(u8, fbs.getWritten(), "artifact: interpreter-free-aot\n") != null);
 }

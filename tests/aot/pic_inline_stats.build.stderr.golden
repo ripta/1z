@@ -11,5 +11,6 @@ AOT interpreter fallbacks: 6 total
     native: nth-elem -> #nth (line 1)
     native: nth-elem -> #nth (line 1)
   static-check: jitInterpretedCall=0/0 jitNativeWordCall=6/6 jitCallQuotation=0/0 (matches build-time inventory)
+artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: not linked

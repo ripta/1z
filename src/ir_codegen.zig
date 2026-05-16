@@ -6379,6 +6379,40 @@ fn patchMissingD0(body: []u8, allocator: Allocator) Allocator.Error![]u8 {
 /// `entry_word_id` identifies which word to call from main().
 pub const InterpreterFallbackMode = enum { true, false, auto };
 
+/// The three semantic artifact classes a 1z build may produce. Class
+/// reflects the maximum runtime capability of the artifact: an
+/// interpreter-linked binary can do everything (eval-string, runtime
+/// load, dynamic dispatch); a runtime-image-only AOT binary can
+/// rehydrate the program dictionary but not evaluate new source; an
+/// interpreter-free AOT binary only executes the frozen compiled graph.
+pub const ArtifactClass = enum {
+    interpreter,
+    runtime_image_aot,
+    interpreter_free_aot,
+
+    /// Lowercase-with-dashes spelling embedded in the AOT metadata
+    /// payload and printed by `1z inspect`. Stable across builds; do
+    /// not change without bumping the metadata schema version.
+    pub fn label(self: ArtifactClass) []const u8 {
+        return switch (self) {
+            .interpreter => "interpreter",
+            .runtime_image_aot => "runtime-image-aot",
+            .interpreter_free_aot => "interpreter-free-aot",
+        };
+    }
+};
+
+/// Classify a built AOT binary by its maximum runtime capability.
+/// Interpreter linkage subsumes the runtime-image case: an
+/// interpreter-linked binary can do everything a runtime-image binary
+/// can do plus dynamic eval, so a binary with both flags is reported
+/// as `interpreter` rather than `runtime-image-aot`.
+pub fn classifyArtifact(interpreter_linked: bool, runtime_image_present: bool) ArtifactClass {
+    if (interpreter_linked) return .interpreter;
+    if (runtime_image_present) return .runtime_image_aot;
+    return .interpreter_free_aot;
+}
+
 /// Core metadata embedded into every AOT binary as a single rodata
 /// string. The schema-version and surrounding sentinels make the block
 /// self-describing for an external inspector. The `interpreter_linked`
@@ -7169,8 +7203,12 @@ pub fn emitProgramC(
     // the `<<1Z_AOT_META_V1` ... `>>` delimiters give an external
     // inspector a stable byte-scan target. Schema-version is the first
     // key after the open marker so future format changes can flip both
-    // the open marker (V2) and the schema-version field together.
-    try emitAotMetadata(allocator, &out, meta, !interpreter_free);
+    // the open marker (V2) and the schema-version field together. The
+    // artifact class is computed here from the post-image-emission
+    // metadata so it agrees with the embedded `interpreter-linked` and
+    // `runtime-image-present` booleans.
+    const artifact_class = classifyArtifact(!interpreter_free, meta.runtime_image_present);
+    try emitAotMetadata(allocator, &out, meta, !interpreter_free, artifact_class);
 
     // 6. Main entry point. Interpreter-free binaries skip prelude loading
     // since every reachable word was compiled and registered explicitly via
@@ -7303,6 +7341,7 @@ fn emitAotMetadata(
     out: *std.ArrayListUnmanaged(u8),
     meta: AotMetadata,
     interpreter_linked: bool,
+    artifact_class: ArtifactClass,
 ) !void {
     const fallback_str: []const u8 = switch (meta.interpreter_fallback_mode) {
         .true => "true",
@@ -7316,7 +7355,10 @@ fn emitAotMetadata(
 
     try out.appendSlice(allocator, "__attribute__((used)) static const char onez_aot_meta_v1[] =\n");
     try out.appendSlice(allocator, "    \"<<1Z_AOT_META_V1\\n\"\n");
-    try out.appendSlice(allocator, "    \"schema-version=1\\n\"\n");
+    try out.appendSlice(allocator, "    \"schema-version=2\\n\"\n");
+    try out.appendSlice(allocator, "    \"artifact-class=");
+    try out.appendSlice(allocator, artifact_class.label());
+    try out.appendSlice(allocator, "\\n\"\n");
     try out.appendSlice(allocator, "    \"interpreter-linked=");
     try out.appendSlice(allocator, yes_no_interp_linked);
     try out.appendSlice(allocator, "\\n\"\n");
@@ -12237,7 +12279,7 @@ test "emitAotMetadata renders runtime-image fields when present" {
     meta.runtime_image_blob_present = true;
     meta.runtime_image_word_count = 42;
 
-    try emitAotMetadata(testing.allocator, &out, meta, true);
+    try emitAotMetadata(testing.allocator, &out, meta, true, classifyArtifact(true, true));
 
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=yes\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-format-version=2\\n") != null);
@@ -12252,7 +12294,7 @@ test "emitAotMetadata omits runtime-image conditional fields when absent" {
     // test_aot_metadata.runtime_image_present is false by default; the
     // three conditional keys must not appear at all so the inspector
     // can keep them as nullable optional fields.
-    try emitAotMetadata(testing.allocator, &out, test_aot_metadata, true);
+    try emitAotMetadata(testing.allocator, &out, test_aot_metadata, true, classifyArtifact(true, false));
 
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=no\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-format-version=") == null);
@@ -12270,11 +12312,28 @@ test "emitAotMetadata renders blob-present=no with non-zero word-count" {
     meta.runtime_image_blob_present = false;
     meta.runtime_image_word_count = 7;
 
-    try emitAotMetadata(testing.allocator, &out, meta, true);
+    try emitAotMetadata(testing.allocator, &out, meta, true, classifyArtifact(true, true));
 
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=yes\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-blob-present=no\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-word-count=7\\n") != null);
+}
+
+test "emitAotMetadata bumps schema version and emits artifact-class" {
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    try emitAotMetadata(testing.allocator, &out, test_aot_metadata, false, .interpreter_free_aot);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "schema-version=2\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "artifact-class=interpreter-free-aot\\n") != null);
+}
+
+test "classifyArtifact prefers interpreter when both flags set" {
+    try testing.expectEqual(ArtifactClass.interpreter, classifyArtifact(true, true));
+    try testing.expectEqual(ArtifactClass.interpreter, classifyArtifact(true, false));
+    try testing.expectEqual(ArtifactClass.runtime_image_aot, classifyArtifact(false, true));
+    try testing.expectEqual(ArtifactClass.interpreter_free_aot, classifyArtifact(false, false));
 }
 
 test "AotFallbackReportBuilder records and snapshots site categories" {

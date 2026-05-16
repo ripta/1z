@@ -8,5 +8,6 @@ AOT interpreter fallbacks: 3 total
     native: stream-write-string -> >bytes (line 490)
     native: stream-write-string -> stream-write (line 490)
   static-check: jitInterpretedCall=0/0 jitNativeWordCall=3/3 jitCallQuotation=0/0 (matches build-time inventory)
+artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: not linked

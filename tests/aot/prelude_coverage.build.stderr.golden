@@ -182,5 +182,6 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: linked
