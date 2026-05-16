@@ -11,7 +11,7 @@ any inspect "<marker:any>" "any marker inspect" assert=
 "any has identity semantics" test-section
 
 any any = t "any equals itself" assert=
-any define-marker = f "any does not equal anonymous marker" assert=
+any make-marker = f "any does not equal anonymous marker" assert=
 
 "any cannot be redefined" test-section
 

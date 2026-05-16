@@ -15,8 +15,8 @@ use "strings" ;
 use "sequences" ;
 
 \ Markers
-required: define-marker ;
-positional: define-marker ;
+required: make-marker ;
+positional: make-marker ;
 
 \ Shared state
 flag-registry: M{ } ;

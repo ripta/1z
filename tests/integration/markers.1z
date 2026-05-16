@@ -4,12 +4,12 @@ use "testing" ;
 
 "Marker identity semantics" test-section
 
-define-marker define-marker = f "different markers are not equal" assert=
-define-marker dup = t "same marker is equal to itself" assert=
+make-marker make-marker = f "different markers are not equal" assert=
+make-marker dup = t "same marker is equal to itself" assert=
 
 "Defining named markers" test-section
 
-test-marker: define-marker ;
+test-marker: make-marker ;
 test-marker marker? t "marker? predicate" assert=
 test-marker type-of marker "type-of returns marker:" assert=
 test-marker inspect "<marker:test-marker>" "named marker inspect" assert=
@@ -17,12 +17,12 @@ test-marker inspect "<marker:test-marker>" "named marker inspect" assert=
 "Marker identity after naming" test-section
 
 test-marker test-marker = t "same named marker equals itself" assert=
-test-marker define-marker = f "named marker doesn't equal anonymous" assert=
+test-marker make-marker = f "named marker doesn't equal anonymous" assert=
 
 "Two different named markers" test-section
 
-marker-a: define-marker ;
-marker-b: define-marker ;
+marker-a: make-marker ;
+marker-b: make-marker ;
 marker-a marker-b = f "different named markers not equal" assert=
 
 "Parse-time marker" test-section
@@ -33,20 +33,20 @@ parse-time parse-time = t "parse-time marker identity" assert=
 
 "Attaching markers to definitions" test-section
 
-custom-marker: define-marker ;
+custom-marker: make-marker ;
 my-word: custom-marker [ 42 ] ;
 my-word 42 "word with custom marker" assert=
 
 "Multiple markers on a definition" test-section
 
-marker1: define-marker ;
-marker2: define-marker ;
+marker1: make-marker ;
+marker2: make-marker ;
 multi-marker-word: marker1 marker2 [ 99 ] ;
 multi-marker-word 99 "word with multiple markers" assert=
 
 "Marker with stack effect" test-section
 
-my-marker2: define-marker ;
+my-marker2: make-marker ;
 word-with-effect: my-marker2 ( -- n ) [ 77 ] ;
 word-with-effect 77 "word with marker and stack effect" assert=
 
@@ -63,7 +63,7 @@ wrap-quot [ 5 ] call 5 "parse-time can read quotations" assert=
 "User-defined markers with struct{}" test-section
 
 \ User-defined markers are automatically parse-time, so they work with struct{}
-my-struct-marker: define-marker ;
+my-struct-marker: make-marker ;
 test-struct: my-struct-marker struct{ val } ;
 100 make-test-struct test-struct? t "user marker with struct works" assert=
 100 make-test-struct val>> 100 "struct created correctly" assert=

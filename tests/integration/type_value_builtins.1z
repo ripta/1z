@@ -45,8 +45,6 @@ doc-string inspect "<type:doc-string>" "doc-string type value" assert=
 "Renamed words still work" test-section
 
 42 "{}" >template interpolate "42" ">template still works" assert=
-test-mk: define-marker ;
-test-mk marker? t "define-marker still works" assert=
 test-dp: define-parameter [ 42 ] ;
 test-dp get 42 "define-parameter still works" assert=
 { "a" } { "b" } make-stack-effect-info stack-effect-info? t "stack-effect-info struct exists" assert=

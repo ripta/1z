@@ -88,7 +88,7 @@ pub const self_type_sentinel: value_mod.TypeValue = .{ .name = "self", .descript
 pub const any_type_sentinel: value_mod.TypeValue = .{ .name = "any", .descriptor = null };
 
 pub const primitives = [_]Primitive{
-    .{ .name = "define-marker", .stack_effect = "-- marker", .doc = "Create an anonymous marker value.", .func = nativeMarker },
+    .{ .name = "make-marker", .stack_effect = "-- marker", .doc = "Create an anonymous marker value.", .func = nativeMarker },
     .{ .name = "parse-time", .stack_effect = "-- marker", .doc = "Push the well-known parse-time marker.", .func = nativeParseTimeMarker, .parse_time = true },
     .{ .name = "parse-time-only", .stack_effect = "-- marker", .doc = "Push the well-known parse-time-only marker.", .func = nativeParseTimeOnlyMarker, .parse_time = true },
     .{ .name = "mutable", .stack_effect = "-- marker", .doc = "Push the well-known mutable marker.", .func = nativeMutableMarker, .parse_time = true },

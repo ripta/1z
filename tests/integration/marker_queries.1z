@@ -9,16 +9,16 @@ plain: [ 1 ] ;
 
 "word-markers on words with markers" test-section
 
-test-marker: define-marker ;
+test-marker: make-marker ;
 single-marker-word: test-marker [ 10 ] ;
 "single-marker-word" word-markers #len 1 "single marker count" assert=
 test-marker "single-marker-word" word-markers #first = t "marker identity preserved" assert=
 
 "word-markers with multiple markers" test-section
 
-mk1: define-marker ;
-mk2: define-marker ;
-mk3: define-marker ;
+mk1: make-marker ;
+mk2: make-marker ;
+mk3: make-marker ;
 multi-marker-word: mk1 mk2 mk3 [ 20 ] ;
 "multi-marker-word" word-markers #len 3 "multiple marker count" assert=
 
