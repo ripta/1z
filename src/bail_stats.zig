@@ -12,7 +12,10 @@ pub const BailStats = struct {
     word_bails: if (enabled) std.AutoHashMapUnmanaged(u32, Entry) else void,
     /// Total quotation bails (no word ID available).
     quotation_bails: if (enabled) u64 else void,
-    /// Total jitInterpretedCall invocations (interpreter fallback, not bail).
+    /// Total interpreter-dispatch callback invocations recorded via
+    /// `recordInterpretedCall`. Covers both `jitInterpretedCall` (compound
+    /// fallback) and `jitNativeWordCall` (native dispatch); the field name
+    /// is kept for stability.
     interpreted_calls: if (enabled) u64 else void,
     allocator: if (enabled) std.mem.Allocator else void,
 

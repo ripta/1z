@@ -472,13 +472,16 @@ pub const AotWordDesc = struct {
     input_count: u8,
     output_count: u8,
     word_id: u32,
-    /// Prelude words are available in the AOT runtime dictionary and can
-    /// safely fall back to jitInterpretedCall if codegen fails.
+    /// Prelude words are available in the AOT runtime dictionary. In
+    /// permissive AOT a codegen failure here falls through to
+    /// `jitInterpretedCall`; strict AOT rejects the build via
+    /// `CompoundFallbackRequired` instead.
     is_prelude: bool = false,
-    /// Native words have no compound instructions and must always use
-    /// jitInterpretedCall at runtime. They are included in the resolver
-    /// so that non-prelude words calling them are not rejected, but they
-    /// must not enter compiled_names or be trial-compiled.
+    /// Native words have no compound instructions. At runtime they are
+    /// dispatched through `jitNativeWordCall`, not the interpreter. They
+    /// are included in the resolver so that non-prelude words calling them
+    /// are not rejected, but they must not enter compiled_names or be
+    /// trial-compiled.
     is_native: bool = false,
     /// Address of the native function for native generic words.
     /// Used by the AOT resolver to populate ResolvedWord.native_fn_ptr
@@ -539,7 +542,7 @@ fn isSupportedOp(name: []const u8) bool {
     return false;
 }
 
-/// Struct native ops that need jitInterpretedCall at runtime.
+/// Struct native ops dispatched through `jitNativeWordCall` in AOT mode.
 fn isStructNativeOp(name: []const u8) bool {
     return std.mem.eql(u8, name, "native.make-struct-instance") or
         std.mem.eql(u8, name, "native.struct-instance-destructure") or
@@ -1242,9 +1245,9 @@ fn emitPerOperationFallback(
 
 /// Emit polymorphic binary arithmetic that handles both fixnum and float
 /// operands at runtime via tag-check branching. Non-numeric operands fall
-/// back to the polymorphic native via jitInterpretedCall for just that
-/// operation, then continue compiled execution. The result is written as a
-/// boxed Value at dest_slot.
+/// back to the polymorphic native via `jitNativeWordCall` (the
+/// `per_op_native` fallback category) for just that operation, then continue
+/// compiled execution. The result is written as a boxed Value at dest_slot.
 fn emitPolymorphicBinaryArith(
     state: *CompileState,
     slot_a: usize,
@@ -1771,7 +1774,8 @@ const CompileState = struct {
     aot_mode: bool = false,
     /// Set of compiled word names available in AOT mode. Used to decide whether
     /// a compound word call can be a direct function call or must fall through
-    /// to jitInterpretedCall.
+    /// to `jitInterpretedCall` (permissive AOT only; strict AOT rejects the
+    /// build at any such site).
     aot_compiled_names: ?*const std.StringHashMapUnmanaged(u32) = null,
     /// Prototype ref for 1-arg callbacks in AOT mode: (uintptr_t) -> int32_t.
     aot_proto_1arg: c.ir_ref = c.IR_UNUSED,
@@ -6446,7 +6450,8 @@ pub fn emitProgramC(
     // no visibility into that decision.
     var meta = metadata;
 
-    // Build name->word_id map for compiled words, excluding native words, which must always use jitInterpretedCall
+    // Build name->word_id map for compiled words, excluding native words,
+    // which dispatch through `jitNativeWordCall` rather than direct C calls.
     var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compiled_names.deinit(allocator);
     for (words) |w| {
@@ -6523,7 +6528,9 @@ pub fn emitProgramC(
 
     // 4. Two-pass compilation: first determine which words compile,
     // then re-compile with only the compilable set so that cross-word calls
-    // to uncompilable words use jitInterpretedCall instead of direct calls.
+    // to uncompiled compound callees use `jitInterpretedCall` (permissive
+    // AOT) instead of direct calls; strict AOT rejects the build at any
+    // such site.
 
     // Pass 1a: trial compile to discover the compilable set
     var compilable_names: std.StringHashMapUnmanaged(u32) = .{};
@@ -7000,7 +7007,10 @@ pub fn emitProgramC(
     }
     try out.appendSlice(allocator, "};\n\n");
 
-    // 5b. Word name table (for interpreter fallback)
+    // 5b. Word name table. Read by both `jitInterpretedCall` (compound
+    // fallback in permissive AOT) and `jitNativeWordCall` (native dispatch
+    // and trace-frame attribution), so it is required in every AOT
+    // artifact, not only those that link the interpreter.
     try out.appendSlice(allocator, "static const char *onez_word_names[] = {\n");
     for (0..table_size) |id| {
         var found = false;
@@ -7926,7 +7936,8 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
 
 /// Emit a compound word call in AOT mode. If the target word is in the
 /// compiled word set, emits a direct call by mangled name. Otherwise, falls
-/// through to jitInterpretedCall with the word ID.
+/// through to `jitInterpretedCall` with the word ID (permissive AOT only;
+/// strict AOT fails the build at this site).
 fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord, line: usize) void {
     const ictx = state.ctx;
     if (state.aot_compiled_names) |names| {

@@ -19,10 +19,11 @@ pub const JitEntry = struct {
     /// Captured so compiled code can benefit from type profiles
     /// observed during interpretation.
     pic_snapshot: ?*PicTable = null,
-    /// Per-word PIC for generic dispatch in the jitInterpretedCall
-    /// fallback path. Lazily allocated on first fallback call for a
-    /// generic word. Caches dispatch table lookups so repeated
-    /// fallback calls avoid the full lookup.
+    /// Per-word PIC for generic dispatch consulted on the generic-marker
+    /// paths of both `jitInterpretedCall` (compound fallback) and
+    /// `jitNativeWordCall` (native dispatch). Lazily allocated on first
+    /// call for a generic word. Caches dispatch table lookups so repeated
+    /// calls avoid the full lookup.
     dispatch_pic: ?*PolymorphicCache = null,
 };
 

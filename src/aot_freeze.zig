@@ -100,8 +100,9 @@ pub fn freezeModuleGraphOpts(
 
     // Snapshot prelude word names before loading the entry file. Words
     // that exist now will be available in the AOT runtime dictionary
-    // (which also calls loadPrelude), so codegen failures for these
-    // words are safe -- they can fall back to jitInterpretedCall.
+    // (which also calls loadPrelude). In permissive AOT, codegen failures
+    // for these words can fall through to `jitInterpretedCall`; strict
+    // AOT rejects compound fallback regardless of prelude membership.
     const prelude_frame_count = ctx.local_frames.items.len;
     var prelude_words = std.StringHashMapUnmanaged(void){};
     defer prelude_words.deinit(allocator);
@@ -669,8 +670,10 @@ fn hasGenericMarker(def: WordDefinition) bool {
 /// entries keyed by runtime type. They cannot be compiled directly because
 /// the empty body cannot satisfy a non-trivial declared stack effect, and
 /// even when input_count == output_count the compiled body would silently
-/// no-op rather than dispatching. They must always fall through to
-/// jitInterpretedCall, which then routes through tryDispatchGenericWithPic.
+/// no-op rather than dispatching. They must always fall through to the
+/// dispatch callback -- `jitInterpretedCall` for the compound-uncompiled
+/// case and `jitNativeWordCall` for native generics -- which then routes
+/// through `tryDispatchGenericWithPic`.
 fn isDispatchOnlyGeneric(def: WordDefinition) bool {
     return def.action == .compound and def.action.compound.len == 0 and hasGenericMarker(def);
 }

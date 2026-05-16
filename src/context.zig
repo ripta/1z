@@ -472,9 +472,12 @@ pub const Context = struct {
     /// Debug-only tracker that asserts lock acquisition respects the ordering
     /// hierarchy: context > channel > tz. Heap-allocated by the root context.
     lock_order_tracker: *LockOrderTracker = undefined,
-    /// When false, jitInterpretedCall and jitCallQuotation crash with a
-    /// diagnostic instead of falling back to the interpreter.  Set by
-    /// onez_set_interpreter_fallback in AOT binaries.
+    /// Runtime gate for the permissive AOT fallback path. When false,
+    /// `jitInterpretedCall` and `jitCallQuotation` crash with a diagnostic
+    /// instead of falling back to the interpreter. Set by
+    /// `onez_set_interpreter_fallback` in AOT binaries. Interpreter-free
+    /// binaries do not link `jitInterpretedCall` at all, so this field is
+    /// only consulted in builds where the extern was emitted.
     allow_interpreted_fallback: bool = true,
     /// Controls automatic JIT compilation of word definitions.
     /// When .eager, every word defined via defineWord is automatically
