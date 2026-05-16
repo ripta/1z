@@ -1,0 +1,3 @@
+\ Demonstrates that a literal quotation works in interpreter-free AOT
+\ without needing `>quotation` to construct one from a word name.
+[ drop ] 42 swap call

@@ -2234,6 +2234,11 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                         "Error: 'compile!' in '{s}' is not available in AOT builds; runtime code compilation is incompatible with every AOT artifact class. Run under the interpreter if your program needs 'compile!'.\n",
                         .{feature_use.caller_name},
                     ) catch {};
+                } else if (std.mem.eql(u8, feature_use.feature_name, ">quotation")) {
+                    err_writer.print(
+                        "Error: '>quotation' in '{s}' is not available in interpreter-free AOT; runtime-constructed quotations require dictionary lookup machinery that interpreter-free binaries omit. If the word name is known at compile time, use a literal quotation '[ word-name ]' instead. Otherwise build with --emit-runtime-image to produce a runtime-image AOT binary, or run under the interpreter.\n",
+                        .{feature_use.caller_name},
+                    ) catch {};
                 } else {
                     err_writer.print(
                         "Error: dynamic feature '{s}' in '{s}' is not available in interpreter-free AOT; this feature requires runtime code-loading machinery that interpreter-free binaries omit. Build with --emit-runtime-image to produce a runtime-image AOT binary, or run under the interpreter, if you need '{s}'.\n",
@@ -2308,16 +2313,6 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         if (std.fs.cwd().createFile(output, .{ .truncate = true })) |f| f.close() else |_| {}
 
         return 0;
-    }
-
-    if (freeze_result.warnings.len > 0) {
-        for (freeze_result.warnings) |warning| {
-            err_writer.print(
-                "Warning: AOT build may diverge at runtime: '{s}' in '{s}'\n",
-                .{ warning.feature_name, warning.caller_name },
-            ) catch {};
-        }
-        err_writer.flush() catch {};
     }
 
     var codegen_diagnostics: ir_codegen.CodegenDiagnostics = .{};

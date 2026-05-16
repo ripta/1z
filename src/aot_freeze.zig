@@ -30,7 +30,6 @@ pub const FreezeResult = struct {
     max_word_id: u32,
     max_quotation_id: u32,
     skipped_words: []const []const u8,
-    warnings: []const FreezeFeatureUse,
     entry_instrs: []const Instruction,
 
     pub fn deinit(self: *FreezeResult, allocator: Allocator) void {
@@ -45,7 +44,6 @@ pub const FreezeResult = struct {
         for (self.quotations) |q| allocator.free(q.c_name);
         allocator.free(self.quotations);
         allocator.free(self.skipped_words);
-        allocator.free(self.warnings);
     }
 };
 
@@ -144,7 +142,6 @@ pub fn freezeModuleGraphOpts(
     };
     defer discovered.names.deinit(ctx.quotationAllocator());
     defer discovered.defs.deinit(ctx.quotationAllocator());
-    defer discovered.warning_entries.deinit(ctx.quotationAllocator());
     defer discovered.native_names.deinit(ctx.quotationAllocator());
     defer discovered.native_defs.deinit(ctx.quotationAllocator());
     defer discovered.quotation_bodies.deinit(ctx.quotationAllocator());
@@ -345,7 +342,6 @@ fn executeAndCollectEntry(
 const DiscoveredWords = struct {
     names: std.ArrayListUnmanaged([]const u8),
     defs: std.ArrayListUnmanaged(WordDefinition),
-    warning_entries: std.ArrayListUnmanaged(FreezeFeatureUse),
     native_names: std.ArrayListUnmanaged([]const u8),
     native_defs: std.ArrayListUnmanaged(WordDefinition),
     quotation_bodies: std.ArrayListUnmanaged([]const Instruction),
@@ -368,22 +364,12 @@ fn discoverReachableWords(
     var worklist = std.ArrayListUnmanaged([]const u8){};
     defer worklist.deinit(temp_allocator);
 
-    var warning_seen = std.StringHashMapUnmanaged(void){};
-    defer {
-        var warning_iter = warning_seen.iterator();
-        while (warning_iter.next()) |entry| {
-            temp_allocator.free(entry.key_ptr.*);
-        }
-        warning_seen.deinit(temp_allocator);
-    }
-
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(temp_allocator);
 
     var result = DiscoveredWords{
         .names = .{},
         .defs = .{},
-        .warning_entries = .{},
         .native_names = .{},
         .native_defs = .{},
         .quotation_bodies = .{},
@@ -410,10 +396,9 @@ fn discoverReachableWords(
     }
 
     // Seed worklist from entry instructions
-    collectCallWords(entry_instrs, "__entry__", &worklist, &seen, &result.warning_entries, &warning_seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
+    collectCallWords(entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
         result.names.deinit(temp_allocator);
         result.defs.deinit(temp_allocator);
-        result.warning_entries.deinit(temp_allocator);
         result.native_names.deinit(temp_allocator);
         result.native_defs.deinit(temp_allocator);
         result.quotation_bodies.deinit(temp_allocator);
@@ -441,10 +426,9 @@ fn discoverReachableWords(
                     .compound => |compound_instrs| {
                         try result.names.append(temp_allocator, name);
                         try result.defs.append(temp_allocator, wordDefFromModuleWord(name, mod_word));
-                        collectCallWords(compound_instrs, name, &worklist, &seen, &result.warning_entries, &warning_seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
+                        collectCallWords(compound_instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
                             result.names.deinit(temp_allocator);
                             result.defs.deinit(temp_allocator);
-                            result.warning_entries.deinit(temp_allocator);
                             result.native_names.deinit(temp_allocator);
                             result.native_defs.deinit(temp_allocator);
                             result.quotation_bodies.deinit(temp_allocator);
@@ -474,10 +458,9 @@ fn discoverReachableWords(
         try result.defs.append(temp_allocator, word);
 
         // Discover callees
-        collectCallWords(instrs, name, &worklist, &seen, &result.warning_entries, &warning_seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
+        collectCallWords(instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
             result.names.deinit(temp_allocator);
             result.defs.deinit(temp_allocator);
-            result.warning_entries.deinit(temp_allocator);
             result.native_names.deinit(temp_allocator);
             result.native_defs.deinit(temp_allocator);
             result.quotation_bodies.deinit(temp_allocator);
@@ -495,8 +478,6 @@ fn collectCallWords(
     caller_name: []const u8,
     worklist: *std.ArrayListUnmanaged([]const u8),
     seen: *std.StringHashMapUnmanaged(void),
-    warnings: *std.ArrayListUnmanaged(FreezeFeatureUse),
-    warning_seen: *std.StringHashMapUnmanaged(void),
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
     diagnostics: *FreezeDiagnostics,
@@ -513,9 +494,6 @@ fn collectCallWords(
                     };
                     return error.DisallowedDynamicFeature;
                 }
-                if (!runtime_image and std.mem.eql(u8, name, ">quotation")) {
-                    try addFeatureWarning(caller_name, name, warnings, warning_seen, allocator);
-                }
                 const gop = try seen.getOrPut(allocator, name);
                 if (!gop.found_existing) {
                     try worklist.append(allocator, name);
@@ -530,7 +508,7 @@ fn collectCallWords(
                         if (!qgop.found_existing) {
                             try quotation_bodies.append(allocator, q.instructions);
                         }
-                        try collectCallWords(q.instructions, caller_name, worklist, seen, warnings, warning_seen, quotation_bodies, quotation_seen, diagnostics, runtime_image, allocator);
+                        try collectCallWords(q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, diagnostics, runtime_image, allocator);
                     },
                     else => {},
                 }
@@ -627,9 +605,9 @@ fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *D
 ///
 /// - `compile!` is rejected in every AOT class. Programs that need it
 ///   must run under the interpreter.
-/// - `eval-string`, `load`, `reload`, `load-file` are rejected when the
-///   build is interpreter-free AOT; runtime-image AOT keeps the
-///   interpreter linked and can satisfy them.
+/// - `eval-string`, `load`, `reload`, `load-file`, and `>quotation` are
+///   rejected when the build is interpreter-free AOT; runtime-image AOT
+///   keeps the interpreter linked and can satisfy them.
 ///
 /// These rejections are semantic, not implementation gaps.
 fn isDisallowedDynamicFeature(name: []const u8, runtime_image: bool) bool {
@@ -638,27 +616,8 @@ fn isDisallowedDynamicFeature(name: []const u8, runtime_image: bool) bool {
     return std.mem.eql(u8, name, "eval-string") or
         std.mem.eql(u8, name, "load") or
         std.mem.eql(u8, name, "reload") or
-        std.mem.eql(u8, name, "load-file");
-}
-
-fn addFeatureWarning(
-    caller_name: []const u8,
-    feature_name: []const u8,
-    warnings: *std.ArrayListUnmanaged(FreezeFeatureUse),
-    warning_seen: *std.StringHashMapUnmanaged(void),
-    allocator: Allocator,
-) Allocator.Error!void {
-    const key = try std.fmt.allocPrint(allocator, "{s}\x00{s}", .{ caller_name, feature_name });
-    errdefer allocator.free(key);
-    const gop = try warning_seen.getOrPut(allocator, key);
-    if (gop.found_existing) {
-        allocator.free(key);
-        return;
-    }
-    try warnings.append(allocator, .{
-        .caller_name = caller_name,
-        .feature_name = feature_name,
-    });
+        std.mem.eql(u8, name, "load-file") or
+        std.mem.eql(u8, name, ">quotation");
 }
 
 fn hasNeverReturnsMarker(def: WordDefinition) bool {
@@ -874,7 +833,6 @@ fn buildAotDescs(
         .max_word_id = max_word_id,
         .max_quotation_id = max_quotation_id,
         .skipped_words = try skipped.toOwnedSlice(allocator),
-        .warnings = try allocator.dupe(FreezeFeatureUse, discovered.warning_entries.items),
         .entry_instrs = try allocator.dupe(Instruction, entry_instrs),
     };
 }
@@ -895,26 +853,17 @@ test "collectCallWords extracts call_word names from instructions" {
     defer seen.deinit(allocator);
     var worklist = std.ArrayListUnmanaged([]const u8){};
     defer worklist.deinit(allocator);
-    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
-    defer warnings.deinit(allocator);
-    var warning_seen = std.StringHashMapUnmanaged(void){};
-    defer {
-        var iter = warning_seen.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        warning_seen.deinit(allocator);
-    }
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, "__entry__", &worklist, &seen, &warnings, &warning_seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
 
     try testing.expectEqual(@as(usize, 2), worklist.items.len);
     try testing.expect(seen.contains("double"));
     try testing.expect(seen.contains("drop"));
-    try testing.expectEqual(@as(usize, 0), warnings.items.len);
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
 }
 
@@ -930,7 +879,6 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
     var discovered = DiscoveredWords{
         .names = .{},
         .defs = .{},
-        .warning_entries = .{},
         .native_names = .{},
         .native_defs = .{},
         .quotation_bodies = .{},
@@ -963,7 +911,6 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
     try testing.expectEqual(@as(u32, 1), result.max_word_id);
     try testing.expectEqual(@as(usize, 0), result.quotations.len);
     try testing.expectEqual(@as(usize, 1), result.skipped_words.len);
-    try testing.expectEqual(@as(usize, 0), result.warnings.len);
     try testing.expect(std.mem.eql(u8, result.skipped_words[0], "bar"));
 }
 
@@ -999,7 +946,6 @@ test "freezeModuleGraphOpts cleanup releases pic snapshots when stack effects ar
     var discovered = DiscoveredWords{
         .names = .{},
         .defs = .{},
-        .warning_entries = .{},
         .native_names = .{},
         .native_defs = .{},
         .quotation_bodies = .{},
@@ -1054,7 +1000,6 @@ test "buildAotDescs includes native words with is_prelude and empty instructions
     var discovered = DiscoveredWords{
         .names = .{},
         .defs = .{},
-        .warning_entries = .{},
         .native_names = .{},
         .native_defs = .{},
         .quotation_bodies = .{},
@@ -1098,38 +1043,8 @@ test "buildAotDescs includes native words with is_prelude and empty instructions
     try testing.expectEqual(@as(u8, 1), native_word.output_count);
 }
 
-test "collectCallWords records >quotation warning once per caller" {
-    const allocator = testing.allocator;
-    const instrs = &[_]Instruction{
-        .{ .op = .{ .call_word = ">quotation" }, .line = 1 },
-        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &[_]Instruction{
-            .{ .op = .{ .call_word = ">quotation" }, .line = 2 },
-        } } } }, .line = 1 },
-    };
-
-    var seen = std.StringHashMapUnmanaged(void){};
-    defer seen.deinit(allocator);
-    var worklist = std.ArrayListUnmanaged([]const u8){};
-    defer worklist.deinit(allocator);
-    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
-    defer warnings.deinit(allocator);
-    var warning_seen = std.StringHashMapUnmanaged(void){};
-    defer {
-        var iter = warning_seen.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        warning_seen.deinit(allocator);
-    }
-    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
-    defer quotation_bodies.deinit(allocator);
-    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
-    defer quotation_seen.deinit(allocator);
-    var diagnostics: FreezeDiagnostics = .{};
-
-    try collectCallWords(instrs, "foo", &worklist, &seen, &warnings, &warning_seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
-
-    try testing.expectEqual(@as(usize, 1), warnings.items.len);
-    try testing.expectEqualStrings("foo", warnings.items[0].caller_name);
-    try testing.expectEqualStrings(">quotation", warnings.items[0].feature_name);
+test "collectCallWords rejects '>quotation' in interpreter-free mode" {
+    try expectInterpreterFreeRejection(">quotation", "make-word");
 }
 
 test "collectCallWords rejects disallowed dynamic features with caller" {
@@ -1142,14 +1057,6 @@ test "collectCallWords rejects disallowed dynamic features with caller" {
     defer seen.deinit(allocator);
     var worklist = std.ArrayListUnmanaged([]const u8){};
     defer worklist.deinit(allocator);
-    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
-    defer warnings.deinit(allocator);
-    var warning_seen = std.StringHashMapUnmanaged(void){};
-    defer {
-        var iter = warning_seen.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        warning_seen.deinit(allocator);
-    }
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
@@ -1161,8 +1068,6 @@ test "collectCallWords rejects disallowed dynamic features with caller" {
         "__entry__",
         &worklist,
         &seen,
-        &warnings,
-        &warning_seen,
         &quotation_bodies,
         &quotation_seen,
         &diagnostics,
@@ -1174,7 +1079,7 @@ test "collectCallWords rejects disallowed dynamic features with caller" {
     try testing.expectEqualStrings("eval-string", diagnostics.fatal_dynamic_feature.?.feature_name);
 }
 
-test "collectCallWords in runtime-image mode permits eval-string and load and skips >quotation warning" {
+test "collectCallWords in runtime-image mode permits eval-string, load, and >quotation" {
     const allocator = testing.allocator;
     const instrs = &[_]Instruction{
         .{ .op = .{ .call_word = "eval-string" }, .line = 1 },
@@ -1188,24 +1093,15 @@ test "collectCallWords in runtime-image mode permits eval-string and load and sk
     defer seen.deinit(allocator);
     var worklist = std.ArrayListUnmanaged([]const u8){};
     defer worklist.deinit(allocator);
-    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
-    defer warnings.deinit(allocator);
-    var warning_seen = std.StringHashMapUnmanaged(void){};
-    defer {
-        var iter = warning_seen.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        warning_seen.deinit(allocator);
-    }
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, "__entry__", &worklist, &seen, &warnings, &warning_seen, &quotation_bodies, &quotation_seen, &diagnostics, true, allocator);
+    try collectCallWords(instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, true, allocator);
 
     try testing.expectEqual(@as(usize, 5), worklist.items.len);
-    try testing.expectEqual(@as(usize, 0), warnings.items.len);
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
 }
 
@@ -1219,14 +1115,6 @@ test "collectCallWords in runtime-image mode still rejects compile!" {
     defer seen.deinit(allocator);
     var worklist = std.ArrayListUnmanaged([]const u8){};
     defer worklist.deinit(allocator);
-    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
-    defer warnings.deinit(allocator);
-    var warning_seen = std.StringHashMapUnmanaged(void){};
-    defer {
-        var iter = warning_seen.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        warning_seen.deinit(allocator);
-    }
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
@@ -1238,8 +1126,6 @@ test "collectCallWords in runtime-image mode still rejects compile!" {
         "do-compile",
         &worklist,
         &seen,
-        &warnings,
-        &warning_seen,
         &quotation_bodies,
         &quotation_seen,
         &diagnostics,
@@ -1277,14 +1163,6 @@ fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8) !void
     defer seen.deinit(allocator);
     var worklist = std.ArrayListUnmanaged([]const u8){};
     defer worklist.deinit(allocator);
-    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
-    defer warnings.deinit(allocator);
-    var warning_seen = std.StringHashMapUnmanaged(void){};
-    defer {
-        var iter = warning_seen.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        warning_seen.deinit(allocator);
-    }
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
@@ -1296,8 +1174,6 @@ fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8) !void
         caller,
         &worklist,
         &seen,
-        &warnings,
-        &warning_seen,
         &quotation_bodies,
         &quotation_seen,
         &diagnostics,
@@ -1323,21 +1199,13 @@ test "collectCallWords discovers quotation bodies" {
     defer seen.deinit(allocator);
     var worklist = std.ArrayListUnmanaged([]const u8){};
     defer worklist.deinit(allocator);
-    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
-    defer warnings.deinit(allocator);
-    var warning_seen = std.StringHashMapUnmanaged(void){};
-    defer {
-        var iter = warning_seen.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        warning_seen.deinit(allocator);
-    }
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, "__entry__", &worklist, &seen, &warnings, &warning_seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
     try testing.expectEqual(inner_body.ptr, quotation_bodies.items[0].ptr);
@@ -1361,21 +1229,13 @@ test "collectCallWords discovers nested quotations" {
     defer seen.deinit(allocator);
     var worklist = std.ArrayListUnmanaged([]const u8){};
     defer worklist.deinit(allocator);
-    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
-    defer warnings.deinit(allocator);
-    var warning_seen = std.StringHashMapUnmanaged(void){};
-    defer {
-        var iter = warning_seen.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        warning_seen.deinit(allocator);
-    }
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, "__entry__", &worklist, &seen, &warnings, &warning_seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
 
     // Both middle and innermost quotations discovered
     try testing.expectEqual(@as(usize, 2), quotation_bodies.items.len);
@@ -1398,21 +1258,13 @@ test "collectCallWords deduplicates quotations by pointer" {
     defer seen.deinit(allocator);
     var worklist = std.ArrayListUnmanaged([]const u8){};
     defer worklist.deinit(allocator);
-    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
-    defer warnings.deinit(allocator);
-    var warning_seen = std.StringHashMapUnmanaged(void){};
-    defer {
-        var iter = warning_seen.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        warning_seen.deinit(allocator);
-    }
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, "__entry__", &worklist, &seen, &warnings, &warning_seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
 
     // Only recorded once despite appearing twice
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
@@ -1436,7 +1288,6 @@ test "buildAotDescs assigns sequential quotation IDs" {
     var discovered = DiscoveredWords{
         .names = .{},
         .defs = .{},
-        .warning_entries = .{},
         .native_names = .{},
         .native_defs = .{},
         .quotation_bodies = .{},
@@ -1505,7 +1356,6 @@ test "buildAotDescs infers effect for quotation calling discovered word" {
     var discovered = DiscoveredWords{
         .names = .{},
         .defs = .{},
-        .warning_entries = .{},
         .native_names = .{},
         .native_defs = .{},
         .quotation_bodies = .{},
@@ -1548,7 +1398,6 @@ test "buildAotDescs returns null effect for unresolvable quotation" {
     var discovered = DiscoveredWords{
         .names = .{},
         .defs = .{},
-        .warning_entries = .{},
         .native_names = .{},
         .native_defs = .{},
         .quotation_bodies = .{},
@@ -1581,7 +1430,6 @@ test "buildAotDescs infers effect for push-only quotation" {
     var discovered = DiscoveredWords{
         .names = .{},
         .defs = .{},
-        .warning_entries = .{},
         .native_names = .{},
         .native_defs = .{},
         .quotation_bodies = .{},
