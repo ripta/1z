@@ -2,6 +2,7 @@ kind: aot-binary
 target: <target>
 build-mode: <build-mode>
 interpreter: linked=yes, fallback=true, locked=yes
+aot-callbacks: jit-interpreted-call=no
 runtime-image: present=no
 1z-version: <version>
 prelude-hash: <prelude-hash>

@@ -1,2 +1,3 @@
 interpreter: not linked (auto: all reachable code compiled)
+jitInterpretedCall: not linked
 runtime-image: words=8 stack-effects=9 typevalue-slots=3 blob-present=false

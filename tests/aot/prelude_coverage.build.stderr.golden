@@ -186,3 +186,4 @@ Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 interpreter: linked (auto: compiled code calls interpreter)
+jitInterpretedCall: linked

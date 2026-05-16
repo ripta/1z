@@ -1,0 +1,2 @@
+--interpreter-fallback=true
+--compile-all-prelude

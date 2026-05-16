@@ -1,3 +1,4 @@
 AOT interpreter fallbacks: 1 total (quotation=1)
   static-check: jitInterpretedCall=0/0 jitNativeWordCall=0/0 jitCallQuotation=1/1 (matches build-time inventory)
 interpreter: linked (auto: compiled code calls interpreter)
+jitInterpretedCall: not linked

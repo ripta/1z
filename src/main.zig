@@ -1750,6 +1750,8 @@ fn printInterpreterLinkSummary(
             "auto: compiled code calls interpreter",
     };
     err_writer.print("interpreter: {s} ({s})\n", .{ status, reason }) catch {};
+    const jic_status: []const u8 = if (diagnostics.jit_interpreted_call_linked) "linked" else "not linked";
+    err_writer.print("jitInterpretedCall: {s}\n", .{jic_status}) catch {};
     err_writer.flush() catch {};
 }
 
@@ -1917,6 +1919,25 @@ fn printCompoundFallbackRequiredError(
             err_writer.writeAll("      callee uncompiled: NC.?: reason not categorized\n") catch {};
         }
     }
+}
+
+/// Render the `JitInterpretedCallLeaked` build error. The classifier
+/// said no `compound_uncompiled` site was emitted, so the binary should
+/// have zero `jitInterpretedCall(` references; the assembled C disagrees.
+/// The static cross-check counts give the user enough to spot the
+/// mismatch, and the message names the most likely cause so the codegen
+/// path can be fixed.
+fn printJitInterpretedCallLeakedError(
+    report: *const ir_codegen.AotFallbackReport,
+    err_writer: anytype,
+) void {
+    const observed = report.static_check.observed_jit_interpreted_calls;
+    err_writer.print(
+        "Error: generated AOT C contains {d} jitInterpretedCall reference{s} " ++
+            "but no compound-fallback sites were recorded; a codegen path emitted " ++
+            "a call without calling noteAotFallbackEmission.\n",
+        .{ observed, if (observed == 1) @as([]const u8, "") else "s" },
+    ) catch {};
 }
 
 fn handleHighlight(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
@@ -2387,6 +2408,11 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 &codegen_diagnostics.aot_fallback_report,
                 err_writer,
             );
+        } else if (err == error.JitInterpretedCallLeaked) {
+            printJitInterpretedCallLeakedError(
+                &codegen_diagnostics.aot_fallback_report,
+                err_writer,
+            );
         } else {
             err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
         }
@@ -2675,6 +2701,11 @@ const AotInspectFields = struct {
     build_mode: []const u8,
     onez_version: []const u8,
     prelude_hash: []const u8,
+    // Per-callback linkage breakdown. Optional so binaries built
+    // before the field existed parse cleanly; absent values are
+    // omitted from the rendered report rather than printed as
+    // "unknown."
+    jit_interpreted_call_linked: ?[]const u8 = null,
     // Runtime-image fields are populated only when the binary
     // embeds a runtime program image; absent otherwise.
     runtime_image_format_version: ?[]const u8 = null,
@@ -2721,6 +2752,7 @@ fn parseAotMetadata(
     var build_mode: ?[]const u8 = null;
     var onez_version: ?[]const u8 = null;
     var prelude_hash: ?[]const u8 = null;
+    var jit_interpreted_call_linked: ?[]const u8 = null;
     var runtime_image_format_version: ?[]const u8 = null;
     var runtime_image_blob_present: ?[]const u8 = null;
     var runtime_image_word_count: ?[]const u8 = null;
@@ -2739,6 +2771,8 @@ fn parseAotMetadata(
             schema_version = value;
         } else if (std.mem.eql(u8, key, "interpreter-linked")) {
             interpreter_linked = value;
+        } else if (std.mem.eql(u8, key, "jit-interpreted-call-linked")) {
+            jit_interpreted_call_linked = value;
         } else if (std.mem.eql(u8, key, "interpreter-fallback-mode")) {
             interpreter_fallback_mode = value;
         } else if (std.mem.eql(u8, key, "interpreter-setting-locked")) {
@@ -2808,6 +2842,7 @@ fn parseAotMetadata(
         .build_mode = build_mode.?,
         .onez_version = onez_version.?,
         .prelude_hash = prelude_hash.?,
+        .jit_interpreted_call_linked = jit_interpreted_call_linked,
         .runtime_image_format_version = runtime_image_format_version,
         .runtime_image_blob_present = runtime_image_blob_present,
         .runtime_image_word_count = runtime_image_word_count,
@@ -2911,6 +2946,9 @@ fn writeInspectReport(w: anytype, fields: AotInspectFields) !void {
         "interpreter: linked={s}, fallback={s}, locked={s}\n",
         .{ fields.interpreter_linked, fields.interpreter_fallback_mode, fields.interpreter_setting_locked },
     );
+    if (fields.jit_interpreted_call_linked) |v| {
+        try w.print("aot-callbacks: jit-interpreted-call={s}\n", .{v});
+    }
     if (std.mem.eql(u8, fields.runtime_image_present, "yes") and
         fields.runtime_image_format_version != null and
         fields.runtime_image_blob_present != null and

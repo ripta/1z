@@ -56,6 +56,13 @@ pub const IrCodegenError = error{
     UncompiledQuotations,
     InterpreterRequiredButLocked,
     CompoundFallbackRequired,
+    /// The generated C source contains `jitInterpretedCall(` references
+    /// even though the build classified the binary as not linking the
+    /// interpreter (no `compound_uncompiled` fallback sites). This is a
+    /// codegen-leak diagnostic: it means a path emitted a call without
+    /// going through `noteAotFallbackEmission`, so the inventory and the
+    /// final C disagree.
+    JitInterpretedCallLeaked,
     OutOfMemory,
 };
 
@@ -327,19 +334,25 @@ fn countOccurrences(haystack: []const u8, needle: []const u8) u32 {
 }
 
 /// Cross-check the build-time fallback inventory against the assembled C
-/// source. The `extern` declarations of `jitInterpretedCall(...)`,
-/// `jitNativeWordCall(...)`, and `jitCallQuotation(...)` are emitted
-/// unconditionally for every AOT program, so the call-site count is the
-/// raw match count minus one for each callback when at least one
-/// occurrence appears.
+/// source. The `extern` declarations of `jitNativeWordCall(...)` and
+/// `jitCallQuotation(...)` are emitted unconditionally, so each of their
+/// observed call-site counts is the raw match count minus one when at
+/// least one occurrence appears. The `jitInterpretedCall(...)` extern is
+/// only emitted when at least one `compound_uncompiled` site needs it, so
+/// the caller passes `jit_interpreted_call_extern_emitted` to indicate
+/// whether the raw count needs the same minus-one adjustment.
 pub fn verifyAotFallbackInventory(
     source: []const u8,
     report: *const AotFallbackReport,
+    jit_interpreted_call_extern_emitted: bool,
 ) AotFallbackStaticCheck {
     const raw_jic = countOccurrences(source, "jitInterpretedCall(");
     const raw_jnwc = countOccurrences(source, "jitNativeWordCall(");
     const raw_jcq = countOccurrences(source, "jitCallQuotation(");
-    const observed_jic = if (raw_jic > 0) raw_jic - 1 else 0;
+    const observed_jic = if (jit_interpreted_call_extern_emitted)
+        (if (raw_jic > 0) raw_jic - 1 else 0)
+    else
+        raw_jic;
     const observed_jnwc = if (raw_jnwc > 0) raw_jnwc - 1 else 0;
     const observed_jcq = if (raw_jcq > 0) raw_jcq - 1 else 0;
 
@@ -415,6 +428,14 @@ pub const CodegenDiagnostics = struct {
     pic_stats: PicStats = .{},
     resolved_interpreter_fallback: ?InterpreterFallbackMode = null,
     has_interpreter_callbacks: bool = false,
+    /// Whether the generated C declares and references `jitInterpretedCall`.
+    /// True iff any `compound_uncompiled` fallback site was emitted, since
+    /// that is the only category that targets `jitInterpretedCall` after
+    /// native and per-op-native callbacks were redirected to
+    /// `jitNativeWordCall`. Drives the conditional extern emission, the
+    /// build-summary line, and the `jit-interpreted-call-linked` metadata
+    /// field surfaced by `1z inspect`.
+    jit_interpreted_call_linked: bool = false,
     /// Populated when `emit_runtime_image=true`. Drives the
     /// `runtime-image-*` metadata fields and lets tests confirm the
     /// emission wiring without inspecting the generated C source.
@@ -6369,6 +6390,11 @@ pub const AotMetadata = struct {
     /// Caller hands in `false`; `emitProgramC` flips it to `true` when
     /// a runtime image is actually emitted into the binary.
     runtime_image_present: bool,
+    /// Caller hands in `false`; `emitProgramC` flips it to `true` when
+    /// the assembled C actually emits a `jitInterpretedCall` extern and
+    /// at least one call site. Drives the `jit-interpreted-call-linked`
+    /// inspector field.
+    jit_interpreted_call_linked: bool = false,
     /// e.g. "aarch64-macos". Caller-owned slice; lifetime must outlive
     /// the call to emitProgramC.
     target_triple: []const u8,
@@ -6439,45 +6465,6 @@ pub fn emitProgramC(
         \\
         \\
     );
-
-    // 2. Callback extern declarations -- emit all unconditionally since the
-    // two-pass compilation may introduce interpreter fallback calls that
-    // weren't predicted by the pre-scan.
-    try out.appendSlice(allocator, "extern int32_t jitSafepoint(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitRecover(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitCleanup(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitGet(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitWithParameter(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitIteratorOp(uintptr_t ctx, uintptr_t opcode);\n");
-    try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
-    try out.appendSlice(allocator, "extern int32_t jitPicTopTagsMatch(uintptr_t ctx, uintptr_t tag_a, uintptr_t tag_b);\n");
-    try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
-    try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
-    try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
-    try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitEnsureStackCapacity(uintptr_t jit_ctx, uintptr_t needed);\n");
-    try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
-    try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitCallCodePtr(uintptr_t jit_ctx, uintptr_t code_ptr);\n");
-    try out.appendSlice(allocator, "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitOverflowError(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n");
-    try out.appendSlice(allocator, "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t line);\n");
-    try out.appendSlice(allocator, "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t line);\n");
-    try out.appendSlice(allocator, "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id);\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_string(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushString(ctx, (uintptr_t)str, len); }\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_symbol(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushSymbol(ctx, (uintptr_t)str, len); }\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest, quotation_id); }\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushWordLiteral(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_word_literal(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushWordLiteral(ctx, (uintptr_t)name, len); }\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushStructType(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_struct_type(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushStructType(ctx, (uintptr_t)name, len); }\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushArray(uintptr_t ctx, uintptr_t data_ptr, uintptr_t data_len);\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_array(uintptr_t ctx, const unsigned char *data, uintptr_t len) { return jitPushArray(ctx, (uintptr_t)data, len); }\n");
 
     // Runtime entry point externs
     try out.appendSlice(allocator,
@@ -6741,6 +6728,17 @@ pub fn emitProgramC(
 
     diagnostics.aot_fallback_report = try aot_fallback_builder.snapshot(allocator);
 
+    // Decide jitInterpretedCall linkage from the finalized Pass 2 report.
+    // The flag has to be available before the conditional callback-extern
+    // emission below; the strict-mode build errors that depend on the
+    // same totals still run later, after the full C source is assembled,
+    // so that quotation-fallback warnings and the static cross-check are
+    // populated and visible alongside the diagnostic.
+    const jit_interpreted_call_linked =
+        diagnostics.aot_fallback_report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)] > 0;
+    diagnostics.jit_interpreted_call_linked = jit_interpreted_call_linked;
+    meta.jit_interpreted_call_linked = jit_interpreted_call_linked;
+
     // Collect quotation fallback warnings for all words with stack effects.
     {
         var fallbacks: std.ArrayListUnmanaged(QuotationFallbackWarning) = .{};
@@ -6900,6 +6898,51 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, "\n");
     }
 
+    // Callback extern declarations. Emitted after the linkage decision
+    // is known so the `jitInterpretedCall` declaration is omitted from
+    // binaries that have no `compound_uncompiled` fallback site and
+    // therefore no call site to declare. Every other callback stays
+    // unconditional because compiled bodies may legitimately reference
+    // them in all artifact classes.
+    if (jit_interpreted_call_linked) {
+        try out.appendSlice(allocator, "extern int32_t jitInterpretedCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
+    }
+    try out.appendSlice(allocator, "extern int32_t jitSafepoint(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitRecover(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitCleanup(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitGet(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitWithParameter(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitIteratorOp(uintptr_t ctx, uintptr_t opcode);\n");
+    try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPicTopTagsMatch(uintptr_t ctx, uintptr_t tag_a, uintptr_t tag_b);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
+    try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitEnsureStackCapacity(uintptr_t jit_ctx, uintptr_t needed);\n");
+    try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitCallCodePtr(uintptr_t jit_ctx, uintptr_t code_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitOverflowError(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t line);\n");
+    try out.appendSlice(allocator, "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id);\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_string(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushString(ctx, (uintptr_t)str, len); }\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_symbol(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushSymbol(ctx, (uintptr_t)str, len); }\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest, quotation_id); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushWordLiteral(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_word_literal(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushWordLiteral(ctx, (uintptr_t)name, len); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushStructType(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_struct_type(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushStructType(ctx, (uintptr_t)name, len); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushArray(uintptr_t ctx, uintptr_t data_ptr, uintptr_t data_len);\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_array(uintptr_t ctx, const unsigned char *data, uintptr_t len) { return jitPushArray(ctx, (uintptr_t)data, len); }\n");
+    try out.appendSlice(allocator, "\n");
+
     // 4a. Forward declarations (only for successfully compiled words)
     for (words) |w| {
         if (!actually_compiled.contains(w.word_id)) continue;
@@ -7046,14 +7089,17 @@ pub fn emitProgramC(
     const interpreter_callbacks_emitted = aot_fallback_emit_count > 0;
 
     // Static cross-check: independently scan the assembled C source for
-    // `jitInterpretedCall(` and `jitCallQuotation(` call sites and confirm
-    // the count agrees with what the build-time inventory recorded. Run
-    // it after compiled bodies are appended so the call sites the bodies
-    // contain are visible, and before the locked-fallback return so that
-    // the diagnostic is available on both the success path and the
-    // build-error path.
+    // `jitInterpretedCall(`, `jitNativeWordCall(`, and `jitCallQuotation(`
+    // call sites and confirm the count agrees with what the build-time
+    // inventory recorded. Run it after compiled bodies are appended so
+    // the call sites the bodies contain are visible, and before the
+    // locked-fallback return so that the diagnostic is available on
+    // both the success path and the build-error path. The
+    // `jit_interpreted_call_linked` flag controls whether the cross-check
+    // expects an `extern` declaration in the source as part of the raw
+    // `jitInterpretedCall(` count.
     diagnostics.aot_fallback_report.static_check =
-        verifyAotFallbackInventory(out.items, &diagnostics.aot_fallback_report);
+        verifyAotFallbackInventory(out.items, &diagnostics.aot_fallback_report, jit_interpreted_call_linked);
 
     // Strict AOT cannot tolerate compound-word fallback to the interpreter:
     // a compiled caller reaching `jitInterpretedCall` for an uncompiled
@@ -7062,9 +7108,7 @@ pub fn emitProgramC(
     // `NotCompilableReason` so the build report names the punch list to
     // fix. Fires regardless of `--lock-interpreter-setting`; the lock gate
     // below still covers the residual native / quotation cases.
-    if (interpreter_fallback == .false and
-        diagnostics.aot_fallback_report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)] > 0)
-    {
+    if (interpreter_fallback == .false and jit_interpreted_call_linked) {
         return IrCodegenError.CompoundFallbackRequired;
     }
 
@@ -7074,6 +7118,18 @@ pub fn emitProgramC(
     // allow_interpreted_fallback.
     if (interpreter_fallback == .false and lock_interpreter_setting and interpreter_callbacks_emitted) {
         return IrCodegenError.InterpreterRequiredButLocked;
+    }
+
+    // Assertion: if the build classified the binary as not needing
+    // `jitInterpretedCall`, the assembled C source must contain zero
+    // `jitInterpretedCall(` call sites. A non-zero count here means a
+    // codegen path emitted a call without recording a
+    // `compound_uncompiled` fallback site through `noteAotFallbackEmission`,
+    // and the inventory and the final C disagree.
+    if (!jit_interpreted_call_linked and
+        diagnostics.aot_fallback_report.static_check.observed_jit_interpreted_calls > 0)
+    {
+        return IrCodegenError.JitInterpretedCallLeaked;
     }
 
     // Emit the interpreter-linked sentinel as a non-static global. The linker
@@ -7244,6 +7300,7 @@ fn emitAotMetadata(
         .auto => "auto",
     };
     const yes_no_interp_linked: []const u8 = if (interpreter_linked) "yes" else "no";
+    const yes_no_jic_linked: []const u8 = if (meta.jit_interpreted_call_linked) "yes" else "no";
     const yes_no_locked: []const u8 = if (meta.interpreter_setting_locked) "yes" else "no";
     const yes_no_runtime_image: []const u8 = if (meta.runtime_image_present) "yes" else "no";
 
@@ -7252,6 +7309,9 @@ fn emitAotMetadata(
     try out.appendSlice(allocator, "    \"schema-version=1\\n\"\n");
     try out.appendSlice(allocator, "    \"interpreter-linked=");
     try out.appendSlice(allocator, yes_no_interp_linked);
+    try out.appendSlice(allocator, "\\n\"\n");
+    try out.appendSlice(allocator, "    \"jit-interpreted-call-linked=");
+    try out.appendSlice(allocator, yes_no_jic_linked);
     try out.appendSlice(allocator, "\\n\"\n");
     try out.appendSlice(allocator, "    \"interpreter-fallback-mode=");
     try out.appendSlice(allocator, fallback_str);
@@ -12264,7 +12324,7 @@ test "verifyAotFallbackInventory matches when source agrees with builder" {
     report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)] = 1;
     report.totals[@intFromEnum(AotFallbackCategory.quotation)] = 1;
 
-    const check = verifyAotFallbackInventory(source, &report);
+    const check = verifyAotFallbackInventory(source, &report, true);
     try testing.expect(check.populated);
     try testing.expect(check.matches());
     try testing.expectEqual(@as(u32, 1), check.expected_jit_interpreted_calls);
@@ -12287,7 +12347,7 @@ test "verifyAotFallbackInventory flags mismatch when builder undercounts" {
     var report: AotFallbackReport = .{};
     report.totals[@intFromEnum(AotFallbackCategory.native)] = 2;
 
-    const check = verifyAotFallbackInventory(source, &report);
+    const check = verifyAotFallbackInventory(source, &report, true);
     try testing.expect(check.populated);
     try testing.expect(!check.matches());
     try testing.expectEqual(@as(u32, 0), check.expected_jit_interpreted_calls);
@@ -12304,9 +12364,23 @@ test "verifyAotFallbackInventory ignores absent callbacks" {
 
     var report: AotFallbackReport = .{};
 
-    const check = verifyAotFallbackInventory(source, &report);
+    const check = verifyAotFallbackInventory(source, &report, false);
     try testing.expect(check.matches());
     try testing.expectEqual(@as(u32, 0), check.observed_jit_interpreted_calls);
     try testing.expectEqual(@as(u32, 0), check.observed_jit_native_word_calls);
     try testing.expectEqual(@as(u32, 0), check.observed_jit_call_quotation);
+}
+
+test "verifyAotFallbackInventory counts call sites without an extern" {
+    // Interpreter-free build dropped the extern declaration but a codegen
+    // path leaked a call site. The raw count is the call-site count
+    // exactly; no minus-one adjustment.
+    const source = "int32_t f(void) { jitInterpretedCall(0,1,2); return 0; }\n";
+
+    var report: AotFallbackReport = .{};
+
+    const check = verifyAotFallbackInventory(source, &report, false);
+    try testing.expect(check.populated);
+    try testing.expectEqual(@as(u32, 1), check.observed_jit_interpreted_calls);
+    try testing.expectEqual(@as(u32, 0), check.expected_jit_interpreted_calls);
 }

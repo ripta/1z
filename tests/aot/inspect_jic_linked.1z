@@ -1,0 +1,7 @@
+\ Permissive AOT build (--interpreter-fallback=true) plus
+\ --compile-all-prelude forces some prelude bodies into the compiled set
+\ even though their callees are uncompilable, producing
+\ `compound_uncompiled` fallback sites. The binary therefore needs
+\ `jitInterpretedCall`, which `1z inspect` should surface as
+\ `jit-interpreted-call=yes`.
+1 1 + drop
