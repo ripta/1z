@@ -24,9 +24,9 @@ const popQuotation = helpers.popQuotation;
 const popBoolean = helpers.popBoolean;
 const popSymbol = helpers.popSymbol;
 
-/// Check if a value is a type descriptor, which is a hash or mutable-map with a `define:` quotation.
+/// Check if a value is a definition descriptor, which is a hash or mutable-map with a `define:` quotation.
 /// Used by `;` to recognize type-defining syntaxes like `struct{ ... }` or `virtual{ ... }`.
-fn isTypeDescriptor(val: Value) bool {
+fn isDefinitionDescriptor(val: Value) bool {
     const define_val_opt: ?Value = switch (val) {
         .hash => |h| h.get("define"),
         .mutable_map => |m| m.get("define"),
@@ -43,7 +43,7 @@ fn isTypeDescriptor(val: Value) bool {
     return false;
 }
 
-/// Get the underlying map from a type descriptor
+/// Get the underlying map from a definition descriptor
 fn getDescriptorMap(val: Value) ?*value_mod.MutableMap {
     return switch (val) {
         .hash => |h| h,
@@ -339,9 +339,9 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
         },
 
         else => {
-            if (isTypeDescriptor(top_val)) {
+            if (isDefinitionDescriptor(top_val)) {
                 const desc_map = getDescriptorMap(top_val) orelse {
-                    helpers.setErrorContext(ctx, "type descriptor has no accessible map", .{});
+                    helpers.setErrorContext(ctx, "definition descriptor has no accessible map", .{});
                     return error.TypeMismatch;
                 };
 
@@ -384,7 +384,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 const define_quot = switch (define_val) {
                     .quotation => |q| q,
                     else => {
-                        helpers.setTypeMismatchError(ctx, "quotation for type descriptor 'define' field", define_val);
+                        helpers.setTypeMismatchError(ctx, "quotation for definition descriptor 'define' field", define_val);
                         return error.TypeMismatch;
                     },
                 };
