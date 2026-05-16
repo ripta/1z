@@ -54,6 +54,7 @@ pub const FreezeFeatureUse = struct {
 
 pub const FreezeDiagnostics = struct {
     fatal_dynamic_feature: ?FreezeFeatureUse = null,
+    fatal_native_interpreter_dependency: ?FreezeFeatureUse = null,
     missing_stack_effects: []const []const u8 = &.{},
 };
 
@@ -63,6 +64,7 @@ pub const FreezeError = error{
     ExecutionFailed,
     OutOfMemory,
     DisallowedDynamicFeature,
+    DisallowedNativeInterpreterDependency,
     MissingStackEffects,
 };
 
@@ -138,6 +140,7 @@ pub fn freezeModuleGraphOpts(
         return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             error.DisallowedDynamicFeature => error.DisallowedDynamicFeature,
+            error.DisallowedNativeInterpreterDependency => error.DisallowedNativeInterpreterDependency,
         };
     };
     defer discovered.names.deinit(ctx.quotationAllocator());
@@ -205,6 +208,15 @@ pub fn freezeModuleGraphOpts(
                     .call_word => |call_name| {
                         if (qual_seen.contains(call_name)) continue;
                         try qual_seen.put(temp_allocator, call_name, {});
+                        if (!options.runtime_image and isInterpreterDependentNative(ctx, call_name)) {
+                            diagnostics.fatal_native_interpreter_dependency = .{
+                                .caller_name = def.name,
+                                .feature_name = call_name,
+                            };
+                            ctx.popPragmaFrame();
+                            ctx.popLocalFrame();
+                            return error.DisallowedNativeInterpreterDependency;
+                        }
                         try discoverCalleeWord(ctx, call_name, &discovered, temp_allocator);
                     },
                     .push_literal => |val| {
@@ -215,6 +227,15 @@ pub fn freezeModuleGraphOpts(
                                     .call_word => |call_name| {
                                         if (qual_seen.contains(call_name)) continue;
                                         try qual_seen.put(temp_allocator, call_name, {});
+                                        if (!options.runtime_image and isInterpreterDependentNative(ctx, call_name)) {
+                                            diagnostics.fatal_native_interpreter_dependency = .{
+                                                .caller_name = def.name,
+                                                .feature_name = call_name,
+                                            };
+                                            ctx.popPragmaFrame();
+                                            ctx.popLocalFrame();
+                                            return error.DisallowedNativeInterpreterDependency;
+                                        }
                                         try discoverCalleeWord(ctx, call_name, &discovered, temp_allocator);
                                     },
                                     else => {},
@@ -355,7 +376,7 @@ fn discoverReachableWords(
     diagnostics: *FreezeDiagnostics,
     runtime_image: bool,
     _: Allocator,
-) (Allocator.Error || error{DisallowedDynamicFeature})!DiscoveredWords {
+) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!DiscoveredWords {
     const temp_allocator = ctx.quotationAllocator();
 
     var seen = std.StringHashMapUnmanaged(void){};
@@ -396,7 +417,7 @@ fn discoverReachableWords(
     }
 
     // Seed worklist from entry instructions
-    collectCallWords(entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
+    collectCallWords(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
         result.names.deinit(temp_allocator);
         result.defs.deinit(temp_allocator);
         result.native_names.deinit(temp_allocator);
@@ -426,7 +447,7 @@ fn discoverReachableWords(
                     .compound => |compound_instrs| {
                         try result.names.append(temp_allocator, name);
                         try result.defs.append(temp_allocator, wordDefFromModuleWord(name, mod_word));
-                        collectCallWords(compound_instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
+                        collectCallWords(ctx, compound_instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
                             result.names.deinit(temp_allocator);
                             result.defs.deinit(temp_allocator);
                             result.native_names.deinit(temp_allocator);
@@ -458,7 +479,7 @@ fn discoverReachableWords(
         try result.defs.append(temp_allocator, word);
 
         // Discover callees
-        collectCallWords(instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
+        collectCallWords(ctx, instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
             result.names.deinit(temp_allocator);
             result.defs.deinit(temp_allocator);
             result.native_names.deinit(temp_allocator);
@@ -474,6 +495,7 @@ fn discoverReachableWords(
 /// Extract call_word names from instructions and add unseen ones to the worklist.
 /// Also collects reachable quotation bodies, dwduped by pointer identity.
 fn collectCallWords(
+    ctx: *const Context,
     instrs: []const Instruction,
     caller_name: []const u8,
     worklist: *std.ArrayListUnmanaged([]const u8),
@@ -483,7 +505,7 @@ fn collectCallWords(
     diagnostics: *FreezeDiagnostics,
     runtime_image: bool,
     allocator: Allocator,
-) (Allocator.Error || error{DisallowedDynamicFeature})!void {
+) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
     for (instrs) |instr| {
         switch (instr.op) {
             .call_word => |name| {
@@ -493,6 +515,13 @@ fn collectCallWords(
                         .feature_name = name,
                     };
                     return error.DisallowedDynamicFeature;
+                }
+                if (!runtime_image and isInterpreterDependentNative(ctx, name)) {
+                    diagnostics.fatal_native_interpreter_dependency = .{
+                        .caller_name = caller_name,
+                        .feature_name = name,
+                    };
+                    return error.DisallowedNativeInterpreterDependency;
                 }
                 const gop = try seen.getOrPut(allocator, name);
                 if (!gop.found_existing) {
@@ -508,13 +537,36 @@ fn collectCallWords(
                         if (!qgop.found_existing) {
                             try quotation_bodies.append(allocator, q.instructions);
                         }
-                        try collectCallWords(q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, diagnostics, runtime_image, allocator);
+                        try collectCallWords(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, diagnostics, runtime_image, allocator);
                     },
                     else => {},
                 }
             },
         }
     }
+}
+
+/// Returns true if `name` resolves to a native (or host-callback) word
+/// definition that carries the well-known `interpreter-dependent` marker.
+/// Compound words and unresolved names return false: this audit only
+/// concerns native code paths reachable from the compiled AOT graph.
+fn isInterpreterDependentNative(ctx: *const Context, name: []const u8) bool {
+    if (ctx.lookupWord(name)) |word| {
+        switch (word.action) {
+            .native, .host_callback => return hasInterpreterDependentMarker(word),
+            .compound => return false,
+        }
+    }
+    if (resolveQualifiedModuleWord(ctx, name)) |mod_word| {
+        switch (mod_word.action) {
+            .native, .host_callback => {
+                const word = wordDefFromModuleWord(name, mod_word);
+                return hasInterpreterDependentMarker(word);
+            },
+            .compound => return false,
+        }
+    }
+    return false;
 }
 
 /// Resolve a module-qualified name (e.g., "native.struct-field-get") to
@@ -623,6 +675,13 @@ fn isDisallowedDynamicFeature(name: []const u8, runtime_image: bool) bool {
 fn hasNeverReturnsMarker(def: WordDefinition) bool {
     for (def.markers) |mk| {
         if (markers_mod.isNeverReturnsMarker(mk)) return true;
+    }
+    return false;
+}
+
+fn hasInterpreterDependentMarker(def: WordDefinition) bool {
+    for (def.markers) |mk| {
+        if (markers_mod.isInterpreterDependentMarker(mk)) return true;
     }
     return false;
 }
@@ -843,6 +902,8 @@ const testing = std.testing;
 
 test "collectCallWords extracts call_word names from instructions" {
     const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
     const instrs = &[_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 1 },
         .{ .op = .{ .call_word = "double" }, .line = 1 },
@@ -859,7 +920,7 @@ test "collectCallWords extracts call_word names from instructions" {
     defer quotation_seen.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
 
     try testing.expectEqual(@as(usize, 2), worklist.items.len);
     try testing.expect(seen.contains("double"));
@@ -1049,6 +1110,8 @@ test "collectCallWords rejects '>quotation' in interpreter-free mode" {
 
 test "collectCallWords rejects disallowed dynamic features with caller" {
     const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
     const instrs = &[_]Instruction{
         .{ .op = .{ .call_word = "eval-string" }, .line = 1 },
     };
@@ -1064,6 +1127,7 @@ test "collectCallWords rejects disallowed dynamic features with caller" {
     var diagnostics: FreezeDiagnostics = .{};
 
     try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
+        &ctx,
         instrs,
         "__entry__",
         &worklist,
@@ -1081,6 +1145,8 @@ test "collectCallWords rejects disallowed dynamic features with caller" {
 
 test "collectCallWords in runtime-image mode permits eval-string, load, and >quotation" {
     const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
     const instrs = &[_]Instruction{
         .{ .op = .{ .call_word = "eval-string" }, .line = 1 },
         .{ .op = .{ .call_word = "load" }, .line = 1 },
@@ -1099,7 +1165,7 @@ test "collectCallWords in runtime-image mode permits eval-string, load, and >quo
     defer quotation_seen.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, true, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, true, allocator);
 
     try testing.expectEqual(@as(usize, 5), worklist.items.len);
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
@@ -1107,6 +1173,8 @@ test "collectCallWords in runtime-image mode permits eval-string, load, and >quo
 
 test "collectCallWords in runtime-image mode still rejects compile!" {
     const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
     const instrs = &[_]Instruction{
         .{ .op = .{ .call_word = "compile!" }, .line = 1 },
     };
@@ -1122,6 +1190,7 @@ test "collectCallWords in runtime-image mode still rejects compile!" {
     var diagnostics: FreezeDiagnostics = .{};
 
     try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
+        &ctx,
         instrs,
         "do-compile",
         &worklist,
@@ -1155,6 +1224,8 @@ test "collectCallWords rejects 'compile!' in interpreter-free mode" {
 
 fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8) !void {
     const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
     const instrs = &[_]Instruction{
         .{ .op = .{ .call_word = feature }, .line = 1 },
     };
@@ -1170,6 +1241,7 @@ fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8) !void
     var diagnostics: FreezeDiagnostics = .{};
 
     try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
+        &ctx,
         instrs,
         caller,
         &worklist,
@@ -1187,6 +1259,8 @@ fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8) !void
 
 test "collectCallWords discovers quotation bodies" {
     const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
     const inner_body = &[_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 2 },
     };
@@ -1205,7 +1279,7 @@ test "collectCallWords discovers quotation bodies" {
     defer quotation_seen.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
     try testing.expectEqual(inner_body.ptr, quotation_bodies.items[0].ptr);
@@ -1213,6 +1287,8 @@ test "collectCallWords discovers quotation bodies" {
 
 test "collectCallWords discovers nested quotations" {
     const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
     const innermost = &[_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 3 },
     };
@@ -1235,7 +1311,7 @@ test "collectCallWords discovers nested quotations" {
     defer quotation_seen.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
 
     // Both middle and innermost quotations discovered
     try testing.expectEqual(@as(usize, 2), quotation_bodies.items.len);
@@ -1245,6 +1321,8 @@ test "collectCallWords discovers nested quotations" {
 
 test "collectCallWords deduplicates quotations by pointer" {
     const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
     const shared_body = &[_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 2 },
     };
@@ -1264,7 +1342,7 @@ test "collectCallWords deduplicates quotations by pointer" {
     defer quotation_seen.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
 
     // Only recorded once despite appearing twice
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
@@ -1445,4 +1523,158 @@ test "buildAotDescs infers effect for push-only quotation" {
     const eff = result.quotations[0].inferred_effect.?;
     try testing.expectEqual(@as(u8, 0), eff.input_count);
     try testing.expectEqual(@as(u8, 2), eff.output_count);
+}
+
+// ── Audit-bar tests for the interpreter-dependent marker ──────────────
+
+/// No-op native used to register synthetic marked words in audit-bar tests.
+fn auditTestNoopNative(_: *Context) anyerror!void {}
+
+test "collectCallWords rejects marked native in interpreter-free mode" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Register a synthetic native carrying the interpreter-dependent
+    // marker. The name is intentionally not in `isDisallowedDynamicFeature`
+    // so the marker check is what fires.
+    try ctx.dictionary.put("audit-dep", .{
+        .name = "audit-dep",
+        .action = .{ .native = auditTestNoopNative },
+        .markers = &.{@constCast(&markers_mod.interpreter_dependent_marker)},
+    });
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "audit-dep" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try testing.expectError(error.DisallowedNativeInterpreterDependency, collectCallWords(
+        &ctx,
+        instrs,
+        "caller",
+        &worklist,
+        &seen,
+        &quotation_bodies,
+        &quotation_seen,
+        &diagnostics,
+        false,
+        allocator,
+    ));
+    try testing.expect(diagnostics.fatal_native_interpreter_dependency != null);
+    try testing.expectEqualStrings("caller", diagnostics.fatal_native_interpreter_dependency.?.caller_name);
+    try testing.expectEqualStrings("audit-dep", diagnostics.fatal_native_interpreter_dependency.?.feature_name);
+}
+
+test "collectCallWords permits marked native in runtime-image mode" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.dictionary.put("audit-dep", .{
+        .name = "audit-dep",
+        .action = .{ .native = auditTestNoopNative },
+        .markers = &.{@constCast(&markers_mod.interpreter_dependent_marker)},
+    });
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "audit-dep" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, true, allocator);
+
+    try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
+    try testing.expect(diagnostics.fatal_dynamic_feature == null);
+    try testing.expectEqual(@as(usize, 1), worklist.items.len);
+}
+
+test "collectCallWords ignores marker on compound words" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Compound bodies cannot host interpreter machinery directly; the
+    // marker only governs native code paths.
+    try ctx.dictionary.put("audit-dep-compound", .{
+        .name = "audit-dep-compound",
+        .action = .{ .compound = &.{} },
+        .markers = &.{@constCast(&markers_mod.interpreter_dependent_marker)},
+    });
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "audit-dep-compound" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+
+    try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
+    try testing.expectEqual(@as(usize, 1), worklist.items.len);
+}
+
+test "audit fires before name-based check when caller reaches a marked native that is also a banned name" {
+    // `eval-string` is rejected by name first (DisallowedDynamicFeature).
+    // The marker is defense-in-depth for unrelated natives. This test
+    // exists to lock in the ordering so future refactors don't accidentally
+    // upgrade the name-based diagnostic to the marker-based one.
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "eval-string" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
+        &ctx,
+        instrs,
+        "caller",
+        &worklist,
+        &seen,
+        &quotation_bodies,
+        &quotation_seen,
+        &diagnostics,
+        false,
+        allocator,
+    ));
+    try testing.expect(diagnostics.fatal_dynamic_feature != null);
+    try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
 }

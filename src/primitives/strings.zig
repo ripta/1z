@@ -88,7 +88,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "inspect", .stack_effect = "value -- string", .doc = "Convert any value to its debug string representation, including quotes for strings.", .func = nativeInspect, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = ">string", .stack_effect = "value -- string", .doc = "Convert value to string, strings and symbols pass through as plain strings.", .func = nativeAsString, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = ">symbol", .stack_effect = "value -- symbol", .doc = "Convert a string to a symbol. Flat enum variants may define custom conversions; data-carrying variants are rejected.", .func = nativeToSymbol, .markers = &.{@constCast(&markers_mod.generic_marker)} },
-    .{ .name = ">quotation", .stack_effect = "name -- quotation", .doc = "Convert a string or symbol name to a quotation that calls that word. Does not check if the word exists.", .func = nativeToQuotation },
+    .{ .name = ">quotation", .stack_effect = "name -- quotation", .doc = "Convert a string or symbol name to a quotation that calls that word. Does not check if the word exists.", .func = nativeToQuotation, .markers = &.{@constCast(&markers_mod.interpreter_dependent_marker)} },
     .{ .name = ">bytes", .stack_effect = "string -- byte-array", .doc = "Convert string to byte array (UTF-8 encoded bytes).", .func = nativeToBytes },
     .{ .name = "bytes>", .stack_effect = "byte-array -- string", .doc = "Convert byte array to string (interprets as UTF-8).", .func = nativeBytesToString },
     .{ .name = "uppercase", .stack_effect = "str -- str", .doc = "Convert ASCII letters to uppercase, non-ASCII bytes pass through.", .func = nativeUppercase },

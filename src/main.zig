@@ -2248,6 +2248,15 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             } else {
                 err_writer.writeAll("Error: AOT build rejected an unidentified dynamic feature\n") catch {};
             }
+        } else if (err == error.DisallowedNativeInterpreterDependency) {
+            if (freeze_diagnostics.fatal_native_interpreter_dependency) |feature_use| {
+                err_writer.print(
+                    "Error: native primitive '{s}' reachable from '{s}' carries the 'interpreter-dependent' marker; its runtime path uses interpreter machinery (dictionary lookup, instruction-array execution, or runtime parsing) that interpreter-free AOT does not provide. Build with --emit-runtime-image to produce a runtime-image AOT binary, or run under the interpreter.\n",
+                    .{ feature_use.feature_name, feature_use.caller_name },
+                ) catch {};
+            } else {
+                err_writer.writeAll("Error: AOT build rejected an unidentified interpreter-dependent native\n") catch {};
+            }
         } else {
             err_writer.print("Error freezing module graph: {s}\n", .{@errorName(err)}) catch {};
         }
