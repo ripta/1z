@@ -5,7 +5,7 @@ use "testing" ;
 "define mutable-map(fixnum)" test-section
 
 \ Define parameterized mutable-map type
-mutable-map(fixnum): mutable-map fixnum define-parameterized-type
+mutable-map(fixnum): M{ inner-type: mutable-map element-type: fixnum define: [ define-parameterized-type ] } ;
 
 \ Basic construction
 M{ x: 1 y: 2 } >mutable-map(fixnum)
@@ -30,7 +30,7 @@ M{ x: 1 } >mutable-map(fixnum) y: 2 @set! unmake-mutable-map(fixnum) y: @get
 "@set! with numeric promotion" test-section
 
 \ Define mutable-map(float) for promotion tests
-mutable-map(float): mutable-map float define-parameterized-type
+mutable-map(float): M{ inner-type: mutable-map element-type: float define: [ define-parameterized-type ] } ;
 
 \ @set! promotes fixnum to float
 M{ x: 1.0 } >mutable-map(float) y: 2 @set!

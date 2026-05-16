@@ -27,7 +27,7 @@ const WordDefinition = dictionary_mod.WordDefinition;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-virtual", .stack_effect = "name: descriptor markers --", .doc = "Define a virtual type and its accessor words.", .func = nativeDefineVirtual },
-    .{ .name = "define-parameterized-type", .stack_effect = "name: base-type element-type --", .doc = "Define a parameterized virtual type with element validation.", .func = nativeDefineParameterizedType },
+    .{ .name = "define-parameterized-type", .stack_effect = "name: descriptor markers --", .doc = "Define a parameterized virtual type from a descriptor map carrying inner-type, element-type, and define fields.", .func = nativeDefineParameterizedType },
 };
 
 pub const registry_entries = [_]RegistryEntry{
@@ -1055,28 +1055,55 @@ pub fn defineParameterizedWrap(ctx: *Context, name: []const u8, vtype: *const Vi
     });
 }
 
-/// define-parameterized-type ( name: base-type element-type -- )
+/// define-parameterized-type ( name: descriptor markers -- ) - Define a parameterized
+/// virtual type from a descriptor carrying `inner-type`, `element-type`, and `define`
+/// fields. Invoked through the descriptor-driven `;` protocol after `;` has pushed
+/// name, descriptor, and the collected markers array.
 ///
-/// Defines a parameterized virtual type. The >name word validates that all
-/// elements of the inner value match the element type. The make-name word
-/// skips element validation.
+/// The `>name` word validates that all elements of the inner value match the element
+/// type. The `make-name` word skips element validation. The resulting type word is a
+/// parse-time, const, typed compound that pushes the `TypeValue` literal.
 fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const elem_type_val = try ctx.stack.pop();
-    const elem_tv = switch (elem_type_val) {
-        .type_val => |tv| tv,
+    const markers_val = try ctx.stack.pop();
+    const markers_array = switch (markers_val) {
+        .array => |arr| arr,
         else => {
-            helpers.setTypeMismatchError(ctx, "type", elem_type_val);
+            helpers.setTypeMismatchError(ctx, "array", markers_val);
             return error.TypeMismatch;
         },
     };
 
-    const base_type_val = try ctx.stack.pop();
+    const desc_val = try ctx.stack.pop();
+    const desc_map: *MutableMap = switch (desc_val) {
+        .mutable_map => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", desc_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const base_type_val = desc_map.get("inner-type") orelse {
+        helpers.setErrorContext(ctx, "define-parameterized-type descriptor missing 'inner-type' field", .{});
+        return error.MissingField;
+    };
     const base_tv = switch (base_type_val) {
         .type_val => |tv| tv,
         else => {
             helpers.setTypeMismatchError(ctx, "type", base_type_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const elem_type_val = desc_map.get("element-type") orelse {
+        helpers.setErrorContext(ctx, "define-parameterized-type descriptor missing 'element-type' field", .{});
+        return error.MissingField;
+    };
+    const elem_tv = switch (elem_type_val) {
+        .type_val => |tv| tv,
+        else => {
+            helpers.setTypeMismatchError(ctx, "type", elem_type_val);
             return error.TypeMismatch;
         },
     };
@@ -1109,10 +1136,28 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     vtype.type_val = tv;
 
     // NAME: ( -- type ) - parse-time const pushing TypeValue
-    const type_markers = try alloc.alloc(*Marker, 3);
-    type_markers[0] = @constCast(&markers_mod.parse_time_marker);
-    type_markers[1] = @constCast(&markers_mod.const_marker);
-    type_markers[2] = @constCast(&markers_mod.typed_marker);
+    var type_markers_list = std.ArrayListUnmanaged(*Marker){};
+    var has_parse_time = false;
+    var has_const = false;
+    var has_typed = false;
+    for (markers_array) |m| {
+        switch (m) {
+            .marker => |mk| {
+                try type_markers_list.append(alloc, mk);
+                if (mk == @as(*const Marker, &markers_mod.parse_time_marker)) has_parse_time = true;
+                if (mk == @as(*const Marker, &markers_mod.const_marker)) has_const = true;
+                if (mk == @as(*const Marker, &markers_mod.typed_marker)) has_typed = true;
+            },
+            else => {
+                helpers.setTypeMismatchError(ctx, "marker", m);
+                return error.TypeMismatch;
+            },
+        }
+    }
+    if (!has_parse_time) try type_markers_list.append(alloc, @constCast(&markers_mod.parse_time_marker));
+    if (!has_const) try type_markers_list.append(alloc, @constCast(&markers_mod.const_marker));
+    if (!has_typed) try type_markers_list.append(alloc, @constCast(&markers_mod.typed_marker));
+    const type_markers = try type_markers_list.toOwnedSlice(alloc);
 
     const type_instrs = try alloc.alloc(Instruction, 1);
     type_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0 };

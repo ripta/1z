@@ -5,7 +5,7 @@ use "testing" ;
 "define-parameterized-type" test-section
 
 \ Define a parameterized type: array(fixnum)
-array(fixnum): array fixnum define-parameterized-type
+array(fixnum): M{ inner-type: array element-type: fixnum define: [ define-parameterized-type ] } ;
 
 \ Basic construction
 { 1 2 3 } >array(fixnum)
@@ -33,7 +33,7 @@ type-name "array(fixnum)" "make- bypasses element validation" assert=
 "custom naming" test-section
 
 \ Custom naming works
-fixnum-array: array fixnum define-parameterized-type
+fixnum-array: M{ inner-type: array element-type: fixnum define: [ define-parameterized-type ] } ;
 { 10 20 } >fixnum-array
 type-name "fixnum-array" "custom parameterized type name works" assert=
 
@@ -72,8 +72,8 @@ type-name "fixnum-array" "custom parameterized type name works" assert=
 "numeric tower promotion" test-section
 
 \ Define array(float) and array(bignum) for promotion tests
-array(float): array float define-parameterized-type
-array(bignum): array bignum define-parameterized-type
+array(float): M{ inner-type: array element-type: float define: [ define-parameterized-type ] } ;
+array(bignum): M{ inner-type: array element-type: bignum define: [ define-parameterized-type ] } ;
 
 \ fixnum -> float promotion
 { 1 2 3 } >array(float)
@@ -104,15 +104,15 @@ type-name "array(bignum)" "fixnum elements promote to array(bignum)" assert=
 "nested parameterized types" test-section
 
 \ Nested parameterized types
-array(array(fixnum)): array array(fixnum) define-parameterized-type
+array(array(fixnum)): M{ inner-type: array element-type: array(fixnum) define: [ define-parameterized-type ] } ;
 { { 1 2 } { 3 4 } } [ >array(fixnum) ] #map #collect >array(array(fixnum))
 type-name "array(array(fixnum))" "nested parameterized types work" assert=
 
 "alias interning and nominal wrappers" test-section
 
-foo-array: array fixnum define-parameterized-type
-bar-array: array fixnum define-parameterized-type
-baz-array: array string define-parameterized-type
+foo-array: M{ inner-type: array element-type: fixnum define: [ define-parameterized-type ] } ;
+bar-array: M{ inner-type: array element-type: fixnum define: [ define-parameterized-type ] } ;
+baz-array: M{ inner-type: array element-type: string define: [ define-parameterized-type ] } ;
 
 foo-array bar-array = "same parameterized aliases compare equal as types" assert-true
 foo-array baz-array = "different parameterized aliases compare unequal as types" assert-false

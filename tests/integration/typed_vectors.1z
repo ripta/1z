@@ -5,7 +5,7 @@ use "testing" ;
 "define vector(fixnum)" test-section
 
 \ Define parameterized vector type
-vector(fixnum): vector fixnum define-parameterized-type
+vector(fixnum): M{ inner-type: vector element-type: fixnum define: [ define-parameterized-type ] } ;
 
 \ Basic construction
 V{ 1 2 3 } >vector(fixnum)
@@ -83,7 +83,7 @@ V{ 1 2 } >vector(fixnum) { 3 4 } #append! unmake-vector(fixnum) #len
 "numeric promotion in typed vectors" test-section
 
 \ Define vector(float) for promotion tests
-vector(float): vector float define-parameterized-type
+vector(float): M{ inner-type: vector element-type: float define: [ define-parameterized-type ] } ;
 
 \ #push! promotes fixnum to float
 V{ 1.0 2.0 } >vector(float) 3 #push!
@@ -111,7 +111,7 @@ V{ 1 2 3 } freeze { 1 2 3 } "plain freeze produces array" assert=
 "freeze typed vector" test-section
 
 \ Define array(fixnum) for freeze target
-array(fixnum): array fixnum define-parameterized-type
+array(fixnum): M{ inner-type: array element-type: fixnum define: [ define-parameterized-type ] } ;
 
 V{ 1 2 3 } >vector(fixnum) freeze
 type-name "array(fixnum)" "freeze produces typed array" assert=
@@ -127,7 +127,7 @@ V{ } >vector(fixnum) freeze unmake-array(fixnum)
 { } "freeze empty typed vector elements" assert=
 
 \ Define array(float) for float freeze
-array(float): array float define-parameterized-type
+array(float): M{ inner-type: array element-type: float define: [ define-parameterized-type ] } ;
 
 V{ 1.0 2.0 3.0 } >vector(float) freeze
 type-name "array(float)" "freeze vector(float) to array(float)" assert=
@@ -142,6 +142,6 @@ unmake-vector(fixnum) #len 3 "original vector unchanged after freeze" assert=
 "freeze error: no target typed array" test-section
 
 \ Define vector(string) but not array(string)
-vector(string): vector string define-parameterized-type
+vector(string): M{ inner-type: vector element-type: string define: [ define-parameterized-type ] } ;
 
 [ V{ "a" "b" } >vector(string) freeze ] "error" assert-error
