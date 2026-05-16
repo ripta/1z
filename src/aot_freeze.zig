@@ -622,6 +622,16 @@ fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *D
     }
 }
 
+/// Returns true if `name` is permanently incompatible with the current
+/// AOT artifact class.
+///
+/// - `compile!` is rejected in every AOT class. Programs that need it
+///   must run under the interpreter.
+/// - `eval-string`, `load`, `reload`, `load-file` are rejected when the
+///   build is interpreter-free AOT; runtime-image AOT keeps the
+///   interpreter linked and can satisfy them.
+///
+/// These rejections are semantic, not implementation gaps.
 fn isDisallowedDynamicFeature(name: []const u8, runtime_image: bool) bool {
     if (std.mem.eql(u8, name, "compile!")) return true;
     if (runtime_image) return false;
@@ -1239,6 +1249,64 @@ test "collectCallWords in runtime-image mode still rejects compile!" {
     try testing.expect(diagnostics.fatal_dynamic_feature != null);
     try testing.expectEqualStrings("do-compile", diagnostics.fatal_dynamic_feature.?.caller_name);
     try testing.expectEqualStrings("compile!", diagnostics.fatal_dynamic_feature.?.feature_name);
+}
+
+test "collectCallWords rejects 'load' in interpreter-free mode" {
+    try expectInterpreterFreeRejection("load", "needs-load");
+}
+
+test "collectCallWords rejects 'reload' in interpreter-free mode" {
+    try expectInterpreterFreeRejection("reload", "needs-reload");
+}
+
+test "collectCallWords rejects 'load-file' in interpreter-free mode" {
+    try expectInterpreterFreeRejection("load-file", "needs-load-file");
+}
+
+test "collectCallWords rejects 'compile!' in interpreter-free mode" {
+    try expectInterpreterFreeRejection("compile!", "needs-compile-bang");
+}
+
+fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8) !void {
+    const allocator = testing.allocator;
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = feature }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var warnings = std.ArrayListUnmanaged(FreezeFeatureUse){};
+    defer warnings.deinit(allocator);
+    var warning_seen = std.StringHashMapUnmanaged(void){};
+    defer {
+        var iter = warning_seen.iterator();
+        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
+        warning_seen.deinit(allocator);
+    }
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
+        instrs,
+        caller,
+        &worklist,
+        &seen,
+        &warnings,
+        &warning_seen,
+        &quotation_bodies,
+        &quotation_seen,
+        &diagnostics,
+        false,
+        allocator,
+    ));
+    try testing.expect(diagnostics.fatal_dynamic_feature != null);
+    try testing.expectEqualStrings(caller, diagnostics.fatal_dynamic_feature.?.caller_name);
+    try testing.expectEqualStrings(feature, diagnostics.fatal_dynamic_feature.?.feature_name);
 }
 
 test "collectCallWords discovers quotation bodies" {

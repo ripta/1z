@@ -2229,19 +2229,19 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             allocator.free(freeze_diagnostics.missing_stack_effects);
         } else if (err == error.DisallowedDynamicFeature) {
             if (freeze_diagnostics.fatal_dynamic_feature) |feature_use| {
-                if (emit_runtime_image_flag and std.mem.eql(u8, feature_use.feature_name, "compile!")) {
+                if (std.mem.eql(u8, feature_use.feature_name, "compile!")) {
                     err_writer.print(
-                        "Error: 'compile!' is not yet supported in runtime-image AOT (in '{s}'); compiling new code at runtime requires growing the dispatch table, which is not yet implemented for runtime-image builds\n",
+                        "Error: 'compile!' in '{s}' is not available in AOT builds; runtime code compilation is incompatible with every AOT artifact class. Run under the interpreter if your program needs 'compile!'.\n",
                         .{feature_use.caller_name},
                     ) catch {};
                 } else {
                     err_writer.print(
-                        "Error: AOT build disallows dynamic feature '{s}' in '{s}'\n",
-                        .{ feature_use.feature_name, feature_use.caller_name },
+                        "Error: dynamic feature '{s}' in '{s}' is not available in interpreter-free AOT; this feature requires runtime code-loading machinery that interpreter-free binaries omit. Build with --emit-runtime-image to produce a runtime-image AOT binary, or run under the interpreter, if you need '{s}'.\n",
+                        .{ feature_use.feature_name, feature_use.caller_name, feature_use.feature_name },
                     ) catch {};
                 }
             } else {
-                err_writer.writeAll("Error: AOT build disallows a dynamic feature\n") catch {};
+                err_writer.writeAll("Error: AOT build rejected an unidentified dynamic feature\n") catch {};
             }
         } else {
             err_writer.print("Error freezing module graph: {s}\n", .{@errorName(err)}) catch {};

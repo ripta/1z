@@ -1,0 +1,1 @@
+Error: 'compile!' in '__entry__' is not available in AOT builds; runtime code compilation is incompatible with every AOT artifact class. Run under the interpreter if your program needs 'compile!'.

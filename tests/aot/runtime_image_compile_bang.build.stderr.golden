@@ -1,1 +1,1 @@
-Error: 'compile!' is not yet supported in runtime-image AOT (in 'do-compile'); compiling new code at runtime requires growing the dispatch table, which is not yet implemented for runtime-image builds
+Error: 'compile!' in 'do-compile' is not available in AOT builds; runtime code compilation is incompatible with every AOT artifact class. Run under the interpreter if your program needs 'compile!'.

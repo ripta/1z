@@ -1,0 +1,1 @@
+Error: dynamic feature 'load' in '__entry__' is not available in interpreter-free AOT; this feature requires runtime code-loading machinery that interpreter-free binaries omit. Build with --emit-runtime-image to produce a runtime-image AOT binary, or run under the interpreter, if you need 'load'.
