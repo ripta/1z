@@ -1,4 +1,4 @@
-Prelude compilation: 270/317 words compiled (85.2%)
+Prelude compilation: 303/349 words compiled (86.8%)
   word '>option:some' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
@@ -23,9 +23,6 @@ Prelude compilation: 270/317 words compiled (85.2%)
   word 'make-option:some' cannot be compiled
       NC.4: word pushes a value that cannot be embedded in an AOT binary
       hint: blocked until AOT literals can be serialized
-  word 'parse-quotation' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
   word 'cond' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
@@ -142,8 +139,8 @@ Prelude compilation: 270/317 words compiled (85.2%)
       hint: blocked until the AOT resolver includes this word
 Quotation bodies compiled: 0
 Inline PIC sites: 0/34 generic call sites preseeded
-AOT interpreter fallbacks: 228 total
-  native: 215
+AOT interpreter fallbacks: 231 total
+  native: 218
   compound-uncompiled: 6
   quotation: 7
   sites:
@@ -163,8 +160,8 @@ AOT interpreter fallbacks: 228 total
     native: >iterator -> native.make-callback-iter (line 771)
     native: >iterator -> native.>iterator (line 773)
     native: >dispatch-provenance -> native.hash-to-struct (line 0)
-    ... 212 more
-  static-check: jitInterpretedCall=6/6 jitNativeWordCall=215/215 jitCallQuotation=7/7 (matches build-time inventory)
+    ... 215 more
+  static-check: jitInterpretedCall=6/6 jitNativeWordCall=218/218 jitCallQuotation=7/7 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter

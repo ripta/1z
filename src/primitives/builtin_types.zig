@@ -1,14 +1,23 @@
+const std = @import("std");
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
+const Instruction = value_mod.Instruction;
+const Marker = value_mod.Marker;
+const MutableMap = value_mod.MutableMap;
+const Value = value_mod.Value;
 
 const types_mod = @import("types.zig");
+const Primitive = types_mod.Primitive;
 const RegistryEntry = types_mod.RegistryEntry;
 
 const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
 
+pub const primitives = [_]Primitive{
+    .{ .name = "define-builtin-type", .stack_effect = "name: descriptor markers --", .doc = "Define a built-in type word from a descriptor map.", .func = nativeDefineBuiltinType },
+};
+
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "define-builtin-type", .func = nativeDefineBuiltinType },
     .{ .name = "type-has-property?", .func = nativeTypeHasProperty, .stack_effect = "type property -- ?" },
     .{ .name = "type-members", .func = nativeTypeMembers, .stack_effect = "type -- array/f" },
     .{ .name = "type-name", .func = nativeTypeName, .stack_effect = "type -- string" },
@@ -28,16 +37,29 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "descriptor-ffi-layout-raw", .func = nativeDescriptorFfiLayoutRaw, .stack_effect = "descriptor -- fixnum" },
 };
 
-/// define-builtin-type ( descriptor -- marker marker marker type ) - Create a type value from a descriptor,
-/// deriving the name from the word-name symbol already on the stack. Pushes parse-time, const, and typed
-/// markers so `;` sees them automatically.
+/// define-builtin-type ( name: descriptor markers -- ) - Define a built-in type word from a
+/// descriptor map. Invoked through the descriptor-driven `;` protocol: the descriptor's
+/// `define:` quotation calls this native after `;` has pushed name, descriptor, and the
+/// collected markers array.
 ///
 /// If a TypeValue for this name was pre-created by Context.initBuiltinTypeValues(),
 /// the existing object is augmented with the descriptor (preserving pointer identity).
-/// Otherwise a new TypeValue is allocated and registered.
+/// Otherwise a new TypeValue is allocated and registered. The resulting word is defined
+/// as a parse-time, const, typed compound that pushes the TypeValue literal.
 fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const markers_val = try ctx.stack.pop();
+    const markers_array = switch (markers_val) {
+        .array => |arr| arr,
+        else => {
+            helpers.setTypeMismatchError(ctx, "array", markers_val);
+            return error.TypeMismatch;
+        },
+    };
+
     const desc_val = try ctx.stack.pop();
-    const source_map: *value_mod.MutableMap = switch (desc_val) {
+    const source_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
             helpers.setTypeMismatchError(ctx, "mutable-map", desc_val);
@@ -45,7 +67,7 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
         },
     };
 
-    const name_val = try ctx.stack.peek();
+    const name_val = try ctx.stack.pop();
     const name = switch (name_val) {
         .symbol => |s| s,
         else => {
@@ -53,8 +75,6 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-
-    const alloc = ctx.quotationAllocator();
 
     const tv = if (ctx.lookupBuiltinTypeValue(name)) |existing| blk: {
         if (existing.descriptor) |existing_desc| {
@@ -76,10 +96,40 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
 
     try ctx.registerTypeDescriptor(name, tv.descriptor.?);
 
-    try ctx.stack.push(.{ .marker = @constCast(&markers_mod.parse_time_marker) });
-    try ctx.stack.push(.{ .marker = @constCast(&markers_mod.const_marker) });
-    try ctx.stack.push(.{ .marker = @constCast(&markers_mod.typed_marker) });
-    try ctx.stack.push(.{ .type_val = tv });
+    var markers_list = std.ArrayListUnmanaged(*Marker){};
+    var has_parse_time = false;
+    var has_const = false;
+    var has_typed = false;
+    for (markers_array) |m| {
+        switch (m) {
+            .marker => |mk| {
+                try markers_list.append(alloc, mk);
+                if (mk == @as(*const Marker, &markers_mod.parse_time_marker)) has_parse_time = true;
+                if (mk == @as(*const Marker, &markers_mod.const_marker)) has_const = true;
+                if (mk == @as(*const Marker, &markers_mod.typed_marker)) has_typed = true;
+            },
+            else => {
+                helpers.setTypeMismatchError(ctx, "marker", m);
+                return error.TypeMismatch;
+            },
+        }
+    }
+    if (!has_parse_time) try markers_list.append(alloc, @constCast(&markers_mod.parse_time_marker));
+    if (!has_const) try markers_list.append(alloc, @constCast(&markers_mod.const_marker));
+    if (!has_typed) try markers_list.append(alloc, @constCast(&markers_mod.typed_marker));
+    const type_markers = try markers_list.toOwnedSlice(alloc);
+
+    const type_instrs = try alloc.alloc(Instruction, 1);
+    type_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0 };
+
+    try ctx.defineWord(name, .{
+        .name = name,
+        .parse_time = true,
+        .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
+        .markers = type_markers,
+        .provenance = .{ .generator = "builtin-type", .parent = name, .role = "type" },
+        .action = .{ .compound = type_instrs },
+    });
 }
 
 /// Merge the user-supplied mutable-map descriptor into a typed
@@ -399,7 +449,6 @@ fn nativeDescriptorFfiLayoutRaw(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = @intCast(layout) });
 }
 
-const std = @import("std");
 const testing = std.testing;
 
 test "native type-members returns members for union types" {

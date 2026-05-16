@@ -14,7 +14,7 @@ Method dispatch registration syntax.
 method{ [<marker:parse-time>] \compound
 
 Stack: [ ]
-parameter [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+parameter ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
 type info:
   kind: builtin-type
 Stack: [ ]

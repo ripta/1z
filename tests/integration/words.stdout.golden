@@ -121,6 +121,7 @@ copy-file ( src dst -- )
 create-directory ( path -- )
 create-symlink ( target link-path -- )
 curry ( x quot -- quot' )
+define-builtin-type ( name descriptor markers -- )
 define-enum ( name descriptor markers -- )
 define-ffi-struct ( name descriptor markers -- )
 define-method ( name descriptor markers -- )
@@ -374,26 +375,26 @@ acquire ( resource -- )
 add-hook ( on-variant quot -- )
 all-words ( -- array )
 and ( ? ? -- ? )
-array
+array ( -- type )
 array? ( val -- ? )
 assert-no-shadow ( module names -- )
 benchmark-report? ( val -- ? )
 bi ( ..a x p: ( ..a x -- ..b ) q: ( ..a x -- ..c ) -- ..b ..c )
-bignum
+bignum ( -- type )
 bignum? ( val -- ? )
 bl ( -- )
 body>> ( instance: word-info -- body: any )
-boolean
+boolean ( -- type )
 boolean? ( val -- ? )
 borrowed? ( val -- ? )
-byte-array
+byte-array ( -- type )
 byte-array? ( val -- ? )
 bytes-alloc ( n -- byte-array )
 bytes-alloc-ptr ( n -- byte-array ptr )
 bytes-resize! ( byte-array n -- byte-array )
 bytes>ffi-ptr ( byte-array -- byte-array ptr )
 case ( val branches -- ... )
-channel
+channel ( -- type )
 choose ( a1 a2 quot -- a )
 cleave ( x quots -- )
 close-iterator ( iterator -- )
@@ -424,7 +425,7 @@ dispatch-provenance ( -- type )
 dispatch-provenance>hash ( dispatch-provenance -- hash )
 dispatch-provenance? ( val -- ? )
 do ( pred body -- pred body )
-doc-string
+doc-string ( -- type )
 doc>> ( instance: word-info -- doc: any )
 drop-at ( ... n -- ... )
 dupd ( a b -- a a b )
@@ -432,7 +433,7 @@ emit ( codepoint -- )
 enum{
 eprint ( str -- )
 eprint-line ( str -- )
-error
+error ( -- type )
 error-stream ( -- param )
 error-type? ( error type -- error ? )
 error>> ( instance: result-error -- error )
@@ -443,9 +444,9 @@ ffi-ptr+len>bytes ( resource n -- byte-array )
 field>> ( instance: dispatch-provenance -- field: string )
 file>> ( instance: source-loc -- file: string )
 finite? ( x -- ? )
-fixnum
+fixnum ( -- type )
 fixnum? ( val -- ? )
-float
+float ( -- type )
 float? ( val -- ? )
 flush ( -- )
 fmt ( source string -- string )
@@ -464,7 +465,7 @@ generated-by ( symbol -- provenance/f )
 generated-words ( symbol -- array )
 generator>> ( instance: provenance -- generator: string )
 generic? ( name -- ? )
-hash
+hash ( -- type )
 hash? ( val -- ? )
 help ( symbol -- )
 ignore-errors ( quot -- )
@@ -475,7 +476,7 @@ input-stream ( -- param )
 inputs>> ( instance: stack-effect-info -- inputs: array )
 inspectable
 integer? ( val -- ? )
-iterator
+iterator ( -- type )
 iterator? ( val -- ? )
 keep ( ..a x quot: ( ..a x -- ..b ) -- ..b x )
 line>> ( instance: source-loc -- line: fixnum )
@@ -496,7 +497,7 @@ make-source-loc ( file: string line: fixnum column: fixnum -- source-loc: source
 make-stack-effect-info ( inputs: array outputs: array -- stack-effect-info: stack-effect-info )
 make-stack-effect-param ( name: string row-variable?: boolean nested-effect: any type-annotation: any -- stack-effect-param: stack-effect-param )
 make-word-info ( name: string stack-effect: any doc: any markers: array native?: boolean body: any methods: array source-loc: any module: any provenance: any compiled?: boolean -- word-info: word-info )
-marker
+marker ( -- type )
 marker? ( val -- ? )
 markers>> ( instance: word-info -- markers: array )
 match{
@@ -507,12 +508,12 @@ method-info? ( val -- ? )
 methods>> ( instance: word-info -- methods: array )
 method{
 min ( a1 a2 -- a )
-module
+module ( -- type )
 module-cache ( -- param )
 module-loaded-hooks ( -- param )
 module>> ( instance: word-info -- module: any )
 module? ( val -- ? )
-mutable-map
+mutable-map ( -- type )
 mutable-map? ( val -- ? )
 mutable? ( val -- ? )
 my-test-word
@@ -566,7 +567,7 @@ ordering? ( val -- ? )
 output-stream ( -- param )
 outputs>> ( instance: stack-effect-info -- outputs: array )
 pad-right ( str width -- str )
-parameter
+parameter ( -- type )
 parameter? ( val -- ? )
 parent>> ( instance: provenance -- parent: string )
 parse-quotation ( -- quotation )
@@ -581,7 +582,7 @@ provenance ( -- type )
 provenance>> ( instance: method-info -- provenance: any )
 provenance>hash ( provenance -- hash )
 provenance? ( val -- ? )
-quotation
+quotation ( -- type )
 quotation-has-calls? ( quotation -- bool )
 quotation>opcodes ( quotation -- array )
 quotation? ( val -- ? )
@@ -589,7 +590,7 @@ read-line ( -- str/f )
 receive? ( ch -- option )
 reexport ( module -- )
 reload ( filename -- module )
-resource
+resource ( -- type )
 result ( -- type )
 result-error ( -- type )
 result-error>hash ( result-error -- hash )
@@ -607,14 +608,14 @@ result? ( val -- ? )
 role>> ( instance: provenance -- role: string )
 row-variable?>> ( instance: stack-effect-param -- row-variable?: boolean )
 run-benchmarks ( quot -- )
-sandbox-spec
-set
+sandbox-spec ( -- type )
+set ( -- type )
 set? ( val -- ? )
 source-loc ( -- type )
 source-loc>> ( instance: word-info -- source-loc: any )
 source-loc>hash ( source-loc -- hash )
 source-loc? ( val -- ? )
-stack-effect
+stack-effect ( -- type )
 stack-effect-info ( -- type )
 stack-effect-info>hash ( stack-effect-info -- hash )
 stack-effect-info? ( val -- ? )
@@ -622,20 +623,20 @@ stack-effect-param ( -- type )
 stack-effect-param>hash ( stack-effect-param -- hash )
 stack-effect-param? ( val -- ? )
 stack-effect>> ( instance: word-info -- stack-effect: any )
-stream
+stream ( -- type )
 stream-write-string ( stream str -- n )
 stream? ( val -- ? )
-string
+string ( -- type )
 string? ( val -- ? )
 stringable
-struct-instance
-struct-type
+struct-instance ( -- type )
+struct-type ( -- type )
 struct{
-symbol
+symbol ( -- type )
 symbol? ( val -- ? )
-tagged
-task
-template
+tagged ( -- type )
+task ( -- type )
+template ( -- type )
 throw-type-error ( value expected-str -- * )
 times ( n quot -- )
 trace-stack ( label -- label )
@@ -644,16 +645,16 @@ tri ( ..a x p: ( ..a x -- ..b ) q: ( ..a x -- ..c ) r: ( ..a x -- ..d ) -- ..b .
 try ( quot -- result )
 try-acquire ( resource -- option )
 tuck ( a b -- b a b )
-type
+type ( -- type )
 type-annotation>> ( instance: stack-effect-param -- type-annotation: any )
-type-descriptor
+type-descriptor ( -- type )
 type-has-property? ( val property -- ? )
 type-members ( type -- array/f )
 type-name ( val -- string )
 type-union? ( type -- ? )
 type>> ( instance: descriptor-variant -- type: type )
 types>> ( instance: method-info -- types: array )
-unit
+unit ( -- type )
 unless ( ? quot -- )
 unmake-descriptor-variant ( descriptor-variant -- name type )
 unmake-dispatch-provenance ( dispatch-provenance -- generator parent role field )
@@ -677,7 +678,7 @@ use
 value>> ( instance: option-payload -- value )
 variant-max-name-len ( variants -- n )
 variant-max-name-len-acc ( max variants -- max )
-vector
+vector ( -- type )
 vector? ( val -- ? )
 virtual{
 when ( ? quot -- )

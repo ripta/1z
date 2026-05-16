@@ -71,7 +71,8 @@ pub fn dispatchDescriptor(val: Value, ctx: *Context) *const TypeDescriptor {
 
 /// Returns the canonical type name for a Value discriminant tag.
 /// For the three dynamic variants (.tagged, .struct_instance, .resource),
-/// returns the base type name used in the prelude's define-builtin-type.
+/// returns the base type name used in the prelude's descriptor-driven
+/// `define-builtin-type` entries.
 pub fn builtinTypeName(comptime tag: std.meta.Tag(Value)) []const u8 {
     return switch (tag) {
         .fixnum => "fixnum",

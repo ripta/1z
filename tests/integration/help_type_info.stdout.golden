@@ -263,7 +263,7 @@ type info:
 Stack: [ ]
 === builtin type info (with metadata) ===
 Stack: [ ]
-Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+Stack: [ "fixnum ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
 type info:
   kind: builtin-type
   integer: t
@@ -271,7 +271,7 @@ type info:
   numeric: t
 " ]
 PASS: fixnum has type info header
-Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+Stack: [ "fixnum ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
 type info:
   kind: builtin-type
   integer: t
@@ -279,7 +279,7 @@ type info:
   numeric: t
 " ]
 PASS: fixnum shows kind
-Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+Stack: [ "fixnum ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
 type info:
   kind: builtin-type
   integer: t
@@ -287,7 +287,7 @@ type info:
   numeric: t
 " ]
 PASS: fixnum shows numeric
-Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+Stack: [ "fixnum ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
 type info:
   kind: builtin-type
   integer: t
@@ -295,7 +295,7 @@ type info:
   numeric: t
 " ]
 PASS: fixnum shows exact
-Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+Stack: [ "fixnum ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
 type info:
   kind: builtin-type
   integer: t
@@ -303,7 +303,7 @@ type info:
   numeric: t
 " ]
 PASS: fixnum shows integer
-Stack: [ "fixnum [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+Stack: [ "fixnum ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
 type info:
   kind: builtin-type
   integer: t
@@ -313,17 +313,17 @@ type info:
 Stack: [ ]
 === builtin type info (without metadata) ===
 Stack: [ ]
-Stack: [ "boolean [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+Stack: [ "boolean ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
 type info:
   kind: builtin-type
 " ]
 PASS: boolean has type info header
-Stack: [ "boolean [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+Stack: [ "boolean ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
 type info:
   kind: builtin-type
 " ]
 PASS: boolean shows kind
-Stack: [ "boolean [<marker:typed>, <marker:const>, <marker:parse-time>] \compound
+Stack: [ "boolean ( -- type ) [<marker:parse-time>, <marker:const>, <marker:typed>] \compound
 type info:
   kind: builtin-type
 " ]

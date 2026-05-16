@@ -118,6 +118,7 @@ pub const extracted_primitives = stack.primitives ++
     structs.primitives ++
     env.primitives ++
     template.primitives ++
+    builtin_types.primitives ++
     virtual.primitives ++
     enums.primitives ++
     dispatch_words.primitives ++

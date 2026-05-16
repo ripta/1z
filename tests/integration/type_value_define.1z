@@ -1,6 +1,6 @@
 use "testing" ;
 
-test-type: [ type: builtin-type: ] make-mutable-map native.define-builtin-type ;
+test-type: M{ type: builtin-type: define: [ define-builtin-type ] } ;
 
 test-type inspect "<type:test-type>" "inspect shows type name" assert=
 
@@ -8,6 +8,6 @@ test-type inspect "<type:test-type>" "inspect shows type name" assert=
 descriptor-kind builtin-type: = "descriptor registered" assert-true
 
 \ Redefining a builtin type that already has a descriptor should error.
-[ fixnum: M{ type: builtin-type: } native.define-builtin-type ;
+[ fixnum: M{ type: builtin-type: define: [ define-builtin-type ] } ;
 ]
 "duplicate descriptor on builtin type errors" assert-error
