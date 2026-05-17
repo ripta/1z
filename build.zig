@@ -1727,6 +1727,8 @@ fn createCommonModule(
     });
     module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
     module.addIncludePath(b.path("ext/toy"));
+    module.addCSourceFile(.{ .file = b.path("ext/minicoro/minicoro.c"), .flags = &.{} });
+    module.addIncludePath(b.path("ext/minicoro"));
     module.linkSystemLibrary("ffi", .{});
     addFfiIncludePath(b, module, target);
     addIrSources(b, module);

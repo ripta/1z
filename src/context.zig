@@ -491,6 +491,8 @@ pub const Context = struct {
     /// When non-null, word lookup checks the word's capability against
     /// this spec and rejects words whose capability is not granted.
     active_sandbox: ?*const SandboxSpec = null,
+    /// Number of OS threads for the scheduler. 0 means auto-detect from CPU count.
+    worker_count: usize = 0,
     /// Shared hook registry for lifecycle event callbacks.
     /// Allocated on the container arena by the root context and shared by
     /// pointer to all child task contexts.

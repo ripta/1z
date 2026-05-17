@@ -59,6 +59,16 @@ fn allocateTask(
     scope: *TaskScope,
     quotation: Quotation,
 ) !*Task {
+    return allocateTaskWithEntry(ctx, scheduler, scope, quotation, &task_mod.taskEntryPoint);
+}
+
+fn allocateTaskWithEntry(
+    ctx: *Context,
+    scheduler: *Scheduler,
+    scope: *TaskScope,
+    quotation: Quotation,
+    entry_fn: task_mod.CoroEntryFn,
+) !*Task {
     const task = try ctx.allocator.create(Task);
     errdefer ctx.allocator.destroy(task);
 
@@ -66,24 +76,22 @@ fn allocateTask(
     errdefer ctx.allocator.destroy(task_ctx);
     task_ctx.* = try Context.initForTask(ctx.allocator, ctx, scheduler);
 
-    const stack_mem = try task_mod.allocateTaskStack(task_stack_size);
-    errdefer task_mod.freeTaskStack(stack_mem);
-
     task.* = .{
         .id = scheduler.nextId(),
         .name = null,
         .status = std.atomic.Value(task_mod.TaskStatus).init(.pending),
-        .uctx = undefined,
-        .stack_mem = stack_mem,
         .ctx = task_ctx,
         .scope = scope,
         .quotation = quotation,
     };
 
-    task_ctx.stack_high = @intFromPtr(stack_mem.ptr) + stack_mem.len;
-    task_ctx.stack_limit = @intFromPtr(stack_mem.ptr) + task_stack_reserve;
+    try task_mod.initCoroContext(task, entry_fn, task_stack_size);
+    errdefer task_mod.coroDestroy(task);
 
-    task_mod.initTaskContext(task, &task_mod.taskEntryPoint, &scheduler.scheduler_uctx);
+    const coro = task.coro.?;
+    task_ctx.stack_high = @intFromPtr(coro.stack_base) + coro.stack_size;
+    task_ctx.stack_limit = @intFromPtr(coro.stack_base) + task_stack_reserve;
+
     try scheduler.all_tasks.append(ctx.allocator, task);
     return task;
 }
@@ -327,8 +335,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     const timer_quot: Quotation = .{ .instructions = timer_instrs };
 
     // spawn the timer task with a custom entry point that marks as failed with a timeout error after the sleep completes
-    const timer_task = try allocateTask(ctx, scheduler, &scope, timer_quot);
-    task_mod.initTaskContext(timer_task, &timerTaskEntryPoint, &scheduler.scheduler_uctx);
+    const timer_task = try allocateTaskWithEntry(ctx, scheduler, &scope, timer_quot, &timerTaskEntryPoint);
     try scope.addChild(timer_task);
     try scheduler.enqueue(timer_task);
 
@@ -376,9 +383,8 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
 /// Runs the timer quotation (which sleeps), then marks the task as failed
 /// with a timeout error. This failure triggers sibling cancellation of the
 /// main task in the isolated scope.
-fn timerTaskEntryPoint() callconv(.c) void {
-    const task = task_mod.pending_entry_task.?;
-    task_mod.pending_entry_task = null;
+fn timerTaskEntryPoint(co: task_mod.CoroPtr) callconv(.c) void {
+    const task: *Task = @ptrCast(@alignCast(task_mod.getCoroUserData(co)));
 
     task.ctx.executeQuotation(task.quotation) catch {
         if (task.cancellation_phase != .none) {

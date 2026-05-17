@@ -7,6 +7,12 @@ const Instruction = @import("value.zig").Instruction;
 const Context = @import("context.zig").Context;
 const task_mod = @import("task.zig");
 
+const c = struct {
+    extern "c" fn getcontext(ucp: *std.c.ucontext_t) c_int;
+    extern "c" fn makecontext(ucp: *std.c.ucontext_t, func: *const fn () callconv(.c) void, argc: c_int) void;
+    extern "c" fn swapcontext(oucp: *std.c.ucontext_t, ucp: *const std.c.ucontext_t) c_int;
+};
+
 pub const ParseResult = union(enum) {
     success: []const Instruction,
     parse_error: parser.ParseError,
@@ -27,12 +33,12 @@ pub const ParserCoroutine = struct {
 
     pub fn yield(self: *ParserCoroutine) void {
         self.status = .yielded;
-        _ = task_mod.swapcontext(&self.uctx, &self.caller_uctx);
+        _ = c.swapcontext(&self.uctx, &self.caller_uctx);
     }
 
     pub fn @"resume"(self: *ParserCoroutine) void {
         self.status = .running;
-        _ = task_mod.swapcontext(&self.caller_uctx, &self.uctx);
+        _ = c.swapcontext(&self.caller_uctx, &self.uctx);
     }
 };
 
@@ -77,5 +83,5 @@ pub fn initCoroutineContext(co: *ParserCoroutine) void {
     co.uctx.stack.flags = 0;
     co.uctx.link = &co.caller_uctx;
 
-    task_mod.makecontext(&co.uctx, &parserEntryPoint, 0);
+    c.makecontext(&co.uctx, &parserEntryPoint, 0);
 }

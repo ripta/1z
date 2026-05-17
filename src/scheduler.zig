@@ -53,12 +53,11 @@ pub const ClockMode = union(enum) {
 ///
 /// Drives green thread execution by round-robin scheduling tasks. Each task
 /// runs until it yields or completes, then control returns to the scheduler
-/// loop via swapcontext.
+/// loop when the coroutine yields back to its caller.
 pub const Scheduler = struct {
     run_queue: std.ArrayListUnmanaged(*Task),
     sleep_queue: SleepQueue,
     current_task: ?*Task = null,
-    scheduler_uctx: std.c.ucontext_t = undefined,
     next_task_id: u64 = 1,
     allocator: Allocator,
     /// Finished tasks whose stacks and arenas are freed on deinit.
@@ -110,10 +109,7 @@ pub const Scheduler = struct {
 
     pub fn deinit(self: *Scheduler) void {
         for (self.finished_tasks.items) |t| {
-            if (t.stack_mem) |mem| {
-                task_mod.freeTaskStack(mem);
-                t.stack_mem = null;
-            }
+            task_mod.coroDestroy(t);
             t.ctx.deinit();
             self.allocator.destroy(t.ctx);
             self.allocator.destroy(t);
@@ -149,31 +145,31 @@ pub const Scheduler = struct {
         return id;
     }
 
-    /// Re-enqueue the current task and swap back to the scheduler context.
+    /// Re-enqueue the current task and yield back to the scheduler loop.
     /// Called from within a running task by the `yield` primitive.
     pub fn yieldCurrentTask(self: *Scheduler) void {
         if (self.current_task) |task| {
             self.run_queue.append(self.allocator, task) catch {};
-            _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
+            task_mod.coroYield();
         }
     }
 
-    /// Swap context back to the scheduler without reënqueuing the current task.
+    /// Yield back to the scheduler without reënqueuing the current task.
     /// Used by nested `task-scope` to block the calling task until its scope completes.
     pub fn suspendCurrentTask(self: *Scheduler) void {
-        if (self.current_task) |task| {
-            _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
+        if (self.current_task != null) {
+            task_mod.coroYield();
         }
     }
 
     /// Suspend the current task until `duration_ns` nanoseconds have elapsed.
-    /// Inserts the task into the sleep queue and swaps back to the scheduler.
+    /// Inserts the task into the sleep queue and yields back to the scheduler.
     pub fn sleepCurrentTask(self: *Scheduler, duration_ns: i128) void {
         if (self.current_task) |task| {
             const wake_time = self.nowNs() + duration_ns;
 
             self.sleep_queue.add(.{ .task = task, .wake_time = wake_time }) catch {};
-            _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
+            task_mod.coroYield();
         }
     }
 
@@ -217,7 +213,7 @@ pub const Scheduler = struct {
             self.multiplexer.register(fd, event) catch {};
             self.io_wait_map.put(self.allocator, fd, .{ .task = task, .event = event }) catch {};
             task.blocked_on_io_fd = fd;
-            _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
+            task_mod.coroYield();
         }
     }
 
@@ -235,7 +231,7 @@ pub const Scheduler = struct {
         });
         task.blocked_on_process_pid = pid;
         task.blocked_on_process_key = key;
-        _ = task_mod.swapcontext(&task.uctx, &self.scheduler_uctx);
+        task_mod.coroYield();
     }
 
     /// Move cancelled tasks from the I/O wait map to the run queue so they
@@ -288,7 +284,7 @@ pub const Scheduler = struct {
     ///
     /// 1. Wake expired sleepers into the run queue.
     /// 2. If run queue non-empty: dequeue one task, handle cancellation or
-    ///    resume via swapcontext, handle completion. Loop back to step 1.
+    ///    resume via mco_resume, handle completion. Loop back to step 1.
     /// 3. Run queue empty: drain cancelled sleepers and I/O waiters.
     /// 4. If sleepers or I/O waiters remain: poll multiplexer with the next
     ///    sleep deadline as timeout, re-enqueue tasks whose fds are ready.
@@ -305,13 +301,8 @@ pub const Scheduler = struct {
                 const task = self.run_queue.orderedRemove(0);
                 self.current_task = task;
 
-                // NOTE(ripta): Set `pending_entry_task` before swapcontext.
-                //              For new tasks, the entry function reads and clears it.
-                //              For resumed tasks, the variable is ignored and overwritten on the next iteration.
-                task_mod.pending_entry_task = task;
                 task.setStatus(.running);
-
-                _ = task_mod.swapcontext(&self.scheduler_uctx, &task.uctx);
+                task_mod.coroResume(task);
                 self.current_task = null;
                 switch (task.getStatus()) {
                     .completed, .failed, .cancelled => {

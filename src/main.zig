@@ -238,6 +238,7 @@ const ExecutionFlags = struct {
     cli_set_compile: bool = false,
     cli_set_profile_top: bool = false,
     allow_interpreter_fallback: bool = false,
+    worker_count: usize = 0,
 };
 
 /// Result of attempting to parse a single argument as a flag.
@@ -419,6 +420,21 @@ fn parseExecutionFlag(
     }
     if (std.mem.eql(u8, arg, "--allow-interpreter-fallback")) {
         state.allow_interpreter_fallback = true;
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--threads=")) {
+        const value = arg["--threads=".len..];
+        const n = std.fmt.parseUnsigned(usize, value, 10) catch {
+            err_writer.print("Error: invalid value for --threads: '{s}'\n", .{value}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        };
+        if (n == 0) {
+            err_writer.print("Error: --threads must be at least 1\n", .{}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        }
+        state.worker_count = n;
         return .consumed;
     }
     if (std.mem.startsWith(u8, arg, "--compile=")) {

@@ -6,35 +6,33 @@ const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
 const ErrorObject = value_mod.ErrorObject;
 
-/// C library functions for ucontext coroutine support.
-const c = struct {
-    extern "c" fn getcontext(ucp: *std.c.ucontext_t) c_int;
-    extern "c" fn makecontext(
-        ucp: *std.c.ucontext_t,
-        func: *const fn () callconv(.c) void,
-        argc: c_int,
-    ) void;
-    extern "c" fn swapcontext(
-        oucp: *std.c.ucontext_t,
-        ucp: *const std.c.ucontext_t,
-    ) c_int;
-};
+const mc = @cImport({
+    @cInclude("minicoro.h");
+});
 
-pub const makecontext = c.makecontext;
-pub const swapcontext = c.swapcontext;
+/// Resume a task's coroutine from the calling (scheduler) context.
+pub fn coroResume(task: *Task) void {
+    _ = mc.mco_resume(task.coro.?);
+}
 
-/// Thread-local variable to pass the task pointer to `taskEntryPoint`.
-/// Thread safety is enforced by `threadlocal`: each OS thread gets its own
-/// slot, so concurrent threads cannot interfere. Within a thread the usage
-/// is a same-thread trampoline: set immediately before swapcontext, read
-/// and cleared in the entry function before any yield point.
-pub threadlocal var pending_entry_task: ?*Task = null;
+/// Yield the current coroutine back to its caller (the scheduler).
+/// Must be called from within a running task coroutine.
+pub fn coroYield() void {
+    _ = mc.mco_yield(mc.mco_running());
+}
 
-/// Entry function for task coroutines. Called via makecontext with no
-/// arguments; reads the task pointer from `pending_entry_task`.
-pub fn taskEntryPoint() callconv(.c) void {
-    const task = pending_entry_task.?;
-    pending_entry_task = null;
+/// Destroy a task's coroutine and clear the pointer.
+pub fn coroDestroy(task: *Task) void {
+    if (task.coro) |co| {
+        _ = mc.mco_destroy(co);
+        task.coro = null;
+    }
+}
+
+/// Entry function for task coroutines. Called by minicoro with the coroutine
+/// pointer as the sole argument; reads the task pointer from user_data.
+pub fn taskEntryPoint(co: CoroPtr) callconv(.c) void {
+    const task: *Task = @ptrCast(@alignCast(mc.mco_get_user_data(co)));
 
     task.ctx.executeQuotation(task.quotation) catch {
         if (task.ctx.error_details.items.len > 0) {
@@ -100,8 +98,7 @@ pub const Task = struct {
     status: std.atomic.Value(TaskStatus),
     result: ?Value = null,
     error_obj: ?*ErrorObject = null,
-    uctx: std.c.ucontext_t = undefined,
-    stack_mem: ?[]align(std.heap.page_size_min) u8 = null,
+    coro: ?*mc.mco_coro = null,
     ctx: *Context,
     scope: *TaskScope,
     cancellation_phase: CancellationPhase = .none,
@@ -188,7 +185,33 @@ pub const TaskScope = struct {
     }
 };
 
-/// Allocate a native stack for a task using mmap with a guard page.
+/// Opaque pointer type for a minicoro coroutine handle.
+pub const CoroPtr = ?*mc.mco_coro;
+
+/// Function type for coroutine entry points passed to minicoro.
+pub const CoroEntryFn = *const fn (CoroPtr) callconv(.c) void;
+
+/// Get the user_data pointer from a coroutine handle.
+pub fn getCoroUserData(co: CoroPtr) ?*anyopaque {
+    return mc.mco_get_user_data(co);
+}
+
+/// Initialize a minicoro coroutine for a task.
+///
+/// The entry function receives the mco_coro pointer and reads the task from
+/// user_data. stack_size controls the OS stack for coroutine execution.
+pub fn initCoroContext(
+    task: *Task,
+    entry_fn: CoroEntryFn,
+    stack_size: usize,
+) !void {
+    var desc = mc.mco_desc_init(entry_fn, stack_size);
+    desc.user_data = task;
+    const result = mc.mco_create(&task.coro, &desc);
+    if (result != mc.MCO_SUCCESS) return error.CoroCreationFailed;
+}
+
+/// Allocate a native stack for a parser coroutine using mmap with a guard page.
 /// Returns the full allocation of guard plus usable.
 ///
 /// Layout: [guard page (PROT_NONE)] [usable stack space]
@@ -216,26 +239,9 @@ pub fn allocateTaskStack(size: usize) ![]align(std.heap.page_size_min) u8 {
     return @alignCast(mem);
 }
 
-/// Free a task stack allocated by allocateTaskStack.
+/// Free a stack allocated by allocateTaskStack.
 pub fn freeTaskStack(mem: []align(std.heap.page_size_min) u8) void {
     std.posix.munmap(mem);
-}
-
-/// Initialize a ucontext_t for a task, setting up the stack and entry function.
-/// The entry function receives no arguments. The task pointer is passed via
-/// a module-level variable, which should be safe because scheduling is single-
-/// threaded cooperative.
-pub fn initTaskContext(task: *Task, entry_fn: *const fn () callconv(.c) void, scheduler_uctx: *std.c.ucontext_t) void {
-    const stack_mem = task.stack_mem.?;
-    const page_size = std.heap.page_size_min;
-
-    _ = c.getcontext(&task.uctx);
-    task.uctx.stack.sp = @ptrCast(stack_mem.ptr + page_size);
-    task.uctx.stack.size = @intCast(stack_mem.len - page_size);
-    task.uctx.stack.flags = 0;
-    task.uctx.link = scheduler_uctx;
-
-    c.makecontext(&task.uctx, entry_fn, 0);
 }
 
 // =============================================================================
