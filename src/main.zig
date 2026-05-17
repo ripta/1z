@@ -1760,6 +1760,14 @@ fn inferFreezeArtifactClass(
     return .interpreter_free_aot;
 }
 
+fn unresolvedReasonLabel(reason: aot_freeze.UnresolvedReason) []const u8 {
+    return switch (reason) {
+        .not_in_dictionary => "absent from the freeze-time dictionary",
+        .skipped_parse_time_only => "marked parse-time-only",
+        .skipped_no_stack_effect => "discovered without a stack effect",
+    };
+}
+
 fn printInterpreterLinkSummary(
     interpreter_fallback: ir_codegen.InterpreterFallbackMode,
     lock_interpreter_setting: bool,
@@ -2273,6 +2281,12 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                     err_writer.print(
                         "Error: dynamic feature '{s}' in '{s}' is not available in interpreter-free AOT; this feature requires runtime code-loading machinery that interpreter-free binaries omit. Build with --emit-runtime-image to produce a runtime-image AOT binary, or run under the interpreter, if you need '{s}'.\n",
                         .{ feature_use.feature_name, feature_use.caller_name, feature_use.feature_name },
+                    ) catch {};
+                }
+                if (freeze_diagnostics.unresolved_callee_hint) |hint| {
+                    err_writer.print(
+                        "  hint: callee '{s}' was {s} at freeze time, so the call site has no concrete runtime word id; the marker fired because the parse-time definition was visible, but no runtime word backs this name.\n",
+                        .{ hint.callee_name, unresolvedReasonLabel(hint.reason) },
                     ) catch {};
                 }
             } else {

@@ -62,6 +62,24 @@ pub const FreezeResult = struct {
 /// Why a `call_word` could not be resolved to a concrete callee during the
 /// freeze BFS. Distinct reasons exist so downstream enforcement can apply
 /// different rules to each.
+///
+/// Enforcement behavior against banned `dynamic-*` features:
+///
+/// - `not_in_dictionary`: BFS marker check returns null (no word to check),
+///   so no ban can fire at this site. If a separate site in the same caller
+///   does trigger a banned-feature diagnostic, the unresolved row is
+///   surfaced as a hint so the user sees what freeze could not classify.
+/// - `skipped_parse_time_only`: the only realistic path where a banned
+///   marker can coexist with an unresolved row, since
+///   `bannedDynamicFeatureForCall` calls `ctx.lookupWord` which returns
+///   parse-time-only definitions. When this happens, freeze emits the
+///   banned-feature error and populates `unresolved_callee_hint` so the
+///   user-facing message can explain why the callee is unresolved at
+///   runtime even though its marker was visible at parse time.
+/// - `skipped_no_stack_effect`: BFS already raised any marker ban (or
+///   chose not to) before remap. This row exists only on the
+///   `MissingStackEffects` error path, and the surrounding FreezeResult
+///   is deinit'd before consumers can observe `call_targets`.
 pub const UnresolvedReason = enum {
     /// Neither `Context.lookupWord` nor `resolveQualifiedModuleWord` returned
     /// a definition for the name. The callee is genuinely absent from the
@@ -79,8 +97,40 @@ pub const UnresolvedReason = enum {
 };
 
 /// Classification placeholder for words materialized by generators
-/// (struct accessors, virtual constructors, `method{` dispatchers).
-/// Reserved for future use; not emitted today.
+/// (struct accessors, virtual constructors, `method{` dispatchers). The
+/// `placeholder` variant is reserved for future first-use generators that
+/// would materialize after the BFS sees a call site; today the variant is
+/// unused because every known generator runs at parse time.
+///
+/// Generator-resolution contract (each known generator kind):
+///
+/// - **Struct accessors** (`field>>`, `>>field`) materialize during `;`
+///   execution of `struct{ ... }`. `src/primitives/structs.zig` calls
+///   `defineFieldGetter` and `defineFieldSetter`, which install real
+///   `WordDefinition` entries whose bodies invoke the qualified natives
+///   `native.struct-field-get` / `native.struct-field-set`. Both the
+///   accessor (direct `ctx.lookupWord`) and the inner native call
+///   (`resolveQualifiedModuleWord`) are resolvable by freeze BFS, so call
+///   sites surface as `compound` or `native` `ResolvedCallee` rows.
+/// - **Virtual constructors** (`<name>`, `make-name`, `>name`, `name>`,
+///   `name?`) materialize during `;` execution of `virtual{ ... }`.
+///   `src/primitives/virtual.zig::defineWrap` / `defineUnwrap` install
+///   the wrap, unwrap, and predicate words; their bodies call qualified
+///   natives like `native.virtual-wrap`. Same resolution path as
+///   struct accessors.
+/// - **`method{` dispatchers**: the polymorphic word itself is defined
+///   separately (built-in or user-authored with the `generic` marker).
+///   `define-method` registers a dispatch table entry through
+///   `ctx.registerDispatch`; no new dictionary word is created. Freeze
+///   resolves the dispatcher directly and walks single-method tables via
+///   `walkSingleMethodDispatch`, so reachable bodies behave like nested
+///   quotation literals during BFS.
+///
+/// Implication: today the BFS never emits a `GeneratedKind` row, and
+/// `unresolved` rows never name a known-generator output. If a future
+/// generator changes its materialization timing, the regression tests in
+/// this file (search for "generator") will flip to `unresolved` and
+/// require an explicit decision to update the contract.
 pub const GeneratedKind = enum {
     placeholder,
 };
@@ -131,9 +181,26 @@ pub const FreezeFeatureUse = struct {
     feature_name: []const u8,
 };
 
+/// Recorded alongside a `DisallowedDynamicFeature` diagnostic when the
+/// callee that triggered the ban classifies as unresolved (or, in a
+/// future world, as a pending generator). Carries the resolution reason
+/// so the user-facing message can explain why the callee is unresolved
+/// at freeze time even though its marker was visible to the ban check.
+pub const UnresolvedCalleeHint = struct {
+    caller_name: []const u8,
+    callee_name: []const u8,
+    reason: UnresolvedReason,
+};
+
 pub const FreezeDiagnostics = struct {
     fatal_dynamic_feature: ?FreezeFeatureUse = null,
     fatal_native_interpreter_dependency: ?FreezeFeatureUse = null,
+    /// Set in lockstep with `fatal_dynamic_feature` when the call_target
+    /// row for the banned site does not resolve to a concrete callee
+    /// id. Today the only realistic path that populates this field is a
+    /// parse-time-only word carrying a `dynamic-*` marker; future
+    /// first-use generators would also surface here.
+    unresolved_callee_hint: ?UnresolvedCalleeHint = null,
     missing_stack_effects: []const []const u8 = &.{},
 };
 
@@ -712,6 +779,23 @@ fn collectCallWords(
                         .caller_name = caller_name,
                         .feature_name = name,
                     };
+                    // If the same name classifies as unresolved (e.g., a
+                    // parse-time-only word carrying a `dynamic-*` marker),
+                    // attach a hint so the user-facing diagnostic can
+                    // explain why the callee has no runtime presence even
+                    // though the marker fired. See the generator-resolution
+                    // contract on `GeneratedKind` for the forward-looking
+                    // case where a first-use generator would surface here.
+                    switch (classifyCallee(ctx, name)) {
+                        .unresolved => |reason| {
+                            diagnostics.unresolved_callee_hint = .{
+                                .caller_name = caller_name,
+                                .callee_name = name,
+                                .reason = reason,
+                            };
+                        },
+                        else => {},
+                    }
                     return error.DisallowedDynamicFeature;
                 }
                 if (artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, name)) {
@@ -2751,4 +2835,323 @@ test "buildAotDescs throughput ceiling on synthetic graph" {
 
     try testing.expectEqual(word_count * calls_per_word, result.call_targets.len);
     try testing.expect(elapsed_ns < ceiling_ns);
+}
+
+// ── Generator-Resolution Contract Tests ────────────────────────────────
+//
+// Pin the rule that struct accessors, virtual constructors, and method{
+// dispatchers materialize as ordinary dictionary or dispatch-table
+// entries by the time freeze BFS observes them. A regression that moves
+// any of these to first-use materialization will flip the resolved
+// variant from `.compound` / `.native` to `.unresolved`, failing these
+// tests loudly. Integration coverage of the same contract lives in
+// `tests/aot/generator_*.1z`; this file's tests pin the resolution
+// machinery without standing up a full parser run.
+
+fn generatorTestNoopNative(_: *Context) anyerror!void {}
+
+test "struct accessor body resolves through buildAotDescs as a compound call" {
+    // Mirrors the shape installed by
+    // `src/primitives/structs.zig::defineFieldGetter`: a compound word
+    // whose body invokes a qualified native helper. The test asserts
+    // call_targets carries `.compound = caller_id` for the entry hitting
+    // the accessor, locking in parse-time materialization.
+    const allocator = testing.allocator;
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "x>>" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    const accessor_body = &[_]Instruction{
+        .{ .op = .{ .call_word = "native.struct-field-get" }, .line = 1 },
+    };
+    const effect = StackEffect{
+        .inputs = &.{.{ .name = "rec" }},
+        .outputs = &.{.{ .name = "val" }},
+    };
+    const native_effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.names.deinit(allocator);
+    defer discovered.defs.deinit(allocator);
+    defer discovered.native_names.deinit(allocator);
+    defer discovered.native_defs.deinit(allocator);
+
+    try discovered.names.append(allocator, "x>>");
+    try discovered.defs.append(allocator, .{
+        .name = "x>>",
+        .action = .{ .compound = accessor_body },
+        .stack_effect = effect,
+    });
+    try discovered.native_names.append(allocator, "native.struct-field-get");
+    try discovered.native_defs.append(allocator, .{
+        .name = "native.struct-field-get",
+        .action = .{ .native = generatorTestNoopNative },
+        .stack_effect = native_effect,
+    });
+
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "__entry__", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = "x>>" } },
+        .{ .caller_name = "x>>", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .native_name = "native.struct-field-get" } },
+    };
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    defer result.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 2), result.call_targets.len);
+    // Entry -> accessor: compound call.
+    try testing.expectEqual(@as(u32, 0), result.call_targets[0].caller_word_id);
+    switch (result.call_targets[0].resolved) {
+        .compound => |id| try testing.expect(id != 0),
+        else => return error.TestExpectedCompound,
+    }
+    // Accessor body -> qualified native.
+    switch (result.call_targets[1].resolved) {
+        .native => |id| try testing.expect(id != 0),
+        else => return error.TestExpectedNative,
+    }
+}
+
+test "virtual constructor body resolves through buildAotDescs as a compound call" {
+    // Mirrors the shape installed by
+    // `src/primitives/virtual.zig::defineWrap`: a compound word whose
+    // body invokes a qualified `native.virtual-wrap`. Asserts the same
+    // resolution rule as the struct-accessor case.
+    const allocator = testing.allocator;
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = ">point" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    const wrap_body = &[_]Instruction{
+        .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 1 },
+    };
+    const effect = StackEffect{
+        .inputs = &.{.{ .name = "raw" }},
+        .outputs = &.{.{ .name = "wrapped" }},
+    };
+    const native_effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.names.deinit(allocator);
+    defer discovered.defs.deinit(allocator);
+    defer discovered.native_names.deinit(allocator);
+    defer discovered.native_defs.deinit(allocator);
+
+    try discovered.names.append(allocator, ">point");
+    try discovered.defs.append(allocator, .{
+        .name = ">point",
+        .action = .{ .compound = wrap_body },
+        .stack_effect = effect,
+    });
+    try discovered.native_names.append(allocator, "native.virtual-wrap");
+    try discovered.native_defs.append(allocator, .{
+        .name = "native.virtual-wrap",
+        .action = .{ .native = generatorTestNoopNative },
+        .stack_effect = native_effect,
+    });
+
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "__entry__", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = ">point" } },
+        .{ .caller_name = ">point", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .native_name = "native.virtual-wrap" } },
+    };
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    defer result.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 2), result.call_targets.len);
+    switch (result.call_targets[0].resolved) {
+        .compound => {},
+        else => return error.TestExpectedCompound,
+    }
+    switch (result.call_targets[1].resolved) {
+        .native => {},
+        else => return error.TestExpectedNative,
+    }
+}
+
+test "method dispatcher resolves through buildAotDescs as a compound call" {
+    // Mirrors a generic word produced by `define-method`: an empty-body
+    // compound carrying the `generic` marker. The dispatch table holds
+    // the actual method bodies; freeze BFS resolves the dispatcher word
+    // itself directly. The synthetic dispatch path
+    // (`walkSingleMethodDispatch`) is exercised by integration tests
+    // since it requires a populated `Context.dispatch_table`.
+    const allocator = testing.allocator;
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "area" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    const effect = StackEffect{
+        .inputs = &.{.{ .name = "shape" }},
+        .outputs = &.{.{ .name = "n" }},
+    };
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.names.deinit(allocator);
+    defer discovered.defs.deinit(allocator);
+
+    try discovered.names.append(allocator, "area");
+    try discovered.defs.append(allocator, .{
+        .name = "area",
+        .action = .{ .compound = &.{} },
+        .stack_effect = effect,
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
+    });
+
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "__entry__", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = "area" } },
+    };
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    defer result.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), result.call_targets.len);
+    // The dispatcher word is descriptor-wise a compound; buildAotDescs
+    // routes empty-body generics through the native-shaped descriptor so
+    // codegen falls back to interpreter dispatch, but the call_targets
+    // entry still records the assigned word id and resolved kind.
+    switch (result.call_targets[0].resolved) {
+        .native, .compound => {},
+        else => return error.TestExpectedResolved,
+    }
+}
+
+test "DisallowedDynamicFeature surfaces unresolved-callee hint for parse-time-only banned word" {
+    // The only realistic path today where a banned `dynamic-*` marker
+    // can coexist with an unresolved call_target row: a user word marked
+    // `parse_time_only = true` carrying `dynamic-eval`. BFS-time
+    // bannedDynamicFeatureForCall fires (the marker is visible via
+    // lookupWord), and classifyCallee returns `.skipped_parse_time_only`
+    // because the runtime never sees the word. The diagnostic should
+    // carry the hint so the user-facing message can explain the gap.
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.dictionary.put("hidden-evaller", .{
+        .name = "hidden-evaller",
+        .action = .{ .compound = &.{} },
+        .parse_time_only = true,
+        .markers = &.{@constCast(&markers_mod.dynamic_eval_marker)},
+    });
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "hidden-evaller" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
+        &ctx,
+        instrs,
+        "caller",
+        &worklist,
+        &seen,
+        &quotation_bodies,
+        &quotation_seen,
+        &pending_call_targets,
+        &quotation_path,
+        &diagnostics,
+        .interpreter_free_aot,
+        allocator,
+        allocator,
+    ));
+
+    try testing.expect(diagnostics.fatal_dynamic_feature != null);
+    try testing.expectEqualStrings("caller", diagnostics.fatal_dynamic_feature.?.caller_name);
+    try testing.expectEqualStrings("hidden-evaller", diagnostics.fatal_dynamic_feature.?.feature_name);
+
+    try testing.expect(diagnostics.unresolved_callee_hint != null);
+    const hint = diagnostics.unresolved_callee_hint.?;
+    try testing.expectEqualStrings("caller", hint.caller_name);
+    try testing.expectEqualStrings("hidden-evaller", hint.callee_name);
+    try testing.expectEqual(UnresolvedReason.skipped_parse_time_only, hint.reason);
+}
+
+test "DisallowedDynamicFeature leaves unresolved-callee hint null for resolved native" {
+    // Confirms the hint stays null on the normal banned-feature path so
+    // existing error messages do not regress with stray hint lines.
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.dictionary.put("user-evaller", .{
+        .name = "user-evaller",
+        .action = .{ .native = generatorTestNoopNative },
+        .markers = &.{@constCast(&markers_mod.dynamic_eval_marker)},
+    });
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "user-evaller" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
+        &ctx,
+        instrs,
+        "caller",
+        &worklist,
+        &seen,
+        &quotation_bodies,
+        &quotation_seen,
+        &pending_call_targets,
+        &quotation_path,
+        &diagnostics,
+        .interpreter_free_aot,
+        allocator,
+        allocator,
+    ));
+
+    try testing.expect(diagnostics.fatal_dynamic_feature != null);
+    try testing.expect(diagnostics.unresolved_callee_hint == null);
 }
