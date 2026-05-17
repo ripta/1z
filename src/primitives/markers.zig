@@ -119,6 +119,85 @@ pub const dynamic_compile_marker: Marker = .{ .name = "dynamic-compile" };
 /// interpreter-free AOT.
 pub const dynamic_quotation_construction_marker: Marker = .{ .name = "dynamic-quotation-construction" };
 
+/// The three semantic artifact classes a 1z build may produce. Class
+/// reflects the maximum runtime capability of the artifact: an
+/// interpreter-linked binary can do everything (eval-string, runtime
+/// load, dynamic dispatch); a runtime-image-only AOT binary can
+/// rehydrate the program dictionary but not evaluate new source; an
+/// interpreter-free AOT binary only executes the frozen compiled graph.
+pub const ArtifactClass = enum {
+    interpreter,
+    runtime_image_aot,
+    interpreter_free_aot,
+
+    /// Lowercase-with-dashes spelling embedded in the AOT metadata
+    /// payload and printed by `1z inspect`. Stable across builds; do
+    /// not change without bumping the metadata schema version.
+    pub fn label(self: ArtifactClass) []const u8 {
+        return switch (self) {
+            .interpreter => "interpreter",
+            .runtime_image_aot => "runtime-image-aot",
+            .interpreter_free_aot => "interpreter-free-aot",
+        };
+    }
+};
+
+/// Freeze policy for the `dynamic-*` marker family. Each row names one
+/// of the well-known dynamic-capability markers; the column flags say
+/// which artifact classes ban that capability. Adding a new
+/// dynamic-capability marker adds a row; adding a new artifact class
+/// adds a column.
+const DynamicMarkerPolicy = struct {
+    marker: *const Marker,
+    banned_in_interpreter: bool,
+    banned_in_runtime_image_aot: bool,
+    banned_in_interpreter_free_aot: bool,
+};
+
+const dynamic_marker_policy = [_]DynamicMarkerPolicy{
+    .{
+        .marker = &dynamic_compile_marker,
+        .banned_in_interpreter = false,
+        .banned_in_runtime_image_aot = true,
+        .banned_in_interpreter_free_aot = true,
+    },
+    .{
+        .marker = &dynamic_eval_marker,
+        .banned_in_interpreter = false,
+        .banned_in_runtime_image_aot = false,
+        .banned_in_interpreter_free_aot = true,
+    },
+    .{
+        .marker = &dynamic_load_marker,
+        .banned_in_interpreter = false,
+        .banned_in_runtime_image_aot = false,
+        .banned_in_interpreter_free_aot = true,
+    },
+    .{
+        .marker = &dynamic_quotation_construction_marker,
+        .banned_in_interpreter = false,
+        .banned_in_runtime_image_aot = false,
+        .banned_in_interpreter_free_aot = true,
+    },
+};
+
+/// Returns true if the marker is one of the well-known `dynamic-*`
+/// markers and its policy entry bans the given artifact class. Returns
+/// false for any non-policy marker (anonymous markers, parse-time
+/// markers, etc.); identity comparison ensures unrelated markers with
+/// coincidental names cannot satisfy the predicate.
+pub fn isDynamicMarkerBannedIn(mk: *const Marker, class: ArtifactClass) bool {
+    for (dynamic_marker_policy) |entry| {
+        if (entry.marker != mk) continue;
+        return switch (class) {
+            .interpreter => entry.banned_in_interpreter,
+            .runtime_image_aot => entry.banned_in_runtime_image_aot,
+            .interpreter_free_aot => entry.banned_in_interpreter_free_aot,
+        };
+    }
+    return false;
+}
+
 /// Dispatch wildcard for `method{`, not a type -- no value has type `any`.
 pub const any_marker: Marker = .{ .name = "any" };
 

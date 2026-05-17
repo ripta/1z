@@ -1740,6 +1740,26 @@ fn printQuotationStats(
     err_writer.flush() catch {};
 }
 
+/// Derive the freeze-time artifact class from the build's CLI flags.
+///
+/// `--interpreter-fallback=true` definitely links the interpreter, so the
+/// binary will have full runtime capability and freeze can apply the
+/// permissive `interpreter` policy. For `.false` and `.auto` the artifact
+/// might still end up interpreter-linked (codegen may emit fallback
+/// calls), but freeze stays conservative and picks the strictest
+/// applicable class: `runtime_image_aot` when the runtime image is
+/// emitted, otherwise `interpreter_free_aot`. `lock_interpreter_setting`
+/// is intentionally not consulted here: it only governs whether codegen
+/// fallback is rejected, which is a downstream concern.
+fn inferFreezeArtifactClass(
+    interpreter_fallback: ir_codegen.InterpreterFallbackMode,
+    emit_runtime_image: bool,
+) ir_codegen.ArtifactClass {
+    if (interpreter_fallback == .true) return .interpreter;
+    if (emit_runtime_image) return .runtime_image_aot;
+    return .interpreter_free_aot;
+}
+
 fn printInterpreterLinkSummary(
     interpreter_fallback: ir_codegen.InterpreterFallbackMode,
     lock_interpreter_setting: bool,
@@ -2227,7 +2247,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var freeze_diagnostics: aot_freeze.FreezeDiagnostics = .{};
     var freeze_result = aot_freeze.freezeModuleGraphOpts(ctx, source, &freeze_diagnostics, allocator, .{
         .compile_all_prelude = compile_all_prelude,
-        .runtime_image = emit_runtime_image_flag,
+        .artifact_class = inferFreezeArtifactClass(interpreter_fallback, emit_runtime_image_flag),
     }) catch |err| {
         if (err == error.MissingStackEffects) {
             for (freeze_diagnostics.missing_stack_effects) |name| {

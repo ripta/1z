@@ -6379,28 +6379,11 @@ fn patchMissingD0(body: []u8, allocator: Allocator) Allocator.Error![]u8 {
 /// `entry_word_id` identifies which word to call from main().
 pub const InterpreterFallbackMode = enum { true, false, auto };
 
-/// The three semantic artifact classes a 1z build may produce. Class
-/// reflects the maximum runtime capability of the artifact: an
-/// interpreter-linked binary can do everything (eval-string, runtime
-/// load, dynamic dispatch); a runtime-image-only AOT binary can
-/// rehydrate the program dictionary but not evaluate new source; an
-/// interpreter-free AOT binary only executes the frozen compiled graph.
-pub const ArtifactClass = enum {
-    interpreter,
-    runtime_image_aot,
-    interpreter_free_aot,
-
-    /// Lowercase-with-dashes spelling embedded in the AOT metadata
-    /// payload and printed by `1z inspect`. Stable across builds; do
-    /// not change without bumping the metadata schema version.
-    pub fn label(self: ArtifactClass) []const u8 {
-        return switch (self) {
-            .interpreter => "interpreter",
-            .runtime_image_aot => "runtime-image-aot",
-            .interpreter_free_aot => "interpreter-free-aot",
-        };
-    }
-};
+/// Re-export of `ArtifactClass` so external callers (inspect mode,
+/// metadata emission) keep importing it from this module. The
+/// definition lives in `primitives/markers.zig` next to the dynamic
+/// marker family whose policy it governs.
+pub const ArtifactClass = markers_mod.ArtifactClass;
 
 /// Which image (if any) the binary ships. Metadata-only images live
 /// on the interpreter-free side of the class boundary: they carry word

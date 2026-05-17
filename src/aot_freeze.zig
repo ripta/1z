@@ -13,6 +13,7 @@ const StackEffect = stack_effect_mod.StackEffect;
 const dictionary_mod = @import("dictionary.zig");
 const WordDefinition = dictionary_mod.WordDefinition;
 const markers_mod = @import("primitives/markers.zig");
+const ArtifactClass = markers_mod.ArtifactClass;
 const pic_mod = @import("pic.zig");
 const dispatch_mod = @import("dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
@@ -164,7 +165,12 @@ pub fn freezeModuleGraph(
 
 pub const FreezeOptions = struct {
     compile_all_prelude: bool = false,
-    runtime_image: bool = false,
+    /// Which artifact class the build is targeting. Drives the
+    /// `dynamic-*` marker policy and the interpreter-dependent native
+    /// ban. Default `.interpreter_free_aot` is the strictest policy
+    /// applied; callers (CLI build, embedded host) pick a class that
+    /// matches the artifact they intend to produce.
+    artifact_class: ArtifactClass = .interpreter_free_aot,
 };
 
 pub fn freezeModuleGraphOpts(
@@ -212,7 +218,7 @@ pub fn freezeModuleGraphOpts(
     // Phase 2: Discover all reachable compound words via BFS.
     // The entry file's local frame is still on the stack, so lookupWord
     // finds entry-file definitions and their imports.
-    var discovered = discoverReachableWords(ctx, entry_instrs, diagnostics, options.runtime_image, allocator) catch |err| {
+    var discovered = discoverReachableWords(ctx, entry_instrs, diagnostics, options.artifact_class, allocator) catch |err| {
         ctx.popPragmaFrame();
         ctx.popLocalFrame();
         return switch (err) {
@@ -294,7 +300,7 @@ pub fn freezeModuleGraphOpts(
                     .call_word => |call_name| {
                         if (qual_seen.contains(call_name)) continue;
                         try qual_seen.put(temp_allocator, call_name, {});
-                        if (!options.runtime_image and isInterpreterDependentNative(ctx, call_name)) {
+                        if (options.artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
                             diagnostics.fatal_native_interpreter_dependency = .{
                                 .caller_name = def.name,
                                 .feature_name = call_name,
@@ -313,7 +319,7 @@ pub fn freezeModuleGraphOpts(
                                     .call_word => |call_name| {
                                         if (qual_seen.contains(call_name)) continue;
                                         try qual_seen.put(temp_allocator, call_name, {});
-                                        if (!options.runtime_image and isInterpreterDependentNative(ctx, call_name)) {
+                                        if (options.artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
                                             diagnostics.fatal_native_interpreter_dependency = .{
                                                 .caller_name = def.name,
                                                 .feature_name = call_name,
@@ -491,7 +497,7 @@ fn discoverReachableWords(
     ctx: *Context,
     entry_instrs: []const Instruction,
     diagnostics: *FreezeDiagnostics,
-    runtime_image: bool,
+    artifact_class: ArtifactClass,
     result_allocator: Allocator,
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!DiscoveredWords {
     const temp_allocator = ctx.quotationAllocator();
@@ -538,7 +544,7 @@ fn discoverReachableWords(
     }
 
     // Seed worklist from entry instructions
-    collectCallWords(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
+    collectCallWords(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
         freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
         result.names.deinit(temp_allocator);
         result.defs.deinit(temp_allocator);
@@ -571,7 +577,7 @@ fn discoverReachableWords(
                         try result.names.append(temp_allocator, name);
                         const qualified_def = wordDefFromModuleWord(name, mod_word);
                         try result.defs.append(temp_allocator, qualified_def);
-                        collectCallWords(ctx, compound_instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
+                        collectCallWords(ctx, compound_instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
                             freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
                             result.names.deinit(temp_allocator);
                             result.defs.deinit(temp_allocator);
@@ -581,7 +587,7 @@ fn discoverReachableWords(
                             result.pending_call_targets.deinit(temp_allocator);
                             return err;
                         };
-                        walkSingleMethodDispatch(ctx, qualified_def, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
+                        walkSingleMethodDispatch(ctx, qualified_def, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
                             freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
                             result.names.deinit(temp_allocator);
                             result.defs.deinit(temp_allocator);
@@ -615,7 +621,7 @@ fn discoverReachableWords(
         try result.defs.append(temp_allocator, word);
 
         // Discover callees
-        collectCallWords(ctx, instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
+        collectCallWords(ctx, instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
             freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
             result.names.deinit(temp_allocator);
             result.defs.deinit(temp_allocator);
@@ -628,7 +634,7 @@ fn discoverReachableWords(
 
         // Walk single-method dispatch entries for dispatch-only generics.
         // For non-generics or multi-method tables, this is a noop.
-        walkSingleMethodDispatch(ctx, word, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
+        walkSingleMethodDispatch(ctx, word, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
             freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
             result.names.deinit(temp_allocator);
             result.defs.deinit(temp_allocator);
@@ -694,21 +700,21 @@ fn collectCallWords(
     pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
     quotation_path: *std.ArrayListUnmanaged(u32),
     diagnostics: *FreezeDiagnostics,
-    runtime_image: bool,
+    artifact_class: ArtifactClass,
     allocator: Allocator,
     path_allocator: Allocator,
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
     for (instrs, 0..) |instr, idx| {
         switch (instr.op) {
             .call_word => |name| {
-                if (bannedDynamicFeatureForCall(ctx, name, runtime_image)) |_| {
+                if (bannedDynamicFeatureForCall(ctx, name, artifact_class)) |_| {
                     diagnostics.fatal_dynamic_feature = .{
                         .caller_name = caller_name,
                         .feature_name = name,
                     };
                     return error.DisallowedDynamicFeature;
                 }
-                if (!runtime_image and isInterpreterDependentNative(ctx, name)) {
+                if (artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, name)) {
                     diagnostics.fatal_native_interpreter_dependency = .{
                         .caller_name = caller_name,
                         .feature_name = name,
@@ -750,7 +756,7 @@ fn collectCallWords(
                             try quotation_bodies.append(allocator, q.instructions);
                         }
                         try quotation_path.append(allocator, @intCast(idx));
-                        const recurse_err = collectCallWords(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, runtime_image, allocator, path_allocator);
+                        const recurse_err = collectCallWords(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
                         _ = quotation_path.pop();
                         try recurse_err;
                     },
@@ -798,7 +804,7 @@ fn walkSingleMethodDispatch(
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
     pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
     diagnostics: *FreezeDiagnostics,
-    runtime_image: bool,
+    artifact_class: ArtifactClass,
     allocator: Allocator,
     path_allocator: Allocator,
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
@@ -837,7 +843,7 @@ fn walkSingleMethodDispatch(
         pending_call_targets,
         &synth_path,
         diagnostics,
-        runtime_image,
+        artifact_class,
         allocator,
         path_allocator,
     );
@@ -949,27 +955,14 @@ fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *D
     }
 }
 
-/// Return the first `dynamic-*` marker on `def` that the current AOT
-/// artifact class disallows, or null. Detection is by marker identity, so
-/// it survives natives being renamed in the registry: the policy follows
-/// the function, not its name.
-///
-/// The current two-class transition keeps `runtime_image` as a bool. The
-/// matrix:
-///
-///   `dynamic-compile`                  banned in every AOT class.
-///   `dynamic-eval`                     banned when not runtime-image.
-///   `dynamic-load`                     banned when not runtime-image.
-///   `dynamic-quotation-construction`   banned when not runtime-image.
-///
-/// The interpreter class is not reachable from freeze.
-fn bannedDynamicMarker(def: WordDefinition, runtime_image: bool) ?*const value_mod.Marker {
+/// Return the first `dynamic-*` marker on `def` whose policy bans the
+/// current AOT artifact class, or null. Detection is by marker identity,
+/// so it survives natives being renamed in the registry: the policy
+/// follows the function, not its name. The policy table itself lives in
+/// `primitives/markers.zig` next to the marker constants it governs.
+fn bannedDynamicMarker(def: WordDefinition, class: ArtifactClass) ?*const value_mod.Marker {
     for (def.markers) |mk| {
-        if (markers_mod.isDynamicCompileMarker(mk)) return mk;
-        if (runtime_image) continue;
-        if (markers_mod.isDynamicEvalMarker(mk)) return mk;
-        if (markers_mod.isDynamicLoadMarker(mk)) return mk;
-        if (markers_mod.isDynamicQuotationConstructionMarker(mk)) return mk;
+        if (markers_mod.isDynamicMarkerBannedIn(mk, class)) return mk;
     }
     return null;
 }
@@ -979,12 +972,12 @@ fn bannedDynamicMarker(def: WordDefinition, runtime_image: bool) ?*const value_m
 /// the resolved callee. Returns null when the name is unresolved or the
 /// resolved word carries no banned markers. Mirrors the shape of
 /// `isInterpreterDependentNative`.
-fn bannedDynamicFeatureForCall(ctx: *const Context, name: []const u8, runtime_image: bool) ?*const value_mod.Marker {
+fn bannedDynamicFeatureForCall(ctx: *const Context, name: []const u8, class: ArtifactClass) ?*const value_mod.Marker {
     if (ctx.lookupWord(name)) |def| {
-        return bannedDynamicMarker(def, runtime_image);
+        return bannedDynamicMarker(def, class);
     }
     if (resolveQualifiedModuleWord(ctx, name)) |mod_word| {
-        return bannedDynamicMarker(wordDefFromModuleWord(name, mod_word), runtime_image);
+        return bannedDynamicMarker(wordDefFromModuleWord(name, mod_word), class);
     }
     return null;
 }
@@ -1292,7 +1285,7 @@ test "collectCallWords extracts call_word names from instructions" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 2), worklist.items.len);
     try testing.expect(seen.contains("double"));
@@ -1514,7 +1507,7 @@ test "collectCallWords rejects disallowed dynamic features with caller" {
         &pending_call_targets,
         &quotation_path,
         &diagnostics,
-        false,
+        .interpreter_free_aot,
         allocator,
         allocator,
     ));
@@ -1550,7 +1543,7 @@ test "collectCallWords in runtime-image mode permits eval-string, load, and >quo
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, true, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .runtime_image_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 5), worklist.items.len);
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
@@ -1590,7 +1583,7 @@ test "collectCallWords in runtime-image mode still rejects compile!" {
         &pending_call_targets,
         &quotation_path,
         &diagnostics,
-        true,
+        .runtime_image_aot,
         allocator,
         allocator,
     ));
@@ -1613,6 +1606,22 @@ test "collectCallWords rejects 'load-file' in interpreter-free mode" {
 
 test "collectCallWords rejects 'compile!' in interpreter-free mode" {
     try expectInterpreterFreeRejection("compile!", "needs-compile-bang", &markers_mod.dynamic_compile_marker);
+}
+
+test "collectCallWords permits 'compile!' in interpreter class" {
+    try expectInterpreterClassPermits("compile!", &markers_mod.dynamic_compile_marker);
+}
+
+test "collectCallWords permits '>quotation' in interpreter class" {
+    try expectInterpreterClassPermits(">quotation", &markers_mod.dynamic_quotation_construction_marker);
+}
+
+test "collectCallWords permits 'eval-string' in interpreter class" {
+    try expectInterpreterClassPermits("eval-string", &markers_mod.dynamic_eval_marker);
+}
+
+test "collectCallWords permits 'load' in interpreter class" {
+    try expectInterpreterClassPermits("load", &markers_mod.dynamic_load_marker);
 }
 
 fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8, marker: *const value_mod.Marker) !void {
@@ -1663,13 +1672,68 @@ fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8, marke
         &pending_call_targets,
         &quotation_path,
         &diagnostics,
-        false,
+        .interpreter_free_aot,
         allocator,
         allocator,
     ));
     try testing.expect(diagnostics.fatal_dynamic_feature != null);
     try testing.expectEqualStrings(caller, diagnostics.fatal_dynamic_feature.?.caller_name);
     try testing.expectEqualStrings(feature, diagnostics.fatal_dynamic_feature.?.feature_name);
+}
+
+/// Mirror of `expectInterpreterFreeRejection` for the `interpreter`
+/// class: the marker policy allows every dynamic-* capability, so the
+/// same call that triggers a diagnostic in interpreter-free mode must
+/// complete without flagging the feature.
+fn expectInterpreterClassPermits(feature: []const u8, marker: *const value_mod.Marker) !void {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    const marker_slice = try allocator.dupe(*value_mod.Marker, &.{@constCast(marker)});
+    defer allocator.free(marker_slice);
+    try ctx.dictionary.put(feature, .{
+        .name = feature,
+        .action = .{ .native = auditTestNoopNative },
+        .markers = marker_slice,
+    });
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = feature }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(
+        &ctx,
+        instrs,
+        "caller",
+        &worklist,
+        &seen,
+        &quotation_bodies,
+        &quotation_seen,
+        &pending_call_targets,
+        &quotation_path,
+        &diagnostics,
+        .interpreter,
+        allocator,
+        allocator,
+    );
+    try testing.expect(diagnostics.fatal_dynamic_feature == null);
+    try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
+    try testing.expectEqual(@as(usize, 1), worklist.items.len);
 }
 
 test "collectCallWords discovers quotation bodies" {
@@ -1699,7 +1763,7 @@ test "collectCallWords discovers quotation bodies" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
     try testing.expectEqual(inner_body.ptr, quotation_bodies.items[0].ptr);
@@ -1736,7 +1800,7 @@ test "collectCallWords discovers nested quotations" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     // Both middle and innermost quotations discovered
     try testing.expectEqual(@as(usize, 2), quotation_bodies.items.len);
@@ -1772,7 +1836,7 @@ test "collectCallWords deduplicates quotations by pointer" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     // Only recorded once despite appearing twice
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
@@ -2004,7 +2068,7 @@ test "collectCallWords rejects marked native in interpreter-free mode" {
         &pending_call_targets,
         &quotation_path,
         &diagnostics,
-        false,
+        .interpreter_free_aot,
         allocator,
         allocator,
     ));
@@ -2043,7 +2107,7 @@ test "collectCallWords permits marked native in runtime-image mode" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, true, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .runtime_image_aot, allocator, allocator);
 
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
@@ -2082,7 +2146,7 @@ test "collectCallWords ignores marker on compound words" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
     try testing.expectEqual(@as(usize, 1), worklist.items.len);
@@ -2128,7 +2192,7 @@ test "dynamic-feature check fires before interpreter-dependent check on a doubly
         &pending_call_targets,
         &quotation_path,
         &diagnostics,
-        false,
+        .interpreter_free_aot,
         allocator,
         allocator,
     ));
@@ -2178,7 +2242,7 @@ test "collectCallWords does not flag a compound that shadows eval-string and lac
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "user-entry", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "user-entry", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
@@ -2229,7 +2293,7 @@ test "collectCallWords flags a user-defined native carrying dynamic-eval" {
         &pending_call_targets,
         &quotation_path,
         &diagnostics,
-        false,
+        .interpreter_free_aot,
         allocator,
         allocator,
     ));
@@ -2276,7 +2340,7 @@ test "collectCallWords does not flag an eval-string whose marker has been stripp
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
@@ -2321,7 +2385,7 @@ test "collectCallWords records a top-level call with empty quotation_path" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 2), pending_call_targets.items.len);
     try testing.expectEqualStrings("__entry__", pending_call_targets.items[0].caller_name);
@@ -2361,7 +2425,7 @@ test "collectCallWords records calls inside nested quotations with quotation_pat
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, outer_instrs, "outer", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, outer_instrs, "outer", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 1), pending_call_targets.items.len);
     const entry = pending_call_targets.items[0];
@@ -2397,7 +2461,7 @@ test "collectCallWords classifies an unresolved name with .not_in_dictionary" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 1), pending_call_targets.items.len);
     try testing.expectEqual(UnresolvedReason.not_in_dictionary, pending_call_targets.items[0].pending.unresolved);
@@ -2432,7 +2496,7 @@ test "collectCallWords classifies a parse-time-only callee as skipped" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 1), pending_call_targets.items.len);
     try testing.expectEqual(UnresolvedReason.skipped_parse_time_only, pending_call_targets.items[0].pending.unresolved);
@@ -2464,7 +2528,7 @@ test "collectCallWords does not deduplicate call-site records" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     // BFS dedup is independent of per-call-site recording: two call_word
     // instructions to the same callee produce two pending entries.

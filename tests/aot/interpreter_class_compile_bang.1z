@@ -1,0 +1,5 @@
+\ Build-time check: with --interpreter-fallback=true the binary will
+\ link the interpreter, so freeze permits `compile!`. Without that
+\ flag, the same source is rejected -- see dynamic_compile_bang_entry.
+square: ( n -- n ) [ dup * ] ;
+square: compile!
