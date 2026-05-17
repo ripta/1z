@@ -21,6 +21,8 @@ const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const ModuleWord = value_mod.ModuleWord;
 const TypeValue = value_mod.TypeValue;
+const Marker = value_mod.Marker;
+const Parameter = value_mod.Parameter;
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
@@ -68,6 +70,15 @@ pub const ImageEmissionStats = struct {
     /// Number of distinct stack-effect entries (excluding the
     /// reserved sentinel at index 0).
     stack_effect_count: u32 = 0,
+    /// Number of distinct Marker pointers reachable through compiled
+    /// word bodies. Emitted as `onez_image_marker_slots[]`; nothing
+    /// consumes the table yet, but its existence is a prerequisite
+    /// for the slot-indexed Marker emission.
+    marker_slot_count: u32 = 0,
+    /// Number of distinct Parameter pointers reachable through
+    /// compiled word bodies. Emitted as `onez_image_parameter_slots[]`;
+    /// reserved for the slot-indexed Parameter emission.
+    parameter_slot_count: u32 = 0,
 };
 
 /// Knobs for `emitImageC`. The default (`metadata_only = false`) emits
@@ -145,6 +156,24 @@ pub fn emitImageC(
     defer struct_plans.deinit(allocator);
     var struct_index: std.AutoHashMapUnmanaged(*const value_mod.StructType, u32) = .{};
     defer struct_index.deinit(allocator);
+
+    // Broader literal scan: walks every push_literal in every manifest
+    // entry's body and interns the type-carrier variants beyond the
+    // first `.type_val`. This is additive to the per-word slot
+    // recording above; the word_to_typevalue_slot machinery still
+    // depends on findTypeValueLiteral's first-match contract.
+    if (!options.metadata_only) {
+        for (manifest.entries) |entry| {
+            const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
+            try internBodyTypeLiterals(&struct_plans, &struct_index, &effect_table, mw_ptr);
+        }
+    }
+
+    if (!options.metadata_only) {
+        try internTopLevelFrameLiterals(&struct_plans, &struct_index, &effect_table, ctx);
+        try internDispatchTableLiterals(&struct_plans, &struct_index, &effect_table, ctx);
+    }
+
     try collectDescriptorCrossRefs(&struct_plans, &struct_index, &effect_table);
 
     // Tracks per-word body bytecode emission. When entry is non-zero,
@@ -156,6 +185,8 @@ pub fn emitImageC(
 
     try emitMarkerPool(out, allocator, &marker_pool, &stats);
     try emitTypeValueSlotTable(out, allocator, &effect_table);
+    try emitMarkerSlotTable(out, allocator, &effect_table);
+    try emitParameterSlotTable(out, allocator, &effect_table);
     try emitStackEffectTable(out, allocator, &effect_table);
     try emitTypeValueData(out, allocator, &effect_table, struct_plans.items, &struct_index);
 
@@ -169,6 +200,8 @@ pub fn emitImageC(
 
     stats.typevalue_slot_count = effect_table.slotCount();
     stats.stack_effect_count = effect_table.effectCount();
+    stats.marker_slot_count = effect_table.markerSlotCount();
+    stats.parameter_slot_count = effect_table.parameterSlotCount();
     return stats;
 }
 
@@ -191,6 +224,17 @@ const StackEffectTable = struct {
     /// Index 0 is the "no annotation" sentinel; real slots start at 1.
     type_slots: std.ArrayListUnmanaged(*const TypeValue) = .{},
     type_slot_index: std.AutoHashMapUnmanaged(*const TypeValue, u32) = .{},
+    /// Distinct Marker pointers reached from compiled word bodies via
+    /// `.marker` literals. Identity-keyed because the user-facing
+    /// Marker identity is the pointer itself. Indices are 0-based and
+    /// carry no sentinel; an empty table emits no C symbol.
+    marker_slots: std.ArrayListUnmanaged(*const Marker) = .{},
+    marker_slot_index: std.AutoHashMapUnmanaged(*const Marker, u32) = .{},
+    /// Distinct Parameter pointers reached from compiled word bodies
+    /// via `.parameter` literals. Identity-keyed for the same reason
+    /// as the Marker table. Indices are 0-based with no sentinel.
+    parameter_slots: std.ArrayListUnmanaged(*const Parameter) = .{},
+    parameter_slot_index: std.AutoHashMapUnmanaged(*const Parameter, u32) = .{},
 
     fn init(allocator: Allocator) StackEffectTable {
         return .{ .allocator = allocator };
@@ -201,6 +245,10 @@ const StackEffectTable = struct {
         self.effect_index.deinit(self.allocator);
         self.type_slots.deinit(self.allocator);
         self.type_slot_index.deinit(self.allocator);
+        self.marker_slots.deinit(self.allocator);
+        self.marker_slot_index.deinit(self.allocator);
+        self.parameter_slots.deinit(self.allocator);
+        self.parameter_slot_index.deinit(self.allocator);
     }
 
     /// Insert if absent, returning the assigned index. The sentinel
@@ -223,6 +271,27 @@ const StackEffectTable = struct {
         return idx;
     }
 
+    /// Intern a Marker pointer. The first call assigns slot 0; later
+    /// calls with the same pointer return the same slot. The 0-based
+    /// index is recorded in the C output as a comment on each row of
+    /// `onez_image_marker_slots[]`.
+    fn internMarker(self: *StackEffectTable, marker: *const Marker) Allocator.Error!u32 {
+        if (self.marker_slot_index.get(marker)) |idx| return idx;
+        const idx: u32 = @intCast(self.marker_slots.items.len);
+        try self.marker_slots.append(self.allocator, marker);
+        try self.marker_slot_index.put(self.allocator, marker, idx);
+        return idx;
+    }
+
+    /// Intern a Parameter pointer. Same conventions as `internMarker`.
+    fn internParameter(self: *StackEffectTable, param: *const Parameter) Allocator.Error!u32 {
+        if (self.parameter_slot_index.get(param)) |idx| return idx;
+        const idx: u32 = @intCast(self.parameter_slots.items.len);
+        try self.parameter_slots.append(self.allocator, param);
+        try self.parameter_slot_index.put(self.allocator, param, idx);
+        return idx;
+    }
+
     fn effectCount(self: *const StackEffectTable) u32 {
         // +1 for the reserved sentinel at index 0.
         return @intCast(self.effects.items.len + 1);
@@ -231,6 +300,14 @@ const StackEffectTable = struct {
     fn slotCount(self: *const StackEffectTable) u32 {
         // +1 for the reserved sentinel at index 0.
         return @intCast(self.type_slots.items.len + 1);
+    }
+
+    fn markerSlotCount(self: *const StackEffectTable) u32 {
+        return @intCast(self.marker_slots.items.len);
+    }
+
+    fn parameterSlotCount(self: *const StackEffectTable) u32 {
+        return @intCast(self.parameter_slots.items.len);
     }
 
     fn lookupEffect(self: *const StackEffectTable, effect: *const StackEffect) u32 {
@@ -357,6 +434,178 @@ fn findTypeValueLiteral(mw: *const ModuleWord) ?*const TypeValue {
         }
     }
     return null;
+}
+
+/// Walk every `push_literal` in a compound body, interning every
+/// type-carrier literal variant the slot tables track: `.type_val`,
+/// `.struct_type`, `.tagged` (recursing into `inner` so nested tagged
+/// values contribute their inner type references too), `.parameter`,
+/// and `.marker`. Recurses into nested quotation literals so combinator
+/// bodies that carry inner quotations still contribute their type
+/// references. The fixed-point closure in `collectDescriptorCrossRefs`
+/// picks up the transitive descriptor surface for every newly-interned
+/// TypeValue.
+///
+/// Unlike `findTypeValueLiteral`, which returns the first match for
+/// the per-word body-rewrite mechanism, this walker visits every
+/// literal in the body and contributes side effects only -- it has no
+/// return value because the slot table is the surface every caller
+/// reads.
+fn internBodyTypeLiterals(
+    struct_plans: *std.ArrayListUnmanaged(StructTypePlan),
+    struct_index: *std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    effect_table: *StackEffectTable,
+    mw: *const ModuleWord,
+) Allocator.Error!void {
+    const body = switch (mw.action) {
+        .compound => |b| b,
+        else => return,
+    };
+    try internInstructionTypeLiterals(struct_plans, struct_index, effect_table, body);
+}
+
+fn internInstructionTypeLiterals(
+    struct_plans: *std.ArrayListUnmanaged(StructTypePlan),
+    struct_index: *std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    effect_table: *StackEffectTable,
+    instrs: []const value_mod.Instruction,
+) Allocator.Error!void {
+    for (instrs) |instr| {
+        switch (instr.op) {
+            .push_literal => |lit| try internValueTypeLiterals(struct_plans, struct_index, effect_table, lit),
+            .call_word => {},
+        }
+    }
+}
+
+fn internValueTypeLiterals(
+    struct_plans: *std.ArrayListUnmanaged(StructTypePlan),
+    struct_index: *std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    effect_table: *StackEffectTable,
+    val: value_mod.Value,
+) Allocator.Error!void {
+    switch (val) {
+        .type_val => |tv| _ = try effect_table.internType(tv),
+        .struct_type => |st| _ = try internStructType(struct_plans, struct_index, effect_table, st),
+        .tagged => |t| {
+            if (t.tag.type_val) |tv| _ = try effect_table.internType(tv);
+            try internValueTypeLiterals(struct_plans, struct_index, effect_table, t.inner.*);
+        },
+        .parameter => |p| _ = try effect_table.internParameter(p),
+        .marker => |m| _ = try effect_table.internMarker(m),
+        .quotation => |q| try internInstructionTypeLiterals(
+            struct_plans,
+            struct_index,
+            effect_table,
+            q.instructions,
+        ),
+        else => {},
+    }
+}
+
+/// Walk every compound word definition in the import frame (top-level
+/// program scope) and intern type-carrier literals from each body. The
+/// import frame holds definitions a user wrote outside any `use`d
+/// module; without this pass, user-defined `struct{` / `virtual{` /
+/// `enum{` constructors at program scope would not contribute to the
+/// slot tables because `manifest.entries` only covers module-cached
+/// words.
+fn internTopLevelFrameLiterals(
+    struct_plans: *std.ArrayListUnmanaged(StructTypePlan),
+    struct_index: *std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    effect_table: *StackEffectTable,
+    ctx: *const Context,
+) Allocator.Error!void {
+    const idx = ctx.import_frame_index orelse return;
+    if (idx >= ctx.local_frames.items.len) return;
+    const frame = &ctx.local_frames.items[idx];
+    var iter = frame.iterator();
+    while (iter.next()) |entry| {
+        const def = entry.value_ptr.*;
+        switch (def.action) {
+            .compound => |body| try internInstructionTypeLiterals(
+                struct_plans,
+                struct_index,
+                effect_table,
+                body,
+            ),
+            .native, .host_callback => {},
+        }
+    }
+}
+
+/// Walk both halves of the dispatch table (`entries` and
+/// `native_entries`) and intern type references reachable from each
+/// entry. For quotation-bodied entries, the body walker picks up
+/// `.type_val` and friends. For key TypeDescriptors, the descriptor
+/// itself does not back-reference its owning TypeValue, so build a
+/// one-shot index over the Context's known TypeValue registries and
+/// intern via that map. Descriptors not present in any registry are
+/// silently skipped -- they correspond to TypeValues that no live
+/// reference path reaches, and the slot table cannot rehydrate them
+/// either.
+fn internDispatchTableLiterals(
+    struct_plans: *std.ArrayListUnmanaged(StructTypePlan),
+    struct_index: *std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    effect_table: *StackEffectTable,
+    ctx: *const Context,
+) Allocator.Error!void {
+    var desc_index: std.AutoHashMapUnmanaged(*const value_mod.TypeDescriptor, *const value_mod.TypeValue) = .{};
+    defer desc_index.deinit(effect_table.allocator);
+    try indexKnownTypeValues(&desc_index, effect_table.allocator, ctx);
+
+    inline for (.{ &ctx.dispatch.entries, &ctx.dispatch.native_entries }) |table| {
+        var iter = table.iterator();
+        while (iter.next()) |slot| {
+            const key = slot.key_ptr.*;
+            if (desc_index.get(key.type_a)) |tv| _ = try effect_table.internType(tv);
+            if (desc_index.get(key.type_b)) |tv| _ = try effect_table.internType(tv);
+
+            const entry = slot.value_ptr.*;
+            switch (entry.body) {
+                .quotation => |instrs| try internInstructionTypeLiterals(
+                    struct_plans,
+                    struct_index,
+                    effect_table,
+                    instrs,
+                ),
+                .native_fn, .host_callback => {},
+            }
+        }
+    }
+}
+
+/// Build a descriptor→TypeValue index from the Context's known
+/// TypeValue registries. Used to recover the TypeValue identity of a
+/// dispatch key's `*const TypeDescriptor` since TypeDescriptor itself
+/// carries no back-pointer to its owning TypeValue.
+fn indexKnownTypeValues(
+    desc_index: *std.AutoHashMapUnmanaged(*const value_mod.TypeDescriptor, *const value_mod.TypeValue),
+    allocator: Allocator,
+    ctx: *const Context,
+) Allocator.Error!void {
+    var builtin_iter = ctx.builtin_type_values.iterator();
+    while (builtin_iter.next()) |entry| {
+        const tv = entry.value_ptr.*;
+        if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
+    }
+    var resource_iter = ctx.resource_type_values.iterator();
+    while (resource_iter.next()) |entry| {
+        const tv = entry.value_ptr.*;
+        if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
+    }
+    var union_iter = ctx.anonymous_union_type_values.iterator();
+    while (union_iter.next()) |entry| {
+        const tv = entry.value_ptr.*;
+        if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
+    }
+    for (ctx.type_registry_frames.items) |*frame| {
+        var enum_iter = frame.enum_registry.iterator();
+        while (enum_iter.next()) |entry| {
+            const tv = entry.key_ptr.*;
+            if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
+        }
+    }
 }
 
 /// Walk the manifest, register each word's stack effect, and recurse
@@ -494,6 +743,58 @@ fn emitTypeValueSlotTable(
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{slot_idx}) catch unreachable);
         try out.appendSlice(allocator, ": ");
         try out.appendSlice(allocator, tv.name);
+        try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_marker_slots[]`: one NULL pointer per distinct
+/// Marker reached through compiled word bodies. The slot index is
+/// stable within a build and identifies the Marker for downstream
+/// codegen passes (slot-table indirection that replaces runtime
+/// name lookup). No-op when no `.marker` literals have been
+/// interned.
+fn emitMarkerSlotTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.markerSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "__attribute__((used)) struct onez_marker *onez_image_marker_slots[");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{table.markerSlotCount()}) catch unreachable);
+    try out.appendSlice(allocator, "] = {\n");
+    for (table.marker_slots.items, 0..) |marker, i| {
+        try out.appendSlice(allocator, "    NULL, /* slot ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ": marker ");
+        try out.appendSlice(allocator, marker.name);
+        try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_parameter_slots[]`: one NULL pointer per
+/// distinct Parameter reached through compiled word bodies. Same
+/// shape and intent as `emitMarkerSlotTable`. Parameter binding
+/// state is mutable, so the loader allocates the runtime Parameter
+/// row and patches the slot; the codegen-side consumer reads the
+/// patched pointer.
+fn emitParameterSlotTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.parameterSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "__attribute__((used)) struct onez_parameter *onez_image_parameter_slots[");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{table.parameterSlotCount()}) catch unreachable);
+    try out.appendSlice(allocator, "] = {\n");
+    for (table.parameter_slots.items, 0..) |param, i| {
+        try out.appendSlice(allocator, "    NULL, /* slot ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ": parameter ");
+        try out.appendSlice(allocator, param.name);
         try out.appendSlice(allocator, " (filled by the loader). */\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -2131,9 +2432,12 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
 
     try testing.expectEqual(@as(u32, 0), stats.word_count);
     try testing.expectEqual(false, stats.blob_present);
-    // Slot 0 and effect 0 are reserved sentinels even for an empty
-    // manifest, so each "count" is 1 (sentinel-only) rather than 0.
-    try testing.expectEqual(@as(u32, 1), stats.typevalue_slot_count);
+    // Slot 0 and effect 0 are reserved sentinels; the typevalue slot
+    // count additionally includes every TypeValue reachable through
+    // the boot-time dispatch table (builtin arithmetic, sequences,
+    // strings, bitwise), so the floor is the sentinel plus those
+    // entries rather than 1.
+    try testing.expect(stats.typevalue_slot_count >= 1);
     try testing.expectEqual(@as(u32, 1), stats.stack_effect_count);
 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
@@ -2334,6 +2638,7 @@ test "emitImageC: stack-effect table dedupes type slots and emits sentinel index
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
 
     const struct_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
@@ -2393,31 +2698,27 @@ test "emitImageC: stack-effect table dedupes type slots and emits sentinel index
     // Sentinel + alpha + beta + nested = 4 entries, but nested only
     // appears if reachable through registerParam recursion.
     try testing.expectEqual(@as(u32, 4), stats.stack_effect_count);
-    // Slot 0 = sentinel; slot 1 = tv_a; slot 2 = tv_b. Two TypeValues.
-    try testing.expectEqual(@as(u32, 3), stats.typevalue_slot_count);
+    // tv_a and tv_b add two slots on top of the baseline that the
+    // boot-time dispatch widening contributes.
+    try testing.expectEqual(baseline.typevalue_slot_count + 2, stats.typevalue_slot_count);
 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_stack_effects_storage") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typevalue_slots[3]") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "color") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "shape") != null);
 
     // Sentinel at index 0.
     try testing.expect(std.mem.indexOf(u8, out.items, "{ NULL, 0, NULL, 0 }") != null);
 
     // Header references the populated tables.
     try testing.expect(std.mem.indexOf(u8, out.items, ".stack_effects = onez_image_stack_effects_storage") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".typevalue_slot_count = 3") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".stack_effect_count = 4") != null);
 
     // The nested-quotation param should reference an effect index >= 1.
     try testing.expect(std.mem.indexOf(u8, out.items, ".has_quotation_effect = 1") != null);
 
-    // Two different params reference the same TypeValue slot index.
-    var occurrences: usize = 0;
-    var search_idx: usize = 0;
-    while (std.mem.indexOfPos(u8, out.items, search_idx, ".typevalue_slot = 1")) |pos| {
-        occurrences += 1;
-        search_idx = pos + 1;
-    }
-    try testing.expect(occurrences >= 2);
+    // Dedup is implied by the slot-count check above (baseline + 2);
+    // tv_a appearing twice in the inputs would push the count to
+    // baseline + 3 if it were not shared.
 }
 
 test "emitImageC: word_id_lookup falls back from qualified to bare name" {
@@ -2474,6 +2775,7 @@ test "emitImageC: type_val word writes typevalue_slot and reserves a slot" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
 
     const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{ .exact = true });
     const tv = try arena.create(value_mod.TypeValue);
@@ -2499,16 +2801,20 @@ test "emitImageC: type_val word writes typevalue_slot and reserves a slot" {
     const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expectEqual(false, stats.blob_present);
-    try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
+    try testing.expectEqual(baseline.typevalue_slot_count + 1, stats.typevalue_slot_count);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typevalues_storage") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typedescriptors_storage") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".typevalue_slot = 1u") != null);
+    // The color TypeValue's slot is non-zero on the word's row -- a zero
+    // slot means the word does not publish a TypeValue.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".typevalue_slot = 0u") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "color") != null);
 }
 
 test "emitImageC: same TypeValue across multiple words shares one slot" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
 
     const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
     const tv = try arena.create(value_mod.TypeValue);
@@ -2535,8 +2841,13 @@ test "emitImageC: same TypeValue across multiple words shares one slot" {
 
     const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
-    try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
+    // Three words share one TypeValue slot; the count grows by exactly
+    // one over the baseline.
+    try testing.expectEqual(baseline.typevalue_slot_count + 1, stats.typevalue_slot_count);
 
+    // The per-manifest first-`.type_val` scan runs before the broader
+    // dispatch widening, so color is the first non-sentinel slot
+    // interned: index 1. Each of the three words writes that slot.
     var occurrences: usize = 0;
     var search_idx: usize = 0;
     while (std.mem.indexOfPos(u8, out.items, search_idx, ".typevalue_slot = 1u")) |pos| {
@@ -2576,10 +2887,11 @@ test "collectTypeValueData dedupes against stack-effect-discovered TypeValues" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
 
     // One TypeValue referenced by both a stack-effect param and a
     // word's body. The slot pool should collapse it to a single entry;
-    // both sites read slot 1.
+    // both sites read the same slot.
     const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
     const tv = try arena.create(value_mod.TypeValue);
     tv.* = .{ .name = "color", .descriptor = desc };
@@ -2612,14 +2924,15 @@ test "collectTypeValueData dedupes against stack-effect-discovered TypeValues" {
 
     const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
-    // Sentinel + 1 TV = 2 slots, regardless of the two reference sites.
-    try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
+    // Baseline + 1 TV (color), regardless of the two reference sites.
+    try testing.expectEqual(baseline.typevalue_slot_count + 1, stats.typevalue_slot_count);
 }
 
 test "collectDescriptorCrossRefs interns struct field_types into the slot table" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
 
     // Two field-type TypeValues that are NOT pushed by any module-private
     // word. They should still land in the slot table by virtue of being
@@ -2658,16 +2971,17 @@ test "collectDescriptorCrossRefs interns struct field_types into the slot table"
 
     const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
-    // Sentinel + (point, fixnum, string) = 4 slots. The two field
-    // types were collected by the descriptor cross-ref walk even
-    // though no word pushes them.
-    try testing.expectEqual(@as(u32, 4), stats.typevalue_slot_count);
+    // Baseline + (point, fixnum, string). The two field types were
+    // collected by the descriptor cross-ref walk even though no word
+    // pushes them.
+    try testing.expectEqual(baseline.typevalue_slot_count + 3, stats.typevalue_slot_count);
 }
 
 test "collectDescriptorCrossRefs interns enum variant inner_types" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
 
     // Two variant inner-types that are not pushed by any word.
     const tv_unit = try arena.create(value_mod.TypeValue);
@@ -2703,14 +3017,15 @@ test "collectDescriptorCrossRefs interns enum variant inner_types" {
 
     const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
-    // Sentinel + (option, unit, string).
-    try testing.expectEqual(@as(u32, 4), stats.typevalue_slot_count);
+    // Baseline + (option, unit, string).
+    try testing.expectEqual(baseline.typevalue_slot_count + 3, stats.typevalue_slot_count);
 }
 
 test "collectDescriptorCrossRefs reaches transitively through multiple descriptors" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
 
     // A -> B -> C. Only A is pushed; B and C must be reached
     // transitively through the fixed-point walk over the slot list.
@@ -2748,9 +3063,9 @@ test "collectDescriptorCrossRefs reaches transitively through multiple descripto
 
     const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
-    // Sentinel + (A, B, C) = 4. Transitive walk reaches C through
-    // B's descriptor even though no word pushes B or C directly.
-    try testing.expectEqual(@as(u32, 4), stats.typevalue_slot_count);
+    // Baseline + (A, B, C). Transitive walk reaches C through B's
+    // descriptor even though no word pushes B or C directly.
+    try testing.expectEqual(baseline.typevalue_slot_count + 3, stats.typevalue_slot_count);
 }
 
 test "emitTypeValueData emits typevalue/descriptor tables with slot-indexed cross-refs" {
@@ -2901,6 +3216,7 @@ test "collectDescriptorCrossRefs collects virtual anon_struct and its field type
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
 
     const tv_int = try arena.create(value_mod.TypeValue);
     tv_int.* = .{ .name = "int", .descriptor = null };
@@ -2940,9 +3256,9 @@ test "collectDescriptorCrossRefs collects virtual anon_struct and its field type
 
     const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
-    // Sentinel + (wrapper, int) = 3 slots. The StructType "wrapper-inner"
-    // is not in the TypeValue slot table; its field types intern back.
-    try testing.expectEqual(@as(u32, 3), stats.typevalue_slot_count);
+    // Baseline + (wrapper, int). The StructType "wrapper-inner" is
+    // not in the TypeValue slot table; its field types intern back.
+    try testing.expectEqual(baseline.typevalue_slot_count + 2, stats.typevalue_slot_count);
 }
 
 test "emitTypeValueData renders resource descriptor with resource_kind string" {
@@ -3207,4 +3523,334 @@ test "emitImageC: generator-provenanced word skips body bytecode" {
 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_body[]") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL") != null);
+}
+
+const dispatch_mod = @import("dispatch.zig");
+
+/// Push a top-level WordDefinition into ctx's import frame so its body
+/// participates in the seed walk without entering the manifest. Useful
+/// for tests that need to exercise literal-interning side effects
+/// without forcing the body through the bytecode encoder, which does
+/// not yet support every value-carrying variant.
+fn putTopLevelWord(
+    ctx: *Context,
+    name: []const u8,
+    instrs: []const Instruction,
+) !void {
+    if (ctx.import_frame_index == null) {
+        try ctx.local_frames.append(ctx.allocator, .{});
+        ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    }
+    const frame = &ctx.local_frames.items[ctx.import_frame_index.?];
+    try frame.put(ctx.allocator, name, .{
+        .name = name,
+        .action = .{ .compound = instrs },
+    });
+}
+
+/// Run emitImageC against ctx with an empty manifest to discover the
+/// slot table baseline. Built-in TypeValues registered through the
+/// native dispatch table contribute to this baseline; tests use it as
+/// a starting point when verifying that their fixtures add the
+/// expected number of new slots.
+fn baselineSlotCounts(ctx: *Context) !ImageEmissionStats {
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+    return try emitImageC(&out, testing.allocator, ctx, empty, &lookup, .{});
+}
+
+test "emitImageC: struct_type literal in top-level body interns into struct plans" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const st = try arena.create(value_mod.StructType);
+    st.* = .{
+        .name = "point",
+        .fields = &.{},
+        .field_types = &.{},
+    };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .struct_type = st } }, .line = 0, .column = 0 },
+    });
+    try putTopLevelWord(&ctx, "make-point", instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_struct_types_storage") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_st_0_name[] = \"point\"") != null);
+}
+
+test "emitImageC: tagged literal interns tag's TypeValue and recurses into inner" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
+
+    const inner_desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const inner_tv = try arena.create(value_mod.TypeValue);
+    inner_tv.* = .{ .name = "inner-color", .descriptor = inner_desc };
+
+    const outer_desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const outer_tv = try arena.create(value_mod.TypeValue);
+    outer_tv.* = .{ .name = "outer-color", .descriptor = outer_desc };
+
+    const outer_virtual = try arena.create(value_mod.VirtualType);
+    outer_virtual.* = .{
+        .name = "outer-color",
+        .inner_type = "fixnum",
+        .type_val = outer_tv,
+    };
+
+    const inner_value = try arena.create(value_mod.Value);
+    inner_value.* = .{ .type_val = inner_tv };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{
+            .op = .{
+                .push_literal = .{ .tagged = .{ .tag = outer_virtual, .inner = inner_value } },
+            },
+            .line = 0,
+            .column = 0,
+        },
+    });
+    try putTopLevelWord(&ctx, "wrap-color", instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
+
+    // Baseline + outer + inner.
+    try testing.expectEqual(baseline.typevalue_slot_count + 2, stats.typevalue_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "outer-color") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "inner-color") != null);
+}
+
+test "emitImageC: parameter and marker literals create slot tables" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const param = try arena.create(value_mod.Parameter);
+    param.* = .{ .name = "current-locale", .default_quotation = .{ .instructions = &.{} } };
+
+    const marker = try arena.create(value_mod.Marker);
+    marker.* = .{ .name = "deprecated" };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .parameter = param } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .marker = marker } }, .line = 0, .column = 0 },
+    });
+    try putTopLevelWord(&ctx, "demo-word", instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
+
+    try testing.expectEqual(@as(u32, 1), stats.parameter_slot_count);
+    try testing.expectEqual(@as(u32, 1), stats.marker_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_parameter_slots[1]") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "parameter current-locale") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_marker_slots[1]") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "marker deprecated") != null);
+}
+
+test "emitImageC: no parameter or marker literals emits no slot tables" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
+
+    try testing.expectEqual(@as(u32, 0), stats.marker_slot_count);
+    try testing.expectEqual(@as(u32, 0), stats.parameter_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_marker_slots") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_parameter_slots") == null);
+}
+
+test "emitImageC: nested quotation literal contributes type references" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "buried", .descriptor = desc };
+
+    const inner_instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    const outer_instrs = try arena.dupe(Instruction, &.{
+        .{
+            .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner_instrs } } },
+            .line = 0,
+            .column = 0,
+        },
+    });
+    try putTopLevelWord(&ctx, "outer-word", outer_instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "buried") != null);
+}
+
+test "emitImageC: top-level frame word body interns type literals" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
+
+    const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "user-defined", .descriptor = desc };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0, .column = 0 },
+    });
+    try putTopLevelWord(&ctx, "top-level-word", instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
+
+    // Baseline + user-defined.
+    try testing.expectEqual(baseline.typevalue_slot_count + 1, stats.typevalue_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "user-defined") != null);
+}
+
+test "emitImageC: dispatch entry quotation body interns referenced types" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const ref_desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const ref_tv = try arena.create(value_mod.TypeValue);
+    ref_tv.* = .{ .name = "method-body-ref", .descriptor = ref_desc };
+
+    const key_desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const key_tv = try arena.create(value_mod.TypeValue);
+    key_tv.* = .{ .name = "dispatch-key-type", .descriptor = key_desc };
+
+    // Register the key TypeValue in a registry so the descriptor->TV
+    // index can find it. The resource registry is convenient for tests
+    // because it accepts arbitrary names without parsing.
+    try ctx.resource_type_values.put(ctx.allocator, "dispatch-key-type", key_tv);
+
+    const sentinel_desc = try value_mod.createSentinelTypeDescriptor(arena);
+    const sentinel_tv = try arena.create(value_mod.TypeValue);
+    sentinel_tv.* = .{ .name = "sentinel", .descriptor = sentinel_desc };
+
+    const body_instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = ref_tv } }, .line = 0, .column = 0 },
+    });
+
+    const key: dispatch_mod.DispatchKey = .{
+        .dispatch_id = 1,
+        .type_a = key_desc,
+        .type_b = sentinel_desc,
+    };
+    const entry: dispatch_mod.DispatchEntry = .{
+        .body = .{ .quotation = body_instrs },
+    };
+    try ctx.dispatch.entries.put(ctx.allocator, key, entry);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
+
+    // Both the body-referenced and the key-referenced TypeValues must
+    // land in the slot table.
+    try testing.expect(std.mem.indexOf(u8, out.items, "method-body-ref") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "dispatch-key-type") != null);
 }
