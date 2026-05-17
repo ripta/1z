@@ -147,6 +147,9 @@ pub fn publishTaskResult(task: *Task) void {
 /// TaskScope tracks children and completion for structured concurrency.
 pub const TaskScope = struct {
     children: std.ArrayListUnmanaged(*Task),
+    /// Guards `children` against concurrent appends from spawns on other
+    /// worker threads and reads from sibling-cancellation iteration.
+    children_mu: std.Thread.Mutex = .{},
     /// The coordinator task that runs the task-scope body. Excluded from
     /// sibling cancellation so it can observe child failures via await.
     scope_task: ?*Task = null,
@@ -175,6 +178,8 @@ pub const TaskScope = struct {
     }
 
     pub fn addChild(self: *TaskScope, task: *Task) !void {
+        self.children_mu.lock();
+        defer self.children_mu.unlock();
         try self.children.append(self.allocator, task);
         _ = self.active_children.fetchAdd(1, .release);
     }

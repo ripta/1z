@@ -49,6 +49,18 @@ pub const ClockMode = union(enum) {
     fake: i128,
 };
 
+/// Callbacks the owning `Worker` registers with its scheduler so the
+/// scheduler can drain the worker's cross-thread external queue, decrement
+/// its active-task counter, and observe shutdown requests without
+/// importing `worker.zig` (which would form an import cycle).
+pub const WorkerOps = struct {
+    drainExternal: *const fn (owner: *anyopaque) void,
+    onTaskDone: *const fn (owner: *anyopaque) void,
+    shutdownRequested: *const fn (owner: *anyopaque) bool,
+    drainWake: *const fn (owner: *anyopaque) void,
+    isPrimary: *const fn (owner: *anyopaque) bool,
+};
+
 /// Cooperative scheduler with a FIFO run queue.
 ///
 /// Drives green thread execution by round-robin scheduling tasks. Each task
@@ -58,12 +70,17 @@ pub const Scheduler = struct {
     run_queue: std.ArrayListUnmanaged(*Task),
     sleep_queue: SleepQueue,
     current_task: ?*Task = null,
-    next_task_id: u64 = 1,
+    /// Monotonic task-id counter. Atomic so spawn paths on other worker
+    /// threads can allocate IDs against this scheduler without locking.
+    next_task_id: std.atomic.Value(u64) = std.atomic.Value(u64).init(1),
     allocator: Allocator,
     /// Finished tasks whose stacks and arenas are freed on deinit.
     finished_tasks: std.ArrayListUnmanaged(*Task),
     /// All tasks ever created, for diagnostic dumps.
     all_tasks: std.ArrayListUnmanaged(*Task) = .{},
+    /// Guards `all_tasks` against concurrent appends from other worker
+    /// threads (spawn dispatches a fresh task onto the target scheduler).
+    all_tasks_mu: std.Thread.Mutex = .{},
     /// Channels created during this scheduler's lifetime, freed on deinit.
     channels: std.ArrayListUnmanaged(*Channel) = .{},
     /// Platform I/O multiplexer for async-aware stream operations.
@@ -79,13 +96,21 @@ pub const Scheduler = struct {
     /// Clock mode.
     clock: ClockMode = .real,
     peak_task_stack_usage: usize = 0,
+    /// Type-erased back-pointer to the owning `Worker`. Null on standalone
+    /// schedulers used in tests. Erased to break a circular import between
+    /// `worker.zig` and this file. Paired with `ops` for invoking worker
+    /// callbacks.
+    owner: ?*anyopaque = null,
+    /// Callback table the owning worker fills in so the scheduler can
+    /// drain the worker's external queue, observe shutdown, etc. Null
+    /// for standalone schedulers.
+    ops: ?*const WorkerOps = null,
 
     pub fn init(allocator: Allocator) !Scheduler {
         return .{
             .run_queue = .{},
             .sleep_queue = SleepQueue.init(allocator, {}),
             .current_task = null,
-            .next_task_id = 1,
             .allocator = allocator,
             .finished_tasks = .{},
             .multiplexer = try Multiplexer.init(),
@@ -138,11 +163,49 @@ pub const Scheduler = struct {
         try self.run_queue.append(self.allocator, task);
     }
 
-    /// Return the next task ID and increment the counter.
+    /// Return the next task ID and increment the counter. Safe to call from
+    /// any thread.
     pub fn nextId(self: *Scheduler) u64 {
-        const id = self.next_task_id;
-        self.next_task_id += 1;
-        return id;
+        return self.next_task_id.fetchAdd(1, .acq_rel);
+    }
+
+    /// Append a freshly allocated task to `all_tasks` under the cross-thread
+    /// mutex. Called from `spawn` paths that may target a scheduler owned by
+    /// a different OS thread.
+    pub fn trackTask(self: *Scheduler, task: *Task) !void {
+        self.all_tasks_mu.lock();
+        defer self.all_tasks_mu.unlock();
+        try self.all_tasks.append(self.allocator, task);
+    }
+
+    fn drainOwnedExternal(self: *Scheduler) void {
+        const owner = self.owner orelse return;
+        const ops = self.ops orelse return;
+        ops.drainExternal(owner);
+    }
+
+    fn drainOwnedWake(self: *Scheduler) void {
+        const owner = self.owner orelse return;
+        const ops = self.ops orelse return;
+        ops.drainWake(owner);
+    }
+
+    fn notifyOwnerTaskDone(self: *Scheduler) void {
+        const owner = self.owner orelse return;
+        const ops = self.ops orelse return;
+        ops.onTaskDone(owner);
+    }
+
+    fn isBackgroundWorker(self: *Scheduler) bool {
+        const owner = self.owner orelse return false;
+        const ops = self.ops orelse return false;
+        return !ops.isPrimary(owner);
+    }
+
+    fn shutdownObserved(self: *Scheduler) bool {
+        const owner = self.owner orelse return true;
+        const ops = self.ops orelse return true;
+        return ops.shutdownRequested(owner);
     }
 
     /// Re-enqueue the current task and yield back to the scheduler loop.
@@ -293,6 +356,10 @@ pub const Scheduler = struct {
         self.last_progress_ns = monotonicNowNs();
 
         while (true) {
+            // Move any tasks pushed onto the owning worker's external queue
+            // into the local run queue before we make scheduling decisions.
+            self.drainOwnedExternal();
+
             if (self.wakeExpiredSleepers()) {
                 self.last_progress_ns = monotonicNowNs();
             }
@@ -325,6 +392,8 @@ pub const Scheduler = struct {
             const has_io_waiters = self.io_wait_map.count() > 0;
             const has_process_waiters = self.process_wait_map.count() > 0;
             const has_blocked_tasks = blk: {
+                self.all_tasks_mu.lock();
+                defer self.all_tasks_mu.unlock();
                 for (self.all_tasks.items) |task| {
                     switch (task.getStatus()) {
                         .completed, .failed, .cancelled => continue,
@@ -335,8 +404,21 @@ pub const Scheduler = struct {
                 break :blk false;
             };
 
-            if (!has_sleepers and !has_io_waiters and !has_process_waiters and !has_blocked_tasks) break;
+            // Background workers do not exit on empty queues -- they sit in
+            // a blocking poll until either a cross-thread enqueue wakes
+            // them or the driver signals shutdown. Primary worker and
+            // standalone schedulers retain the original drain-and-exit
+            // behavior.
+            const background = self.isBackgroundWorker();
+            if (!background) {
+                if (!has_sleepers and !has_io_waiters and !has_process_waiters and !has_blocked_tasks) break;
+            } else {
+                if (self.shutdownObserved() and !has_sleepers and !has_io_waiters and !has_process_waiters and !has_blocked_tasks) break;
+            }
 
+            // Background workers without local work block indefinitely
+            // until a wake signal or registered I/O arrives; non-background
+            // schedulers use the sleep queue head as the natural timeout.
             var timeout: ?i128 = if (has_sleepers) blk: {
                 const next = self.sleep_queue.peek().?;
                 const now = self.nowNs();
@@ -376,6 +458,14 @@ pub const Scheduler = struct {
                             self.run_queue.append(self.allocator, kv.value.task) catch {};
                         }
                     },
+                    .wake => {
+                        // Drain the wake fd so a future cross-thread
+                        // `signal()` can fire an edge again (edge-triggered
+                        // eventfd otherwise stays asserted forever). The
+                        // external queue itself is drained at the top of
+                        // the next iteration.
+                        self.drainOwnedWake();
+                    },
                 }
             }
 
@@ -390,10 +480,13 @@ pub const Scheduler = struct {
         }
     }
 
-    fn emitStallDetect(self: *const Scheduler, threshold_ns: i128) void {
+    fn emitStallDetect(self: *Scheduler, threshold_ns: i128) void {
         var tw = trace.TraceWriter.init();
 
         const secs = @as(f64, @floatFromInt(@as(i64, @intCast(@min(threshold_ns, std.math.maxInt(i64)))))) / @as(f64, @floatFromInt(@as(i64, std.time.ns_per_s)));
+
+        self.all_tasks_mu.lock();
+        defer self.all_tasks_mu.unlock();
 
         var active_count: usize = 0;
         var runnable_count: usize = 0;
@@ -418,6 +511,9 @@ pub const Scheduler = struct {
     /// the scheduler is stuck on.
     pub fn dumpAllTasks(self: *Scheduler) void {
         var tw = trace.TraceWriter.init();
+
+        self.all_tasks_mu.lock();
+        defer self.all_tasks_mu.unlock();
 
         var runnable_count: usize = 0;
         var active_count: usize = 0;
@@ -560,6 +656,8 @@ pub const Scheduler = struct {
             task.blocked_on_process_key = null;
             self.run_queue.append(self.allocator, task) catch {};
         } else if (task.blocked_on_scope) |scope| {
+            scope.children_mu.lock();
+            defer scope.children_mu.unlock();
             for (scope.children.items) |child| {
                 self.cancelTask(child);
             }
@@ -611,11 +709,16 @@ pub const Scheduler = struct {
             //              flag is checked in the scheduler loop before resuming a task, but if a sibling
             //              is already running then it may not observe the cancellation until it yields
             //              back to the scheduler.
-            //
             task.scope.cancellation_requested.store(true, .release);
 
             // XXX(ripta): Be sure to skip the scope task since it's the coordinator and needs to observe
             //             the failure via await, but it may not be in the same scope if it's a nested scope.
+            //
+            // TODO(ripta): Cross-worker sibling cancellation cancels only the tasks on this worker's scheduler;
+            //              siblings on other workers see `cancellation_phase` set but their owning worker
+            //              handles the wakeup.
+            task.scope.children_mu.lock();
+            defer task.scope.children_mu.unlock();
             for (task.scope.children.items) |sibling| {
                 if (sibling == task) continue;
                 if (sibling == task.scope.scope_task) continue;
@@ -634,6 +737,11 @@ pub const Scheduler = struct {
             self.peak_task_stack_usage = task.peak_stack_usage;
         }
         self.finished_tasks.append(self.allocator, task) catch {};
+
+        // Drop the owning worker's active-task counter so future
+        // `pickLeastLoaded` decisions reflect the freed slot. No-op when
+        // the scheduler is standalone or unowned.
+        self.notifyOwnerTaskDone();
     }
 };
 
@@ -647,7 +755,7 @@ test "init and deinit empty scheduler" {
 
     try std.testing.expectEqual(@as(usize, 0), sched.run_queue.items.len);
     try std.testing.expect(sched.current_task == null);
-    try std.testing.expectEqual(@as(u64, 1), sched.next_task_id);
+    try std.testing.expectEqual(@as(u64, 1), sched.next_task_id.load(.acquire));
 }
 
 test "nextId increments" {
@@ -681,4 +789,39 @@ test "advanceClock advances fake time" {
     sched.clock = .{ .fake = 1_000_000_000 };
     sched.advanceClock(500_000_000);
     try std.testing.expectEqual(@as(i128, 1_500_000_000), sched.nowNs());
+}
+
+test "nextId is unique under concurrent access" {
+    var sched = try Scheduler.init(std.testing.allocator);
+    defer sched.deinit();
+
+    const Worker = struct {
+        sched: *Scheduler,
+        ids: []u64,
+
+        fn run(self: @This()) void {
+            for (self.ids) |*slot| {
+                slot.* = self.sched.nextId();
+            }
+        }
+    };
+
+    const per_thread: usize = 2_000;
+    const thread_count: usize = 4;
+    var buf: [thread_count * per_thread]u64 = undefined;
+
+    var threads: [thread_count]std.Thread = undefined;
+    for (&threads, 0..) |*t, i| {
+        const slice = buf[i * per_thread .. (i + 1) * per_thread];
+        t.* = try std.Thread.spawn(.{}, Worker.run, .{Worker{ .sched = &sched, .ids = slice }});
+    }
+    for (threads) |t| t.join();
+
+    var seen = std.AutoHashMap(u64, void).init(std.testing.allocator);
+    defer seen.deinit();
+    for (buf) |id| {
+        const gop = try seen.getOrPut(id);
+        try std.testing.expect(!gop.found_existing);
+    }
+    try std.testing.expectEqual(@as(usize, thread_count * per_thread), seen.count());
 }

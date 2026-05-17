@@ -1,0 +1,23 @@
+use "testing" ;
+
+\ Smoke test for the M:N scheduler. Spawns many tiny tasks in a task-scope
+\ and lets the scope drain. We deliberately avoid features that race across
+\ workers until cross-thread unblock paths land: no channels, no await on
+\ results, no cross-task scope completion observation. The scope simply
+\ ends when every spawned child returns.
+
+[
+  50 [
+    [ 1 2 + drop ] spawn drop
+  ] times
+] task-scope
+
+t "many-tiny-tasks finished" assert-true
+
+[
+  20 [
+    [ 5 [ yield ] times ] spawn drop
+  ] times
+] task-scope
+
+t "yielding-tasks finished" assert-true

@@ -26,6 +26,7 @@ const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
 const ir_codegen = @import("ir_codegen.zig");
 const bail_stats_mod = @import("bail_stats.zig");
 const Scheduler = @import("scheduler.zig").Scheduler;
+const WorkerPool = @import("worker.zig").WorkerPool;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const types_mod = @import("primitives/types.zig");
 const Capability = types_mod.Capability;
@@ -400,6 +401,10 @@ pub const Context = struct {
     /// Set by task-scope on entry, cleared on exit. Read by the
     /// test-timeout watchdog thread.
     active_scheduler: std.atomic.Value(?*Scheduler) = std.atomic.Value(?*Scheduler).init(null),
+    /// Worker pool backing the M:N scheduler. Set by the outermost
+    /// `task-scope` and read by `spawn` to pick a least-loaded worker.
+    /// Null outside any `task-scope`.
+    worker_pool: ?*WorkerPool = null,
     /// Stack of type registry frames for scoped type descriptor and enum
     /// registry entries. The bottom frame holds boot-time registrations;
     /// additional frames are pushed by `with-isolation`.
@@ -678,6 +683,7 @@ pub const Context = struct {
             .dispatch = DispatchTable.init(allocator),
             .jit_dispatch = JitDispatchTable.init(allocator),
             .scheduler = scheduler,
+            .worker_pool = parent.worker_pool,
             .parent_context = parent,
 
             .trace = parent.trace,

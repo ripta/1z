@@ -610,6 +610,16 @@ fn hasTestTimeoutFlag(flags_lines: ?[]const u8) bool {
     return false;
 }
 
+fn hasThreadsFlag(flags_lines: ?[]const u8) bool {
+    const fl = flags_lines orelse return false;
+    var flag_iter = std.mem.splitScalar(u8, fl, '\n');
+    while (flag_iter.next()) |flag| {
+        const trimmed = std.mem.trim(u8, flag, " \t\r");
+        if (std.mem.startsWith(u8, trimmed, "--threads=")) return true;
+    }
+    return false;
+}
+
 fn testTimeoutSeconds(flags_lines: ?[]const u8) ?u32 {
     const fl = flags_lines orelse return null;
     var flag_iter = std.mem.splitScalar(u8, fl, '\n');
@@ -1442,6 +1452,14 @@ fn configureIntegrationRun(
     }
     if (!hasTestTimeoutFlag(te.flags_lines)) {
         run.addArg(b.fmt("--test-timeout={d}", .{timeout_secs}));
+    }
+    // Default integration tests to single-threaded execution. The M:N
+    // scheduler's cross-thread paths (channel send, scope completion,
+    // timer expiry, cancellation) are not yet complete, so existing tests
+    // exercise behavior that races under multi-thread execution. Tests
+    // can opt back in by specifying their own `--threads=N` in `.flags`.
+    if (!hasThreadsFlag(te.flags_lines)) {
+        run.addArg("--threads=1");
     }
     if (te.flags_lines) |fl| {
         var flag_iter = std.mem.splitScalar(u8, fl, '\n');

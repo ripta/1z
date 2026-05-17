@@ -789,6 +789,7 @@ const ExecutionContext = struct {
 
         ec.ctx.trace = exec.trace_config;
         ec.ctx.deadlock_detect_ns = exec.deadlock_detect_ns;
+        ec.ctx.worker_count = exec.worker_count;
 
         for (global.load_paths.items) |lp| {
             const duped = ec.ctx.quotationAllocator().dupe(u8, lp) catch {

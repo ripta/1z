@@ -6,6 +6,9 @@ const Task = task_mod.Task;
 const TaskScope = task_mod.TaskScope;
 const scheduler_mod = @import("../scheduler.zig");
 const Scheduler = scheduler_mod.Scheduler;
+const worker_mod = @import("../worker.zig");
+const Worker = worker_mod.Worker;
+const WorkerPool = worker_mod.WorkerPool;
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const value_mod = @import("../value.zig");
@@ -92,7 +95,7 @@ fn allocateTaskWithEntry(
     task_ctx.stack_high = @intFromPtr(coro.stack_base) + coro.stack_size;
     task_ctx.stack_limit = @intFromPtr(coro.stack_base) + task_stack_reserve;
 
-    try scheduler.all_tasks.append(ctx.allocator, task);
+    try scheduler.trackTask(task);
     return task;
 }
 
@@ -138,33 +141,52 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         return;
     }
 
-    // Case: Top-level
-    var scheduler = try Scheduler.init(ctx.allocator);
-    defer scheduler.deinit();
+    // Case: Top-level. Build the worker pool, run the primary worker on
+    // this thread, and let background workers handle tasks dispatched
+    // there by `spawn`'s least-loaded selection.
+    const n: usize = blk: {
+        if (ctx.worker_count > 0) break :blk ctx.worker_count;
+        break :blk std.Thread.getCpuCount() catch 1;
+    };
 
-    scheduler.deadlock_detect_ns = ctx.deadlock_detect_ns;
+    var pool = try WorkerPool.init(ctx.allocator, n);
+    defer pool.deinit();
 
-    ctx.scheduler = &scheduler;
-    ctx.active_scheduler.store(&scheduler, .release);
+    const primary = pool.primary();
+    primary.scheduler.deadlock_detect_ns = ctx.deadlock_detect_ns;
+
+    ctx.scheduler = &primary.scheduler;
+    ctx.worker_pool = &pool;
+    ctx.active_scheduler.store(&primary.scheduler, .release);
     defer {
         ctx.scheduler = null;
+        ctx.worker_pool = null;
         ctx.active_scheduler.store(null, .release);
     }
 
     var scope = TaskScope.init(ctx.allocator);
     defer scope.deinit();
 
-    const scope_task = try allocateTask(ctx, &scheduler, &scope, quot);
+    const scope_task = try allocateTask(ctx, &primary.scheduler, &scope, quot);
     scope.scope_task = scope_task;
 
     try scope.addChild(scope_task);
-    try scheduler.enqueue(scope_task);
+    try primary.scheduler.enqueue(scope_task);
+    _ = primary.active_tasks.fetchAdd(1, .release);
 
-    scheduler.runLoop();
+    try pool.startBackgroundWorkers();
+    primary.scheduler.runLoop();
+
+    // Tell background workers to drain their queues and exit, then join.
+    // Their runLoop now exits only after `signalShutdown` plus empty
+    // local queues, so this is the cooperative shutdown path.
+    for (pool.workers[1..]) |*w| w.signalShutdown();
+    pool.join();
 
     if (ctx.benchmark) |bench| {
-        if (scheduler.peak_task_stack_usage > bench.peak_task_stack_usage) {
-            bench.peak_task_stack_usage = scheduler.peak_task_stack_usage;
+        // TODO(ripta): aggregate peak_task_stack_usage across all workers.
+        if (primary.scheduler.peak_task_stack_usage > bench.peak_task_stack_usage) {
+            bench.peak_task_stack_usage = primary.scheduler.peak_task_stack_usage;
         }
     }
 
@@ -176,9 +198,9 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
 
 /// spawn ( quot -- task )
 ///
-/// Must be called within a `task-scope`. We first read the current scope from
-/// `scheduler.current_task.scope`, allocate a new task, add task as a child,
-/// enqueues the task, and pushes the task value onto the caller's stack.
+/// Must be called within a `task-scope`. Picks the worker with the fewest
+/// active tasks, allocates the new task on its scheduler, adds it to the
+/// caller's scope, and dispatches it via local or cross-thread enqueue.
 fn nativeSpawn(ctx: *Context) anyerror!void {
     const quot = try helpers.popQuotation(ctx);
 
@@ -193,10 +215,7 @@ fn nativeSpawn(ctx: *Context) anyerror!void {
     };
 
     const scope = current.scope;
-    const task = try allocateTask(ctx, scheduler, scope, quot);
-    try scope.addChild(task);
-    try scheduler.enqueue(task);
-
+    const task = try spawnTaskOnPool(ctx, scheduler, scope, quot);
     try ctx.stack.push(.{ .task = task });
 }
 
@@ -219,12 +238,39 @@ fn nativeSpawnNamed(ctx: *Context) anyerror!void {
     };
 
     const scope = current.scope;
-    const task = try allocateTask(ctx, scheduler, scope, quot);
+    const task = try spawnTaskOnPool(ctx, scheduler, scope, quot);
     task.name = name;
+    try ctx.stack.push(.{ .task = task });
+}
+
+/// Allocate a child task on the least-loaded worker, attach it to the
+/// given scope, and either enqueue locally or push to the target worker's
+/// cross-thread external queue. The active-tasks counter on the target is
+/// incremented before allocation so racing spawners observe the new load
+/// even if allocation is still in progress. Falls back to the legacy
+/// single-scheduler enqueue when there is no `worker_pool` (standalone
+/// schedulers in tests).
+fn spawnTaskOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot: Quotation) !*Task {
+    if (ctx.worker_pool) |pool| {
+        const target = pool.pickLeastLoaded();
+        _ = target.active_tasks.fetchAdd(1, .release);
+        errdefer _ = target.active_tasks.fetchSub(1, .release);
+
+        const task = try allocateTask(ctx, &target.scheduler, scope, quot);
+        try scope.addChild(task);
+        if (&target.scheduler == scheduler) {
+            try target.scheduler.enqueue(task);
+        } else {
+            try target.enqueueExternal(task);
+        }
+        return task;
+    }
+
+    // Legacy single-scheduler path (used by standalone schedulers in tests).
+    const task = try allocateTask(ctx, scheduler, scope, quot);
     try scope.addChild(task);
     try scheduler.enqueue(task);
-
-    try ctx.stack.push(.{ .task = task });
+    return task;
 }
 
 /// task-self ( -- task )

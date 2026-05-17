@@ -18,63 +18,69 @@ pub const LockLevel = enum(u8) {
     tz = 3,
 };
 
-/// Tracks the highest lock level currently held by a context, asserting
-/// that new acquisitions respect the ordering hierarchy. Guarded by
-/// `std.debug.runtime_safety` so all checks compile out in release builds.
-pub const LockOrderTracker = struct {
-    held_level: LockLevel = .none,
-    held_count: u32 = 0,
+/// Per-thread lock-ordering state. Each OS thread maintains its own
+/// `held_level` and `held_count` so multi-threaded schedulers can run
+/// concurrent locks without false-positive ordering violations.
+threadlocal var held_level: LockLevel = .none;
+threadlocal var held_count: u32 = 0;
 
-    pub fn acquire(self: *LockOrderTracker, level: LockLevel) void {
+/// Tracks the highest lock level currently held by *this thread*,
+/// asserting that new acquisitions respect the ordering hierarchy.
+/// Guarded by `std.debug.runtime_safety` so all checks compile out in
+/// release builds. The struct holds no per-instance state; it is a
+/// stable handle so contexts can share a single `*LockOrderTracker`
+/// pointer across tasks while each thread checks its own state.
+pub const LockOrderTracker = struct {
+    pub fn acquire(_: *LockOrderTracker, level: LockLevel) void {
         if (comptime @import("builtin").mode != .Debug) return;
 
         const new = @intFromEnum(level);
-        const cur = @intFromEnum(self.held_level);
+        const cur = @intFromEnum(held_level);
 
-        if (self.held_count == 0) {
+        if (held_count == 0) {
             // No locks held -- any level is fine.
-            self.held_level = level;
-            self.held_count = 1;
+            held_level = level;
+            held_count = 1;
             return;
         }
 
         // Same-level re-entry is allowed for channel peers (address-ordered).
         if (new == cur and level == .channel) {
-            self.held_count += 1;
+            held_count += 1;
             return;
         }
 
         if (new <= cur) {
             std.debug.panic(
                 "Lock ordering violation: acquiring level {d} ({s}) while holding level {d} ({s})",
-                .{ new, @tagName(level), cur, @tagName(self.held_level) },
+                .{ new, @tagName(level), cur, @tagName(held_level) },
             );
         }
 
-        self.held_level = level;
-        self.held_count += 1;
+        held_level = level;
+        held_count += 1;
     }
 
-    pub fn release(self: *LockOrderTracker, level: LockLevel) void {
+    pub fn release(_: *LockOrderTracker, level: LockLevel) void {
         if (comptime @import("builtin").mode != .Debug) return;
 
-        if (self.held_count == 0) {
+        if (held_count == 0) {
             std.debug.panic("Lock order release with no locks held", .{});
         }
 
         const rel = @intFromEnum(level);
-        const cur = @intFromEnum(self.held_level);
+        const cur = @intFromEnum(held_level);
 
         if (rel != cur) {
             std.debug.panic(
                 "Lock order release mismatch: releasing level {d} ({s}) but held level is {d} ({s})",
-                .{ rel, @tagName(level), cur, @tagName(self.held_level) },
+                .{ rel, @tagName(level), cur, @tagName(held_level) },
             );
         }
 
-        self.held_count -= 1;
-        if (self.held_count == 0) {
-            self.held_level = .none;
+        held_count -= 1;
+        if (held_count == 0) {
+            held_level = .none;
         }
     }
 };
@@ -83,37 +89,37 @@ test "ascending lock order is allowed" {
     var tracker = LockOrderTracker{};
 
     tracker.acquire(.context_rw);
-    std.testing.expectEqual(LockLevel.context_rw, tracker.held_level) catch unreachable;
-    std.testing.expectEqual(@as(u32, 1), tracker.held_count) catch unreachable;
+    std.testing.expectEqual(LockLevel.context_rw, held_level) catch unreachable;
+    std.testing.expectEqual(@as(u32, 1), held_count) catch unreachable;
 
     tracker.release(.context_rw);
-    std.testing.expectEqual(LockLevel.none, tracker.held_level) catch unreachable;
-    std.testing.expectEqual(@as(u32, 0), tracker.held_count) catch unreachable;
+    std.testing.expectEqual(LockLevel.none, held_level) catch unreachable;
+    std.testing.expectEqual(@as(u32, 0), held_count) catch unreachable;
 
     // Now acquire at a higher level
     tracker.acquire(.channel);
-    std.testing.expectEqual(LockLevel.channel, tracker.held_level) catch unreachable;
+    std.testing.expectEqual(LockLevel.channel, held_level) catch unreachable;
 
     tracker.release(.channel);
-    std.testing.expectEqual(LockLevel.none, tracker.held_level) catch unreachable;
+    std.testing.expectEqual(LockLevel.none, held_level) catch unreachable;
 }
 
 test "same-level channel re-entry is allowed" {
     var tracker = LockOrderTracker{};
 
     tracker.acquire(.channel);
-    std.testing.expectEqual(@as(u32, 1), tracker.held_count) catch unreachable;
+    std.testing.expectEqual(@as(u32, 1), held_count) catch unreachable;
 
     tracker.acquire(.channel);
-    std.testing.expectEqual(@as(u32, 2), tracker.held_count) catch unreachable;
+    std.testing.expectEqual(@as(u32, 2), held_count) catch unreachable;
 
     tracker.release(.channel);
-    std.testing.expectEqual(@as(u32, 1), tracker.held_count) catch unreachable;
-    std.testing.expectEqual(LockLevel.channel, tracker.held_level) catch unreachable;
+    std.testing.expectEqual(@as(u32, 1), held_count) catch unreachable;
+    std.testing.expectEqual(LockLevel.channel, held_level) catch unreachable;
 
     tracker.release(.channel);
-    std.testing.expectEqual(@as(u32, 0), tracker.held_count) catch unreachable;
-    std.testing.expectEqual(LockLevel.none, tracker.held_level) catch unreachable;
+    std.testing.expectEqual(@as(u32, 0), held_count) catch unreachable;
+    std.testing.expectEqual(LockLevel.none, held_level) catch unreachable;
 }
 
 test "reset after full release" {
@@ -129,6 +135,6 @@ test "reset after full release" {
     tracker.acquire(.context_rw);
     tracker.release(.context_rw);
 
-    std.testing.expectEqual(LockLevel.none, tracker.held_level) catch unreachable;
-    std.testing.expectEqual(@as(u32, 0), tracker.held_count) catch unreachable;
+    std.testing.expectEqual(LockLevel.none, held_level) catch unreachable;
+    std.testing.expectEqual(@as(u32, 0), held_count) catch unreachable;
 }
