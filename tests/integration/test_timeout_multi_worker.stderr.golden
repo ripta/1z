@@ -1,0 +1,10 @@
+TEST-TIMEOUT: 1.0s limit reached
+TASK-DUMP: 4 tasks, 0 runnable
+  task[2] blocked_channel stack=[] callstack:
+    src/prelude.1z:5 receive
+  task[3] blocked_channel stack=[] callstack:
+    src/prelude.1z:5 receive
+  task[4] blocked_channel stack=[] callstack:
+    src/prelude.1z:5 receive
+  task[5] blocked_channel stack=[] callstack:
+    src/prelude.1z:5 receive

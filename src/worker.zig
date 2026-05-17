@@ -3,9 +3,12 @@ const Allocator = std.mem.Allocator;
 const scheduler_mod = @import("scheduler.zig");
 const Scheduler = scheduler_mod.Scheduler;
 const WorkerOps = scheduler_mod.WorkerOps;
+const monotonicNowNs = scheduler_mod.monotonicNowNs;
 const Task = @import("task.zig").Task;
+const TaskStatus = @import("task.zig").TaskStatus;
 const Multiplexer = @import("multiplexer.zig").Multiplexer;
 const WakeSource = @import("multiplexer.zig").WakeSource;
+const trace = @import("trace.zig");
 
 /// Static `WorkerOps` table used by every `Worker` so the scheduler can
 /// call back into the worker through type-erased pointers without forming
@@ -19,6 +22,13 @@ const worker_ops: WorkerOps = .{
     .enqueueExternal = enqueueExternalCb,
     .requestCancellation = requestCancellationCb,
     .drainCancellations = drainCancellationsCb,
+    .nextTaskId = nextTaskIdCb,
+    .recordPoolProgress = recordPoolProgressCb,
+    .poolLastProgressNs = poolLastProgressNsCb,
+    .poolDeadlockThresholdNs = poolDeadlockThresholdNsCb,
+    .claimStallReport = claimStallReportCb,
+    .emitPoolStallDetect = emitPoolStallDetectCb,
+    .dumpAllPoolTasks = dumpAllPoolTasksCb,
 };
 
 fn drainExternalCb(owner: *anyopaque) void {
@@ -59,6 +69,43 @@ fn requestCancellationCb(owner: *anyopaque, task: *Task) !void {
 fn drainCancellationsCb(owner: *anyopaque) void {
     const w: *Worker = @ptrCast(@alignCast(owner));
     w.drainCancellations();
+}
+
+fn nextTaskIdCb(owner: *anyopaque) u64 {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    return w.pool.?.next_task_id.fetchAdd(1, .acq_rel);
+}
+
+fn recordPoolProgressCb(owner: *anyopaque, now_ns: i128) void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    w.pool.?.last_progress_ns.store(now_ns, .release);
+}
+
+fn poolLastProgressNsCb(owner: *anyopaque) i128 {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    return w.pool.?.last_progress_ns.load(.acquire);
+}
+
+fn poolDeadlockThresholdNsCb(owner: *anyopaque) ?i128 {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    return w.pool.?.deadlock_threshold_ns;
+}
+
+fn claimStallReportCb(owner: *anyopaque) bool {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    // CAS-elect a single reporter so only one worker dumps and exits even
+    // when several workers cross the threshold in the same poll cycle.
+    return w.pool.?.stall_reported.cmpxchgStrong(false, true, .acq_rel, .acquire) == null;
+}
+
+fn emitPoolStallDetectCb(owner: *anyopaque, threshold_ns: i128) void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    w.pool.?.emitStallDetect(threshold_ns);
+}
+
+fn dumpAllPoolTasksCb(owner: *anyopaque) void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    w.pool.?.dumpAllTasks();
 }
 
 /// A single OS thread with its own scheduler instance.
@@ -104,6 +151,11 @@ pub const Worker = struct {
     /// `task-scope` exit) to tell this worker to drain its queues and
     /// return from `runLoop`.
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Back-pointer to the owning `WorkerPool`. Set by `WorkerPool.init`
+    /// after the worker lives in its final slot so the pointer is stable.
+    /// Null for free-standing `Worker` values used in unit tests that do
+    /// not exercise pool-level coordination.
+    pool: ?*WorkerPool = null,
 
     pub fn init(allocator: Allocator, id: usize) !Worker {
         var sched = try Scheduler.init(allocator);
@@ -202,22 +254,47 @@ pub const Worker = struct {
 pub const WorkerPool = struct {
     workers: []Worker,
     allocator: Allocator,
+    /// Globally-unique task ID counter. Every `Scheduler.nextId` call
+    /// invoked through a worker draws from here so a single integer
+    /// unambiguously identifies a task across the whole program. Drives
+    /// deterministic ordering in aggregated diagnostic dumps.
+    next_task_id: std.atomic.Value(u64) = std.atomic.Value(u64).init(1),
+    /// Monotonic timestamp (nanoseconds) of the most recent progress event
+    /// observed by any worker -- task completion, sleeper wake, or I/O
+    /// readiness. Updated by every worker through `Scheduler.recordProgress`.
+    /// Read by every worker's stall-detect computation so a busy
+    /// background worker correctly suppresses a stall warning on an idle
+    /// primary.
+    last_progress_ns: std.atomic.Value(i128) = std.atomic.Value(i128).init(0),
+    /// Stall detection threshold, propagated from `ctx.deadlock_detect_ns`
+    /// by `task-scope`. Null disables stall detection. Read by every
+    /// worker; never mutated after `task-scope` writes it.
+    deadlock_threshold_ns: ?i128 = null,
+    /// CAS guard ensuring only one worker emits the stall dump and calls
+    /// `std.process.exit(124)` when multiple workers simultaneously detect
+    /// the threshold has been exceeded.
+    stall_reported: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
-    pub fn init(allocator: Allocator, count: usize) !WorkerPool {
+    /// Initialize `pool` in place. Takes a self-pointer so worker
+    /// back-pointers can be set during construction; this guarantees
+    /// every worker has a stable pool pointer before any callback runs
+    /// and removes the per-call-site wire-up step.
+    pub fn init(pool: *WorkerPool, allocator: Allocator, count: usize) !void {
         std.debug.assert(count >= 1);
         const workers = try allocator.alloc(Worker, count);
         errdefer allocator.free(workers);
+        pool.* = .{ .workers = workers, .allocator = allocator };
         var initialized: usize = 0;
         errdefer for (workers[0..initialized]) |*w| w.deinit();
         for (workers, 0..) |*w, i| {
             w.* = try Worker.init(allocator, i);
             initialized += 1;
-            // Wire the scheduler's owner back-pointer to this worker after
-            // the worker lives in its final slot so the pointer is stable.
+            // Wire all back-pointers after the worker lives in its final
+            // slot so every pointer is stable.
             w.scheduler.owner = @ptrCast(w);
             w.scheduler.ops = &worker_ops;
+            w.pool = pool;
         }
-        return .{ .workers = workers, .allocator = allocator };
     }
 
     pub fn deinit(self: *WorkerPool) void {
@@ -257,14 +334,101 @@ pub const WorkerPool = struct {
         }
         return best;
     }
+
+    /// Lock every worker's `all_tasks_mu` in ascending worker-id order so
+    /// the snapshot used by diagnostic dumps is consistent across workers
+    /// even while they continue running. Returns a fixed lock ordering
+    /// that prevents deadlock against itself.
+    fn lockAllTasksMu(self: *WorkerPool) void {
+        for (self.workers) |*w| w.scheduler.all_tasks_mu.lock();
+    }
+
+    fn unlockAllTasksMu(self: *WorkerPool) void {
+        var i: usize = self.workers.len;
+        while (i > 0) {
+            i -= 1;
+            self.workers[i].scheduler.all_tasks_mu.unlock();
+        }
+    }
+
+    fn countActive(self: *WorkerPool) struct { active: usize, runnable: usize } {
+        var active: usize = 0;
+        var runnable: usize = 0;
+        for (self.workers) |*w| {
+            const sched = &w.scheduler;
+            for (sched.all_tasks.items) |task| {
+                switch (task.getStatus()) {
+                    .completed, .failed, .cancelled => continue,
+                    .pending, .running => {},
+                }
+                active += 1;
+                const home = task.ctx.scheduler orelse sched;
+                if (home.taskState(task) == .runnable) runnable += 1;
+            }
+        }
+        return .{ .active = active, .runnable = runnable };
+    }
+
+    /// Emit the `STALL-DETECT: ...` header counting active and runnable
+    /// tasks across every worker. Holds all `all_tasks_mu` locks for the
+    /// duration of the count.
+    pub fn emitStallDetect(self: *WorkerPool, threshold_ns: i128) void {
+        var tw = trace.TraceWriter.init();
+        const secs = @as(f64, @floatFromInt(@as(i64, @intCast(@min(threshold_ns, std.math.maxInt(i64)))))) / @as(f64, @floatFromInt(@as(i64, std.time.ns_per_s)));
+
+        self.lockAllTasksMu();
+        defer self.unlockAllTasksMu();
+
+        const counts = self.countActive();
+        tw.print("STALL-DETECT: {d:.1}s with no progress, {d} tasks, {d} runnable\n", .{ secs, counts.active, counts.runnable });
+    }
+
+    /// Dump every active task across the pool to stderr, sorted by global
+    /// task ID for deterministic output. Each task is printed via its
+    /// home scheduler so per-state details (current_task, sleep_queue)
+    /// resolve correctly.
+    pub fn dumpAllTasks(self: *WorkerPool) void {
+        var tw = trace.TraceWriter.init();
+
+        self.lockAllTasksMu();
+        defer self.unlockAllTasksMu();
+
+        const counts = self.countActive();
+        tw.print("TASK-DUMP: {d} tasks, {d} runnable\n", .{ counts.active, counts.runnable });
+
+        // Gather all active tasks into a single slice, then sort by id so
+        // output is stable regardless of which worker hosts each task.
+        var collected: std.ArrayListUnmanaged(*Task) = .{};
+        defer collected.deinit(self.allocator);
+        for (self.workers) |*w| {
+            for (w.scheduler.all_tasks.items) |task| {
+                switch (task.getStatus()) {
+                    .completed, .failed, .cancelled => continue,
+                    .pending, .running => {},
+                }
+                collected.append(self.allocator, task) catch return;
+            }
+        }
+        std.mem.sort(*Task, collected.items, {}, taskIdLessThan);
+
+        for (collected.items) |task| {
+            const home = task.ctx.scheduler orelse &self.workers[0].scheduler;
+            home.dumpOneTask(&tw, task);
+        }
+    }
 };
+
+fn taskIdLessThan(_: void, a: *Task, b: *Task) bool {
+    return a.id < b.id;
+}
 
 // =============================================================================
 // Tests
 // =============================================================================
 
 test "WorkerPool init and deinit with n=1" {
-    var pool = try WorkerPool.init(std.testing.allocator, 1);
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 1);
     defer pool.deinit();
 
     try std.testing.expectEqual(@as(usize, 1), pool.workers.len);
@@ -272,7 +436,8 @@ test "WorkerPool init and deinit with n=1" {
 }
 
 test "WorkerPool init and deinit with n=4" {
-    var pool = try WorkerPool.init(std.testing.allocator, 4);
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 4);
     defer pool.deinit();
 
     try std.testing.expectEqual(@as(usize, 4), pool.workers.len);
@@ -282,7 +447,8 @@ test "WorkerPool init and deinit with n=4" {
 }
 
 test "WorkerPool wires scheduler owner back-pointer" {
-    var pool = try WorkerPool.init(std.testing.allocator, 3);
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 3);
     defer pool.deinit();
 
     for (pool.workers) |*w| {
@@ -292,7 +458,8 @@ test "WorkerPool wires scheduler owner back-pointer" {
 }
 
 test "WorkerPool startBackgroundWorkers and join" {
-    var pool = try WorkerPool.init(std.testing.allocator, 3);
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 3);
     defer pool.deinit();
 
     // Signal shutdown before starting so the background workers exit promptly.
@@ -307,7 +474,8 @@ test "WorkerPool startBackgroundWorkers and join" {
 }
 
 test "pickLeastLoaded returns worker with smallest active count" {
-    var pool = try WorkerPool.init(std.testing.allocator, 3);
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 3);
     defer pool.deinit();
 
     pool.workers[0].active_tasks.store(2, .release);
@@ -318,7 +486,8 @@ test "pickLeastLoaded returns worker with smallest active count" {
 }
 
 test "pickLeastLoaded breaks ties by lower id" {
-    var pool = try WorkerPool.init(std.testing.allocator, 3);
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 3);
     defer pool.deinit();
 
     pool.workers[0].active_tasks.store(2, .release);
@@ -329,7 +498,8 @@ test "pickLeastLoaded breaks ties by lower id" {
 }
 
 test "Worker.enqueueExternal then drainExternal returns the task" {
-    var pool = try WorkerPool.init(std.testing.allocator, 1);
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 1);
     defer pool.deinit();
 
     var dummy_task: Task = undefined;
@@ -341,7 +511,8 @@ test "Worker.enqueueExternal then drainExternal returns the task" {
 }
 
 test "Worker.requestCancellation appends to cancel queue" {
-    var pool = try WorkerPool.init(std.testing.allocator, 1);
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 1);
     defer pool.deinit();
 
     var dummy_task: Task = undefined;
@@ -352,7 +523,8 @@ test "Worker.requestCancellation appends to cancel queue" {
 }
 
 test "Worker.drainCancellations clears the cancel queue" {
-    var pool = try WorkerPool.init(std.testing.allocator, 1);
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 1);
     defer pool.deinit();
 
     // Use a completed-status task so drainCancellations' early-out
@@ -369,8 +541,35 @@ test "Worker.drainCancellations clears the cancel queue" {
     try std.testing.expectEqual(@as(usize, 0), pool.workers[0].cancel_queue.items.len);
 }
 
+test "WorkerPool.init wires the pool back-pointer on every worker" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 3);
+    defer pool.deinit();
+
+    for (pool.workers) |*w| {
+        try std.testing.expectEqual(&pool, w.pool.?);
+    }
+}
+
+test "WorkerPool.next_task_id allocates unique ids across workers" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 3);
+    defer pool.deinit();
+
+    const id0 = pool.workers[0].scheduler.nextId();
+    const id1 = pool.workers[1].scheduler.nextId();
+    const id2 = pool.workers[2].scheduler.nextId();
+    const id3 = pool.workers[0].scheduler.nextId();
+
+    try std.testing.expectEqual(@as(u64, 1), id0);
+    try std.testing.expectEqual(@as(u64, 2), id1);
+    try std.testing.expectEqual(@as(u64, 3), id2);
+    try std.testing.expectEqual(@as(u64, 4), id3);
+}
+
 test "Worker.signalShutdown causes runThread to return" {
-    var pool = try WorkerPool.init(std.testing.allocator, 2);
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 2);
     defer pool.deinit();
 
     // Shutdown both so the test does not depend on the new background-blocking

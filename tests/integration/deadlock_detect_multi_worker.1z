@@ -1,0 +1,8 @@
+use "testing" ;
+[
+  <channel>
+  4 [
+    dup [ receive drop ] curry spawn drop
+  ] times
+  drop
+] task-scope

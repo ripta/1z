@@ -399,8 +399,14 @@ pub const Context = struct {
     scheduler: ?*Scheduler = null,
     /// Atomic scheduler pointer for cross-thread diagnostic access.
     /// Set by task-scope on entry, cleared on exit. Read by the
-    /// test-timeout watchdog thread.
+    /// test-timeout watchdog thread as a fallback when no worker pool
+    /// is active (REPL, single-eval, or unit-test paths).
     active_scheduler: std.atomic.Value(?*Scheduler) = std.atomic.Value(?*Scheduler).init(null),
+    /// Atomic pool pointer for cross-thread diagnostic access. Set by
+    /// the outermost `task-scope` on entry, cleared on exit. Preferred
+    /// over `active_scheduler` by the test-timeout watchdog so dumps
+    /// aggregate state across every worker.
+    active_worker_pool: std.atomic.Value(?*WorkerPool) = std.atomic.Value(?*WorkerPool).init(null),
     /// Worker pool backing the M:N scheduler. Set by the outermost
     /// `task-scope` and read by `spawn` to pick a least-loaded worker.
     /// Null outside any `task-scope`.

@@ -149,19 +149,25 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         break :blk std.Thread.getCpuCount() catch 1;
     };
 
-    var pool = try WorkerPool.init(ctx.allocator, n);
+    var pool: WorkerPool = undefined;
+    try pool.init(ctx.allocator, n);
     defer pool.deinit();
+    // Stall detection is pool-wide: every worker reads the shared
+    // threshold and timestamp so a busy background worker correctly
+    // suppresses a false stall warning on an idle primary.
+    pool.deadlock_threshold_ns = ctx.deadlock_detect_ns;
 
     const primary = pool.primary();
-    primary.scheduler.deadlock_detect_ns = ctx.deadlock_detect_ns;
 
     ctx.scheduler = &primary.scheduler;
     ctx.worker_pool = &pool;
     ctx.active_scheduler.store(&primary.scheduler, .release);
+    ctx.active_worker_pool.store(&pool, .release);
     defer {
         ctx.scheduler = null;
         ctx.worker_pool = null;
         ctx.active_scheduler.store(null, .release);
+        ctx.active_worker_pool.store(null, .release);
     }
 
     var scope = TaskScope.init(ctx.allocator);

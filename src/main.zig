@@ -1389,7 +1389,12 @@ fn testTimeoutWatchdog(timeout_ns: u64, ctx: *Context) void {
     const secs = @as(f64, @floatFromInt(timeout_ns)) /
         @as(f64, @floatFromInt(@as(u64, std.time.ns_per_s)));
     tw.print("TEST-TIMEOUT: {d:.1}s limit reached\n", .{secs});
-    if (ctx.active_scheduler.load(.acquire)) |sched| {
+    // Prefer the pool dump so tasks pinned to background workers appear
+    // alongside primary tasks. Fall back to the active scheduler for
+    // contexts that run outside a `task-scope` (REPL, eval).
+    if (ctx.active_worker_pool.load(.acquire)) |pool| {
+        pool.dumpAllTasks();
+    } else if (ctx.active_scheduler.load(.acquire)) |sched| {
         sched.dumpAllTasks();
     }
     std.process.exit(124);

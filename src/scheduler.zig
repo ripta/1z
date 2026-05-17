@@ -69,6 +69,37 @@ pub const WorkerOps = struct {
     /// scheduler's local-cancellation logic for each entry. Owning thread
     /// only.
     drainCancellations: *const fn (owner: *anyopaque) void,
+    /// Allocate the next globally-unique task ID from the worker's pool so
+    /// that diagnostic output can refer to any task by a single integer
+    /// regardless of which worker it lives on. Safe to call from any
+    /// thread.
+    nextTaskId: *const fn (owner: *anyopaque) u64,
+    /// Publish a monotonic progress timestamp to the pool. Called from
+    /// every worker on task completion, sleeper wake, and I/O readiness
+    /// events so stall detection accounts for progress made on any worker.
+    /// Safe to call from any thread; racing writers don't matter because
+    /// the monotonic clock guarantees the latest writer is approximately
+    /// the most recent event.
+    recordPoolProgress: *const fn (owner: *anyopaque, now_ns: i128) void,
+    /// Read the pool's most recent progress timestamp. Used by stall
+    /// detection to compute elapsed-since-progress against a shared
+    /// timeline rather than the per-worker `last_progress_ns`.
+    poolLastProgressNs: *const fn (owner: *anyopaque) i128,
+    /// Read the pool-level stall detection threshold (nanoseconds since
+    /// last progress before a stall is declared). Null disables.
+    poolDeadlockThresholdNs: *const fn (owner: *anyopaque) ?i128,
+    /// CAS-elect this worker as the unique stall reporter. Returns true
+    /// when the current worker has won the race to dump and exit; false
+    /// when another worker has already taken responsibility.
+    claimStallReport: *const fn (owner: *anyopaque) bool,
+    /// Emit the `STALL-DETECT: ...` header with aggregated active and
+    /// runnable counts across every worker in the pool. Paired with
+    /// `dumpAllPoolTasks` on the stall path.
+    emitPoolStallDetect: *const fn (owner: *anyopaque, threshold_ns: i128) void,
+    /// Dump every task across every worker in the pool to stderr in
+    /// task-id order, then return. Caller is responsible for
+    /// `std.process.exit(124)` afterwards.
+    dumpAllPoolTasks: *const fn (owner: *anyopaque) void,
 };
 
 /// Cooperative scheduler with a FIFO run queue.
@@ -197,7 +228,17 @@ pub const Scheduler = struct {
 
     /// Return the next task ID and increment the counter. Safe to call from
     /// any thread.
+    ///
+    /// When owned by a worker, IDs are drawn from the pool's shared counter
+    /// so task IDs are globally unique across workers. Standalone
+    /// schedulers (unit tests, REPL eval outside `task-scope`) keep their
+    /// own counter starting at 1.
     pub fn nextId(self: *Scheduler) u64 {
+        if (self.owner) |owner| {
+            if (self.ops) |ops| {
+                return ops.nextTaskId(owner);
+            }
+        }
         return self.next_task_id.fetchAdd(1, .acq_rel);
     }
 
@@ -238,6 +279,42 @@ pub const Scheduler = struct {
         const owner = self.owner orelse return false;
         const ops = self.ops orelse return false;
         return !ops.isPrimary(owner);
+    }
+
+    /// Capture a progress event. Updates the scheduler-local timestamp
+    /// (used by standalone schedulers) and, when owned by a worker,
+    /// publishes the timestamp to the pool's shared atomic so stall
+    /// detection on every worker observes global progress.
+    fn recordProgress(self: *Scheduler) void {
+        const now = monotonicNowNs();
+        self.last_progress_ns = now;
+        if (self.owner) |owner| {
+            if (self.ops) |ops| {
+                ops.recordPoolProgress(owner, now);
+            }
+        }
+    }
+
+    /// Read the elapsed-since-last-progress source of truth: the pool's
+    /// shared timestamp when owned, otherwise the scheduler-local field.
+    fn lastProgressNs(self: *Scheduler) i128 {
+        if (self.owner) |owner| {
+            if (self.ops) |ops| {
+                return ops.poolLastProgressNs(owner);
+            }
+        }
+        return self.last_progress_ns;
+    }
+
+    /// Read the effective stall threshold: pool-level when owned (set by
+    /// `task-scope`), scheduler-local otherwise (set directly by tests).
+    fn stallThresholdNs(self: *Scheduler) ?i128 {
+        if (self.owner) |owner| {
+            if (self.ops) |ops| {
+                return ops.poolDeadlockThresholdNs(owner);
+            }
+        }
+        return self.deadlock_detect_ns;
     }
 
     fn shutdownObserved(self: *Scheduler) bool {
@@ -391,7 +468,7 @@ pub const Scheduler = struct {
     ///    sleep deadline as timeout, re-enqueue tasks whose fds are ready.
     ///    Loop back to step 1.
     pub fn runLoop(self: *Scheduler) void {
-        self.last_progress_ns = monotonicNowNs();
+        self.recordProgress();
 
         while (true) {
             // Move any tasks pushed onto the owning worker's external queue
@@ -403,7 +480,7 @@ pub const Scheduler = struct {
             self.drainOwnedCancellations();
 
             if (self.wakeExpiredSleepers()) {
-                self.last_progress_ns = monotonicNowNs();
+                self.recordProgress();
             }
 
             if (self.run_queue.items.len > 0) {
@@ -416,7 +493,7 @@ pub const Scheduler = struct {
                 switch (task.getStatus()) {
                     .completed, .failed, .cancelled => {
                         self.handleTaskDone(task);
-                        self.last_progress_ns = monotonicNowNs();
+                        self.recordProgress();
                     },
                     .running, .pending => {},
                 }
@@ -477,9 +554,9 @@ pub const Scheduler = struct {
                 break :blk if (remaining > 0) remaining else @as(i128, 0);
             } else null;
 
-            if (self.deadlock_detect_ns) |threshold| {
+            if (self.stallThresholdNs()) |threshold| {
                 const now = monotonicNowNs();
-                const stall_remaining = threshold - (now - self.last_progress_ns);
+                const stall_remaining = threshold - (now - self.lastProgressNs());
                 const stall_timeout: i128 = if (stall_remaining > 0) stall_remaining else 0;
                 timeout = if (timeout) |t| @min(t, stall_timeout) else stall_timeout;
             }
@@ -490,7 +567,7 @@ pub const Scheduler = struct {
 
             const ready = self.multiplexer.poll(timeout) catch &.{};
             if (ready.len > 0) {
-                self.last_progress_ns = monotonicNowNs();
+                self.recordProgress();
             }
             for (ready) |ev| {
                 switch (ev) {
@@ -520,15 +597,32 @@ pub const Scheduler = struct {
                 }
             }
 
-            if (self.deadlock_detect_ns) |threshold| {
-                const elapsed = monotonicNowNs() - self.last_progress_ns;
+            if (self.stallThresholdNs()) |threshold| {
+                const elapsed = monotonicNowNs() - self.lastProgressNs();
                 if (elapsed >= threshold) {
-                    self.emitStallDetect(threshold);
-                    self.dumpAllTasks();
-                    std.process.exit(124);
+                    self.reportStall(threshold);
                 }
             }
         }
+    }
+
+    /// Emit the stall diagnostic and abort. When owned by a pool, only
+    /// one worker wins the CAS race and runs the aggregated dump across
+    /// every worker; the losers return without dumping (their progress is
+    /// moot because the winner is about to `exit(124)`). Standalone
+    /// schedulers fall back to the per-scheduler dump.
+    fn reportStall(self: *Scheduler, threshold_ns: i128) void {
+        if (self.owner) |owner| {
+            if (self.ops) |ops| {
+                if (!ops.claimStallReport(owner)) return;
+                ops.emitPoolStallDetect(owner, threshold_ns);
+                ops.dumpAllPoolTasks(owner);
+                std.process.exit(124);
+            }
+        }
+        self.emitStallDetect(threshold_ns);
+        self.dumpAllTasks();
+        std.process.exit(124);
     }
 
     fn emitStallDetect(self: *Scheduler, threshold_ns: i128) void {
@@ -590,7 +684,7 @@ pub const Scheduler = struct {
         }
     }
 
-    const TaskState = enum {
+    pub const TaskState = enum {
         running,
         blocked_fd,
         blocked_process,
@@ -600,7 +694,7 @@ pub const Scheduler = struct {
         runnable,
     };
 
-    fn taskState(self: *const Scheduler, task: *const Task) TaskState {
+    pub fn taskState(self: *const Scheduler, task: *const Task) TaskState {
         if (self.current_task == task) return .running;
         if (task.blocked_on_io_fd != null) return .blocked_fd;
         if (task.blocked_on_process_pid != null) return .blocked_process;
@@ -612,7 +706,7 @@ pub const Scheduler = struct {
         return .runnable;
     }
 
-    fn dumpOneTask(self: *const Scheduler, tw: *trace.TraceWriter, task: *const Task) void {
+    pub fn dumpOneTask(self: *const Scheduler, tw: *trace.TraceWriter, task: *const Task) void {
         var buf: [4096]u8 = undefined;
         var fbs = std.io.fixedBufferStream(&buf);
         const w = fbs.writer();

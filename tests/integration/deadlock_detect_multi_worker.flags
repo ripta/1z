@@ -1,0 +1,3 @@
+--deadlock-detect=1
+--threads=4
+--no-show-stack
