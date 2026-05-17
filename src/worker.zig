@@ -17,6 +17,8 @@ const worker_ops: WorkerOps = .{
     .drainWake = drainWakeCb,
     .isPrimary = isPrimaryCb,
     .enqueueExternal = enqueueExternalCb,
+    .requestCancellation = requestCancellationCb,
+    .drainCancellations = drainCancellationsCb,
 };
 
 fn drainExternalCb(owner: *anyopaque) void {
@@ -49,6 +51,16 @@ fn enqueueExternalCb(owner: *anyopaque, task: *Task) !void {
     try w.enqueueExternal(task);
 }
 
+fn requestCancellationCb(owner: *anyopaque, task: *Task) !void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    try w.requestCancellation(task);
+}
+
+fn drainCancellationsCb(owner: *anyopaque) void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    w.drainCancellations();
+}
+
 /// A single OS thread with its own scheduler instance.
 ///
 /// Each worker owns a scheduler (run queue, sleep queue, multiplexer), an
@@ -74,6 +86,16 @@ pub const Worker = struct {
     /// worker's scheduler drains it at the top of every loop iteration.
     external_queue: std.ArrayListUnmanaged(*Task) = .{},
     external_queue_mu: std.Thread.Mutex = .{},
+    /// Cross-thread cancellation request buffer. Cancellers on other
+    /// worker threads append a target task here under `cancel_queue_mu`
+    /// and signal `wake`; this worker's scheduler drains it at the top of
+    /// every loop iteration and runs the local cancellation logic for
+    /// each entry. Separating cancellation from `external_queue` lets the
+    /// home worker route the task through its own per-state cleanup
+    /// (IO/sleep/process/scope/channel) instead of unconditionally
+    /// appending to the run queue.
+    cancel_queue: std.ArrayListUnmanaged(*Task) = .{},
+    cancel_queue_mu: std.Thread.Mutex = .{},
     /// Wake source registered with `scheduler.multiplexer`; lets other
     /// threads interrupt a blocking `poll()` so newly enqueued external
     /// tasks are observed promptly.
@@ -100,6 +122,7 @@ pub const Worker = struct {
     pub fn deinit(self: *Worker) void {
         self.wake.deinit();
         self.external_queue.deinit(self.allocator);
+        self.cancel_queue.deinit(self.allocator);
         self.scheduler.deinit();
     }
 
@@ -127,6 +150,40 @@ pub const Worker = struct {
             self.scheduler.run_queue.append(self.allocator, t) catch {};
         }
         self.external_queue.clearRetainingCapacity();
+    }
+
+    /// Append a task to this worker's cross-thread cancellation queue and
+    /// wake the worker. Safe to call from any thread. The flag on the
+    /// task itself is set by the caller before enqueuing so the home
+    /// worker can short-circuit duplicate requests on dequeue.
+    pub fn requestCancellation(self: *Worker, task: *Task) !void {
+        {
+            self.cancel_queue_mu.lock();
+            defer self.cancel_queue_mu.unlock();
+            try self.cancel_queue.append(self.allocator, task);
+        }
+        self.wake.signal();
+    }
+
+    /// Drain the cancellation queue, processing each entry through the
+    /// scheduler's local cancellation path. Owning thread only.
+    ///
+    /// Snapshots the queue under the lock so per-task processing (which
+    /// may touch maps owned by this worker's scheduler) happens without
+    /// holding the cancellation-queue mutex.
+    pub fn drainCancellations(self: *Worker) void {
+        var snapshot: std.ArrayListUnmanaged(*Task) = .{};
+        defer snapshot.deinit(self.allocator);
+        {
+            self.cancel_queue_mu.lock();
+            defer self.cancel_queue_mu.unlock();
+            if (self.cancel_queue.items.len == 0) return;
+            snapshot.appendSlice(self.allocator, self.cancel_queue.items) catch {};
+            self.cancel_queue.clearRetainingCapacity();
+        }
+        for (snapshot.items) |t| {
+            self.scheduler.cancelTaskLocal(t);
+        }
     }
 
     /// Signal that this worker should exit `runLoop` as soon as its local
@@ -281,6 +338,35 @@ test "Worker.enqueueExternal then drainExternal returns the task" {
     pool.workers[0].drainExternal();
     try std.testing.expectEqual(@as(usize, 1), pool.workers[0].scheduler.run_queue.items.len);
     try std.testing.expectEqual(&dummy_task, pool.workers[0].scheduler.run_queue.items[0]);
+}
+
+test "Worker.requestCancellation appends to cancel queue" {
+    var pool = try WorkerPool.init(std.testing.allocator, 1);
+    defer pool.deinit();
+
+    var dummy_task: Task = undefined;
+    try pool.workers[0].requestCancellation(&dummy_task);
+
+    try std.testing.expectEqual(@as(usize, 1), pool.workers[0].cancel_queue.items.len);
+    try std.testing.expectEqual(&dummy_task, pool.workers[0].cancel_queue.items[0]);
+}
+
+test "Worker.drainCancellations clears the cancel queue" {
+    var pool = try WorkerPool.init(std.testing.allocator, 1);
+    defer pool.deinit();
+
+    // Use a completed-status task so drainCancellations' early-out
+    // skips dereferencing the rest of the Task (avoids a synthetic
+    // Context/TaskScope here; the end-to-end path is covered by the
+    // task_cross_thread_cancel integration test).
+    var done_task: Task = undefined;
+    done_task.status = std.atomic.Value(@import("task.zig").TaskStatus).init(.completed);
+
+    try pool.workers[0].requestCancellation(&done_task);
+    try std.testing.expectEqual(@as(usize, 1), pool.workers[0].cancel_queue.items.len);
+
+    pool.workers[0].drainCancellations();
+    try std.testing.expectEqual(@as(usize, 0), pool.workers[0].cancel_queue.items.len);
 }
 
 test "Worker.signalShutdown causes runThread to return" {

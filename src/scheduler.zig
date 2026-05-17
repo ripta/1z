@@ -60,6 +60,15 @@ pub const WorkerOps = struct {
     drainWake: *const fn (owner: *anyopaque) void,
     isPrimary: *const fn (owner: *anyopaque) bool,
     enqueueExternal: *const fn (owner: *anyopaque, task: *Task) anyerror!void,
+    /// Ask the owning worker to cancel a task on its own thread. The worker
+    /// pushes the task pointer onto its cancellation queue and signals its
+    /// wake source so a blocked `poll()` returns promptly. The home worker
+    /// then drains the queue and runs the local cancellation logic.
+    requestCancellation: *const fn (owner: *anyopaque, task: *Task) anyerror!void,
+    /// Drain the worker's cancellation request queue, invoking the
+    /// scheduler's local-cancellation logic for each entry. Owning thread
+    /// only.
+    drainCancellations: *const fn (owner: *anyopaque) void,
 };
 
 /// Cooperative scheduler with a FIFO run queue.
@@ -207,6 +216,12 @@ pub const Scheduler = struct {
         ops.drainExternal(owner);
     }
 
+    fn drainOwnedCancellations(self: *Scheduler) void {
+        const owner = self.owner orelse return;
+        const ops = self.ops orelse return;
+        ops.drainCancellations(owner);
+    }
+
     fn drainOwnedWake(self: *Scheduler) void {
         const owner = self.owner orelse return;
         const ops = self.ops orelse return;
@@ -282,7 +297,7 @@ pub const Scheduler = struct {
     fn drainCancelledSleepers(self: *Scheduler) void {
         var i: usize = 0;
         while (i < self.sleep_queue.count()) {
-            if (self.sleep_queue.items[i].task.cancellation_phase != .none) {
+            if (self.sleep_queue.items[i].task.getCancellationPhase() != .none) {
                 const entry = self.sleep_queue.items[i];
                 _ = self.sleep_queue.removeIndex(i);
                 self.run_queue.append(self.allocator, entry.task) catch {};
@@ -328,7 +343,7 @@ pub const Scheduler = struct {
 
         var it = self.io_wait_map.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.task.cancellation_phase != .none) {
+            if (entry.value_ptr.task.getCancellationPhase() != .none) {
                 removals.append(self.allocator, entry.key_ptr.*) catch {};
             }
         }
@@ -349,7 +364,7 @@ pub const Scheduler = struct {
 
         var it = self.process_wait_map.iterator();
         while (it.next()) |entry| {
-            if (entry.value_ptr.task.cancellation_phase != .none) {
+            if (entry.value_ptr.task.getCancellationPhase() != .none) {
                 removals.append(self.allocator, entry.key_ptr.*) catch {};
             }
         }
@@ -382,6 +397,10 @@ pub const Scheduler = struct {
             // Move any tasks pushed onto the owning worker's external queue
             // into the local run queue before we make scheduling decisions.
             self.drainOwnedExternal();
+            // Process cross-thread cancellation requests next so the local
+            // logic can route blocked tasks (IO/sleep/process/scope/channel)
+            // back into the run queue before the scheduling pass picks one.
+            self.drainOwnedCancellations();
 
             if (self.wakeExpiredSleepers()) {
                 self.last_progress_ns = monotonicNowNs();
@@ -658,19 +677,40 @@ pub const Scheduler = struct {
         }
     }
 
-    /// Cancel a task cooperatively. Sets `cancellation_phase` to `.pending`
-    /// and requeues the task so it resumes and unwinds through its cleanup
-    /// handlers. If the task is blocked on a channel, I/O fd, or sleeping,
-    /// it is moved to the run queue immediately. If the task is waiting on a
-    /// nested scope, we recursively cancel all children so the scope drains
-    /// and the waiting task is eventually requeued by `handleTaskDone`.
+    /// Cancel a task cooperatively. Routes the request to the task's home
+    /// worker so all per-state cleanup (IO/sleep/process/scope/channel)
+    /// runs on the thread that owns the relevant queues.
+    ///
+    /// - Local target: process inline via `cancelTaskLocal`.
+    /// - Remote target: publish `cancellation_phase = .pending`, push the
+    ///   task onto the home worker's cancellation queue, and signal its
+    ///   wake source. The home worker drains the queue at the top of its
+    ///   next loop iteration and runs `cancelTaskLocal` itself.
+    ///
+    /// Safe to call from any worker. Idempotent: re-cancelling a task
+    /// that has already observed cancellation is a no-op.
     pub fn cancelTask(self: *Scheduler, task: *Task) void {
+        const home = if (task.ctx.scheduler) |s| s else self;
+        if (home == self) {
+            self.cancelTaskLocal(task);
+        } else {
+            self.cancelTaskRemote(home, task);
+        }
+    }
+
+    /// Cancel a task whose home scheduler is `self`. Sets
+    /// `cancellation_phase` to `.pending` and routes the task back to the
+    /// run queue, unwiring any blocked-on state it currently owns. If the
+    /// task is waiting on a nested scope, the scope's children are
+    /// cancelled (each child re-enters the public `cancelTask` router so
+    /// children on other workers take the remote path).
+    pub fn cancelTaskLocal(self: *Scheduler, task: *Task) void {
         switch (task.getStatus()) {
             .completed, .failed, .cancelled => return,
             .pending, .running => {},
         }
 
-        task.cancellation_phase = .pending;
+        task.setCancellationPhase(.pending);
 
         if (task.blocked_on_channel != null) {
             self.run_queue.append(self.allocator, task) catch {};
@@ -696,6 +736,31 @@ pub const Scheduler = struct {
         } else {
             self.wakeSleepingTask(task);
         }
+    }
+
+    /// Cancel a task whose home scheduler is on a different worker.
+    /// Publishes the flag, then hands the task off to the home worker's
+    /// cancellation queue so per-state cleanup runs on the owning thread.
+    fn cancelTaskRemote(self: *Scheduler, home: *Scheduler, task: *Task) void {
+        _ = self;
+        switch (task.getStatus()) {
+            .completed, .failed, .cancelled => return,
+            .pending, .running => {},
+        }
+
+        // Idempotent: skip if already cancelling.
+        if (task.getCancellationPhase() != .none) return;
+        task.setCancellationPhase(.pending);
+
+        if (home.owner) |owner| {
+            if (home.ops) |ops| {
+                ops.requestCancellation(owner, task) catch {};
+                return;
+            }
+        }
+        // Standalone test scheduler with no concurrent runLoop: process
+        // inline. Mirrors the `wakeTask` standalone fallback.
+        home.cancelTaskLocal(task);
     }
 
     /// Remove a specific task from the sleep queue and add it to the run queue.
@@ -746,9 +811,9 @@ pub const Scheduler = struct {
             // XXX(ripta): Be sure to skip the scope task since it's the coordinator and needs to observe
             //             the failure via await, but it may not be in the same scope if it's a nested scope.
             //
-            // TODO(ripta): Cross-worker sibling cancellation cancels only the tasks on this worker's scheduler;
-            //              siblings on other workers see `cancellation_phase` set but their owning worker
-            //              handles the wakeup.
+            // `cancelTask` routes siblings on other workers through their
+            // home worker's cancellation queue, so per-state cleanup
+            // happens on the owning thread.
             task.scope.children_mu.lock();
             defer task.scope.children_mu.unlock();
             for (task.scope.children.items) |sibling| {

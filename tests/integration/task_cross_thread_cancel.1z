@@ -1,0 +1,87 @@
+use "testing" ;
+use "time" ;
+
+\ Cross-thread cancellation under the M:N scheduler.
+\
+\ Each spawned task lands on whichever worker is least loaded. With four
+\ workers and many spawned children, cancellation paths almost always
+\ cross worker boundaries. A broken cross-thread cancellation manifests
+\ as a hang (caught by deadlock detection) because the cancelled
+\ children never wake from their blocking states.
+
+\ -- 1. Sibling cancellation reaches sleepers on other workers --
+\
+\ One task throws after a short delay; many siblings sleep "forever".
+\ The scope must propagate the throw and cancel every sibling, including
+\ the ones pinned to non-primary workers.
+
+test-sibling-cancel-many-sleepers: ( -- ) [
+  [
+    [
+      [ 10 milliseconds sleep f "kick" test-error: make-error throw ] spawn drop
+      16 [
+        [ 100 seconds sleep ] spawn drop
+      ] times
+    ] task-scope
+  ] [ drop ] recover
+  t "sibling cancel drains 16 cross-worker sleepers" assert-true
+] ;
+
+\ -- 2. Sibling cancellation reaches channel-blocked siblings on other workers --
+
+test-sibling-cancel-channel-receivers: ( -- ) [
+  [
+    [
+      <channel>
+      12 [
+        dup [ receive drop ] curry spawn drop
+      ] times
+      drop
+      [ 10 milliseconds sleep f "kick" test-error: make-error throw ] spawn drop
+    ] task-scope
+  ] [ drop ] recover
+  t "sibling cancel drains 12 cross-worker channel receivers" assert-true
+] ;
+
+\ -- 3. Explicit cancel-task reaches a sleeper on another worker --
+\
+\ Spawn many sleepers, then cancel each by handle. With four workers
+\ most cancel-task calls cross worker boundaries.
+
+test-cancel-task-many-sleepers: ( -- ) [
+  [
+    V{ }
+    16 [
+      [ 100 seconds sleep ] spawn #push!
+    ] times
+    10 milliseconds sleep
+    [ cancel-task ] #each
+  ] task-scope
+  t "cancel-task drains 16 cross-worker sleepers" assert-true
+] ;
+
+\ -- 4. cancel-task on a scope-blocked task recurses across workers --
+\
+\ The outer task is suspended awaiting a nested scope. Cancelling the
+\ outer task must recurse into every child of that nested scope,
+\ including children pinned to non-primary workers.
+
+test-cancel-scope-blocked-cross-worker: ( -- ) [
+  [
+    [
+      [
+        8 [
+          [ 100 seconds sleep ] spawn drop
+        ] times
+      ] task-scope
+    ] spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] task-scope
+  t "scope-blocked cancel reaches 8 cross-worker children" assert-true
+] ;
+
+test-sibling-cancel-many-sleepers
+test-sibling-cancel-channel-receivers
+test-cancel-task-many-sleepers
+test-cancel-scope-blocked-cross-worker

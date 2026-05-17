@@ -561,8 +561,8 @@ pub fn checkCancellation(ctx: *Context) error{UserThrown}!void {
     // Task-level cancellation: if this task was individually cancelled,
     // it should observe said cancellation as soon as it reaches a yield
     // point and unwind immediately.
-    if (current.cancellation_phase == .pending) {
-        current.cancellation_phase = .unwinding;
+    if (current.getCancellationPhase() == .pending) {
+        current.setCancellationPhase(.unwinding);
         ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
             .error_type = "task-cancelled",
             .message = "task was cancelled",
@@ -573,11 +573,11 @@ pub fn checkCancellation(ctx: *Context) error{UserThrown}!void {
     // Scope-level cancellation: if a sibling failed and the scope flagged
     // cancellation, tasks that yield can observe it without waiting for the
     // scheduler to individually cancelTask each sibling.
-    if (current.cancellation_phase == .none and
+    if (current.getCancellationPhase() == .none and
         current.scope.cancellation_requested.load(.acquire) and
         current != (current.scope.scope_task orelse current))
     {
-        current.cancellation_phase = .unwinding;
+        current.setCancellationPhase(.unwinding);
         ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
             .error_type = "task-cancelled",
             .message = "task was cancelled",

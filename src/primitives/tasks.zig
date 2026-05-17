@@ -433,7 +433,7 @@ fn timerTaskEntryPoint(co: task_mod.CoroPtr) callconv(.c) void {
     const task: *Task = @ptrCast(@alignCast(task_mod.getCoroUserData(co)));
 
     task.ctx.executeQuotation(task.quotation) catch {
-        if (task.cancellation_phase != .none) {
+        if (task.getCancellationPhase() != .none) {
             task.setStatus(.cancelled);
         } else {
             task.setStatus(.failed);
@@ -855,7 +855,7 @@ fn deepCopyErrorObject(err: *const ErrorObject, box_alloc: Allocator, inner_allo
 /// need to poll for cancellation.
 fn nativeCancelledQuery(ctx: *Context) anyerror!void {
     const cancelled = if (ctx.scheduler) |sched|
-        if (sched.current_task) |task| task.cancellation_phase != .none else false
+        if (sched.current_task) |task| task.getCancellationPhase() != .none else false
     else
         false;
     try ctx.stack.push(.{ .boolean = cancelled });

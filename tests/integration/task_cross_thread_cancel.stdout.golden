@@ -1,0 +1,12 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: sibling cancel drains 16 cross-worker sleepers
+Stack: [ ]
+PASS: sibling cancel drains 12 cross-worker channel receivers
+Stack: [ ]
+PASS: cancel-task drains 16 cross-worker sleepers
+Stack: [ ]
+PASS: scope-blocked cancel reaches 8 cross-worker children
+Stack: [ ]

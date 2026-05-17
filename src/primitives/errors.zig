@@ -194,8 +194,8 @@ pub fn nativeCleanup(ctx: *Context) anyerror!void {
     // Shield the cleanup quotation from re-cancellation so it can yield,
     // sleep, or do I/O without being interrupted by a pending cancellation.
     const task = if (ctx.scheduler) |sched| sched.current_task else null;
-    const was_unwinding = if (task) |t| t.cancellation_phase == .unwinding else false;
-    if (was_unwinding) task.?.cancellation_phase = .shielded;
+    const was_unwinding = if (task) |t| t.getCancellationPhase() == .unwinding else false;
+    if (was_unwinding) task.?.setCancellationPhase(.shielded);
 
     // Always execute cleanup quotation, even if body failed
     // If cleanup also fails, we ignore that error and prioritize the body error
@@ -203,7 +203,7 @@ pub fn nativeCleanup(ctx: *Context) anyerror!void {
         // Cleanup error is suppressed; body error takes priority
     };
 
-    if (was_unwinding) task.?.cancellation_phase = .unwinding;
+    if (was_unwinding) task.?.setCancellationPhase(.unwinding);
 
     // Re-throw original error if body failed
     try body_result;

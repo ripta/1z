@@ -41,7 +41,7 @@ pub fn taskEntryPoint(co: CoroPtr) callconv(.c) void {
                 .error_type = detail.error_type,
                 .message = detail.message,
             }) catch null;
-            if (task.cancellation_phase != .none and std.mem.eql(u8, detail.error_type, "task-cancelled")) {
+            if (task.getCancellationPhase() != .none and std.mem.eql(u8, detail.error_type, "task-cancelled")) {
                 task.setStatus(.cancelled);
             } else {
                 task.setStatus(.failed);
@@ -49,7 +49,7 @@ pub fn taskEntryPoint(co: CoroPtr) callconv(.c) void {
         } else if (task.ctx.thrown_error) |thrown| {
             task.error_obj = thrown;
             task.ctx.thrown_error = null;
-            if (task.cancellation_phase != .none and std.mem.eql(u8, thrown.error_type, "task-cancelled")) {
+            if (task.getCancellationPhase() != .none and std.mem.eql(u8, thrown.error_type, "task-cancelled")) {
                 task.setStatus(.cancelled);
             } else {
                 task.setStatus(.failed);
@@ -84,7 +84,7 @@ pub const TaskStatus = enum(u8) {
 /// - `unwinding`: task has observed the cancellation and is propagating the error.
 /// - `shielded`: cleanup handler is executing; cancellation checks are suppressed
 ///               so the handler can yield, sleep, or do I/O without re-triggering.
-pub const CancellationPhase = enum {
+pub const CancellationPhase = enum(u8) {
     none,
     pending,
     unwinding,
@@ -101,7 +101,7 @@ pub const Task = struct {
     coro: ?*mc.mco_coro = null,
     ctx: *Context,
     scope: *TaskScope,
-    cancellation_phase: CancellationPhase = .none,
+    cancellation_phase: std.atomic.Value(CancellationPhase) = std.atomic.Value(CancellationPhase).init(.none),
     blocked_on_channel: ?*anyopaque = null,
     blocked_on_io_fd: ?std.posix.fd_t = null,
     blocked_on_process_pid: ?std.posix.pid_t = null,
@@ -122,6 +122,14 @@ pub const Task = struct {
 
     pub inline fn setStatus(self: *Task, s: TaskStatus) void {
         self.status.store(s, .release);
+    }
+
+    pub inline fn getCancellationPhase(self: *const Task) CancellationPhase {
+        return self.cancellation_phase.load(.acquire);
+    }
+
+    pub inline fn setCancellationPhase(self: *Task, p: CancellationPhase) void {
+        self.cancellation_phase.store(p, .release);
     }
 };
 
