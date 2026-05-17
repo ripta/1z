@@ -1,0 +1,2 @@
+use-eval: ( -- ) [ "1 2 +" eval-string drop ] ;
+use-eval

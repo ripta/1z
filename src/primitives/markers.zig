@@ -198,6 +198,16 @@ pub fn isDynamicMarkerBannedIn(mk: *const Marker, class: ArtifactClass) bool {
     return false;
 }
 
+/// Returns true if the marker is one of the four well-known `dynamic-*`
+/// capability markers, regardless of artifact-class policy. Identity
+/// comparison ensures non-policy markers with coincidental names are excluded.
+pub fn isDynamicMarker(mk: *const Marker) bool {
+    for (dynamic_marker_policy) |entry| {
+        if (entry.marker == mk) return true;
+    }
+    return false;
+}
+
 /// Dispatch wildcard for `method{`, not a type -- no value has type `any`.
 pub const any_marker: Marker = .{ .name = "any" };
 

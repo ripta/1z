@@ -1,0 +1,3 @@
+eval-wrapper: ( -- ) [ "1 2 +" eval-string drop ] ;
+run-wrapper: ( -- ) [ eval-wrapper ] ;
+run-wrapper

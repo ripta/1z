@@ -1,0 +1,4 @@
+feature: dynamic-eval
+
+  use-eval → eval-string
+  __entry__ → use-eval → eval-string

@@ -181,6 +181,24 @@ pub const FreezeFeatureUse = struct {
     feature_name: []const u8,
 };
 
+/// One call chain from a compound word to a target native. `compound_chain`
+/// holds word names from the outermost caller down to (and including) the
+/// direct caller of the native; `native_name` is the native itself.
+///
+/// Example for a chain A → B → native.eval-string:
+///   compound_chain = .{ "A", "B" }
+///   native_name    = "native.eval-string"  (or the unqualified name)
+///
+/// A direct caller has `compound_chain.len == 1`.
+pub const ReachChain = struct {
+    compound_chain: []const []const u8,
+    native_name: []const u8,
+
+    pub fn deinit(self: ReachChain, allocator: Allocator) void {
+        allocator.free(self.compound_chain);
+    }
+};
+
 /// Recorded alongside a `DisallowedDynamicFeature` diagnostic when the
 /// callee that triggered the ban classifies as unresolved (or, in a
 /// future world, as a pending generator). Carries the resolution reason
@@ -1064,6 +1082,182 @@ fn bannedDynamicFeatureForCall(ctx: *const Context, name: []const u8, class: Art
         return bannedDynamicMarker(wordDefFromModuleWord(name, mod_word), class);
     }
     return null;
+}
+
+/// Walk `freeze_result.call_targets` to find every compound word that
+/// transitively calls any native carrying `target_marker`. Returns one
+/// `ReachChain` per reached compound, sorted by chain length (shortest first)
+/// then by the outermost word name (alphabetically). Each chain includes the
+/// word names from the outermost caller through the direct native caller, plus
+/// the native name itself.
+///
+/// Run freeze with `.interpreter` artifact class so no bans fire; this lets
+/// the function surface dynamic-feature usage in programs that would be
+/// rejected under stricter classes.
+pub fn computeReachabilityForMarker(
+    freeze_result: *const FreezeResult,
+    ctx: *const Context,
+    target_marker: *const value_mod.Marker,
+    allocator: Allocator,
+) Allocator.Error![]ReachChain {
+    // Build word_id → AotWordDesc for name lookup.
+    var id_to_word = std.AutoHashMapUnmanaged(u32, *const AotWordDesc){};
+    defer id_to_word.deinit(allocator);
+    for (freeze_result.words) |*w| {
+        try id_to_word.put(allocator, w.word_id, w);
+    }
+
+    // Find native word IDs that carry the target marker.
+    var target_natives = std.AutoHashMapUnmanaged(u32, []const u8){}; // id → native name
+    defer target_natives.deinit(allocator);
+    for (freeze_result.words) |w| {
+        if (!w.is_native) continue;
+        const has_target = blk: {
+            if (ctx.lookupWord(w.name)) |def| {
+                for (def.markers) |mk| {
+                    if (mk == target_marker) break :blk true;
+                }
+            } else if (resolveQualifiedModuleWord(ctx, w.name)) |mod_word| {
+                for (mod_word.markers) |mk| {
+                    if (mk == target_marker) break :blk true;
+                }
+            }
+            break :blk false;
+        };
+        if (has_target) try target_natives.put(allocator, w.word_id, w.name);
+    }
+
+    if (target_natives.count() == 0) return &.{};
+
+    // Direct callers: compound words that call a target native.
+    // Stores the first native name seen for each caller (representative).
+    var direct_callers = std.AutoHashMapUnmanaged(u32, []const u8){};
+    defer direct_callers.deinit(allocator);
+    for (freeze_result.call_targets) |entry| {
+        switch (entry.resolved) {
+            .native => |nid| {
+                if (target_natives.get(nid)) |native_name| {
+                    if (!direct_callers.contains(entry.caller_word_id)) {
+                        try direct_callers.put(allocator, entry.caller_word_id, native_name);
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    if (direct_callers.count() == 0) return &.{};
+
+    // Reverse compound call graph: compound_id → list of compound word ids that call it.
+    var reverse_graph = std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)){};
+    defer {
+        var it = reverse_graph.iterator();
+        while (it.next()) |rev_entry| rev_entry.value_ptr.deinit(allocator);
+        reverse_graph.deinit(allocator);
+    }
+    for (freeze_result.call_targets) |entry| {
+        switch (entry.resolved) {
+            .compound => |cid| {
+                const gop = try reverse_graph.getOrPut(allocator, cid);
+                if (!gop.found_existing) gop.value_ptr.* = .{};
+                try gop.value_ptr.append(allocator, entry.caller_word_id);
+            },
+            else => {},
+        }
+    }
+
+    // BFS from direct callers through the reverse graph. Track parent pointers
+    // so chains can be reconstructed. parent_map[id] = (parent_id, native_name).
+    // A direct caller has parent = null; native_name is the native it calls.
+    const ParentEntry = struct {
+        parent: ?u32,
+        native_name: ?[]const u8,
+    };
+    var parent_map = std.AutoHashMapUnmanaged(u32, ParentEntry){};
+    defer parent_map.deinit(allocator);
+
+    var bfs_queue = std.ArrayListUnmanaged(u32){};
+    defer bfs_queue.deinit(allocator);
+
+    var dc_it = direct_callers.iterator();
+    while (dc_it.next()) |dc_entry| {
+        const word_id = dc_entry.key_ptr.*;
+        try parent_map.put(allocator, word_id, .{ .parent = null, .native_name = dc_entry.value_ptr.* });
+        try bfs_queue.append(allocator, word_id);
+    }
+
+    var qi: usize = 0;
+    while (qi < bfs_queue.items.len) : (qi += 1) {
+        const current_id = bfs_queue.items[qi];
+        if (reverse_graph.get(current_id)) |callers| {
+            for (callers.items) |caller_id| {
+                if (parent_map.contains(caller_id)) continue;
+                try parent_map.put(allocator, caller_id, .{ .parent = current_id, .native_name = null });
+                try bfs_queue.append(allocator, caller_id);
+            }
+        }
+    }
+
+    // Build ReachChain for every word in parent_map.
+    var chains = std.ArrayListUnmanaged(ReachChain){};
+    errdefer {
+        for (chains.items) |c| c.deinit(allocator);
+        chains.deinit(allocator);
+    }
+
+    var pm_it = parent_map.iterator();
+    while (pm_it.next()) |pm_entry| {
+        const word_id = pm_entry.key_ptr.*;
+
+        // Walk parent chain: word_id → parent → ... → direct_caller (no parent).
+        var chain_ids = std.ArrayListUnmanaged(u32){};
+        defer chain_ids.deinit(allocator);
+
+        var cur = word_id;
+        while (true) {
+            try chain_ids.append(allocator, cur);
+            const pe = parent_map.get(cur).?;
+            const p = pe.parent orelse break;
+            cur = p;
+        }
+        // chain_ids: [word_id, ..., direct_caller_id], already in call order
+        // (outer caller first, direct caller last).
+
+        // native_name is on the direct caller (last element).
+        const direct_caller_id = chain_ids.items[chain_ids.items.len - 1];
+        const native_name = parent_map.get(direct_caller_id).?.native_name orelse continue;
+
+        // Convert word IDs to names.
+        var compound_chain = try allocator.alloc([]const u8, chain_ids.items.len);
+        errdefer allocator.free(compound_chain);
+        var all_found = true;
+        for (chain_ids.items, 0..) |cid, i| {
+            const desc = id_to_word.get(cid) orelse {
+                all_found = false;
+                break;
+            };
+            compound_chain[i] = desc.name;
+        }
+        if (!all_found) {
+            allocator.free(compound_chain);
+            continue;
+        }
+        try chains.append(allocator, .{
+            .compound_chain = compound_chain,
+            .native_name = native_name,
+        });
+    }
+
+    // Sort by chain length ascending, then by outermost name alphabetically.
+    std.mem.sort(ReachChain, chains.items, {}, struct {
+        fn lessThan(_: void, a: ReachChain, b: ReachChain) bool {
+            if (a.compound_chain.len != b.compound_chain.len)
+                return a.compound_chain.len < b.compound_chain.len;
+            return std.mem.lessThan(u8, a.compound_chain[0], b.compound_chain[0]);
+        }
+    }.lessThan);
+
+    return chains.toOwnedSlice(allocator);
 }
 
 fn hasNeverReturnsMarker(def: WordDefinition) bool {

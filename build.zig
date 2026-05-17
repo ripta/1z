@@ -840,6 +840,14 @@ const AotEnvEntry = struct {
     value: []const u8,
 };
 
+const AotReachEntry = struct {
+    feature: []const u8,
+    golden_path: []const u8,
+    content: []const u8,
+    has_golden: bool,
+    reach_features_path: []const u8,
+};
+
 const AotTestEntry = struct {
     name_without_ext: []const u8,
     file_path: []const u8,
@@ -864,6 +872,7 @@ const AotTestEntry = struct {
     has_inspect_stdout_golden: bool,
     inspect_stdout_golden_path: []const u8,
     inspect_stdout_content: []const u8,
+    reach_entries: []const AotReachEntry,
     build_flags: []const []const u8,
     build_flags_path: []const u8,
     env_entries: []const AotEnvEntry,
@@ -952,6 +961,34 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             has_inspect_stdout_golden = true;
         } else |_| {}
 
+        var reach_entries: std.ArrayListUnmanaged(AotReachEntry) = .{};
+        const reach_features_path = b.fmt("tests/aot/{s}.reach-features", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.reach-features", .{name_without_ext}), .{})) |features_file| {
+            defer features_file.close();
+            const features_content = features_file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+            var lines = std.mem.splitScalar(u8, features_content, '\n');
+            while (lines.next()) |line| {
+                const feature = std.mem.trim(u8, line, " \t\r");
+                if (feature.len == 0 or feature[0] == '#') continue;
+                const golden_name = b.fmt("{s}.reach-{s}.stdout.golden", .{ name_without_ext, feature });
+                const golden_path = b.fmt("tests/aot/{s}", .{golden_name});
+                var has_golden = false;
+                var golden_content: []const u8 = "";
+                if (aot_dir.openFile(golden_name, .{})) |golden_file| {
+                    defer golden_file.close();
+                    golden_content = golden_file.readToEndAlloc(b.allocator, 1024 * 1024) catch "";
+                    has_golden = true;
+                } else |_| {}
+                reach_entries.append(b.allocator, .{
+                    .feature = b.dupe(feature),
+                    .golden_path = golden_path,
+                    .content = golden_content,
+                    .has_golden = has_golden,
+                    .reach_features_path = reach_features_path,
+                }) catch {};
+            }
+        } else |_| {}
+
         var build_flags: std.ArrayListUnmanaged([]const u8) = .{};
         const build_flags_path = b.fmt("tests/aot/{s}.build-flags", .{name_without_ext});
         if (aot_dir.openFile(b.fmt("{s}.build-flags", .{name_without_ext}), .{})) |file| {
@@ -1008,6 +1045,7 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             .has_inspect_stdout_golden = has_inspect_stdout_golden,
             .inspect_stdout_golden_path = inspect_stdout_golden_path,
             .inspect_stdout_content = inspect_stdout_content,
+            .reach_entries = reach_entries.items,
             .build_flags = build_flags.items,
             .build_flags_path = build_flags_path,
             .env_entries = env_entries.items,
@@ -1148,6 +1186,32 @@ fn addAotTests(
             });
             update_normalize_inspect.addFileArg(update_inspect_run.captureStdOut());
             update_files.*.addCopyFileToSource(update_normalize_inspect.captureStdOut(), te.inspect_stdout_golden_path);
+        }
+
+        for (te.reach_entries) |re| {
+            if (re.has_golden) {
+                const reach_run = b.addSystemCommand(&.{ exe_path, "inspect", "--reach", re.feature });
+                reach_run.addFileArg(b.path(te.file_path));
+                reach_run.step.dependOn(b.getInstallStep());
+                reach_run.addFileInput(artifact.getEmittedBin());
+                reach_run.addFileInput(b.path(re.reach_features_path));
+                reach_run.expectExitCode(0);
+                addCommonFileDeps(b, reach_run);
+                if (has_diff) {
+                    addGoldenDiff(b, test_step, reach_run.captureStdOut(), re.golden_path, te.file_path);
+                } else {
+                    reach_run.expectStdOutEqual(re.content);
+                    test_step.dependOn(&reach_run.step);
+                }
+            }
+
+            const update_reach = b.addSystemCommand(&.{ exe_path, "inspect", "--reach", re.feature });
+            update_reach.addFileArg(b.path(te.file_path));
+            update_reach.step.dependOn(b.getInstallStep());
+            update_reach.addFileInput(artifact.getEmittedBin());
+            update_reach.addFileInput(b.path(re.reach_features_path));
+            addCommonFileDeps(b, update_reach);
+            update_files.*.addCopyFileToSource(update_reach.captureStdOut(), re.golden_path);
         }
 
         if (is_build_only) {

@@ -6461,6 +6461,11 @@ pub const AotMetadata = struct {
     zig_version: []const u8 = "",
     c_compiler_id: []const u8 = "",
     c_compiler_version: []const u8 = "",
+    /// Comma-separated list of `dynamic-*` marker names reachable in the
+    /// frozen call graph (e.g. `"dynamic-eval,dynamic-load"`), or `"none"`.
+    /// Optional: omitted from the binary when null (older builds). Set by
+    /// the build driver after a successful freeze.
+    dynamic_features: ?[]const u8 = null,
 };
 
 pub fn emitProgramC(
@@ -7467,6 +7472,11 @@ fn emitAotMetadata(
     if (meta.c_compiler_version.len > 0) {
         try out.appendSlice(allocator, "    \"c-compiler-version=");
         try out.appendSlice(allocator, meta.c_compiler_version);
+        try out.appendSlice(allocator, "\\n\"\n");
+    }
+    if (meta.dynamic_features) |df| {
+        try out.appendSlice(allocator, "    \"dynamic-features=");
+        try out.appendSlice(allocator, df);
         try out.appendSlice(allocator, "\\n\"\n");
     }
 

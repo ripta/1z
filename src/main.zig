@@ -31,6 +31,7 @@ const trace_mod = @import("trace.zig");
 const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
 const aot_freeze = @import("aot_freeze.zig");
+const markers_mod = @import("primitives/markers.zig");
 const aot_image = @import("aot_image.zig");
 const aot_image_emit = @import("aot_image_emit.zig");
 const ir_codegen = @import("ir_codegen.zig");
@@ -636,11 +637,18 @@ fn printInspectHelp() void {
     var stdout_buf: [4096]u8 = undefined;
     var stdout = stdout_file.writerStreaming(&stdout_buf);
     const w = &stdout.interface;
-    w.writeAll("Usage: 1z inspect <binary>\n\n") catch {};
-    w.writeAll("Report metadata embedded in a 1z AOT binary, including target,\n") catch {};
-    w.writeAll("build mode, artifact class, interpreter linkage and fallback\n") catch {};
-    w.writeAll("policy, runtime image presence, 1z version, and prelude content\n") catch {};
-    w.writeAll("hash.\n\n") catch {};
+    w.writeAll("Usage: 1z inspect <binary>\n") catch {};
+    w.writeAll("       1z inspect --reach FEATURE <source.1z>\n\n") catch {};
+    w.writeAll("Without --reach: report metadata embedded in a 1z AOT binary,\n") catch {};
+    w.writeAll("including target, build mode, artifact class, interpreter linkage\n") catch {};
+    w.writeAll("and fallback policy, runtime image presence, dynamic-feature\n") catch {};
+    w.writeAll("touchpoints, 1z version, and prelude content hash.\n\n") catch {};
+    w.writeAll("With --reach FEATURE: freeze the source file with the interpreter\n") catch {};
+    w.writeAll("artifact class (no bans) and report every compound word that\n") catch {};
+    w.writeAll("transitively calls a native carrying the named dynamic-capability\n") catch {};
+    w.writeAll("marker, with the full call chain to the native.\n\n") catch {};
+    w.writeAll("FEATURE is one of: eval, load, compile, quotation-construction\n") catch {};
+    w.writeAll("The 'dynamic-' prefix is also accepted (e.g. dynamic-eval).\n\n") catch {};
     w.writeAll("Artifact classes:\n") catch {};
     w.writeAll("  interpreter          binary links the full interpreter; dynamic\n") catch {};
     w.writeAll("                       runtime code features (eval-string, runtime\n") catch {};
@@ -2396,6 +2404,9 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const cc_probe = probeCCompiler(allocator);
     defer cc_probe.deinit(allocator);
 
+    const touched_features = computeTouchedDynamicFeatures(&freeze_result, ctx, allocator) catch null;
+    defer if (touched_features) |tf| allocator.free(tf);
+
     const aot_metadata: ir_codegen.AotMetadata = .{
         .interpreter_fallback_mode = interpreter_fallback,
         .interpreter_setting_locked = lock_interpreter_setting,
@@ -2408,6 +2419,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         .zig_version = zig_version_str,
         .c_compiler_id = cc_probe.id,
         .c_compiler_version = cc_probe.banner,
+        .dynamic_features = touched_features,
     };
 
     const c_source = ir_codegen.emitProgramC(
@@ -2796,6 +2808,10 @@ const AotInspectFields = struct {
     zig_version: ?[]const u8 = null,
     c_compiler_id: ?[]const u8 = null,
     c_compiler_version: ?[]const u8 = null,
+    // Comma-separated list of dynamic-* marker names reachable in the
+    // frozen call graph, or "none". Absent on binaries built before this
+    // field was added; present on current and future builds.
+    dynamic_features: ?[]const u8 = null,
 };
 
 const AotInspectError = error{
@@ -2841,6 +2857,7 @@ fn parseAotMetadata(
     var zig_version: ?[]const u8 = null;
     var c_compiler_id: ?[]const u8 = null;
     var c_compiler_version: ?[]const u8 = null;
+    var dynamic_features: ?[]const u8 = null;
 
     var line_it = std.mem.splitScalar(u8, payload, '\n');
     while (line_it.next()) |line| {
@@ -2886,6 +2903,8 @@ fn parseAotMetadata(
             c_compiler_id = value;
         } else if (std.mem.eql(u8, key, "c-compiler-version")) {
             c_compiler_version = value;
+        } else if (std.mem.eql(u8, key, "dynamic-features")) {
+            dynamic_features = value;
         }
         // Unknown keys are ignored so the parser can read newer
         // binaries that add forward-compatible optional fields.
@@ -2951,10 +2970,118 @@ fn parseAotMetadata(
         .zig_version = zig_version,
         .c_compiler_id = c_compiler_id,
         .c_compiler_version = c_compiler_version,
+        .dynamic_features = dynamic_features,
     };
 }
 
-fn handleInspect(gpa: std.mem.Allocator, args: []const []const u8) u8 {
+/// Scan `freeze_result.call_targets` and return a comma-separated list of
+/// `dynamic-*` marker names reachable through resolved native calls, or
+/// `"none"`. The returned slice is allocated from `allocator`. The list
+/// preserves the order of `dynamic_marker_policy` (compile, eval, load,
+/// quotation-construction) and omits markers not touched.
+fn computeTouchedDynamicFeatures(
+    freeze_result: *const aot_freeze.FreezeResult,
+    ctx: *const Context,
+    allocator: std.mem.Allocator,
+) std.mem.Allocator.Error![]const u8 {
+    // Build word_id → name map for native words.
+    var id_to_name = std.AutoHashMapUnmanaged(u32, []const u8){};
+    defer id_to_name.deinit(allocator);
+    for (freeze_result.words) |w| {
+        if (w.is_native) try id_to_name.put(allocator, w.word_id, w.name);
+    }
+
+    // Track which dynamic markers are touched.
+    var touched = [4]bool{ false, false, false, false };
+    const policy = &[_]*const value_mod.Marker{
+        &markers_mod.dynamic_compile_marker,
+        &markers_mod.dynamic_eval_marker,
+        &markers_mod.dynamic_load_marker,
+        &markers_mod.dynamic_quotation_construction_marker,
+    };
+
+    for (freeze_result.call_targets) |entry| {
+        switch (entry.resolved) {
+            .native => |nid| {
+                const name = id_to_name.get(nid) orelse continue;
+                if (ctx.lookupWord(name)) |def| {
+                    for (def.markers) |mk| {
+                        for (policy, 0..) |pm, pi| {
+                            if (mk == pm) touched[pi] = true;
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    var out = std.ArrayListUnmanaged(u8){};
+    defer out.deinit(allocator);
+    const names = [4][]const u8{
+        "dynamic-compile",
+        "dynamic-eval",
+        "dynamic-load",
+        "dynamic-quotation-construction",
+    };
+    for (touched, names) |t, nm| {
+        if (!t) continue;
+        if (out.items.len > 0) try out.appendSlice(allocator, ",");
+        try out.appendSlice(allocator, nm);
+    }
+    if (out.items.len == 0) return try allocator.dupe(u8, "none");
+    return out.toOwnedSlice(allocator);
+}
+
+/// Resolve a feature name (short or full `dynamic-` prefix) to the
+/// corresponding well-known marker constant, or return null for unknown names.
+fn resolveReachFeature(name: []const u8) ?*const value_mod.Marker {
+    const n = if (std.mem.startsWith(u8, name, "dynamic-")) name["dynamic-".len..] else name;
+    if (std.mem.eql(u8, n, "eval")) return &markers_mod.dynamic_eval_marker;
+    if (std.mem.eql(u8, n, "load")) return &markers_mod.dynamic_load_marker;
+    if (std.mem.eql(u8, n, "compile")) return &markers_mod.dynamic_compile_marker;
+    if (std.mem.eql(u8, n, "quotation-construction")) return &markers_mod.dynamic_quotation_construction_marker;
+    return null;
+}
+
+/// Write the reachability report for a single feature to `w`.
+fn writeReachReport(
+    w: anytype,
+    feature_name: []const u8,
+    chains: []const aot_freeze.ReachChain,
+) !void {
+    try w.print("feature: dynamic-{s}\n\n", .{
+        if (std.mem.startsWith(u8, feature_name, "dynamic-"))
+            feature_name["dynamic-".len..]
+        else
+            feature_name,
+    });
+    if (chains.len == 0) {
+        try w.writeAll("  (none)\n");
+        return;
+    }
+    for (chains) |chain| {
+        try w.writeAll("  ");
+        for (chain.compound_chain, 0..) |word, i| {
+            if (i > 0) try w.writeAll(" \xe2\x86\x92 ");
+            try w.writeAll(word);
+        }
+        try w.writeAll(" \xe2\x86\x92 ");
+        try w.writeAll(chain.native_name);
+        try w.writeAll("\n");
+    }
+}
+
+/// Handle `1z inspect --reach FEATURE <source.1z>`: freeze the source file
+/// (with the most permissive artifact class so no bans fire), then walk the
+/// call-target map to find every compound word that transitively calls a
+/// native carrying the named dynamic-capability marker.
+fn handleInspectReach(
+    gpa: std.mem.Allocator,
+    global: *GlobalFlags,
+    feature_name: []const u8,
+    source_file: []const u8,
+) u8 {
     const stdout_file: File = .stdout();
     var stdout_buf: [4096]u8 = undefined;
     var stdout = stdout_file.writerStreaming(&stdout_buf);
@@ -2965,27 +3092,142 @@ fn handleInspect(gpa: std.mem.Allocator, args: []const []const u8) u8 {
     var stderr = stderr_file.writerStreaming(&stderr_buf);
     const err_writer = &stderr.interface;
 
+    const target_marker = resolveReachFeature(feature_name) orelse {
+        err_writer.print(
+            "Error: unknown feature '{s}'; valid names: eval, load, compile, quotation-construction\n",
+            .{feature_name},
+        ) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    var mem_limit = MemoryLimitAllocator.init(gpa, global.max_memory_bytes);
+    const allocator = mem_limit.allocator();
+
+    var ctx_obj = Context.init(allocator);
+    defer ctx_obj.deinit();
+    const ctx = &ctx_obj;
+
+    var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+    if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
+        if (global.stdlib_path) |sp| {
+            ctx.stdlib_path = sp;
+        } else {
+            const lib_path = std.fs.path.join(allocator, &.{ exe_dir, "../lib" }) catch null;
+            if (lib_path) |lp| {
+                var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+                if (std.fs.cwd().realpath(lp, &real_buf)) |real| {
+                    ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, real) catch null;
+                } else |_| {}
+                allocator.free(lp);
+            }
+        }
+    } else |_| {
+        if (global.stdlib_path) |sp| ctx.stdlib_path = sp;
+    }
+
+    for (global.load_paths.items) |lp| {
+        const duped = ctx.quotationAllocator().dupe(u8, lp) catch continue;
+        ctx.load_paths.append(allocator, duped) catch continue;
+    }
+
+    ctx.loadPrelude(global.prelude_path) catch |err| {
+        err_writer.print("Error loading prelude: {s}\n", .{@errorName(err)}) catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    var freeze_diagnostics: aot_freeze.FreezeDiagnostics = .{};
+    var freeze_result = aot_freeze.freezeModuleGraphOpts(ctx, source_file, &freeze_diagnostics, allocator, .{
+        .artifact_class = .interpreter,
+    }) catch |err| {
+        switch (err) {
+            error.FileNotFound => err_writer.print("Error: file not found: '{s}'\n", .{source_file}) catch {},
+            error.FileReadFailed => err_writer.print("Error: failed to read '{s}'\n", .{source_file}) catch {},
+            error.ExecutionFailed => err_writer.writeAll("Error: execution failed\n") catch {},
+            error.OutOfMemory => err_writer.writeAll("Error: out of memory\n") catch {},
+            else => err_writer.print("Error: {s}\n", .{@errorName(err)}) catch {},
+        }
+        err_writer.flush() catch {};
+        return 1;
+    };
+    defer freeze_result.deinit(allocator);
+
+    const chains = aot_freeze.computeReachabilityForMarker(
+        &freeze_result,
+        ctx,
+        target_marker,
+        allocator,
+    ) catch {
+        err_writer.writeAll("Error: out of memory computing reachability\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+    defer {
+        for (chains) |c| c.deinit(allocator);
+        allocator.free(chains);
+    }
+
+    writeReachReport(out_writer, feature_name, chains) catch {};
+    out_writer.flush() catch {};
+    return 0;
+}
+
+fn handleInspect(gpa: std.mem.Allocator, args: []const []const u8) u8 {
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    const err_writer = &stderr.interface;
+
     if (hasHelpFlag(args)) {
         printInspectHelp();
         return 0;
     }
 
-    var binary_path: ?[]const u8 = null;
-    for (args) |arg| {
+    // Parse flags. --reach requires a source file; all others take a binary.
+    var global = GlobalFlags{};
+    defer global.deinit(gpa);
+
+    var reach_feature: ?[]const u8 = null;
+    var path_arg: ?[]const u8 = null;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        const g = parseGlobalFlag(arg, &global, gpa, err_writer) catch return 1;
+        if (g == .consumed) continue;
+        if (std.mem.eql(u8, arg, "--reach")) {
+            i += 1;
+            if (i >= args.len) {
+                err_writer.writeAll("Error: --reach requires a feature name argument\n") catch {};
+                err_writer.flush() catch {};
+                return 1;
+            }
+            reach_feature = args[i];
+            continue;
+        }
         if (arg.len > 0 and arg[0] == '-') {
             err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
             err_writer.flush() catch {};
             return 1;
         }
-        if (binary_path != null) {
-            err_writer.writeAll("Error: 1z inspect takes exactly one binary path\n") catch {};
+        if (path_arg != null) {
+            err_writer.writeAll("Error: 1z inspect takes exactly one path\n") catch {};
             err_writer.flush() catch {};
             return 1;
         }
-        binary_path = arg;
+        path_arg = arg;
     }
 
-    const path = binary_path orelse {
+    if (reach_feature) |feature| {
+        const source = path_arg orelse {
+            err_writer.writeAll("Usage: 1z inspect --reach FEATURE <source.1z>\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+        return handleInspectReach(gpa, &global, feature, source);
+    }
+
+    const path = path_arg orelse {
         err_writer.writeAll("Usage: 1z inspect <binary>\n") catch {};
         err_writer.flush() catch {};
         return 1;
@@ -3034,6 +3276,11 @@ fn handleInspect(gpa: std.mem.Allocator, args: []const []const u8) u8 {
         },
     };
 
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const out_writer = &stdout.interface;
+
     writeInspectReport(out_writer, fields) catch {};
     out_writer.flush() catch {};
     return 0;
@@ -3079,6 +3326,9 @@ fn writeInspectReport(w: anytype, fields: AotInspectFields) !void {
         );
     } else {
         try w.print("runtime-image: present={s}\n", .{fields.runtime_image_present});
+    }
+    if (fields.dynamic_features) |v| {
+        try w.print("dynamic-features: {s}\n", .{v});
     }
     try w.print("1z-version: {s}\n", .{fields.onez_version});
     try w.print("prelude-hash: {s}\n", .{fields.prelude_hash});
