@@ -31,6 +31,11 @@ pub const FreezeResult = struct {
     max_quotation_id: u32,
     skipped_words: []const []const u8,
     entry_instrs: []const Instruction,
+    /// One entry per reachable `call_word` instruction, recording where the
+    /// call originates and which callee freeze resolved it to. Built during
+    /// Word Discovery BFS and remapped to caller word ids in buildAotDescs.
+    /// Stable ordering: insertion order from the BFS.
+    call_targets: []const CallTargetEntry = &.{},
 
     pub fn deinit(self: *FreezeResult, allocator: Allocator) void {
         allocator.free(self.entry_instrs);
@@ -44,7 +49,64 @@ pub const FreezeResult = struct {
         for (self.quotations) |q| allocator.free(q.c_name);
         allocator.free(self.quotations);
         allocator.free(self.skipped_words);
+        for (self.call_targets) |entry| {
+            if (entry.quotation_path.len > 0) allocator.free(entry.quotation_path);
+        }
+        allocator.free(self.call_targets);
     }
+};
+
+/// Why a `call_word` could not be resolved to a concrete callee during the
+/// freeze BFS. Distinct reasons exist so downstream enforcement can apply
+/// different rules to each.
+pub const UnresolvedReason = enum {
+    /// Neither `Context.lookupWord` nor `resolveQualifiedModuleWord` returned
+    /// a definition for the name. The callee is genuinely absent from the
+    /// dictionary visible at freeze time.
+    not_in_dictionary,
+    /// The name resolves to a compound word marked `parse_time_only`. The
+    /// existing BFS skips such words because they have no runtime presence
+    /// and no `word_id` is ever assigned.
+    skipped_parse_time_only,
+    /// The callee resolved during BFS but was dropped by buildAotDescs
+    /// because its definition has no stack effect. Only reachable on the
+    /// MissingStackEffects error path; the surrounding FreezeResult is
+    /// deinit'd before any consumer observes the call_targets array.
+    skipped_no_stack_effect,
+};
+
+/// Classification placeholder for words materialized by generators
+/// (struct accessors, virtual constructors, `method{` dispatchers).
+/// Reserved for future use; not emitted today.
+pub const GeneratedKind = enum {
+    placeholder,
+};
+
+/// The result of resolving a `call_word` instruction's name at freeze time.
+/// The `native` and `compound` variants carry the assigned word id from
+/// `buildAotDescs`; the `unresolved` variant carries a reason; `generated`
+/// is reserved for future generator-classification work.
+pub const ResolvedCallee = union(enum) {
+    native: u32,
+    compound: u32,
+    generated: GeneratedKind,
+    unresolved: UnresolvedReason,
+};
+
+/// One reachable call_word instruction, identified by its containing word
+/// and the path within that word's instruction tree.
+///
+/// `instruction_index` indexes into the containing word's top-level
+/// instruction body. `quotation_path` walks into nested quotation literals
+/// to reach the call site; an empty path means the call is at the top
+/// level of the containing word's body. For example, a call at index 2 of
+/// the quotation at index 5 of the caller's body has
+/// `instruction_index = 5` and `quotation_path = .{ 2 }`.
+pub const CallTargetEntry = struct {
+    caller_word_id: u32,
+    instruction_index: u32,
+    quotation_path: []const u32,
+    resolved: ResolvedCallee,
 };
 
 pub const FreezeFeatureUse = struct {
@@ -148,6 +210,14 @@ pub fn freezeModuleGraphOpts(
     defer discovered.native_names.deinit(ctx.quotationAllocator());
     defer discovered.native_defs.deinit(ctx.quotationAllocator());
     defer discovered.quotation_bodies.deinit(ctx.quotationAllocator());
+    defer discovered.pending_call_targets.deinit(ctx.quotationAllocator());
+    // Path slices in pending entries are allocated from the result
+    // allocator and transferred to FreezeResult.call_targets by
+    // buildAotDescs. On any error between here and a successful return,
+    // those slices must be freed manually since the FreezeResult never
+    // takes ownership. buildAotDescs zeros out the transferred slice
+    // references on success so this errdefer is a no-op after handoff.
+    errdefer freePendingCallTargetPaths(&discovered.pending_call_targets, allocator);
 
     if (options.compile_all_prelude) {
         const temp_allocator = ctx.quotationAllocator();
@@ -253,13 +323,18 @@ pub fn freezeModuleGraphOpts(
     ctx.popLocalFrame();
 
     // Phase 3: Build AotWordDesc array
-    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, ctx, allocator);
+    var result = try buildAotDescs(entry_instrs, &discovered, discovered.pending_call_targets.items, &prelude_words, ctx, allocator);
     if (result.skipped_words.len > 0) {
         diagnostics.missing_stack_effects = result.skipped_words;
         result.skipped_words = &.{};
         result.deinit(allocator);
         return error.MissingStackEffects;
     }
+
+    // Success: path slices have been duped into result.call_targets. Free
+    // the BFS-time originals; the idempotent free renders the errdefer
+    // above a no-op if any subsequent step fails.
+    freePendingCallTargetPaths(&discovered.pending_call_targets, allocator);
 
     return result;
 }
@@ -366,6 +441,32 @@ const DiscoveredWords = struct {
     native_names: std.ArrayListUnmanaged([]const u8),
     native_defs: std.ArrayListUnmanaged(WordDefinition),
     quotation_bodies: std.ArrayListUnmanaged([]const Instruction),
+    /// One entry per reachable `call_word` instruction encountered during
+    /// BFS. Caller is recorded by name here; buildAotDescs remaps to the
+    /// assigned word id when producing FreezeResult.call_targets. The
+    /// callee discriminator and assigned id are filled in at remap time
+    /// from the discovered name tables.
+    pending_call_targets: std.ArrayListUnmanaged(PendingCallTarget) = .{},
+};
+
+/// Where a callee name should be looked up at remap time so that the
+/// final ResolvedCallee can carry an assigned word id. The BFS performs
+/// the dictionary lookup once per call site to decide which table will
+/// hold the id (compound vs native) or whether the callee is unresolved.
+const PendingResolution = union(enum) {
+    compound_name: []const u8,
+    native_name: []const u8,
+    unresolved: UnresolvedReason,
+};
+
+/// A call_word instruction recorded during BFS, awaiting remap to the
+/// caller's assigned word id and (for resolved callees) lookup of the
+/// callee's assigned word id.
+const PendingCallTarget = struct {
+    caller_name: []const u8,
+    instruction_index: u32,
+    quotation_path: []const u32,
+    pending: PendingResolution,
 };
 
 /// BFS over call_word references starting from entry instructions,
@@ -375,7 +476,7 @@ fn discoverReachableWords(
     entry_instrs: []const Instruction,
     diagnostics: *FreezeDiagnostics,
     runtime_image: bool,
-    _: Allocator,
+    result_allocator: Allocator,
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!DiscoveredWords {
     const temp_allocator = ctx.quotationAllocator();
 
@@ -388,12 +489,16 @@ fn discoverReachableWords(
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(temp_allocator);
 
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(temp_allocator);
+
     var result = DiscoveredWords{
         .names = .{},
         .defs = .{},
         .native_names = .{},
         .native_defs = .{},
         .quotation_bodies = .{},
+        .pending_call_targets = .{},
     };
 
     // Push deps frames for every loaded module so that lookupWord can find
@@ -417,12 +522,14 @@ fn discoverReachableWords(
     }
 
     // Seed worklist from entry instructions
-    collectCallWords(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
+    collectCallWords(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
+        freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
         result.names.deinit(temp_allocator);
         result.defs.deinit(temp_allocator);
         result.native_names.deinit(temp_allocator);
         result.native_defs.deinit(temp_allocator);
         result.quotation_bodies.deinit(temp_allocator);
+        result.pending_call_targets.deinit(temp_allocator);
         return err;
     };
 
@@ -447,12 +554,14 @@ fn discoverReachableWords(
                     .compound => |compound_instrs| {
                         try result.names.append(temp_allocator, name);
                         try result.defs.append(temp_allocator, wordDefFromModuleWord(name, mod_word));
-                        collectCallWords(ctx, compound_instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
+                        collectCallWords(ctx, compound_instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
+                            freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
                             result.names.deinit(temp_allocator);
                             result.defs.deinit(temp_allocator);
                             result.native_names.deinit(temp_allocator);
                             result.native_defs.deinit(temp_allocator);
                             result.quotation_bodies.deinit(temp_allocator);
+                            result.pending_call_targets.deinit(temp_allocator);
                             return err;
                         };
                     },
@@ -479,12 +588,14 @@ fn discoverReachableWords(
         try result.defs.append(temp_allocator, word);
 
         // Discover callees
-        collectCallWords(ctx, instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, diagnostics, runtime_image, temp_allocator) catch |err| {
+        collectCallWords(ctx, instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
+            freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
             result.names.deinit(temp_allocator);
             result.defs.deinit(temp_allocator);
             result.native_names.deinit(temp_allocator);
             result.native_defs.deinit(temp_allocator);
             result.quotation_bodies.deinit(temp_allocator);
+            result.pending_call_targets.deinit(temp_allocator);
             return err;
         };
     }
@@ -492,8 +603,46 @@ fn discoverReachableWords(
     return result;
 }
 
+/// Free quotation_path slices owned by entries in `pending_call_targets`.
+/// Idempotent: clears each entry's slice reference after freeing so that
+/// the success-path explicit call and the error-path errdefer can both
+/// run safely without risking double-free.
+fn freePendingCallTargetPaths(pending: *std.ArrayListUnmanaged(PendingCallTarget), allocator: Allocator) void {
+    for (pending.items) |*entry| {
+        if (entry.quotation_path.len > 0) {
+            allocator.free(entry.quotation_path);
+            entry.quotation_path = &.{};
+        }
+    }
+}
+
+/// Resolve a callee name into its `PendingResolution` form without
+/// performing any side-effecting work. Used at every call site to record
+/// the call_targets entry; the result is finalized to a `ResolvedCallee`
+/// after buildAotDescs assigns word ids.
+fn classifyCallee(ctx: *const Context, name: []const u8) PendingResolution {
+    if (ctx.lookupWord(name)) |word| {
+        if (word.parse_time_only) {
+            return .{ .unresolved = .skipped_parse_time_only };
+        }
+        return switch (word.action) {
+            .native, .host_callback => .{ .native_name = name },
+            .compound => .{ .compound_name = name },
+        };
+    }
+    if (resolveQualifiedModuleWord(ctx, name)) |mod_word| {
+        return switch (mod_word.action) {
+            .native, .host_callback => .{ .native_name = name },
+            .compound => .{ .compound_name = name },
+        };
+    }
+    return .{ .unresolved = .not_in_dictionary };
+}
+
 /// Extract call_word names from instructions and add unseen ones to the worklist.
 /// Also collects reachable quotation bodies, dwduped by pointer identity.
+/// Per-call-site records are appended to `pending_call_targets` for later
+/// remap to caller word ids.
 fn collectCallWords(
     ctx: *const Context,
     instrs: []const Instruction,
@@ -502,11 +651,14 @@ fn collectCallWords(
     seen: *std.StringHashMapUnmanaged(void),
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
+    quotation_path: *std.ArrayListUnmanaged(u32),
     diagnostics: *FreezeDiagnostics,
     runtime_image: bool,
     allocator: Allocator,
+    path_allocator: Allocator,
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
-    for (instrs) |instr| {
+    for (instrs, 0..) |instr, idx| {
         switch (instr.op) {
             .call_word => |name| {
                 if (isDisallowedDynamicFeature(name, runtime_image)) {
@@ -527,6 +679,16 @@ fn collectCallWords(
                 if (!gop.found_existing) {
                     try worklist.append(allocator, name);
                 }
+                const path_copy: []const u32 = if (quotation_path.items.len == 0)
+                    &.{}
+                else
+                    try path_allocator.dupe(u32, quotation_path.items);
+                try pending_call_targets.append(allocator, .{
+                    .caller_name = caller_name,
+                    .instruction_index = @intCast(idx),
+                    .quotation_path = path_copy,
+                    .pending = classifyCallee(ctx, name),
+                });
             },
             .push_literal => |val| {
                 // Recurse into nested quotations
@@ -537,7 +699,10 @@ fn collectCallWords(
                         if (!qgop.found_existing) {
                             try quotation_bodies.append(allocator, q.instructions);
                         }
-                        try collectCallWords(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, diagnostics, runtime_image, allocator);
+                        try quotation_path.append(allocator, @intCast(idx));
+                        const recurse_err = collectCallWords(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, runtime_image, allocator, path_allocator);
+                        _ = quotation_path.pop();
+                        try recurse_err;
                     },
                     else => {},
                 }
@@ -712,6 +877,7 @@ fn isDispatchOnlyGeneric(def: WordDefinition) bool {
 fn buildAotDescs(
     entry_instrs: []const Instruction,
     discovered: *const DiscoveredWords,
+    pending_call_targets: []const PendingCallTarget,
     prelude_words: *const std.StringHashMapUnmanaged(void),
     ctx: ?*Context,
     allocator: Allocator,
@@ -839,6 +1005,54 @@ fn buildAotDescs(
         try word_map.put(allocator, w.name, w);
     }
 
+    // Remap pending call targets: substitute caller word ids and resolve
+    // callee word ids via word_map. Path slices are duped into the result
+    // allocator so the FreezeResult owns them; the BFS-time originals are
+    // freed by the caller after this function returns.
+    var call_targets_list: std.ArrayListUnmanaged(CallTargetEntry) = .{};
+    errdefer {
+        for (call_targets_list.items) |entry| {
+            if (entry.quotation_path.len > 0) allocator.free(entry.quotation_path);
+        }
+        call_targets_list.deinit(allocator);
+    }
+    for (pending_call_targets) |p| {
+        const caller_entry = word_map.get(p.caller_name) orelse continue;
+        const resolved: ResolvedCallee = blk: switch (p.pending) {
+            .unresolved => |r| break :blk .{ .unresolved = r },
+            .native_name, .compound_name => {
+                const callee_name = switch (p.pending) {
+                    .native_name, .compound_name => |n| n,
+                    .unresolved => unreachable,
+                };
+                if (word_map.get(callee_name)) |w| {
+                    break :blk if (w.is_native)
+                        ResolvedCallee{ .native = w.word_id }
+                    else
+                        ResolvedCallee{ .compound = w.word_id };
+                }
+                break :blk .{ .unresolved = .skipped_no_stack_effect };
+            },
+        };
+        const path_dup: []const u32 = if (p.quotation_path.len == 0)
+            &.{}
+        else
+            try allocator.dupe(u32, p.quotation_path);
+        try call_targets_list.append(allocator, .{
+            .caller_word_id = caller_entry.word_id,
+            .instruction_index = p.instruction_index,
+            .quotation_path = path_dup,
+            .resolved = resolved,
+        });
+    }
+    const call_targets_slice = try call_targets_list.toOwnedSlice(allocator);
+    errdefer {
+        for (call_targets_slice) |entry| {
+            if (entry.quotation_path.len > 0) allocator.free(entry.quotation_path);
+        }
+        allocator.free(call_targets_slice);
+    }
+
     const FreezeResolverData = struct {
         map: *const std.StringHashMapUnmanaged(AotWordDesc),
 
@@ -893,6 +1107,7 @@ fn buildAotDescs(
         .max_quotation_id = max_quotation_id,
         .skipped_words = try skipped.toOwnedSlice(allocator),
         .entry_instrs = try allocator.dupe(Instruction, entry_instrs),
+        .call_targets = call_targets_slice,
     };
 }
 
@@ -918,9 +1133,14 @@ test "collectCallWords extracts call_word names from instructions" {
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 2), worklist.items.len);
     try testing.expect(seen.contains("double"));
@@ -963,7 +1183,7 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
     });
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     // Entry word (id 0) + foo (id 1) = 2 words; bar skipped
@@ -1031,7 +1251,7 @@ test "freezeModuleGraphOpts cleanup releases pic snapshots when stack effects ar
     });
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, &ctx, allocator);
+    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, &ctx, allocator);
 
     // Sanity: foo got a pic snapshot, bar was skipped.
     try testing.expect(result.words[1].pic_snapshot != null);
@@ -1087,7 +1307,7 @@ test "buildAotDescs includes native words with is_prelude and empty instructions
     });
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     // Entry (id 0) + foo (id 1) + type-of (id 2) = 3 words
@@ -1124,6 +1344,11 @@ test "collectCallWords rejects disallowed dynamic features with caller" {
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
     try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
@@ -1134,8 +1359,11 @@ test "collectCallWords rejects disallowed dynamic features with caller" {
         &seen,
         &quotation_bodies,
         &quotation_seen,
+        &pending_call_targets,
+        &quotation_path,
         &diagnostics,
         false,
+        allocator,
         allocator,
     ));
     try testing.expect(diagnostics.fatal_dynamic_feature != null);
@@ -1163,9 +1391,14 @@ test "collectCallWords in runtime-image mode permits eval-string, load, and >quo
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, true, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, true, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 5), worklist.items.len);
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
@@ -1187,6 +1420,11 @@ test "collectCallWords in runtime-image mode still rejects compile!" {
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
     try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
@@ -1197,8 +1435,11 @@ test "collectCallWords in runtime-image mode still rejects compile!" {
         &seen,
         &quotation_bodies,
         &quotation_seen,
+        &pending_call_targets,
+        &quotation_path,
         &diagnostics,
         true,
+        allocator,
         allocator,
     ));
     try testing.expect(diagnostics.fatal_dynamic_feature != null);
@@ -1238,6 +1479,11 @@ fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8) !void
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
     try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
@@ -1248,8 +1494,11 @@ fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8) !void
         &seen,
         &quotation_bodies,
         &quotation_seen,
+        &pending_call_targets,
+        &quotation_path,
         &diagnostics,
         false,
+        allocator,
         allocator,
     ));
     try testing.expect(diagnostics.fatal_dynamic_feature != null);
@@ -1277,9 +1526,14 @@ test "collectCallWords discovers quotation bodies" {
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
     try testing.expectEqual(inner_body.ptr, quotation_bodies.items[0].ptr);
@@ -1309,9 +1563,14 @@ test "collectCallWords discovers nested quotations" {
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
 
     // Both middle and innermost quotations discovered
     try testing.expectEqual(@as(usize, 2), quotation_bodies.items.len);
@@ -1340,9 +1599,14 @@ test "collectCallWords deduplicates quotations by pointer" {
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
 
     // Only recorded once despite appearing twice
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
@@ -1385,7 +1649,7 @@ test "buildAotDescs assigns sequential quotation IDs" {
     try discovered.quotation_bodies.append(allocator, q_body_2);
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), result.quotations.len);
@@ -1452,7 +1716,7 @@ test "buildAotDescs infers effect for quotation calling discovered word" {
     try discovered.quotation_bodies.append(allocator, q_body);
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     // Quotation pushes 1, then calls double (1 in, 1 out) => net (0, 1)
@@ -1485,7 +1749,7 @@ test "buildAotDescs returns null effect for unresolvable quotation" {
     try discovered.quotation_bodies.append(allocator, q_body);
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), result.quotations.len);
@@ -1517,7 +1781,7 @@ test "buildAotDescs infers effect for push-only quotation" {
     try discovered.quotation_bodies.append(allocator, q_body);
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     const eff = result.quotations[0].inferred_effect.?;
@@ -1556,6 +1820,11 @@ test "collectCallWords rejects marked native in interpreter-free mode" {
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
     try testing.expectError(error.DisallowedNativeInterpreterDependency, collectCallWords(
@@ -1566,8 +1835,11 @@ test "collectCallWords rejects marked native in interpreter-free mode" {
         &seen,
         &quotation_bodies,
         &quotation_seen,
+        &pending_call_targets,
+        &quotation_path,
         &diagnostics,
         false,
+        allocator,
         allocator,
     ));
     try testing.expect(diagnostics.fatal_native_interpreter_dependency != null);
@@ -1598,9 +1870,14 @@ test "collectCallWords permits marked native in runtime-image mode" {
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, true, allocator);
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, true, allocator, allocator);
 
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
@@ -1632,9 +1909,14 @@ test "collectCallWords ignores marker on compound words" {
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &diagnostics, false, allocator);
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
 
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
     try testing.expectEqual(@as(usize, 1), worklist.items.len);
@@ -1661,6 +1943,11 @@ test "audit fires before name-based check when caller reaches a marked native th
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
     try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
@@ -1671,10 +1958,419 @@ test "audit fires before name-based check when caller reaches a marked native th
         &seen,
         &quotation_bodies,
         &quotation_seen,
+        &pending_call_targets,
+        &quotation_path,
         &diagnostics,
         false,
+        allocator,
         allocator,
     ));
     try testing.expect(diagnostics.fatal_dynamic_feature != null);
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
+}
+
+// ── Call-Target Recording Tests ────────────────────────────────────────
+
+fn callTargetsNoopNative(ctx: *Context) anyerror!void {
+    _ = ctx;
+}
+
+test "collectCallWords records a top-level call with empty quotation_path" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Register two natives so classification is .native_name and resolution
+    // succeeds in a downstream buildAotDescs pass. The names are arbitrary;
+    // classification only consults the dictionary.
+    try ctx.dictionary.put("noop-a", .{ .name = "noop-a", .action = .{ .native = callTargetsNoopNative } });
+    try ctx.dictionary.put("noop-b", .{ .name = "noop-b", .action = .{ .native = callTargetsNoopNative } });
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 1 },
+        .{ .op = .{ .call_word = "noop-a" }, .line = 1 },
+        .{ .op = .{ .call_word = "noop-b" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+
+    try testing.expectEqual(@as(usize, 2), pending_call_targets.items.len);
+    try testing.expectEqualStrings("__entry__", pending_call_targets.items[0].caller_name);
+    try testing.expectEqual(@as(u32, 1), pending_call_targets.items[0].instruction_index);
+    try testing.expectEqual(@as(usize, 0), pending_call_targets.items[0].quotation_path.len);
+    try testing.expectEqualStrings("noop-a", pending_call_targets.items[0].pending.native_name);
+    try testing.expectEqual(@as(u32, 2), pending_call_targets.items[1].instruction_index);
+    try testing.expectEqualStrings("noop-b", pending_call_targets.items[1].pending.native_name);
+}
+
+test "collectCallWords records calls inside nested quotations with quotation_path" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+    try ctx.dictionary.put("inner-noop", .{ .name = "inner-noop", .action = .{ .native = callTargetsNoopNative } });
+
+    const inner_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "inner-noop" }, .line = 1 },
+    };
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner_instrs } } }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(&ctx, outer_instrs, "outer", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+
+    try testing.expectEqual(@as(usize, 1), pending_call_targets.items.len);
+    const entry = pending_call_targets.items[0];
+    try testing.expectEqualStrings("outer", entry.caller_name);
+    try testing.expectEqual(@as(u32, 0), entry.instruction_index);
+    try testing.expectEqual(@as(usize, 1), entry.quotation_path.len);
+    // Outer instruction index 1 is the quotation literal we recursed into.
+    try testing.expectEqual(@as(u32, 1), entry.quotation_path[0]);
+    try testing.expectEqualStrings("inner-noop", entry.pending.native_name);
+}
+
+test "collectCallWords classifies an unresolved name with .not_in_dictionary" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "no-such-word" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+
+    try testing.expectEqual(@as(usize, 1), pending_call_targets.items.len);
+    try testing.expectEqual(UnresolvedReason.not_in_dictionary, pending_call_targets.items[0].pending.unresolved);
+}
+
+test "collectCallWords classifies a parse-time-only callee as skipped" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+    try ctx.dictionary.put("parse-only", .{
+        .name = "parse-only",
+        .action = .{ .compound = &.{} },
+        .parse_time_only = true,
+    });
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "parse-only" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+
+    try testing.expectEqual(@as(usize, 1), pending_call_targets.items.len);
+    try testing.expectEqual(UnresolvedReason.skipped_parse_time_only, pending_call_targets.items[0].pending.unresolved);
+}
+
+test "collectCallWords does not deduplicate call-site records" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+    try ctx.dictionary.put("once", .{ .name = "once", .action = .{ .native = callTargetsNoopNative } });
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "once" }, .line = 1 },
+        .{ .op = .{ .call_word = "once" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+
+    // BFS dedup is independent of per-call-site recording: two call_word
+    // instructions to the same callee produce two pending entries.
+    try testing.expectEqual(@as(usize, 2), pending_call_targets.items.len);
+    try testing.expectEqual(@as(u32, 0), pending_call_targets.items[0].instruction_index);
+    try testing.expectEqual(@as(u32, 1), pending_call_targets.items[1].instruction_index);
+}
+
+test "buildAotDescs remaps caller name to caller_word_id and resolves callees" {
+    const allocator = testing.allocator;
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "foo" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.names.deinit(allocator);
+    defer discovered.defs.deinit(allocator);
+    defer discovered.native_names.deinit(allocator);
+    defer discovered.native_defs.deinit(allocator);
+
+    // Compound "foo" gets word_id 1; native "bar" gets word_id 2.
+    try discovered.names.append(allocator, "foo");
+    try discovered.defs.append(allocator, .{
+        .name = "foo",
+        .action = .{ .compound = &.{} },
+        .stack_effect = effect,
+    });
+    try discovered.native_names.append(allocator, "bar");
+    try discovered.native_defs.append(allocator, .{
+        .name = "bar",
+        .action = .{ .native = callTargetsNoopNative },
+        .stack_effect = effect,
+    });
+
+    const pending = [_]PendingCallTarget{
+        // Entry calls foo.
+        .{ .caller_name = "__entry__", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = "foo" } },
+        // foo calls bar.
+        .{ .caller_name = "foo", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .native_name = "bar" } },
+    };
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    defer result.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 2), result.call_targets.len);
+    // First entry: __entry__ (id 0) -> foo (compound, id 1).
+    try testing.expectEqual(@as(u32, 0), result.call_targets[0].caller_word_id);
+    try testing.expectEqual(@as(u32, 0), result.call_targets[0].instruction_index);
+    try testing.expectEqual(@as(u32, 1), result.call_targets[0].resolved.compound);
+    // Second entry: foo (id 1) -> bar (native, id 2).
+    try testing.expectEqual(@as(u32, 1), result.call_targets[1].caller_word_id);
+    try testing.expectEqual(@as(u32, 2), result.call_targets[1].resolved.native);
+}
+
+test "buildAotDescs preserves unresolved variant from pending entries" {
+    const allocator = testing.allocator;
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "no-such" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "__entry__", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .unresolved = .not_in_dictionary } },
+    };
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    defer result.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), result.call_targets.len);
+    try testing.expectEqual(@as(u32, 0), result.call_targets[0].caller_word_id);
+    try testing.expectEqual(UnresolvedReason.not_in_dictionary, result.call_targets[0].resolved.unresolved);
+}
+
+test "buildAotDescs preserves quotation_path through dupe" {
+    const allocator = testing.allocator;
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "n" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.native_names.deinit(allocator);
+    defer discovered.native_defs.deinit(allocator);
+    try discovered.native_names.append(allocator, "n");
+    try discovered.native_defs.append(allocator, .{
+        .name = "n",
+        .action = .{ .native = callTargetsNoopNative },
+        .stack_effect = effect,
+    });
+
+    // BFS-time path slice owned by the test; the dupe-into-result pattern
+    // means buildAotDescs allocates its own copy. The test leaves this
+    // slice intact (no transfer) because pending is a stack literal here.
+    const path_data = [_]u32{ 3, 1 };
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "__entry__", .instruction_index = 5, .quotation_path = &path_data, .pending = .{ .native_name = "n" } },
+    };
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    defer result.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), result.call_targets.len);
+    const out = result.call_targets[0];
+    try testing.expectEqual(@as(u32, 5), out.instruction_index);
+    try testing.expectEqual(@as(usize, 2), out.quotation_path.len);
+    try testing.expectEqual(@as(u32, 3), out.quotation_path[0]);
+    try testing.expectEqual(@as(u32, 1), out.quotation_path[1]);
+    // Confirm the dupe is a distinct allocation, not aliased to path_data.
+    try testing.expect(@intFromPtr(out.quotation_path.ptr) != @intFromPtr(&path_data[0]));
+}
+
+test "buildAotDescs throughput ceiling on synthetic graph" {
+    // Ceiling, not a baseline diff. Chosen generously so it passes today and
+    // would fail only on catastrophic regression; tune downward as the path
+    // becomes hotter or upward as the synthetic workload grows.
+    const allocator = testing.allocator;
+    const word_count: usize = 200;
+    const calls_per_word: usize = 20;
+    const ceiling_ns: u64 = 250 * std.time.ns_per_ms;
+
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{});
+    defer allocator.free(entry_instrs);
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.names.deinit(allocator);
+    defer discovered.defs.deinit(allocator);
+
+    const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+    // Generate word names "w0".. "wN-1" and append. Each compound's body is
+    // a hand-built array of call_word instructions pointing at neighbors;
+    // bodies own their backing slices and are freed at test end.
+    var name_buf = std.ArrayListUnmanaged([]u8){};
+    defer {
+        for (name_buf.items) |n| allocator.free(n);
+        name_buf.deinit(allocator);
+    }
+    var body_buf = std.ArrayListUnmanaged([]Instruction){};
+    defer {
+        for (body_buf.items) |b| allocator.free(b);
+        body_buf.deinit(allocator);
+    }
+
+    var i: usize = 0;
+    while (i < word_count) : (i += 1) {
+        const name = try std.fmt.allocPrint(allocator, "w{d}", .{i});
+        try name_buf.append(allocator, name);
+    }
+    i = 0;
+    while (i < word_count) : (i += 1) {
+        const body = try allocator.alloc(Instruction, calls_per_word);
+        var j: usize = 0;
+        while (j < calls_per_word) : (j += 1) {
+            const target_idx = (i + j + 1) % word_count;
+            body[j] = .{ .op = .{ .call_word = name_buf.items[target_idx] }, .line = 1 };
+        }
+        try body_buf.append(allocator, body);
+        try discovered.names.append(allocator, name_buf.items[i]);
+        try discovered.defs.append(allocator, .{
+            .name = name_buf.items[i],
+            .action = .{ .compound = body },
+            .stack_effect = effect,
+        });
+    }
+
+    // Build pending_call_targets: one entry per call_word in every body.
+    var pending = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending.deinit(allocator);
+    i = 0;
+    while (i < word_count) : (i += 1) {
+        var j: usize = 0;
+        while (j < calls_per_word) : (j += 1) {
+            const target_idx = (i + j + 1) % word_count;
+            try pending.append(allocator, .{
+                .caller_name = name_buf.items[i],
+                .instruction_index = @intCast(j),
+                .quotation_path = &.{},
+                .pending = .{ .compound_name = name_buf.items[target_idx] },
+            });
+        }
+    }
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+
+    var timer = try std.time.Timer.start();
+    var result = try buildAotDescs(entry_instrs, &discovered, pending.items, &prelude_words, null, allocator);
+    const elapsed_ns = timer.read();
+    defer result.deinit(allocator);
+
+    try testing.expectEqual(word_count * calls_per_word, result.call_targets.len);
+    try testing.expect(elapsed_ns < ceiling_ns);
 }
