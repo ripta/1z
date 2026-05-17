@@ -984,11 +984,23 @@ pub const Context = struct {
 
     /// Push a new empty local frame onto the frame stack.
     pub fn pushLocalFrame(self: *Context) !void {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+        try self.pushLocalFrameLocked();
+    }
+
+    fn pushLocalFrameLocked(self: *Context) !void {
         try self.local_frames.append(self.allocator, LocalFrame{});
     }
 
     /// Pop the top local frame from the frame stack.
     pub fn popLocalFrame(self: *Context) void {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+        self.popLocalFrameLocked();
+    }
+
+    fn popLocalFrameLocked(self: *Context) void {
         if (self.local_frames.items.len > 0) {
             const last_idx = self.local_frames.items.len - 1;
             self.local_frames.items[last_idx].deinit(self.allocator);
@@ -1002,7 +1014,10 @@ pub const Context = struct {
     ///
     /// The module's own words take precedence over its dependencies.
     pub fn pushModuleDepsFrame(self: *Context, module: *const value_mod.Module) !void {
-        try self.pushLocalFrame();
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        try self.pushLocalFrameLocked();
         const frame_idx = self.local_frames.items.len - 1;
         var frame = &self.local_frames.items[frame_idx];
 
