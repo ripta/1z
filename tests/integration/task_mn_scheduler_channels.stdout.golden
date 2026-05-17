@@ -1,0 +1,27 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+PASS: producer/consumer pair delivers value
+Stack: [ ]
+PASS: fan-in sum reaches expected total
+Stack: [ ]
+PASS: blocked receiver gets none after close
+Stack: [ ]
+PASS: nested scope drains
+Stack: [ ]

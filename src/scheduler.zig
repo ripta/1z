@@ -59,6 +59,7 @@ pub const WorkerOps = struct {
     shutdownRequested: *const fn (owner: *anyopaque) bool,
     drainWake: *const fn (owner: *anyopaque) void,
     isPrimary: *const fn (owner: *anyopaque) bool,
+    enqueueExternal: *const fn (owner: *anyopaque, task: *Task) anyerror!void,
 };
 
 /// Cooperative scheduler with a FIFO run queue.
@@ -161,6 +162,28 @@ pub const Scheduler = struct {
     /// Append a task to the end of the run queue.
     pub fn enqueue(self: *Scheduler, task: *Task) !void {
         try self.run_queue.append(self.allocator, task);
+    }
+
+    /// Route `task` to its home worker's run queue. If the home is `self`,
+    /// append locally. Otherwise push to the home worker's mutex-guarded
+    /// external queue, which signals the home worker's wake source so a
+    /// blocked `poll()` returns promptly. Safe to call from any worker.
+    pub fn wakeTask(self: *Scheduler, task: *Task) !void {
+        const home = if (task.ctx.scheduler) |s| s else self;
+        if (home == self) {
+            try self.run_queue.append(self.allocator, task);
+            return;
+        }
+        if (home.owner) |owner| {
+            if (home.ops) |ops| {
+                try ops.enqueueExternal(owner, task);
+                return;
+            }
+        }
+        // Standalone home scheduler (tests). Fall back to a direct append
+        // on the home's run queue; standalone schedulers are not
+        // concurrently driven by another OS thread.
+        try home.run_queue.append(home.allocator, task);
     }
 
     /// Return the next task ID and increment the counter. Safe to call from
@@ -391,15 +414,24 @@ pub const Scheduler = struct {
             const has_sleepers = self.sleep_queue.count() > 0;
             const has_io_waiters = self.io_wait_map.count() > 0;
             const has_process_waiters = self.process_wait_map.count() > 0;
+            // Any task pinned to this worker that has not yet reached a
+            // terminal status is "blocked" for runLoop purposes -- it has
+            // either yielded for sleep/IO (already counted above) or is
+            // suspended awaiting a wake that will arrive on the local run
+            // queue, the local sleep queue, or the cross-thread external
+            // queue. The latter case is invisible to the per-state flags
+            // (`blocked_on_channel`, `blocked_on_scope`, ...), so without
+            // this broader check a worker can fall through `break` while a
+            // task on a sibling worker is still racing to enqueue the
+            // wake.
             const has_blocked_tasks = blk: {
                 self.all_tasks_mu.lock();
                 defer self.all_tasks_mu.unlock();
                 for (self.all_tasks.items) |task| {
                     switch (task.getStatus()) {
                         .completed, .failed, .cancelled => continue,
-                        .pending, .running => {},
+                        .pending, .running => break :blk true,
                     }
-                    if (task.blocked_on_channel != null or task.blocked_on_scope != null) break :blk true;
                 }
                 break :blk false;
             };
@@ -687,10 +719,10 @@ pub const Scheduler = struct {
     /// 3. If all children in the scope are done and the scope is being awaited, re-enqueue the scope waiter.
     /// 4. Track the finished task for resource cleanup in deinit.
     fn handleTaskDone(self: *Scheduler, task: *Task) void {
-        _ = task.scope.active_children.fetchSub(1, .release);
+        const prev_children = task.scope.active_children.fetchSub(1, .acq_rel);
 
         if (task.awaiting_task) |awaiter| {
-            self.run_queue.append(self.allocator, awaiter) catch {};
+            self.wakeTask(awaiter) catch {};
         }
 
         if (task.getStatus() == .failed and task.scope.failed_error == null) {
@@ -726,10 +758,15 @@ pub const Scheduler = struct {
             }
         }
 
-        if (task.scope.allChildrenDone()) {
+        // Only the worker that decremented `active_children` to zero is
+        // allowed to wake the scope waiter. Reading `waiting_task` here is
+        // race-free because under M:N two completing children could both
+        // observe `allChildrenDone()` true if both checked after both
+        // decrements; the unique-winner guard prevents a double-wake.
+        if (prev_children == 1) {
             if (task.scope.waiting_task) |scope_waiter| {
-                self.run_queue.append(self.allocator, scope_waiter) catch {};
                 task.scope.waiting_task = null;
+                self.wakeTask(scope_waiter) catch {};
             }
         }
 

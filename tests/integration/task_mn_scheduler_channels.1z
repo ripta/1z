@@ -1,0 +1,86 @@
+use "testing" ;
+
+\ Cross-worker wake paths under the M:N scheduler.
+\
+\ With four workers, spawned tasks fan out across OS threads. The wake
+\ events in these tests therefore typically cross worker boundaries, so a
+\ broken cross-thread wake manifests as a hang (caught by deadlock
+\ detection) or as a missed value.
+
+\ -- 1. Producer/consumer pairs over unbuffered channels --
+\
+\ Each pair sends a single fixnum. With many pairs the producer and
+\ consumer almost always land on different workers, exercising the
+\ direct-handoff wake path in both directions.
+
+test-producer-consumer-pairs: ( -- ) [
+  [
+    16 [
+      <channel>
+      dup [ 7 swap send ] curry spawn drop
+      receive
+      7 "producer/consumer pair delivers value" assert=
+    ] times
+  ] task-scope
+] ;
+
+\ -- 2. Buffered channel many-to-one fan-in --
+\
+\ Producers send a known total; a single consumer receives that many
+\ values and sums them. Exercises buffered-channel wake when receivers
+\ block on a full-but-being-drained channel.
+
+test-fan-in-sum: ( -- ) [
+  [
+    8 <buffered-channel>
+    \ spawn 8 producers, each sending one value
+    8 [
+      dup [ 1 swap send ] curry spawn drop
+    ] times
+    \ consume exactly 8 values
+    0
+    8 [
+      over receive +
+    ] times
+    nip
+    8 "fan-in sum reaches expected total" assert=
+  ] task-scope
+] ;
+
+\ -- 3. Channel close wakes a blocked receiver on another worker --
+\
+\ The receiver task is spawned (likely on a non-primary worker) and
+\ blocks on receive?. After close, the receiver wakes with option:none.
+
+test-close-wakes-receiver: ( -- ) [
+  [
+    <channel>
+    dup [ receive? ] curry spawn
+    swap close-channel
+    await
+    option:none? t "blocked receiver gets none after close" assert=
+  ] task-scope
+] ;
+
+\ -- 4. Scope completion across workers --
+\
+\ A nested task-scope waits on several children that just yield and
+\ complete. The last child to finish is frequently on a different worker
+\ than the scope waiter; the scope_waiter wake therefore crosses
+\ threads.
+
+test-scope-completion: ( -- ) [
+  [
+    [
+      32 [
+        [ 4 [ yield ] times ] spawn drop
+      ] times
+    ] task-scope
+    t "nested scope drains" assert-true
+  ] task-scope
+] ;
+
+test-producer-consumer-pairs
+test-fan-in-sum
+test-close-wakes-receiver
+test-scope-completion

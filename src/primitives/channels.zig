@@ -145,7 +145,7 @@ fn nativeSend(ctx: *Context) anyerror!void {
         receiver.blocked_on_channel = null;
         receiver.value_delivered = true;
         releaseChannel(ctx, ch);
-        try scheduler.enqueue(receiver);
+        try scheduler.wakeTask(receiver);
         return;
     }
 
@@ -229,7 +229,7 @@ fn nativeReceive(ctx: *Context) anyerror!void {
         sender.blocked_on_channel = null;
         sender.value_delivered = true;
         releaseChannel(ctx, ch);
-        try scheduler.enqueue(sender);
+        try scheduler.wakeTask(sender);
         return;
     }
 
@@ -245,7 +245,7 @@ fn nativeReceive(ctx: *Context) anyerror!void {
             ch.buffer.push(sender_entry.value);
             sender_entry.task.blocked_on_channel = null;
             sender_entry.task.value_delivered = true;
-            try scheduler.enqueue(sender_entry.task);
+            try scheduler.wakeTask(sender_entry.task);
         }
         releaseChannel(ctx, ch);
         return;
@@ -311,7 +311,7 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
         try ctx.stack.push(.{ .boolean = true });
         sender_entry.task.blocked_on_channel = null;
         sender_entry.task.value_delivered = true;
-        try scheduler.enqueue(sender_entry.task);
+        try scheduler.wakeTask(sender_entry.task);
         return;
     }
 
@@ -326,7 +326,7 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
             ch.buffer.push(sender_entry.value);
             sender_entry.task.blocked_on_channel = null;
             sender_entry.task.value_delivered = true;
-            try scheduler.enqueue(sender_entry.task);
+            try scheduler.wakeTask(sender_entry.task);
         }
         return;
     }
@@ -386,7 +386,7 @@ fn nativeCloseChannel(ctx: *Context) anyerror!void {
     releaseChannel(ctx, ch);
 
     for (tasks_to_wake[0..wake_count]) |task| {
-        scheduler.enqueue(task) catch {};
+        scheduler.wakeTask(task) catch {};
     }
 }
 
@@ -456,7 +456,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
 
             sender_entry.task.blocked_on_channel = null;
             unlockChannelsOrdered(ctx, channels);
-            try scheduler.enqueue(sender_entry.task);
+            try scheduler.wakeTask(sender_entry.task);
             return;
         }
 
@@ -471,7 +471,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
                 const sender_entry = ch.waiting_senders.orderedRemove(0);
                 ch.buffer.push(sender_entry.value);
                 sender_entry.task.blocked_on_channel = null;
-                try scheduler.enqueue(sender_entry.task);
+                try scheduler.wakeTask(sender_entry.task);
             }
             unlockChannelsOrdered(ctx, channels);
             return;

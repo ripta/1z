@@ -16,6 +16,7 @@ const worker_ops: WorkerOps = .{
     .shutdownRequested = shutdownRequestedCb,
     .drainWake = drainWakeCb,
     .isPrimary = isPrimaryCb,
+    .enqueueExternal = enqueueExternalCb,
 };
 
 fn drainExternalCb(owner: *anyopaque) void {
@@ -41,6 +42,11 @@ fn drainWakeCb(owner: *anyopaque) void {
 fn isPrimaryCb(owner: *anyopaque) bool {
     const w: *Worker = @ptrCast(@alignCast(owner));
     return w.id == 0;
+}
+
+fn enqueueExternalCb(owner: *anyopaque, task: *Task) !void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    try w.enqueueExternal(task);
 }
 
 /// A single OS thread with its own scheduler instance.
