@@ -661,7 +661,7 @@ fn collectCallWords(
     for (instrs, 0..) |instr, idx| {
         switch (instr.op) {
             .call_word => |name| {
-                if (isDisallowedDynamicFeature(name, runtime_image)) {
+                if (bannedDynamicFeatureForCall(ctx, name, runtime_image)) |_| {
                     diagnostics.fatal_dynamic_feature = .{
                         .caller_name = caller_name,
                         .feature_name = name,
@@ -817,24 +817,44 @@ fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *D
     }
 }
 
-/// Returns true if `name` is permanently incompatible with the current
-/// AOT artifact class.
+/// Return the first `dynamic-*` marker on `def` that the current AOT
+/// artifact class disallows, or null. Detection is by marker identity, so
+/// it survives natives being renamed in the registry: the policy follows
+/// the function, not its name.
 ///
-/// - `compile!` is rejected in every AOT class. Programs that need it
-///   must run under the interpreter.
-/// - `eval-string`, `load`, `reload`, `load-file`, and `>quotation` are
-///   rejected when the build is interpreter-free AOT; runtime-image AOT
-///   keeps the interpreter linked and can satisfy them.
+/// The current two-class transition keeps `runtime_image` as a bool. The
+/// matrix:
 ///
-/// These rejections are semantic, not implementation gaps.
-fn isDisallowedDynamicFeature(name: []const u8, runtime_image: bool) bool {
-    if (std.mem.eql(u8, name, "compile!")) return true;
-    if (runtime_image) return false;
-    return std.mem.eql(u8, name, "eval-string") or
-        std.mem.eql(u8, name, "load") or
-        std.mem.eql(u8, name, "reload") or
-        std.mem.eql(u8, name, "load-file") or
-        std.mem.eql(u8, name, ">quotation");
+///   `dynamic-compile`                  banned in every AOT class.
+///   `dynamic-eval`                     banned when not runtime-image.
+///   `dynamic-load`                     banned when not runtime-image.
+///   `dynamic-quotation-construction`   banned when not runtime-image.
+///
+/// The interpreter class is not reachable from freeze.
+fn bannedDynamicMarker(def: WordDefinition, runtime_image: bool) ?*const value_mod.Marker {
+    for (def.markers) |mk| {
+        if (markers_mod.isDynamicCompileMarker(mk)) return mk;
+        if (runtime_image) continue;
+        if (markers_mod.isDynamicEvalMarker(mk)) return mk;
+        if (markers_mod.isDynamicLoadMarker(mk)) return mk;
+        if (markers_mod.isDynamicQuotationConstructionMarker(mk)) return mk;
+    }
+    return null;
+}
+
+/// Resolve `name` against the current dictionary (direct lookup, then
+/// qualified-module lookup) and return any banned `dynamic-*` marker on
+/// the resolved callee. Returns null when the name is unresolved or the
+/// resolved word carries no banned markers. Mirrors the shape of
+/// `isInterpreterDependentNative`.
+fn bannedDynamicFeatureForCall(ctx: *const Context, name: []const u8, runtime_image: bool) ?*const value_mod.Marker {
+    if (ctx.lookupWord(name)) |def| {
+        return bannedDynamicMarker(def, runtime_image);
+    }
+    if (resolveQualifiedModuleWord(ctx, name)) |mod_word| {
+        return bannedDynamicMarker(wordDefFromModuleWord(name, mod_word), runtime_image);
+    }
+    return null;
 }
 
 fn hasNeverReturnsMarker(def: WordDefinition) bool {
@@ -1325,7 +1345,7 @@ test "buildAotDescs includes native words with is_prelude and empty instructions
 }
 
 test "collectCallWords rejects '>quotation' in interpreter-free mode" {
-    try expectInterpreterFreeRejection(">quotation", "make-word");
+    try expectInterpreterFreeRejection(">quotation", "make-word", &markers_mod.dynamic_quotation_construction_marker);
 }
 
 test "collectCallWords rejects disallowed dynamic features with caller" {
@@ -1448,25 +1468,39 @@ test "collectCallWords in runtime-image mode still rejects compile!" {
 }
 
 test "collectCallWords rejects 'load' in interpreter-free mode" {
-    try expectInterpreterFreeRejection("load", "needs-load");
+    try expectInterpreterFreeRejection("load", "needs-load", &markers_mod.dynamic_load_marker);
 }
 
 test "collectCallWords rejects 'reload' in interpreter-free mode" {
-    try expectInterpreterFreeRejection("reload", "needs-reload");
+    try expectInterpreterFreeRejection("reload", "needs-reload", &markers_mod.dynamic_load_marker);
 }
 
 test "collectCallWords rejects 'load-file' in interpreter-free mode" {
-    try expectInterpreterFreeRejection("load-file", "needs-load-file");
+    try expectInterpreterFreeRejection("load-file", "needs-load-file", &markers_mod.dynamic_load_marker);
 }
 
 test "collectCallWords rejects 'compile!' in interpreter-free mode" {
-    try expectInterpreterFreeRejection("compile!", "needs-compile-bang");
+    try expectInterpreterFreeRejection("compile!", "needs-compile-bang", &markers_mod.dynamic_compile_marker);
 }
 
-fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8) !void {
+fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8, marker: *const value_mod.Marker) !void {
     const allocator = testing.allocator;
     var ctx = Context.init(allocator);
     defer ctx.deinit();
+
+    // Pin the feature name to a native carrying the banned marker. This
+    // keeps the test independent of whether the corresponding word is
+    // available in a prelude-less Context: `load` and `reload` are prelude
+    // compounds, while `load-file` and `compile!` are natives populated by
+    // Context.init. The overwrite is harmless in both cases since the
+    // marker check is identity-based.
+    const marker_slice = try allocator.dupe(*value_mod.Marker, &.{@constCast(marker)});
+    defer allocator.free(marker_slice);
+    try ctx.dictionary.put(feature, .{
+        .name = feature,
+        .action = .{ .native = auditTestNoopNative },
+        .markers = marker_slice,
+    });
     const instrs = &[_]Instruction{
         .{ .op = .{ .call_word = feature }, .line = 1 },
     };
@@ -1922,11 +1956,12 @@ test "collectCallWords ignores marker on compound words" {
     try testing.expectEqual(@as(usize, 1), worklist.items.len);
 }
 
-test "audit fires before name-based check when caller reaches a marked native that is also a banned name" {
-    // `eval-string` is rejected by name first (DisallowedDynamicFeature).
-    // The marker is defense-in-depth for unrelated natives. This test
-    // exists to lock in the ordering so future refactors don't accidentally
-    // upgrade the name-based diagnostic to the marker-based one.
+test "dynamic-feature check fires before interpreter-dependent check on a doubly-marked native" {
+    // `eval-string` carries both interpreter-dependent and dynamic-eval
+    // markers. `collectCallWords` checks dynamic-feature markers first so
+    // the diagnostic surfaces as DisallowedDynamicFeature, not the
+    // narrower DisallowedNativeInterpreterDependency. This test locks in
+    // that ordering so future refactors keep the more actionable error.
     const allocator = testing.allocator;
     var ctx = Context.init(allocator);
     defer ctx.deinit();
@@ -1967,6 +2002,153 @@ test "audit fires before name-based check when caller reaches a marked native th
     ));
     try testing.expect(diagnostics.fatal_dynamic_feature != null);
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
+}
+
+test "collectCallWords does not flag a compound that shadows eval-string and lacks dynamic-eval" {
+    // Identity-based detection must respect shadowing: when the resolver
+    // sees the user's `eval-string` first and that word carries no banned
+    // marker, the call is permitted regardless of the homonymous native
+    // sitting in the global dictionary.
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    const shadow_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 },
+    };
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    const top_idx = ctx.local_frames.items.len - 1;
+    try ctx.local_frames.items[top_idx].put(ctx.allocator, "eval-string", .{
+        .name = "eval-string",
+        .action = .{ .compound = shadow_body },
+    });
+
+    const resolved = ctx.lookupWord("eval-string").?;
+    try testing.expectEqual(@as(usize, 0), resolved.markers.len);
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "eval-string" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(&ctx, instrs, "user-entry", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+
+    try testing.expect(diagnostics.fatal_dynamic_feature == null);
+    try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
+    try testing.expectEqual(@as(usize, 1), worklist.items.len);
+}
+
+test "collectCallWords flags a user-defined native carrying dynamic-eval" {
+    // A user-registered native whose name is not on any historical
+    // deny list still trips the dynamic-feature check because policy is
+    // attached to the marker, not the name.
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.dictionary.put("user-evaller", .{
+        .name = "user-evaller",
+        .action = .{ .native = auditTestNoopNative },
+        .markers = &.{@constCast(&markers_mod.dynamic_eval_marker)},
+    });
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "user-evaller" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try testing.expectError(error.DisallowedDynamicFeature, collectCallWords(
+        &ctx,
+        instrs,
+        "caller",
+        &worklist,
+        &seen,
+        &quotation_bodies,
+        &quotation_seen,
+        &pending_call_targets,
+        &quotation_path,
+        &diagnostics,
+        false,
+        allocator,
+        allocator,
+    ));
+    try testing.expect(diagnostics.fatal_dynamic_feature != null);
+    try testing.expectEqualStrings("caller", diagnostics.fatal_dynamic_feature.?.caller_name);
+    try testing.expectEqualStrings("user-evaller", diagnostics.fatal_dynamic_feature.?.feature_name);
+}
+
+test "collectCallWords does not flag an eval-string whose marker has been stripped" {
+    // Stripping the markers from the eval-string slot models a registry
+    // rename where the deny list and the implementation drift apart. The
+    // old string-compare check would still fire on the unchanged name;
+    // identity-based detection correctly stays silent because the marker
+    // moved (or was deleted) with the function it certifies. The
+    // complementary failure -- that calling under the new, marker-bearing
+    // name still trips the check -- is covered by the user-defined
+    // dynamic-eval test above.
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.dictionary.put("eval-string", .{
+        .name = "eval-string",
+        .action = .{ .native = auditTestNoopNative },
+        .markers = &.{},
+    });
+
+    const instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "eval-string" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, false, allocator, allocator);
+
+    try testing.expect(diagnostics.fatal_dynamic_feature == null);
+    try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
+    try testing.expectEqual(@as(usize, 1), worklist.items.len);
 }
 
 // ── Call-Target Recording Tests ────────────────────────────────────────
