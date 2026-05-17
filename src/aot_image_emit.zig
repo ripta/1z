@@ -47,7 +47,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 4;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -70,6 +70,19 @@ pub const ImageEmissionStats = struct {
     stack_effect_count: u32 = 0,
 };
 
+/// Knobs for `emitImageC`. The default (`metadata_only = false`) emits
+/// a full runtime image with executable body bytecode. With
+/// `metadata_only = true` the emitter retains the read-only diagnostic
+/// surface (names, stack effects, markers, source locations,
+/// doc-strings, provenance, type descriptors) but skips per-word body
+/// bytecode and the word-level typevalue body rewrite. The loader then
+/// leaves compound words with empty instruction streams so
+/// `>word-info` reflects the "frozen metadata, no body" contract for
+/// interpreter-free AOT binaries.
+pub const ImageEmitOptions = struct {
+    metadata_only: bool = false,
+};
+
 /// Emit the runtime image as static C data into `out`. Returns counts
 /// suitable for downstream metadata reporting.
 ///
@@ -77,7 +90,9 @@ pub const ImageEmissionStats = struct {
 /// effects, action variant). `manifest` orders the walk and assigns the
 /// classification path. `word_id_lookup` maps each in-image word's
 /// resolved name to the AOT dispatch-table id; words missing from the
-/// map land on `word_id_sentinel`.
+/// map land on `word_id_sentinel`. `options` controls whether the
+/// emitter is producing a full runtime image or a metadata-only image
+/// (interpreter-free read-only introspection surface).
 ///
 /// The output is appended to `out`; the caller is responsible for the
 /// surrounding C source (preamble, dispatch table, main, etc.).
@@ -87,6 +102,7 @@ pub fn emitImageC(
     ctx: *const Context,
     manifest: ImageManifest,
     word_id_lookup: *const std.StringHashMapUnmanaged(u32),
+    options: ImageEmitOptions,
 ) ImageEmitError!ImageEmissionStats {
     var stats: ImageEmissionStats = .{};
 
@@ -107,13 +123,21 @@ pub fn emitImageC(
     // has filled the table, then rewrites the word body to push that
     // TypeValue directly. Zero means "this word does not publish a
     // TypeValue".
+    //
+    // In metadata-only mode the body rewrite would re-introduce a
+    // runnable body for type-defining words, which conflicts with the
+    // interpreter-free read-only contract. Skip the per-word slot map
+    // entirely; stack-effect type annotations still intern their
+    // TypeValue references through `internType` below.
     const word_to_typevalue_slot = try allocator.alloc(u32, manifest.entries.len);
     defer allocator.free(word_to_typevalue_slot);
     @memset(word_to_typevalue_slot, 0);
-    for (manifest.entries, 0..) |entry, idx| {
-        const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
-        if (findTypeValueLiteral(mw_ptr)) |tv| {
-            word_to_typevalue_slot[idx] = try effect_table.internType(tv);
+    if (!options.metadata_only) {
+        for (manifest.entries, 0..) |entry, idx| {
+            const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
+            if (findTypeValueLiteral(mw_ptr)) |tv| {
+                word_to_typevalue_slot[idx] = try effect_table.internType(tv);
+            }
         }
     }
 
@@ -136,7 +160,10 @@ pub fn emitImageC(
     try emitTypeValueData(out, allocator, &effect_table, struct_plans.items, &struct_index);
 
     try emitWordNameStrings(out, allocator, manifest);
-    try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens);
+    try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
+    if (!options.metadata_only) {
+        try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens);
+    }
     try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, &marker_pool, &effect_table, word_to_typevalue_slot, word_body_lens, &stats);
     try emitHeader(out, allocator, manifest, &marker_pool, &effect_table, struct_plans.items, stats);
 
@@ -1387,6 +1414,21 @@ fn emitTypeDeclarations(
         \\    const uint8_t *body_bytecode;
         \\    uint32_t body_bytecode_len;
         \\    uint32_t typevalue_slot;          /* 0 when this word does not publish a TypeValue. */
+        \\    /* Diagnostic metadata. Each string is NULL when absent; len 0 mirrors NULL.   */
+        \\    /* Retained even in metadata-only images so >word-info and all-words can       */
+        \\    /* surface source locations, doc-strings, and provenance for stack traces.    */
+        \\    const char *doc;
+        \\    uint32_t doc_len;
+        \\    const char *source_file;
+        \\    uint32_t source_file_len;
+        \\    uint32_t source_line;
+        \\    uint32_t source_column;
+        \\    const char *provenance_generator;
+        \\    uint32_t provenance_generator_len;
+        \\    const char *provenance_parent;
+        \\    uint32_t provenance_parent_len;
+        \\    const char *provenance_role;
+        \\    uint32_t provenance_role_len;
         \\} onez_image_word_t;
         \\
         \\/* TypeValue static C data schema. Every TypeValue reachable from any */
@@ -1498,6 +1540,90 @@ fn emitWordNameStrings(
         try out.appendSlice(allocator, ";\n");
     }
     try out.append(allocator, '\n');
+}
+
+/// Emit per-word diagnostic-metadata string literals: doc, source_file,
+/// and the three provenance strings. Each absent field is left
+/// unemitted; the word table emits NULL/0 for those rows. This is
+/// retained for both runtime-image and metadata-only image modes so
+/// `>word-info`, `all-words`, and stack traces can name source
+/// locations and generator roles.
+fn emitWordDiagnosticStrings(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    ctx: *const Context,
+    manifest: ImageManifest,
+) Allocator.Error!void {
+    if (manifest.entries.len == 0) return;
+    var emitted_any = false;
+    for (manifest.entries, 0..) |entry, idx| {
+        const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
+        if (mw_ptr.doc) |d| {
+            try out.appendSlice(allocator, "static const char ");
+            try writeWordDocSym(out, allocator, idx);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, d);
+            try out.appendSlice(allocator, ";\n");
+            emitted_any = true;
+        }
+        if (mw_ptr.source_file) |sf| {
+            try out.appendSlice(allocator, "static const char ");
+            try writeWordSourceFileSym(out, allocator, idx);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, sf);
+            try out.appendSlice(allocator, ";\n");
+            emitted_any = true;
+        }
+        if (mw_ptr.provenance) |p| {
+            try out.appendSlice(allocator, "static const char ");
+            try writeWordProvGenSym(out, allocator, idx);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, p.generator);
+            try out.appendSlice(allocator, ";\n");
+            try out.appendSlice(allocator, "static const char ");
+            try writeWordProvParentSym(out, allocator, idx);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, p.parent);
+            try out.appendSlice(allocator, ";\n");
+            try out.appendSlice(allocator, "static const char ");
+            try writeWordProvRoleSym(out, allocator, idx);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, p.role);
+            try out.appendSlice(allocator, ";\n");
+            emitted_any = true;
+        }
+    }
+    if (emitted_any) try out.append(allocator, '\n');
+}
+
+fn writeWordDocSym(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, idx: usize) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_doc", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeWordSourceFileSym(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, idx: usize) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_sf", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeWordProvGenSym(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, idx: usize) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_pg", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeWordProvParentSym(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, idx: usize) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_pp", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeWordProvRoleSym(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, idx: usize) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_w_{d}_pr", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
 }
 
 /// Serialize each structural compound word's body to bytecode and
@@ -1742,8 +1868,61 @@ fn emitModuleAndWordTables(
 
         try out.appendSlice(allocator, "        .typevalue_slot = ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{word_to_typevalue_slot[idx]}) catch unreachable);
+        try out.appendSlice(allocator, ",\n");
+
+        // Diagnostic metadata: doc, source location, provenance. Each
+        // string is NULL/0 when the underlying `WordDefinition` field
+        // is absent. Doc / source_file / provenance triple are emitted
+        // up front by `emitWordDiagnosticStrings`.
+        if (mw_ptr.doc) |d| {
+            try out.appendSlice(allocator, "        .doc = ");
+            try writeWordDocSym(out, allocator, idx);
+            try out.appendSlice(allocator, ",\n        .doc_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{d.len}) catch unreachable);
+            try out.appendSlice(allocator, ",\n");
+        } else {
+            try out.appendSlice(allocator, "        .doc = NULL,\n        .doc_len = 0,\n");
+        }
+        if (mw_ptr.source_file) |sf| {
+            try out.appendSlice(allocator, "        .source_file = ");
+            try writeWordSourceFileSym(out, allocator, idx);
+            try out.appendSlice(allocator, ",\n        .source_file_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{sf.len}) catch unreachable);
+            try out.appendSlice(allocator, ",\n");
+        } else {
+            try out.appendSlice(allocator, "        .source_file = NULL,\n        .source_file_len = 0,\n");
+        }
+        try out.appendSlice(allocator, "        .source_line = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{mw_ptr.source_line}) catch unreachable);
+        try out.appendSlice(allocator, ",\n        .source_column = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{mw_ptr.source_column}) catch unreachable);
+        try out.appendSlice(allocator, ",\n");
+        if (mw_ptr.provenance) |p| {
+            try out.appendSlice(allocator, "        .provenance_generator = ");
+            try writeWordProvGenSym(out, allocator, idx);
+            try out.appendSlice(allocator, ",\n        .provenance_generator_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{p.generator.len}) catch unreachable);
+            try out.appendSlice(allocator, ",\n        .provenance_parent = ");
+            try writeWordProvParentSym(out, allocator, idx);
+            try out.appendSlice(allocator, ",\n        .provenance_parent_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{p.parent.len}) catch unreachable);
+            try out.appendSlice(allocator, ",\n        .provenance_role = ");
+            try writeWordProvRoleSym(out, allocator, idx);
+            try out.appendSlice(allocator, ",\n        .provenance_role_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{p.role.len}) catch unreachable);
+            try out.appendSlice(allocator, ",\n");
+        } else {
+            try out.appendSlice(allocator,
+                \\        .provenance_generator = NULL,
+                \\        .provenance_generator_len = 0,
+                \\        .provenance_parent = NULL,
+                \\        .provenance_parent_len = 0,
+                \\        .provenance_role = NULL,
+                \\        .provenance_role_len = 0,
+                \\
+            );
+        }
         try out.appendSlice(allocator,
-            \\,
             \\    },
             \\
         );
@@ -1948,7 +2127,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup);
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
 
     try testing.expectEqual(@as(u32, 0), stats.word_count);
     try testing.expectEqual(false, stats.blob_present);
@@ -1960,7 +2139,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 3") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 4") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
@@ -1983,7 +2162,7 @@ test "emitImageC: type declarations include all schema structs" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
 
     const required_structs = [_][]const u8{
         "struct onez_image_module",
@@ -2046,7 +2225,7 @@ test "emitImageC: module and word tables match the manifest order" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expectEqual(@as(u32, 4), stats.word_count);
     try testing.expectEqual(true, stats.blob_present);
@@ -2127,7 +2306,7 @@ test "emitImageC: marker pool dedupes shared marker names across words" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // Pool has exactly two entries (shared marker counted once).
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_mk_0_name[] = \"generic\"") != null);
@@ -2209,7 +2388,7 @@ test "emitImageC: stack-effect table dedupes type slots and emits sentinel index
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // Sentinel + alpha + beta + nested = 4 entries, but nested only
     // appears if reachable through registerParam recursion.
@@ -2258,7 +2437,7 @@ test "emitImageC: word_id_lookup falls back from qualified to bare name" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expect(std.mem.indexOf(u8, out.items, "0x00000007u") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "0x00000013u") != null);
@@ -2283,7 +2462,7 @@ test "emitImageC: required runtime-image symbols all appear" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_modules_storage") != null);
@@ -2317,7 +2496,7 @@ test "emitImageC: type_val word writes typevalue_slot and reserves a slot" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expectEqual(false, stats.blob_present);
     try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
@@ -2354,7 +2533,7 @@ test "emitImageC: same TypeValue across multiple words shares one slot" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
 
@@ -2381,7 +2560,7 @@ test "emitImageC: structural words without a type_val write typevalue_slot = 0" 
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // Four words; none push a type_val, so every row's typevalue_slot is 0.
     var occurrences: usize = 0;
@@ -2431,7 +2610,7 @@ test "collectTypeValueData dedupes against stack-effect-discovered TypeValues" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // Sentinel + 1 TV = 2 slots, regardless of the two reference sites.
     try testing.expectEqual(@as(u32, 2), stats.typevalue_slot_count);
@@ -2477,7 +2656,7 @@ test "collectDescriptorCrossRefs interns struct field_types into the slot table"
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // Sentinel + (point, fixnum, string) = 4 slots. The two field
     // types were collected by the descriptor cross-ref walk even
@@ -2522,7 +2701,7 @@ test "collectDescriptorCrossRefs interns enum variant inner_types" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // Sentinel + (option, unit, string).
     try testing.expectEqual(@as(u32, 4), stats.typevalue_slot_count);
@@ -2567,7 +2746,7 @@ test "collectDescriptorCrossRefs reaches transitively through multiple descripto
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // Sentinel + (A, B, C) = 4. Transitive walk reaches C through
     // B's descriptor even though no word pushes B or C directly.
@@ -2611,7 +2790,7 @@ test "emitTypeValueData emits typevalue/descriptor tables with slot-indexed cros
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // The new typevalue + typedescriptor tables appear.
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typevalues_storage[] = {") != null);
@@ -2657,7 +2836,7 @@ test "emitTypeValueData emits enum variant pool referenced from descriptor row" 
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // The enum variants pool exists; both variant names appear.
     try testing.expect(std.mem.indexOf(u8, out.items, "_variants[] = {") != null);
@@ -2709,7 +2888,7 @@ test "emitTypeValueData emits struct-type table for virtual anon_struct" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // The struct-type table exists with the StructType's name.
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_struct_types_storage[] = {") != null);
@@ -2759,7 +2938,7 @@ test "collectDescriptorCrossRefs collects virtual anon_struct and its field type
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // Sentinel + (wrapper, int) = 3 slots. The StructType "wrapper-inner"
     // is not in the TypeValue slot table; its field types intern back.
@@ -2794,7 +2973,7 @@ test "emitTypeValueData renders resource descriptor with resource_kind string" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_typedescriptors_storage") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "demo-handle") != null);
@@ -2830,7 +3009,7 @@ test "emitTypeValueData renders ffi_struct descriptor with ffi_layout" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expect(std.mem.indexOf(u8, out.items, ".ffi_layout = 42") != null);
     // kind index 7 is `ffi_struct` in the TypeKindData encoding.
@@ -2860,7 +3039,7 @@ test "emitImageC: structural compound emits body bytecode symbol" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     // The byte-array definition appears, and the word-table row points
     // at it with a non-zero length.
@@ -2897,7 +3076,7 @@ test "emitImageC: blob word does not emit body bytecode" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_body[]") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL") != null);
@@ -2923,7 +3102,7 @@ test "emitImageC: empty compound body emits NULL bytecode" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_body[]") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL") != null);
@@ -2957,7 +3136,7 @@ test "emitImageC: structural bytecode round-trips through decoder" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     const sym = "onez_image_w_0_body[] = {";
     const start = std.mem.indexOf(u8, out.items, sym) orelse return error.TestExpectedSymbol;
@@ -3024,7 +3203,7 @@ test "emitImageC: generator-provenanced word skips body bytecode" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup);
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_body[]") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL") != null);

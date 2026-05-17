@@ -52,6 +52,21 @@ typedef struct onez_image_word {
     const uint8_t *body_bytecode;
     uint32_t body_bytecode_len;
     uint32_t typevalue_slot;          /* 0 when this word does not publish a TypeValue. */
+    /* Diagnostic metadata. Each string is NULL when absent; len 0 mirrors NULL.   */
+    /* Retained even in metadata-only images so >word-info and all-words can       */
+    /* surface source locations, doc-strings, and provenance for stack traces.    */
+    const char *doc;
+    uint32_t doc_len;
+    const char *source_file;
+    uint32_t source_file_len;
+    uint32_t source_line;
+    uint32_t source_column;
+    const char *provenance_generator;
+    uint32_t provenance_generator_len;
+    const char *provenance_parent;
+    uint32_t provenance_parent_len;
+    const char *provenance_role;
+    uint32_t provenance_role_len;
 } onez_image_word_t;
 
 /* TypeValue static C data schema. Every TypeValue reachable from any */
@@ -253,6 +268,36 @@ static const char onez_image_w_5_name[] = "color:red?";
 static const char onez_image_w_6_name[] = "color?";
 static const char onez_image_w_7_name[] = "plain-double";
 
+static const char onez_image_w_0_sf[] = "fixtures/dump_image_dep.1z";
+static const char onez_image_w_0_pg[] = "enum";
+static const char onez_image_w_0_pp[] = "color";
+static const char onez_image_w_0_pr[] = "conversion";
+static const char onez_image_w_1_sf[] = "fixtures/dump_image_dep.1z";
+static const char onez_image_w_1_pg[] = "enum";
+static const char onez_image_w_1_pp[] = "color";
+static const char onez_image_w_1_pr[] = "type";
+static const char onez_image_w_2_sf[] = "fixtures/dump_image_dep.1z";
+static const char onez_image_w_2_pg[] = "enum";
+static const char onez_image_w_2_pp[] = "color";
+static const char onez_image_w_2_pr[] = "variant-constructor";
+static const char onez_image_w_3_sf[] = "fixtures/dump_image_dep.1z";
+static const char onez_image_w_3_pg[] = "enum";
+static const char onez_image_w_3_pp[] = "color";
+static const char onez_image_w_3_pr[] = "predicate";
+static const char onez_image_w_4_sf[] = "fixtures/dump_image_dep.1z";
+static const char onez_image_w_4_pg[] = "enum";
+static const char onez_image_w_4_pp[] = "color";
+static const char onez_image_w_4_pr[] = "variant-constructor";
+static const char onez_image_w_5_sf[] = "fixtures/dump_image_dep.1z";
+static const char onez_image_w_5_pg[] = "enum";
+static const char onez_image_w_5_pp[] = "color";
+static const char onez_image_w_5_pr[] = "predicate";
+static const char onez_image_w_6_sf[] = "fixtures/dump_image_dep.1z";
+static const char onez_image_w_6_pg[] = "enum";
+static const char onez_image_w_6_pp[] = "color";
+static const char onez_image_w_6_pr[] = "predicate";
+static const char onez_image_w_7_sf[] = "fixtures/dump_image_dep.1z";
+
 static const uint8_t onez_image_w_7_body[] = {2,0,0,0,7,0,0,0,28,0,0,0,0,0,2,0,0,0,0,0,0,0,7,0,0,0,30,0,0,0,1,1,0,0,0,42};
 
 static const onez_image_marker_t *const onez_image_w_0_markers[] = {
@@ -285,6 +330,18 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
         .typevalue_slot = 1u,
+        .doc = NULL,
+        .doc_len = 0,
+        .source_file = onez_image_w_0_sf,
+        .source_file_len = 26,
+        .source_line = 93u,
+        .source_column = 11u,
+        .provenance_generator = onez_image_w_0_pg,
+        .provenance_generator_len = 4,
+        .provenance_parent = onez_image_w_0_pp,
+        .provenance_parent_len = 5,
+        .provenance_role = onez_image_w_0_pr,
+        .provenance_role_len = 10,
     },
     {
         .name = onez_image_w_1_name,
@@ -304,6 +361,18 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
         .typevalue_slot = 1u,
+        .doc = NULL,
+        .doc_len = 0,
+        .source_file = onez_image_w_1_sf,
+        .source_file_len = 26,
+        .source_line = 93u,
+        .source_column = 11u,
+        .provenance_generator = onez_image_w_1_pg,
+        .provenance_generator_len = 4,
+        .provenance_parent = onez_image_w_1_pp,
+        .provenance_parent_len = 5,
+        .provenance_role = onez_image_w_1_pr,
+        .provenance_role_len = 4,
     },
     {
         .name = onez_image_w_2_name,
@@ -323,6 +392,18 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
         .typevalue_slot = 0u,
+        .doc = NULL,
+        .doc_len = 0,
+        .source_file = onez_image_w_2_sf,
+        .source_file_len = 26,
+        .source_line = 93u,
+        .source_column = 11u,
+        .provenance_generator = onez_image_w_2_pg,
+        .provenance_generator_len = 4,
+        .provenance_parent = onez_image_w_2_pp,
+        .provenance_parent_len = 5,
+        .provenance_role = onez_image_w_2_pr,
+        .provenance_role_len = 19,
     },
     {
         .name = onez_image_w_3_name,
@@ -342,6 +423,18 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
         .typevalue_slot = 0u,
+        .doc = NULL,
+        .doc_len = 0,
+        .source_file = onez_image_w_3_sf,
+        .source_file_len = 26,
+        .source_line = 93u,
+        .source_column = 11u,
+        .provenance_generator = onez_image_w_3_pg,
+        .provenance_generator_len = 4,
+        .provenance_parent = onez_image_w_3_pp,
+        .provenance_parent_len = 5,
+        .provenance_role = onez_image_w_3_pr,
+        .provenance_role_len = 9,
     },
     {
         .name = onez_image_w_4_name,
@@ -361,6 +454,18 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
         .typevalue_slot = 0u,
+        .doc = NULL,
+        .doc_len = 0,
+        .source_file = onez_image_w_4_sf,
+        .source_file_len = 26,
+        .source_line = 93u,
+        .source_column = 11u,
+        .provenance_generator = onez_image_w_4_pg,
+        .provenance_generator_len = 4,
+        .provenance_parent = onez_image_w_4_pp,
+        .provenance_parent_len = 5,
+        .provenance_role = onez_image_w_4_pr,
+        .provenance_role_len = 19,
     },
     {
         .name = onez_image_w_5_name,
@@ -380,6 +485,18 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
         .typevalue_slot = 0u,
+        .doc = NULL,
+        .doc_len = 0,
+        .source_file = onez_image_w_5_sf,
+        .source_file_len = 26,
+        .source_line = 93u,
+        .source_column = 11u,
+        .provenance_generator = onez_image_w_5_pg,
+        .provenance_generator_len = 4,
+        .provenance_parent = onez_image_w_5_pp,
+        .provenance_parent_len = 5,
+        .provenance_role = onez_image_w_5_pr,
+        .provenance_role_len = 9,
     },
     {
         .name = onez_image_w_6_name,
@@ -399,6 +516,18 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
         .typevalue_slot = 1u,
+        .doc = NULL,
+        .doc_len = 0,
+        .source_file = onez_image_w_6_sf,
+        .source_file_len = 26,
+        .source_line = 93u,
+        .source_column = 11u,
+        .provenance_generator = onez_image_w_6_pg,
+        .provenance_generator_len = 4,
+        .provenance_parent = onez_image_w_6_pp,
+        .provenance_parent_len = 5,
+        .provenance_role = onez_image_w_6_pr,
+        .provenance_role_len = 9,
     },
     {
         .name = onez_image_w_7_name,
@@ -418,6 +547,18 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .body_bytecode = onez_image_w_7_body,
         .body_bytecode_len = 36,
         .typevalue_slot = 0u,
+        .doc = NULL,
+        .doc_len = 0,
+        .source_file = onez_image_w_7_sf,
+        .source_file_len = 26,
+        .source_line = 7u,
+        .source_column = 34u,
+        .provenance_generator = NULL,
+        .provenance_generator_len = 0,
+        .provenance_parent = NULL,
+        .provenance_parent_len = 0,
+        .provenance_role = NULL,
+        .provenance_role_len = 0,
     },
 };
 
@@ -426,7 +567,7 @@ static const onez_image_module_t onez_image_modules_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 3,
+    .format_version = 4,
     .module_count = 1,
     .word_count = 8,
     .marker_pool_count = 4,

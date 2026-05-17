@@ -6402,15 +6402,29 @@ pub const ArtifactClass = enum {
     }
 };
 
+/// Which image (if any) the binary ships. Metadata-only images live
+/// on the interpreter-free side of the class boundary: they carry word
+/// metadata for read-only introspection but no executable bodies, so
+/// they do not promote the artifact to `runtime-image-aot`.
+pub const ImageKind = enum {
+    none,
+    metadata_only,
+    full_runtime,
+};
+
 /// Classify a built AOT binary by its maximum runtime capability.
-/// Interpreter linkage subsumes the runtime-image case: an
-/// interpreter-linked binary can do everything a runtime-image binary
-/// can do plus dynamic eval, so a binary with both flags is reported
-/// as `interpreter` rather than `runtime-image-aot`.
-pub fn classifyArtifact(interpreter_linked: bool, runtime_image_present: bool) ArtifactClass {
+/// Interpreter linkage subsumes everything: an interpreter-linked
+/// binary can do dynamic eval and runtime load, so it's reported as
+/// `interpreter` regardless of image. Without interpreter linkage, a
+/// full runtime image lifts the binary to `runtime-image-aot`; a
+/// metadata-only image (or no image at all) stays at
+/// `interpreter-free-aot`.
+pub fn classifyArtifact(interpreter_linked: bool, image: ImageKind) ArtifactClass {
     if (interpreter_linked) return .interpreter;
-    if (runtime_image_present) return .runtime_image_aot;
-    return .interpreter_free_aot;
+    return switch (image) {
+        .none, .metadata_only => .interpreter_free_aot,
+        .full_runtime => .runtime_image_aot,
+    };
 }
 
 /// Core metadata embedded into every AOT binary as a single rodata
@@ -6426,8 +6440,16 @@ pub const AotMetadata = struct {
     interpreter_fallback_mode: InterpreterFallbackMode,
     interpreter_setting_locked: bool,
     /// Caller hands in `false`; `emitProgramC` flips it to `true` when
-    /// a runtime image is actually emitted into the binary.
+    /// a full runtime image (with executable body bytecode and blob
+    /// entries) is emitted into the binary.
     runtime_image_present: bool,
+    /// Caller hands in `false`; `emitProgramC` flips it to `true` when
+    /// an interpreter-free binary emits a metadata-only image (word
+    /// metadata for read-only introspection, no executable bodies).
+    /// Mutually exclusive with `runtime_image_present`: interpreter-free
+    /// uses the metadata-only path; `--emit-runtime-image` upgrades to
+    /// the full runtime image.
+    metadata_image_present: bool = false,
     /// Caller hands in `false`; `emitProgramC` flips it to `true` when
     /// the assembled C actually emits a `jitInterpretedCall` extern and
     /// at least one call site. Drives the `jit-interpreted-call-linked`
@@ -7090,11 +7112,34 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, "};\n\n");
     }
 
-    // Runtime image: emitted alongside the dispatch table when the
-    // caller opts in. The loader rehydrates this into the runtime
-    // Context so module-private words become resolvable at runtime.
-    if (emit_runtime_image) {
-        if (interp_ctx) |ctx| {
+    // Interpreter-free decision: an AOT binary can drop the interpreter when
+    // either the user explicitly opted out and locked the setting, or auto
+    // mode confirmed no fallback was emitted. Computed here, before the
+    // image emission, so the image emitter can pick metadata-only vs
+    // full runtime image based on the resolved class.
+    const interpreter_callbacks_emitted = aot_fallback_emit_count > 0;
+    const interpreter_free = switch (interpreter_fallback) {
+        .true => false,
+        .false => lock_interpreter_setting,
+        .auto => !interpreter_callbacks_emitted,
+    };
+
+    // Image emission. Three paths produce distinct image shapes:
+    //
+    // 1. `--emit-runtime-image` -> full runtime image with executable
+    //    body bytecode and blob entries. Produces a runtime-image-aot
+    //    or interpreter binary, depending on linkage.
+    // 2. interpreter-free without `--emit-runtime-image` -> metadata-only
+    //    image. The dictionary is rehydrated for read-only
+    //    introspection (`>word-info`, `all-words`, stack traces) but
+    //    bodies stay empty so the contract "frozen metadata, no body
+    //    evaluation" is preserved.
+    // 3. interpreter-linked binary without `--emit-runtime-image` -> no
+    //    image; the prelude reload at `onez_init()` populates the
+    //    dictionary the usual way.
+    if (interp_ctx) |ctx| {
+        const want_metadata_only = interpreter_free and !emit_runtime_image;
+        if (emit_runtime_image or want_metadata_only) {
             var manifest = try aot_image_mod.buildImageManifest(@constCast(ctx), allocator);
             defer manifest.deinit(allocator);
 
@@ -7104,7 +7149,7 @@ pub fn emitProgramC(
                 try image_word_lookup.put(allocator, w.name, w.word_id);
             }
 
-            const stats = aot_image_emit_mod.emitImageC(&out, allocator, ctx, manifest, &image_word_lookup) catch |err| switch (err) {
+            const stats = aot_image_emit_mod.emitImageC(&out, allocator, ctx, manifest, &image_word_lookup, .{ .metadata_only = want_metadata_only }) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 // The freeze classifier already concluded each
                 // structural body is shaped for static-C-data, so a
@@ -7120,17 +7165,16 @@ pub fn emitProgramC(
             // shared with `aot_image_emit.zig` and the loader, so the
             // inspector reports the same number the binary actually
             // carries in `onez_image_header.format_version`.
-            meta.runtime_image_present = true;
+            if (want_metadata_only) {
+                meta.metadata_image_present = true;
+            } else {
+                meta.runtime_image_present = true;
+            }
             meta.runtime_image_format_version = aot_image_emit_mod.format_version;
             meta.runtime_image_blob_present = stats.blob_present;
             meta.runtime_image_word_count = stats.word_count;
         }
     }
-
-    // Interpreter-free decision: an AOT binary can drop the interpreter when
-    // either the user explicitly opted out and locked the setting, or auto
-    // mode confirmed no fallback was emitted.
-    const interpreter_callbacks_emitted = aot_fallback_emit_count > 0;
 
     // Static cross-check: independently scan the assembled C source for
     // `jitInterpretedCall(`, `jitNativeWordCall(`, and `jitCallQuotation(`
@@ -7178,12 +7222,8 @@ pub fn emitProgramC(
 
     // Emit the interpreter-linked sentinel as a non-static global. The linker
     // GC drops lib1z.a when this is 0; the symbol itself is a redundant marker
-    // alongside the inspect-friendly string below.
-    const interpreter_free = switch (interpreter_fallback) {
-        .true => false,
-        .false => lock_interpreter_setting,
-        .auto => !interpreter_callbacks_emitted,
-    };
+    // alongside the inspect-friendly string below. `interpreter_free` is
+    // resolved earlier so the image emission can pick its mode.
     try out.appendSlice(allocator, if (interpreter_free)
         "int onez_interpreter_linked = 0;\n\n"
     else
@@ -7205,9 +7245,15 @@ pub fn emitProgramC(
     // key after the open marker so future format changes can flip both
     // the open marker (V2) and the schema-version field together. The
     // artifact class is computed here from the post-image-emission
-    // metadata so it agrees with the embedded `interpreter-linked` and
-    // `runtime-image-present` booleans.
-    const artifact_class = classifyArtifact(!interpreter_free, meta.runtime_image_present);
+    // metadata so it agrees with the embedded `interpreter-linked`,
+    // `runtime-image-present`, and `metadata-image-present` booleans.
+    const image_kind: ImageKind = if (meta.runtime_image_present)
+        .full_runtime
+    else if (meta.metadata_image_present)
+        .metadata_only
+    else
+        .none;
+    const artifact_class = classifyArtifact(!interpreter_free, image_kind);
     try emitAotMetadata(allocator, &out, meta, !interpreter_free, artifact_class);
 
     // 6. Main entry point. Interpreter-free binaries skip prelude loading
@@ -7221,11 +7267,13 @@ pub fn emitProgramC(
     else
         "    void *rt = onez_init();\n");
 
-    // Runtime-image hookup: rehydrate module-private dictionary
-    // entries, blob TypeValues, and the shared slot table before user
-    // code runs. The image symbols are emitted earlier in this file by
-    // `aot_image_emit.emitImageC` when `emit_runtime_image` is true.
-    if (emit_runtime_image) {
+    // Image hookup: rehydrate module-private dictionary entries (and,
+    // for runtime-image mode, blob TypeValues and bodies) before user
+    // code runs. Emitted by `aot_image_emit.emitImageC` above when the
+    // build chose either the full runtime image or the metadata-only
+    // image path. The loader handles both shapes; metadata-only entries
+    // simply have empty bodies and zero typevalue_slot.
+    if (meta.runtime_image_present or meta.metadata_image_present) {
         try out.appendSlice(allocator,
             \\    extern const onez_image_header_t onez_image_v1;
             \\    extern const struct onez_typevalue *onez_image_typevalue_slots[];
@@ -7352,10 +7400,11 @@ fn emitAotMetadata(
     const yes_no_jic_linked: []const u8 = if (meta.jit_interpreted_call_linked) "yes" else "no";
     const yes_no_locked: []const u8 = if (meta.interpreter_setting_locked) "yes" else "no";
     const yes_no_runtime_image: []const u8 = if (meta.runtime_image_present) "yes" else "no";
+    const yes_no_metadata_image: []const u8 = if (meta.metadata_image_present) "yes" else "no";
 
     try out.appendSlice(allocator, "__attribute__((used)) static const char onez_aot_meta_v1[] =\n");
     try out.appendSlice(allocator, "    \"<<1Z_AOT_META_V1\\n\"\n");
-    try out.appendSlice(allocator, "    \"schema-version=2\\n\"\n");
+    try out.appendSlice(allocator, "    \"schema-version=3\\n\"\n");
     try out.appendSlice(allocator, "    \"artifact-class=");
     try out.appendSlice(allocator, artifact_class.label());
     try out.appendSlice(allocator, "\\n\"\n");
@@ -7374,6 +7423,9 @@ fn emitAotMetadata(
     try out.appendSlice(allocator, "    \"runtime-image-present=");
     try out.appendSlice(allocator, yes_no_runtime_image);
     try out.appendSlice(allocator, "\\n\"\n");
+    try out.appendSlice(allocator, "    \"metadata-image-present=");
+    try out.appendSlice(allocator, yes_no_metadata_image);
+    try out.appendSlice(allocator, "\\n\"\n");
     try out.appendSlice(allocator, "    \"target-triple=");
     try out.appendSlice(allocator, meta.target_triple);
     try out.appendSlice(allocator, "\\n\"\n");
@@ -7387,10 +7439,12 @@ fn emitAotMetadata(
     try out.appendSlice(allocator, meta.prelude_hash_hex);
     try out.appendSlice(allocator, "\\n\"\n");
 
-    // Runtime-image fields are only meaningful when a runtime image
-    // is actually embedded; absent fields must not be rendered as
-    // empty values.
-    if (meta.runtime_image_present) {
+    // Image format details (`runtime-image-format-version`,
+    // `runtime-image-blob-present`, `runtime-image-word-count`) apply
+    // to both the full runtime image and the interpreter-free
+    // metadata-only image since both share the same on-disk schema.
+    // Absent when no image is embedded.
+    if (meta.runtime_image_present or meta.metadata_image_present) {
         var num_buf: [32]u8 = undefined;
         const fmt_str = std.fmt.bufPrint(&num_buf, "{d}", .{meta.runtime_image_format_version}) catch unreachable;
         try out.appendSlice(allocator, "    \"runtime-image-format-version=");
@@ -12279,7 +12333,7 @@ test "emitAotMetadata renders runtime-image fields when present" {
     meta.runtime_image_blob_present = true;
     meta.runtime_image_word_count = 42;
 
-    try emitAotMetadata(testing.allocator, &out, meta, true, classifyArtifact(true, true));
+    try emitAotMetadata(testing.allocator, &out, meta, true, classifyArtifact(true, .full_runtime));
 
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=yes\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-format-version=2\\n") != null);
@@ -12294,7 +12348,7 @@ test "emitAotMetadata omits runtime-image conditional fields when absent" {
     // test_aot_metadata.runtime_image_present is false by default; the
     // three conditional keys must not appear at all so the inspector
     // can keep them as nullable optional fields.
-    try emitAotMetadata(testing.allocator, &out, test_aot_metadata, true, classifyArtifact(true, false));
+    try emitAotMetadata(testing.allocator, &out, test_aot_metadata, true, classifyArtifact(true, .none));
 
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=no\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-format-version=") == null);
@@ -12312,7 +12366,7 @@ test "emitAotMetadata renders blob-present=no with non-zero word-count" {
     meta.runtime_image_blob_present = false;
     meta.runtime_image_word_count = 7;
 
-    try emitAotMetadata(testing.allocator, &out, meta, true, classifyArtifact(true, true));
+    try emitAotMetadata(testing.allocator, &out, meta, true, classifyArtifact(true, .full_runtime));
 
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=yes\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-blob-present=no\\n") != null);
@@ -12325,15 +12379,38 @@ test "emitAotMetadata bumps schema version and emits artifact-class" {
 
     try emitAotMetadata(testing.allocator, &out, test_aot_metadata, false, .interpreter_free_aot);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, "schema-version=2\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "schema-version=3\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "artifact-class=interpreter-free-aot\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "metadata-image-present=no\\n") != null);
+}
+
+test "emitAotMetadata renders metadata-image-present=yes for interpreter-free image" {
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    var meta = test_aot_metadata;
+    meta.metadata_image_present = true;
+    meta.runtime_image_format_version = aot_image_emit_mod.format_version;
+    meta.runtime_image_blob_present = false;
+    meta.runtime_image_word_count = 12;
+
+    try emitAotMetadata(testing.allocator, &out, meta, false, classifyArtifact(false, .metadata_only));
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "artifact-class=interpreter-free-aot\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-present=no\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "metadata-image-present=yes\\n") != null);
+    // Image-format fields appear regardless of which image flavor is set
+    // since both modes share the same on-disk format.
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-word-count=12\\n") != null);
 }
 
 test "classifyArtifact prefers interpreter when both flags set" {
-    try testing.expectEqual(ArtifactClass.interpreter, classifyArtifact(true, true));
-    try testing.expectEqual(ArtifactClass.interpreter, classifyArtifact(true, false));
-    try testing.expectEqual(ArtifactClass.runtime_image_aot, classifyArtifact(false, true));
-    try testing.expectEqual(ArtifactClass.interpreter_free_aot, classifyArtifact(false, false));
+    try testing.expectEqual(ArtifactClass.interpreter, classifyArtifact(true, .full_runtime));
+    try testing.expectEqual(ArtifactClass.interpreter, classifyArtifact(true, .none));
+    try testing.expectEqual(ArtifactClass.interpreter, classifyArtifact(true, .metadata_only));
+    try testing.expectEqual(ArtifactClass.runtime_image_aot, classifyArtifact(false, .full_runtime));
+    try testing.expectEqual(ArtifactClass.interpreter_free_aot, classifyArtifact(false, .none));
+    try testing.expectEqual(ArtifactClass.interpreter_free_aot, classifyArtifact(false, .metadata_only));
 }
 
 test "AotFallbackReportBuilder records and snapshots site categories" {

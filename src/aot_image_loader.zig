@@ -20,6 +20,8 @@ const stack_effect_mod = @import("stack_effect.zig");
 const aot_image_emit = @import("aot_image_emit.zig");
 const instruction_bytecode = @import("instruction_bytecode.zig");
 const Context = @import("context.zig").Context;
+const dictionary_mod = @import("dictionary.zig");
+const WordProvenance = dictionary_mod.WordProvenance;
 
 /// Errors the loader can surface. The C-side caller maps these to
 /// `ONEZ_ERR_LOAD_FAILED` and uses `ctx.error_details` for the
@@ -88,6 +90,18 @@ pub const Word = extern struct {
     body_bytecode: ?[*]const u8,
     body_bytecode_len: u32,
     typevalue_slot: u32,
+    doc: ?[*]const u8,
+    doc_len: u32,
+    source_file: ?[*]const u8,
+    source_file_len: u32,
+    source_line: u32,
+    source_column: u32,
+    provenance_generator: ?[*]const u8,
+    provenance_generator_len: u32,
+    provenance_parent: ?[*]const u8,
+    provenance_parent_len: u32,
+    provenance_role: ?[*]const u8,
+    provenance_role_len: u32,
 };
 
 /// Zig mirror of the C `onez_image_enum_variant_t` row. The loader walks
@@ -260,6 +274,7 @@ fn populateModulesAndWords(ctx: *Context, header: *const Header) LoaderError!voi
             const markers_slice = try buildMarkerSlice(arena, w);
             const stack_effect = try decodeStackEffect(arena, header, w.stack_effect_idx);
             const body = try decodeWordBody(arena, w);
+            const diag = decodeDiagnosticMetadata(w);
 
             // Treat `aot_image_emit.word_id_sentinel` (0xFFFFFFFFu) as
             // "no AOT dispatch entry" -- the codegen marker for words
@@ -274,6 +289,11 @@ fn populateModulesAndWords(ctx: *Context, header: *const Header) LoaderError!voi
                 .stack_effect = stack_effect,
                 .markers = markers_slice,
                 .source_module = module_ptr,
+                .doc = diag.doc,
+                .source_file = diag.source_file,
+                .source_line = diag.source_line,
+                .source_column = diag.source_column,
+                .provenance = diag.provenance,
                 .word_id = word_id_opt,
                 .action = .{ .compound = body },
             };
@@ -302,6 +322,54 @@ fn decodeWordBody(arena: Allocator, w: Word) LoaderError![]const value_mod.Instr
     const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
     return instruction_bytecode.deserializeQuotationInstructions(bytes, arena) catch
         return LoaderError.OutOfMemory;
+}
+
+/// Decoded diagnostic metadata for one image word. Each field mirrors a
+/// nullable counterpart on `ModuleWord`/`WordDefinition`, so the loader
+/// can populate `>word-info`, `all-words`, and stack-trace renderers
+/// directly from the static image without re-reading the source.
+const DecodedDiagnostics = struct {
+    doc: ?[]const u8,
+    source_file: ?[]const u8,
+    source_line: usize,
+    source_column: usize,
+    provenance: ?WordProvenance,
+};
+
+/// Decode the doc, source-location, and provenance fields from one
+/// image word row. Strings are pointer-aliased into the image, not
+/// copied; the image lives for the process lifetime, so the slices
+/// share that lifetime with everything else the loader returns.
+fn decodeDiagnosticMetadata(w: Word) DecodedDiagnostics {
+    const doc_opt: ?[]const u8 = if (w.doc) |p|
+        if (w.doc_len > 0) p[0..w.doc_len] else null
+    else
+        null;
+    const sf_opt: ?[]const u8 = if (w.source_file) |p|
+        if (w.source_file_len > 0) p[0..w.source_file_len] else null
+    else
+        null;
+    const provenance_opt: ?WordProvenance = if (w.provenance_generator) |gp|
+        WordProvenance{
+            .generator = gp[0..w.provenance_generator_len],
+            .parent = if (w.provenance_parent) |pp|
+                pp[0..w.provenance_parent_len]
+            else
+                "",
+            .role = if (w.provenance_role) |rp|
+                rp[0..w.provenance_role_len]
+            else
+                "",
+        }
+    else
+        null;
+    return .{
+        .doc = doc_opt,
+        .source_file = sf_opt,
+        .source_line = w.source_line,
+        .source_column = w.source_column,
+        .provenance = provenance_opt,
+    };
 }
 
 /// Walk the marker-pointer array for one word and produce a runtime
@@ -787,6 +855,18 @@ fn wordRow(name: []const u8, word_id: u32, module_idx: u32) Word {
         .body_bytecode = null,
         .body_bytecode_len = 0,
         .typevalue_slot = 0,
+        .doc = null,
+        .doc_len = 0,
+        .source_file = null,
+        .source_file_len = 0,
+        .source_line = 0,
+        .source_column = 0,
+        .provenance_generator = null,
+        .provenance_generator_len = 0,
+        .provenance_parent = null,
+        .provenance_parent_len = 0,
+        .provenance_role = null,
+        .provenance_role_len = 0,
     };
 }
 
@@ -1379,4 +1459,81 @@ test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {
         LoaderError.OutOfMemory,
         loadIntoContext(&ctx, &header, null, null),
     );
+}
+
+test "loadIntoContext: diagnostic metadata fields round-trip into ModuleWord" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const w_name = "annotated";
+    const m_name = "demo";
+    const doc_str = "doubles the input";
+    const file_str = "/projects/demo.1z";
+    const gen_str = "struct";
+    const parent_str = "person";
+    const role_str = "field-getter";
+
+    var w = wordRow(w_name, 7, 0);
+    w.doc = doc_str.ptr;
+    w.doc_len = @intCast(doc_str.len);
+    w.source_file = file_str.ptr;
+    w.source_file_len = @intCast(file_str.len);
+    w.source_line = 12;
+    w.source_column = 4;
+    w.provenance_generator = gen_str.ptr;
+    w.provenance_generator_len = @intCast(gen_str.len);
+    w.provenance_parent = parent_str.ptr;
+    w.provenance_parent_len = @intCast(parent_str.len);
+    w.provenance_role = role_str.ptr;
+    w.provenance_role_len = @intCast(role_str.len);
+
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try loadIntoContext(&ctx, &header, null, null);
+
+    const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
+    const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
+    try testing.expectEqualStrings(doc_str, mw.doc orelse return error.TestExpectedDoc);
+    try testing.expectEqualStrings(file_str, mw.source_file orelse return error.TestExpectedSourceFile);
+    try testing.expectEqual(@as(usize, 12), mw.source_line);
+    try testing.expectEqual(@as(usize, 4), mw.source_column);
+    const prov = mw.provenance orelse return error.TestExpectedProvenance;
+    try testing.expectEqualStrings(gen_str, prov.generator);
+    try testing.expectEqualStrings(parent_str, prov.parent);
+    try testing.expectEqualStrings(role_str, prov.role);
+}
+
+test "loadIntoContext: absent diagnostic metadata leaves ModuleWord fields null" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const w_name = "bare";
+    const m_name = "demo";
+    const words = [_]Word{wordRow(w_name, 0, 0)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try loadIntoContext(&ctx, &header, null, null);
+
+    const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
+    const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
+    try testing.expect(mw.doc == null);
+    try testing.expect(mw.source_file == null);
+    try testing.expectEqual(@as(usize, 0), mw.source_line);
+    try testing.expectEqual(@as(usize, 0), mw.source_column);
+    try testing.expect(mw.provenance == null);
 }

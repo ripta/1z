@@ -1743,6 +1743,7 @@ fn printQuotationStats(
 fn printInterpreterLinkSummary(
     interpreter_fallback: ir_codegen.InterpreterFallbackMode,
     lock_interpreter_setting: bool,
+    emit_runtime_image: bool,
     diagnostics: *const ir_codegen.CodegenDiagnostics,
     err_writer: anytype,
 ) void {
@@ -1751,8 +1752,17 @@ fn printInterpreterLinkSummary(
         .false => lock_interpreter_setting,
         .auto => !diagnostics.has_interpreter_callbacks,
     };
-    const runtime_image_present = diagnostics.image_stats != null;
-    const artifact_class = ir_codegen.classifyArtifact(!interpreter_free, runtime_image_present);
+    // Build summary mirrors the artifact-class decision in
+    // `emitProgramC`. `diagnostics.image_stats` is set for both the
+    // full runtime image and the metadata-only image; only `--emit-runtime-image`
+    // produces the full image, so the build flag is the disambiguator.
+    const image_kind: ir_codegen.ImageKind = if (diagnostics.image_stats == null)
+        .none
+    else if (emit_runtime_image)
+        .full_runtime
+    else
+        .metadata_only;
+    const artifact_class = ir_codegen.classifyArtifact(!interpreter_free, image_kind);
     err_writer.print("artifact: {s}\n", .{artifact_class.label()}) catch {};
     const status: []const u8 = if (interpreter_free) "not linked" else "linked";
     const reason: []const u8 = switch (interpreter_fallback) {
@@ -2311,7 +2321,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
         var dump_buf: std.ArrayListUnmanaged(u8) = .{};
         defer dump_buf.deinit(allocator);
-        _ = aot_image_emit.emitImageC(&dump_buf, allocator, ctx, manifest, &image_word_lookup) catch {
+        _ = aot_image_emit.emitImageC(&dump_buf, allocator, ctx, manifest, &image_word_lookup, .{}) catch {
             err_writer.writeAll("Error: out of memory rendering image C\n") catch {};
             err_writer.flush() catch {};
             return 1;
@@ -2487,7 +2497,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         }
     }
 
-    printInterpreterLinkSummary(interpreter_fallback, lock_interpreter_setting, &codegen_diagnostics, err_writer);
+    printInterpreterLinkSummary(interpreter_fallback, lock_interpreter_setting, emit_runtime_image_flag, &codegen_diagnostics, err_writer);
 
     if (codegen_diagnostics.image_stats) |stats| {
         err_writer.print("runtime-image: words={d} stack-effects={d} typevalue-slots={d} blob-present={s}\n", .{
@@ -2733,8 +2743,16 @@ const AotInspectFields = struct {
     // omitted from the rendered report rather than printed as
     // "unknown."
     jit_interpreted_call_linked: ?[]const u8 = null,
-    // Runtime-image fields are populated only when the binary
-    // embeds a runtime program image; absent otherwise.
+    // Metadata-image presence indicates an interpreter-free AOT
+    // binary that carries the read-only introspection surface
+    // (word metadata, no executable bodies). Absent on v1/v2 binaries;
+    // populated at schema-version=3+.
+    metadata_image_present: ?[]const u8 = null,
+    // Runtime-image fields are populated when the binary embeds an
+    // image -- either the full runtime image or the metadata-only
+    // image. Both shapes share the same on-disk format, so the
+    // format-version / blob-present / word-count fields apply to
+    // both. Absent when no image is embedded.
     runtime_image_format_version: ?[]const u8 = null,
     runtime_image_blob_present: ?[]const u8 = null,
     runtime_image_word_count: ?[]const u8 = null,
@@ -2781,6 +2799,7 @@ fn parseAotMetadata(
     var prelude_hash: ?[]const u8 = null;
     var artifact_class: ?[]const u8 = null;
     var jit_interpreted_call_linked: ?[]const u8 = null;
+    var metadata_image_present: ?[]const u8 = null;
     var runtime_image_format_version: ?[]const u8 = null;
     var runtime_image_blob_present: ?[]const u8 = null;
     var runtime_image_word_count: ?[]const u8 = null;
@@ -2809,6 +2828,8 @@ fn parseAotMetadata(
             interpreter_setting_locked = value;
         } else if (std.mem.eql(u8, key, "runtime-image-present")) {
             runtime_image_present = value;
+        } else if (std.mem.eql(u8, key, "metadata-image-present")) {
+            metadata_image_present = value;
         } else if (std.mem.eql(u8, key, "target-triple")) {
             target_triple = value;
         } else if (std.mem.eql(u8, key, "build-mode")) {
@@ -2842,8 +2863,11 @@ fn parseAotMetadata(
     };
     // Schema v1 omits `artifact-class`; the inspector derives it from
     // the other fields. v2 adds `artifact-class` as a required key.
+    // v3 adds `metadata-image-present` for interpreter-free binaries
+    // that ship the read-only introspection surface.
     const is_v2 = std.mem.eql(u8, sv, "2");
-    if (!std.mem.eql(u8, sv, "1") and !is_v2) {
+    const is_v3 = std.mem.eql(u8, sv, "3");
+    if (!std.mem.eql(u8, sv, "1") and !is_v2 and !is_v3) {
         err_ctx.schema_version = sv;
         return error.UnsupportedSchemaVersion;
     }
@@ -2864,8 +2888,12 @@ fn parseAotMetadata(
             return error.MissingField;
         }
     }
-    if (is_v2 and artifact_class == null) {
+    if ((is_v2 or is_v3) and artifact_class == null) {
         err_ctx.missing_field = "artifact-class";
+        return error.MissingField;
+    }
+    if (is_v3 and metadata_image_present == null) {
+        err_ctx.missing_field = "metadata-image-present";
         return error.MissingField;
     }
 
@@ -2881,6 +2909,7 @@ fn parseAotMetadata(
         .prelude_hash = prelude_hash.?,
         .artifact_class = artifact_class,
         .jit_interpreted_call_linked = jit_interpreted_call_linked,
+        .metadata_image_present = metadata_image_present,
         .runtime_image_format_version = runtime_image_format_version,
         .runtime_image_blob_present = runtime_image_blob_present,
         .runtime_image_word_count = runtime_image_word_count,
@@ -3632,6 +3661,77 @@ test "parseAotMetadata reports missing artifact-class at schema v2" {
     const result = parseAotMetadata(sample, &err_ctx);
     try std.testing.expectError(error.MissingField, result);
     try std.testing.expectEqualStrings("artifact-class", err_ctx.missing_field);
+}
+
+test "parseAotMetadata parses schema v3 metadata-image-present" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=3\n" ++
+        "artifact-class=interpreter-free-aot\n" ++
+        "interpreter-linked=no\n" ++
+        "interpreter-fallback-mode=false\n" ++
+        "interpreter-setting-locked=yes\n" ++
+        "runtime-image-present=no\n" ++
+        "metadata-image-present=yes\n" ++
+        "target-triple=aarch64-macos\n" ++
+        "build-mode=ReleaseSafe\n" ++
+        "onez-version=0.1.0-dev\n" ++
+        "prelude-hash=" ++ ("0123456789abcdef" ** 4) ++ "\n" ++
+        ">>\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const fields = try parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectEqualStrings("3", fields.schema_version);
+    try std.testing.expectEqualStrings("interpreter-free-aot", fields.artifact_class.?);
+    try std.testing.expectEqualStrings("no", fields.runtime_image_present);
+    try std.testing.expectEqualStrings("yes", fields.metadata_image_present.?);
+}
+
+test "parseAotMetadata reports missing metadata-image-present at schema v3" {
+    const sample =
+        "<<1Z_AOT_META_V1\n" ++
+        "schema-version=3\n" ++
+        "artifact-class=interpreter-free-aot\n" ++
+        "interpreter-linked=no\n" ++
+        "interpreter-fallback-mode=false\n" ++
+        "interpreter-setting-locked=yes\n" ++
+        "runtime-image-present=no\n" ++
+        "target-triple=aarch64-macos\n" ++
+        "build-mode=ReleaseSafe\n" ++
+        "onez-version=0.1.0-dev\n" ++
+        "prelude-hash=" ++ ("0123456789abcdef" ** 4) ++ "\n" ++
+        ">>\n";
+    var err_ctx: AotInspectErrorContext = .{};
+    const result = parseAotMetadata(sample, &err_ctx);
+    try std.testing.expectError(error.MissingField, result);
+    try std.testing.expectEqualStrings("metadata-image-present", err_ctx.missing_field);
+}
+
+test "writeInspectReport omits metadata-image-present line for interpreter-free with metadata image" {
+    var buf: [512]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+
+    const fields: AotInspectFields = .{
+        .schema_version = "3",
+        .artifact_class = "interpreter-free-aot",
+        .interpreter_linked = "no",
+        .interpreter_fallback_mode = "false",
+        .interpreter_setting_locked = "yes",
+        .runtime_image_present = "no",
+        .metadata_image_present = "yes",
+        .target_triple = "aarch64-macos",
+        .build_mode = "ReleaseSafe",
+        .onez_version = "0.1.0-dev",
+        .prelude_hash = test_prelude_hash,
+    };
+    try writeInspectReport(fbs.writer(), fields);
+
+    const written = fbs.getWritten();
+    // The metadata-image sub-flag stays in the binary metadata block
+    // (readable via raw parse) but is intentionally not echoed as a new
+    // inspect line; the `artifact:` line is the user-facing summary.
+    try std.testing.expect(std.mem.indexOf(u8, written, "metadata-image") == null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "artifact: interpreter-free-aot\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, written, "runtime-image: present=no\n") != null);
 }
 
 test "parseAotMetadata reports missing required field" {
