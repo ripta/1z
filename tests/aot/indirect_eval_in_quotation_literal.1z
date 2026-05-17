@@ -1,0 +1,3 @@
+run-it: [ [ "1 2 +" eval-string ] call ] ;
+
+run-it

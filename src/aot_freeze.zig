@@ -14,6 +14,8 @@ const dictionary_mod = @import("dictionary.zig");
 const WordDefinition = dictionary_mod.WordDefinition;
 const markers_mod = @import("primitives/markers.zig");
 const pic_mod = @import("pic.zig");
+const dispatch_mod = @import("dispatch.zig");
+const DispatchTable = dispatch_mod.DispatchTable;
 
 pub const AotQuotationDesc = struct {
     quotation_id: u32,
@@ -102,12 +104,26 @@ pub const ResolvedCallee = union(enum) {
 /// level of the containing word's body. For example, a call at index 2 of
 /// the quotation at index 5 of the caller's body has
 /// `instruction_index = 5` and `quotation_path = .{ 2 }`.
+///
+/// For calls discovered by walking a single-method `method{` dispatch
+/// entry on a dispatch-only generic, `caller_word_id` is the polymorphic
+/// word's id, `instruction_index` is 0, and `quotation_path` begins with
+/// `DISPATCH_PATH_SENTINEL`. The polymorphic word's compound body is
+/// empty by construction, so this encoding cannot collide with any real
+/// quotation literal path.
 pub const CallTargetEntry = struct {
     caller_word_id: u32,
     instruction_index: u32,
     quotation_path: []const u32,
     resolved: ResolvedCallee,
 };
+
+/// Sentinel placed at the head of `CallTargetEntry.quotation_path` for
+/// entries discovered by walking a single-method dispatch entry on a
+/// dispatch-only generic. The polymorphic caller's compound body is
+/// empty, so consumers can rely on this value to distinguish
+/// dispatch-walked rows from direct quotation-literal rows.
+pub const DISPATCH_PATH_SENTINEL: u32 = std.math.maxInt(u32);
 
 pub const FreezeFeatureUse = struct {
     caller_name: []const u8,
@@ -553,8 +569,19 @@ fn discoverReachableWords(
                     },
                     .compound => |compound_instrs| {
                         try result.names.append(temp_allocator, name);
-                        try result.defs.append(temp_allocator, wordDefFromModuleWord(name, mod_word));
+                        const qualified_def = wordDefFromModuleWord(name, mod_word);
+                        try result.defs.append(temp_allocator, qualified_def);
                         collectCallWords(ctx, compound_instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
+                            freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
+                            result.names.deinit(temp_allocator);
+                            result.defs.deinit(temp_allocator);
+                            result.native_names.deinit(temp_allocator);
+                            result.native_defs.deinit(temp_allocator);
+                            result.quotation_bodies.deinit(temp_allocator);
+                            result.pending_call_targets.deinit(temp_allocator);
+                            return err;
+                        };
+                        walkSingleMethodDispatch(ctx, qualified_def, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
                             freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
                             result.names.deinit(temp_allocator);
                             result.defs.deinit(temp_allocator);
@@ -589,6 +616,19 @@ fn discoverReachableWords(
 
         // Discover callees
         collectCallWords(ctx, instrs, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
+            freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
+            result.names.deinit(temp_allocator);
+            result.defs.deinit(temp_allocator);
+            result.native_names.deinit(temp_allocator);
+            result.native_defs.deinit(temp_allocator);
+            result.quotation_bodies.deinit(temp_allocator);
+            result.pending_call_targets.deinit(temp_allocator);
+            return err;
+        };
+
+        // Walk single-method dispatch entries for dispatch-only generics.
+        // For non-generics or multi-method tables, this is a noop.
+        walkSingleMethodDispatch(ctx, word, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, runtime_image, temp_allocator, result_allocator) catch |err| {
             freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
             result.names.deinit(temp_allocator);
             result.defs.deinit(temp_allocator);
@@ -691,7 +731,17 @@ fn collectCallWords(
                 });
             },
             .push_literal => |val| {
-                // Recurse into nested quotations
+                // Recurse into nested quotations unconditionally. This is
+                // what implicitly covers banned natives inside quotation
+                // literals passed to combinators like `call`, `if`,
+                // `dip`, `each`, and so on: the freeze BFS sees the
+                // literal body before the combinator runs, and the
+                // banned-feature check above fires on the inner
+                // `call_word` site. The recursion is intentionally
+                // conservative -- it walks every literal quotation in
+                // sight, including ones that may be `drop`ped or stored
+                // without being called, so an unreachable banned call
+                // still trips detection.
                 switch (val) {
                     .quotation => |q| {
                         const ptr_key = @intFromPtr(q.instructions.ptr);
@@ -709,6 +759,88 @@ fn collectCallWords(
             },
         }
     }
+}
+
+/// Walk a single-method `method{` dispatch entry as if it were a nested
+/// quotation literal inside the polymorphic word. This is the indirect
+/// call-coverage extension for monomorphic dispatch: a banned native
+/// reachable only through such a method body is flagged with the same
+/// diagnostic as a direct `call_word`.
+///
+/// Scope and limits:
+///
+/// - Only compound dispatch-only generics participate (the
+///   `isDispatchOnlyGeneric` shape: empty compound body plus the
+///   `generic` marker). Native polymorphic primitives like `+` keep
+///   their existing direct-call treatment; this helper does not extend
+///   to them.
+/// - Only single-method tables are walked. Multi-method tables fall
+///   through to construction-site detection of non-constant
+///   `>quotation` arguments; mixing markers across entries would
+///   require either a stricter union check or reachability analysis.
+/// - Only `.quotation` bodies are walked. `.native_fn` and
+///   `.host_callback` entries carry no marker set on the dispatch
+///   entry, and mapping a `NativeFn` pointer back to a `WordDefinition`
+///   would require a dictionary scan that is a deliberate later step.
+///
+/// The empty-body precondition on dispatch-only generics is what makes
+/// the synthetic `quotation_path = [ DISPATCH_PATH_SENTINEL, ... ]`
+/// encoding unambiguous: any path beginning with that sentinel
+/// originated from this helper, since the polymorphic word's own body
+/// holds no quotation literal at any index.
+fn walkSingleMethodDispatch(
+    ctx: *const Context,
+    def: WordDefinition,
+    polymorphic_name: []const u8,
+    worklist: *std.ArrayListUnmanaged([]const u8),
+    seen: *std.StringHashMapUnmanaged(void),
+    quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
+    quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
+    diagnostics: *FreezeDiagnostics,
+    runtime_image: bool,
+    allocator: Allocator,
+    path_allocator: Allocator,
+) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
+    if (!isDispatchOnlyGeneric(def)) return;
+
+    const pairs = try ctx.dispatchEntriesForId(def.dispatch_id, allocator);
+    defer allocator.free(pairs);
+    if (pairs.len != 1) return;
+
+    const body = pairs[0].entry.body;
+    const q_instrs = switch (body) {
+        .quotation => |q| q,
+        .native_fn, .host_callback => return,
+    };
+
+    // Dedup the method body the same way collectCallWords dedups
+    // nested quotations, so a re-entry through the polymorphic word's
+    // worklist hit does not redo the walk.
+    const ptr_key = @intFromPtr(q_instrs.ptr);
+    const qgop = try quotation_seen.getOrPut(allocator, ptr_key);
+    if (qgop.found_existing) return;
+    try quotation_bodies.append(allocator, q_instrs);
+
+    var synth_path = std.ArrayListUnmanaged(u32){};
+    defer synth_path.deinit(allocator);
+    try synth_path.append(allocator, DISPATCH_PATH_SENTINEL);
+
+    try collectCallWords(
+        ctx,
+        q_instrs,
+        polymorphic_name,
+        worklist,
+        seen,
+        quotation_bodies,
+        quotation_seen,
+        pending_call_targets,
+        &synth_path,
+        diagnostics,
+        runtime_image,
+        allocator,
+        path_allocator,
+    );
 }
 
 /// Returns true if `name` resolves to a native (or host-callback) word

@@ -1,0 +1,4 @@
+my-op: ( s -- ) generic [ ] ;
+my-op: method{ string } [ eval-string ] ;
+
+"1 2 +" my-op
