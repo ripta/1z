@@ -203,7 +203,7 @@ word-defined-hooks: parameter{ [ { } ] } ;
 module-loaded-hooks: parameter{ [ { } ] } ;
 
 \\ Load a module by name or file path, returning a cached copy if available.
-load: ( filename -- module ) [
+load: dynamic-load ( filename -- module ) [
   dup native.resolve-load-path
   module-cache get over @has?
   [ swap drop module-cache get swap @get ]
@@ -212,7 +212,7 @@ load: ( filename -- module ) [
 ] ;
 
 \\ Load a module by name or file path, bypassing the cache.
-reload: ( filename -- module ) [
+reload: dynamic-load ( filename -- module ) [
   module-cache get swap load-file
 ] ;
 

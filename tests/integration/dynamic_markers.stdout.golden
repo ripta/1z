@@ -1,0 +1,44 @@
+=== dynamic-eval marker on natives ===
+Stack: [ ]
+Stack: [ t ]
+PASS: eval-string has dynamic-eval
+Stack: [ ]
+=== dynamic-load marker on natives and prelude ===
+Stack: [ ]
+Stack: [ t ]
+PASS: load-file has dynamic-load
+Stack: [ ]
+Stack: [ t ]
+PASS: load has dynamic-load
+Stack: [ ]
+Stack: [ t ]
+PASS: reload has dynamic-load
+Stack: [ ]
+=== dynamic-compile marker on natives ===
+Stack: [ ]
+Stack: [ t ]
+PASS: compile! has dynamic-compile
+Stack: [ ]
+=== dynamic-quotation-construction marker on natives ===
+Stack: [ ]
+Stack: [ t ]
+PASS: >quotation has dynamic-quotation-construction
+Stack: [ ]
+=== dynamic-X markers on user-defined words ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: user word carries dynamic-eval
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: user word carries dynamic-load
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: user word carries dynamic-compile
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: user word carries dynamic-quotation-construction
+Stack: [ ]

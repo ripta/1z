@@ -98,6 +98,27 @@ pub const never_returns_marker: Marker = .{ .name = "never-returns" };
 /// this marker. Runtime-image AOT and the interpreter accept it.
 pub const interpreter_dependent_marker: Marker = .{ .name = "interpreter-dependent" };
 
+/// Well-known marker certifying that a word performs runtime string-to-code
+/// evaluation (the `eval-string` capability). Freeze policy: allowed under
+/// the interpreter and runtime-image AOT; banned under interpreter-free AOT.
+pub const dynamic_eval_marker: Marker = .{ .name = "dynamic-eval" };
+
+/// Well-known marker certifying that a word performs runtime module loading
+/// (e.g., `load`, `reload`, `load-file`). Freeze policy: allowed under the
+/// interpreter and runtime-image AOT; banned under interpreter-free AOT.
+pub const dynamic_load_marker: Marker = .{ .name = "dynamic-load" };
+
+/// Well-known marker certifying that a word invokes the compiler at runtime
+/// (the `compile!` capability). Freeze policy: allowed under the
+/// interpreter; banned under both runtime-image and interpreter-free AOT.
+pub const dynamic_compile_marker: Marker = .{ .name = "dynamic-compile" };
+
+/// Well-known marker certifying that a word constructs quotations from
+/// runtime values (the `>quotation` capability). Freeze policy: allowed
+/// under the interpreter and runtime-image AOT; banned under
+/// interpreter-free AOT.
+pub const dynamic_quotation_construction_marker: Marker = .{ .name = "dynamic-quotation-construction" };
+
 /// Dispatch wildcard for `method{`, not a type -- no value has type `any`.
 pub const any_marker: Marker = .{ .name = "any" };
 
@@ -128,6 +149,10 @@ pub const primitives = [_]Primitive{
     .{ .name = "deprecated", .stack_effect = "-- marker", .doc = "Push the well-known deprecated marker. The linter warns at call sites of deprecated words.", .func = nativeDeprecatedMarker, .parse_time = true },
     .{ .name = "never-returns", .stack_effect = "-- marker", .doc = "Push the well-known never-returns marker. Indicates the word never returns to its caller.", .func = nativeNeverReturnsMarker, .parse_time = true },
     .{ .name = "interpreter-dependent", .stack_effect = "-- marker", .doc = "Push the well-known interpreter-dependent marker. Reachable natives carrying this marker are rejected by interpreter-free AOT.", .func = nativeInterpreterDependentMarker, .parse_time = true },
+    .{ .name = "dynamic-eval", .stack_effect = "-- marker", .doc = "Push the well-known dynamic-eval marker. Certifies the word performs runtime string-to-code evaluation.", .func = nativeDynamicEvalMarker, .parse_time = true },
+    .{ .name = "dynamic-load", .stack_effect = "-- marker", .doc = "Push the well-known dynamic-load marker. Certifies the word performs runtime module loading.", .func = nativeDynamicLoadMarker, .parse_time = true },
+    .{ .name = "dynamic-compile", .stack_effect = "-- marker", .doc = "Push the well-known dynamic-compile marker. Certifies the word invokes the compiler at runtime.", .func = nativeDynamicCompileMarker, .parse_time = true },
+    .{ .name = "dynamic-quotation-construction", .stack_effect = "-- marker", .doc = "Push the well-known dynamic-quotation-construction marker. Certifies the word constructs quotations from runtime values.", .func = nativeDynamicQuotationConstructionMarker, .parse_time = true },
     .{ .name = "any", .stack_effect = "-- marker", .doc = "Push the well-known any marker for method dispatch wildcards.", .func = nativeAnyMarker, .parse_time = true, .markers = &.{@constCast(&const_marker)} },
     .{ .name = "self", .stack_effect = "-- marker", .doc = "Push the well-known self marker for protocol type annotations.", .func = nativeSelfMarker, .parse_time = true, .markers = &.{@constCast(&const_marker)} },
 };
@@ -220,6 +245,26 @@ pub fn nativeInterpreterDependentMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&interpreter_dependent_marker) });
 }
 
+/// dynamic-eval ( -- marker ) - Push the well-known dynamic-eval marker
+pub fn nativeDynamicEvalMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&dynamic_eval_marker) });
+}
+
+/// dynamic-load ( -- marker ) - Push the well-known dynamic-load marker
+pub fn nativeDynamicLoadMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&dynamic_load_marker) });
+}
+
+/// dynamic-compile ( -- marker ) - Push the well-known dynamic-compile marker
+pub fn nativeDynamicCompileMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&dynamic_compile_marker) });
+}
+
+/// dynamic-quotation-construction ( -- marker ) - Push the well-known dynamic-quotation-construction marker
+pub fn nativeDynamicQuotationConstructionMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&dynamic_quotation_construction_marker) });
+}
+
 /// any ( -- marker ) - Push the well-known any marker
 pub fn nativeAnyMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&any_marker) });
@@ -308,6 +353,26 @@ pub fn isNeverReturnsMarker(mk: *const Marker) bool {
 /// Check if a marker is the well-known interpreter-dependent marker
 pub fn isInterpreterDependentMarker(mk: *const Marker) bool {
     return mk == &interpreter_dependent_marker;
+}
+
+/// Check if a marker is the well-known dynamic-eval marker
+pub fn isDynamicEvalMarker(mk: *const Marker) bool {
+    return mk == &dynamic_eval_marker;
+}
+
+/// Check if a marker is the well-known dynamic-load marker
+pub fn isDynamicLoadMarker(mk: *const Marker) bool {
+    return mk == &dynamic_load_marker;
+}
+
+/// Check if a marker is the well-known dynamic-compile marker
+pub fn isDynamicCompileMarker(mk: *const Marker) bool {
+    return mk == &dynamic_compile_marker;
+}
+
+/// Check if a marker is the well-known dynamic-quotation-construction marker
+pub fn isDynamicQuotationConstructionMarker(mk: *const Marker) bool {
+    return mk == &dynamic_quotation_construction_marker;
 }
 
 /// word-markers ( module name -- markers ) - Get the markers attached to a word in a module

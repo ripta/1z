@@ -1,0 +1,47 @@
+\ Test that dynamic-X markers are attached to the natives and prelude words
+\ that exercise the corresponding dynamic capability, and that user-defined
+\ words can carry these markers.
+
+use "testing" ;
+
+"dynamic-eval marker on natives" test-section
+
+"eval-string" word-markers [ dynamic-eval = ] #filter #count 1 =
+t "eval-string has dynamic-eval" assert=
+
+"dynamic-load marker on natives and prelude" test-section
+
+"load-file" word-markers [ dynamic-load = ] #filter #count 1 =
+t "load-file has dynamic-load" assert=
+"load" word-markers [ dynamic-load = ] #filter #count 1 =
+t "load has dynamic-load" assert=
+"reload" word-markers [ dynamic-load = ] #filter #count 1 =
+t "reload has dynamic-load" assert=
+
+"dynamic-compile marker on natives" test-section
+
+"compile!" word-markers [ dynamic-compile = ] #filter #count 1 =
+t "compile! has dynamic-compile" assert=
+
+"dynamic-quotation-construction marker on natives" test-section
+
+">quotation" word-markers [ dynamic-quotation-construction = ] #filter #count 1 =
+t ">quotation has dynamic-quotation-construction" assert=
+
+"dynamic-X markers on user-defined words" test-section
+
+user-eval: dynamic-eval [ ] ;
+"user-eval" word-markers [ dynamic-eval = ] #filter #count 1 =
+t "user word carries dynamic-eval" assert=
+
+user-load: dynamic-load [ ] ;
+"user-load" word-markers [ dynamic-load = ] #filter #count 1 =
+t "user word carries dynamic-load" assert=
+
+user-compile: dynamic-compile [ ] ;
+"user-compile" word-markers [ dynamic-compile = ] #filter #count 1 =
+t "user word carries dynamic-compile" assert=
+
+user-quot: dynamic-quotation-construction [ ] ;
+"user-quot" word-markers [ dynamic-quotation-construction = ] #filter #count 1 =
+t "user word carries dynamic-quotation-construction" assert=
