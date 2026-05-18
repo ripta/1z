@@ -1,0 +1,9 @@
+\ Exercises a user-defined marker under runtime-image AOT. The
+\ compound body of `my-marker` is a single `push_literal { .marker = m }`
+\ instruction. Routing the push through the marker slot table preserves
+\ pointer identity across freeze and runtime.
+
+my-marker: make-marker ;
+
+my-marker my-marker = .
+my-marker .

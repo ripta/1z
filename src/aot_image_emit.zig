@@ -140,11 +140,21 @@ pub const ImageCollection = struct {
 /// the slot maps before Pass 2 codegen runs, so compiled word bodies
 /// can reference link-time-resolvable slot indices instead of
 /// runtime name lookups.
+///
+/// `extra_bodies` carries instruction streams that are reachable from
+/// the AOT program but absent from both `manifest` (module-cache
+/// scope only) and `ctx.local_frames[import_frame_index]` (the freeze
+/// step pops the user's top-level frame before collection runs). The
+/// post-freeze `AotWordDesc` array is the canonical source: it
+/// preserves the identity of every Parameter and Marker pointer
+/// referenced by a discovered word body, so codegen and the loader
+/// agree on slot indices.
 pub fn collectImageSlots(
     allocator: Allocator,
     ctx: *const Context,
     manifest: ImageManifest,
     options: ImageEmitOptions,
+    extra_bodies: []const []const value_mod.Instruction,
 ) Allocator.Error!ImageCollection {
     var collection: ImageCollection = .{
         .allocator = allocator,
@@ -174,6 +184,9 @@ pub fn collectImageSlots(
         }
         try internTopLevelFrameLiterals(&collection.struct_plans, &collection.struct_index, &collection.effect_table, ctx);
         try internDispatchTableLiterals(&collection.struct_plans, &collection.struct_index, &collection.effect_table, ctx);
+        for (extra_bodies) |body| {
+            try internInstructionTypeLiterals(&collection.struct_plans, &collection.struct_index, &collection.effect_table, body);
+        }
     }
 
     try collectDescriptorCrossRefs(&collection.struct_plans, &collection.struct_index, &collection.effect_table);
@@ -214,6 +227,8 @@ pub fn emitImageCFromCollection(
     try emitTypeValueSlotTable(out, allocator, effect_table);
     try emitMarkerSlotTable(out, allocator, effect_table);
     try emitParameterSlotTable(out, allocator, effect_table);
+    try emitMarkerDescriptionsStorage(out, allocator, effect_table);
+    try emitParameterDescriptionsStorage(out, allocator, effect_table);
     try emitStructTypeSlotTable(out, allocator, struct_plans_items);
     try emitStackEffectTable(out, allocator, effect_table);
     try emitTypeValueData(out, allocator, effect_table, struct_plans_items, struct_index);
@@ -255,7 +270,7 @@ pub fn emitImageC(
     word_id_lookup: *const std.StringHashMapUnmanaged(u32),
     options: ImageEmitOptions,
 ) ImageEmitError!ImageEmissionStats {
-    var collection = try collectImageSlots(allocator, ctx, manifest, options);
+    var collection = try collectImageSlots(allocator, ctx, manifest, options, &.{});
     defer collection.deinit();
     return emitImageCFromCollection(out, allocator, ctx, manifest, word_id_lookup, &collection, options);
 }
@@ -905,6 +920,126 @@ fn emitParameterSlotTable(
         try out.appendSlice(allocator, ": parameter ");
         try out.appendSlice(allocator, param.name);
         try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+fn writeMarkerDescNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_marker_desc_{d}_name", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeParamDescNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_param_desc_{d}_name", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeParamDescBodySym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_param_desc_{d}_body", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+/// Emit `onez_image_marker_descriptions_storage[]`: one row per slot in
+/// `onez_image_marker_slots[]`. Each row carries the marker's name; the
+/// loader resolves the name to either a well-known marker singleton or
+/// a freshly-allocated `*Marker`, then patches the slot. No-op when no
+/// markers have been interned.
+fn emitMarkerDescriptionsStorage(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.markerSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+
+    for (table.marker_slots.items, 0..) |marker, i| {
+        try out.appendSlice(allocator, "static const char ");
+        try writeMarkerDescNameSym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = ");
+        try emitCStringLiteral(out, allocator, marker.name);
+        try out.appendSlice(allocator, ";\n");
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_marker_description_t onez_image_marker_descriptions_storage[] = {\n");
+    for (table.marker_slots.items, 0..) |marker, i| {
+        try out.appendSlice(allocator, "    { .name = ");
+        try writeMarkerDescNameSym(out, allocator, i);
+        try out.appendSlice(allocator, ", .name_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{marker.name.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, " },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_parameter_descriptions_storage[]`: one row per slot
+/// in `onez_image_parameter_slots[]`. Each row carries the parameter's
+/// name and the serialized bytecode for its lazy default quotation. The
+/// loader deserializes the bytecode and allocates the runtime
+/// `*Parameter`, then patches the slot. No-op when no parameters have
+/// been interned.
+fn emitParameterDescriptionsStorage(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) ImageEmitError!void {
+    if (table.parameterSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+
+    for (table.parameter_slots.items, 0..) |param, i| {
+        try out.appendSlice(allocator, "static const char ");
+        try writeParamDescNameSym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = ");
+        try emitCStringLiteral(out, allocator, param.name);
+        try out.appendSlice(allocator, ";\n");
+
+        const bytes = instruction_bytecode.serializeQuotationInstructions(param.default_quotation.instructions, allocator) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NotEncodable => return error.NotEncodable,
+        };
+        defer allocator.free(bytes);
+
+        try out.appendSlice(allocator, "static const uint8_t ");
+        try writeParamDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = {");
+        for (bytes, 0..) |byte, bi| {
+            if (bi > 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{byte}) catch unreachable);
+        }
+        try out.appendSlice(allocator, "};\n");
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_parameter_description_t onez_image_parameter_descriptions_storage[] = {\n");
+    for (table.parameter_slots.items, 0..) |param, i| {
+        try out.appendSlice(allocator, "    { .name = ");
+        try writeParamDescNameSym(out, allocator, i);
+        try out.appendSlice(allocator, ", .name_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{param.name.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ", .default_quotation_bytecode = ");
+        try writeParamDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ", .default_quotation_bytecode_len = sizeof(");
+        try writeParamDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ") },\n");
     }
     try out.appendSlice(allocator, "};\n\n");
 }
@@ -1910,6 +2045,29 @@ fn emitTypeDeclarations(
         \\    uint32_t        member_type_count;
         \\} onez_image_typevalue_t;
         \\
+        \\/* Per-slot description for `.marker` literal pushes. The loader walks  */
+        \\/* onez_image_marker_descriptions_storage[], resolves the name to a    */
+        \\/* well-known *Marker if it matches a built-in singleton, otherwise   */
+        \\/* allocates a fresh *Marker, then patches                            */
+        \\/* onez_image_marker_slots[slot] with the resolved pointer.            */
+        \\typedef struct onez_image_marker_description {
+        \\    const char *name;
+        \\    uint32_t    name_len;
+        \\    uint32_t    slot;                 /* index into onez_image_marker_slots */
+        \\} onez_image_marker_description_t;
+        \\
+        \\/* Per-slot description for `.parameter` literal pushes. Parameters    */
+        \\/* are always loader-allocated; the default-quotation bytecode encodes */
+        \\/* the lazily-evaluated default body, deserialized at startup via the  */
+        \\/* same instruction_bytecode decoder the runtime uses for word bodies. */
+        \\typedef struct onez_image_parameter_description {
+        \\    const char *name;
+        \\    uint32_t    name_len;
+        \\    uint32_t    slot;                 /* index into onez_image_parameter_slots */
+        \\    const uint8_t *default_quotation_bytecode;
+        \\    uint32_t       default_quotation_bytecode_len;
+        \\} onez_image_parameter_description_t;
+        \\
         \\typedef struct onez_image_header {
         \\    uint32_t format_version;
         \\    uint32_t module_count;
@@ -1919,6 +2077,8 @@ fn emitTypeDeclarations(
         \\    uint32_t stack_effect_count;
         \\    uint32_t typevalue_count;
         \\    uint32_t struct_type_count;
+        \\    uint32_t marker_slot_count;
+        \\    uint32_t parameter_slot_count;
         \\    const struct onez_image_module *modules;
         \\    const struct onez_image_word *words;
         \\    const struct onez_image_marker *markers;
@@ -1926,6 +2086,8 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_typevalue *typevalues;
         \\    const struct onez_image_typedescriptor *typedescriptors;
         \\    const struct onez_image_struct_type *struct_types;
+        \\    const struct onez_image_marker_description *marker_descriptions;
+        \\    const struct onez_image_parameter_description *parameter_descriptions;
         \\} onez_image_header_t;
         \\
         \\
@@ -2464,6 +2626,8 @@ fn emitHeader(
 
     const typevalue_count: u32 = @intCast(effect_table.type_slots.items.len);
     const struct_type_count: u32 = @intCast(struct_plans.len);
+    const marker_slot_count: u32 = effect_table.markerSlotCount();
+    const parameter_slot_count: u32 = effect_table.parameterSlotCount();
 
     const has_entries = manifest.entries.len > 0;
     const modules_ref: []const u8 = if (has_entries) "onez_image_modules_storage" else "NULL";
@@ -2473,6 +2637,8 @@ fn emitHeader(
     const typevalues_ref: []const u8 = if (typevalue_count > 0) "onez_image_typevalues_storage" else "NULL";
     const typedescriptors_ref: []const u8 = if (typevalue_count > 0) "onez_image_typedescriptors_storage" else "NULL";
     const struct_types_ref: []const u8 = if (struct_type_count > 0) "onez_image_struct_types_storage" else "NULL";
+    const marker_descs_ref: []const u8 = if (marker_slot_count > 0) "onez_image_marker_descriptions_storage" else "NULL";
+    const parameter_descs_ref: []const u8 = if (parameter_slot_count > 0) "onez_image_parameter_descriptions_storage" else "NULL";
 
     try out.appendSlice(allocator,
         \\__attribute__((used)) const onez_image_header_t onez_image_v1 = {
@@ -2493,6 +2659,10 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{typevalue_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .struct_type_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{struct_type_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .marker_slot_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{marker_slot_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .parameter_slot_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{parameter_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .modules = ");
     try out.appendSlice(allocator, modules_ref);
     try out.appendSlice(allocator, ",\n    .words = ");
@@ -2507,6 +2677,10 @@ fn emitHeader(
     try out.appendSlice(allocator, typedescriptors_ref);
     try out.appendSlice(allocator, ",\n    .struct_types = ");
     try out.appendSlice(allocator, struct_types_ref);
+    try out.appendSlice(allocator, ",\n    .marker_descriptions = ");
+    try out.appendSlice(allocator, marker_descs_ref);
+    try out.appendSlice(allocator, ",\n    .parameter_descriptions = ");
+    try out.appendSlice(allocator, parameter_descs_ref);
     try out.appendSlice(allocator,
         \\,
         \\};
@@ -3829,8 +4003,12 @@ test "emitImageC: no parameter or marker literals emits no slot tables" {
 
     try testing.expectEqual(@as(u32, 0), stats.marker_slot_count);
     try testing.expectEqual(@as(u32, 0), stats.parameter_slot_count);
-    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_marker_slots") == null);
-    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_parameter_slots") == null);
+    // Match the array-definition syntax (preceded by `*`) instead of
+    // the bare symbol name; the typedef comments mention the slot
+    // tables by name even when no array is emitted, so a plain
+    // substring search would mis-trigger on those comments.
+    try testing.expect(std.mem.indexOf(u8, out.items, "*onez_image_marker_slots[") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "*onez_image_parameter_slots[") == null);
 }
 
 test "emitImageC: nested quotation literal contributes type references" {

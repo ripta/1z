@@ -1,0 +1,11 @@
+\ Exercises a user-defined parameter under runtime-image AOT. The
+\ compound body of `my-param` is `push_literal { .parameter = p }`;
+\ routing the push through the parameter slot table preserves pointer
+\ identity across freeze and runtime so two consecutive calls to
+\ `my-param` return the same `*Parameter`. The default quotation runs
+\ on `get` when no binding is in scope.
+
+my-param: parameter{ [ 42 ] } ;
+
+my-param my-param = .
+my-param get .

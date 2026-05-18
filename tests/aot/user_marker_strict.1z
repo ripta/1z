@@ -1,0 +1,9 @@
+\ Strict (interpreter-free) variant of user_marker.1z. Exercises the
+\ marker slot table under --interpreter-fallback=false: any push that
+\ falls through to the legacy `onez_push_word_literal` runtime lookup
+\ would abort here, because the dictionary lookup path is unavailable.
+
+my-marker: make-marker ;
+
+my-marker my-marker = .
+my-marker .

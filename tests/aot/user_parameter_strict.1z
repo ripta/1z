@@ -1,0 +1,9 @@
+\ Strict (interpreter-free) variant of user_parameter.1z. Exercises the
+\ parameter slot table under --interpreter-fallback=false: any push that
+\ falls through to the legacy `onez_push_word_literal` runtime lookup
+\ would abort here because the dictionary lookup path is unavailable.
+
+my-param: parameter{ [ 42 ] } ;
+
+my-param my-param = .
+my-param get .

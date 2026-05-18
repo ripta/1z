@@ -138,6 +138,29 @@ typedef struct onez_image_typevalue {
     uint32_t        member_type_count;
 } onez_image_typevalue_t;
 
+/* Per-slot description for `.marker` literal pushes. The loader walks  */
+/* onez_image_marker_descriptions_storage[], resolves the name to a    */
+/* well-known *Marker if it matches a built-in singleton, otherwise   */
+/* allocates a fresh *Marker, then patches                            */
+/* onez_image_marker_slots[slot] with the resolved pointer.            */
+typedef struct onez_image_marker_description {
+    const char *name;
+    uint32_t    name_len;
+    uint32_t    slot;                 /* index into onez_image_marker_slots */
+} onez_image_marker_description_t;
+
+/* Per-slot description for `.parameter` literal pushes. Parameters    */
+/* are always loader-allocated; the default-quotation bytecode encodes */
+/* the lazily-evaluated default body, deserialized at startup via the  */
+/* same instruction_bytecode decoder the runtime uses for word bodies. */
+typedef struct onez_image_parameter_description {
+    const char *name;
+    uint32_t    name_len;
+    uint32_t    slot;                 /* index into onez_image_parameter_slots */
+    const uint8_t *default_quotation_bytecode;
+    uint32_t       default_quotation_bytecode_len;
+} onez_image_parameter_description_t;
+
 typedef struct onez_image_header {
     uint32_t format_version;
     uint32_t module_count;
@@ -147,6 +170,8 @@ typedef struct onez_image_header {
     uint32_t stack_effect_count;
     uint32_t typevalue_count;
     uint32_t struct_type_count;
+    uint32_t marker_slot_count;
+    uint32_t parameter_slot_count;
     const struct onez_image_module *modules;
     const struct onez_image_word *words;
     const struct onez_image_marker *markers;
@@ -154,6 +179,8 @@ typedef struct onez_image_header {
     const struct onez_image_typevalue *typevalues;
     const struct onez_image_typedescriptor *typedescriptors;
     const struct onez_image_struct_type *struct_types;
+    const struct onez_image_marker_description *marker_descriptions;
+    const struct onez_image_parameter_description *parameter_descriptions;
 } onez_image_header_t;
 
 static const char onez_image_mk_0_name[] = "generic";
@@ -247,6 +274,36 @@ __attribute__((used)) struct onez_parameter *onez_image_parameter_slots[6] = {
     NULL, /* slot 3: parameter error-stream (filled by the loader). */
     NULL, /* slot 4: parameter input-stream (filled by the loader). */
     NULL, /* slot 5: parameter module-cache (filled by the loader). */
+};
+
+static const char onez_image_marker_desc_0_name[] = "generic";
+static const char onez_image_marker_desc_1_name[] = "shadow-ok";
+
+static const onez_image_marker_description_t onez_image_marker_descriptions_storage[] = {
+    { .name = onez_image_marker_desc_0_name, .name_len = 7, .slot = 0 },
+    { .name = onez_image_marker_desc_1_name, .name_len = 9, .slot = 1 },
+};
+
+static const char onez_image_param_desc_0_name[] = "module-loaded-hooks";
+static const uint8_t onez_image_param_desc_0_body[] = {1,0,0,0,2,0,0,0,35,0,0,0,0,6,0,0,0,0};
+static const char onez_image_param_desc_1_name[] = "output-stream";
+static const uint8_t onez_image_param_desc_1_body[] = {1,0,0,0,2,0,0,0,29,0,0,0,1,6,0,0,0,115,116,100,111,117,116};
+static const char onez_image_param_desc_2_name[] = "word-defined-hooks";
+static const uint8_t onez_image_param_desc_2_body[] = {1,0,0,0,2,0,0,0,34,0,0,0,0,6,0,0,0,0};
+static const char onez_image_param_desc_3_name[] = "error-stream";
+static const uint8_t onez_image_param_desc_3_body[] = {1,0,0,0,2,0,0,0,28,0,0,0,1,6,0,0,0,115,116,100,101,114,114};
+static const char onez_image_param_desc_4_name[] = "input-stream";
+static const uint8_t onez_image_param_desc_4_body[] = {1,0,0,0,2,0,0,0,28,0,0,0,1,5,0,0,0,115,116,100,105,110};
+static const char onez_image_param_desc_5_name[] = "module-cache";
+static const uint8_t onez_image_param_desc_5_body[] = {1,0,0,0,2,0,0,0,28,0,0,0,1,25,0,0,0,110,97,116,105,118,101,46,109,111,100,117,108,101,45,99,97,99,104,101,45,118,97,108,117,101};
+
+static const onez_image_parameter_description_t onez_image_parameter_descriptions_storage[] = {
+    { .name = onez_image_param_desc_0_name, .name_len = 19, .slot = 0, .default_quotation_bytecode = onez_image_param_desc_0_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_0_body) },
+    { .name = onez_image_param_desc_1_name, .name_len = 13, .slot = 1, .default_quotation_bytecode = onez_image_param_desc_1_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_1_body) },
+    { .name = onez_image_param_desc_2_name, .name_len = 18, .slot = 2, .default_quotation_bytecode = onez_image_param_desc_2_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_2_body) },
+    { .name = onez_image_param_desc_3_name, .name_len = 12, .slot = 3, .default_quotation_bytecode = onez_image_param_desc_3_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_3_body) },
+    { .name = onez_image_param_desc_4_name, .name_len = 12, .slot = 4, .default_quotation_bytecode = onez_image_param_desc_4_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_4_body) },
+    { .name = onez_image_param_desc_5_name, .name_len = 12, .slot = 5, .default_quotation_bytecode = onez_image_param_desc_5_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_5_body) },
 };
 
 __attribute__((used)) struct onez_struct_type *onez_image_struct_type_slots[11] = {
@@ -1031,6 +1088,8 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .stack_effect_count = 9,
     .typevalue_count = 63,
     .struct_type_count = 11,
+    .marker_slot_count = 2,
+    .parameter_slot_count = 6,
     .modules = onez_image_modules_storage,
     .words = onez_image_words_storage,
     .markers = onez_image_markers_storage,
@@ -1038,5 +1097,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .typevalues = onez_image_typevalues_storage,
     .typedescriptors = onez_image_typedescriptors_storage,
     .struct_types = onez_image_struct_types_storage,
+    .marker_descriptions = onez_image_marker_descriptions_storage,
+    .parameter_descriptions = onez_image_parameter_descriptions_storage,
 };
 

@@ -464,6 +464,36 @@ pub fn isDynamicQuotationConstructionMarker(mk: *const Marker) bool {
     return mk == &dynamic_quotation_construction_marker;
 }
 
+/// Resolve a marker name to the corresponding well-known static-singleton
+/// `*Marker`, or null when no built-in marker matches. The list mirrors
+/// the well-known `Marker` constants enumerated at the top of this file
+/// and registered through the `primitives` array. Used by the AOT runtime
+/// image loader to preserve freeze→runtime pointer identity for built-in
+/// markers when populating `onez_image_marker_slots[]`.
+pub fn lookupWellKnownMarker(name: []const u8) ?*Marker {
+    if (std.mem.eql(u8, name, "parse-time")) return @constCast(&parse_time_marker);
+    if (std.mem.eql(u8, name, "parse-time-only")) return @constCast(&parse_time_only_marker);
+    if (std.mem.eql(u8, name, "mutable")) return @constCast(&mutable_marker);
+    if (std.mem.eql(u8, name, "generic")) return @constCast(&generic_marker);
+    if (std.mem.eql(u8, name, "const")) return @constCast(&const_marker);
+    if (std.mem.eql(u8, name, "branch-combinator")) return @constCast(&branch_combinator_marker);
+    if (std.mem.eql(u8, name, "loop-combinator")) return @constCast(&loop_combinator_marker);
+    if (std.mem.eql(u8, name, "shadow-ok")) return @constCast(&shadow_ok_marker);
+    if (std.mem.eql(u8, name, "typed")) return @constCast(&typed_marker);
+    if (std.mem.eql(u8, name, "stack-recursive")) return @constCast(&stack_recursive_marker);
+    if (std.mem.eql(u8, name, "no-compile")) return @constCast(&no_compile_marker);
+    if (std.mem.eql(u8, name, "deprecated")) return @constCast(&deprecated_marker);
+    if (std.mem.eql(u8, name, "never-returns")) return @constCast(&never_returns_marker);
+    if (std.mem.eql(u8, name, "interpreter-dependent")) return @constCast(&interpreter_dependent_marker);
+    if (std.mem.eql(u8, name, "dynamic-eval")) return @constCast(&dynamic_eval_marker);
+    if (std.mem.eql(u8, name, "dynamic-load")) return @constCast(&dynamic_load_marker);
+    if (std.mem.eql(u8, name, "dynamic-compile")) return @constCast(&dynamic_compile_marker);
+    if (std.mem.eql(u8, name, "dynamic-quotation-construction")) return @constCast(&dynamic_quotation_construction_marker);
+    if (std.mem.eql(u8, name, "any")) return @constCast(&any_marker);
+    if (std.mem.eql(u8, name, "self")) return @constCast(&self_marker);
+    return null;
+}
+
 /// word-markers ( module name -- markers ) - Get the markers attached to a word in a module
 ///
 /// Returns an array of marker values. Returns empty array if word has no markers.

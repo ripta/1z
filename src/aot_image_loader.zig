@@ -22,6 +22,7 @@ const instruction_bytecode = @import("instruction_bytecode.zig");
 const Context = @import("context.zig").Context;
 const dictionary_mod = @import("dictionary.zig");
 const WordProvenance = dictionary_mod.WordProvenance;
+const markers_mod = @import("primitives/markers.zig");
 
 /// Errors the loader can surface. The C-side caller maps these to
 /// `ONEZ_ERR_LOAD_FAILED` and uses `ctx.error_details` for the
@@ -172,6 +173,28 @@ pub const TypeValueRow = extern struct {
 /// Sentinel for absent anon_struct in `TypeDescriptor.anon_struct_idx`.
 pub const anon_struct_absent: u32 = 0xFFFFFFFF;
 
+/// Zig mirror of `onez_image_marker_description_t`. One row per slot in
+/// `onez_image_marker_slots[]`; the loader resolves the name to either a
+/// well-known marker singleton or a freshly-allocated `*Marker`, then
+/// patches `onez_image_marker_slots[slot]` with the resolved pointer.
+pub const MarkerDescription = extern struct {
+    name: [*]const u8,
+    name_len: u32,
+    slot: u32,
+};
+
+/// Zig mirror of `onez_image_parameter_description_t`. One row per slot
+/// in `onez_image_parameter_slots[]`. The loader deserializes the
+/// default-quotation bytecode, allocates a `*Parameter`, and patches the
+/// matching slot.
+pub const ParameterDescription = extern struct {
+    name: [*]const u8,
+    name_len: u32,
+    slot: u32,
+    default_quotation_bytecode: ?[*]const u8,
+    default_quotation_bytecode_len: u32,
+};
+
 pub const Header = extern struct {
     format_version: u32,
     module_count: u32,
@@ -181,6 +204,8 @@ pub const Header = extern struct {
     stack_effect_count: u32,
     typevalue_count: u32,
     struct_type_count: u32,
+    marker_slot_count: u32,
+    parameter_slot_count: u32,
     modules: ?[*]const Module,
     words: ?[*]const Word,
     markers: ?[*]const Marker,
@@ -188,6 +213,8 @@ pub const Header = extern struct {
     typevalues: ?[*]const TypeValueRow,
     typedescriptors: ?[*]const TypeDescriptor,
     struct_types: ?[*]const StructType,
+    marker_descriptions: ?[*]const MarkerDescription,
+    parameter_descriptions: ?[*]const ParameterDescription,
 };
 
 /// Slot table type matching the C declaration:
@@ -276,6 +303,8 @@ pub fn loadIntoContext(
 
     try populateModulesAndWords(ctx, header);
     try populateTypeValueSlots(ctx, header, slots.typevalues, slots.struct_types);
+    try populateMarkerSlots(ctx, header, slots.markers);
+    try populateParameterSlots(ctx, header, slots.parameters);
     if (pic_relocs) |relocs| {
         try resolvePicRelocations(header, slots.typevalues, relocs);
     }
@@ -289,9 +318,9 @@ pub fn loadIntoContext(
     ctx.image_struct_type_slots = slots.struct_types;
     ctx.image_struct_type_slot_count = header.struct_type_count;
     ctx.image_marker_slots = slots.markers;
-    ctx.image_marker_slot_count = header.marker_pool_count;
+    ctx.image_marker_slot_count = header.marker_slot_count;
     ctx.image_parameter_slots = slots.parameters;
-    ctx.image_parameter_slot_count = 0;
+    ctx.image_parameter_slot_count = header.parameter_slot_count;
 }
 
 // -- Module + word population ------------------------------------------
@@ -745,6 +774,74 @@ fn populateTypeValueSlots(
     }
 }
 
+/// Walk the marker description table and patch
+/// `onez_image_marker_slots[]` so compiled bodies that pushed
+/// freeze-time `.marker` literals reach a live runtime `*Marker` of
+/// matching identity. Each description resolves to the well-known marker
+/// singleton when its name matches a built-in; otherwise the loader
+/// allocates a fresh `*Marker` from the context arena.
+fn populateMarkerSlots(
+    ctx: *Context,
+    header: *const Header,
+    slots: ?MarkerSlotTable,
+) LoaderError!void {
+    if (header.marker_slot_count == 0) return;
+    const descs = header.marker_descriptions orelse return;
+    const slot_table = slots orelse return;
+    const arena = ctx.quotationAllocator();
+    var i: u32 = 0;
+    while (i < header.marker_slot_count) : (i += 1) {
+        const row = descs[i];
+        if (row.slot >= header.marker_slot_count) return LoaderError.BadSlotIndex;
+        const name = nameSlice(row.name, row.name_len);
+        const resolved: *value_mod.Marker = blk: {
+            if (markers_mod.lookupWellKnownMarker(name)) |well_known| break :blk well_known;
+            const fresh = arena.create(value_mod.Marker) catch return LoaderError.OutOfMemory;
+            fresh.* = .{ .name = name };
+            break :blk fresh;
+        };
+        slot_table[row.slot] = resolved;
+    }
+}
+
+/// Walk the parameter description table and patch
+/// `onez_image_parameter_slots[]`. Each row carries the parameter's name
+/// and the bytecode for its lazy default quotation; the loader
+/// deserializes the bytecode into a runtime `Quotation` and allocates a
+/// fresh `*Parameter` from the context arena.
+fn populateParameterSlots(
+    ctx: *Context,
+    header: *const Header,
+    slots: ?ParameterSlotTable,
+) LoaderError!void {
+    if (header.parameter_slot_count == 0) return;
+    const descs = header.parameter_descriptions orelse return;
+    const slot_table = slots orelse return;
+    const arena = ctx.quotationAllocator();
+    var i: u32 = 0;
+    while (i < header.parameter_slot_count) : (i += 1) {
+        const row = descs[i];
+        if (row.slot >= header.parameter_slot_count) return LoaderError.BadSlotIndex;
+        const name = nameSlice(row.name, row.name_len);
+        const instructions: []const value_mod.Instruction = if (row.default_quotation_bytecode) |p|
+            if (row.default_quotation_bytecode_len > 0)
+                instruction_bytecode.deserializeQuotationInstructions(
+                    p[0..row.default_quotation_bytecode_len],
+                    arena,
+                ) catch return LoaderError.OutOfMemory
+            else
+                &.{}
+        else
+            &.{};
+        const param = arena.create(value_mod.Parameter) catch return LoaderError.OutOfMemory;
+        param.* = .{
+            .name = name,
+            .default_quotation = .{ .instructions = instructions, .code_ptr = null },
+        };
+        slot_table[row.slot] = param;
+    }
+}
+
 /// Decode a TypeKindData payload from one typedescriptor row.
 /// Cross-references resolve through the slot table populated by
 /// pass 2; an out-of-range slot index returns `BadSlotIndex`. The
@@ -1034,6 +1131,8 @@ fn emptyHeader() Header {
         .stack_effect_count = 1,
         .typevalue_count = 0,
         .struct_type_count = 0,
+        .marker_slot_count = 0,
+        .parameter_slot_count = 0,
         .modules = null,
         .words = null,
         .markers = null,
@@ -1041,6 +1140,8 @@ fn emptyHeader() Header {
         .typevalues = null,
         .typedescriptors = null,
         .struct_types = null,
+        .marker_descriptions = null,
+        .parameter_descriptions = null,
     };
 }
 

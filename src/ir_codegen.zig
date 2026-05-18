@@ -1698,10 +1698,10 @@ const TypedLiteralSlot = struct {
 /// null when any of: slot-table emission is disabled, the slot maps
 /// are not populated (e.g. pure-AOT build without an interpreter
 /// context), the value variant is not a slot-tableable typed literal
-/// (.tagged, .marker, and .parameter are intentionally excluded --
-/// the loader does not allocate the corresponding runtime row, so
-/// the legacy name-lookup path still owns those variants), or the
-/// pointer was not interned during the collection pass.
+/// (.tagged is intentionally excluded -- the loader does not yet
+/// allocate the corresponding runtime row, so the legacy name-lookup
+/// path still owns that variant), or the pointer was not interned
+/// during the collection pass.
 fn resolveTypedLiteralSlot(state: *const CompileState, val: Value) ?TypedLiteralSlot {
     if (!state.aot_mode) return null;
     if (!state.aot_emit_slot_table_literals) return null;
@@ -1713,6 +1713,14 @@ fn resolveTypedLiteralSlot(state: *const CompileState, val: Value) ?TypedLiteral
             null,
         .struct_type => |st| if (maps.struct_type_slot_index.get(st)) |slot|
             .{ .slot = slot, .helper_name = "onez_push_struct_type_slot" }
+        else
+            null,
+        .marker => |mk| if (maps.marker_slot_index.get(mk)) |slot|
+            .{ .slot = slot, .helper_name = "onez_push_marker_slot" }
+        else
+            null,
+        .parameter => |p| if (maps.parameter_slot_index.get(p)) |slot|
+            .{ .slot = slot, .helper_name = "onez_push_parameter_slot" }
         else
             null,
         else => null,
@@ -6794,11 +6802,24 @@ pub fn emitProgramC(
         for (words) |w| {
             try image_word_lookup.put(allocator, w.name, w.word_id);
         }
+        // Post-freeze word bodies are the canonical source for any
+        // type-carrier literal that lives in a user top-level word.
+        // The interpreter Context's local frame has been popped by
+        // this point, so internTopLevelFrameLiterals can no longer
+        // see those definitions; collecting from AotWordDesc keeps
+        // the slot maps in sync with what codegen will compile.
+        var extra_bodies: std.ArrayListUnmanaged([]const value_mod.Instruction) = .{};
+        defer extra_bodies.deinit(allocator);
+        for (words) |w| {
+            if (w.is_native) continue;
+            try extra_bodies.append(allocator, w.instructions);
+        }
         image_collection = try aot_image_emit_mod.collectImageSlots(
             allocator,
             ctx,
             image_manifest.?,
             .{ .metadata_only = false },
+            extra_bodies.items,
         );
         image_slot_maps = .{
             .typevalue_slot_index = &image_collection.?.effect_table.type_slot_index,
@@ -7142,14 +7163,17 @@ pub fn emitProgramC(
     // Slot-table-indexed typed-literal helpers. The runtime caches
     // each slot table's pointer on Context during image loading; the
     // jit functions index through it to recover the runtime pointer
-    // and push the corresponding Value. Marker and Parameter remain
-    // on the legacy name-lookup path -- the loader does not allocate
-    // runtime *Marker / *Parameter rows, so the slot tables would
-    // contain only NULL pointers.
+    // and push the corresponding Value. Available for `.type_val`,
+    // `.struct_type`, `.marker`, and `.parameter` literals; `.tagged`
+    // literals still fall through to the legacy name-lookup path.
     try out.appendSlice(allocator, "extern int32_t jitPushTypeValueSlot(uintptr_t ctx, uintptr_t slot);\n");
     try out.appendSlice(allocator, "static inline int32_t onez_push_typevalue_slot(uintptr_t ctx, uintptr_t slot) { return jitPushTypeValueSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushStructTypeSlot(uintptr_t ctx, uintptr_t slot);\n");
     try out.appendSlice(allocator, "static inline int32_t onez_push_struct_type_slot(uintptr_t ctx, uintptr_t slot) { return jitPushStructTypeSlot(ctx, slot); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushMarkerSlot(uintptr_t ctx, uintptr_t slot);\n");
+    try out.appendSlice(allocator, "static inline int32_t onez_push_marker_slot(uintptr_t ctx, uintptr_t slot) { return jitPushMarkerSlot(ctx, slot); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushParameterSlot(uintptr_t ctx, uintptr_t slot);\n");
+    try out.appendSlice(allocator, "static inline int32_t onez_push_parameter_slot(uintptr_t ctx, uintptr_t slot) { return jitPushParameterSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "\n");
 
     // 4a. Forward declarations (only for successfully compiled words)
@@ -8790,6 +8814,54 @@ export fn jitPushStructTypeSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
         return 2;
     };
     ctx.stack.push(.{ .struct_type = st }) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    return 0;
+}
+
+/// Push a `.marker` literal by reading slot `slot` from
+/// `onez_image_marker_slots[]`. The loader resolved the slot to either a
+/// well-known marker singleton or a freshly-allocated `*Marker` during
+/// runtime-image rehydration.
+export fn jitPushMarkerSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const table = ctx.image_marker_slots orelse {
+        recordSlotMiss(ctx, "marker", slot);
+        ctx.jit_pending_error = error.WordNotFound;
+        return 2;
+    };
+    const mk = table[slot] orelse {
+        recordSlotMiss(ctx, "marker", slot);
+        ctx.jit_pending_error = error.WordNotFound;
+        return 2;
+    };
+    ctx.stack.push(.{ .marker = mk }) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    return 0;
+}
+
+/// Push a `.parameter` literal by reading slot `slot` from
+/// `onez_image_parameter_slots[]`. The loader allocated the `*Parameter`
+/// and deserialized its default quotation during runtime-image
+/// rehydration.
+export fn jitPushParameterSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const table = ctx.image_parameter_slots orelse {
+        recordSlotMiss(ctx, "parameter", slot);
+        ctx.jit_pending_error = error.WordNotFound;
+        return 2;
+    };
+    const param = table[slot] orelse {
+        recordSlotMiss(ctx, "parameter", slot);
+        ctx.jit_pending_error = error.WordNotFound;
+        return 2;
+    };
+    ctx.stack.push(.{ .parameter = param }) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
