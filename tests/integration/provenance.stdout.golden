@@ -185,27 +185,27 @@ Stack: [ ]
 === struct generated-words ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ { "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
+Stack: [ { "gw-point" "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
 PASS: struct generated-words includes make-
-Stack: [ { "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
+Stack: [ { "gw-point" "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
 PASS: struct generated-words includes >-
-Stack: [ { "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
+Stack: [ { "gw-point" "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
 PASS: struct generated-words includes unmake-
-Stack: [ { "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
+Stack: [ { "gw-point" "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
 PASS: struct generated-words includes >hash
-Stack: [ { "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
+Stack: [ { "gw-point" "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
 PASS: struct generated-words includes predicate
-Stack: [ { "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
+Stack: [ { "gw-point" "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
 PASS: struct generated-words includes getter
-Stack: [ { "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
+Stack: [ { "gw-point" "make-gw-point" ">gw-point" "unmake-gw-point" "gw-point>hash" "gw-point?" "x>>" "y>>" } ]
 PASS: struct generated-words includes second getter
 Stack: [ ]
 === mutable struct generated-words includes setters ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ { "make-gw-mut" ">gw-mut" "unmake-gw-mut" "gw-mut>hash" "gw-mut?" "val>>" ">>val" } ]
+Stack: [ { "gw-mut" "make-gw-mut" ">gw-mut" "unmake-gw-mut" "gw-mut>hash" "gw-mut?" "val>>" ">>val" } ]
 PASS: mutable struct generated-words includes setter
-Stack: [ { "make-gw-mut" ">gw-mut" "unmake-gw-mut" "gw-mut>hash" "gw-mut?" "val>>" ">>val" } ]
+Stack: [ { "gw-mut" "make-gw-mut" ">gw-mut" "unmake-gw-mut" "gw-mut>hash" "gw-mut?" "val>>" ">>val" } ]
 PASS: mutable struct generated-words includes getter
 Stack: [ ]
 === simple virtual generated-words ===
@@ -279,7 +279,8 @@ PASS: generated-by returns f for generic word
 Stack: [ ]
 === consistency: all generated-words are findable ===
 Stack: [ ]
-Stack: [ { t t t t t t t } ]
+Stack: [ { t t t t t t t t } ]
+PASS: generated word is findable
 PASS: generated word is findable
 PASS: generated word is findable
 PASS: generated word is findable

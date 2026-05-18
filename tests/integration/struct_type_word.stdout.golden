@@ -1,0 +1,30 @@
+=== struct type word basics ===
+Stack: [ ]
+Stack: [ ]
+PASS: vec2 is a type value
+Stack: [ ]
+PASS: type-of instance equals type word
+Stack: [ ]
+PASS: type-name of struct type
+Stack: [ ]
+PASS: cannot-redefine-const
+Stack: [ ]
+=== struct type word with mutable struct ===
+Stack: [ ]
+Stack: [ ]
+PASS: mutable struct type-of matches
+Stack: [ ]
+=== struct type word in modules ===
+Stack: [ ]
+Stack: [ ]
+PASS: module exports point type word
+Stack: [ ]
+PASS: qualified point is a type value
+Stack: [ ]
+PASS: qualified type-of matches
+Stack: [ ]
+=== struct type word is parse-time ===
+Stack: [ ]
+Stack: [ ]
+PASS: type word executes at parse time
+Stack: [ ]
