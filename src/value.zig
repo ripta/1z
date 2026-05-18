@@ -404,6 +404,11 @@ pub const TypeValue = struct {
     descriptor: ?*TypeDescriptor,
     generated_words: ?[]Value = null,
     member_types: ?[]const *const TypeValue = null,
+    /// Back-reference to the VirtualType when this TypeValue represents a
+    /// virtual type. Mirrors VirtualType.type_val. Used by generator-emitted
+    /// natives to recover the VirtualType pointer from a popped .type_val
+    /// without resorting to fixnum-disguised pointers.
+    virtual_type: ?*const VirtualType = null,
 };
 
 pub const DescriptorFlags = struct {

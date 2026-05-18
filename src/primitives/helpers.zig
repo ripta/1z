@@ -434,6 +434,10 @@ pub fn popMarker(ctx: *Context) !*Marker {
     return popAs(.marker, ctx);
 }
 
+pub fn popTypeVal(ctx: *Context) !*value_mod.TypeValue {
+    return popAs(.type_val, ctx);
+}
+
 pub fn popStructType(ctx: *Context) !*StructType {
     return popAs(.struct_type, ctx);
 }

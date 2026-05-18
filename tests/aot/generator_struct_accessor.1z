@@ -1,0 +1,11 @@
+\ Exercises struct-type generator words under runtime-image AOT.
+\ The constructor (make-point), positional unwrap (unmake-point),
+\ and predicate (point?) are compound bodies that push the struct's
+\ TypeValue/StructType as typed literals; those must route through
+\ the runtime-image slot table for AOT.
+
+point: struct{ x y } ;
+
+1 2 make-point unmake-point + .
+1 2 make-point point? .
+"nope" point? .

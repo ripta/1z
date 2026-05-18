@@ -522,6 +522,10 @@ fn populateTypeValueSlots(
     // through it. The slot index matches the row's position in
     // `onez_image_struct_types_storage[]`, mirroring the typevalue
     // slot-table contract.
+    //
+    // If a StructType with the same name already exists in the context
+    // (e.g., allocated by `loadPrelude`), reuse it so prelude-
+    // interpreted code and AOT-compiled code share the same identity.
     var struct_types_out: []*value_mod.StructType = &.{};
     if (header.struct_type_count > 0) {
         struct_types_out = arena.alloc(*value_mod.StructType, header.struct_type_count) catch
@@ -530,22 +534,55 @@ fn populateTypeValueSlots(
         var i: u32 = 0;
         while (i < header.struct_type_count) : (i += 1) {
             const row = rows[i];
-            const st = arena.create(value_mod.StructType) catch return LoaderError.OutOfMemory;
-            st.* = .{
-                .name = nameSlice(row.name, row.name_len),
-                .fields = try decodeFieldNames(arena, row.field_names, row.field_name_lens, row.field_count),
-                .field_types = &.{},
+            const name = nameSlice(row.name, row.name_len);
+            const existing_st: ?*value_mod.StructType = blk: {
+                if (ctx.lookupTypeValueByName(name)) |tv| {
+                    const desc = tv.descriptor orelse break :blk null;
+                    switch (desc.kind) {
+                        .struct_ => {
+                            if (tv.virtual_type) |vt| {
+                                if (vt.anon_struct) |as| break :blk @constCast(as);
+                            }
+                            break :blk null;
+                        },
+                        .virtual => |vdata| {
+                            if (vdata.anon_struct) |as| break :blk @constCast(as);
+                            break :blk null;
+                        },
+                        else => break :blk null,
+                    }
+                }
+                break :blk null;
+            };
+            const st = if (existing_st) |reused| reused else blk: {
+                const fresh = arena.create(value_mod.StructType) catch
+                    return LoaderError.OutOfMemory;
+                fresh.* = .{
+                    .name = name,
+                    .fields = try decodeFieldNames(arena, row.field_names, row.field_name_lens, row.field_count),
+                    .field_types = &.{},
+                };
+                break :blk fresh;
             };
             struct_types_out[i] = st;
             if (struct_type_slots) |table| table[i] = st;
         }
     }
 
-    // Pass 2: allocate TypeValues and patch the slot table.
+    // Pass 2: allocate TypeValues and patch the slot table. If a
+    // TypeValue with the same name already exists in the context
+    // (e.g. allocated by `loadPrelude`), reuse it so identity stays
+    // single-sourced. Without this, prelude-interpreted code keeps
+    // pointing at the prelude allocation while AOT-compiled code
+    // would route through a fresh loader allocation, splitting the
+    // identity surface that dispatch table lookups and predicate
+    // checks key on.
     const tv_count = header.typevalue_count;
     if (tv_count == 0) return;
     const tv_rows = header.typevalues orelse return LoaderError.OutOfMemory;
     const tv_out = arena.alloc(*value_mod.TypeValue, tv_count) catch
+        return LoaderError.OutOfMemory;
+    const tv_reused = arena.alloc(bool, tv_count) catch
         return LoaderError.OutOfMemory;
     {
         var i: u32 = 0;
@@ -554,17 +591,26 @@ fn populateTypeValueSlots(
             if (row.slot == 0 or row.slot >= header.typevalue_slot_count) {
                 return LoaderError.BadSlotIndex;
             }
-            const desc = arena.create(value_mod.TypeDescriptor) catch
-                return LoaderError.OutOfMemory;
-            desc.* = .{ .kind = .{ .builtin = {} } };
-            const tv = arena.create(value_mod.TypeValue) catch
-                return LoaderError.OutOfMemory;
-            tv.* = .{
-                .name = nameSlice(row.name, row.name_len),
-                .descriptor = desc,
-            };
-            tv_out[i] = tv;
-            if (slots) |slot_table| slot_table[row.slot] = tv;
+            const name = nameSlice(row.name, row.name_len);
+            const existing = ctx.lookupTypeValueByName(name) orelse
+                findEnumVariantTypeValueByName(ctx, name);
+            if (existing) |reused| {
+                tv_out[i] = reused;
+                tv_reused[i] = true;
+            } else {
+                const desc = arena.create(value_mod.TypeDescriptor) catch
+                    return LoaderError.OutOfMemory;
+                desc.* = .{ .kind = .{ .builtin = {} } };
+                const tv = arena.create(value_mod.TypeValue) catch
+                    return LoaderError.OutOfMemory;
+                tv.* = .{
+                    .name = name,
+                    .descriptor = desc,
+                };
+                tv_out[i] = tv;
+                tv_reused[i] = false;
+            }
+            if (slots) |slot_table| slot_table[row.slot] = tv_out[i];
         }
     }
 
@@ -573,6 +619,7 @@ fn populateTypeValueSlots(
         const desc_rows = header.typedescriptors orelse return LoaderError.OutOfMemory;
         var i: u32 = 0;
         while (i < tv_count) : (i += 1) {
+            if (tv_reused[i]) continue;
             const row = tv_rows[i];
             const drow = desc_rows[i];
             const tv = tv_out[i];
@@ -591,6 +638,93 @@ fn populateTypeValueSlots(
                 row.member_type_count,
             );
             tv.member_types = if (member_types.len == 0) null else member_types;
+        }
+    }
+
+    // Pass 3.5: link the runtime TypeValue back to its peer aggregate.
+    //
+    // For `.struct_` TypeValues, find the runtime `*StructType` allocated
+    // in Pass 1 with the matching name and set its `type_val`
+    // back-reference. Generator-emitted compound bodies push the
+    // StructType and the natives recover the owning TypeValue through
+    // `st.type_val.?`; interpreter mode sets this at type-definition
+    // time, so mirror that here.
+    //
+    // For `.virtual` and `.enum_variant` TypeValues, allocate a fresh
+    // `*VirtualType` and link both directions: `vt.type_val = tv` and
+    // `tv.virtual_type = vt`. Generator-emitted compound bodies push the
+    // TypeValue and the natives recover the VirtualType through the
+    // back-reference. When a virtual is struct-backed, also patch the
+    // backing StructType's `type_val` so struct-instance natives (hash
+    // wrap, destructure, etc.) reach the owning TypeValue.
+    {
+        var i: u32 = 0;
+        while (i < tv_count) : (i += 1) {
+            // Reused TypeValues already carry their virtual_type and
+            // struct_type back-references from the prelude path.
+            if (tv_reused[i]) continue;
+            const tv = tv_out[i];
+            const desc = tv.descriptor orelse continue;
+            switch (desc.kind) {
+                .struct_ => {
+                    for (struct_types_out) |st| {
+                        if (std.mem.eql(u8, st.name, tv.name)) {
+                            st.type_val = tv;
+                            break;
+                        }
+                    }
+                },
+                .virtual => |vdata| {
+                    const vt = arena.create(value_mod.VirtualType) catch
+                        return LoaderError.OutOfMemory;
+                    const inner_name: []const u8 = if (vdata.anon_struct != null)
+                        tv.name
+                    else if (vdata.inner_type) |it|
+                        it.name
+                    else
+                        "";
+                    const type_params_slice: ?[]*const value_mod.TypeValue = blk: {
+                        if (vdata.type_params.len == 0) break :blk null;
+                        const tp = arena.alloc(*const value_mod.TypeValue, vdata.type_params.len) catch
+                            return LoaderError.OutOfMemory;
+                        for (vdata.type_params, 0..) |t, idx| tp[idx] = t;
+                        break :blk tp;
+                    };
+                    vt.* = .{
+                        .name = tv.name,
+                        .inner_type = inner_name,
+                        .anon_struct = vdata.anon_struct,
+                        .type_params = type_params_slice,
+                        .type_val = tv,
+                    };
+                    tv.virtual_type = vt;
+                    if (vdata.anon_struct) |st| {
+                        @constCast(st).type_val = tv;
+                    }
+                },
+                .enum_variant => |evdata| {
+                    const vt = arena.create(value_mod.VirtualType) catch
+                        return LoaderError.OutOfMemory;
+                    const inner_name: []const u8 = if (evdata.inner_type) |it| it.name else "";
+                    const anon_struct: ?*const value_mod.StructType = blk: {
+                        const inner_tv = evdata.inner_type orelse break :blk null;
+                        const inner_desc = inner_tv.descriptor orelse break :blk null;
+                        break :blk switch (inner_desc.kind) {
+                            .struct_ => null,
+                            else => null,
+                        };
+                    };
+                    vt.* = .{
+                        .name = tv.name,
+                        .inner_type = inner_name,
+                        .anon_struct = anon_struct,
+                        .parent_type = evdata.parent,
+                        .type_val = tv,
+                    };
+                    tv.virtual_type = vt;
+                },
+                else => {},
+            }
         }
     }
 
@@ -832,6 +966,25 @@ fn resolvePicRelocations(
 
 fn nameSlice(ptr: [*]const u8, len: u32) []const u8 {
     return ptr[0..len];
+}
+
+/// Scan the context's enum variant registries for a TypeValue with the
+/// given name. `lookupTypeValueByName` only walks the dictionary, but
+/// data-carrying enum variant TypeValues (e.g. `option:some`) are not
+/// dictionary-resolvable -- only their wrap / predicate words are.
+/// The variant's TypeValue is reachable through the enum's variant
+/// VirtualType list.
+fn findEnumVariantTypeValueByName(ctx: *Context, name: []const u8) ?*value_mod.TypeValue {
+    for (ctx.type_registry_frames.items) |*frame| {
+        var iter = frame.enum_registry.iterator();
+        while (iter.next()) |entry| {
+            for (entry.value_ptr.*) |variant_vt| {
+                const tv = variant_vt.type_val orelse continue;
+                if (std.mem.eql(u8, tv.name, name)) return tv;
+            }
+        }
+    }
+    return null;
 }
 
 /// Push a structured error onto `ctx.error_details` so `captureError`

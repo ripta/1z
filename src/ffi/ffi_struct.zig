@@ -243,6 +243,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
     const tv = try alloc.create(value_mod.TypeValue);
     tv.* = .{ .name = name, .descriptor = desc_map };
     vtype.type_val = tv;
+    tv.virtual_type = vtype;
 
     // Define NAME as parse-time const pushing TypeValue
     const type_markers = try alloc.alloc(*Marker, 3);

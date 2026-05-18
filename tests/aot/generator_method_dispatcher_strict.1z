@@ -1,0 +1,11 @@
+\ Strict (interpreter-free) variant of generator_method_dispatcher.1z.
+\ Same caveat: until user `method{` registrations replay across the
+\ freeze→AOT boundary, the generic fallback runs at runtime.
+
+shape: virtual{ fixnum } ;
+
+double: generic ( s -- n ) [ drop 0 ] ;
+double: method{ shape } [ unmake-shape 2 * ] ;
+
+5 make-shape double .
+10 >shape double .

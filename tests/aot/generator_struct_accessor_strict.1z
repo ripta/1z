@@ -1,0 +1,9 @@
+\ Strict (interpreter-free) variant of generator_struct_accessor.1z.
+\ The struct generator-emitted compound words must AOT-compile fully
+\ with no interpreter fallback.
+
+point: struct{ x y } ;
+
+1 2 make-point unmake-point + .
+1 2 make-point point? .
+"nope" point? .

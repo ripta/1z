@@ -1,0 +1,10 @@
+\ Strict (interpreter-free) variant of generator_virtual_constructor.1z.
+\ The same generator-emitted compound words must AOT-compile fully with
+\ no interpreter fallback.
+
+weight: virtual{ fixnum } ;
+
+42 make-weight weight? .
+42 make-weight unmake-weight .
+42 >weight unmake-weight .
+"hello" weight? .

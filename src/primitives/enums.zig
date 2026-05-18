@@ -295,6 +295,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             );
             variant_tv.* = .{ .name = full_name, .descriptor = variant_desc };
             vtype.type_val = variant_tv;
+            variant_tv.virtual_type = vtype;
 
             try vtype_list.append(alloc, vtype);
 
@@ -344,6 +345,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             );
             variant_tv.* = .{ .name = full_name, .descriptor = variant_desc };
             vtype.type_val = variant_tv;
+            variant_tv.virtual_type = vtype;
 
             try vtype_list.append(alloc, vtype);
 
@@ -363,7 +365,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             try virtual.defineVirtualToHash(ctx, to_hash_name, vtype, markers_slice);
 
             const hash_instrs = try alloc.alloc(Instruction, 2);
-            hash_instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+            hash_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = vtype.type_val.? } }, .line = 0 };
             hash_instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-to-hash" }, .line = 0 };
             try virtual.registerHashDispatch(ctx, vtype.type_val.?, hash_instrs);
 

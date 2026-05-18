@@ -486,6 +486,12 @@ fn internStructType(
     for (st.field_types) |maybe| {
         if (maybe) |tv| _ = try effect_table.internType(tv);
     }
+    // Intern the owning TypeValue alongside the StructType so the loader
+    // can rehydrate `StructType.type_val` from the matching runtime
+    // `*TypeValue`. Without this, generator-emitted natives that read
+    // `st.type_val.?` (e.g. struct predicate, destructure) panic at
+    // runtime on a null back-reference.
+    if (st.type_val) |tv| _ = try effect_table.internType(tv);
     return idx;
 }
 

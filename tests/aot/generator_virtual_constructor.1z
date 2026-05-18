@@ -1,0 +1,12 @@
+\ Exercises virtual-type generator words under runtime-image AOT.
+\ The wrap (>weight, make-weight), unwrap (unmake-weight), and predicate
+\ (weight?) words are compound bodies generated at definition time. They
+\ push the virtual type's TypeValue as a .type_val literal, which must
+\ be routed through the runtime-image slot table for AOT.
+
+weight: virtual{ fixnum } ;
+
+42 make-weight weight? .
+42 make-weight unmake-weight .
+42 >weight unmake-weight .
+"hello" weight? .

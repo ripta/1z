@@ -551,27 +551,6 @@ fn isStructNativeOp(name: []const u8) bool {
         std.mem.eql(u8, name, "native.hash-to-struct");
 }
 
-/// Native helpers whose preceding fixnum literal is a process-local
-/// VirtualType pointer. In AOT, those pointers are baked from the build
-/// process and become invalid in the generated binary's runtime process, so
-/// callers must fall back to the interpreter.
-fn isRuntimeVirtualPtrNative(name: []const u8) bool {
-    return std.mem.eql(u8, name, "native.virtual-wrap") or
-        std.mem.eql(u8, name, "native.virtual-unwrap") or
-        std.mem.eql(u8, name, "native.virtual-type-predicate") or
-        std.mem.eql(u8, name, "native.virtual-struct-wrap") or
-        std.mem.eql(u8, name, "native.virtual-struct-unwrap") or
-        std.mem.eql(u8, name, "native.virtual-struct-to-hash") or
-        std.mem.eql(u8, name, "native.virtual-struct-hash-wrap") or
-        std.mem.eql(u8, name, "native.virtual-parameterized-wrap") or
-        std.mem.eql(u8, name, "native.typed-validate-and-promote") or
-        std.mem.eql(u8, name, "native.typed-validate-seq-elements") or
-        std.mem.eql(u8, name, "native.typed-nth-mut-dispatch") or
-        std.mem.eql(u8, name, "native.typed-at-set-mut-dispatch") or
-        std.mem.eql(u8, name, "native.typed-at-remove-mut-dispatch") or
-        std.mem.eql(u8, name, "native.typed-freeze-dispatch");
-}
-
 fn isBinaryOp(name: []const u8) bool {
     for (supported_binary_ops) |op| {
         if (std.mem.eql(u8, name, op)) return true;
@@ -3344,7 +3323,7 @@ fn compilePredBodyLoop(
 }
 
 /// Try to emit inline IR for virtual type unwrapping.
-/// Recognizes the pattern: push_literal(fixnum=vtypePtr) + call_word("native.virtual-unwrap").
+/// Recognizes the pattern: push_literal(type_val=tv) + call_word("native.virtual-unwrap").
 /// Returns true if inlined; false to fall back to runtime callback.
 fn tryEmitInlineVirtualUnwrap(
     state: *CompileState,
@@ -3355,10 +3334,13 @@ fn tryEmitInlineVirtualUnwrap(
 ) bool {
     if (sp.* < 2) return false;
 
-    // virtual type pointer must be a constant fixnum from the preceding instruction
-    const vtype_fixnum: i64 = if (idx > 0) blk: {
+    // virtual type must be a constant .type_val from the preceding instruction
+    const vt: *const VirtualType = if (idx > 0) blk: {
         break :blk switch (instructions[idx - 1].op) {
-            .push_literal => |v| if (v == .fixnum) v.fixnum else return false,
+            .push_literal => |v| switch (v) {
+                .type_val => |tv| tv.virtual_type orelse return false,
+                else => return false,
+            },
             else => return false,
         };
     } else return false;
@@ -3382,7 +3364,7 @@ fn tryEmitInlineVirtualUnwrap(
 
     const tag_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, c.ir_const_addr(ctx, ValueLayout.tagged_tag_ptr_offset));
     const actual_vtype = c._ir_LOAD(ctx, c.IR_ADDR, tag_ptr_addr);
-    const expected_vtype = c.ir_const_addr(ctx, @as(usize, @intCast(vtype_fixnum)));
+    const expected_vtype = c.ir_const_addr(ctx, @intFromPtr(vt));
     const vtype_mismatch = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), actual_vtype, expected_vtype);
     const if_mismatch = c._ir_IF(ctx, vtype_mismatch);
     c._ir_IF_TRUE_cold(ctx, if_mismatch);
@@ -3403,7 +3385,7 @@ fn tryEmitInlineVirtualUnwrap(
 }
 
 /// Try to emit inline IR for parameterized type element validation.
-/// Recognizes the pattern: push_literal(fixnum=vtypePtr) + call_word("native.typed-validate-and-promote").
+/// Recognizes the pattern: push_literal(type_val=tv) + call_word("native.typed-validate-and-promote").
 /// Returns true if inlined; false to fall back to runtime callback.
 fn tryEmitInlineTypedValidateAndPromote(
     state: *CompileState,
@@ -3414,15 +3396,16 @@ fn tryEmitInlineTypedValidateAndPromote(
 ) bool {
     if (sp.* < 2) return false;
 
-    // virtual type pointer must be a constant fixnum from the preceding instruction
-    const vtype_fixnum: i64 = if (idx > 0) blk: {
+    // virtual type must be a constant .type_val from the preceding instruction
+    const vt: *const VirtualType = if (idx > 0) blk: {
         break :blk switch (instructions[idx - 1].op) {
-            .push_literal => |v| if (v == .fixnum) v.fixnum else return false,
+            .push_literal => |v| switch (v) {
+                .type_val => |tv| tv.virtual_type orelse return false,
+                else => return false,
+            },
             else => return false,
         };
     } else return false;
-
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(vtype_fixnum)));
 
     // no type_params means validation is a no-op
     const params = vt.type_params orelse {
@@ -5031,11 +5014,11 @@ fn compileInstructions(
                     sp.* = ic;
                     resetStackToPhysical(stack, sp.*);
                 } else if (std.mem.eql(u8, name, "native.virtual-unwrap")) {
-                    if (state.aot_mode) {
-                        state.not_compilable_reason = .non_serializable_literal;
-                        return IrCodegenError.NotCompilable;
-                    }
-                    if (!tryEmitInlineVirtualUnwrap(state, instructions, idx, stack, sp)) {
+                    // The inline emitter bakes a process-local VirtualType pointer
+                    // constant, so it is JIT-only. In AOT mode the preceding
+                    // .type_val literal is routed through the runtime-image slot
+                    // table and the native callback handles the rest.
+                    if (state.aot_mode or !tryEmitInlineVirtualUnwrap(state, instructions, idx, stack, sp)) {
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
                 } else if (std.mem.eql(u8, name, "native.struct-field-get")) {
@@ -5047,11 +5030,9 @@ fn compileInstructions(
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
                 } else if (std.mem.eql(u8, name, "native.typed-validate-and-promote")) {
-                    if (state.aot_mode) {
-                        state.not_compilable_reason = .non_serializable_literal;
-                        return IrCodegenError.NotCompilable;
-                    }
-                    if (!tryEmitInlineTypedValidateAndPromote(state, instructions, idx, stack, sp)) {
+                    // JIT-only inline emitter; AOT uses the native callback because
+                    // the preceding .type_val literal goes through the slot table.
+                    if (state.aot_mode or !tryEmitInlineTypedValidateAndPromote(state, instructions, idx, stack, sp)) {
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
                 } else if (std.mem.eql(u8, name, "native.make-struct-instance") or
@@ -5065,9 +5046,6 @@ fn compileInstructions(
                     std.mem.eql(u8, name, "native.hash-to-struct"))
                 {
                     try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
-                } else if (state.aot_mode and isRuntimeVirtualPtrNative(name)) {
-                    state.not_compilable_reason = .non_serializable_literal;
-                    return IrCodegenError.NotCompilable;
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
                     const res = state.resolver orelse {
@@ -10439,13 +10417,14 @@ test "% with float operand bails" {
 
 test "compile inline virtual-unwrap" {
     var vtype = VirtualType{ .name = "test-vt", .inner_type = "fixnum" };
+    var tv = TypeValue{ .name = "test-vt", .descriptor = null, .virtual_type = &vtype };
+    vtype.type_val = &tv;
     var inner_val = Value{ .fixnum = 42 };
     const tagged_val = Value{ .tagged = .{ .tag = &vtype, .inner = &inner_val } };
-    const vtype_ptr: i64 = @intCast(@intFromPtr(&vtype));
 
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = tagged_val }, .line = 1 },
-        .{ .op = .{ .push_literal = .{ .fixnum = vtype_ptr } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .type_val = &tv } }, .line = 2 },
         .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 3 },
     };
 
@@ -10464,13 +10443,16 @@ test "compile inline virtual-unwrap" {
 test "inline virtual-unwrap returns error_propagate on wrong vtype" {
     var vtype_a = VirtualType{ .name = "type-a", .inner_type = "fixnum" };
     var vtype_b = VirtualType{ .name = "type-b", .inner_type = "fixnum" };
+    var tv_a = TypeValue{ .name = "type-a", .descriptor = null, .virtual_type = &vtype_a };
+    var tv_b = TypeValue{ .name = "type-b", .descriptor = null, .virtual_type = &vtype_b };
+    vtype_a.type_val = &tv_a;
+    vtype_b.type_val = &tv_b;
     var inner_val = Value{ .fixnum = 99 };
     const tagged_val = Value{ .tagged = .{ .tag = &vtype_a, .inner = &inner_val } };
-    const vtype_b_ptr: i64 = @intCast(@intFromPtr(&vtype_b));
 
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = tagged_val }, .line = 1 },
-        .{ .op = .{ .push_literal = .{ .fixnum = vtype_b_ptr } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .type_val = &tv_b } }, .line = 2 },
         .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 3 },
     };
 
@@ -10485,10 +10467,11 @@ test "inline virtual-unwrap returns error_propagate on wrong vtype" {
 
 test "inline virtual-unwrap returns error_propagate on non-tagged value" {
     var vtype = VirtualType{ .name = "test-vt", .inner_type = "fixnum" };
-    const vtype_ptr: i64 = @intCast(@intFromPtr(&vtype));
+    var tv = TypeValue{ .name = "test-vt", .descriptor = null, .virtual_type = &vtype };
+    vtype.type_val = &tv;
 
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .fixnum = vtype_ptr } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .type_val = &tv } }, .line = 1 },
         .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 2 },
     };
 
@@ -10503,11 +10486,12 @@ test "inline virtual-unwrap returns error_propagate on non-tagged value" {
 
 test "inline virtual-unwrap on input parameter" {
     var vtype = VirtualType{ .name = "test-vt", .inner_type = "fixnum" };
+    var tv = TypeValue{ .name = "test-vt", .descriptor = null, .virtual_type = &vtype };
+    vtype.type_val = &tv;
     var inner_val = Value{ .fixnum = 77 };
-    const vtype_ptr: i64 = @intCast(@intFromPtr(&vtype));
 
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .fixnum = vtype_ptr } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .type_val = &tv } }, .line = 1 },
         .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 2 },
     };
 
@@ -10525,11 +10509,12 @@ test "inline virtual-unwrap on input parameter" {
 
 test "inline virtual-unwrap then arithmetic" {
     var vtype = VirtualType{ .name = "test-vt", .inner_type = "fixnum" };
+    var tv = TypeValue{ .name = "test-vt", .descriptor = null, .virtual_type = &vtype };
+    vtype.type_val = &tv;
     var inner_val = Value{ .fixnum = 10 };
-    const vtype_ptr: i64 = @intCast(@intFromPtr(&vtype));
 
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .fixnum = vtype_ptr } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .type_val = &tv } }, .line = 1 },
         .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 2 },
         .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 3 },
         .{ .op = .{ .call_word = "+" }, .line = 4 },
@@ -10758,7 +10743,9 @@ test "compile inline typed-validate-and-promote with fixnum" {
     var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
     var type_params = [_]*const TypeValue{&fixnum_tv};
     var vt = VirtualType{ .name = "array(fixnum)", .inner_type = "array", .type_params = &type_params };
-    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+    var tv = TypeValue{ .name = "array(fixnum)", .descriptor = null, .virtual_type = &vt };
+    vt.type_val = &tv;
+    const vtype_ptr: Value = .{ .type_val = &tv };
 
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 1 },
@@ -10782,7 +10769,9 @@ test "compile inline typed-validate-and-promote with float" {
     var float_tv = TypeValue{ .name = "float", .descriptor = null };
     var type_params = [_]*const TypeValue{&float_tv};
     var vt = VirtualType{ .name = "array(float)", .inner_type = "array", .type_params = &type_params };
-    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+    var tv = TypeValue{ .name = "array(float)", .descriptor = null, .virtual_type = &vt };
+    vt.type_val = &tv;
+    const vtype_ptr: Value = .{ .type_val = &tv };
 
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .float = 3.14 } }, .line = 1 },
@@ -10806,7 +10795,9 @@ test "inline typed-validate-and-promote returns error_propagate on type mismatch
     var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
     var type_params = [_]*const TypeValue{&fixnum_tv};
     var vt = VirtualType{ .name = "array(fixnum)", .inner_type = "array", .type_params = &type_params };
-    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+    var tv = TypeValue{ .name = "array(fixnum)", .descriptor = null, .virtual_type = &vt };
+    vt.type_val = &tv;
+    const vtype_ptr: Value = .{ .type_val = &tv };
 
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = vtype_ptr }, .line = 1 },
@@ -10824,7 +10815,9 @@ test "inline typed-validate-and-promote returns error_propagate on type mismatch
 
 test "inline typed-validate-and-promote no-op when no type_params" {
     var vt = VirtualType{ .name = "wrapper", .inner_type = "array" };
-    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+    var tv = TypeValue{ .name = "wrapper", .descriptor = null, .virtual_type = &vt };
+    vt.type_val = &tv;
+    const vtype_ptr: Value = .{ .type_val = &tv };
 
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 1 },
@@ -10848,7 +10841,9 @@ test "inline typed-validate-and-promote on input parameter" {
     var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
     var type_params = [_]*const TypeValue{&fixnum_tv};
     var vt = VirtualType{ .name = "vector(fixnum)", .inner_type = "vector", .type_params = &type_params };
-    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+    var tv = TypeValue{ .name = "vector(fixnum)", .descriptor = null, .virtual_type = &vt };
+    vt.type_val = &tv;
+    const vtype_ptr: Value = .{ .type_val = &tv };
 
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = vtype_ptr }, .line = 1 },
@@ -10871,7 +10866,9 @@ test "inline typed-validate-and-promote then arithmetic" {
     var fixnum_tv = TypeValue{ .name = "fixnum", .descriptor = null };
     var type_params = [_]*const TypeValue{&fixnum_tv};
     var vt = VirtualType{ .name = "array(fixnum)", .inner_type = "array", .type_params = &type_params };
-    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(&vt)) };
+    var tv = TypeValue{ .name = "array(fixnum)", .descriptor = null, .virtual_type = &vt };
+    vt.type_val = &tv;
+    const vtype_ptr: Value = .{ .type_val = &tv };
 
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 1 },
@@ -10891,91 +10888,6 @@ test "inline typed-validate-and-promote then arithmetic" {
     try testing.expectEqual(@as(usize, 1), sp);
     try testing.expect(values[0] == .fixnum);
     try testing.expectEqual(@as(i64, 15), values[0].fixnum);
-}
-
-// AOT mode rejects natives whose preceding fixnum literal is a
-// process-local VirtualType pointer. Those pointers do not survive into
-// the AOT binary's runtime process, so the only valid lowering is the
-// JIT-only inline emitter (`tryEmitInlineVirtualUnwrap` and
-// `tryEmitInlineTypedValidateAndPromote`). In AOT mode the dispatch
-// branch falls through to `state.not_compilable_reason =
-// .non_serializable_literal; return IrCodegenError.NotCompilable` before
-// the inline emitter is consulted, which is why the failed-inline AOT
-// path for these two natives is unreachable and not covered by an AOT
-// integration test.
-
-test "AOT mode rejects native.virtual-unwrap with non-serializable-literal" {
-    const instrs = [_]Instruction{
-        .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 1 },
-    };
-    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
-    defer compiled_names.deinit(testing.allocator);
-
-    var reason: ?NotCompilableReason = null;
-    try testing.expectError(
-        IrCodegenError.NotCompilable,
-        emitWordCAot(
-            &instrs,
-            2,
-            1,
-            "test-aot-virtual-unwrap",
-            null,
-            null,
-            &compiled_names,
-            null,
-            null,
-            null,
-            testing.allocator,
-            null,
-            &reason,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            false,
-        ),
-    );
-    try testing.expectEqual(NotCompilableReason.non_serializable_literal, reason.?);
-}
-
-test "AOT mode rejects native.typed-validate-and-promote with non-serializable-literal" {
-    const instrs = [_]Instruction{
-        .{ .op = .{ .call_word = "native.typed-validate-and-promote" }, .line = 1 },
-    };
-    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
-    defer compiled_names.deinit(testing.allocator);
-
-    var reason: ?NotCompilableReason = null;
-    try testing.expectError(
-        IrCodegenError.NotCompilable,
-        emitWordCAot(
-            &instrs,
-            2,
-            1,
-            "test-aot-typed-validate",
-            null,
-            null,
-            &compiled_names,
-            null,
-            null,
-            null,
-            testing.allocator,
-            null,
-            &reason,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            null,
-            false,
-        ),
-    );
-    try testing.expectEqual(NotCompilableReason.non_serializable_literal, reason.?);
 }
 
 // --- C emission tests ---

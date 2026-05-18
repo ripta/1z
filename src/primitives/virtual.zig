@@ -31,20 +31,20 @@ pub const primitives = [_]Primitive{
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "virtual-wrap", .func = virtualWrapHelper, .stack_effect = "value vtype-ptr -- tagged" },
-    .{ .name = "virtual-unwrap", .func = virtualUnwrapHelper, .stack_effect = "tagged vtype-ptr -- value" },
-    .{ .name = "virtual-type-predicate", .func = virtualTypePredicateHelper, .stack_effect = "value vtype-ptr -- ?" },
+    .{ .name = "virtual-wrap", .func = virtualWrapHelper, .stack_effect = "value tv -- tagged" },
+    .{ .name = "virtual-unwrap", .func = virtualUnwrapHelper, .stack_effect = "tagged tv -- value" },
+    .{ .name = "virtual-type-predicate", .func = virtualTypePredicateHelper, .stack_effect = "value tv -- ?" },
     .{ .name = "virtual-struct-wrap", .func = virtualStructWrapHelper, .polymorphic = true },
     .{ .name = "virtual-struct-unwrap", .func = virtualStructUnwrapHelper, .polymorphic = true },
-    .{ .name = "virtual-struct-to-hash", .func = virtualStructToHashHelper, .stack_effect = "tagged vtype-ptr -- hash" },
-    .{ .name = "virtual-struct-hash-wrap", .func = virtualStructHashWrapHelper, .stack_effect = "hash vtype-ptr -- tagged" },
-    .{ .name = "virtual-parameterized-wrap", .func = virtualParameterizedWrapHelper, .stack_effect = "value vtype-ptr -- tagged" },
-    .{ .name = "typed-validate-and-promote", .func = typedValidateAndPromote, .stack_effect = "value vtype-ptr -- promoted-value" },
-    .{ .name = "typed-validate-seq-elements", .func = typedValidateSeqElements, .stack_effect = "seq vtype-ptr -- seq" },
-    .{ .name = "typed-nth-mut-dispatch", .func = typedNthMutDispatch, .stack_effect = "typed-vec n elem vtype-ptr -- typed-vec" },
-    .{ .name = "typed-at-set-mut-dispatch", .func = typedAtSetMutDispatch, .stack_effect = "typed-mmap key value vtype-ptr -- typed-mmap" },
-    .{ .name = "typed-at-remove-mut-dispatch", .func = typedAtRemoveMutDispatch, .stack_effect = "typed-mmap key vtype-ptr -- typed-mmap" },
-    .{ .name = "typed-freeze-dispatch", .func = typedFreezeDispatch, .stack_effect = "typed-vec vtype-ptr -- typed-array" },
+    .{ .name = "virtual-struct-to-hash", .func = virtualStructToHashHelper, .stack_effect = "tagged tv -- hash" },
+    .{ .name = "virtual-struct-hash-wrap", .func = virtualStructHashWrapHelper, .stack_effect = "hash tv -- tagged" },
+    .{ .name = "virtual-parameterized-wrap", .func = virtualParameterizedWrapHelper, .stack_effect = "value tv -- tagged" },
+    .{ .name = "typed-validate-and-promote", .func = typedValidateAndPromote, .stack_effect = "value tv -- promoted-value" },
+    .{ .name = "typed-validate-seq-elements", .func = typedValidateSeqElements, .stack_effect = "seq tv -- seq" },
+    .{ .name = "typed-nth-mut-dispatch", .func = typedNthMutDispatch, .stack_effect = "typed-vec n elem tv -- typed-vec" },
+    .{ .name = "typed-at-set-mut-dispatch", .func = typedAtSetMutDispatch, .stack_effect = "typed-mmap key value tv -- typed-mmap" },
+    .{ .name = "typed-at-remove-mut-dispatch", .func = typedAtRemoveMutDispatch, .stack_effect = "typed-mmap key tv -- typed-mmap" },
+    .{ .name = "typed-freeze-dispatch", .func = typedFreezeDispatch, .stack_effect = "typed-vec tv -- typed-array" },
 };
 
 /// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words
@@ -153,6 +153,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const tv = try alloc.create(value_mod.TypeValue);
             tv.* = .{ .name = name, .descriptor = desc_map };
             vtype.type_val = tv;
+            tv.virtual_type = vtype;
 
             // NAME: ( -- type ) - the virtual type itself pushing a TypeValue
             const type_markers = try alloc.alloc(*Marker, 3);
@@ -239,6 +240,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const tv = try alloc.create(value_mod.TypeValue);
             tv.* = .{ .name = name, .descriptor = desc_map };
             vtype.type_val = tv;
+            tv.virtual_type = vtype;
 
             // NAME: ( -- type ) - the virtual type itself pushing a TypeValue
             const type_markers = try alloc.alloc(*Marker, 3);
@@ -274,7 +276,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try defineVirtualToHash(ctx, to_hash_name, vtype, markers_slice);
 
             const hash_instrs = try alloc.alloc(Instruction, 2);
-            hash_instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+            hash_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = vtype.type_val.? } }, .line = 0 };
             hash_instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-to-hash" }, .line = 0 };
             try registerHashDispatch(ctx, vtype.type_val.?, hash_instrs);
 
@@ -299,14 +301,14 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     }
 }
 
-/// Trampoline helper ( value vtype-ptr -- tagged )
+/// Trampoline helper ( value tv -- tagged )
 ///
 /// Given a value, wraps it as a tagged virtual type instance.
 fn virtualWrapHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const val = try ctx.stack.pop();
 
@@ -326,12 +328,12 @@ fn virtualWrapHelper(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
-/// Trampoline helper ( tagged vtype-ptr -- value )
+/// Trampoline helper ( tagged tv -- value )
 ///
 /// Given a tagged virtual type instance, unwraps and validates its type.
 fn virtualUnwrapHelper(ctx: *Context) anyerror!void {
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const val = try ctx.stack.pop();
     switch (val) {
@@ -350,12 +352,12 @@ fn virtualUnwrapHelper(ctx: *Context) anyerror!void {
     }
 }
 
-/// Trampoline helper ( value vtype-ptr -- ? )
+/// Trampoline helper ( value tv -- ? )
 ///
 /// Given a value, checks if it is a tagged instance of the given virtual type.
 fn virtualTypePredicateHelper(ctx: *Context) anyerror!void {
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const val = try ctx.stack.pop();
     const is_match = switch (val) {
@@ -379,7 +381,7 @@ pub fn defineWrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, ma
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = vtype.type_val.? } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-wrap" }, .line = 0 };
 
     const generic_markers = try alloc.alloc(*Marker, markers.len + 1);
@@ -411,7 +413,7 @@ pub fn defineUnwrap(ctx: *Context, name: []const u8, vtype: *const VirtualType, 
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = vtype.type_val.? } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-unwrap" }, .line = 0 };
 
     const effect_str = try std.fmt.allocPrint(alloc, "{s} -- value", .{vtype.name});
@@ -429,7 +431,7 @@ pub fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualTyp
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = vtype.type_val.? } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-type-predicate" }, .line = 0 };
 
     try ctx.defineWord(name, .{
@@ -441,12 +443,12 @@ pub fn definePredicate(ctx: *Context, name: []const u8, vtype: *const VirtualTyp
     });
 }
 
-/// Trampoline helper ( field1..fieldN vtype-ptr -- tagged )
+/// Trampoline helper ( field1..fieldN tv -- tagged )
 fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const st = vt.anon_struct orelse {
         helpers.setErrorContext(ctx, "{s} is not a struct-backed virtual type", .{vt.name});
@@ -473,10 +475,10 @@ fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
-/// Trampoline helper ( tagged vtype-ptr -- field1..fieldN )
+/// Trampoline helper ( tagged tv -- field1..fieldN )
 fn virtualStructUnwrapHelper(ctx: *Context) anyerror!void {
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const val = try ctx.stack.pop();
     switch (val) {
@@ -504,14 +506,14 @@ fn virtualStructUnwrapHelper(ctx: *Context) anyerror!void {
     }
 }
 
-/// Trampoline helper ( tagged vtype-ptr -- hash )
+/// Trampoline helper ( tagged tv -- hash )
 ///
 /// Validates the tag, unwraps to struct instance, converts fields to a hash.
 fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const st = vt.anon_struct orelse {
         helpers.setErrorContext(ctx, "{s} is not a struct-backed virtual type", .{vt.name});
@@ -547,16 +549,17 @@ fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
     }
 }
 
-/// Trampoline helper ( hash vtype-ptr -- tagged )
+/// Trampoline helper ( hash tv -- tagged )
 ///
-/// Takes a hash and a VirtualType pointer, validates that the hash has every
-/// field required by the anonymous struct (and no extras), reads field values
-/// from the hash in field order, and constructs a tagged struct instance.
+/// Takes a hash and a TypeValue for a virtual type, validates that the hash
+/// has every field required by the anonymous struct (and no extras), reads
+/// field values from the hash in field order, and constructs a tagged struct
+/// instance.
 fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const st = vt.anon_struct orelse {
         helpers.setErrorContext(ctx, "{s} is not a struct-backed virtual type", .{vt.name});
@@ -602,7 +605,7 @@ pub fn defineStructHashWrap(ctx: *Context, name: []const u8, vtype: *const Virtu
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = vtype.type_val.? } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-hash-wrap" }, .line = 0 };
 
     const generic_markers = try alloc.alloc(*Marker, markers.len + 1);
@@ -631,7 +634,7 @@ pub fn defineStructWrap(ctx: *Context, name: []const u8, vtype: *const VirtualTy
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = vtype.type_val.? } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-wrap" }, .line = 0 };
 
     const fields = if (vtype.anon_struct) |st| st.fields else &[_][]const u8{};
@@ -650,7 +653,7 @@ pub fn defineStructUnwrap(ctx: *Context, name: []const u8, vtype: *const Virtual
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = vtype.type_val.? } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-unwrap" }, .line = 0 };
 
     const fields = if (vtype.anon_struct) |st| st.fields else &[_][]const u8{};
@@ -669,7 +672,7 @@ pub fn defineVirtualToHash(ctx: *Context, name: []const u8, vtype: *const Virtua
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = vtype.type_val.? } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-struct-to-hash" }, .line = 0 };
 
     const effect_str = try std.fmt.allocPrint(alloc, "{s} -- hash", .{vtype.name});
@@ -709,12 +712,12 @@ fn tryPromoteElement(alloc: Allocator, elem: Value, expected: []const u8) ?Value
 }
 
 /// Validate a single value against a parameterized type's element type,
-/// with numeric tower promotion. ( value vtype-ptr -- promoted-value )
+/// with numeric tower promotion. ( value tv -- promoted-value )
 fn typedValidateAndPromote(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const val = try ctx.stack.pop();
 
@@ -744,12 +747,12 @@ fn typedValidateAndPromote(ctx: *Context) anyerror!void {
 }
 
 /// Validate all elements of a sequence against a parameterized type's
-/// element type, with numeric tower promotion. ( seq vtype-ptr -- seq )
+/// element type, with numeric tower promotion. ( seq tv -- seq )
 fn typedValidateSeqElements(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const seq = try ctx.stack.pop();
 
@@ -807,15 +810,15 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
 }
 
 /// Native dispatch helper for #nth! on typed vectors.
-/// Stack: typed-vec n elem vtype-ptr -- typed-vec
+/// Stack: typed-vec n elem tv -- typed-vec
 ///
 /// Validates and promotes elem, unwraps the typed vector, delegates to
 /// the raw #nth!, then rewraps.
 fn typedNthMutDispatch(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     var elem = try ctx.stack.pop();
     const n = try ctx.stack.pop();
@@ -861,8 +864,8 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
 fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     var new_value = try ctx.stack.pop();
     const key = try ctx.stack.pop();
@@ -908,8 +911,8 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
 fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const key = try ctx.stack.pop();
     const typed_mmap = try ctx.stack.pop();
@@ -938,8 +941,8 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
 fn typedFreezeDispatch(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     const typed_vec = try ctx.stack.pop();
 
@@ -977,15 +980,15 @@ fn typedFreezeDispatch(ctx: *Context) anyerror!void {
     }
 }
 
-/// Trampoline helper ( value vtype-ptr -- tagged )
+/// Trampoline helper ( value tv -- tagged )
 ///
 /// Like virtualWrapHelper but additionally validates that array elements
 /// match the parameterized type's type_params[0].
 fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const ptr_val = try helpers.popFixnum(ctx);
-    const vt: *const VirtualType = @ptrFromInt(@as(usize, @intCast(ptr_val)));
+    const tv = try helpers.popTypeVal(ctx);
+    const vt = tv.virtual_type.?;
 
     var val = try ctx.stack.pop();
 
@@ -1042,7 +1045,7 @@ pub fn defineParameterizedWrap(ctx: *Context, name: []const u8, vtype: *const Vi
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = @intCast(@intFromPtr(vtype)) } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = vtype.type_val.? } }, .line = 0 };
     instrs[1] = .{ .op = .{ .call_word = "native.virtual-parameterized-wrap" }, .line = 0 };
 
     const effect_str = try std.fmt.allocPrint(alloc, "value -- {s}", .{vtype.name});
@@ -1134,6 +1137,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     const tv = try alloc.create(value_mod.TypeValue);
     tv.* = .{ .name = name, .descriptor = desc };
     vtype.type_val = tv;
+    tv.virtual_type = vtype;
 
     // NAME: ( -- type ) - parse-time const pushing TypeValue
     var type_markers_list = std.ArrayListUnmanaged(*Marker){};
@@ -1219,7 +1223,7 @@ fn registerVectorMutationDispatches(
     generated_words: *std.ArrayListUnmanaged(Value),
 ) !void {
     const type_tv = vtype.type_val.?;
-    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(vtype)) };
+    const vtype_ptr: Value = .{ .type_val = vtype.type_val.? };
 
     // Element-adding ops: #push!, #unshift!
     // Stack: typed-vec elem
@@ -1335,7 +1339,7 @@ fn registerMutableMapMutationDispatches(
     generated_words: *std.ArrayListUnmanaged(Value),
 ) !void {
     const type_tv = vtype.type_val.?;
-    const vtype_ptr: Value = .{ .fixnum = @intCast(@intFromPtr(vtype)) };
+    const vtype_ptr: Value = .{ .type_val = vtype.type_val.? };
 
     // @set! ( typed-mmap key value -- typed-mmap )
     {
