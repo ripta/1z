@@ -41,3 +41,18 @@ m.meters type-of type = "qualified meters is a type value" assert-true
 
 weight: virtual{ fixnum } ;
 { weight } #first type-of type = "type word executes at parse time" assert-true
+
+"user-defined type as inner type" test-section
+
+color: struct{ r g b } ;
+pixel: virtual{ color } ;
+
+\ wrapping and unwrapping works with a user-defined struct as inner type
+1 2 3 make-color >pixel pixel? "struct inner type wraps" assert-true
+1 2 3 make-color >pixel unmake-pixel type-of color = "struct inner type unwraps to correct type" assert-true
+
+"typo rejection" test-section
+
+\ unknown type name in virtual{ is rejected at definition time
+[ no-such-type-test: virtual{ no-such-type } ;
+] "TypeMismatch" assert-error

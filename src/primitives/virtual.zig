@@ -39,9 +39,10 @@ pub const registry_entries = [_]RegistryEntry{
 ///
 /// Generates: >NAME (wrap), NAME> (unwrap), NAME? (predicate)
 ///
-/// When inner-type is a string, creates a simple virtual type wrapping that type.
+/// When inner-type is a type value, creates a simple virtual type wrapping that type.
 /// When inner-type is a mutable map (struct descriptor from `struct{`), creates a
 /// struct-backed virtual type with positional wrap and destructuring unwrap.
+/// A string inner-type indicates an unknown word (typo) and is rejected.
 fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -104,13 +105,9 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
         },
     };
 
-    const effective_inner_type_val = switch (inner_type_val) {
-        .type_val => |tv| Value{ .string = tv.name },
-        else => inner_type_val,
-    };
-
-    switch (effective_inner_type_val) {
-        .string => |inner_type| {
+    switch (inner_type_val) {
+        .type_val => |inner_tv| {
+            const inner_type = inner_tv.name;
             // Allocate singleton VirtualType shared by all instances
             const vtype = try alloc.create(VirtualType);
             vtype.* = .{
@@ -266,8 +263,12 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try ctx.type_descriptors.put(ctx.allocator, name, frozen_desc);
             vtype.type_val.?.descriptor = frozen_desc;
         },
+        .string => |s| {
+            helpers.setErrorContext(ctx, "virtual{{ inner type '{s}' is not a known type", .{s});
+            return error.TypeMismatch;
+        },
         else => {
-            helpers.setErrorContext(ctx, "virtual{{ inner type must be a string or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});
+            helpers.setErrorContext(ctx, "virtual{{ inner type must be a type value or struct descriptor, got {s}", .{helpers.valueTypeName(inner_type_val)});
             return error.TypeMismatch;
         },
     }

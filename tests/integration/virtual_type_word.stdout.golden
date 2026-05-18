@@ -32,3 +32,15 @@ Stack: [ ]
 Stack: [ ]
 PASS: type word executes at parse time
 Stack: [ ]
+=== user-defined type as inner type ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: struct inner type wraps
+Stack: [ ]
+PASS: struct inner type unwraps to correct type
+Stack: [ ]
+=== typo rejection ===
+Stack: [ ]
+PASS: TypeMismatch
+Stack: [ ]
