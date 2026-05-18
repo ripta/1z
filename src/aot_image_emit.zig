@@ -79,6 +79,12 @@ pub const ImageEmissionStats = struct {
     /// compiled word bodies. Emitted as `onez_image_parameter_slots[]`;
     /// reserved for the slot-indexed Parameter emission.
     parameter_slot_count: u32 = 0,
+    /// Number of distinct StructType pointers reachable through the
+    /// descriptor cross-reference walk. Emitted as
+    /// `onez_image_struct_type_slots[]`; mirrors the typevalue slot
+    /// table so codegen can push struct-type literals through a
+    /// link-time-resolvable slot rather than a runtime name lookup.
+    struct_type_slot_count: u32 = 0,
 };
 
 /// Knobs for `emitImageC`. The default (`metadata_only = false`) emits
@@ -93,6 +99,140 @@ pub const ImageEmissionStats = struct {
 pub const ImageEmitOptions = struct {
     metadata_only: bool = false,
 };
+
+/// Aggregate of the populated slot tables, struct-plan list, marker
+/// pool, and per-word typevalue-slot vector that the codegen consumer
+/// and the C emitter both read. `collectImageSlots` populates it
+/// once; `emitImageCFromCollection` consumes the same instance for
+/// its slot-table emission.
+///
+/// Owned by the caller. Free with `deinit` once both the codegen
+/// pass and the emit pass have finished reading from it.
+pub const ImageCollection = struct {
+    allocator: Allocator,
+    effect_table: StackEffectTable,
+    marker_pool: MarkerPool,
+    struct_plans: std.ArrayListUnmanaged(StructTypePlan) = .{},
+    struct_index: std.AutoHashMapUnmanaged(*const value_mod.StructType, u32) = .{},
+    word_to_typevalue_slot: []u32,
+
+    pub fn deinit(self: *ImageCollection) void {
+        self.struct_index.deinit(self.allocator);
+        self.struct_plans.deinit(self.allocator);
+        self.marker_pool.deinit();
+        self.effect_table.deinit();
+        self.allocator.free(self.word_to_typevalue_slot);
+    }
+
+    /// Look up the slot index for a StructType. Returns null when the
+    /// pointer has not been interned via the collection walk. Codegen
+    /// consumers gate slot-table emission on a non-null return.
+    pub fn lookupStructTypeSlot(self: *const ImageCollection, st: *const value_mod.StructType) ?u32 {
+        return self.struct_index.get(st);
+    }
+};
+
+/// Run every collection walk that backs the slot tables, returning
+/// the populated `ImageCollection`. The caller takes ownership and
+/// must call `deinit` once it has finished consuming the result.
+///
+/// Splitting collection from emission lets `emitProgramC` populate
+/// the slot maps before Pass 2 codegen runs, so compiled word bodies
+/// can reference link-time-resolvable slot indices instead of
+/// runtime name lookups.
+pub fn collectImageSlots(
+    allocator: Allocator,
+    ctx: *const Context,
+    manifest: ImageManifest,
+    options: ImageEmitOptions,
+) Allocator.Error!ImageCollection {
+    var collection: ImageCollection = .{
+        .allocator = allocator,
+        .effect_table = StackEffectTable.init(allocator),
+        .marker_pool = MarkerPool.init(allocator),
+        .word_to_typevalue_slot = try allocator.alloc(u32, manifest.entries.len),
+    };
+    errdefer collection.deinit();
+    @memset(collection.word_to_typevalue_slot, 0);
+
+    try collectMarkers(&collection.marker_pool, ctx, manifest);
+    try collectStackEffects(&collection.effect_table, ctx, manifest);
+
+    if (!options.metadata_only) {
+        for (manifest.entries, 0..) |entry, idx| {
+            const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
+            if (findTypeValueLiteral(mw_ptr)) |tv| {
+                collection.word_to_typevalue_slot[idx] = try collection.effect_table.internType(tv);
+            }
+        }
+    }
+
+    if (!options.metadata_only) {
+        for (manifest.entries) |entry| {
+            const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
+            try internBodyTypeLiterals(&collection.struct_plans, &collection.struct_index, &collection.effect_table, mw_ptr);
+        }
+        try internTopLevelFrameLiterals(&collection.struct_plans, &collection.struct_index, &collection.effect_table, ctx);
+        try internDispatchTableLiterals(&collection.struct_plans, &collection.struct_index, &collection.effect_table, ctx);
+    }
+
+    try collectDescriptorCrossRefs(&collection.struct_plans, &collection.struct_index, &collection.effect_table);
+
+    return collection;
+}
+
+/// Emit the runtime image as static C data into `out`, reading
+/// slot-table contents from a pre-populated `ImageCollection`. Use
+/// this entry point when the caller has already run
+/// `collectImageSlots` and needs the slot indices for codegen
+/// purposes; otherwise the convenience wrapper `emitImageC` runs both
+/// back to back.
+pub fn emitImageCFromCollection(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    ctx: *const Context,
+    manifest: ImageManifest,
+    word_id_lookup: *const std.StringHashMapUnmanaged(u32),
+    collection: *ImageCollection,
+    options: ImageEmitOptions,
+) ImageEmitError!ImageEmissionStats {
+    var stats: ImageEmissionStats = .{};
+
+    try emitTypeDeclarations(out, allocator);
+
+    const effect_table = &collection.effect_table;
+    const marker_pool = &collection.marker_pool;
+    const struct_plans_items = collection.struct_plans.items;
+    const struct_index = &collection.struct_index;
+    const word_to_typevalue_slot = collection.word_to_typevalue_slot;
+
+    const word_body_lens = try allocator.alloc(u32, manifest.entries.len);
+    defer allocator.free(word_body_lens);
+    @memset(word_body_lens, 0);
+
+    try emitMarkerPool(out, allocator, marker_pool, &stats);
+    try emitTypeValueSlotTable(out, allocator, effect_table);
+    try emitMarkerSlotTable(out, allocator, effect_table);
+    try emitParameterSlotTable(out, allocator, effect_table);
+    try emitStructTypeSlotTable(out, allocator, struct_plans_items);
+    try emitStackEffectTable(out, allocator, effect_table);
+    try emitTypeValueData(out, allocator, effect_table, struct_plans_items, struct_index);
+
+    try emitWordNameStrings(out, allocator, manifest);
+    try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
+    if (!options.metadata_only) {
+        try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens);
+    }
+    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, &stats);
+    try emitHeader(out, allocator, manifest, marker_pool, effect_table, struct_plans_items, stats);
+
+    stats.typevalue_slot_count = effect_table.slotCount();
+    stats.stack_effect_count = effect_table.effectCount();
+    stats.marker_slot_count = effect_table.markerSlotCount();
+    stats.parameter_slot_count = effect_table.parameterSlotCount();
+    stats.struct_type_slot_count = @intCast(struct_plans_items.len);
+    return stats;
+}
 
 /// Emit the runtime image as static C data into `out`. Returns counts
 /// suitable for downstream metadata reporting.
@@ -115,94 +255,9 @@ pub fn emitImageC(
     word_id_lookup: *const std.StringHashMapUnmanaged(u32),
     options: ImageEmitOptions,
 ) ImageEmitError!ImageEmissionStats {
-    var stats: ImageEmissionStats = .{};
-
-    try emitTypeDeclarations(out, allocator);
-
-    var marker_pool = MarkerPool.init(allocator);
-    defer marker_pool.deinit();
-    try collectMarkers(&marker_pool, ctx, manifest);
-
-    var effect_table = StackEffectTable.init(allocator);
-    defer effect_table.deinit();
-    try collectStackEffects(&effect_table, ctx, manifest);
-
-    // Per-word TypeValue-slot map. For every word whose body pushes a
-    // `type_val` literal, intern the TypeValue into the shared slot
-    // table and record the slot index here. The loader uses the slot
-    // index to look up the runtime TypeValue after `populateTypeValueSlots`
-    // has filled the table, then rewrites the word body to push that
-    // TypeValue directly. Zero means "this word does not publish a
-    // TypeValue".
-    //
-    // In metadata-only mode the body rewrite would re-introduce a
-    // runnable body for type-defining words, which conflicts with the
-    // interpreter-free read-only contract. Skip the per-word slot map
-    // entirely; stack-effect type annotations still intern their
-    // TypeValue references through `internType` below.
-    const word_to_typevalue_slot = try allocator.alloc(u32, manifest.entries.len);
-    defer allocator.free(word_to_typevalue_slot);
-    @memset(word_to_typevalue_slot, 0);
-    if (!options.metadata_only) {
-        for (manifest.entries, 0..) |entry, idx| {
-            const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
-            if (findTypeValueLiteral(mw_ptr)) |tv| {
-                word_to_typevalue_slot[idx] = try effect_table.internType(tv);
-            }
-        }
-    }
-
-    var struct_plans: std.ArrayListUnmanaged(StructTypePlan) = .{};
-    defer struct_plans.deinit(allocator);
-    var struct_index: std.AutoHashMapUnmanaged(*const value_mod.StructType, u32) = .{};
-    defer struct_index.deinit(allocator);
-
-    // Broader literal scan: walks every push_literal in every manifest
-    // entry's body and interns the type-carrier variants beyond the
-    // first `.type_val`. This is additive to the per-word slot
-    // recording above; the word_to_typevalue_slot machinery still
-    // depends on findTypeValueLiteral's first-match contract.
-    if (!options.metadata_only) {
-        for (manifest.entries) |entry| {
-            const mw_ptr = lookupModuleWord(ctx, entry) orelse continue;
-            try internBodyTypeLiterals(&struct_plans, &struct_index, &effect_table, mw_ptr);
-        }
-    }
-
-    if (!options.metadata_only) {
-        try internTopLevelFrameLiterals(&struct_plans, &struct_index, &effect_table, ctx);
-        try internDispatchTableLiterals(&struct_plans, &struct_index, &effect_table, ctx);
-    }
-
-    try collectDescriptorCrossRefs(&struct_plans, &struct_index, &effect_table);
-
-    // Tracks per-word body bytecode emission. When entry is non-zero,
-    // the word references `onez_image_w_<idx>_body` at that length;
-    // zero means the word table emits NULL.
-    const word_body_lens = try allocator.alloc(u32, manifest.entries.len);
-    defer allocator.free(word_body_lens);
-    @memset(word_body_lens, 0);
-
-    try emitMarkerPool(out, allocator, &marker_pool, &stats);
-    try emitTypeValueSlotTable(out, allocator, &effect_table);
-    try emitMarkerSlotTable(out, allocator, &effect_table);
-    try emitParameterSlotTable(out, allocator, &effect_table);
-    try emitStackEffectTable(out, allocator, &effect_table);
-    try emitTypeValueData(out, allocator, &effect_table, struct_plans.items, &struct_index);
-
-    try emitWordNameStrings(out, allocator, manifest);
-    try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
-    if (!options.metadata_only) {
-        try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens);
-    }
-    try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, &marker_pool, &effect_table, word_to_typevalue_slot, word_body_lens, &stats);
-    try emitHeader(out, allocator, manifest, &marker_pool, &effect_table, struct_plans.items, stats);
-
-    stats.typevalue_slot_count = effect_table.slotCount();
-    stats.stack_effect_count = effect_table.effectCount();
-    stats.marker_slot_count = effect_table.markerSlotCount();
-    stats.parameter_slot_count = effect_table.parameterSlotCount();
-    return stats;
+    var collection = try collectImageSlots(allocator, ctx, manifest, options);
+    defer collection.deinit();
+    return emitImageCFromCollection(out, allocator, ctx, manifest, word_id_lookup, &collection, options);
 }
 
 /// Combined table for stack effects, the params they reference, and
@@ -213,7 +268,7 @@ pub fn emitImageC(
 /// "no annotation" sentinel for the same reason. Params do not get
 /// their own dedup pool: they are owned by exactly one effect, so
 /// emitting them inline keeps the bookkeeping local.
-const StackEffectTable = struct {
+pub const StackEffectTable = struct {
     allocator: Allocator,
     /// Effects in deterministic insertion order. Index 0 is a
     /// reserved sentinel that the loader must treat as "no effect".
@@ -313,6 +368,27 @@ const StackEffectTable = struct {
     fn lookupEffect(self: *const StackEffectTable, effect: *const StackEffect) u32 {
         return self.effect_index.get(effect) orelse 0;
     }
+
+    /// Look up the 1-based TypeValue slot index for `tv`. Returns 0
+    /// (the "no annotation" sentinel) when the pointer has not been
+    /// interned. Codegen consumers gate emission on a non-zero return.
+    pub fn lookupTypeSlot(self: *const StackEffectTable, tv: *const TypeValue) u32 {
+        return self.type_slot_index.get(tv) orelse 0;
+    }
+
+    /// Look up the 0-based Marker slot index for `marker`. Returns
+    /// null when the pointer has not been interned. Codegen consumers
+    /// must intern via the collection walk before consulting this
+    /// method.
+    pub fn lookupMarkerSlot(self: *const StackEffectTable, marker: *const Marker) ?u32 {
+        return self.marker_slot_index.get(marker);
+    }
+
+    /// Look up the 0-based Parameter slot index for `param`. Returns
+    /// null when the pointer has not been interned.
+    pub fn lookupParameterSlot(self: *const StackEffectTable, param: *const Parameter) ?u32 {
+        return self.parameter_slot_index.get(param);
+    }
 };
 
 /// Pre-resolved data for one image-side StructType. StructTypes are
@@ -320,7 +396,7 @@ const StackEffectTable = struct {
 /// in the TypeValue slot table -- the loader allocates a parallel
 /// `*StructType` per row in `onez_image_struct_types_storage[]` and
 /// references it from the owning virtual descriptor by index.
-const StructTypePlan = struct {
+pub const StructTypePlan = struct {
     struct_type: *const value_mod.StructType,
 };
 
@@ -645,16 +721,16 @@ fn registerParam(
 
 /// Pool of unique marker names. The vector preserves insertion order
 /// so codegen output is deterministic; the map gives O(1) dedup.
-const MarkerPool = struct {
+pub const MarkerPool = struct {
     allocator: Allocator,
     names: std.ArrayListUnmanaged([]const u8) = .{},
     indices: std.StringHashMapUnmanaged(u32) = .{},
 
-    fn init(allocator: Allocator) MarkerPool {
+    pub fn init(allocator: Allocator) MarkerPool {
         return .{ .allocator = allocator };
     }
 
-    fn deinit(self: *MarkerPool) void {
+    pub fn deinit(self: *MarkerPool) void {
         self.names.deinit(self.allocator);
         self.indices.deinit(self.allocator);
     }
@@ -769,6 +845,33 @@ fn emitMarkerSlotTable(
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
         try out.appendSlice(allocator, ": marker ");
         try out.appendSlice(allocator, marker.name);
+        try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_struct_type_slots[]`: one NULL pointer per
+/// distinct StructType reached through compiled word bodies and
+/// descriptor cross-references. The slot index matches the row's
+/// position in `onez_image_struct_types_storage[]`, so the loader
+/// can patch each entry with the runtime `*StructType` pointer it
+/// allocates while walking the same `struct_types` table. No-op
+/// when no struct types have been interned.
+fn emitStructTypeSlotTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    struct_plans: []const StructTypePlan,
+) Allocator.Error!void {
+    if (struct_plans.len == 0) return;
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "__attribute__((used)) struct onez_struct_type *onez_image_struct_type_slots[");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{struct_plans.len}) catch unreachable);
+    try out.appendSlice(allocator, "] = {\n");
+    for (struct_plans, 0..) |plan, i| {
+        try out.appendSlice(allocator, "    NULL, /* slot ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ": struct ");
+        try out.appendSlice(allocator, plan.struct_type.name);
         try out.appendSlice(allocator, " (filled by the loader). */\n");
     }
     try out.appendSlice(allocator, "};\n\n");

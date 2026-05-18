@@ -197,6 +197,37 @@ pub const Header = extern struct {
 /// patch them at startup.
 pub const SlotTable = [*]?*const value_mod.TypeValue;
 
+/// Slot table for StructType pointers, mirroring `SlotTable` for the
+/// runtime `*StructType` allocations the loader produces from
+/// `onez_image_struct_types_storage[]`. The C declaration is:
+///   struct onez_struct_type *onez_image_struct_type_slots[N]
+/// `struct onez_struct_type` is an opaque type at the C level; the
+/// loader patches each slot with the runtime `*value_mod.StructType`
+/// address allocated in `populateTypeValueSlots` Pass 1.
+pub const StructTypeSlotTable = [*]?*value_mod.StructType;
+
+/// Slot table for Marker pointers. The runtime allocates markers as
+/// part of `populateModulesAndWords` and patches each slot with the
+/// canonical runtime pointer. `null` when no marker slots were
+/// emitted.
+pub const MarkerSlotTable = [*]?*value_mod.Marker;
+
+/// Slot table for Parameter pointers. Parameter binding state is
+/// mutable; the loader allocates the runtime Parameter row and
+/// patches each slot accordingly.
+pub const ParameterSlotTable = [*]?*value_mod.Parameter;
+
+/// All four loader-populated slot tables, passed together so the
+/// `loadIntoContext` signature stays compact as new tables land. Any
+/// individual field may be null when its corresponding C symbol was
+/// not emitted (zero-slot count).
+pub const SlotTables = struct {
+    typevalues: ?SlotTable = null,
+    struct_types: ?StructTypeSlotTable = null,
+    markers: ?MarkerSlotTable = null,
+    parameters: ?ParameterSlotTable = null,
+};
+
 /// PIC snapshot relocation entry. Each entry says "rewrite this
 /// pointer-sized slot in the snapshot to the runtime address of slot
 /// `slot_index` from the TypeValue slot table after task 2 fills it".
@@ -223,10 +254,15 @@ pub const PicRelocationTable = struct {
 
 /// Public entry point. The runtime calls this once after the prelude
 /// finishes loading, before any user code runs.
+///
+/// `slots` carries the TypeValue / StructType / Marker / Parameter
+/// slot tables that codegen consults for slot-indexed literal pushes.
+/// Any field may be null when its corresponding C symbol was not
+/// emitted (zero-slot count).
 pub fn loadIntoContext(
     ctx: *Context,
     header: *const Header,
-    slots: ?SlotTable,
+    slots: SlotTables,
     pic_relocs: ?PicRelocationTable,
 ) LoaderError!void {
     if (header.format_version != aot_image_emit.format_version) {
@@ -239,10 +275,23 @@ pub fn loadIntoContext(
     }
 
     try populateModulesAndWords(ctx, header);
-    try populateTypeValueSlots(ctx, header, slots);
+    try populateTypeValueSlots(ctx, header, slots.typevalues, slots.struct_types);
     if (pic_relocs) |relocs| {
-        try resolvePicRelocations(header, slots, relocs);
+        try resolvePicRelocations(header, slots.typevalues, relocs);
     }
+
+    // Cache slot-table pointers on the Context so the compiled-code
+    // helpers (`jitPushTypeValueSlot`, `jitPushStructTypeSlot`, etc.)
+    // can resolve slot-indexed literal pushes with a direct table
+    // lookup rather than a runtime dictionary search.
+    ctx.image_typevalue_slots = slots.typevalues;
+    ctx.image_typevalue_slot_count = header.typevalue_slot_count;
+    ctx.image_struct_type_slots = slots.struct_types;
+    ctx.image_struct_type_slot_count = header.struct_type_count;
+    ctx.image_marker_slots = slots.markers;
+    ctx.image_marker_slot_count = header.marker_pool_count;
+    ctx.image_parameter_slots = slots.parameters;
+    ctx.image_parameter_slot_count = 0;
 }
 
 // -- Module + word population ------------------------------------------
@@ -461,13 +510,18 @@ fn populateTypeValueSlots(
     ctx: *Context,
     header: *const Header,
     slots: ?SlotTable,
+    struct_type_slots: ?StructTypeSlotTable,
 ) LoaderError!void {
     if (header.typevalue_count == 0 and header.struct_type_count == 0) {
         return;
     }
     const arena = ctx.quotationAllocator();
 
-    // Pass 1: allocate runtime StructTypes.
+    // Pass 1: allocate runtime StructTypes and patch the struct-type
+    // slot table so codegen-emitted slot-indexed pushes can resolve
+    // through it. The slot index matches the row's position in
+    // `onez_image_struct_types_storage[]`, mirroring the typevalue
+    // slot-table contract.
     var struct_types_out: []*value_mod.StructType = &.{};
     if (header.struct_type_count > 0) {
         struct_types_out = arena.alloc(*value_mod.StructType, header.struct_type_count) catch
@@ -483,6 +537,7 @@ fn populateTypeValueSlots(
                 .field_types = &.{},
             };
             struct_types_out[i] = st;
+            if (struct_type_slots) |table| table[i] = st;
         }
     }
 
@@ -905,7 +960,7 @@ test "loadIntoContext: rejects unsupported format version" {
 
     try testing.expectError(
         LoaderError.UnsupportedFormat,
-        loadIntoContext(&ctx, &header, null, null),
+        loadIntoContext(&ctx, &header, .{}, null),
     );
 }
 
@@ -915,7 +970,7 @@ test "loadIntoContext: empty header populates nothing" {
 
     const header = emptyHeader();
 
-    try loadIntoContext(&ctx, &header, null, null);
+    try loadIntoContext(&ctx, &header, .{}, null);
 
     var iter = ctx.module_cache_value.iterator();
     var seen: u32 = 0;
@@ -944,7 +999,7 @@ test "loadIntoContext: structural-only image populates module cache" {
     header.modules = &modules;
     header.words = &words;
 
-    try loadIntoContext(&ctx, &header, null, null);
+    try loadIntoContext(&ctx, &header, .{}, null);
 
     const entry = ctx.module_cache_value.get(m_name) orelse {
         try testing.expect(false);
@@ -1020,7 +1075,7 @@ test "loadIntoContext: resource TypeValue rehydrates kind + universal bools + re
     header.typevalues = &typevalues;
     header.typedescriptors = &descriptors;
 
-    try loadIntoContext(&ctx, &header, &slot_storage, null);
+    try loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null);
 
     const tv = slot_storage[1] orelse {
         try testing.expect(false);
@@ -1093,7 +1148,7 @@ test "loadIntoContext: struct TypeDescriptor with field-types resolves cross-ref
     header.typevalues = &typevalues;
     header.typedescriptors = &descriptors;
 
-    try loadIntoContext(&ctx, &header, &slot_storage, null);
+    try loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null);
 
     const tv_a = slot_storage[1] orelse return error.TestUnexpectedResult;
     const tv_b = slot_storage[2] orelse return error.TestUnexpectedResult;
@@ -1151,7 +1206,7 @@ test "loadIntoContext: enum descriptor decodes variants and cross-references" {
     header.typevalues = &typevalues;
     header.typedescriptors = &descriptors;
 
-    try loadIntoContext(&ctx, &header, &slot_storage, null);
+    try loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null);
 
     const color = slot_storage[1] orelse return error.TestUnexpectedResult;
     const red = slot_storage[2] orelse return error.TestUnexpectedResult;
@@ -1222,7 +1277,7 @@ test "loadIntoContext: virtual with anon_struct allocates StructType" {
     header.typedescriptors = &descriptors;
     header.struct_types = &struct_types;
 
-    try loadIntoContext(&ctx, &header, &slot_storage, null);
+    try loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null);
 
     const outer = slot_storage[2] orelse return error.TestUnexpectedResult;
     const outer_kind = outer.descriptor.?.kind;
@@ -1266,7 +1321,7 @@ test "loadIntoContext: PIC relocation rewrites snapshot slot to runtime TypeValu
     header.typevalues = &typevalues;
     header.typedescriptors = &descriptors;
 
-    try loadIntoContext(&ctx, &header, &slot_storage, reloc_table);
+    try loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, reloc_table);
 
     const tv = slot_storage[1] orelse return error.TestUnexpectedResult;
     try testing.expectEqual(tv, snapshot_slot);
@@ -1289,7 +1344,7 @@ test "loadIntoContext: PIC relocation with out-of-range slot index errors" {
 
     try testing.expectError(
         LoaderError.BadSlotIndex,
-        loadIntoContext(&ctx, &header, &slot_storage, reloc_table),
+        loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, reloc_table),
     );
 }
 
@@ -1321,7 +1376,7 @@ test "loadIntoContext: rejects out-of-range typevalue slot" {
 
     try testing.expectError(
         LoaderError.BadSlotIndex,
-        loadIntoContext(&ctx, &header, &slot_storage, null),
+        loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null),
     );
 }
 
@@ -1352,7 +1407,7 @@ test "loadIntoContext: bytecode body decodes into compound action" {
     header.modules = &modules;
     header.words = &words;
 
-    try loadIntoContext(&ctx, &header, null, null);
+    try loadIntoContext(&ctx, &header, .{}, null);
 
     const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
     const module_ptr = entry.module;
@@ -1382,7 +1437,7 @@ test "loadIntoContext: null body bytecode preserves empty compound" {
     header.modules = &modules;
     header.words = &words;
 
-    try loadIntoContext(&ctx, &header, null, null);
+    try loadIntoContext(&ctx, &header, .{}, null);
 
     const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
     const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
@@ -1421,7 +1476,7 @@ test "loadIntoContext: nested quotation literal round-trips" {
     header.modules = &modules;
     header.words = &words;
 
-    try loadIntoContext(&ctx, &header, null, null);
+    try loadIntoContext(&ctx, &header, .{}, null);
 
     const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
     const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
@@ -1457,7 +1512,7 @@ test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {
 
     try testing.expectError(
         LoaderError.OutOfMemory,
-        loadIntoContext(&ctx, &header, null, null),
+        loadIntoContext(&ctx, &header, .{}, null),
     );
 }
 
@@ -1497,7 +1552,7 @@ test "loadIntoContext: diagnostic metadata fields round-trip into ModuleWord" {
     header.modules = &modules;
     header.words = &words;
 
-    try loadIntoContext(&ctx, &header, null, null);
+    try loadIntoContext(&ctx, &header, .{}, null);
 
     const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
     const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
@@ -1527,7 +1582,7 @@ test "loadIntoContext: absent diagnostic metadata leaves ModuleWord fields null"
     header.modules = &modules;
     header.words = &words;
 
-    try loadIntoContext(&ctx, &header, null, null);
+    try loadIntoContext(&ctx, &header, .{}, null);
 
     const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
     const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;

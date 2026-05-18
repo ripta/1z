@@ -265,14 +265,18 @@ export fn onez_load_prelude(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
 /// generated `main()` for runtime-image AOT binaries calls this once
 /// between `onez_init` and `onez_set_args`.
 ///
-/// `header_ptr` points at the embedded `onez_image_v1` symbol;
-/// `slot_table_ptr` points at the first element of
-/// `onez_image_typevalue_slots[]`. Both must remain valid for the
-/// lifetime of the runtime.
+/// `header_ptr` points at the embedded `onez_image_v1` symbol; the
+/// four slot-table pointers point at the first element of the
+/// corresponding `onez_image_*_slots[]` arrays. All five pointers must
+/// remain valid for the lifetime of the runtime. Any slot-table
+/// pointer may be NULL when its table was not emitted (zero slots).
 export fn onez_load_runtime_image(
     ptr: ?*anyopaque,
     header_ptr: ?*const anyopaque,
-    slot_table_ptr: ?*anyopaque,
+    typevalue_slots_ptr: ?*anyopaque,
+    struct_type_slots_ptr: ?*anyopaque,
+    marker_slots_ptr: ?*anyopaque,
+    parameter_slots_ptr: ?*anyopaque,
 ) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
@@ -283,12 +287,29 @@ export fn onez_load_runtime_image(
     };
     const header: *const aot_image_loader.Header = @ptrCast(@alignCast(hp));
 
-    const slots: ?aot_image_loader.SlotTable = if (slot_table_ptr) |sp|
+    const typevalue_slots: ?aot_image_loader.SlotTable = if (typevalue_slots_ptr) |sp|
+        @ptrCast(@alignCast(sp))
+    else
+        null;
+    const struct_type_slots: ?aot_image_loader.StructTypeSlotTable = if (struct_type_slots_ptr) |sp|
+        @ptrCast(@alignCast(sp))
+    else
+        null;
+    const marker_slots: ?aot_image_loader.MarkerSlotTable = if (marker_slots_ptr) |sp|
+        @ptrCast(@alignCast(sp))
+    else
+        null;
+    const parameter_slots: ?aot_image_loader.ParameterSlotTable = if (parameter_slots_ptr) |sp|
         @ptrCast(@alignCast(sp))
     else
         null;
 
-    aot_image_loader.loadIntoContext(ctx, header, slots, null) catch |err| {
+    aot_image_loader.loadIntoContext(ctx, header, .{
+        .typevalues = typevalue_slots,
+        .struct_types = struct_type_slots,
+        .markers = marker_slots,
+        .parameters = parameter_slots,
+    }, null) catch |err| {
         captureError(handle, err);
         return ONEZ_ERR_LOAD_FAILED;
     };

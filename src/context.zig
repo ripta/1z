@@ -377,6 +377,20 @@ pub const Context = struct {
     /// AOT quotation function pointers, indexed by quotation_id.
     /// Registered at startup by onez_runtime_register_quotations.
     aot_quotation_fns: ?AotQuotationFnTable = null,
+    /// Runtime-image slot tables, cached at load time so the
+    /// compiled-code helpers (`jitPushTypeValueSlot`,
+    /// `jitPushStructTypeSlot`, etc.) can resolve typed-literal
+    /// pushes without a runtime dictionary lookup. Each pointer is
+    /// null when the corresponding table was not emitted (zero
+    /// slots). Populated by `aot_image_loader.loadIntoContext`.
+    image_typevalue_slots: ?[*]?*const value_mod.TypeValue = null,
+    image_struct_type_slots: ?[*]?*value_mod.StructType = null,
+    image_marker_slots: ?[*]?*value_mod.Marker = null,
+    image_parameter_slots: ?[*]?*value_mod.Parameter = null,
+    image_typevalue_slot_count: u32 = 0,
+    image_struct_type_slot_count: u32 = 0,
+    image_marker_slot_count: u32 = 0,
+    image_parameter_slot_count: u32 = 0,
     /// Pending error from a JIT error-handling callback (recover/cleanup).
     /// Set by the callback when it returns error_propagate status, consumed
     /// by the interpreter dispatch loop.
