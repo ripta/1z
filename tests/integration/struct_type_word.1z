@@ -1,0 +1,35 @@
+use "testing" ;
+
+"struct type word basics" test-section
+
+vec2: struct{ x y } ;
+
+\ type word pushes a type value
+vec2 type-of type = "vec2 is a type value" assert-true
+
+\ type-of on instance matches the type word
+1 2 make-vec2 type-of vec2 = "type-of instance equals type word" assert-true
+
+\ type-name extracts the name
+vec2 native.type-name "vec2" "type-name of struct type" assert=
+
+\ type word is const
+[ vec2: [ 42 ] ;
+] "cannot-redefine-const" assert-error
+
+"struct type word with mutable struct" test-section
+
+mpoint: mutable struct{ mx my } ;
+10 20 make-mpoint type-of mpoint = "mutable struct type-of matches" assert-true
+
+"struct type word in modules" test-section
+
+m: "module_struct_lib.1z" load ;
+m point: @has? t "module exports point type word" assert=
+m.point type-of type = "qualified point is a type value" assert-true
+1 2 m.make-point type-of m.point = "qualified type-of matches" assert-true
+
+"struct type word is parse-time" test-section
+
+color: struct{ r g b } ;
+{ color } #first type-of type = "type word executes at parse time" assert-true

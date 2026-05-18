@@ -91,6 +91,27 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
         },
     };
 
+    // Create a TypeValue for the enum type itself
+    const enum_tv = try alloc.create(value_mod.TypeValue);
+    enum_tv.* = .{ .name = enum_name, .descriptor = null };
+
+    // NAME: ( -- type ) - the enum type pushing a TypeValue
+    const type_markers = try alloc.alloc(*Marker, 3);
+    type_markers[0] = @constCast(&markers_mod.parse_time_marker);
+    type_markers[1] = @constCast(&markers_mod.const_marker);
+    type_markers[2] = @constCast(&markers_mod.typed_marker);
+
+    const type_instrs = try alloc.alloc(Instruction, 1);
+    type_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = enum_tv } }, .line = 0 };
+
+    try ctx.defineWord(enum_name, .{
+        .name = enum_name,
+        .parse_time = true,
+        .markers = type_markers,
+        .provenance = .{ .generator = "enum", .parent = enum_name, .role = "type" },
+        .action = .{ .compound = type_instrs },
+    });
+
     var vtype_list = std.ArrayListUnmanaged(*const VirtualType){};
     var generated_words = std.ArrayListUnmanaged(Value){};
 
@@ -268,10 +289,12 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     });
 
     try generated_words.append(alloc, .{ .string = agg_pred_name });
+    try generated_words.append(alloc, .{ .string = try alloc.dupe(u8, enum_name) });
     const gw_slice = try generated_words.toOwnedSlice(alloc);
     try desc_map.put(alloc, "generated-words", .{ .array = gw_slice });
     const frozen_desc: *value_mod.HashTable = @ptrCast(desc_map);
     try ctx.type_descriptors.put(ctx.allocator, enum_name, frozen_desc);
+    enum_tv.descriptor = frozen_desc;
 
     const vtypes_slice = try vtype_list.toOwnedSlice(alloc);
     try ctx.enum_registry.put(ctx.allocator, enum_name, vtypes_slice);

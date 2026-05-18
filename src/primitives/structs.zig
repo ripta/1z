@@ -116,6 +116,23 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     tv.* = .{ .name = name, .descriptor = null };
     struct_type.type_val = tv;
 
+    // NAME: ( -- type ) - the struct type itself pushing a TypeValue
+    const type_markers = try alloc.alloc(*Marker, 3);
+    type_markers[0] = @constCast(&markers_mod.parse_time_marker);
+    type_markers[1] = @constCast(&markers_mod.const_marker);
+    type_markers[2] = @constCast(&markers_mod.typed_marker);
+
+    const type_instrs = try alloc.alloc(Instruction, 1);
+    type_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0 };
+
+    try ctx.defineWord(name, .{
+        .name = name,
+        .parse_time = true,
+        .markers = type_markers,
+        .provenance = .{ .generator = "struct", .parent = name, .role = "type" },
+        .action = .{ .compound = type_instrs },
+    });
+
     // make-NAME: ( field1 field2 ... -- instance ) - positional constructor
     const make_name = try std.fmt.allocPrint(alloc, "make-{s}", .{name});
     try defineConstructor(ctx, make_name, struct_type, markers_slice);
@@ -161,6 +178,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
 
     // Build generated-words reverse index
     var generated_words = std.ArrayListUnmanaged(Value){};
+    try generated_words.append(alloc, .{ .string = name });
     try generated_words.append(alloc, .{ .string = make_name });
     try generated_words.append(alloc, .{ .string = convert_name });
     try generated_words.append(alloc, .{ .string = unmake_name });

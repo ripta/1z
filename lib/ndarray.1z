@@ -17,7 +17,7 @@ contiguous?: ( shape strides -- bool ) [
   swap row-major-strides =
 ] ;
 
-ndarray: ( data shape -- ndarray ) [
+<ndarray>: ( data shape -- ndarray ) [
   dup #len 0 = [ f "shape must be non-empty" EInvalidArgument make-error throw ] when
   dup [ dup fixnum? [ 0 > ] [ drop f ] if ] #filter #collect #len over #len =
   not [ f "shape elements must be positive fixnums" EInvalidArgument make-error throw ] when
@@ -660,7 +660,7 @@ nd{: parse-time [
     \ 1D: single row, shape is { n }
     0 #nth
     dup { } swap #len #push
-    ndarray
+    <ndarray>
   ] [
     \ 2D: validate all rows have same length, flatten
     dup 0 #nth #len
@@ -676,7 +676,7 @@ nd{: parse-time [
     \ stack: shape rows
     { } swap >iterator [ #append ] #each
     \ stack: shape flat-data
-    swap ndarray
+    swap <ndarray>
   ] if
 ] ;
 
@@ -704,7 +704,7 @@ mask: ( ndarray bool-ndarray -- ndarray ) [
   dup #len 0 = [
     drop { } { 0 } { 1 } <rot- make-ndarray
   ] [
-    { } over #len #push ndarray nip
+    { } over #len #push <ndarray> nip
   ] if
 ] ;
 
@@ -725,7 +725,7 @@ gather: ( ndarray indices -- ndarray ) [
   dup #len 0 = [
     drop { } { 0 } { 1 } <rot- make-ndarray
   ] [
-    { } over #len #push ndarray nip
+    { } over #len #push <ndarray> nip
   ] if
 ] ;
 

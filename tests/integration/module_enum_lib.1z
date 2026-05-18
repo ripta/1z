@@ -1,0 +1,3 @@
+\ Module that defines an enum type for scoping tests
+
+direction: enum{ north south east west } ;

@@ -4,21 +4,21 @@ use "testing" ;
 use "ranges" ;
 
 "range type" test-section
-1 10 range type-name "range" "type-of returns range" assert=
-1 10 range range? t "range? on range" assert=
+1 10 <range> type-name "range" "type-of returns range" assert=
+1 10 <range> range? t "range? on range" assert=
 42 range? f "range? on integer" assert=
 
 "range (exclusive ascending)" test-section
-1 10 range >iterator #collect { 1 2 3 4 5 6 7 8 9 } "1 to 10" assert=
-0 5 range >iterator #collect { 0 1 2 3 4 } "0 to 5" assert=
--2 2 range >iterator #collect { -2 -1 0 1 } "-2 to 2" assert=
+1 10 <range> >iterator #collect { 1 2 3 4 5 6 7 8 9 } "1 to 10" assert=
+0 5 <range> >iterator #collect { 0 1 2 3 4 } "0 to 5" assert=
+-2 2 <range> >iterator #collect { -2 -1 0 1 } "-2 to 2" assert=
 
 "range (exclusive descending)" test-section
-10 1 range >iterator #collect { 10 9 8 7 6 5 4 3 2 } "10 to 1" assert=
-5 3 range >iterator #collect { 5 4 } "5 to 3" assert=
+10 1 <range> >iterator #collect { 10 9 8 7 6 5 4 3 2 } "10 to 1" assert=
+5 3 <range> >iterator #collect { 5 4 } "5 to 3" assert=
 
 "range (empty)" test-section
-5 5 range >iterator #collect { } "equal bounds" assert=
+5 5 <range> >iterator #collect { } "equal bounds" assert=
 
 "range= (inclusive ascending)" test-section
 1 10 range= >iterator #collect { 1 2 3 4 5 6 7 8 9 10 } "1 to 10 inclusive" assert=
@@ -51,36 +51,36 @@ use "ranges" ;
 3 7 range-inclusive >iterator #collect { 3 4 5 6 7 } "range-inclusive 3 7" assert=
 
 "#len" test-section
-1 10 range #len 9 "#len ascending" assert=
+1 10 <range> #len 9 "#len ascending" assert=
 1 10 range= #len 10 "#len inclusive" assert=
 1 10 2 range-step #len 5 "#len stepped" assert=
 0 20 5 range-step #len 4 "#len step 5" assert=
-10 1 range #len 9 "#len descending" assert=
+10 1 <range> #len 9 "#len descending" assert=
 10 1 -3 range-step #len 3 "#len descending stepped" assert=
-5 5 range #len 0 "#len empty" assert=
+5 5 <range> #len 0 "#len empty" assert=
 
 "#nth" test-section
-1 10 range 0 #nth 1 "#nth first" assert=
-1 10 range 8 #nth 9 "#nth last" assert=
+1 10 <range> 0 #nth 1 "#nth first" assert=
+1 10 <range> 8 #nth 9 "#nth last" assert=
 1 10 2 range-step 2 #nth 5 "#nth stepped" assert=
 10 1 -3 range-step 1 #nth 7 "#nth descending" assert=
-[ 1 10 range -1 #nth ] "#nth negative" assert-error
-[ 1 10 range 9 #nth ] "#nth out of bounds" assert-error
-[ 5 5 range 0 #nth ] "#nth on empty" assert-error
+[ 1 10 <range> -1 #nth ] "#nth negative" assert-error
+[ 1 10 <range> 9 #nth ] "#nth out of bounds" assert-error
+[ 5 5 <range> 0 #nth ] "#nth on empty" assert-error
 
 "#first" test-section
-1 10 range #first 1 "#first ascending" assert=
-10 1 range #first 10 "#first descending" assert=
+1 10 <range> #first 1 "#first ascending" assert=
+10 1 <range> #first 10 "#first descending" assert=
 5 5 range= #first 5 "#first single element" assert=
-[ 5 5 range #first ] "#first on empty" assert-error
+[ 5 5 <range> #first ] "#first on empty" assert-error
 
 "#last" test-section
-1 10 range #last 9 "#last ascending" assert=
+1 10 <range> #last 9 "#last ascending" assert=
 1 10 range= #last 10 "#last inclusive" assert=
 1 10 2 range-step #last 9 "#last stepped" assert=
-10 1 range #last 2 "#last descending" assert=
+10 1 <range> #last 2 "#last descending" assert=
 10 1 -3 range-step #last 4 "#last descending stepped" assert=
-[ 5 5 range #last ] "#last on empty" assert-error
+[ 5 5 <range> #last ] "#last on empty" assert-error
 
 "range-from" test-section
 1 range-from >iterator 5 #take #collect { 1 2 3 4 5 } "range-from 1 take 5" assert=
@@ -108,6 +108,6 @@ use "ranges" ;
 0 range-from >iterator 10 #take 0 [ + ] #reduce 45 "infinite + take + reduce" assert=
 
 "lazy pipeline" test-section
-1 10 range >iterator [ 2 * ] #map #collect { 2 4 6 8 10 12 14 16 18 } "range + map" assert=
-1 10 range >iterator [ 5 > ] #filter #collect { 6 7 8 9 } "range + filter" assert=
+1 10 <range> >iterator [ 2 * ] #map #collect { 2 4 6 8 10 12 14 16 18 } "range + map" assert=
+1 10 <range> >iterator [ 5 > ] #filter #collect { 6 7 8 9 } "range + filter" assert=
 1 100 range= >iterator 0 [ + ] #reduce 5050 "range + reduce" assert=

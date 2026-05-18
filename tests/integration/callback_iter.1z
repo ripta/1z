@@ -91,4 +91,4 @@ V{ 1 2 3 } >iterator #collect { 1 2 3 } "vector round-trips through >iterator" a
 "Range >iterator still works" test-section
 
 use "ranges" ;
-1 5 range >iterator #collect { 1 2 3 4 } "range round-trips through >iterator" assert=
+1 5 <range> >iterator #collect { 1 2 3 4 } "range round-trips through >iterator" assert=

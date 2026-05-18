@@ -4,7 +4,7 @@
 range: virtual{ struct{ start end step infinite? } } ;
 
 \ Exclusive range [start, end) with auto-step +-1
-range: ( start end -- range ) [
+<range>: ( start end -- range ) [
   2dup < [ 1 ] [ -1 ] if f make-range
 ] ;
 
@@ -25,7 +25,7 @@ range-step: ( start end step -- range ) [
 ] ;
 
 \ Generate exclusive range [0, n)
-iota: ( n -- range ) [ 0 swap range ] ;
+iota: ( n -- range ) [ 0 swap <range> ] ;
 
 \ Infinite range from start, step 1
 range-from: ( start -- range ) [ 0 1 t make-range ] ;

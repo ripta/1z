@@ -202,6 +202,7 @@ task-self ( -- task )
 throw ( error -- )
 try-receive ( ch -- val/f ? )
 type-of ( val -- type )
+typed ( -- marker )
 tz-decompose ( sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev )
 unchecked-match ( val branches -- ... )
 uppercase ( str -- str )
@@ -319,6 +320,7 @@ column>>
 comparable
 cond ( branches -- ... )
 define-parameter
+dispatch-provenance
 dispatch-provenance>hash
 dispatch-provenance?
 do ( pred body -- pred body )
@@ -382,6 +384,7 @@ marker? ( val -- ? )
 markers>>
 match{
 max ( a1 a2 -- a )
+method-info
 method-info>hash
 method-info?
 methods>>
@@ -405,6 +408,7 @@ no-matching-branch ( data -- error )
 not ( ? -- ? )
 number? ( val -- ? )
 odd? ( n -- ? )
+option
 option:none
 option:none?
 option:some> ( option -- value )
@@ -412,6 +416,7 @@ option:some>hash
 option:some?
 option?
 or ( ? ? -- ? )
+ordering
 ordering:eq
 ordering:eq?
 ordering:gt
@@ -431,6 +436,7 @@ pragma-get ( name -- option )
 print ( str -- )
 print-line ( str -- )
 protocol{
+provenance
 provenance>>
 provenance>hash
 provenance?
@@ -439,6 +445,7 @@ quotation? ( val -- ? )
 read-line ( -- str/f )
 receive? ( ch -- option )
 resource
+result
 result:err> ( result -- error )
 result:err>hash
 result:err?
@@ -450,10 +457,12 @@ role>>
 run-benchmarks ( quot -- )
 set
 set? ( val -- ? )
+source-loc
 source-loc>>
 source-loc>hash
 source-loc?
 stack-effect
+stack-effect-info
 stack-effect-info>hash
 stack-effect-info?
 stack-effect>>
@@ -502,6 +511,7 @@ while ( ..a pred body -- ..b )
 with-input-stream ( stream quot -- )
 with-iterator ( iterator quot -- ... )
 with-output-stream ( stream quot -- )
+word-info
 word-info>hash
 word-info?
 word-source ( symbol -- option )

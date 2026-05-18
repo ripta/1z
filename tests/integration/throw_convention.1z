@@ -54,10 +54,10 @@ EInvalidArgument invalid-argument: "EInvalidArgument value" assert=
 "range errors use proper types" test-section
 
 [ 1 10 0 range-step ] invalid-argument: "range-step zero step" assert-error-type
-[ 5 5 range #first ] index-out-of-bounds: "empty range #first" assert-error-type
-[ 5 5 range #last ] index-out-of-bounds: "empty range #last" assert-error-type
-[ 1 10 range -1 #nth ] index-out-of-bounds: "range negative index" assert-error-type
-[ 1 10 range 9 #nth ] index-out-of-bounds: "range out of bounds" assert-error-type
+[ 5 5 <range> #first ] index-out-of-bounds: "empty range #first" assert-error-type
+[ 5 5 <range> #last ] index-out-of-bounds: "empty range #last" assert-error-type
+[ 1 10 <range> -1 #nth ] index-out-of-bounds: "range negative index" assert-error-type
+[ 1 10 <range> 9 #nth ] index-out-of-bounds: "range out of bounds" assert-error-type
 
 "cons-list errors use proper types" test-section
 
