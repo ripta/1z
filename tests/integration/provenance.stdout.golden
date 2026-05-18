@@ -237,29 +237,29 @@ Stack: [ ]
 === flat enum generated-words ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ { "gw-dir:north" "gw-dir:north?" "gw-dir:south" "gw-dir:south?" "gw-dir:east" "gw-dir:east?" "gw-dir:west" "gw-dir:west?" "gw-dir?" } ]
+Stack: [ { "gw-dir:north" "gw-dir:north?" "gw-dir:south" "gw-dir:south?" "gw-dir:east" "gw-dir:east?" "gw-dir:west" "gw-dir:west?" "gw-dir?" "gw-dir" } ]
 PASS: enum generated-words includes variant constructor
-Stack: [ { "gw-dir:north" "gw-dir:north?" "gw-dir:south" "gw-dir:south?" "gw-dir:east" "gw-dir:east?" "gw-dir:west" "gw-dir:west?" "gw-dir?" } ]
+Stack: [ { "gw-dir:north" "gw-dir:north?" "gw-dir:south" "gw-dir:south?" "gw-dir:east" "gw-dir:east?" "gw-dir:west" "gw-dir:west?" "gw-dir?" "gw-dir" } ]
 PASS: enum generated-words includes variant predicate
-Stack: [ { "gw-dir:north" "gw-dir:north?" "gw-dir:south" "gw-dir:south?" "gw-dir:east" "gw-dir:east?" "gw-dir:west" "gw-dir:west?" "gw-dir?" } ]
+Stack: [ { "gw-dir:north" "gw-dir:north?" "gw-dir:south" "gw-dir:south?" "gw-dir:east" "gw-dir:east?" "gw-dir:west" "gw-dir:west?" "gw-dir?" "gw-dir" } ]
 PASS: enum generated-words includes aggregate predicate
 Stack: [ ]
 === data-carrying enum generated-words ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" } ]
+Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" "gw-shape" } ]
 PASS: data enum generated-words includes wrap
-Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" } ]
+Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" "gw-shape" } ]
 PASS: data enum generated-words includes make-
-Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" } ]
+Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" "gw-shape" } ]
 PASS: data enum generated-words includes unmake-
-Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" } ]
+Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" "gw-shape" } ]
 PASS: data enum generated-words includes >hash
-Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" } ]
+Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" "gw-shape" } ]
 PASS: data enum generated-words includes variant pred
-Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" } ]
+Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" "gw-shape" } ]
 PASS: data enum generated-words includes flat variant
-Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" } ]
+Stack: [ { ">gw-shape:circle" "make-gw-shape:circle" "unmake-gw-shape:circle" "gw-shape:circle>hash" "gw-shape:circle?" "gw-shape:dot" "gw-shape:dot?" "gw-shape?" "gw-shape" } ]
 PASS: data enum generated-words includes aggregate pred
 Stack: [ ]
 === generated-by on generated word ===

@@ -1,0 +1,39 @@
+use "testing" ;
+
+"enum type word basics" test-section
+
+color: enum{ red green blue } ;
+
+\ type word pushes a type value
+color type-of type = "color is a type value" assert-true
+
+\ type-name extracts the name
+color native.type-name "color" "type-name of enum type" assert=
+
+\ type word is const
+[ color: [ 42 ] ;
+] "cannot-redefine-const" assert-error
+
+"data-carrying enum type word" test-section
+
+shape: enum{
+  circle struct{ radius }
+  point
+} ;
+
+\ type word pushes a type value
+shape type-of type = "shape is a type value" assert-true
+
+\ type-name extracts the name
+shape native.type-name "shape" "type-name of data-carrying enum type" assert=
+
+"enum type word in modules" test-section
+
+m: "module_enum_lib.1z" load ;
+m direction: @has? t "module exports direction type word" assert=
+m.direction type-of type = "qualified direction is a type value" assert-true
+
+"enum type word is parse-time" test-section
+
+suit: enum{ hearts diamonds clubs spades } ;
+{ suit } #first type-of type = "type word executes at parse time" assert-true

@@ -408,6 +408,7 @@ no-matching-branch ( data -- error )
 not ( ? -- ? )
 number? ( val -- ? )
 odd? ( n -- ? )
+option
 option:none
 option:none?
 option:some> ( option -- value )
@@ -415,6 +416,7 @@ option:some>hash
 option:some?
 option?
 or ( ? ? -- ? )
+ordering
 ordering:eq
 ordering:eq?
 ordering:gt
@@ -443,6 +445,7 @@ quotation? ( val -- ? )
 read-line ( -- str/f )
 receive? ( ch -- option )
 resource
+result
 result:err> ( result -- error )
 result:err>hash
 result:err?

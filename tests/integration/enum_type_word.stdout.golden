@@ -1,0 +1,28 @@
+=== enum type word basics ===
+Stack: [ ]
+Stack: [ ]
+PASS: color is a type value
+Stack: [ ]
+PASS: type-name of enum type
+Stack: [ ]
+PASS: cannot-redefine-const
+Stack: [ ]
+=== data-carrying enum type word ===
+Stack: [ ]
+Stack: [ ]
+PASS: shape is a type value
+Stack: [ ]
+PASS: type-name of data-carrying enum type
+Stack: [ ]
+=== enum type word in modules ===
+Stack: [ ]
+Stack: [ ]
+PASS: module exports direction type word
+Stack: [ ]
+PASS: qualified direction is a type value
+Stack: [ ]
+=== enum type word is parse-time ===
+Stack: [ ]
+Stack: [ ]
+PASS: type word executes at parse time
+Stack: [ ]
