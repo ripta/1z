@@ -211,27 +211,27 @@ Stack: [ ]
 === simple virtual generated-words ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ { ">gw-meter" "make-gw-meter" "unmake-gw-meter" "gw-meter?" } ]
+Stack: [ { "gw-meter" ">gw-meter" "make-gw-meter" "unmake-gw-meter" "gw-meter?" } ]
 PASS: virtual generated-words includes wrap
-Stack: [ { ">gw-meter" "make-gw-meter" "unmake-gw-meter" "gw-meter?" } ]
+Stack: [ { "gw-meter" ">gw-meter" "make-gw-meter" "unmake-gw-meter" "gw-meter?" } ]
 PASS: virtual generated-words includes make-
-Stack: [ { ">gw-meter" "make-gw-meter" "unmake-gw-meter" "gw-meter?" } ]
+Stack: [ { "gw-meter" ">gw-meter" "make-gw-meter" "unmake-gw-meter" "gw-meter?" } ]
 PASS: virtual generated-words includes unmake-
-Stack: [ { ">gw-meter" "make-gw-meter" "unmake-gw-meter" "gw-meter?" } ]
+Stack: [ { "gw-meter" ">gw-meter" "make-gw-meter" "unmake-gw-meter" "gw-meter?" } ]
 PASS: virtual generated-words includes predicate
 Stack: [ ]
 === struct-backed virtual generated-words ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ { ">gw-vec" "make-gw-vec" "unmake-gw-vec" "gw-vec>hash" "gw-vec?" } ]
+Stack: [ { "gw-vec" ">gw-vec" "make-gw-vec" "unmake-gw-vec" "gw-vec>hash" "gw-vec?" } ]
 PASS: sbv generated-words includes wrap
-Stack: [ { ">gw-vec" "make-gw-vec" "unmake-gw-vec" "gw-vec>hash" "gw-vec?" } ]
+Stack: [ { "gw-vec" ">gw-vec" "make-gw-vec" "unmake-gw-vec" "gw-vec>hash" "gw-vec?" } ]
 PASS: sbv generated-words includes make-
-Stack: [ { ">gw-vec" "make-gw-vec" "unmake-gw-vec" "gw-vec>hash" "gw-vec?" } ]
+Stack: [ { "gw-vec" ">gw-vec" "make-gw-vec" "unmake-gw-vec" "gw-vec>hash" "gw-vec?" } ]
 PASS: sbv generated-words includes unmake-
-Stack: [ { ">gw-vec" "make-gw-vec" "unmake-gw-vec" "gw-vec>hash" "gw-vec?" } ]
+Stack: [ { "gw-vec" ">gw-vec" "make-gw-vec" "unmake-gw-vec" "gw-vec>hash" "gw-vec?" } ]
 PASS: sbv generated-words includes >hash
-Stack: [ { ">gw-vec" "make-gw-vec" "unmake-gw-vec" "gw-vec>hash" "gw-vec?" } ]
+Stack: [ { "gw-vec" ">gw-vec" "make-gw-vec" "unmake-gw-vec" "gw-vec>hash" "gw-vec?" } ]
 PASS: sbv generated-words includes predicate
 Stack: [ ]
 === flat enum generated-words ===

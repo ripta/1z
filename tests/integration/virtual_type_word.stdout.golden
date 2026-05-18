@@ -1,0 +1,34 @@
+=== virtual type word basics ===
+Stack: [ ]
+Stack: [ ]
+PASS: duration is a type value
+Stack: [ ]
+PASS: type-of instance equals type word
+Stack: [ ]
+PASS: type-name of virtual type
+Stack: [ ]
+PASS: cannot-redefine-const
+Stack: [ ]
+=== struct-backed virtual type word ===
+Stack: [ ]
+Stack: [ ]
+PASS: point is a type value
+Stack: [ ]
+PASS: struct-backed type-of matches
+Stack: [ ]
+PASS: type-name of struct-backed virtual
+Stack: [ ]
+=== virtual type word in modules ===
+Stack: [ ]
+Stack: [ ]
+PASS: module exports meters type word
+Stack: [ ]
+PASS: qualified meters is a type value
+Stack: [ ]
+PASS: qualified type-of matches
+Stack: [ ]
+=== virtual type word is parse-time ===
+Stack: [ ]
+Stack: [ ]
+PASS: type word executes at parse time
+Stack: [ ]

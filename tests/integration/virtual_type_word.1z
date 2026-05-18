@@ -1,0 +1,43 @@
+use "testing" ;
+
+"virtual type word basics" test-section
+
+duration: virtual{ fixnum } ;
+
+\ type word pushes a type value
+duration type-of type = "duration is a type value" assert-true
+
+\ type-of on instance matches the type word
+42 >duration type-of duration = "type-of instance equals type word" assert-true
+
+\ type-name extracts the name
+duration native.type-name "duration" "type-name of virtual type" assert=
+
+\ type word is const
+[ duration: [ 42 ] ;
+] "cannot-redefine-const" assert-error
+
+"struct-backed virtual type word" test-section
+
+point: virtual{ struct{ x y } } ;
+
+\ type word pushes a type value
+point type-of type = "point is a type value" assert-true
+
+\ type-of on instance matches the type word
+1 2 make-point type-of point = "struct-backed type-of matches" assert-true
+
+\ type-name extracts the name
+point native.type-name "point" "type-name of struct-backed virtual" assert=
+
+"virtual type word in modules" test-section
+
+m: "module_virtual_lib.1z" load ;
+m meters: @has? t "module exports meters type word" assert=
+m.meters type-of type = "qualified meters is a type value" assert-true
+42 m.>meters type-of m.meters = "qualified type-of matches" assert-true
+
+"virtual type word is parse-time" test-section
+
+weight: virtual{ fixnum } ;
+{ weight } #first type-of type = "type word executes at parse time" assert-true

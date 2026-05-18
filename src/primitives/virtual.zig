@@ -123,6 +123,23 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             tv.* = .{ .name = name, .descriptor = null };
             vtype.type_val = tv;
 
+            // NAME: ( -- type ) - the virtual type itself pushing a TypeValue
+            const type_markers = try alloc.alloc(*Marker, 3);
+            type_markers[0] = @constCast(&markers_mod.parse_time_marker);
+            type_markers[1] = @constCast(&markers_mod.const_marker);
+            type_markers[2] = @constCast(&markers_mod.typed_marker);
+
+            const type_instrs = try alloc.alloc(Instruction, 1);
+            type_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0 };
+
+            try ctx.defineWord(name, .{
+                .name = name,
+                .parse_time = true,
+                .markers = type_markers,
+                .provenance = .{ .generator = "virtual", .parent = name, .role = "type" },
+                .action = .{ .compound = type_instrs },
+            });
+
             // >NAME / make-NAME: ( value -- tagged ) - wrap
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
             try defineWrap(ctx, wrap_name, vtype, markers_slice);
@@ -139,6 +156,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try definePredicate(ctx, pred_name, vtype, markers_slice);
 
             var generated_words = std.ArrayListUnmanaged(Value){};
+            try generated_words.append(alloc, .{ .string = name });
             try generated_words.append(alloc, .{ .string = wrap_name });
             try generated_words.append(alloc, .{ .string = make_name });
             try generated_words.append(alloc, .{ .string = unmake_name });
@@ -195,6 +213,23 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             tv.* = .{ .name = name, .descriptor = null };
             vtype.type_val = tv;
 
+            // NAME: ( -- type ) - the virtual type itself pushing a TypeValue
+            const type_markers = try alloc.alloc(*Marker, 3);
+            type_markers[0] = @constCast(&markers_mod.parse_time_marker);
+            type_markers[1] = @constCast(&markers_mod.const_marker);
+            type_markers[2] = @constCast(&markers_mod.typed_marker);
+
+            const type_instrs = try alloc.alloc(Instruction, 1);
+            type_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = tv } }, .line = 0 };
+
+            try ctx.defineWord(name, .{
+                .name = name,
+                .parse_time = true,
+                .markers = type_markers,
+                .provenance = .{ .generator = "virtual", .parent = name, .role = "type" },
+                .action = .{ .compound = type_instrs },
+            });
+
             // >NAME: ( hash -- tagged ) - hash-based wrap
             const wrap_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
             try defineStructHashWrap(ctx, wrap_name, vtype, markers_slice);
@@ -219,6 +254,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try definePredicate(ctx, pred_name, vtype, markers_slice);
 
             var generated_words = std.ArrayListUnmanaged(Value){};
+            try generated_words.append(alloc, .{ .string = name });
             try generated_words.append(alloc, .{ .string = wrap_name });
             try generated_words.append(alloc, .{ .string = make_name });
             try generated_words.append(alloc, .{ .string = unmake_name });
