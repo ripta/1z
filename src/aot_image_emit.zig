@@ -23,6 +23,8 @@ const ModuleWord = value_mod.ModuleWord;
 const TypeValue = value_mod.TypeValue;
 const Marker = value_mod.Marker;
 const Parameter = value_mod.Parameter;
+const VirtualType = value_mod.VirtualType;
+const Value = value_mod.Value;
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
@@ -85,6 +87,11 @@ pub const ImageEmissionStats = struct {
     /// table so codegen can push struct-type literals through a
     /// link-time-resolvable slot rather than a runtime name lookup.
     struct_type_slot_count: u32 = 0,
+    /// Number of distinct `.tagged` Values reachable through compiled
+    /// word bodies, keyed on `(tag, inner)` pointer identity. Emitted
+    /// as `onez_image_tagged_slots[]` and patched at load time with the
+    /// runtime tagged Value the description row reconstructs.
+    tagged_slot_count: u32 = 0,
 };
 
 /// Knobs for `emitImageC`. The default (`metadata_only = false`) emits
@@ -227,11 +234,13 @@ pub fn emitImageCFromCollection(
     try emitTypeValueSlotTable(out, allocator, effect_table);
     try emitMarkerSlotTable(out, allocator, effect_table);
     try emitParameterSlotTable(out, allocator, effect_table);
+    try emitTaggedSlotTable(out, allocator, effect_table);
     try emitMarkerDescriptionsStorage(out, allocator, effect_table);
     try emitParameterDescriptionsStorage(out, allocator, effect_table);
     try emitStructTypeSlotTable(out, allocator, struct_plans_items);
     try emitStackEffectTable(out, allocator, effect_table);
     try emitTypeValueData(out, allocator, effect_table, struct_plans_items, struct_index);
+    try emitTaggedDescriptionsStorage(out, allocator, effect_table, struct_index);
 
     try emitWordNameStrings(out, allocator, manifest);
     try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
@@ -246,6 +255,7 @@ pub fn emitImageCFromCollection(
     stats.marker_slot_count = effect_table.markerSlotCount();
     stats.parameter_slot_count = effect_table.parameterSlotCount();
     stats.struct_type_slot_count = @intCast(struct_plans_items.len);
+    stats.tagged_slot_count = effect_table.taggedSlotCount();
     return stats;
 }
 
@@ -283,6 +293,13 @@ pub fn emitImageC(
 /// "no annotation" sentinel for the same reason. Params do not get
 /// their own dedup pool: they are owned by exactly one effect, so
 /// emitting them inline keeps the bookkeeping local.
+pub const TaggedSlotKey = instruction_bytecode.TaggedKey;
+
+pub const TaggedSlotEntry = struct {
+    tag: *const VirtualType,
+    inner: *const Value,
+};
+
 pub const StackEffectTable = struct {
     allocator: Allocator,
     /// Effects in deterministic insertion order. Index 0 is a
@@ -305,6 +322,13 @@ pub const StackEffectTable = struct {
     /// as the Marker table. Indices are 0-based with no sentinel.
     parameter_slots: std.ArrayListUnmanaged(*const Parameter) = .{},
     parameter_slot_index: std.AutoHashMapUnmanaged(*const Parameter, u32) = .{},
+    /// Distinct `.tagged` Values reached from compiled word bodies,
+    /// keyed on `(tag, inner)` pointer identity. The loader allocates a
+    /// runtime `*const Value` per entry by reconstructing the tag from
+    /// the TypeValue slot table and deserializing the inner Value.
+    /// Indices are 0-based with no sentinel.
+    tagged_slots: std.ArrayListUnmanaged(TaggedSlotEntry) = .{},
+    tagged_slot_index: std.AutoHashMapUnmanaged(TaggedSlotKey, u32) = .{},
 
     fn init(allocator: Allocator) StackEffectTable {
         return .{ .allocator = allocator };
@@ -319,6 +343,8 @@ pub const StackEffectTable = struct {
         self.marker_slot_index.deinit(self.allocator);
         self.parameter_slots.deinit(self.allocator);
         self.parameter_slot_index.deinit(self.allocator);
+        self.tagged_slots.deinit(self.allocator);
+        self.tagged_slot_index.deinit(self.allocator);
     }
 
     /// Insert if absent, returning the assigned index. The sentinel
@@ -362,6 +388,18 @@ pub const StackEffectTable = struct {
         return idx;
     }
 
+    /// Intern a `.tagged` Value identity. Two tagged Values are the same
+    /// entry when their `tag` and `inner` pointers both match. Returns
+    /// the assigned 0-based slot index.
+    fn internTagged(self: *StackEffectTable, tag: *const VirtualType, inner: *const Value) Allocator.Error!u32 {
+        const key: TaggedSlotKey = .{ .tag = tag, .inner_ptr = inner };
+        if (self.tagged_slot_index.get(key)) |idx| return idx;
+        const idx: u32 = @intCast(self.tagged_slots.items.len);
+        try self.tagged_slots.append(self.allocator, .{ .tag = tag, .inner = inner });
+        try self.tagged_slot_index.put(self.allocator, key, idx);
+        return idx;
+    }
+
     fn effectCount(self: *const StackEffectTable) u32 {
         // +1 for the reserved sentinel at index 0.
         return @intCast(self.effects.items.len + 1);
@@ -378,6 +416,10 @@ pub const StackEffectTable = struct {
 
     fn parameterSlotCount(self: *const StackEffectTable) u32 {
         return @intCast(self.parameter_slots.items.len);
+    }
+
+    fn taggedSlotCount(self: *const StackEffectTable) u32 {
+        return @intCast(self.tagged_slots.items.len);
     }
 
     fn lookupEffect(self: *const StackEffectTable, effect: *const StackEffect) u32 {
@@ -403,6 +445,12 @@ pub const StackEffectTable = struct {
     /// null when the pointer has not been interned.
     pub fn lookupParameterSlot(self: *const StackEffectTable, param: *const Parameter) ?u32 {
         return self.parameter_slot_index.get(param);
+    }
+
+    /// Look up the 0-based tagged slot index for the `(tag, inner)`
+    /// identity. Returns null when the pair has not been interned.
+    pub fn lookupTaggedSlot(self: *const StackEffectTable, tag: *const VirtualType, inner: *const Value) ?u32 {
+        return self.tagged_slot_index.get(.{ .tag = tag, .inner_ptr = inner });
     }
 };
 
@@ -587,6 +635,7 @@ fn internValueTypeLiterals(
         .tagged => |t| {
             if (t.tag.type_val) |tv| _ = try effect_table.internType(tv);
             try internValueTypeLiterals(struct_plans, struct_index, effect_table, t.inner.*);
+            _ = try effect_table.internTagged(t.tag, t.inner);
         },
         .parameter => |p| _ = try effect_table.internParameter(p),
         .marker => |m| _ = try effect_table.internMarker(m),
@@ -1039,6 +1088,124 @@ fn emitParameterDescriptionsStorage(
         try writeParamDescBodySym(out, allocator, i);
         try out.appendSlice(allocator, ", .default_quotation_bytecode_len = sizeof(");
         try writeParamDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ") },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+fn writeTaggedDescNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_tagged_desc_{d}_name", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeTaggedDescBodySym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_tagged_desc_{d}_inner", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+/// Emit `onez_image_tagged_slots[]`: one NULL pointer per distinct
+/// `.tagged` Value identity reached through compiled word bodies. The
+/// loader patches each slot with a heap-allocated runtime `*const Value`
+/// reconstructed from the description row's tag-typevalue slot and
+/// serialized inner bytecode. No-op when no tagged literals have been
+/// interned.
+fn emitTaggedSlotTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.taggedSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "__attribute__((used)) const struct onez_value *onez_image_tagged_slots[");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{table.taggedSlotCount()}) catch unreachable);
+    try out.appendSlice(allocator, "] = {\n");
+    for (table.tagged_slots.items, 0..) |entry, i| {
+        try out.appendSlice(allocator, "    NULL, /* slot ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ": tagged ");
+        try out.appendSlice(allocator, entry.tag.name);
+        try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_tagged_descriptions_storage[]`: one row per slot in
+/// `onez_image_tagged_slots[]`. Each row carries the tag's qualified
+/// name (for diagnostics), the TypeValue slot of the tag (used to
+/// recover the runtime `*const VirtualType` via `tv.virtual_type`), and
+/// the inner Value bytecode (serialized in image mode so type-carrier
+/// inners route through their slot tables). No-op when no tagged
+/// literals have been interned.
+fn emitTaggedDescriptionsStorage(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+    struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+) ImageEmitError!void {
+    if (table.taggedSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+
+    const slot_maps: instruction_bytecode.SlotEncodingMaps = .{
+        .typevalue_slot_index = &table.type_slot_index,
+        .struct_type_slot_index = struct_index,
+        .marker_slot_index = &table.marker_slot_index,
+        .parameter_slot_index = &table.parameter_slot_index,
+        .tagged_slot_index = &table.tagged_slot_index,
+    };
+
+    for (table.tagged_slots.items, 0..) |entry, i| {
+        try out.appendSlice(allocator, "static const char ");
+        try writeTaggedDescNameSym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = ");
+        try emitCStringLiteral(out, allocator, entry.tag.name);
+        try out.appendSlice(allocator, ";\n");
+
+        var inner_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer inner_buf.deinit(allocator);
+        instruction_bytecode.serializeValueIntoForImage(&inner_buf, entry.inner.*, allocator, &slot_maps) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NotEncodable => return error.NotEncodable,
+        };
+
+        try out.appendSlice(allocator, "static const uint8_t ");
+        try writeTaggedDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = {");
+        for (inner_buf.items, 0..) |byte, bi| {
+            if (bi > 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{byte}) catch unreachable);
+        }
+        try out.appendSlice(allocator, "};\n");
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_tagged_description_t onez_image_tagged_descriptions_storage[] = {\n");
+    for (table.tagged_slots.items, 0..) |entry, i| {
+        const tag_tv = entry.tag.type_val orelse return error.NotEncodable;
+        const tag_slot = table.lookupTypeSlot(tag_tv);
+        if (tag_slot == 0) return error.NotEncodable;
+
+        try out.appendSlice(allocator, "    { .name = ");
+        try writeTaggedDescNameSym(out, allocator, i);
+        try out.appendSlice(allocator, ", .name_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{entry.tag.name.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ", .tag_typevalue_slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{tag_slot}) catch unreachable);
+        try out.appendSlice(allocator, ", .inner_bytecode = ");
+        try writeTaggedDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ", .inner_bytecode_len = sizeof(");
+        try writeTaggedDescBodySym(out, allocator, i);
         try out.appendSlice(allocator, ") },\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -2068,6 +2235,23 @@ fn emitTypeDeclarations(
         \\    uint32_t       default_quotation_bytecode_len;
         \\} onez_image_parameter_description_t;
         \\
+        \\/* Per-slot description for `.tagged` literal pushes. The loader walks   */
+        \\/* onez_image_tagged_descriptions_storage[], resolves the tag's          */
+        \\/* `*const VirtualType` via the TypeValue slot table entry at            */
+        \\/* `tag_typevalue_slot` (using `TypeValue.virtual_type` populated by     */
+        \\/* the typevalue-load pass), deserializes the inner Value through        */
+        \\/* `deserializeValueAtForImage`, allocates a runtime `*const Value`      */
+        \\/* carrying `.tagged = .{ .tag = vt, .inner = inner_ptr }`, and patches  */
+        \\/* `onez_image_tagged_slots[slot]` with that pointer.                    */
+        \\typedef struct onez_image_tagged_description {
+        \\    const char *name;
+        \\    uint32_t    name_len;
+        \\    uint32_t    slot;                 /* index into onez_image_tagged_slots */
+        \\    uint32_t    tag_typevalue_slot;   /* index into onez_image_typevalue_slots */
+        \\    const uint8_t *inner_bytecode;
+        \\    uint32_t       inner_bytecode_len;
+        \\} onez_image_tagged_description_t;
+        \\
         \\typedef struct onez_image_header {
         \\    uint32_t format_version;
         \\    uint32_t module_count;
@@ -2079,6 +2263,7 @@ fn emitTypeDeclarations(
         \\    uint32_t struct_type_count;
         \\    uint32_t marker_slot_count;
         \\    uint32_t parameter_slot_count;
+        \\    uint32_t tagged_slot_count;
         \\    const struct onez_image_module *modules;
         \\    const struct onez_image_word *words;
         \\    const struct onez_image_marker *markers;
@@ -2088,6 +2273,7 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_struct_type *struct_types;
         \\    const struct onez_image_marker_description *marker_descriptions;
         \\    const struct onez_image_parameter_description *parameter_descriptions;
+        \\    const struct onez_image_tagged_description *tagged_descriptions;
         \\} onez_image_header_t;
         \\
         \\
@@ -2628,6 +2814,7 @@ fn emitHeader(
     const struct_type_count: u32 = @intCast(struct_plans.len);
     const marker_slot_count: u32 = effect_table.markerSlotCount();
     const parameter_slot_count: u32 = effect_table.parameterSlotCount();
+    const tagged_slot_count: u32 = effect_table.taggedSlotCount();
 
     const has_entries = manifest.entries.len > 0;
     const modules_ref: []const u8 = if (has_entries) "onez_image_modules_storage" else "NULL";
@@ -2639,6 +2826,7 @@ fn emitHeader(
     const struct_types_ref: []const u8 = if (struct_type_count > 0) "onez_image_struct_types_storage" else "NULL";
     const marker_descs_ref: []const u8 = if (marker_slot_count > 0) "onez_image_marker_descriptions_storage" else "NULL";
     const parameter_descs_ref: []const u8 = if (parameter_slot_count > 0) "onez_image_parameter_descriptions_storage" else "NULL";
+    const tagged_descs_ref: []const u8 = if (tagged_slot_count > 0) "onez_image_tagged_descriptions_storage" else "NULL";
 
     try out.appendSlice(allocator,
         \\__attribute__((used)) const onez_image_header_t onez_image_v1 = {
@@ -2663,6 +2851,8 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{marker_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .parameter_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{parameter_slot_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .tagged_slot_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{tagged_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .modules = ");
     try out.appendSlice(allocator, modules_ref);
     try out.appendSlice(allocator, ",\n    .words = ");
@@ -2681,6 +2871,8 @@ fn emitHeader(
     try out.appendSlice(allocator, marker_descs_ref);
     try out.appendSlice(allocator, ",\n    .parameter_descriptions = ");
     try out.appendSlice(allocator, parameter_descs_ref);
+    try out.appendSlice(allocator, ",\n    .tagged_descriptions = ");
+    try out.appendSlice(allocator, tagged_descs_ref);
     try out.appendSlice(allocator,
         \\,
         \\};
@@ -3940,6 +4132,96 @@ test "emitImageC: tagged literal interns tag's TypeValue and recurses into inner
     try testing.expectEqual(baseline.typevalue_slot_count + 2, stats.typevalue_slot_count);
     try testing.expect(std.mem.indexOf(u8, out.items, "outer-color") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "inner-color") != null);
+}
+
+test "emitImageC: tagged literal reserves a slot and emits a description row" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const tag_desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const tag_tv = try arena.create(value_mod.TypeValue);
+    tag_tv.* = .{ .name = "color:red", .descriptor = tag_desc };
+
+    const tag_virtual = try arena.create(value_mod.VirtualType);
+    tag_virtual.* = .{ .name = "color:red", .inner_type = "symbol", .type_val = tag_tv };
+    tag_tv.virtual_type = tag_virtual;
+
+    const inner_value = try arena.create(value_mod.Value);
+    inner_value.* = .{ .symbol = "red" };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{
+            .op = .{ .push_literal = .{ .tagged = .{ .tag = tag_virtual, .inner = inner_value } } },
+            .line = 0,
+            .column = 0,
+        },
+    });
+    try putTopLevelWord(&ctx, "make-red", instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
+
+    try testing.expectEqual(@as(u32, 1), stats.tagged_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_tagged_slots[1]") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_tagged_descriptions_storage") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "color:red") != null);
+}
+
+test "emitImageC: repeated tagged literal with same (tag, inner) shares one slot" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const tag_desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const tag_tv = try arena.create(value_mod.TypeValue);
+    tag_tv.* = .{ .name = "color:red", .descriptor = tag_desc };
+
+    const tag_virtual = try arena.create(value_mod.VirtualType);
+    tag_virtual.* = .{ .name = "color:red", .inner_type = "symbol", .type_val = tag_tv };
+    tag_tv.virtual_type = tag_virtual;
+
+    const inner_value = try arena.create(value_mod.Value);
+    inner_value.* = .{ .symbol = "red" };
+
+    const tagged_lit: value_mod.Value = .{ .tagged = .{ .tag = tag_virtual, .inner = inner_value } };
+    const instrs_a = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = tagged_lit }, .line = 0, .column = 0 },
+    });
+    const instrs_b = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = tagged_lit }, .line = 0, .column = 0 },
+    });
+    try putTopLevelWord(&ctx, "red-a", instrs_a);
+    try putTopLevelWord(&ctx, "red-b", instrs_b);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
+
+    try testing.expectEqual(@as(u32, 1), stats.tagged_slot_count);
 }
 
 test "emitImageC: parameter and marker literals create slot tables" {

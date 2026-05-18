@@ -71,6 +71,11 @@ const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
+const TypeValue = value_mod.TypeValue;
+const VirtualType = value_mod.VirtualType;
+const StructType = value_mod.StructType;
+const Marker = value_mod.Marker;
+const Parameter = value_mod.Parameter;
 
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -78,6 +83,46 @@ const StackEffectParam = stack_effect_mod.StackEffectParam;
 
 /// Errors that can arise from the encoder.
 pub const SerializeError = Allocator.Error || error{NotEncodable};
+
+/// Image-mode slot maps. When `serializeValueIntoForImage` receives a
+/// non-null `*const SlotEncodingMaps`, type-carrier Value variants
+/// (`.type_val`, `.struct_type`, `.tagged`, `.parameter`, `.marker`) are
+/// emitted as slot-reference value tags rather than failing with
+/// `error.NotEncodable`. The slot indices are written into the bytecode
+/// and resolved by `deserializeValueAtForImage` through the matching
+/// `SlotResolutionTables`. Pointer-identity is preserved across the
+/// freeze→runtime boundary.
+pub const SlotEncodingMaps = struct {
+    typevalue_slot_index: *const std.AutoHashMapUnmanaged(*const TypeValue, u32),
+    struct_type_slot_index: *const std.AutoHashMapUnmanaged(*const StructType, u32),
+    marker_slot_index: *const std.AutoHashMapUnmanaged(*const Marker, u32),
+    parameter_slot_index: *const std.AutoHashMapUnmanaged(*const Parameter, u32),
+    tagged_slot_index: *const std.AutoHashMapUnmanaged(TaggedKey, u32),
+};
+
+/// Key for the tagged slot map, mirrored from `aot_image_emit.TaggedSlotKey`
+/// to avoid a cyclic module dependency. Identity is `(tag, inner_ptr)`.
+pub const TaggedKey = struct {
+    tag: *const VirtualType,
+    inner_ptr: *const Value,
+};
+
+/// Image-mode slot resolution tables, mirrored from the Context fields the
+/// loader caches at startup. `deserializeValueAtForImage` uses these to
+/// resolve slot indices back to live runtime pointers when decoding
+/// type-carrier inner values inside tagged-slot description bytecode.
+pub const SlotResolutionTables = struct {
+    typevalue_slots: ?[*]?*const TypeValue,
+    typevalue_slot_count: u32,
+    struct_type_slots: ?[*]?*StructType,
+    struct_type_slot_count: u32,
+    marker_slots: ?[*]?*Marker,
+    marker_slot_count: u32,
+    parameter_slots: ?[*]?*Parameter,
+    parameter_slot_count: u32,
+    tagged_slots: ?[*]?*const Value,
+    tagged_slot_count: u32,
+};
 
 /// Op tags. Stored in the bytecode stream.
 const op_tag_push_literal: u8 = 0;
@@ -94,6 +139,15 @@ const value_tag_array: u8 = 6;
 const value_tag_hash: u8 = 7;
 const value_tag_stack_effect: u8 = 8;
 const value_tag_unit: u8 = 9;
+
+/// Image-mode-only value tags. Emitted by `serializeValueIntoForImage`
+/// when slot maps are provided; decoded by `deserializeValueAtForImage`
+/// against the loader's slot tables. Each carries a `u32 slot_index`.
+const value_tag_type_val_slot: u8 = 10;
+const value_tag_struct_type_slot: u8 = 11;
+const value_tag_marker_slot: u8 = 12;
+const value_tag_parameter_slot: u8 = 13;
+const value_tag_tagged_slot: u8 = 14;
 
 /// Serialize an instruction slice into a freshly allocated byte buffer.
 /// Caller owns the returned slice.
@@ -209,6 +263,79 @@ pub fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocato
             try buf.append(allocator, value_tag_unit);
         },
         else => return error.NotEncodable,
+    }
+}
+
+/// Image-mode variant of `serializeValueInto`. When `slot_maps` is
+/// non-null and `val` is a type-carrier variant, emit a slot-reference
+/// value tag (`type_val_slot`, `struct_type_slot`, `marker_slot`,
+/// `parameter_slot`, or `tagged_slot`) carrying the `u32` slot index;
+/// non-type-carrier variants delegate to `serializeValueInto` and array
+/// /hash recurse through this function so transitively-reachable
+/// type-carriers route through their slot tables.
+///
+/// When `slot_maps` is null, fall back to `serializeValueInto` directly.
+/// Callers that need the legacy behavior keep working unchanged.
+pub fn serializeValueIntoForImage(
+    buf: *std.ArrayListUnmanaged(u8),
+    val: Value,
+    allocator: Allocator,
+    slot_maps: ?*const SlotEncodingMaps,
+) SerializeError!void {
+    const maps = slot_maps orelse return serializeValueInto(buf, val, allocator);
+    switch (val) {
+        .type_val => |tv| {
+            const slot = maps.typevalue_slot_index.get(tv) orelse return error.NotEncodable;
+            try buf.append(allocator, value_tag_type_val_slot);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot));
+        },
+        .struct_type => |st| {
+            const slot = maps.struct_type_slot_index.get(st) orelse return error.NotEncodable;
+            try buf.append(allocator, value_tag_struct_type_slot);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot));
+        },
+        .marker => |m| {
+            const slot = maps.marker_slot_index.get(m) orelse return error.NotEncodable;
+            try buf.append(allocator, value_tag_marker_slot);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot));
+        },
+        .parameter => |p| {
+            const slot = maps.parameter_slot_index.get(p) orelse return error.NotEncodable;
+            try buf.append(allocator, value_tag_parameter_slot);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot));
+        },
+        .tagged => |t| {
+            const key: TaggedKey = .{ .tag = t.tag, .inner_ptr = t.inner };
+            const slot = maps.tagged_slot_index.get(key) orelse return error.NotEncodable;
+            try buf.append(allocator, value_tag_tagged_slot);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot));
+        },
+        .array => |elems| {
+            try buf.append(allocator, value_tag_array);
+            const elem_count: u32 = @intCast(elems.len);
+            try buf.appendSlice(allocator, std.mem.asBytes(&elem_count));
+            for (elems) |elem| {
+                try serializeValueIntoForImage(buf, elem, allocator, slot_maps);
+            }
+        },
+        .hash => |h| {
+            try buf.append(allocator, value_tag_hash);
+            const entry_count: u32 = @intCast(h.count());
+            try buf.appendSlice(allocator, std.mem.asBytes(&entry_count));
+            var iter = h.iterator();
+            while (iter.next()) |entry| {
+                const key = entry.key_ptr.*;
+                const key_len: u32 = @intCast(key.len);
+                try buf.appendSlice(allocator, std.mem.asBytes(&key_len));
+                try buf.appendSlice(allocator, key);
+                try serializeValueIntoForImage(buf, entry.value_ptr.*, allocator, slot_maps);
+            }
+        },
+        .quotation => |q| {
+            try buf.append(allocator, value_tag_quotation);
+            try serializeInstructionsInto(buf, q.instructions, allocator);
+        },
+        else => try serializeValueInto(buf, val, allocator),
     }
 }
 
@@ -352,6 +479,109 @@ pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator
     };
 }
 
+/// Image-mode variant of `deserializeValueAt`. When the encoded value
+/// uses one of the slot-reference tags emitted by
+/// `serializeValueIntoForImage`, resolve the slot index through
+/// `slot_tables` and reconstruct the runtime Value. Slot indices that
+/// fall outside their table return `error.OutOfMemory` (the shared
+/// deserialize error channel, kept narrow to avoid a separate decoder
+/// error set).
+///
+/// When `slot_tables` is null, behave identically to `deserializeValueAt`.
+pub fn deserializeValueAtForImage(
+    data: []const u8,
+    offset: *usize,
+    allocator: Allocator,
+    slot_tables: ?*const SlotResolutionTables,
+) Allocator.Error!Value {
+    if (offset.* >= data.len) return error.OutOfMemory;
+    const val_tag = data[offset.*];
+    const tables = slot_tables orelse return deserializeValueAt(data, offset, allocator);
+    offset.* += 1;
+    return switch (val_tag) {
+        value_tag_type_val_slot => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (slot >= tables.typevalue_slot_count) return error.OutOfMemory;
+            const table = tables.typevalue_slots orelse return error.OutOfMemory;
+            const tv = table[slot] orelse return error.OutOfMemory;
+            break :blk .{ .type_val = @constCast(tv) };
+        },
+        value_tag_struct_type_slot => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (slot >= tables.struct_type_slot_count) return error.OutOfMemory;
+            const table = tables.struct_type_slots orelse return error.OutOfMemory;
+            const st = table[slot] orelse return error.OutOfMemory;
+            break :blk .{ .struct_type = st };
+        },
+        value_tag_marker_slot => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (slot >= tables.marker_slot_count) return error.OutOfMemory;
+            const table = tables.marker_slots orelse return error.OutOfMemory;
+            const m = table[slot] orelse return error.OutOfMemory;
+            break :blk .{ .marker = m };
+        },
+        value_tag_parameter_slot => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (slot >= tables.parameter_slot_count) return error.OutOfMemory;
+            const table = tables.parameter_slots orelse return error.OutOfMemory;
+            const p = table[slot] orelse return error.OutOfMemory;
+            break :blk .{ .parameter = p };
+        },
+        value_tag_tagged_slot => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (slot >= tables.tagged_slot_count) return error.OutOfMemory;
+            const table = tables.tagged_slots orelse return error.OutOfMemory;
+            const tv = table[slot] orelse return error.OutOfMemory;
+            break :blk tv.*;
+        },
+        value_tag_array => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const elem_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            const elems = try allocator.alloc(Value, elem_count);
+            for (elems) |*elem| {
+                elem.* = try deserializeValueAtForImage(data, offset, allocator, slot_tables);
+            }
+            break :blk .{ .array = elems };
+        },
+        value_tag_hash => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const entry_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            var h = HashTable{};
+            try h.ensureTotalCapacity(allocator, entry_count);
+            for (0..entry_count) |_| {
+                if (offset.* + 4 > data.len) return error.OutOfMemory;
+                const klen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+                offset.* += 4;
+                if (offset.* + klen > data.len) return error.OutOfMemory;
+                const key = try allocator.dupe(u8, data[offset.*..][0..klen]);
+                offset.* += klen;
+                const value = try deserializeValueAtForImage(data, offset, allocator, slot_tables);
+                h.putAssumeCapacity(key, value);
+            }
+            const h_ptr = try allocator.create(HashTable);
+            h_ptr.* = h;
+            break :blk .{ .hash = h_ptr };
+        },
+        else => blk: {
+            // Rewind one byte so the legacy decoder re-reads the tag.
+            offset.* -= 1;
+            break :blk deserializeValueAt(data, offset, allocator);
+        },
+    };
+}
+
 fn readParamArray(data: []const u8, offset: *usize, allocator: Allocator) Allocator.Error![]StackEffectParam {
     if (offset.* + 4 > data.len) return error.OutOfMemory;
     const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
@@ -376,10 +606,6 @@ fn readParamArray(data: []const u8, offset: *usize, allocator: Allocator) Alloca
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
-const TypeValue = value_mod.TypeValue;
-const VirtualType = value_mod.VirtualType;
-const Marker = value_mod.Marker;
-const Parameter = value_mod.Parameter;
 
 fn freeDecodedInstructions(decoded: []Instruction) void {
     for (decoded) |instr| {

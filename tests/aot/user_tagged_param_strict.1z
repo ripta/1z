@@ -1,0 +1,20 @@
+\ Exercises multiple user-defined enum variants under interpreter-free
+\ AOT. With interpreter fallback disabled, every `.tagged` literal must
+\ be reconstructed through the slot table, with no dictionary-based fallback
+\ is available at runtime.
+
+direction: enum{
+  north: unit
+  south: unit
+  east:  unit
+  west:  unit
+} ;
+
+go-north: ( -- d ) [ direction:north ] ;
+go-east: ( -- d ) [ direction:east ] ;
+
+go-north go-north = .
+go-east go-east = .
+go-north go-east = .
+go-north .
+go-east .

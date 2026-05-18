@@ -195,6 +195,22 @@ pub const ParameterDescription = extern struct {
     default_quotation_bytecode_len: u32,
 };
 
+/// Zig mirror of `onez_image_tagged_description_t`. One row per slot in
+/// `onez_image_tagged_slots[]`. The loader recovers the tag's
+/// `*const VirtualType` through `tag_typevalue_slot` (reading
+/// `typevalues[slot].virtual_type`), deserializes the inner Value via
+/// `instruction_bytecode.deserializeValueAtForImage`, allocates a
+/// runtime `*const Value` carrying `.tagged`, and patches the matching
+/// slot.
+pub const TaggedDescription = extern struct {
+    name: [*]const u8,
+    name_len: u32,
+    slot: u32,
+    tag_typevalue_slot: u32,
+    inner_bytecode: ?[*]const u8,
+    inner_bytecode_len: u32,
+};
+
 pub const Header = extern struct {
     format_version: u32,
     module_count: u32,
@@ -206,6 +222,7 @@ pub const Header = extern struct {
     struct_type_count: u32,
     marker_slot_count: u32,
     parameter_slot_count: u32,
+    tagged_slot_count: u32,
     modules: ?[*]const Module,
     words: ?[*]const Word,
     markers: ?[*]const Marker,
@@ -215,6 +232,7 @@ pub const Header = extern struct {
     struct_types: ?[*]const StructType,
     marker_descriptions: ?[*]const MarkerDescription,
     parameter_descriptions: ?[*]const ParameterDescription,
+    tagged_descriptions: ?[*]const TaggedDescription,
 };
 
 /// Slot table type matching the C declaration:
@@ -244,7 +262,14 @@ pub const MarkerSlotTable = [*]?*value_mod.Marker;
 /// patches each slot accordingly.
 pub const ParameterSlotTable = [*]?*value_mod.Parameter;
 
-/// All four loader-populated slot tables, passed together so the
+/// Slot table for `.tagged` Value pointers. Each entry is allocated on
+/// the context arena by the loader: an inner Value plus a wrapping
+/// Value carrying `.tagged = .{ .tag = vt, .inner = inner_ptr }`. The
+/// codegen-side push helper reads through this slot table to recover
+/// the freeze-time tagged identity at runtime.
+pub const TaggedSlotTable = [*]?*const value_mod.Value;
+
+/// All loader-populated slot tables, passed together so the
 /// `loadIntoContext` signature stays compact as new tables land. Any
 /// individual field may be null when its corresponding C symbol was
 /// not emitted (zero-slot count).
@@ -253,6 +278,7 @@ pub const SlotTables = struct {
     struct_types: ?StructTypeSlotTable = null,
     markers: ?MarkerSlotTable = null,
     parameters: ?ParameterSlotTable = null,
+    tagged: ?TaggedSlotTable = null,
 };
 
 /// PIC snapshot relocation entry. Each entry says "rewrite this
@@ -321,6 +347,15 @@ pub fn loadIntoContext(
     ctx.image_marker_slot_count = header.marker_slot_count;
     ctx.image_parameter_slots = slots.parameters;
     ctx.image_parameter_slot_count = header.parameter_slot_count;
+    ctx.image_tagged_slots = slots.tagged;
+    ctx.image_tagged_slot_count = header.tagged_slot_count;
+
+    // Tagged slot population runs last because each row's inner
+    // bytecode may reference the typevalue, struct-type, marker, or
+    // parameter slot tables (recursive `.tagged.inner` routes through
+    // `deserializeValueAtForImage`), so those tables must be patched
+    // first.
+    try populateTaggedSlots(ctx, header, slots.tagged);
 }
 
 // -- Module + word population ------------------------------------------
@@ -842,6 +877,72 @@ fn populateParameterSlots(
     }
 }
 
+/// Walk the tagged description table and patch
+/// `onez_image_tagged_slots[]`. For each row, recover the tag's
+/// `*const VirtualType` by reading the typevalue slot at
+/// `tag_typevalue_slot` and following the loader-populated
+/// `TypeValue.virtual_type` back-reference. Deserialize the inner
+/// Value via `instruction_bytecode.deserializeValueAtForImage`, passing
+/// the already-patched slot tables so nested `.tagged` / `.type_val` /
+/// etc. inner values resolve through their own slots. Allocate a
+/// runtime `*const Value` carrying `.tagged = .{ .tag = vt,
+/// .inner = inner_ptr }` and patch the slot.
+fn populateTaggedSlots(
+    ctx: *Context,
+    header: *const Header,
+    slots: ?TaggedSlotTable,
+) LoaderError!void {
+    if (header.tagged_slot_count == 0) return;
+    const descs = header.tagged_descriptions orelse return;
+    const slot_table = slots orelse return;
+    const arena = ctx.quotationAllocator();
+
+    const slot_tables: instruction_bytecode.SlotResolutionTables = .{
+        .typevalue_slots = ctx.image_typevalue_slots,
+        .typevalue_slot_count = ctx.image_typevalue_slot_count,
+        .struct_type_slots = ctx.image_struct_type_slots,
+        .struct_type_slot_count = ctx.image_struct_type_slot_count,
+        .marker_slots = ctx.image_marker_slots,
+        .marker_slot_count = ctx.image_marker_slot_count,
+        .parameter_slots = ctx.image_parameter_slots,
+        .parameter_slot_count = ctx.image_parameter_slot_count,
+        .tagged_slots = ctx.image_tagged_slots,
+        .tagged_slot_count = ctx.image_tagged_slot_count,
+    };
+
+    var i: u32 = 0;
+    while (i < header.tagged_slot_count) : (i += 1) {
+        const row = descs[i];
+        if (row.slot >= header.tagged_slot_count) return LoaderError.BadSlotIndex;
+        if (row.tag_typevalue_slot == 0) return LoaderError.BadSlotIndex;
+        if (row.tag_typevalue_slot >= header.typevalue_slot_count) return LoaderError.BadSlotIndex;
+        const tv_table = ctx.image_typevalue_slots orelse return LoaderError.BadSlotIndex;
+        const tv_const = tv_table[row.tag_typevalue_slot] orelse return LoaderError.BadSlotIndex;
+        const vt = tv_const.virtual_type orelse return LoaderError.BadSlotIndex;
+
+        const inner = arena.create(value_mod.Value) catch return LoaderError.OutOfMemory;
+        if (row.inner_bytecode) |p| {
+            if (row.inner_bytecode_len > 0) {
+                var offset: usize = 0;
+                inner.* = instruction_bytecode.deserializeValueAtForImage(
+                    p[0..row.inner_bytecode_len],
+                    &offset,
+                    arena,
+                    &slot_tables,
+                ) catch return LoaderError.OutOfMemory;
+            } else {
+                inner.* = .{ .unit = {} };
+            }
+        } else {
+            inner.* = .{ .unit = {} };
+        }
+
+        const tagged = arena.create(value_mod.Value) catch return LoaderError.OutOfMemory;
+        tagged.* = .{ .tagged = .{ .tag = vt, .inner = inner } };
+        slot_table[row.slot] = tagged;
+    }
+}
+
 /// Decode a TypeKindData payload from one typedescriptor row.
 /// Cross-references resolve through the slot table populated by
 /// pass 2; an out-of-range slot index returns `BadSlotIndex`. The
@@ -1133,6 +1234,7 @@ fn emptyHeader() Header {
         .struct_type_count = 0,
         .marker_slot_count = 0,
         .parameter_slot_count = 0,
+        .tagged_slot_count = 0,
         .modules = null,
         .words = null,
         .markers = null,
@@ -1142,6 +1244,7 @@ fn emptyHeader() Header {
         .struct_types = null,
         .marker_descriptions = null,
         .parameter_descriptions = null,
+        .tagged_descriptions = null,
     };
 }
 
@@ -1632,6 +1735,126 @@ test "loadIntoContext: rejects out-of-range typevalue slot" {
         LoaderError.BadSlotIndex,
         loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null),
     );
+}
+
+test "loadIntoContext: tagged slot rejects out-of-range tag_typevalue_slot" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    var desc = zeroDescriptor();
+    desc.kind = 0;
+    const descriptors = [_]TypeDescriptor{desc};
+    const tv_name = "color:red";
+    const typevalues = [_]TypeValueRow{
+        .{
+            .name = tv_name.ptr,
+            .name_len = tv_name.len,
+            .slot = 1,
+            .descriptor = &descriptors[0],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
+    };
+
+    const tag_name = "color:red";
+    const tagged_descs = [_]TaggedDescription{
+        .{
+            .name = tag_name.ptr,
+            .name_len = tag_name.len,
+            .slot = 0,
+            .tag_typevalue_slot = 99,
+            .inner_bytecode = null,
+            .inner_bytecode_len = 0,
+        },
+    };
+
+    var tv_storage: [2]?*const value_mod.TypeValue = .{ null, null };
+    var tagged_storage: [1]?*const value_mod.Value = .{null};
+
+    var header = emptyHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+    header.tagged_slot_count = 1;
+    header.tagged_descriptions = &tagged_descs;
+
+    try testing.expectError(
+        LoaderError.BadSlotIndex,
+        loadIntoContext(
+            &ctx,
+            &header,
+            .{ .typevalues = &tv_storage, .tagged = &tagged_storage },
+            null,
+        ),
+    );
+}
+
+test "loadIntoContext: tagged slot reconstructs Value via VirtualType back-reference" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    var desc = zeroDescriptor();
+    desc.kind = 3; // virtual
+    desc.anon_struct_idx = anon_struct_absent;
+    const descriptors = [_]TypeDescriptor{desc};
+    const tv_name = "color:red";
+    const typevalues = [_]TypeValueRow{
+        .{
+            .name = tv_name.ptr,
+            .name_len = tv_name.len,
+            .slot = 1,
+            .descriptor = &descriptors[0],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
+    };
+
+    // Inner Value bytecode: a 5-byte symbol "red". Use the canonical
+    // encoder so the schema stays in sync with the deserializer.
+    var inner_enc: std.ArrayListUnmanaged(u8) = .{};
+    defer inner_enc.deinit(testing.allocator);
+    try instruction_bytecode.serializeValueInto(
+        &inner_enc,
+        .{ .symbol = "red" },
+        testing.allocator,
+    );
+
+    const tag_name = "color:red";
+    const tagged_descs = [_]TaggedDescription{
+        .{
+            .name = tag_name.ptr,
+            .name_len = tag_name.len,
+            .slot = 0,
+            .tag_typevalue_slot = 1,
+            .inner_bytecode = inner_enc.items.ptr,
+            .inner_bytecode_len = @intCast(inner_enc.items.len),
+        },
+    };
+
+    var tv_storage: [2]?*const value_mod.TypeValue = .{ null, null };
+    var tagged_storage: [1]?*const value_mod.Value = .{null};
+
+    var header = emptyHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+    header.tagged_slot_count = 1;
+    header.tagged_descriptions = &tagged_descs;
+
+    try loadIntoContext(
+        &ctx,
+        &header,
+        .{ .typevalues = &tv_storage, .tagged = &tagged_storage },
+        null,
+    );
+
+    const tagged_ptr = tagged_storage[0] orelse return error.TestUnexpectedResult;
+    try testing.expect(tagged_ptr.* == .tagged);
+    try testing.expectEqualStrings("color:red", tagged_ptr.tagged.tag.name);
+    try testing.expect(tagged_ptr.tagged.inner.* == .symbol);
+    try testing.expectEqualStrings("red", tagged_ptr.tagged.inner.symbol);
 }
 
 test "loadIntoContext: bytecode body decodes into compound action" {

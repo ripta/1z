@@ -277,6 +277,7 @@ export fn onez_load_runtime_image(
     struct_type_slots_ptr: ?*anyopaque,
     marker_slots_ptr: ?*anyopaque,
     parameter_slots_ptr: ?*anyopaque,
+    tagged_slots_ptr: ?*anyopaque,
 ) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
@@ -303,12 +304,17 @@ export fn onez_load_runtime_image(
         @ptrCast(@alignCast(sp))
     else
         null;
+    const tagged_slots: ?aot_image_loader.TaggedSlotTable = if (tagged_slots_ptr) |sp|
+        @ptrCast(@alignCast(sp))
+    else
+        null;
 
     aot_image_loader.loadIntoContext(ctx, header, .{
         .typevalues = typevalue_slots,
         .struct_types = struct_type_slots,
         .markers = marker_slots,
         .parameters = parameter_slots,
+        .tagged = tagged_slots,
     }, null) catch |err| {
         captureError(handle, err);
         return ONEZ_ERR_LOAD_FAILED;

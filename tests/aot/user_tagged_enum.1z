@@ -1,0 +1,15 @@
+\ Exercises a user-defined enum variant under runtime-image AOT. The
+\ compound body of `red-variant` pushes a `.tagged` literal whose tag is
+\ the enum variant's VirtualType. Routing the push through the tagged
+\ slot table preserves freeze-time identity across runtime so two
+\ consecutive references compare equal and print identically.
+
+color: enum{
+  red: unit
+  green: unit
+} ;
+
+red-variant: ( -- v ) [ color:red ] ;
+
+red-variant red-variant = .
+red-variant .

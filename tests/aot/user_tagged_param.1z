@@ -1,0 +1,21 @@
+\ Exercises multiple user-defined enum variants under runtime-image AOT.
+\ Each variant's compound body pushes a distinct `.tagged` literal,
+\ exercising independent slot indices in the tagged slot table. Identity
+\ between repeated calls within a variant is preserved by the slot
+\ table; identity between calls to different variants must differ.
+
+direction: enum{
+  north: unit
+  south: unit
+  east:  unit
+  west:  unit
+} ;
+
+go-north: ( -- d ) [ direction:north ] ;
+go-east: ( -- d ) [ direction:east ] ;
+
+go-north go-north = .
+go-east go-east = .
+go-north go-east = .
+go-north .
+go-east .

@@ -161,6 +161,23 @@ typedef struct onez_image_parameter_description {
     uint32_t       default_quotation_bytecode_len;
 } onez_image_parameter_description_t;
 
+/* Per-slot description for `.tagged` literal pushes. The loader walks   */
+/* onez_image_tagged_descriptions_storage[], resolves the tag's          */
+/* `*const VirtualType` via the TypeValue slot table entry at            */
+/* `tag_typevalue_slot` (using `TypeValue.virtual_type` populated by     */
+/* the typevalue-load pass), deserializes the inner Value through        */
+/* `deserializeValueAtForImage`, allocates a runtime `*const Value`      */
+/* carrying `.tagged = .{ .tag = vt, .inner = inner_ptr }`, and patches  */
+/* `onez_image_tagged_slots[slot]` with that pointer.                    */
+typedef struct onez_image_tagged_description {
+    const char *name;
+    uint32_t    name_len;
+    uint32_t    slot;                 /* index into onez_image_tagged_slots */
+    uint32_t    tag_typevalue_slot;   /* index into onez_image_typevalue_slots */
+    const uint8_t *inner_bytecode;
+    uint32_t       inner_bytecode_len;
+} onez_image_tagged_description_t;
+
 typedef struct onez_image_header {
     uint32_t format_version;
     uint32_t module_count;
@@ -172,6 +189,7 @@ typedef struct onez_image_header {
     uint32_t struct_type_count;
     uint32_t marker_slot_count;
     uint32_t parameter_slot_count;
+    uint32_t tagged_slot_count;
     const struct onez_image_module *modules;
     const struct onez_image_word *words;
     const struct onez_image_marker *markers;
@@ -181,6 +199,7 @@ typedef struct onez_image_header {
     const struct onez_image_struct_type *struct_types;
     const struct onez_image_marker_description *marker_descriptions;
     const struct onez_image_parameter_description *parameter_descriptions;
+    const struct onez_image_tagged_description *tagged_descriptions;
 } onez_image_header_t;
 
 static const char onez_image_mk_0_name[] = "generic";
@@ -274,6 +293,19 @@ __attribute__((used)) struct onez_parameter *onez_image_parameter_slots[6] = {
     NULL, /* slot 3: parameter error-stream (filled by the loader). */
     NULL, /* slot 4: parameter input-stream (filled by the loader). */
     NULL, /* slot 5: parameter module-cache (filled by the loader). */
+};
+
+__attribute__((used)) const struct onez_value *onez_image_tagged_slots[10] = {
+    NULL, /* slot 0: tagged color:green (filled by the loader). */
+    NULL, /* slot 1: tagged color:red (filled by the loader). */
+    NULL, /* slot 2: tagged on:module-loaded (filled by the loader). */
+    NULL, /* slot 3: tagged on:unhandled-error (filled by the loader). */
+    NULL, /* slot 4: tagged on:word-defined (filled by the loader). */
+    NULL, /* slot 5: tagged on:exit (filled by the loader). */
+    NULL, /* slot 6: tagged ordering:lt (filled by the loader). */
+    NULL, /* slot 7: tagged ordering:eq (filled by the loader). */
+    NULL, /* slot 8: tagged ordering:gt (filled by the loader). */
+    NULL, /* slot 9: tagged option:none (filled by the loader). */
 };
 
 static const char onez_image_marker_desc_0_name[] = "generic";
@@ -772,6 +804,40 @@ __attribute__((used)) static const onez_image_typevalue_t onez_image_typevalues_
     { .name = onez_image_tv_62_name, .name_len = 16, .slot = 63, .descriptor = &onez_image_typedescriptors_storage[62], .member_type_slots = NULL, .member_type_count = 0 },
 };
 
+static const char onez_image_tagged_desc_0_name[] = "color:green";
+static const uint8_t onez_image_tagged_desc_0_inner[] = {4,5,0,0,0,103,114,101,101,110};
+static const char onez_image_tagged_desc_1_name[] = "color:red";
+static const uint8_t onez_image_tagged_desc_1_inner[] = {4,3,0,0,0,114,101,100};
+static const char onez_image_tagged_desc_2_name[] = "on:module-loaded";
+static const uint8_t onez_image_tagged_desc_2_inner[] = {4,13,0,0,0,109,111,100,117,108,101,45,108,111,97,100,101,100};
+static const char onez_image_tagged_desc_3_name[] = "on:unhandled-error";
+static const uint8_t onez_image_tagged_desc_3_inner[] = {4,15,0,0,0,117,110,104,97,110,100,108,101,100,45,101,114,114,111,114};
+static const char onez_image_tagged_desc_4_name[] = "on:word-defined";
+static const uint8_t onez_image_tagged_desc_4_inner[] = {4,12,0,0,0,119,111,114,100,45,100,101,102,105,110,101,100};
+static const char onez_image_tagged_desc_5_name[] = "on:exit";
+static const uint8_t onez_image_tagged_desc_5_inner[] = {4,4,0,0,0,101,120,105,116};
+static const char onez_image_tagged_desc_6_name[] = "ordering:lt";
+static const uint8_t onez_image_tagged_desc_6_inner[] = {4,2,0,0,0,108,116};
+static const char onez_image_tagged_desc_7_name[] = "ordering:eq";
+static const uint8_t onez_image_tagged_desc_7_inner[] = {4,2,0,0,0,101,113};
+static const char onez_image_tagged_desc_8_name[] = "ordering:gt";
+static const uint8_t onez_image_tagged_desc_8_inner[] = {4,2,0,0,0,103,116};
+static const char onez_image_tagged_desc_9_name[] = "option:none";
+static const uint8_t onez_image_tagged_desc_9_inner[] = {4,4,0,0,0,110,111,110,101};
+
+static const onez_image_tagged_description_t onez_image_tagged_descriptions_storage[] = {
+    { .name = onez_image_tagged_desc_0_name, .name_len = 11, .slot = 0, .tag_typevalue_slot = 2, .inner_bytecode = onez_image_tagged_desc_0_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_0_inner) },
+    { .name = onez_image_tagged_desc_1_name, .name_len = 9, .slot = 1, .tag_typevalue_slot = 3, .inner_bytecode = onez_image_tagged_desc_1_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_1_inner) },
+    { .name = onez_image_tagged_desc_2_name, .name_len = 16, .slot = 2, .tag_typevalue_slot = 29, .inner_bytecode = onez_image_tagged_desc_2_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_2_inner) },
+    { .name = onez_image_tagged_desc_3_name, .name_len = 18, .slot = 3, .tag_typevalue_slot = 34, .inner_bytecode = onez_image_tagged_desc_3_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_3_inner) },
+    { .name = onez_image_tagged_desc_4_name, .name_len = 15, .slot = 4, .tag_typevalue_slot = 41, .inner_bytecode = onez_image_tagged_desc_4_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_4_inner) },
+    { .name = onez_image_tagged_desc_5_name, .name_len = 7, .slot = 5, .tag_typevalue_slot = 47, .inner_bytecode = onez_image_tagged_desc_5_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_5_inner) },
+    { .name = onez_image_tagged_desc_6_name, .name_len = 11, .slot = 6, .tag_typevalue_slot = 36, .inner_bytecode = onez_image_tagged_desc_6_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_6_inner) },
+    { .name = onez_image_tagged_desc_7_name, .name_len = 11, .slot = 7, .tag_typevalue_slot = 42, .inner_bytecode = onez_image_tagged_desc_7_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_7_inner) },
+    { .name = onez_image_tagged_desc_8_name, .name_len = 11, .slot = 8, .tag_typevalue_slot = 54, .inner_bytecode = onez_image_tagged_desc_8_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_8_inner) },
+    { .name = onez_image_tagged_desc_9_name, .name_len = 11, .slot = 9, .tag_typevalue_slot = 55, .inner_bytecode = onez_image_tagged_desc_9_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_9_inner) },
+};
+
 static const char onez_image_w_0_name[] = ">color";
 static const char onez_image_w_1_name[] = "color";
 static const char onez_image_w_2_name[] = "color:green";
@@ -1090,6 +1156,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .struct_type_count = 11,
     .marker_slot_count = 2,
     .parameter_slot_count = 6,
+    .tagged_slot_count = 10,
     .modules = onez_image_modules_storage,
     .words = onez_image_words_storage,
     .markers = onez_image_markers_storage,
@@ -1099,5 +1166,6 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .struct_types = onez_image_struct_types_storage,
     .marker_descriptions = onez_image_marker_descriptions_storage,
     .parameter_descriptions = onez_image_parameter_descriptions_storage,
+    .tagged_descriptions = onez_image_tagged_descriptions_storage,
 };
 
