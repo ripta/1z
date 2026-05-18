@@ -1,0 +1,11 @@
+\ Strict (interpreter-free) variant of aot_user_struct.1z. Every
+\ struct-generator-emitted word must AOT-compile with no interpreter
+\ fallback. The constructor, predicate, and positional unwrap all
+\ route through the slot-table push helpers.
+
+point: struct{ x y } ;
+
+2 3 make-point unmake-point + .
+4 5 make-point point? .
+"not-a-point" point? .
+99 -1 make-point unmake-point + .

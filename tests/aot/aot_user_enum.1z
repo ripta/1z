@@ -1,0 +1,25 @@
+\ End-to-end exercise of a user-defined enum under runtime-image AOT.
+\ Unit-variant references produce `.tagged` literals whose tag is the
+\ variant's VirtualType; each push routes through the runtime-image
+\ tagged slot table.
+
+color: enum{
+  red:   unit
+  green: unit
+  blue:  unit
+} ;
+
+\ Unit variant constructors compare equal across references.
+color:red color:red = .
+color:red color:green = .
+
+\ Per-variant predicates distinguish siblings.
+color:blue color:blue? .
+color:blue color:red? .
+
+\ Aggregate predicate matches every variant of the enum.
+color:red color? .
+"not-a-color" color? .
+
+\ Inspect format for a unit variant.
+color:green inspect .

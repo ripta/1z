@@ -1,0 +1,17 @@
+\ Strict (interpreter-free) variant of aot_user_enum.1z. Unit-variant
+\ generators emit `.tagged` literals; every push must route through the
+\ runtime-image tagged slot table with no interpreter fallback.
+
+color: enum{
+  red:   unit
+  green: unit
+  blue:  unit
+} ;
+
+color:red color:red = .
+color:red color:green = .
+color:blue color:blue? .
+color:blue color:red? .
+color:red color? .
+"not-a-color" color? .
+color:green inspect .

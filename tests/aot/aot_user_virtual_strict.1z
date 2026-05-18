@@ -1,0 +1,12 @@
+\ Strict (interpreter-free) variant of aot_user_virtual.1z. The virtual
+\ generator's wrap, unwrap, predicate, and hash words must AOT-compile
+\ with no interpreter fallback. Every TypeValue push routes through the
+\ runtime-image slot table.
+
+weight: virtual{ fixnum } ;
+
+42 make-weight unmake-weight .
+7 >weight unmake-weight .
+13 make-weight weight? .
+"not-a-weight" weight? .
+100 make-weight unmake-weight >weight unmake-weight .

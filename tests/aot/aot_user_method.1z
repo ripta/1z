@@ -1,0 +1,22 @@
+\ End-to-end exercise of a `method{` dispatch on a user-defined virtual
+\ type under runtime-image AOT. The dispatch entry is registered at
+\ freeze time keyed on the virtual TypeValue's descriptor; the runtime
+\ push of that TypeValue goes through the slot table.
+\
+\ User-side dispatch registrations do not yet replay across the
+\ freeze->runtime boundary, so the generic body's fallthrough behavior
+\ runs at runtime. The test exercises the build path and that
+\ observable runtime behavior.
+
+box: virtual{ fixnum } ;
+
+bump: generic ( s -- n ) [ drop -1 ] ;
+bump: method{ box } [ unmake-box 1 + ] ;
+
+5 make-box bump .
+9 >box bump .
+
+\ Predicate still works through the slot table even without the user
+\ method replaying.
+5 make-box box? .
+"not-a-box" box? .

@@ -1,0 +1,15 @@
+\ Strict (interpreter-free) variant of aot_user_method.1z. The generic
+\ word, the user method registration, and the predicate must all
+\ AOT-compile with no interpreter fallback. User dispatch registrations
+\ do not replay across the freeze->runtime boundary, so the generic
+\ body's fallthrough is the observable behavior at runtime.
+
+box: virtual{ fixnum } ;
+
+bump: generic ( s -- n ) [ drop -1 ] ;
+bump: method{ box } [ unmake-box 1 + ] ;
+
+5 make-box bump .
+9 >box bump .
+5 make-box box? .
+"not-a-box" box? .

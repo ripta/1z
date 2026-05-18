@@ -3858,14 +3858,16 @@ fn compileInstructions(
                     stack[sp.*] = .{ .raw_at_slot = sp.* };
                     sp.* += 1;
                 } else if (resolveTypedLiteralSlot(state, val)) |slot_info| {
-                    // Slot-indexed typed-literal push. The runtime
-                    // image's loader patches the slot table with the
-                    // live runtime pointer; the helper resolves the
-                    // slot through `Context.image_*_slots` and pushes
-                    // the corresponding Value variant. Bypasses the
-                    // runtime dictionary lookup that the legacy
-                    // `onez_push_word_literal` / `onez_push_struct_type`
-                    // path performs.
+                    // Slot-indexed typed-literal push. The runtime image's
+                    // loader patches the slot table with the live runtime
+                    // pointer; the helper resolves the slot through
+                    // `Context.image_*_slots` and pushes the corresponding
+                    // Value variant. All AOT artifact classes route every
+                    // type-carrier literal (`.type_val`, `.struct_type`,
+                    // `.marker`, `.parameter`, `.tagged`) through here;
+                    // type-carrier literals that the freeze-time collection
+                    // failed to intern fall through to the catch-all
+                    // `non_serializable_literal` NotCompilable below.
                     const proto_2arg = c.ir_proto_2(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR);
                     const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, slot_info.helper_name), proto_2arg);
 
@@ -3886,102 +3888,6 @@ fn compileInstructions(
                     const slot_const = c.ir_const_addr(ctx, slot_info.slot);
                     const call_result = c._ir_CALL_2(ctx, c.IR_I32, push_fn, ctx_val, slot_const);
                     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
-
-                    // Re-read sp after callback (it pushed one value).
-                    _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
-                    stack[sp.*] = .{ .raw_at_slot = sp.* };
-                    sp.* += 1;
-                } else if (state.aot_mode and (val == .type_val or val == .parameter or val == .marker)) {
-                    // Non-simple literals that fell through the slot-table
-                    // resolver. The legacy callback looks up the word at
-                    // runtime and pushes its literal value. Used by the
-                    // runtime-image artifact class for any literal whose
-                    // pointer the freeze-time collection did not intern;
-                    // interpreter-free AOT cannot hit this path because the
-                    // resolver gates emission on slot interning. `.tagged`
-                    // and `.struct_type` route exclusively through their
-                    // slot tables now.
-                    const lit_name = switch (val) {
-                        .type_val => |tv| tv.name,
-                        .parameter => |p| p.name,
-                        .marker => |mk| mk.name,
-                        else => unreachable,
-                    };
-
-                    const proto_3arg = c.ir_proto_3(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_word_literal"), proto_3arg);
-
-                    // Store sp before callback.
-                    const sp_const = c.ir_const_addr(ctx, sp.*);
-                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
-
-                    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
-                        state.preloaded_ctx_val
-                    else blk: {
-                        JitContextLayout.ensureInit();
-                        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
-                        const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-                        break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
-                    };
-
-                    const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
-                    var sym_buf: [32]u8 = undefined;
-                    const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
-                    const sym_ref = c.ir_const_func(ctx, c.ir_strl(ctx, &sym_buf, sym_name.len), 0);
-                    const name_len_const = c.ir_const_addr(ctx, lit_name.len);
-
-                    const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, name_len_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
-
-                    if (state.aot_string_literals) |lits| {
-                        lits.append(std.heap.page_allocator, .{
-                            .data = lit_name,
-                            .is_symbol = false,
-                        }) catch {};
-                    }
-
-                    // Re-read sp after callback (it pushed one value).
-                    _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
-                    stack[sp.*] = .{ .raw_at_slot = sp.* };
-                    sp.* += 1;
-                } else if (state.aot_mode and val == .struct_type) {
-                    // struct_type literals: look up the constructor word at
-                    // runtime to recover the runtime struct_type pointer.
-                    const struct_name = val.struct_type.name;
-
-                    const proto_3arg = c.ir_proto_3(ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
-                    const push_fn = c.ir_const_func(ctx, c.ir_str(ctx, "onez_push_struct_type"), proto_3arg);
-
-                    // Store sp before callback.
-                    const sp_const = c.ir_const_addr(ctx, sp.*);
-                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
-
-                    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
-                        state.preloaded_ctx_val
-                    else blk: {
-                        JitContextLayout.ensureInit();
-                        const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
-                        const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-                        break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
-                    };
-
-                    const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
-                    var sym_buf: [32]u8 = undefined;
-                    const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
-                    const sym_ref = c.ir_const_func(ctx, c.ir_strl(ctx, &sym_buf, sym_name.len), 0);
-                    const name_len_const = c.ir_const_addr(ctx, struct_name.len);
-
-                    const call_result = c._ir_CALL_3(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, name_len_const);
-                    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
-
-                    if (state.aot_string_literals) |lits| {
-                        lits.append(std.heap.page_allocator, .{
-                            .data = struct_name,
-                            .is_symbol = false,
-                        }) catch {};
-                    }
 
                     // Re-read sp after callback (it pushed one value).
                     _ = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
@@ -6698,15 +6604,6 @@ pub fn emitProgramC(
     var image_collection: ?aot_image_emit_mod.ImageCollection = null;
     defer if (image_collection) |*coll| coll.deinit();
     var image_slot_maps: ?AotImageSlotMaps = null;
-    // Slot tables are only emitted (and patched by the loader) when
-    // the binary carries an image. Conservative gate: only enable
-    // slot-indexed literal pushes when `--emit-runtime-image` is set
-    // explicitly, since the interpreter-free decision (which drives
-    // metadata-only image emission) is not knowable until Pass 2's
-    // fallback emission count is final. Builds without an image fall
-    // back to the legacy name-lookup path, which still resolves
-    // through the dictionary the prelude reload populates.
-    const will_emit_image = (interp_ctx != null) and emit_runtime_image;
     if (interp_ctx) |ctx| {
         image_manifest = try aot_image_mod.buildImageManifest(@constCast(ctx), allocator);
         for (words) |w| {
@@ -6740,7 +6637,13 @@ pub fn emitProgramC(
         };
     }
     const slot_maps_ptr: ?*const AotImageSlotMaps = if (image_slot_maps) |*m| m else null;
-    const emit_slot_table_literals = will_emit_image;
+    // Slot tables are emitted whenever an interpreter context is
+    // available. Image emission below produces at least a
+    // metadata-only image in that case, so the loader can patch the
+    // slot tables with runtime pointers. This keeps every AOT
+    // artifact class on the slot-table path, removing the legacy
+    // name-lookup fallback for type-carrier literals.
+    const emit_slot_table_literals = slot_maps_ptr != null;
 
     // 4. Two-pass compilation: first determine which words compile,
     // then re-compile with only the compilable set so that cross-word calls
@@ -7166,20 +7069,15 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static int32_t onez_push_string(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushString(ctx, (uintptr_t)str, len); }\n");
     try out.appendSlice(allocator, "static int32_t onez_push_symbol(uintptr_t ctx, const char *str, uintptr_t len) { return jitPushSymbol(ctx, (uintptr_t)str, len); }\n");
     try out.appendSlice(allocator, "static int32_t onez_push_quotation(uintptr_t ctx, const unsigned char *data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id) { return jitPushQuotation(ctx, (uintptr_t)data, len, dest, quotation_id); }\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushWordLiteral(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_word_literal(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushWordLiteral(ctx, (uintptr_t)name, len); }\n");
-    try out.appendSlice(allocator, "extern int32_t jitPushStructType(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
-    try out.appendSlice(allocator, "static int32_t onez_push_struct_type(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushStructType(ctx, (uintptr_t)name, len); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushArray(uintptr_t ctx, uintptr_t data_ptr, uintptr_t data_len);\n");
     try out.appendSlice(allocator, "static int32_t onez_push_array(uintptr_t ctx, const unsigned char *data, uintptr_t len) { return jitPushArray(ctx, (uintptr_t)data, len); }\n");
     // Slot-table-indexed typed-literal helpers. The runtime caches
     // each slot table's pointer on Context during image loading; the
     // jit functions index through it to recover the runtime pointer
-    // and push the corresponding Value. Available for `.type_val`,
+    // and push the corresponding Value. Used for `.type_val`,
     // `.struct_type`, `.marker`, `.parameter`, and `.tagged` literals;
-    // the legacy `onez_push_word_literal` path stays in place for
-    // runtime-image AOT freezes that did not intern a particular
-    // pointer (e.g. non-collection-visible reachability).
+    // any miss surfaces as `non_serializable_literal` at codegen time
+    // rather than a runtime name lookup.
     try out.appendSlice(allocator, "extern int32_t jitPushTypeValueSlot(uintptr_t ctx, uintptr_t slot);\n");
     try out.appendSlice(allocator, "static inline int32_t onez_push_typevalue_slot(uintptr_t ctx, uintptr_t slot) { return jitPushTypeValueSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushStructTypeSlot(uintptr_t ctx, uintptr_t slot);\n");
@@ -7310,62 +7208,60 @@ pub fn emitProgramC(
         .auto => !interpreter_callbacks_emitted,
     };
 
-    // Image emission. Three paths produce distinct image shapes:
+    // Image emission. Two paths produce distinct image shapes:
     //
     // 1. `--emit-runtime-image` -> full runtime image with executable
     //    body bytecode and blob entries. Produces a runtime-image-aot
     //    or interpreter binary, depending on linkage.
-    // 2. interpreter-free without `--emit-runtime-image` -> metadata-only
-    //    image. The dictionary is rehydrated for read-only
-    //    introspection (`>word-info`, `all-words`, stack traces) but
-    //    bodies stay empty so the contract "frozen metadata, no body
-    //    evaluation" is preserved.
-    // 3. interpreter-linked binary without `--emit-runtime-image` -> no
-    //    image; the prelude reload at `onez_init()` populates the
-    //    dictionary the usual way.
+    // 2. Any other AOT build -> metadata-only image. The dictionary is
+    //    rehydrated for read-only introspection (`>word-info`,
+    //    `all-words`, stack traces); bodies stay empty. Slot tables for
+    //    type-carrier literals are emitted in both shapes so compiled
+    //    code never falls back to runtime name lookup for type
+    //    identity. Interpreter-linked builds reuse the prelude-allocated
+    //    TypeValues by name during loader patching, preserving identity
+    //    with the dispatch table the prelude reload populates.
     if (interp_ctx) |ctx| {
-        const want_metadata_only = interpreter_free and !emit_runtime_image;
-        if (emit_runtime_image or want_metadata_only) {
-            const manifest = image_manifest orelse return IrCodegenError.CompilationFailed;
-            const collection = if (image_collection) |*coll| coll else return IrCodegenError.CompilationFailed;
+        const want_metadata_only = !emit_runtime_image;
+        const manifest = image_manifest orelse return IrCodegenError.CompilationFailed;
+        const collection = if (image_collection) |*coll| coll else return IrCodegenError.CompilationFailed;
 
-            const stats = aot_image_emit_mod.emitImageCFromCollection(
-                &out,
-                allocator,
-                ctx,
-                manifest,
-                &image_word_lookup,
-                collection,
-                .{ .metadata_only = want_metadata_only },
-            ) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                // The freeze classifier already concluded each
-                // structural body is shaped for static-C-data, so a
-                // NotEncodable here points at a classifier/encoder
-                // mismatch -- surface as NotCompilable so the caller
-                // falls back to the existing codegen-failure pipeline.
-                error.NotEncodable => return IrCodegenError.NotCompilable,
-            };
-            diagnostics.image_stats = stats;
+        const stats = aot_image_emit_mod.emitImageCFromCollection(
+            &out,
+            allocator,
+            ctx,
+            manifest,
+            &image_word_lookup,
+            collection,
+            .{ .metadata_only = want_metadata_only },
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // The freeze classifier already concluded each
+            // structural body is shaped for static-C-data, so a
+            // NotEncodable here points at a classifier/encoder
+            // mismatch -- surface as NotCompilable so the caller
+            // falls back to the existing codegen-failure pipeline.
+            error.NotEncodable => return IrCodegenError.NotCompilable,
+        };
+        diagnostics.image_stats = stats;
 
-            // Surface the freshly-emitted image through the embedded
-            // metadata record. `format_version` is the source of truth
-            // shared with `aot_image_emit.zig` and the loader, so the
-            // inspector reports the same number the binary actually
-            // carries in `onez_image_header.format_version`.
-            if (want_metadata_only) {
-                meta.metadata_image_present = true;
-            } else {
-                meta.runtime_image_present = true;
-            }
-            meta.runtime_image_format_version = aot_image_emit_mod.format_version;
-            meta.runtime_image_blob_present = stats.blob_present;
-            meta.runtime_image_word_count = stats.word_count;
-            meta.runtime_image_struct_type_slot_count = stats.struct_type_slot_count;
-            meta.runtime_image_marker_slot_count = stats.marker_slot_count;
-            meta.runtime_image_parameter_slot_count = stats.parameter_slot_count;
-            meta.runtime_image_tagged_slot_count = stats.tagged_slot_count;
+        // Surface the freshly-emitted image through the embedded
+        // metadata record. `format_version` is the source of truth
+        // shared with `aot_image_emit.zig` and the loader, so the
+        // inspector reports the same number the binary actually
+        // carries in `onez_image_header.format_version`.
+        if (want_metadata_only) {
+            meta.metadata_image_present = true;
+        } else {
+            meta.runtime_image_present = true;
         }
+        meta.runtime_image_format_version = aot_image_emit_mod.format_version;
+        meta.runtime_image_blob_present = stats.blob_present;
+        meta.runtime_image_word_count = stats.word_count;
+        meta.runtime_image_struct_type_slot_count = stats.struct_type_slot_count;
+        meta.runtime_image_marker_slot_count = stats.marker_slot_count;
+        meta.runtime_image_parameter_slot_count = stats.parameter_slot_count;
+        meta.runtime_image_tagged_slot_count = stats.tagged_slot_count;
     }
 
     // Static cross-check: independently scan the assembled C source for
@@ -8593,199 +8489,10 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
     return 0;
 }
 
-/// Record a structured `word-not-found` failure so `onez_print_error` can
-/// surface the missing name. Used by AOT push-literal callbacks where the
-/// runtime lookup helper returned null. The name is duplicated into the
-/// arena allocator so its lifetime tracks the context, matching the
-/// convention used by other error_details producers.
-fn recordWordNotFound(ctx: *Context, name: []const u8) void {
-    const msg = ctx.arena.allocator().dupe(u8, name) catch return;
-    ctx.error_details.append(ctx.allocator, .{
-        .error_type = "word-not-found",
-        .message = msg,
-        .source = "<aot-runtime>",
-        .line = 0,
-        .word_name = msg,
-    }) catch {};
-}
-
-/// Look up a word by name, falling through to the module cache for
-/// module-private words that plain `lookupWord` cannot reach. Returns
-/// the compound body's instructions, or null when not found / not
-/// compound. Shared by AOT runtime callbacks that need to read literal
-/// payloads out of word definitions.
-fn lookupWordCompoundInstrs(ctx: *Context, name: []const u8) ?[]const Instruction {
-    if (lookupWordCompoundEntry(ctx, name)) |entry| return entry.instrs;
-    return null;
-}
-
-const RuntimeImageWordEntry = struct {
-    instrs: []const Instruction,
-    /// Populated only when the word came from a runtime-image module
-    /// (loader-seeded `ModuleWord.word_id`). Words found via the local
-    /// dictionary go through their own JIT registration path and don't
-    /// need this fallback.
-    word_id: ?u32 = null,
-};
-
-/// Like `lookupWordCompoundInstrs` but also returns the runtime-image
-/// JIT word_id when the word came from `module_cache_value`. The
-/// runtime-image M1 stub bodies have `instrs.len == 0`; the AOT-side
-/// callers (`jitPushWordLiteral`, `jitPushStructType`) detect the stub
-/// case and fall through to compiled dispatch via `word_id`.
-fn lookupWordCompoundEntry(ctx: *Context, name: []const u8) ?RuntimeImageWordEntry {
-    if (ctx.lookupWord(name)) |word| {
-        switch (word.action) {
-            .compound => |instrs| return .{ .instrs = instrs, .word_id = word.word_id },
-            .native, .host_callback => {},
-        }
-    }
-    var iter = ctx.module_cache_value.iterator();
-    while (iter.next()) |entry| {
-        if (entry.value_ptr.* != .module) continue;
-        const module = entry.value_ptr.*.module;
-        if (module.words.get(name)) |mw| {
-            switch (mw.action) {
-                .compound => |instrs| return .{ .instrs = instrs, .word_id = mw.word_id },
-                .native, .host_callback => {},
-            }
-        }
-    }
-    return null;
-}
-
-/// Invoke an AOT-compiled word by JIT dispatch id, pushing its results
-/// onto the runtime stack. Returns true on success. False means either
-/// the dispatch entry is missing/uncompiled, or the call bailed; the
-/// caller decides whether to surface that as an error.
-fn invokeCompiledWordById(ctx: *Context, word_id: u32) bool {
-    const entry = ctx.jit_dispatch.get(word_id) orelse return false;
-    const code_ptr = entry.code_ptr orelse return false;
-
-    const saved_sp = ctx.stack.items.items.len;
-    var jit_ctx = JitContext{
-        .items_ptr = ctx.stack.items.items.ptr,
-        .sp_ptr = &ctx.stack.items.items.len,
-        .capacity = ctx.stack.items.capacity,
-        .ctx = ctx,
-    };
-    const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
-    const status = ExecResult.fromStatus(func(&jit_ctx));
-    return switch (status) {
-        .ok => true,
-        .error_propagate => false,
-        .bail => blk: {
-            // A bail from compiled code restores stack depth so the
-            // caller can fall through to its existing failure path
-            // without leaving the stack in an inconsistent state.
-            ctx.stack.items.items.len = saved_sp;
-            break :blk false;
-        },
-    };
-}
-
-/// Push a word's literal value onto the stack. The word must be a single
-/// push_literal instruction (type words, enum variants, parameter definitions).
-/// The name is at `name_ptr` with length `name_len`. The runtime looks up the
-/// word in the dictionary and pushes its literal value.
-///
-/// Falls through to `module_cache_value` on `lookupWord` miss because
-/// enum variants and parameter words for module-private definitions live in
-/// `module.words` and are not visible to plain `lookupWord` from inside
-/// AOT-to-AOT direct calls.
-export fn jitPushWordLiteral(ctx_raw: usize, name_ptr: usize, name_len: usize) callconv(.c) i32 {
-    if (ctx_raw == 0) return 1;
-    const ctx: *Context = @ptrFromInt(ctx_raw);
-    const src: [*]const u8 = @ptrFromInt(name_ptr);
-    const name = src[0..name_len];
-    const entry = lookupWordCompoundEntry(ctx, name) orelse {
-        recordWordNotFound(ctx, name);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
-    if (entry.instrs.len == 1) {
-        switch (entry.instrs[0].op) {
-            .push_literal => |val| {
-                ctx.stack.push(val) catch {
-                    ctx.jit_pending_error = error.OutOfMemory;
-                    return 2;
-                };
-                return 0;
-            },
-            else => {},
-        }
-    }
-    // Runtime-image stub: an empty compound body whose word_id maps to
-    // an AOT-compiled dispatch entry. Calling the compiled word lets
-    // the variant constructor (or other literal-pushing word) push the
-    // right Value via its frozen body, which is what the structural
-    // path's M1 emission relies on.
-    if (entry.instrs.len == 0) {
-        if (entry.word_id) |word_id| {
-            if (invokeCompiledWordById(ctx, word_id)) return 0;
-        }
-    }
-    ctx.jit_pending_error = error.TypeMismatch;
-    return 2;
-}
-
-/// Push a struct_type value onto the stack by looking up the constructor word
-/// "make-{name}" and extracting the struct_type from its first instruction.
-/// Used by AOT-compiled struct words whose struct_type pointer is only valid
-/// at compile time.
-///
-/// Falls through to `module_cache_value` on `lookupWord` miss because
-/// constructor words for module-private struct definitions live in
-/// `module.words` and are not visible to plain `lookupWord` from inside
-/// AOT-to-AOT direct calls.
-export fn jitPushStructType(ctx_raw: usize, name_ptr: usize, name_len: usize) callconv(.c) i32 {
-    if (ctx_raw == 0) return 1;
-    const ctx: *Context = @ptrFromInt(ctx_raw);
-    const src: [*]const u8 = @ptrFromInt(name_ptr);
-    const struct_name = src[0..name_len];
-
-    // Build "make-{name}" to look up the constructor word
-    var buf: [256]u8 = undefined;
-    const ctor_name = std.fmt.bufPrint(&buf, "make-{s}", .{struct_name}) catch {
-        ctx.jit_pending_error = error.Overflow;
-        return 2;
-    };
-
-    const ctor_entry = lookupWordCompoundEntry(ctx, ctor_name) orelse {
-        recordWordNotFound(ctx, ctor_name);
-        ctx.jit_pending_error = error.WordNotFound;
-        return 2;
-    };
-
-    if (ctor_entry.instrs.len >= 1) {
-        switch (ctor_entry.instrs[0].op) {
-            .push_literal => |val| {
-                if (val == .struct_type) {
-                    ctx.stack.push(val) catch {
-                        ctx.jit_pending_error = error.OutOfMemory;
-                        return 2;
-                    };
-                    return 0;
-                }
-            },
-            else => {},
-        }
-    }
-    // Runtime-image stub: empty constructor body with an AOT word_id
-    // that pushes the struct_type when invoked.
-    if (ctor_entry.instrs.len == 0) {
-        if (ctor_entry.word_id) |word_id| {
-            if (invokeCompiledWordById(ctx, word_id)) return 0;
-        }
-    }
-    ctx.jit_pending_error = error.TypeMismatch;
-    return 2;
-}
-
 /// Helper: report a typed-literal slot miss (out-of-range or NULL slot)
-/// onto the Context's error_details so the runtime emits the same
-/// diagnostic shape that `recordWordNotFound` does for name-lookup
-/// misses. Used by the four slot-indexed `jitPush*Slot` callbacks.
+/// onto the Context's error_details so the runtime emits a structured
+/// failure for compiled code that consulted a slot table without a live
+/// entry. Used by the four slot-indexed `jitPush*Slot` callbacks.
 fn recordSlotMiss(ctx: *Context, kind: []const u8, slot: usize) void {
     var buf: [128]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "{s} slot {d}", .{ kind, slot }) catch return;
@@ -11257,6 +10964,28 @@ test "emitProgramC generates complete C source" {
 
     // Main entry point
     try testing.expect(std.mem.indexOf(u8, source, "int main(") != null);
+}
+
+test "emitProgramC omits legacy name-lookup typed-literal helpers" {
+    // Every AOT compilation routes type-carrier literals through the
+    // slot-table helpers (onez_push_*_slot). The legacy name-lookup
+    // callbacks were deleted; their symbols must not reappear in the
+    // generated C, otherwise a runtime dictionary lookup could sneak
+    // back in for type identity.
+    const double_instrs = makeInstructions(.{ @as(i64, 2), "*" });
+
+    const words = [_]AotWordDesc{
+        .{ .name = "double", .instructions = &double_instrs, .input_count = 1, .output_count = 1, .word_id = 0 },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "jitPushWordLiteral") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitPushStructType(") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_word_literal") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_struct_type(") == null);
 }
 
 test "emitProgramC dispatch table has correct entries" {

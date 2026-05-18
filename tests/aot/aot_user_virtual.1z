@@ -1,0 +1,21 @@
+\ End-to-end exercise of a user-defined virtual type under runtime-image
+\ AOT. Covers wrap (>name), raw constructor (make-name), positional
+\ unwrap, predicate. The virtual generator emits compound bodies that
+\ push the TypeValue as a .type_val literal; every such push routes
+\ through the runtime-image slot table.
+
+weight: virtual{ fixnum } ;
+
+\ Raw constructor + positional unwrap.
+42 make-weight unmake-weight .
+
+\ Hash-based wrap on the backing type produces an instance with the
+\ same payload.
+7 >weight unmake-weight .
+
+\ Predicate distinguishes wrapped instances from foreign values.
+13 make-weight weight? .
+"not-a-weight" weight? .
+
+\ Round-trip through wrap-unwrap-wrap preserves the payload.
+100 make-weight unmake-weight >weight unmake-weight .

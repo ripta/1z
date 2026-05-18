@@ -1,0 +1,17 @@
+\ End-to-end exercise of a user-defined struct under runtime-image AOT.
+\ Covers definition, raw constructor, positional unwrap, predicate. The
+\ constructor and predicate words push the StructType as a typed
+\ literal; each push must route through the runtime-image slot table.
+
+point: struct{ x y } ;
+
+\ Raw constructor + positional unwrap.
+2 3 make-point unmake-point + .
+
+\ Predicate distinguishes instances from foreign values.
+4 5 make-point point? .
+"not-a-point" point? .
+
+\ Positional unwrap of an instance built with a different fixnum
+\ payload exercises a second slot-table push from the constructor.
+99 -1 make-point unmake-point + .
