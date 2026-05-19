@@ -275,7 +275,7 @@ pub const Scheduler = struct {
         ops.onTaskDone(owner);
     }
 
-    fn isBackgroundWorker(self: *Scheduler) bool {
+    pub fn isBackgroundWorker(self: *Scheduler) bool {
         const owner = self.owner orelse return false;
         const ops = self.ops orelse return false;
         return !ops.isPrimary(owner);

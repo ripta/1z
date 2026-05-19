@@ -929,6 +929,16 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
 
 /// load-file ( cache filename -- module ) - Load a file unconditionally into the given cache
 fn nativeLoadFile(ctx: *Context) anyerror!void {
+    if (ctx.scheduler) |sched| {
+        if (sched.isBackgroundWorker()) {
+            ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+                .error_type = "non-primary-worker",
+                .message = "load-file cannot be called from a non-primary worker",
+            });
+            return error.UserThrown;
+        }
+    }
+
     const alloc = ctx.quotationAllocator();
 
     const filename = try popString(ctx);

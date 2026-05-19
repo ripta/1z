@@ -1,0 +1,54 @@
+use "testing" ;
+
+\ Non-primary-worker policy: load-file (and the prelude words load/reload
+\ that delegate to it on a cache miss) must throw `non-primary-worker` when
+\ called from a worker other than the primary. The check lives in
+\ nativeLoadFile, so cache-hit `load` is intentionally not gated; the test
+\ for `load` exercises the cache-miss path.
+\
+\ With --threads=4, pickLeastLoaded picks the worker with the smallest
+\ active_tasks count and breaks ties by lowest id. The primary worker is
+\ already running the test driver, so a single spawn deterministically
+\ lands on a non-primary worker.
+
+"non-primary-worker policy" test-section
+
+test-load-file-non-primary: ( -- ) [
+  [
+    [
+      [ M{ } "math" load-file drop ] spawn await drop
+    ] task-scope
+  ] non-primary-worker: "load-file from non-primary worker throws"
+  assert-error-type
+] ;
+
+test-reload-non-primary: ( -- ) [
+  [
+    [
+      [ "math" reload drop ] spawn await drop
+    ] task-scope
+  ] non-primary-worker: "reload from non-primary worker throws"
+  assert-error-type
+] ;
+
+\ `math` is not pre-loaded by the prelude or by `use "testing"`, so the
+\ cache lookup misses and `load` falls through to `load-file`.
+test-load-cache-miss-non-primary: ( -- ) [
+  [
+    [
+      [ "math" load drop ] spawn await drop
+    ] task-scope
+  ] non-primary-worker: "load (cache miss) from non-primary worker throws"
+  assert-error-type
+] ;
+
+test-load-on-primary-ok: ( -- ) [
+  "math" load
+  t "load on primary returns a module" assert-true
+  drop
+] ;
+
+test-load-file-non-primary
+test-reload-non-primary
+test-load-cache-miss-non-primary
+test-load-on-primary-ok
