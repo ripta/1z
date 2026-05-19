@@ -42,3 +42,17 @@ grab-fields hello struct{ x y } END
 
 grab-fields hello struct{ x y } END
 #first "hello" "first value is raw string" assert=
+
+"parse-types-until" test-section
+
+grab-types: parse-time [ "END" parse-types-until ] ;
+
+\ known parse-time type word succeeds
+grab-types fixnum END
+#len 1 "parse-types-until collects one type" assert=
+
+grab-types fixnum END
+#first type-of type "parse-types-until returns type value" assert=
+
+\ unknown token is an error
+[ "fixtures/parse_types_until_typo.1z" load ] "TypeMismatch" assert-error

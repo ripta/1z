@@ -78,7 +78,7 @@ virtual{: parse-time [
   ]
   [ M{ type: virtual: } ]
   if
-  inner-type: "}" parse-values-until @set!
+  inner-type: "}" parse-types-until @set!
   define: [ define-virtual ] @set!
 ] ;
 

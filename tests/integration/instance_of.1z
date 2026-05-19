@@ -1,0 +1,43 @@
+use "testing" ;
+
+"built-in types" test-section
+42 fixnum instance-of? "fixnum instance-of? fixnum" assert-true
+"hello" string instance-of? "string instance-of? string" assert-true
+t boolean instance-of? "boolean instance-of? boolean" assert-true
+3.14 float instance-of? "float instance-of? float" assert-true
+foo: symbol instance-of? "symbol instance-of? symbol" assert-true
+{ 1 2 } array instance-of? "array instance-of? array" assert-true
+[ 1 2 ] quotation instance-of? "quotation instance-of? quotation" assert-true
+H{ } hash instance-of? "hash instance-of? hash" assert-true
+
+"built-in negative" test-section
+42 string instance-of? "fixnum not instance-of? string" assert-false
+"hello" fixnum instance-of? "string not instance-of? fixnum" assert-false
+t fixnum instance-of? "boolean not instance-of? fixnum" assert-false
+
+"enum variant exact match" test-section
+ordering:lt ordering:lt type-of instance-of? "ordering:lt instance-of? ordering:lt type" assert-true
+ordering:gt ordering:gt type-of instance-of? "ordering:gt instance-of? ordering:gt type" assert-true
+ordering:eq ordering:eq type-of instance-of? "ordering:eq instance-of? ordering:eq type" assert-true
+
+"enum variant parent fallback" test-section
+ordering:lt ordering instance-of? "ordering:lt instance-of? ordering" assert-true
+ordering:gt ordering instance-of? "ordering:gt instance-of? ordering" assert-true
+ordering:eq ordering instance-of? "ordering:eq instance-of? ordering" assert-true
+
+"enum variant wrong parent" test-section
+ordering:lt option instance-of? "ordering:lt not instance-of? option" assert-false
+option:none ordering instance-of? "option:none not instance-of? ordering" assert-false
+
+"virtual type" test-section
+test-vtype: virtual{ fixnum } ;
+42 >test-vtype test-vtype instance-of? "virtual instance-of? its type" assert-true
+42 >test-vtype fixnum instance-of? "virtual not instance-of? inner type" assert-false
+
+"struct type" test-section
+test-point: struct{ x y } ;
+1 2 make-test-point test-point instance-of? "struct instance-of? its type" assert-true
+1 2 make-test-point fixnum instance-of? "struct not instance-of? fixnum" assert-false
+
+"type mismatch" test-section
+[ 42 "not-a-type" instance-of? ] "TypeMismatch" assert-error

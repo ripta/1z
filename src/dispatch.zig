@@ -50,7 +50,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
 /// or null for everything else.
 pub fn dispatchEnumName(val: Value) ?[]const u8 {
     return switch (val) {
-        .tagged => |t| t.tag.enum_name,
+        .tagged => |t| if (t.tag.parent_type) |pt| pt.name else null,
         else => null,
     };
 }

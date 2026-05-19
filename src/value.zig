@@ -130,8 +130,30 @@ pub const Marker = struct {
 };
 
 /// VirtualType represents the definition of a virtual type.
+///
 /// All instances of the same virtual type share a single VirtualType allocation,
 /// enabling pointer equality for type identity checks.
+///
+/// The `parent_type` field models a variant-to-parent relationship. For example,
+/// when `define-enum` creates variants like `color:red`, it set each variant's
+/// `parent_type` to point at the parent enum's `TypeValue`. This chain is
+/// exactly one level deep: a variant points to its enum, and the enum itself
+/// has no parent. This constraint is structural: only VirtualType carries
+/// `parent_type`, and an enum's TypeValue is not  backed by any VirtualType.
+///
+/// `instance-of?` uses the parent_type field as a one-level fallback: it first
+/// compares the value's own TypeValue pointer against the query type, then
+/// checks the value's `parent_type` if set. This allows:
+///
+///   color:red instance-of? color
+///
+/// to return true.
+///
+/// `parent_type` is unrelated to value containment. A nested array like
+/// `{ { 1 } }` has type `array`, not `array(array(fixnum))`. The type
+/// system does not currently track inner element types at the value level.
+/// It is also unrelated to generic or parameterized types, which do not exist
+/// in the type system.
 pub const VirtualType = struct {
     // Type name, e.g., "duration"
     name: []const u8,
@@ -139,8 +161,8 @@ pub const VirtualType = struct {
     inner_type: []const u8,
     // Anonymous struct backing, if struct-backed
     anon_struct: ?*const StructType = null,
-    // Parent enum name for enum variants, e.g., "color" for "color:red"
-    enum_name: ?[]const u8 = null,
+    // Parent enum type for enum variants, e.g., the "color" TypeValue for "color:red"
+    parent_type: ?*const TypeValue = null,
     // First-class type value for this virtual type, set during type registration
     type_val: ?*TypeValue = null,
 };

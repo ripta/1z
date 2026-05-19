@@ -53,6 +53,5 @@ pixel: virtual{ color } ;
 
 "typo rejection" test-section
 
-\ unknown type name in virtual{ is rejected at definition time
-[ no-such-type-test: virtual{ no-such-type } ;
-] "TypeMismatch" assert-error
+\ unknown type name in virtual{ is rejected at parse time
+[ "fixtures/virtual_typo.1z" load ] "TypeMismatch" assert-error
