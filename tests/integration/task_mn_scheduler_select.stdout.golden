@@ -1,0 +1,34 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+PASS: single-channel cross-worker select returns 99
+Stack: [ ]
+PASS: multi-channel cross-worker: sender on first channel
+PASS: multi-channel cross-worker: sender on second channel
+PASS: multi-channel cross-worker: sender on first channel
+PASS: multi-channel cross-worker: sender on second channel
+PASS: multi-channel cross-worker: sender on first channel
+PASS: multi-channel cross-worker: sender on second channel
+PASS: multi-channel cross-worker: sender on first channel
+PASS: multi-channel cross-worker: sender on second channel
+Stack: [ ]
+PASS: select buffered cross-worker delivers 11 or 22
+Stack: [ ]
+PASS: select all-closed cross-worker throws
+Stack: [ ]

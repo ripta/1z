@@ -1,0 +1,21 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: empty buffered: flag is f
+PASS: after cross-worker send: flag is t
+PASS: after cross-worker send: value is 42
+PASS: after drain: flag is f
+Stack: [ ]
+PASS: drain iteration: flag is t
+PASS: drain iteration: flag is t
+PASS: drain iteration: flag is t
+PASS: drain iteration: flag is t
+PASS: drain iteration: flag is t
+PASS: drain iteration: flag is t
+PASS: drain iteration: flag is t
+PASS: drain iteration: flag is t
+PASS: drain sum equals number of producers
+PASS: after full drain: flag is f
+Stack: [ ]
+PASS: closed empty: flag is f
+Stack: [ ]

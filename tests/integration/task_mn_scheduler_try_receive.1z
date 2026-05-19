@@ -1,0 +1,72 @@
+use "testing" ;
+
+\ Cross-worker exercise of `try-receive` under the M:N scheduler.
+\
+\ With four workers, spawned producers and closers land on threads
+\ other than the main task. A broken cross-thread lock or wake would
+\ manifest as either a hang (caught by deadlock detection) or an
+\ off-by-one value mismatch from a missed buffer write.
+
+\ -- 1. Buffered channel: empty returns (f f); after a cross-worker
+\       send completes, the buffer holds the value; drain succeeds;
+\       next try-receive returns (f f) again.
+
+test-try-receive-empty-and-filled: ( -- ) [
+  [
+    1 <buffered-channel>
+    dup try-receive
+    swap drop
+    f "empty buffered: flag is f" assert=
+    dup [ 42 swap send ] curry spawn
+    await drop
+    dup try-receive
+    t "after cross-worker send: flag is t" assert=
+    42 "after cross-worker send: value is 42" assert=
+    try-receive
+    swap drop
+    f "after drain: flag is f" assert=
+  ] task-scope
+] ;
+
+\ -- 2. Buffered fan-in: 8 producers fill an 8-slot buffer from other
+\       workers; consumer drains every value via try-receive; trailing
+\       try-receive returns (f f).
+
+test-try-receive-drain-many: ( -- ) [
+  [
+    8 <buffered-channel>
+    { } 8 [
+      over [ 1 swap send ] curry spawn
+      #push
+    ] times
+    await-all drop
+    0 8 [
+      over try-receive
+      t "drain iteration: flag is t" assert=
+      +
+    ] times
+    8 "drain sum equals number of producers" assert=
+    try-receive
+    swap drop
+    f "after full drain: flag is f" assert=
+  ] task-scope
+] ;
+
+\ -- 3. Cross-worker close: a task on another worker closes the
+\       channel; try-receive on the closed-empty channel returns
+\       (f f) rather than throwing.
+
+test-try-receive-closed-empty: ( -- ) [
+  [
+    <channel>
+    dup [ close-channel ] curry spawn
+    await drop
+    try-receive
+    swap drop
+    f "closed empty: flag is f" assert=
+  ] task-scope
+] ;
+
+test-try-receive-empty-and-filled
+test-try-receive-drain-many
+test-try-receive-closed-empty

@@ -1,0 +1,93 @@
+use "testing" ;
+
+\ Cross-worker exercise of `select` under the M:N scheduler.
+\
+\ With four workers, spawned senders and closers land on threads
+\ other than the main task. select's wake path therefore typically
+\ crosses worker boundaries -- a broken cross-thread wake manifests
+\ as a hang (caught by deadlock detection) or a stale result.
+
+\ -- 1. Single-channel select with a cross-worker sender. Repeated to
+\       maximize the chance the sender lands on a non-primary worker.
+
+test-select-cross-worker-single: ( -- ) [
+  [
+    16 [
+      <channel>
+      dup [ 99 swap send ] curry spawn drop
+      { } swap #push
+      select
+      drop
+      99 "single-channel cross-worker select returns 99" assert=
+    ] times
+  ] task-scope
+] ;
+
+\ -- 2. Multi-channel select with one cross-worker sender at a time,
+\       alternating which channel is the producer. Exercises select's
+\       wake path through both positions in the channel array.
+
+test-select-cross-worker-multi: ( -- ) [
+  [
+    4 [
+      <channel>
+      <channel>
+      over [ 11 swap send ] curry spawn drop
+      [ { } swap #push ] dip #push
+      select
+      drop
+      11 "multi-channel cross-worker: sender on first channel" assert=
+      <channel>
+      <channel>
+      dup [ 22 swap send ] curry spawn drop
+      [ { } swap #push ] dip #push
+      select
+      drop
+      22 "multi-channel cross-worker: sender on second channel" assert=
+    ] times
+  ] task-scope
+] ;
+
+\ -- 3. Multi-channel select over two buffered channels, both filled
+\       by cross-worker producers. Both producers complete before the
+\       select runs; select reads from whichever appears first in the
+\       channel array.
+
+test-select-buffered-cross-worker: ( -- ) [
+  [
+    1 <buffered-channel>
+    1 <buffered-channel>
+    over [ 11 swap send ] curry spawn
+    swap
+    dup [ 22 swap send ] curry spawn
+    await drop
+    swap
+    await drop
+    [ { } swap #push ] dip #push
+    select
+    drop
+    dup 11 = swap 22 = or
+    "select buffered cross-worker delivers 11 or 22" assert-true
+  ] task-scope
+] ;
+
+\ -- 4. Multi-channel select on all-closed channels (closers run on
+\       other workers) throws channel-closed.
+
+test-select-all-closed-cross-worker: ( -- ) [
+  [
+    [
+      <channel>
+      <channel>
+      over [ close-channel ] curry spawn drop
+      dup [ close-channel ] curry spawn drop
+      [ { } swap #push ] dip #push
+      select
+    ] task-scope
+  ] channel-closed: "select all-closed cross-worker throws" assert-error-type
+] ;
+
+test-select-cross-worker-single
+test-select-cross-worker-multi
+test-select-buffered-cross-worker
+test-select-all-closed-cross-worker
