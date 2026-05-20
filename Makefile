@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test unit-test integration-test eager-test fmt-test lsp-test aot-test aot-run aot-interpreter-strip-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter profiles build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test eager-test fmt-test lsp-test aot-test aot-run aot-interpreter-strip-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter profiles build-example clean help docs docker-build docker-test
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -30,11 +30,21 @@ fmt: build ## Format zig and 1z source files
 	timeout $(TARGET_TIMEOUT) zig fmt src/ build.zig
 	timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z fmt $$(find . \( -path './.zig-cache' -o -path './$(ZIG_PREFIX)' \) -prune -o -name '*.1z' -print)
 
-test: ## Run all tests
+test: test-threads-1 test-threads-auto ## Run all tests under both --threads=1 and --threads=auto
+
+test-threads-1: ## Run all tests with default --threads=1 for integration tests
 	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
-	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+
+test-threads-auto: ## Run all tests with default --threads=auto for integration tests
+	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
+	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
@@ -185,7 +195,7 @@ clean: ## Remove build artifacts
 	rm -rf $(ZIG_PREFIX) .old.zig-cache
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s %s\n", $$1, $$2}'
 
 docs: build ## Generate API reference documentation
 	./$(ZIG_PREFIX)/bin/1z tools/gen-docs.1z

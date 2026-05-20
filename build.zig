@@ -6,6 +6,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const test_case_timeout_secs = b.option(u32, "test-case-timeout", "Per-test timeout in seconds") orelse 10;
     const test_filter = b.option([]const u8, "test-filter", "Comma-separated substring filter for test names");
+    const test_threads = b.option([]const u8, "test-threads", "Default --threads=<value> for integration tests; overridable per-test via .flags") orelse "1";
     const verbose_test_reporting = envFlagIsSet(b, "VERBOSE");
     const slow_test_threshold_ms: u64 = 1000;
     const bail_stats = b.option(bool, "bail-stats", "Enable bail frequency instrumentation (writes stats to stderr on exit)") orelse false;
@@ -168,7 +169,7 @@ pub fn build(b: *std.Build) void {
     update_golden_step.dependOn(&install_toy_shared.step);
     var update_files = b.addUpdateSourceFiles();
 
-    addIntegrationTests(b, exe, test_case_helper, integration_test_step, &update_files, &integration_status_files, test_entries, has_diff, false, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter);
+    addIntegrationTests(b, exe, test_case_helper, integration_test_step, &update_files, &integration_status_files, test_entries, has_diff, false, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter, test_threads);
     if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, integration_test_step, "integration", integration_status_files.items);
 
     update_golden_step.dependOn(&update_files.step);
@@ -192,7 +193,7 @@ pub fn build(b: *std.Build) void {
     eager_test_step.dependOn(&install_toy_shared.step);
     var eager_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
-    addIntegrationTests(b, exe, test_case_helper, eager_test_step, null, &eager_status_files, test_entries, has_diff, true, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter);
+    addIntegrationTests(b, exe, test_case_helper, eager_test_step, null, &eager_status_files, test_entries, has_diff, true, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter, test_threads);
     if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, eager_test_step, "eager integration", eager_status_files.items);
 
     // Formatter tests
@@ -722,6 +723,7 @@ fn addIntegrationTests(
     verbose_test_reporting: bool,
     slow_test_threshold_ms: u64,
     test_filter: ?[]const u8,
+    test_threads: []const u8,
 ) void {
     var previous_serial_test_run: ?*std.Build.Step = null;
     var matched_count: usize = 0;
@@ -768,7 +770,7 @@ fn addIntegrationTests(
             }
             previous_serial_test_run = &test_run.step;
         }
-        configureIntegrationRun(b, test_run, te, timeout_secs, jit_mode);
+        configureIntegrationRun(b, test_run, te, timeout_secs, jit_mode, test_threads);
 
         if (te.has_stderr_golden) {
             test_run.addFileInput(b.path(te.stderr_golden_path));
@@ -825,7 +827,7 @@ fn addIntegrationTests(
             update_run.addArg("--");
             update_run.addFileInput(artifact.getEmittedBin());
             update_run.addArtifactArg(artifact);
-            configureIntegrationRun(b, update_run, te, timeout_secs, false);
+            configureIntegrationRun(b, update_run, te, timeout_secs, false, test_threads);
             uf_ptr.*.addCopyFileToSource(update_run.captureStdOut(), te.stdout_golden_path);
 
             const update_exit_code = te.expected_exit_code orelse 0;
@@ -1393,6 +1395,7 @@ fn configureIntegrationRun(
     te: TestEntry,
     timeout_secs: u32,
     jit_mode: bool,
+    test_threads: []const u8,
 ) void {
     var raw_mode = false;
     var detected_subcommand: ?[]const u8 = null;
@@ -1453,13 +1456,8 @@ fn configureIntegrationRun(
     if (!hasTestTimeoutFlag(te.flags_lines)) {
         run.addArg(b.fmt("--test-timeout={d}", .{timeout_secs}));
     }
-    // Default integration tests to single-threaded execution. The M:N
-    // scheduler's cross-thread paths (channel send, scope completion,
-    // timer expiry, cancellation) are not yet complete, so existing tests
-    // exercise behavior that races under multi-thread execution. Tests
-    // can opt back in by specifying their own `--threads=N` in `.flags`.
-    if (!hasThreadsFlag(te.flags_lines)) {
-        run.addArg("--threads=1");
+    if (!hasThreadsFlag(te.flags_lines) and !std.mem.eql(u8, test_threads, "auto")) {
+        run.addArg(b.fmt("--threads={s}", .{test_threads}));
     }
     if (te.flags_lines) |fl| {
         var flag_iter = std.mem.splitScalar(u8, fl, '\n');
