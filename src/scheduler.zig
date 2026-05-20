@@ -100,6 +100,18 @@ pub const WorkerOps = struct {
     /// task-id order, then return. Caller is responsible for
     /// `std.process.exit(124)` afterwards.
     dumpAllPoolTasks: *const fn (owner: *anyopaque) void,
+    /// Return true if any worker in the pool owns a non-terminal task.
+    /// Used by the primary worker's exit check: the primary cannot break
+    /// out of `runLoop` while any worker still hosts live work, because a
+    /// sibling worker may spawn a task back onto the primary's external
+    /// queue at any time. Without a pool-wide check the primary races
+    /// against cross-thread spawns and can exit before those tasks land.
+    poolHasAliveTasks: *const fn (owner: *anyopaque) bool,
+    /// Signal the primary worker's wake source so it returns from `poll()`
+    /// and re-evaluates `poolHasAliveTasks`. Called from any worker's
+    /// `handleTaskDone` so the primary observes the pool draining without
+    /// needing a separate event source.
+    wakePrimary: *const fn (owner: *anyopaque) void,
 };
 
 /// Cooperative scheduler with a FIFO run queue.
@@ -273,12 +285,26 @@ pub const Scheduler = struct {
         const owner = self.owner orelse return;
         const ops = self.ops orelse return;
         ops.onTaskDone(owner);
+        // Nudge the primary worker so it re-evaluates its pool-wide exit
+        // check. Without this the primary can sit in `poll()` after the
+        // last background task finishes because nothing else signals its
+        // wake source.
+        ops.wakePrimary(owner);
     }
 
     pub fn isBackgroundWorker(self: *Scheduler) bool {
         const owner = self.owner orelse return false;
         const ops = self.ops orelse return false;
         return !ops.isPrimary(owner);
+    }
+
+    /// Pool-wide alive-task check used by the primary worker's exit path.
+    /// Standalone schedulers (no owning worker) cannot have peers, so the
+    /// answer collapses to the per-worker check the caller already did.
+    fn poolHasAliveTasks(self: *Scheduler) bool {
+        const owner = self.owner orelse return false;
+        const ops = self.ops orelse return false;
+        return ops.poolHasAliveTasks(owner);
     }
 
     /// Capture a progress event. Updates the scheduler-local timestamp
@@ -539,7 +565,13 @@ pub const Scheduler = struct {
             // behavior.
             const background = self.isBackgroundWorker();
             if (!background) {
-                if (!has_sleepers and !has_io_waiters and !has_process_waiters and !has_blocked_tasks) break;
+                // Primary's exit must be pool-wide: a sibling worker can
+                // spawn a task back onto the primary's external queue at
+                // any time, and the primary's own `all_tasks` does not see
+                // those cross-worker spawns until they land. Checking the
+                // pool's aggregate alive count closes the race.
+                const any_alive = self.poolHasAliveTasks();
+                if (!has_sleepers and !has_io_waiters and !has_process_waiters and !has_blocked_tasks and !any_alive) break;
             } else {
                 if (self.shutdownObserved() and !has_sleepers and !has_io_waiters and !has_process_waiters and !has_blocked_tasks) break;
             }

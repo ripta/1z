@@ -29,6 +29,8 @@ const worker_ops: WorkerOps = .{
     .claimStallReport = claimStallReportCb,
     .emitPoolStallDetect = emitPoolStallDetectCb,
     .dumpAllPoolTasks = dumpAllPoolTasksCb,
+    .poolHasAliveTasks = poolHasAliveTasksCb,
+    .wakePrimary = wakePrimaryCb,
 };
 
 fn drainExternalCb(owner: *anyopaque) void {
@@ -106,6 +108,16 @@ fn emitPoolStallDetectCb(owner: *anyopaque, threshold_ns: i128) void {
 fn dumpAllPoolTasksCb(owner: *anyopaque) void {
     const w: *Worker = @ptrCast(@alignCast(owner));
     w.pool.?.dumpAllTasks();
+}
+
+fn poolHasAliveTasksCb(owner: *anyopaque) bool {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    return w.pool.?.anyAliveTasks();
+}
+
+fn wakePrimaryCb(owner: *anyopaque) void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    w.pool.?.workers[0].wake.signal();
 }
 
 /// A single OS thread with its own scheduler instance.
@@ -349,6 +361,26 @@ pub const WorkerPool = struct {
             i -= 1;
             self.workers[i].scheduler.all_tasks_mu.unlock();
         }
+    }
+
+    /// Return true if any worker in the pool owns a non-terminal task.
+    /// Locks every worker's `all_tasks_mu` in ascending id order so the
+    /// answer is consistent against concurrent spawns; the spawner has to
+    /// take the target worker's `all_tasks_mu` inside `trackTask` before
+    /// the new task is observable, so if a spawn is in progress this call
+    /// either sees the task or blocks until the spawner finishes.
+    fn anyAliveTasks(self: *WorkerPool) bool {
+        self.lockAllTasksMu();
+        defer self.unlockAllTasksMu();
+        for (self.workers) |*w| {
+            for (w.scheduler.all_tasks.items) |task| {
+                switch (task.getStatus()) {
+                    .completed, .failed, .cancelled => continue,
+                    .pending, .running => return true,
+                }
+            }
+        }
+        return false;
     }
 
     fn countActive(self: *WorkerPool) struct { active: usize, runnable: usize } {

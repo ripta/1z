@@ -4,17 +4,26 @@ const std = @import("std");
 /// Tracks current live bytes (incremented on alloc/resize/remap, decremented on free).
 /// When the cap is exceeded, aborts the process with an error message to stderr.
 /// A max_bytes of 0 means unlimited (no cap enforced).
+///
+/// Thread-safe: `current_bytes` is an atomic counter so concurrent allocations /
+/// frees from multiple worker threads under the M:N scheduler don't race. The cap
+/// check is still TOCTOU but a single concurrent allocation can at most push the
+/// total slightly past the cap before `abortWithMessage` exits the process anyway.
 pub const MemoryLimitAllocator = struct {
     backing_allocator: std.mem.Allocator,
-    current_bytes: usize,
+    current_bytes: std.atomic.Value(usize),
     max_bytes: usize,
 
     pub fn init(backing: std.mem.Allocator, max_bytes: usize) MemoryLimitAllocator {
         return .{
             .backing_allocator = backing,
-            .current_bytes = 0,
+            .current_bytes = std.atomic.Value(usize).init(0),
             .max_bytes = max_bytes,
         };
+    }
+
+    pub fn currentBytes(self: *const MemoryLimitAllocator) usize {
+        return self.current_bytes.load(.monotonic);
     }
 
     pub fn allocator(self: *MemoryLimitAllocator) std.mem.Allocator {
@@ -34,13 +43,13 @@ pub const MemoryLimitAllocator = struct {
     fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
         const self: *MemoryLimitAllocator = @ptrCast(@alignCast(ctx));
 
-        if (self.max_bytes > 0 and self.current_bytes + len > self.max_bytes) {
+        if (self.max_bytes > 0 and self.current_bytes.load(.monotonic) + len > self.max_bytes) {
             abortWithMessage(self.max_bytes, len);
         }
 
         const result = self.backing_allocator.rawAlloc(len, alignment, ret_addr);
         if (result != null) {
-            self.current_bytes += len;
+            _ = self.current_bytes.fetchAdd(len, .monotonic);
         }
         return result;
     }
@@ -50,7 +59,7 @@ pub const MemoryLimitAllocator = struct {
 
         if (new_len > memory.len) {
             const delta = new_len - memory.len;
-            if (self.max_bytes > 0 and self.current_bytes + delta > self.max_bytes) {
+            if (self.max_bytes > 0 and self.current_bytes.load(.monotonic) + delta > self.max_bytes) {
                 abortWithMessage(self.max_bytes, delta);
             }
         }
@@ -59,9 +68,9 @@ pub const MemoryLimitAllocator = struct {
         const success = self.backing_allocator.rawResize(memory, alignment, new_len, ret_addr);
         if (success) {
             if (new_len > old_len) {
-                self.current_bytes += (new_len - old_len);
+                _ = self.current_bytes.fetchAdd(new_len - old_len, .monotonic);
             } else {
-                self.current_bytes -= (old_len - new_len);
+                _ = self.current_bytes.fetchSub(old_len - new_len, .monotonic);
             }
         }
         return success;
@@ -72,7 +81,7 @@ pub const MemoryLimitAllocator = struct {
 
         if (new_len > memory.len) {
             const delta = new_len - memory.len;
-            if (self.max_bytes > 0 and self.current_bytes + delta > self.max_bytes) {
+            if (self.max_bytes > 0 and self.current_bytes.load(.monotonic) + delta > self.max_bytes) {
                 abortWithMessage(self.max_bytes, delta);
             }
         }
@@ -81,9 +90,9 @@ pub const MemoryLimitAllocator = struct {
         const result = self.backing_allocator.rawRemap(memory, alignment, new_len, ret_addr);
         if (result != null) {
             if (new_len > old_len) {
-                self.current_bytes += (new_len - old_len);
+                _ = self.current_bytes.fetchAdd(new_len - old_len, .monotonic);
             } else {
-                self.current_bytes -= (old_len - new_len);
+                _ = self.current_bytes.fetchSub(old_len - new_len, .monotonic);
             }
         }
         return result;
@@ -92,7 +101,7 @@ pub const MemoryLimitAllocator = struct {
     fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
         const self: *MemoryLimitAllocator = @ptrCast(@alignCast(ctx));
         self.backing_allocator.rawFree(memory, alignment, ret_addr);
-        self.current_bytes -= memory.len;
+        _ = self.current_bytes.fetchSub(memory.len, .monotonic);
     }
 
     fn abortWithMessage(limit: usize, attempted: usize) noreturn {
@@ -210,16 +219,16 @@ test "MemoryLimitAllocator: tracks allocations and frees" {
     const alloc = mem_limit.allocator();
 
     const mem1 = try alloc.alloc(u8, 100);
-    try std.testing.expectEqual(@as(usize, 100), mem_limit.current_bytes);
+    try std.testing.expectEqual(@as(usize, 100), mem_limit.currentBytes());
 
     const mem2 = try alloc.alloc(u8, 200);
-    try std.testing.expectEqual(@as(usize, 300), mem_limit.current_bytes);
+    try std.testing.expectEqual(@as(usize, 300), mem_limit.currentBytes());
 
     alloc.free(mem1);
-    try std.testing.expectEqual(@as(usize, 200), mem_limit.current_bytes);
+    try std.testing.expectEqual(@as(usize, 200), mem_limit.currentBytes());
 
     alloc.free(mem2);
-    try std.testing.expectEqual(@as(usize, 0), mem_limit.current_bytes);
+    try std.testing.expectEqual(@as(usize, 0), mem_limit.currentBytes());
 }
 
 test "MemoryLimitAllocator: unlimited allows any allocation" {
@@ -229,5 +238,5 @@ test "MemoryLimitAllocator: unlimited allows any allocation" {
     const mem = try alloc.alloc(u8, 1024 * 1024);
     defer alloc.free(mem);
 
-    try std.testing.expectEqual(@as(usize, 1024 * 1024), mem_limit.current_bytes);
+    try std.testing.expectEqual(@as(usize, 1024 * 1024), mem_limit.currentBytes());
 }
