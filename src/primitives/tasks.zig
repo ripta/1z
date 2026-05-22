@@ -140,7 +140,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
 
         try helpers.checkCancellation(ctx);
 
-        if (scope.failed_error) |err_obj| {
+        if (scope.firstFailedChildError()) |err_obj| {
             ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
             return error.UserThrown;
         }
@@ -203,7 +203,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         }
     }
 
-    if (scope.failed_error) |err_obj| {
+    if (scope.firstFailedChildError()) |err_obj| {
         ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
         return error.UserThrown;
     }

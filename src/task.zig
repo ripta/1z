@@ -163,8 +163,6 @@ pub const TaskScope = struct {
     scope_task: ?*Task = null,
     /// Task that is waiting for the entire scope to complete.
     waiting_task: ?*Task = null,
-    /// First child error, propagated to parent on scope exit.
-    failed_error: ?*ErrorObject = null,
     allocator: Allocator,
     /// Atomic count of children that have not yet finished.
     active_children: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -176,7 +174,6 @@ pub const TaskScope = struct {
             .children = .{},
             .scope_task = null,
             .waiting_task = null,
-            .failed_error = null,
             .allocator = allocator,
         };
     }
@@ -195,6 +192,25 @@ pub const TaskScope = struct {
     /// Check if all children have finished (completed, failed, or cancelled).
     pub fn allChildrenDone(self: *const TaskScope) bool {
         return self.active_children.load(.acquire) == 0;
+    }
+
+    /// Walk children in spawn order under `children_mu` and return the
+    /// first child whose status is `.failed`, along with its
+    /// `error_obj`. Returns null when no child failed. Intended to be
+    /// called only after `allChildrenDone()` returns true so every
+    /// child has reached a stable terminal status; the per-task status
+    /// transition to `.failed` happens-before the `active_children`
+    /// fetchSub that drives the scope waiter, so reads of `error_obj`
+    /// observe the writer's assignment without further synchronization.
+    pub fn firstFailedChildError(self: *TaskScope) ?*ErrorObject {
+        self.children_mu.lock();
+        defer self.children_mu.unlock();
+        for (self.children.items) |child| {
+            if (child.getStatus() == .failed) {
+                return child.error_obj;
+            }
+        }
+        return null;
     }
 };
 
@@ -300,6 +316,117 @@ test "cancellation requested flag" {
 
     scope.cancellation_requested.store(true, .release);
     try std.testing.expect(scope.cancellation_requested.load(.acquire));
+}
+
+test "firstFailedChildError walks children in spawn order" {
+    var scope = TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    var first = ErrorObject{ .error_type = "first-error", .message = "first" };
+    var second = ErrorObject{ .error_type = "second-error", .message = "second" };
+
+    var t0 = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.completed),
+        .ctx = undefined,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    var t1 = Task{
+        .id = 2,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.failed),
+        .error_obj = &first,
+        .ctx = undefined,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    var t2 = Task{
+        .id = 3,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.failed),
+        .error_obj = &second,
+        .ctx = undefined,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+
+    try scope.children.append(scope.allocator, &t0);
+    try scope.children.append(scope.allocator, &t1);
+    try scope.children.append(scope.allocator, &t2);
+
+    const got = scope.firstFailedChildError();
+    try std.testing.expect(got != null);
+    try std.testing.expectEqualStrings("first-error", got.?.error_type);
+}
+
+test "firstFailedChildError returns null when no child failed" {
+    var scope = TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    var t0 = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.completed),
+        .ctx = undefined,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    var t1 = Task{
+        .id = 2,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.cancelled),
+        .ctx = undefined,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+
+    try scope.children.append(scope.allocator, &t0);
+    try scope.children.append(scope.allocator, &t1);
+
+    try std.testing.expect(scope.firstFailedChildError() == null);
+}
+
+test "firstFailedChildError skips completed and cancelled children" {
+    var scope = TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    var err = ErrorObject{ .error_type = "real-error", .message = "real" };
+
+    var t0 = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.cancelled),
+        .ctx = undefined,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    var t1 = Task{
+        .id = 2,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.completed),
+        .ctx = undefined,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    var t2 = Task{
+        .id = 3,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.failed),
+        .error_obj = &err,
+        .ctx = undefined,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+
+    try scope.children.append(scope.allocator, &t0);
+    try scope.children.append(scope.allocator, &t1);
+    try scope.children.append(scope.allocator, &t2);
+
+    const got = scope.firstFailedChildError();
+    try std.testing.expect(got != null);
+    try std.testing.expectEqualStrings("real-error", got.?.error_type);
 }
 
 test "publishTaskResult rejects borrowed buffer results" {
