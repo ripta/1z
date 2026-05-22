@@ -521,6 +521,35 @@ stream-write-string: ( stream str -- n ) [ >bytes stream-write ] ;
 \\ I/O errors propagate as thrown errors.
 stream-read(exact): ( stream n -- bytes ) [ B{ } swap (stream-read-exact-step) ] ;
 
+\ Internal helper: tail-recursive write loop used by stream-write(exact).
+\ State carries (stream total remaining): stream to write to, bytes written
+\ so far, remaining bytes still to write.
+(stream-write-exact-step): ( stream total remaining -- n ) [
+  dup #len 0 = [
+    drop nip
+  ] [
+    pick over [ stream-write ] [ drop -1 ] recover
+    dup 0 <= [
+      drop drop nip
+    ] [
+      [ over #len #slice ] keep
+      swap
+      [ + ] dip
+      (stream-write-exact-step)
+    ] if
+  ] if
+] ;
+
+\\ Write `bytes` to a stream, looping on `stream-write` until the full
+\\ count is written or the stream terminates (e.g., the reader closes the
+\\ pipe and `stream-write` would yield `EPIPE`). Returns the total count
+\\ of bytes successfully written; a return less than the input length
+\\ signals that the stream closed before completion.
+stream-write(exact): ( stream bytes -- n ) [
+  dup string? [ >bytes ] when
+  0 swap (stream-write-exact-step)
+] ;
+
 \ Stream redirection combinators
 \\ Execute a quotation with a different output stream.
 with-output-stream: ( stream quot -- ) [ output-stream swap with-parameter ] ;

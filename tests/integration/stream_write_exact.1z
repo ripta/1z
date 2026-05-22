@@ -1,0 +1,32 @@
+use "testing" ;
+
+\ -- 1. Exact write returns the full requested count --
+
+test-stream-write-exact-full: ( -- ) [
+  [
+    <pipe>
+    \ stack: rd wr
+    dup "hello" stream-write(exact)
+    \ stack: rd wr n
+    5 "exact write returns full count" assert=
+    stream-close stream-close
+  ] task-scope
+] ;
+
+\ -- 2. Exact write returns 0 once the reader has closed --
+
+test-stream-write-exact-epipe: ( -- ) [
+  [
+    <pipe>
+    \ stack: rd wr
+    swap stream-close
+    \ stack: wr
+    dup "hello" stream-write(exact)
+    \ stack: wr n
+    0 "exact write returns 0 after reader closes" assert=
+    stream-close
+  ] task-scope
+] ;
+
+test-stream-write-exact-full
+test-stream-write-exact-epipe

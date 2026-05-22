@@ -4,8 +4,8 @@ Inline PIC sites: 1/2 generic call sites preseeded
 AOT interpreter fallbacks: 6 total
   native: 6
   sites:
-    native: . -> inspect (line 564)
-    native: flush -> stream-flush (line 558)
+    native: . -> inspect (line 593)
+    native: flush -> stream-flush (line 587)
     native: stream-write-string -> >bytes (line 495)
     native: stream-write-string -> stream-write (line 495)
     native: nth-elem -> #nth (line 1)

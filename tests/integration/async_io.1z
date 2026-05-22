@@ -23,7 +23,7 @@ test-pipe-multi-writer: ( -- ) [
     <pipe>
     dup [ "ab" stream-write drop ] curry spawn drop
     dup [ "cd" stream-write drop ] curry spawn drop
-    swap dup 4 stream-read
+    swap dup 4 stream-read(exact)
     \ stack: wr rd bytes
     #len 4 "reader receives all bytes from multiple writers" assert=
     stream-close stream-close

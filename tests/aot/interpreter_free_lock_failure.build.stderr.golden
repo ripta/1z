@@ -4,8 +4,8 @@ Error: --interpreter-fallback=false --lock-interpreter-setting was set, but at l
 AOT interpreter fallbacks: 5 total
   native: 5
   sites:
-    native: . -> inspect (line 564)
-    native: flush -> stream-flush (line 558)
+    native: . -> inspect (line 593)
+    native: flush -> stream-flush (line 587)
     native: stream-write-string -> >bytes (line 495)
     native: stream-write-string -> stream-write (line 495)
     native: keep -> dip (line 393)

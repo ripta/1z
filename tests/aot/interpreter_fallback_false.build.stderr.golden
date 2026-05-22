@@ -18,11 +18,14 @@ Warning: 'while' parameter 'body' has row-variable effect; quotation call falls 
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: --interpreter-fallback=false rejects compound-fallback dispatch; 5 call sites still route through the interpreter
-  'pragma-get' -> 'pragma-get?' (line 947)
+Error: --interpreter-fallback=false rejects compound-fallback dispatch; 6 call sites still route through the interpreter
+  'stream-write(exact)' -> '(stream-write-exact-step)' (line 550)
+      callee uncompiled: NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  'pragma-get' -> 'pragma-get?' (line 976)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-  'pragma-get' -> 'option:some>' (line 949)
+  'pragma-get' -> 'option:some>' (line 978)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
   '#none' -> '#any' (line 364)
@@ -31,8 +34,8 @@ Error: --interpreter-fallback=false rejects compound-fallback dispatch; 5 call s
   'generic?' -> '#any' (line 341)
       callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  '@get?' -> '>option:some' (line 790)
+  '@get?' -> '>option:some' (line 819)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-AOT interpreter fallbacks: 250 total (native=238 compound-uncompiled=5 quotation=7)
-  static-check: jitInterpretedCall=5/5 jitNativeWordCall=238/238 jitCallQuotation=7/7 (matches build-time inventory)
+AOT interpreter fallbacks: 251 total (native=238 compound-uncompiled=6 quotation=7)
+  static-check: jitInterpretedCall=6/6 jitNativeWordCall=238/238 jitCallQuotation=7/7 (matches build-time inventory)
