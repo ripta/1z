@@ -18,6 +18,7 @@ Global options:
 
 Execution options:
   --show-stack              Print the stack after execution
+  --threads=N               Number of worker threads (default: CPU count)
   --debug                   Start in the interactive debugger
   --break=WORD              Set a breakpoint on WORD (implies --debug)
   --allow-all-recursion     Suppress non-tail recursion warnings

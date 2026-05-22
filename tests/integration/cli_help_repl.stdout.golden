@@ -1,6 +1,10 @@
-Usage: 1z run [options] <file> [args...]
+Usage: 1z repl [options]
 
-Execute a 1z source file.
+Start the interactive REPL.
+
+REPL options:
+  -q, --quiet               Suppress banner
+  -qq, --silent             Suppress banner, prompts, stack, and goodbye
 
 Global options:
   --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)

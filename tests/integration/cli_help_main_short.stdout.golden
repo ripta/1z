@@ -20,6 +20,10 @@ Global options (available to all subcommands):
   --stdlib-path=PATH      Override standard library path
   --prelude=PATH          Override prelude file path
 
+Execution options (run, eval, repl, check):
+  --threads=N             Number of worker threads (default: CPU count)
+  (see `1z <subcommand> --help` for more)
+
 Bare forms:
   1z                      Enter the REPL (same as `1z repl`)
   1z <file>               Alias for `1z run <file>`

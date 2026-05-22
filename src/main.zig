@@ -499,6 +499,10 @@ fn printUsage() void {
         \\  --stdlib-path=PATH      Override standard library path
         \\  --prelude=PATH          Override prelude file path
         \\
+        \\Execution options (run, eval, repl, check):
+        \\  --threads=N             Number of worker threads (default: CPU count)
+        \\  (see `1z <subcommand> --help` for more)
+        \\
         \\Bare forms:
         \\  1z                      Enter the REPL (same as `1z repl`)
         \\  1z <file>               Alias for `1z run <file>`
@@ -518,6 +522,7 @@ fn printUsage() void {
 
 const execution_flags_help =
     \\  --show-stack              Print the stack after execution
+    \\  --threads=N               Number of worker threads (default: CPU count)
     \\  --debug                   Start in the interactive debugger
     \\  --break=WORD              Set a breakpoint on WORD (implies --debug)
     \\  --allow-all-recursion     Suppress non-tail recursion warnings
@@ -590,6 +595,8 @@ fn printCheckHelp() void {
     w.writeAll("Run static analysis on a 1z source file without executing it.\n\n") catch {};
     w.writeAll("The following execution flags are NOT accepted by `check`:\n") catch {};
     w.writeAll("  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile, --profile-top=N\n\n") catch {};
+    w.writeAll("Execution options:\n") catch {};
+    w.writeAll("  --threads=N               Number of worker threads (default: CPU count)\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};

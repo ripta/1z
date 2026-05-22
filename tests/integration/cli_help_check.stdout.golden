@@ -5,6 +5,9 @@ Run static analysis on a 1z source file without executing it.
 The following execution flags are NOT accepted by `check`:
   --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile, --profile-top=N
 
+Execution options:
+  --threads=N               Number of worker threads (default: CPU count)
+
 Global options:
   --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
   --load-path=PATH          Add a module search path (repeatable)
