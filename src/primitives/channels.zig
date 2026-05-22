@@ -47,17 +47,17 @@ fn ensureSendValueEscapable(ctx: *Context, value: Value) anyerror!void {
 
 pub const primitives = [_]Primitive{
     .{ .name = "<channel>", .stack_effect = "-- ch", .doc = "Create an unbufferedf channel.", .func = nativeCreateChannel },
-    .{ .name = "send", .stack_effect = "val ch --", .doc = "Send a value to a channel. Blocks if no receiver ready (unbuffered) or buffer full.", .func = nativeSend },
+    .{ .name = "send", .stack_effect = "val ch --", .doc = "Send a value to a channel. Blocks if no receiver ready (unbuffered) or buffer full. The value is deep-copied at the task boundary; when sender and receiver are on different workers the receiver wakes via its home worker's external queue.", .func = nativeSend },
     .{
         .name = "receive",
         .stack_effect = "ch -- val",
-        .doc = "Receive a value from a channel. Blocks if no value available. Throws ChannelClosed if closed and empty.",
+        .doc = "Receive a value from a channel. Blocks if no value available. Throws ChannelClosed if closed and empty. The value is deep-copied at the task boundary; when sender and receiver are on different workers the receiver wakes via its home worker's external queue.",
         .func = nativeReceive,
     },
-    .{ .name = "try-receive", .stack_effect = "ch -- val/f ?", .doc = "Non-blocking receive. Returns value and t if data is available, or f and f if not.", .func = nativeTryReceive },
+    .{ .name = "try-receive", .stack_effect = "ch -- val/f ?", .doc = "Non-blocking receive. Returns value and t if data is available, or f and f if not. Any waiting sender on another worker is woken via the cross-worker wake queue.", .func = nativeTryReceive },
     .{ .name = "<buffered-channel>", .stack_effect = "n -- ch", .doc = "Create a buffered channel with capacity n.", .func = nativeCreateBufferedChannel },
-    .{ .name = "close-channel", .stack_effect = "ch --", .doc = "Close a channel. No more sends allowed; receives drain buffered values.", .func = nativeCloseChannel },
-    .{ .name = "select", .stack_effect = "array -- val ch", .doc = "Wait on multiple channels. Returns the first available value and which channel it came from.", .func = nativeSelect },
+    .{ .name = "close-channel", .stack_effect = "ch --", .doc = "Close a channel. No more sends allowed; receives drain buffered values. Blocked senders and receivers on other workers are woken via the cross-worker wake queue.", .func = nativeCloseChannel },
+    .{ .name = "select", .stack_effect = "array -- val ch", .doc = "Wait on multiple channels. Returns the first available value and which channel it came from. Channels may have counterparties on any worker; delivery wakes the selecting task via its home worker's external queue.", .func = nativeSelect },
 };
 
 /// <channel> ( -- ch )
@@ -98,6 +98,11 @@ fn nativeCreateBufferedChannel(ctx: *Context) anyerror!void {
 /// If the channel is buffered and full, blocks until a receiver takes something from the buffer, then pushes the value onto the buffer and returns.
 ///
 /// In all cases, if the channel is closed, throws ChannelClosed. If the current task is cancelled while blocked, throws a "task-cancelled" error.
+///
+/// Values that cross the task boundary are deep-copied: the receiver
+/// observes a copy independent of the sender's value. When sender and
+/// receiver are pinned to different workers, the receiver wakes via its
+/// home worker's external queue.
 fn nativeSend(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "send cannot be called during module loading";
@@ -196,6 +201,11 @@ fn nativeSend(ctx: *Context) anyerror!void {
 /// Otherwise, blocks until a sender is waiting or a value is buffered, then behaves as above when it wakes up.
 ///
 /// In all cases, if the current task is cancelled while blocked, throws a "task-cancelled" error.
+///
+/// Values that cross the task boundary are deep-copied: the receiver
+/// observes a copy independent of the sender's value. Waking a sender or
+/// receiver pinned to a different worker routes through the target's home
+/// worker external queue.
 fn nativeReceive(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "receive cannot be called during module loading";
@@ -293,6 +303,10 @@ fn nativeReceive(ctx: *Context) anyerror!void {
 ///
 /// Non-blocking receive attempt. If a value is immediately available from a
 /// waiting sender or the buffer, pushes the value and t. Otherwise pushes f f.
+///
+/// The received value is deep-copied at the task boundary. When the
+/// waiting sender that supplied the value is pinned to another worker, the
+/// sender wakes via its home worker's external queue.
 fn nativeTryReceive(ctx: *Context) anyerror!void {
     const ch = try helpers.popChannel(ctx);
 
@@ -338,7 +352,9 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
 /// close-channel ( ch -- )
 ///
 /// Mark the channel as closed. Double-close is a no-op.
-/// Wakes all blocked senders and receivers so they can observe the closed state.
+/// Wakes all blocked senders and receivers so they can observe the closed
+/// state. Tasks pinned to other workers are woken via their home worker's
+/// external queue.
 fn nativeCloseChannel(ctx: *Context) anyerror!void {
     const ch = try helpers.popChannel(ctx);
 
@@ -400,6 +416,11 @@ fn nativeCloseChannel(ctx: *Context) anyerror!void {
 /// all channels with a shared SelectContext, then suspends. When any channel
 /// delivers a value (via send) or is closed, the task wakes and returns the
 /// result. Stale receiver entries are cleaned from the other channels.
+///
+/// Registered channels may have senders and receivers pinned to any worker;
+/// when delivery happens on another worker, the selecting task wakes via
+/// its home worker's external queue. The delivered value is deep-copied at
+/// the task boundary.
 fn nativeSelect(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "select cannot be called during module loading";

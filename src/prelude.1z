@@ -203,6 +203,9 @@ word-defined-hooks: parameter{ [ { } ] } ;
 module-loaded-hooks: parameter{ [ { } ] } ;
 
 \\ Load a module by name or file path, returning a cached copy if available.
+\\ Cache misses delegate to `load-file`, which is restricted to the primary
+\\ worker and throws `non-primary-worker` when called from any other worker
+\\ task. Cache hits perform no dictionary writes and are not gated.
 load: dynamic-load ( filename -- module ) [
   dup native.resolve-load-path
   module-cache get over @has?
@@ -211,7 +214,9 @@ load: dynamic-load ( filename -- module ) [
   if
 ] ;
 
-\\ Load a module by name or file path, bypassing the cache.
+\\ Load a module by name or file path, bypassing the cache. Always delegates
+\\ to `load-file` and therefore throws `non-primary-worker` when called from
+\\ any task whose home worker is not the primary.
 reload: dynamic-load ( filename -- module ) [
   module-cache get swap load-file
 ] ;

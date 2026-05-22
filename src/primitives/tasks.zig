@@ -38,8 +38,8 @@ pub const registry_entries = [_]RegistryEntry{
 };
 
 pub const primitives = [_]Primitive{
-    .{ .name = "task-scope", .stack_effect = "quot --", .doc = "Run quotation in a structured concurrency scope.", .func = nativeTaskScope },
-    .{ .name = "spawn", .stack_effect = "quot -- task", .doc = "Spawn a new task from a quotation.", .func = nativeSpawn },
+    .{ .name = "task-scope", .stack_effect = "quot --", .doc = "Run quotation in a structured concurrency scope. Waits for every child task to reach a terminal status regardless of which worker each child ran on.", .func = nativeTaskScope },
+    .{ .name = "spawn", .stack_effect = "quot -- task", .doc = "Spawn a new task from a quotation. The task is pinned to the worker with the fewest active tasks at spawn time for its entire lifetime.", .func = nativeSpawn },
     .{ .name = "spawn-named", .stack_effect = "quot name -- task", .doc = "Spawn a named task from a quotation.", .func = nativeSpawnNamed },
     .{ .name = "task-self", .stack_effect = "-- task", .doc = "Push the current task handle.", .func = nativeTaskSelf },
     .{ .name = "yield", .stack_effect = "--", .doc = "Voluntarily yield the current task.", .func = nativeYield },
@@ -47,7 +47,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "await-all", .stack_effect = "array -- array", .doc = "Wait for all tasks in array and return array of results.", .func = nativeAwaitAll },
     .{ .name = "sleep", .stack_effect = "duration --", .doc = "Suspend the current task for a duration.", .func = nativeSleep },
     .{ .name = "cancel-task", .stack_effect = "task --", .doc = "Cancel a task.", .func = nativeCancelTask },
-    .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration.", .func = nativeWithTimeout },
+    .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration. The main task and the timer task may run on different workers; cancellation crosses workers via the scheduler's cross-thread cancel path.", .func = nativeWithTimeout },
     .{ .name = "multiplexer-stats", .stack_effect = "-- hash", .doc = "Return a hash of I/O multiplexer statistics. Requires an active task-scope.", .func = nativeMultiplexerStats },
     .{ .name = "cancelled?", .stack_effect = "-- bool", .doc = "Push t if the current task has a pending cancellation, f otherwise.", .func = nativeCancelledQuery },
     .{ .name = "task-stack-peak", .stack_effect = "-- n", .doc = "Return the current task's peak native stack usage in bytes.", .func = nativeTaskStackPeak },
@@ -104,13 +104,20 @@ fn allocateTaskWithEntry(
 /// Two code paths depending on whether a scheduler is already running.
 ///
 /// 1. Top-level: called from the main context where `ctx.scheduler` is null.
-/// Creates a Scheduler, wraps the quotation in a scope task, runs the
-/// scheduling loop to completion, then propagates any child error.
+/// Builds the worker pool, wraps the quotation in a scope task, runs the
+/// scheduling loop to completion across all workers, then propagates any
+/// child error.
 ///
 /// 2. Nested: called from within a running task where `ctx.scheduler` is
 /// non-null. Creates a TaskScope on the current task's native stack frame,
 /// spawns a scope task, suspends the current task until the scope drains,
 /// then propagates any child error.
+///
+/// In both cases the scope waits for every child to reach a terminal
+/// status regardless of which worker each child ran on. Cross-worker child
+/// completion is signalled via the `active_children` atomic counter; the
+/// worker that drives the counter to zero wakes the scope's owner task via
+/// its home worker's external queue.
 fn nativeTaskScope(ctx: *Context) anyerror!void {
     const quot = try helpers.popQuotation(ctx);
 
@@ -207,6 +214,8 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
 /// Must be called within a `task-scope`. Picks the worker with the fewest
 /// active tasks, allocates the new task on its scheduler, adds it to the
 /// caller's scope, and dispatches it via local or cross-thread enqueue.
+/// The spawned task is pinned to its assigned worker for its entire
+/// lifetime; it does not migrate between workers.
 fn nativeSpawn(ctx: *Context) anyerror!void {
     const quot = try helpers.popQuotation(ctx);
 
@@ -347,10 +356,15 @@ fn nativeSleep(ctx: *Context) anyerror!void {
 ///
 /// Run a quotation with a timeout. Creates an isolated nested scope with two
 /// tasks: the main task running the user's quotation and a timer task that
-/// sleeps for the given duration then triggers a timeout failure.
+/// sleeps for the given duration then triggers a timeout failure. Each
+/// task is assigned to a worker by the usual least-loaded rule, so the
+/// main task and the timer task may run on different workers.
 ///
 /// If the main task completes first, its result is pushed and the timer is cancelled.
 /// If the timer fires first, the main task is cancelled and a `timeout` error is thrown.
+/// Cross-worker cancellation routes through the scheduler's cross-thread
+/// cancel queue with home-worker cleanup, so neither outcome depends on
+/// the two tasks sharing a worker.
 fn nativeWithTimeout(ctx: *Context) anyerror!void {
     const dur = try helpers.popDuration(ctx);
     const quot = try helpers.popQuotation(ctx);

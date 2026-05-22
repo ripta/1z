@@ -39,7 +39,7 @@ Open a file stream with mode (read:, write:, append:, read-write:).
 stream-open ( path mode -- stream ) \native
 
 Stack: [ ]
-Spawn a new task from a quotation.
+Spawn a new task from a quotation. The task is pinned to the worker with the fewest active tasks at spawn time for its entire lifetime.
 spawn ( quot -- task ) \native
 
 Stack: [ ]

@@ -29,7 +29,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "eval-string", .stack_effect = "string --", .doc = "Execute a string as 1z code in the caller's scope.", .func = nativeEvalString, .capability = .eval, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_eval_marker) } },
     .{ .name = "export", .stack_effect = "name --", .doc = "Promote an imported word to a public definition in the current scope.", .func = nativeExport },
     .{ .name = "compile!", .stack_effect = "sym --", .doc = "JIT-compile a word for integer arithmetic. Throws if the word is not found or not compilable.", .func = nativeCompile, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_compile_marker) } },
-    .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file unconditionally (no cache check) and store the result in the given M{} cache.", .func = nativeLoadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
+    .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file unconditionally (no cache check) and store the result in the given M{} cache. Restricted to the primary worker; throws `non-primary-worker` when invoked from any other worker task.", .func = nativeLoadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
 };
 
 const RegistryEntry = @import("types.zig").RegistryEntry;
@@ -928,6 +928,10 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
 }
 
 /// load-file ( cache filename -- module ) - Load a file unconditionally into the given cache
+///
+/// Restricted to the primary worker. When invoked from any task whose home
+/// worker is a background worker, throws `non-primary-worker` rather than
+/// racing on module parsing.
 fn nativeLoadFile(ctx: *Context) anyerror!void {
     if (ctx.scheduler) |sched| {
         if (sched.isBackgroundWorker()) {
