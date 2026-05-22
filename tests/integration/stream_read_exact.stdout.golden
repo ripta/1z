@@ -1,6 +1,9 @@
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
 PASS: exact read returns requested count
 Stack: [ ]
 PASS: exact read returns short bytes on EOF
+Stack: [ ]
+PASS: exact read receives later pipe chunk
 Stack: [ ]

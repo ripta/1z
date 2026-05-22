@@ -32,5 +32,25 @@ test-stream-read-exact-eof: ( -- ) [
   ] task-scope
 ] ;
 
+\ -- 3. Exact read loops across separately-woken pipe chunks --
+
+test-stream-read-exact-multi-chunk: ( -- ) [
+  [
+    <pipe>
+    \ stack: rd wr
+    dup [
+      dup
+      "ab" stream-write drop
+      10 milliseconds sleep
+      "cd" stream-write drop
+    ] curry spawn drop
+    swap dup 4 stream-read(exact)
+    \ stack: wr rd bytes
+    "abcd" >bytes "exact read receives later pipe chunk" assert=
+    stream-close stream-close
+  ] task-scope
+] ;
+
 test-stream-read-exact-full
 test-stream-read-exact-eof
+test-stream-read-exact-multi-chunk

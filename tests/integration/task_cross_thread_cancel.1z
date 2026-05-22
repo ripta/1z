@@ -18,10 +18,10 @@ use "time" ;
 test-sibling-cancel-many-sleepers: ( -- ) [
   [
     [
-      [ 10 milliseconds sleep f "kick" test-error: make-error throw ] spawn drop
       16 [
         [ 100 seconds sleep ] spawn drop
       ] times
+      [ 10 milliseconds sleep f "kick" test-error: make-error throw ] spawn drop
     ] task-scope
   ] [ drop ] recover
   t "sibling cancel drains 16 cross-worker sleepers" assert-true
