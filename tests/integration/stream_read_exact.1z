@@ -1,0 +1,36 @@
+use "testing" ;
+use "time" ;
+
+\ -- 1. Exact read receives the full requested count --
+
+test-stream-read-exact-full: ( -- ) [
+  [
+    <pipe>
+    \ stack: rd wr
+    dup [ "hello" stream-write drop ] curry spawn drop
+    swap dup 5 stream-read(exact)
+    \ stack: wr rd bytes
+    "hello" >bytes "exact read returns requested count" assert=
+    stream-close stream-close
+  ] task-scope
+] ;
+
+\ -- 2. Exact read returns a short result when the writer closes early --
+
+test-stream-read-exact-eof: ( -- ) [
+  [
+    <pipe>
+    \ stack: rd wr
+    \ Write 3 bytes then close the write end so the reader observes EOF
+    \ on its second iteration of the exact-read loop.
+    dup "abc" stream-write drop stream-close
+    \ stack: rd
+    dup 10 stream-read(exact)
+    \ stack: rd bytes
+    "abc" >bytes "exact read returns short bytes on EOF" assert=
+    stream-close
+  ] task-scope
+] ;
+
+test-stream-read-exact-full
+test-stream-read-exact-eof

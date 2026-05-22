@@ -494,6 +494,33 @@ xor: ( ? ? -- ? ) [ 2dup and not -rot> or and ] ;
 \\ Write a string to a stream as bytes, returning bytes written.
 stream-write-string: ( stream str -- n ) [ >bytes stream-write ] ;
 
+\ Internal helper: tail-recursive read loop used by stream-read(exact).
+\ State carries (stream acc n): stream to read from, accumulator so far,
+\ bytes still required.
+(stream-read-exact-step): ( stream acc n -- bytes ) [
+  dup 0 = [
+    drop nip
+  ] [
+    pick over stream-read
+    dup #len 0 = [
+      drop drop nip
+    ] [
+      dup #len
+      -rot>
+      [ swap - ] dip
+      swap
+      [ #append ] dip
+      (stream-read-exact-step)
+    ] if
+  ] if
+] ;
+
+\\ Read exactly `n` bytes from a stream into a single byte-array, looping
+\\ on `stream-read` until the requested count is satisfied or the stream
+\\ reaches EOF. Returns a short byte-array (`#len < n`) on EOF; non-EOF
+\\ I/O errors propagate as thrown errors.
+stream-read(exact): ( stream n -- bytes ) [ B{ } swap (stream-read-exact-step) ] ;
+
 \ Stream redirection combinators
 \\ Execute a quotation with a different output stream.
 with-output-stream: ( stream quot -- ) [ output-stream swap with-parameter ] ;

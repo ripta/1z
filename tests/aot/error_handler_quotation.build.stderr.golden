@@ -3,10 +3,10 @@ Inline PIC sites: 0/1 generic call sites preseeded
 AOT interpreter fallbacks: 4 total
   native: 4
   sites:
-    native: flush -> stream-flush (line 526)
-    native: stream-write-string -> >bytes (line 490)
-    native: stream-write-string -> stream-write (line 490)
-    native: . -> inspect (line 532)
+    native: flush -> stream-flush (line 558)
+    native: stream-write-string -> >bytes (line 495)
+    native: stream-write-string -> stream-write (line 495)
+    native: . -> inspect (line 564)
 Error: 1 word could not be compiled to C
   word '__entry__': NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect

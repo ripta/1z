@@ -1,0 +1,6 @@
+Stack: [ ]
+Stack: [ ]
+PASS: exact read returns requested count
+Stack: [ ]
+PASS: exact read returns short bytes on EOF
+Stack: [ ]
