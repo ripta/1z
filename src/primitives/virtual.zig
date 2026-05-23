@@ -128,12 +128,6 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
         },
         else => inner_type_raw,
     };
-    // The inner type rides inside the outer descriptor's `inner-type` array.
-    // Releasing the outer descriptor walks its entries but stops at the array,
-    // which is not refcount-aware, so a `struct{ }` inner descriptor would
-    // otherwise never reach refcount zero. Release it here once consumed; the
-    // `.type_val` case is a no-op release.
-    defer container_backing.releaseValue(inner_type_val);
 
     const name_val = try ctx.stack.pop();
     const name = switch (name_val) {
@@ -333,7 +327,10 @@ fn virtualWrapHelper(ctx: *Context) anyerror!void {
     const inner = try alloc.create(Value);
     inner.* = val;
 
-    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    // `val` was popped (ownership transferred); wrapping it in the tagged
+    // makes the tagged its owner. pushMoved transfers that baseline to the
+    // slot without an extra retain.
+    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
 /// Trampoline helper ( tagged tv -- value )
@@ -347,13 +344,18 @@ fn virtualUnwrapHelper(ctx: *Context) anyerror!void {
     switch (val) {
         .tagged => |t| {
             if (t.tag == vt) {
-                try ctx.stack.push(t.inner.*);
+                // The consumed wrapper owns its inner value; unwrapping
+                // transfers that ownership to the new stack slot, so move
+                // the inner out rather than taking a second reference.
+                try ctx.stack.pushMoved(t.inner.*);
             } else {
+                container_backing.releaseValue(val);
                 helpers.setErrorContext(ctx, "expected {s}, got {s}", .{ vt.name, t.tag.name });
                 return error.TypeMismatch;
             }
         },
         else => {
+            container_backing.releaseValue(val);
             helpers.setErrorContext(ctx, "expected {s}, got {s}", .{ vt.name, helpers.valueTypeName(val) });
             return error.TypeMismatch;
         },
@@ -368,6 +370,7 @@ fn virtualTypePredicateHelper(ctx: *Context) anyerror!void {
     const vt = tv.virtual_type.?;
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const is_match = switch (val) {
         .tagged => |t| t.tag == vt,
         else => false,
@@ -729,27 +732,32 @@ fn typedValidateAndPromote(ctx: *Context) anyerror!void {
 
     const val = try ctx.stack.pop();
 
+    // Each branch re-stores the popped value (or a freshly promoted
+    // replacement) into the slot it came from, so transfer ownership via
+    // pushMoved rather than taking a second owning reference.
     const params = vt.type_params orelse {
-        try ctx.stack.push(val);
+        try ctx.stack.pushMoved(val);
         return;
     };
     if (params.len == 0) {
-        try ctx.stack.push(val);
+        try ctx.stack.pushMoved(val);
         return;
     }
 
     const expected_tv = params[0];
     const actual_tv = dispatch_mod.dispatchTypeValue(val, ctx);
     if (actual_tv == expected_tv) {
-        try ctx.stack.push(val);
+        try ctx.stack.pushMoved(val);
         return;
     }
 
     if (tryPromoteElement(alloc, val, expected_tv.name)) |promoted| {
-        try ctx.stack.push(promoted);
+        container_backing.releaseValue(val);
+        try ctx.stack.pushMoved(promoted);
         return;
     }
 
+    container_backing.releaseValue(val);
     helpers.setErrorContext(ctx, "{s} element has type {s}, expected {s}", .{ vt.name, actual_tv.name, expected_tv.name });
     return error.TypeMismatch;
 }
@@ -764,12 +772,15 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
 
     const seq = try ctx.stack.pop();
 
+    // Like typedValidateAndPromote, every branch re-stores the popped
+    // sequence (or an in-place-promoted version of it) into its slot, so
+    // transfer ownership via pushMoved instead of retaining again.
     const params = vt.type_params orelse {
-        try ctx.stack.push(seq);
+        try ctx.stack.pushMoved(seq);
         return;
     };
     if (params.len == 0) {
-        try ctx.stack.push(seq);
+        try ctx.stack.pushMoved(seq);
         return;
     }
 
@@ -778,7 +789,7 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
         .array => |arr| arr,
         .vector => |v| v.list.items,
         else => {
-            try ctx.stack.push(seq);
+            try ctx.stack.pushMoved(seq);
             return;
         },
     };
@@ -805,16 +816,16 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
 
     if (promoted_items) |pi| {
         switch (seq) {
-            .array => try ctx.stack.push(.{ .array = pi.items }),
+            .array => try ctx.stack.pushMoved(.{ .array = pi.items }),
             .vector => |v| {
                 v.list.items = pi.items;
                 v.list.capacity = pi.capacity;
-                try ctx.stack.push(.{ .vector = v });
+                try ctx.stack.pushMoved(.{ .vector = v });
             },
-            else => try ctx.stack.push(seq),
+            else => try ctx.stack.pushMoved(seq),
         }
     } else {
-        try ctx.stack.push(seq);
+        try ctx.stack.pushMoved(seq);
     }
 }
 
@@ -832,6 +843,10 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
     var elem = try ctx.stack.pop();
     const n = try ctx.stack.pop();
     const typed_vec = try ctx.stack.pop();
+    // The consumed typed vector still owns its inner backing. The rewrap
+    // below reuses the same mutated backing and takes a fresh owning
+    // reference, so release this slot's reference when the helper returns.
+    defer container_backing.releaseValue(typed_vec);
 
     // Validate and promote element
     if (vt.type_params) |params| {
@@ -865,7 +880,7 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
     const result_vec = try ctx.stack.pop();
     const inner = try alloc.create(Value);
     inner.* = result_vec;
-    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
 /// Native dispatch helper for @set! on typed mutable maps.
@@ -879,6 +894,9 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
     var new_value = try ctx.stack.pop();
     const key = try ctx.stack.pop();
     const typed_mmap = try ctx.stack.pop();
+    // The rewrap reuses the same mutated backing and takes a fresh owning
+    // reference, so release this consumed slot's reference on return.
+    defer container_backing.releaseValue(typed_mmap);
 
     // Validate and promote value
     if (vt.type_params) |params| {
@@ -912,7 +930,7 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
     const result_mmap = try ctx.stack.pop();
     const inner = try alloc.create(Value);
     inner.* = result_mmap;
-    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
 /// Native dispatch helper for @remove! on typed mutable maps.
@@ -925,6 +943,9 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
 
     const key = try ctx.stack.pop();
     const typed_mmap = try ctx.stack.pop();
+    // The rewrap reuses the same mutated backing and takes a fresh owning
+    // reference, so release this consumed slot's reference on return.
+    defer container_backing.releaseValue(typed_mmap);
 
     // Unwrap typed mmap to raw mmap, push raw-mmap key for @remove!
     try ctx.stack.push(typed_mmap.tagged.inner.*);
@@ -941,7 +962,7 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
     const result_mmap = try ctx.stack.pop();
     const inner = try alloc.create(Value);
     inner.* = result_mmap;
-    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
 /// Native dispatch helper for freeze on typed vectors.
@@ -954,6 +975,9 @@ fn typedFreezeDispatch(ctx: *Context) anyerror!void {
     const vt = tv.virtual_type.?;
 
     const typed_vec = try ctx.stack.pop();
+    // freeze consumes the typed vector and produces a fresh typed array;
+    // release the consumed wrapper's owning reference on return.
+    defer container_backing.releaseValue(typed_vec);
 
     // Unwrap tagged vec to raw vec
     const raw_vec = typed_vec.tagged.inner.*;
@@ -1046,7 +1070,9 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
     const inner = try alloc.create(Value);
     inner.* = val;
 
-    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    // `val` was popped (ownership transferred); the tagged becomes its
+    // owner via pushMoved without an extra retain.
+    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
 /// >NAME: ( value -- tagged ) - validating wrap for parameterized types

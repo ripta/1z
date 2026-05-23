@@ -23,6 +23,7 @@ pub fn executeDispatchBody(ctx: *Context, body: dispatch_mod.DispatchBody) !void
 /// Auto-unwrap the top stack operand from a tagged value to its inner value.
 fn autoUnwrapTopOperand(ctx: *Context) !void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     try ctx.stack.push(val.tagged.inner.*);
 }
 
@@ -31,6 +32,8 @@ fn autoUnwrapTopOperand(ctx: *Context) !void {
 fn autoUnwrapBinaryOperands(ctx: *Context, unwrap_a: bool, unwrap_b: bool) !void {
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
+    defer container_backing.releaseValue(b);
     const new_a = if (unwrap_a) a.tagged.inner.* else a;
     const new_b = if (unwrap_b) b.tagged.inner.* else b;
     try ctx.stack.push(new_a);

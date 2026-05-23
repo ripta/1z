@@ -50,6 +50,7 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
     // Create a new hash table
     const hash = ctx.quotationAllocator().create(HashTable) catch return error.OutOfMemory;
     hash.* = HashTable{};
+    errdefer container_backing.releaseValue(.{ .hash = hash });
 
     // Parse instructions as key: value pairs
     var i: usize = 0;
@@ -83,9 +84,15 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
         i += 1;
 
         while (i < instrs.len and instrs[i].op == .call_word) : (i += 1) {}
-        const val = if (i - val_start == 1 and instrs[val_start].op == .push_literal)
-            instrs[val_start].op.push_literal
-        else blk: {
+        // push_literal values are borrowed from the instruction stream, so a
+        // hash slot becomes a new owner and must retain. call_word values were
+        // popped from the stack into a transient C-local, so the slot inherits
+        // ownership without an additional retain.
+        const val = if (i - val_start == 1 and instrs[val_start].op == .push_literal) blk: {
+            const v = instrs[val_start].op.push_literal;
+            container_backing.retainValue(v);
+            break :blk v;
+        } else blk: {
             try ctx.executeQuotation(.{ .instructions = instrs[val_start..i] });
             break :blk ctx.stack.pop() catch {
                 helpers.setErrorContext(ctx, "value for key '{s}' produced no result", .{key});
@@ -93,15 +100,17 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
             };
         };
 
-        // Copy key to arena for persistence. The hash table is not yet
-        // refcount-aware: stored values are borrowed for the lifetime of
-        // the owning arena. Retaining here without a matching release at
-        // hash destroy would leak refcounted containers.
-        const key_copy = ctx.quotationAllocator().dupe(u8, key) catch return error.OutOfMemory;
-        hash.put(ctx.quotationAllocator(), key_copy, val) catch return error.OutOfMemory;
+        const key_copy = ctx.quotationAllocator().dupe(u8, key) catch {
+            container_backing.releaseValue(val);
+            return error.OutOfMemory;
+        };
+        hash.put(ctx.quotationAllocator(), key_copy, val) catch {
+            container_backing.releaseValue(val);
+            return error.OutOfMemory;
+        };
     }
 
-    try ctx.stack.push(.{ .hash = hash });
+    try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
 /// make-vector ( quotation -- vector ) - Create a vector from values in quotation
@@ -187,11 +196,18 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
     // Create a new set
     const set = alloc.create(Set) catch return error.OutOfMemory;
     set.* = Set{};
+    errdefer container_backing.releaseValue(.{ .set = set });
 
-    // Execute each instruction and collect unique values
+    // Execute each instruction and collect unique values. push_literal values
+    // are borrowed from the instruction stream, so a set slot becomes a new
+    // owner and must retain. call_word values were popped from the stack into
+    // a transient C-local, so the slot inherits ownership without a retain.
     for (instrs) |instr| {
         const val = switch (instr.op) {
-            .push_literal => |v| v,
+            .push_literal => |v| blk: {
+                container_backing.retainValue(v);
+                break :blk v;
+            },
             .call_word => blk: {
                 // Execute the word to get the value
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
@@ -199,13 +215,18 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
             },
         };
 
-        // Sets are not yet refcount-aware; values are borrowed for the
-        // lifetime of the owning arena. Retaining without a matching
-        // release at set destroy would leak refcounted containers.
-        set.put(alloc, val, {}) catch return error.OutOfMemory;
+        // A duplicate key already present in the set keeps its existing owning
+        // reference; release the redundant one this iteration produced.
+        const gop = set.getOrPut(alloc, val) catch {
+            container_backing.releaseValue(val);
+            return error.OutOfMemory;
+        };
+        if (gop.found_existing) {
+            container_backing.releaseValue(val);
+        }
     }
 
-    try ctx.stack.push(.{ .set = set });
+    try ctx.stack.pushMoved(.{ .set = set });
 }
 
 /// make-mutable-map ( quotation -- mmap ) - Create a mutable map from key: value pairs

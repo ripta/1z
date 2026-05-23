@@ -253,6 +253,7 @@ fn nativeLenString(ctx: *Context) anyerror!void {
 
 fn nativeLenArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     try ctx.stack.push(.{ .fixnum = @intCast(val.array.len) });
 }
 
@@ -269,11 +270,13 @@ fn nativeLenByteArray(ctx: *Context) anyerror!void {
 
 fn nativeLenSet(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     try ctx.stack.push(.{ .fixnum = @intCast(val.set.count()) });
 }
 
 fn nativeLenHash(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     try ctx.stack.push(.{ .fixnum = @intCast(val.hash.count()) });
 }
 
@@ -310,6 +313,7 @@ fn nativeNthString(ctx: *Context) anyerror!void {
 fn nativeNthArray(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     const index = b.fixnum;
     if (index < 0) {
         setErrorContext(ctx, "negative index {d}", .{index});
@@ -374,6 +378,7 @@ fn nativeFirstString(ctx: *Context) anyerror!void {
 
 fn nativeFirstArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const a = val.array;
     if (a.len == 0) {
         setErrorContext(ctx, "empty array", .{});
@@ -420,6 +425,7 @@ fn nativeLastString(ctx: *Context) anyerror!void {
 
 fn nativeLastArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const a = val.array;
     if (a.len == 0) {
         setErrorContext(ctx, "empty array", .{});

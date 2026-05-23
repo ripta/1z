@@ -2,6 +2,7 @@ const std = @import("std");
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
+const Iterator = @import("iterator.zig").Iterator;
 
 /// Refcounted, mutex-guarded header for mutable container backings.
 ///
@@ -108,32 +109,92 @@ pub const ContainerHeader = struct {
     }
 };
 
-/// Per-variant retain dispatch. Vector and mutable_map carry refcounted
-/// backing and route through `header.retain()`. byte_array remains a
-/// no-op stub until its backing migrates. Non-container variants are
-/// no-ops by construction.
+/// Per-variant retain dispatch.
 ///
-/// Storage-boundary call sites (stack push, container insertion,
-/// dictionary entry, task result) route through this single entry point
-/// so the dispatch is consistent across migrations.
+/// The header-backed variants (i.e., `vector`, `mutable_map`) carry a refcounted backing and route through
+/// `header.retain()`. Their contents are accounted only at `destroy`, so we don't recurse into them here.
+///
+/// The headerless composites (i.e., `array`, `hash`, `set`, `tagged`, `iterator`) owns a reference to each
+/// refcounted value they embeds, so a stack slot holding one must retain those embedded values recursively.
+///
+/// Bytearray remains a noöp stub until its backing migrates.
+///
+/// Non-container variants are noöps by construction.
+///
+/// Storage-boundary call sites (stack push, container insertion, dictionary entry, task result) route
+/// through this single entry point so the dispatch is consistent across migrations.
 pub fn retainValue(v: Value) void {
     switch (v) {
         .vector => |vec| vec.header.retain(),
         .mutable_map => |mm| mm.header.retain(),
+        .array => |items| retainValues(items),
+        .hash => |h| {
+            var iter = h.iterator();
+            while (iter.next()) |entry| retainValue(entry.value_ptr.*);
+        },
+        .set => |s| retainValues(s.keys()),
+        .tagged => |t| retainValue(t.inner.*),
+        .iterator => |it| retainIteratorBacking(it),
         .byte_array => |_| {},
         else => {},
     }
 }
 
-/// Per-variant release dispatch. Mirror of `retainValue`; vector and
-/// mutable_map call `header.release()` (destroying the backing on last
-/// drop); byte_array remains a no-op stub until its backing migrates.
+/// Per-variant release dispatch.
+///
+/// Header-backed variants call `header.release()`, destroying the backing on last drop.
+///
+/// Headerless composites recurse into their embedded values so the inner backings drop exactly once per
+/// owning slot.
+///
+/// Bytearray remains a noöp stub until its backing migrates.
 pub fn releaseValue(v: Value) void {
     switch (v) {
         .vector => |vec| vec.header.release(),
         .mutable_map => |mm| mm.header.release(),
+        .array => |items| releaseValues(items),
+        .hash => |h| {
+            var iter = h.iterator();
+            while (iter.next()) |entry| releaseValue(entry.value_ptr.*);
+        },
+        .set => |s| releaseValues(s.keys()),
+        .tagged => |t| releaseValue(t.inner.*),
+        .iterator => |it| releaseIteratorBacking(it),
         .byte_array => |_| {},
         else => {},
+    }
+}
+
+/// Retain the refcounted backing an iterator captures.
+///
+/// `array` iterators hold a slice of element Values.
+///
+/// The chained iterators (`map`, `filter`, `take`, `drop`) forward to their inner iterator.
+///
+/// `range` captures no Values.
+///
+/// `callback` captures only quotations whose container literals are tracked by the per-arena release
+/// list, so both are no-ops.
+pub fn retainIteratorBacking(it: *Iterator) void {
+    switch (it.kind) {
+        .array => |ai| retainValues(ai.items),
+        .map => |m| retainIteratorBacking(m.inner),
+        .filter => |fi| retainIteratorBacking(fi.inner),
+        .take => |t| retainIteratorBacking(t.inner),
+        .drop => |d| retainIteratorBacking(d.inner),
+        .range, .callback => {},
+    }
+}
+
+/// Release the refcounted backing an iterator captures.
+pub fn releaseIteratorBacking(it: *Iterator) void {
+    switch (it.kind) {
+        .array => |ai| releaseValues(ai.items),
+        .map => |m| releaseIteratorBacking(m.inner),
+        .filter => |fi| releaseIteratorBacking(fi.inner),
+        .take => |t| releaseIteratorBacking(t.inner),
+        .drop => |d| releaseIteratorBacking(d.inner),
+        .range, .callback => {},
     }
 }
 
@@ -180,15 +241,48 @@ pub fn retainInstructionsContainerLiterals(instructions: []const Instruction) vo
     }
 }
 
-/// Returns `true` if any instruction in the slice is a `push_literal` carrying a
-/// container variant. Used at construction sites to decide whether a quotation needs to
-/// be registered on its owning allocators's container release list.
+/// Returns `true` if `val` carries a refcounted backing, either directly (a header-backed variant) or
+/// transitively through a composite that embeds one.
+///
+/// Used to decide whether an instruction's `push_literal` operand holds an owning reference that must
+/// be released at teardown.
+pub fn valueHoldsRefcountedBacking(val: Value) bool {
+    return switch (val) {
+        .vector, .mutable_map, .byte_array => true,
+        .array => |items| {
+            for (items) |item| {
+                if (valueHoldsRefcountedBacking(item)) return true;
+            }
+            return false;
+        },
+        .hash => |h| {
+            var iter = h.iterator();
+            while (iter.next()) |entry| {
+                if (valueHoldsRefcountedBacking(entry.value_ptr.*)) return true;
+            }
+            return false;
+        },
+        .set => |s| {
+            for (s.keys()) |key| {
+                if (valueHoldsRefcountedBacking(key)) return true;
+            }
+            return false;
+        },
+        .tagged => |t| valueHoldsRefcountedBacking(t.inner.*),
+        else => false,
+    };
+}
+
+/// Returns `true` if any instruction in the slice is a `push_literal` carrying a refcounted backing,
+/// directly or transitively through a composite literal.
+///
+/// Used at construction sites to decide whether a quotation needs to be registered on its owning
+/// allocator's container release list.
 pub fn instructionsHaveContainerLiteral(instructions: []const Instruction) bool {
     for (instructions) |instr| {
         switch (instr.op) {
-            .push_literal => |val| switch (val) {
-                .vector, .mutable_map, .byte_array => return true,
-                else => {},
+            .push_literal => |val| {
+                if (valueHoldsRefcountedBacking(val)) return true;
             },
             .call_word => {},
         }
@@ -433,6 +527,93 @@ test "retainValue/releaseValue: mutable_map dispatch exercises the header" {
 
     releaseValue(.{ .mutable_map = mm });
     // Final release destroys the backing; no further refcount inspection.
+}
+
+test "retainValue/releaseValue: array propagates to embedded vector" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    var items = [_]Value{.{ .vector = vec }};
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    retainValue(.{ .array = &items });
+    try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    releaseValue(.{ .array = &items });
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    // Drop the baseline reference; destroys the backing.
+    vec.header.release();
+}
+
+test "retainValue/releaseValue: tagged propagates to inner vector" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    var inner: Value = .{ .vector = vec };
+    var dummy_vt: value_mod.VirtualType = undefined;
+
+    retainValue(.{ .tagged = .{ .tag = &dummy_vt, .inner = &inner } });
+    try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    releaseValue(.{ .tagged = .{ .tag = &dummy_vt, .inner = &inner } });
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    vec.header.release();
+}
+
+test "retainValue/releaseValue: hash propagates to stored vector value" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    var h = value_mod.HashTable{};
+    defer h.deinit(testing.allocator);
+    try h.put(testing.allocator, "k", .{ .vector = vec });
+
+    retainValue(.{ .hash = &h });
+    try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    releaseValue(.{ .hash = &h });
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    vec.header.release();
+}
+
+test "retainValue/releaseValue: set propagates to member vector" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    var s = value_mod.Set{};
+    defer s.deinit(testing.allocator);
+    try s.put(testing.allocator, .{ .vector = vec }, {});
+
+    retainValue(.{ .set = &s });
+    try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    releaseValue(.{ .set = &s });
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    vec.header.release();
+}
+
+test "retainValue/releaseValue: nested array recurses to depth" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    var inner = [_]Value{.{ .vector = vec }};
+    var outer = [_]Value{.{ .array = &inner }};
+
+    retainValue(.{ .array = &outer });
+    try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    releaseValue(.{ .array = &outer });
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    vec.header.release();
+}
+
+test "retainValue/releaseValue: array iterator propagates to captured vector" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    var items = [_]Value{.{ .vector = vec }};
+    var it = Iterator{ .kind = .{ .array = .{ .items = &items, .index = 0 } } };
+
+    retainValue(.{ .iterator = &it });
+    try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    releaseValue(.{ .iterator = &it });
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    vec.header.release();
 }
 
 test "instructionsHaveContainerLiteral: detects container push_literal operands" {

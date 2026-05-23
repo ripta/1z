@@ -4,6 +4,7 @@ const Context = @import("../context.zig").Context;
 
 const value_mod = @import("../value.zig");
 const dispatch = @import("../dispatch.zig");
+const container_backing = @import("../container_backing.zig");
 const helpers = @import("helpers.zig");
 
 const types_mod = @import("types.zig");
@@ -27,6 +28,7 @@ pub const registry_entries = [_]RegistryEntry{
 /// array lookup).
 fn nativeTypeOf(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const tv = dispatch.dispatchTypeValue(val, ctx);
     try ctx.stack.push(.{ .type_val = tv });
 }
@@ -39,6 +41,7 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
 fn nativeInstanceOf(ctx: *Context) anyerror!void {
     const tv = try helpers.popAs(.type_val, ctx);
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
 
     const val_tv: *const value_mod.TypeValue = dispatch.dispatchTypeValue(val, ctx);
 
