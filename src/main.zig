@@ -3798,6 +3798,7 @@ test {
     _ = @import("benchmark.zig");
     _ = @import("profile.zig");
     _ = @import("memory_limit.zig");
+    _ = @import("container_backing.zig");
     _ = @import("line_editor.zig");
     _ = @import("debugger/mod.zig");
     _ = @import("multiplexer.zig");
