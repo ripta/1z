@@ -8,14 +8,20 @@ const std = @import("std");
 ///
 /// Level 1: Context shared_lock (RwLock) -- shared registries
 /// Level 2: Channel mutex (per-channel Mutex, address-ordered among peers)
-/// Level 3: tz_mutex (leaf-only Mutex in time.zig)
+/// Level 3: Container mutex (per-container Mutex on refcounted backings)
+/// Level 4: tz_mutex (leaf-only Mutex in time.zig)
+///
+/// Channels lock the channel mutex and may call `deepCopyValue`, which
+/// locks the source container's mutex while iterating; container therefore
+/// sits above channel in the order.
 ///
 /// Atomics (Task.status, TaskScope counters) are outside the hierarchy.
 pub const LockLevel = enum(u8) {
     none = 0,
     context_rw = 1,
     channel = 2,
-    tz = 3,
+    container = 3,
+    tz = 4,
 };
 
 /// Per-thread lock-ordering state. Each OS thread maintains its own

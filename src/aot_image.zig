@@ -528,9 +528,10 @@ test "classifyValue: hash, mutable_map, vector, byte_array, set are blob" {
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .mutable_map = &mm }).path);
     try testing.expectEqual(BlobReason.mutable_map, classifyValue(.{ .mutable_map = &mm }).reason);
 
-    var vec = value_mod.Vector{};
-    try testing.expectEqual(ImagePath.blob, classifyValue(.{ .vector = &vec }).path);
-    try testing.expectEqual(BlobReason.dynamic_container, classifyValue(.{ .vector = &vec }).reason);
+    const vec = try value_mod.Vector.create(testing.allocator);
+    defer vec.header.release();
+    try testing.expectEqual(ImagePath.blob, classifyValue(.{ .vector = vec }).path);
+    try testing.expectEqual(BlobReason.dynamic_container, classifyValue(.{ .vector = vec }).reason);
 }
 
 test "classifyValue: parameter is blob" {

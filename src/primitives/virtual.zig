@@ -768,7 +768,7 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
     const expected_tv = params[0];
     const items: []const Value = switch (seq) {
         .array => |arr| arr,
-        .vector => |v| v.items,
+        .vector => |v| v.list.items,
         else => {
             try ctx.stack.push(seq);
             return;
@@ -799,7 +799,8 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
         switch (seq) {
             .array => try ctx.stack.push(.{ .array = pi.items }),
             .vector => |v| {
-                v.items = pi.items;
+                v.list.items = pi.items;
+                v.list.capacity = pi.capacity;
                 try ctx.stack.push(.{ .vector = v });
             },
             else => try ctx.stack.push(seq),
@@ -957,7 +958,7 @@ fn typedFreezeDispatch(ctx: *Context) anyerror!void {
     };
 
     // Dupe items to create raw array
-    const items = try alloc.dupe(Value, vec.items);
+    const items = try alloc.dupe(Value, vec.list.items);
 
     // Construct target type name: "array(" ++ elem_type ++ ")"
     const params = vt.type_params orelse {

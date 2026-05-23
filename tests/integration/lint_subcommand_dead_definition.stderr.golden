@@ -1,2 +1,762 @@
 tests/fixtures/lint/dead-definition.1z:8:36: info: [dead-definition] definition is not referenced by any other checked-file word
 tests/fixtures/lint/dead-definition.1z:5:40: info: [dead-definition] definition is not referenced by any other checked-file word
+error(gpa): memory address 0x567320000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x558620000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x558623b00 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x553a00000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x553a06d00 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x54ba40000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x548b60000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x548b67200 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x548b6e400 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x545f20000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x545f20c00 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x545f2a100 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x545f2a580 leaked: 
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1231:56: 0x104b8bddb in ensureTotalCapacityPrecise (1z)
+                const new_memory = try gpa.alignedAlloc(T, alignment, new_capacity);
+                                                       ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1207:51: 0x10497eed3 in ensureTotalCapacity (1z)
+            return self.ensureTotalCapacityPrecise(gpa, growCapacity(self.capacity, new_capacity));
+                                                  ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1261:41: 0x104b0606f in addOne (1z)
+            try self.ensureTotalCapacity(gpa, newlen);
+                                        ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:894:49: 0x1048f600f in append (1z)
+            const new_item_ptr = try self.addOne(gpa);
+                                                ^
+/Users/ripta/projects/1z/src/primitives/sequences.zig:1554:42: 0x104869a7b in nativePushMut (1z)
+    const append_result = vec.list.append(vec.header.allocator, elem);
+                                         ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+
+error(gpa): memory address 0x545f2bb00 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x545f2da80 leaked: 
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1231:56: 0x104b8bddb in ensureTotalCapacityPrecise (1z)
+                const new_memory = try gpa.alignedAlloc(T, alignment, new_capacity);
+                                                       ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1207:51: 0x10497eed3 in ensureTotalCapacity (1z)
+            return self.ensureTotalCapacityPrecise(gpa, growCapacity(self.capacity, new_capacity));
+                                                  ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1261:41: 0x104b0606f in addOne (1z)
+            try self.ensureTotalCapacity(gpa, newlen);
+                                        ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:894:49: 0x1048f600f in append (1z)
+            const new_item_ptr = try self.addOne(gpa);
+                                                ^
+/Users/ripta/projects/1z/src/primitives/sequences.zig:1554:42: 0x104869a7b in nativePushMut (1z)
+    const append_result = vec.list.append(vec.header.allocator, elem);
+                                         ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+
+error(gpa): memory address 0x545f31d80 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x533560000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x53356f000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x528620000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x5115a0000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x5115a8700 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x5115ac880 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x5115ac900 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x50ec60000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x50ec66600 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x50ec6cc00 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x506860000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x50686a000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x4ddae0000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x4d5560000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x4ce000000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:3649:44: 0x1047e7ff7 in executeQuotation (1z)
+        return self.executeQuotationWithPic(quotation, null);
+                                           ^
+/Users/ripta/projects/1z/src/context.zig:3781:34: 0x10494708b in executeQuotationWithFrame (1z)
+        try self.executeQuotation(quotation);
+                                 ^
+
+error(gpa): memory address 0x4bf860000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3794:37: 0x1049584df in executeQuotationInline (1z)
+        try self.executeInstructions(quotation.instructions, null);
+                                    ^
+/Users/ripta/projects/1z/src/primitives/control.zig:546:35: 0x10484c8bb in nativeIf (1z)
+    try ctx.executeQuotationInline(if (cond) true_quot else false_quot);
+                                  ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x3c6aa0000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:4131:84: 0x104b099e7 in executeInstructions (1z)
+                                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic);
+                                                                                   ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+
+error(gpa): memory address 0x3be220000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:4131:84: 0x104b099e7 in executeInstructions (1z)
+                                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic);
+                                                                                   ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+
+error(gpa): memory address 0x1387e0000 leaked: 
+/Users/ripta/projects/1z/src/value.zig:54:42: 0x10497490f in create (1z)
+        const self = try allocator.create(Vector);
+                                         ^
+/Users/ripta/projects/1z/src/primitives/data_structures.zig:113:30: 0x1048560fb in nativeMakeVector (1z)
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+                             ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+/Users/ripta/projects/1z/src/context.zig:4131:84: 0x104b099e7 in executeInstructions (1z)
+                                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic);
+                                                                                   ^
+/Users/ripta/projects/1z/src/context.zig:3678:57: 0x1048f7257 in executeQuotationWithPic (1z)
+            const exec_result = self.executeInstructions(current_instructions, current_pic);
+                                                        ^
+
+error(gpa): memory address 0x4c4d80000 leaked: 
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1231:56: 0x104b8bddb in ensureTotalCapacityPrecise (1z)
+                const new_memory = try gpa.alignedAlloc(T, alignment, new_capacity);
+                                                       ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1207:51: 0x10497eed3 in ensureTotalCapacity (1z)
+            return self.ensureTotalCapacityPrecise(gpa, growCapacity(self.capacity, new_capacity));
+                                                  ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1261:41: 0x104b0606f in addOne (1z)
+            try self.ensureTotalCapacity(gpa, newlen);
+                                        ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:894:49: 0x1048f600f in append (1z)
+            const new_item_ptr = try self.addOne(gpa);
+                                                ^
+/Users/ripta/projects/1z/src/primitives/sequences.zig:1554:42: 0x104869a7b in nativePushMut (1z)
+    const append_result = vec.list.append(vec.header.allocator, elem);
+                                         ^
+/Users/ripta/projects/1z/src/context.zig:4071:45: 0x104b091a3 in executeInstructions (1z)
+                                    if (func(self)) |_| {
+                                            ^
+
+error(gpa): memory address 0x109f43c00 leaked: 
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1231:56: 0x104b8bddb in ensureTotalCapacityPrecise (1z)
+                const new_memory = try gpa.alignedAlloc(T, alignment, new_capacity);
+                                                       ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1207:51: 0x10497eed3 in ensureTotalCapacity (1z)
+            return self.ensureTotalCapacityPrecise(gpa, growCapacity(self.capacity, new_capacity));
+                                                  ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1261:41: 0x104b0606f in addOne (1z)
+            try self.ensureTotalCapacity(gpa, newlen);
+                                        ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:894:49: 0x1048f600f in append (1z)
+            const new_item_ptr = try self.addOne(gpa);
+                                                ^
+/Users/ripta/projects/1z/src/primitives/sequences.zig:1554:42: 0x104869a7b in nativePushMut (1z)
+    const append_result = vec.list.append(vec.header.allocator, elem);
+                                         ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+
+error(gpa): memory address 0x109f44c00 leaked: 
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1231:56: 0x104b8bddb in ensureTotalCapacityPrecise (1z)
+                const new_memory = try gpa.alignedAlloc(T, alignment, new_capacity);
+                                                       ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1207:51: 0x10497eed3 in ensureTotalCapacity (1z)
+            return self.ensureTotalCapacityPrecise(gpa, growCapacity(self.capacity, new_capacity));
+                                                  ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:1261:41: 0x104b0606f in addOne (1z)
+            try self.ensureTotalCapacity(gpa, newlen);
+                                        ^
+/opt/homebrew/Cellar/zig/0.15.2/lib/zig/std/array_list.zig:894:49: 0x1048f600f in append (1z)
+            const new_item_ptr = try self.addOne(gpa);
+                                                ^
+/Users/ripta/projects/1z/src/primitives/sequences.zig:1554:42: 0x104869a7b in nativePushMut (1z)
+    const append_result = vec.list.append(vec.header.allocator, elem);
+                                         ^
+/Users/ripta/projects/1z/src/context.zig:4142:63: 0x104b09ab3 in executeInstructions (1z)
+                                        .native => |func| func(self),
+                                                              ^
+

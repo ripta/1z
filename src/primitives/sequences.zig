@@ -244,7 +244,8 @@ fn nativeLenArray(ctx: *Context) anyerror!void {
 
 fn nativeLenVector(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    try ctx.stack.push(.{ .fixnum = @intCast(val.vector.items.len) });
+    defer container_backing.releaseValue(val);
+    try ctx.stack.push(.{ .fixnum = @intCast(val.vector.list.items.len) });
 }
 
 fn nativeLenByteArray(ctx: *Context) anyerror!void {
@@ -311,6 +312,7 @@ fn nativeNthArray(ctx: *Context) anyerror!void {
 fn nativeNthVector(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     const index = b.fixnum;
     if (index < 0) {
         setErrorContext(ctx, "negative index {d}", .{index});
@@ -318,11 +320,12 @@ fn nativeNthVector(ctx: *Context) anyerror!void {
     }
     const idx: usize = @intCast(index);
     const v = a.vector;
-    if (idx >= v.items.len) {
-        setErrorContext(ctx, "index {d} out of bounds for vector of length {d}", .{ idx, v.items.len });
+    if (idx >= v.list.items.len) {
+        const vec_len = v.list.items.len;
+        setErrorContext(ctx, "index {d} out of bounds for vector of length {d}", .{ idx, vec_len });
         return error.IndexOutOfBounds;
     }
-    try ctx.stack.push(v.items[idx]);
+    try ctx.stack.push(v.list.items[idx]);
 }
 
 fn nativeNthByteArray(ctx: *Context) anyerror!void {
@@ -366,12 +369,13 @@ fn nativeFirstArray(ctx: *Context) anyerror!void {
 
 fn nativeFirstVector(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const v = val.vector;
-    if (v.items.len == 0) {
+    if (v.list.items.len == 0) {
         setErrorContext(ctx, "empty vector", .{});
         return error.EmptySequence;
     }
-    try ctx.stack.push(v.items[0]);
+    try ctx.stack.push(v.list.items[0]);
 }
 
 fn nativeFirstByteArray(ctx: *Context) anyerror!void {
@@ -411,12 +415,13 @@ fn nativeLastArray(ctx: *Context) anyerror!void {
 
 fn nativeLastVector(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const v = val.vector;
-    if (v.items.len == 0) {
+    if (v.list.items.len == 0) {
         setErrorContext(ctx, "empty vector", .{});
         return error.EmptySequence;
     }
-    try ctx.stack.push(v.items[v.items.len - 1]);
+    try ctx.stack.push(v.list.items[v.list.items.len - 1]);
 }
 
 fn nativeLastByteArray(ctx: *Context) anyerror!void {
@@ -604,7 +609,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
         }
     }
 
-    var value = try ctx.stack.pop();
+    const value = try ctx.stack.pop();
     const index = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
 
@@ -616,15 +621,23 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .vector => |v| {
-            if (idx >= v.items.len) {
-                setErrorContext(ctx, "index {d} out of bounds for vector of length {d}", .{ idx, v.items.len });
+            v.header.lock();
+            if (idx >= v.list.items.len) {
+                const vec_len = v.list.items.len;
+                v.header.unlock();
+                container_backing.releaseValue(value);
+                container_backing.releaseValue(.{ .vector = v });
+                setErrorContext(ctx, "index {d} out of bounds for vector of length {d}", .{ idx, vec_len });
                 return error.IndexOutOfBounds;
             }
-            if (ctx.parent_context != null) value = tasks.deepCopyValue(value, ctx.containerAllocator()) catch return error.OutOfMemory;
-            container_backing.releaseValue(v.items[idx]);
-            container_backing.retainValue(value);
-            v.items[idx] = value;
-            try ctx.stack.push(.{ .vector = v });
+            const prior = v.list.items[idx];
+            v.list.items[idx] = value;
+            v.header.unlock();
+            container_backing.releaseValue(prior);
+            ctx.stack.pushMoved(.{ .vector = v }) catch |err| {
+                container_backing.releaseValue(.{ .vector = v });
+                return err;
+            };
         },
         .byte_array => |b| {
             const bytes = b.slice();
@@ -895,16 +908,15 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .string = s[bounds.start_byte..bounds.end_byte] });
         },
         .vector => |v| {
-            if (end > v.items.len) {
-                setErrorContext(ctx, "slice [{}:{}] out of bounds for vector of length {}", .{ start, end, v.items.len });
+            if (end > v.list.items.len) {
+                setErrorContext(ctx, "slice [{}:{}] out of bounds for vector of length {}", .{ start, end, v.list.items.len });
                 return error.IndexOutOfBounds;
             }
             const slice_len = end - start;
-            const result_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            result_vec.* = Vector{};
-            result_vec.ensureTotalCapacity(alloc, slice_len) catch return error.OutOfMemory;
-            for (v.items[start..end]) |elem| {
-                result_vec.appendAssumeCapacity(elem);
+            const result_vec = Vector.create(alloc) catch return error.OutOfMemory;
+            result_vec.list.ensureTotalCapacity(alloc, slice_len) catch return error.OutOfMemory;
+            for (v.list.items[start..end]) |elem| {
+                result_vec.list.appendAssumeCapacity(elem);
             }
             try ctx.stack.push(.{ .vector = result_vec });
         },
@@ -949,14 +961,13 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
         },
         .vector => |vec1| {
             const items2 = try sequenceToValues(seq2, alloc);
-            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            new_vec.* = Vector{};
-            new_vec.ensureTotalCapacity(alloc, vec1.items.len + items2.len) catch return error.OutOfMemory;
-            for (vec1.items) |item| {
-                new_vec.appendAssumeCapacity(item);
+            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
+            new_vec.list.ensureTotalCapacity(alloc, vec1.list.items.len + items2.len) catch return error.OutOfMemory;
+            for (vec1.list.items) |item| {
+                new_vec.list.appendAssumeCapacity(item);
             }
             for (items2) |item| {
-                new_vec.appendAssumeCapacity(item);
+                new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
         },
@@ -1078,17 +1089,38 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
     }
 
     const seq = try ctx.stack.pop();
-    const vec = try popVector(ctx);
-    const alloc = ctx.containerAllocator();
-    const in_task = ctx.parent_context != null;
+    const vec = popVector(ctx) catch |err| {
+        container_backing.releaseValue(seq);
+        return err;
+    };
 
-    const items = try sequenceToValues(seq, alloc);
-    for (items) |elem| {
-        const stored = if (in_task) tasks.deepCopyValue(elem, alloc) catch return error.OutOfMemory else elem;
-        vec.append(alloc, stored) catch return error.OutOfMemory;
+    const items = sequenceToValues(seq, ctx.containerAllocator()) catch |err| {
+        container_backing.releaseValue(seq);
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
+
+    vec.header.lock();
+    var appended: usize = 0;
+    while (appended < items.len) : (appended += 1) {
+        const elem = items[appended];
+        container_backing.retainValue(elem);
+        vec.list.append(vec.header.allocator, elem) catch |err| {
+            container_backing.releaseValue(elem);
+            vec.header.unlock();
+            container_backing.releaseValue(seq);
+            container_backing.releaseValue(.{ .vector = vec });
+            return err;
+        };
     }
+    vec.header.unlock();
 
-    try ctx.stack.push(.{ .vector = vec });
+    container_backing.releaseValue(seq);
+
+    ctx.stack.pushMoved(.{ .vector = vec }) catch |err| {
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
 }
 
 /// #prepend ( seq1 seq2 -- seq ) - Prepend seq2's elements to seq1, returns new sequence of type seq1
@@ -1110,14 +1142,13 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
         },
         .vector => |vec1| {
             const items2 = try sequenceToValues(seq2, alloc);
-            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            new_vec.* = Vector{};
-            new_vec.ensureTotalCapacity(alloc, items2.len + vec1.items.len) catch return error.OutOfMemory;
+            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
+            new_vec.list.ensureTotalCapacity(alloc, items2.len + vec1.list.items.len) catch return error.OutOfMemory;
             for (items2) |item| {
-                new_vec.appendAssumeCapacity(item);
+                new_vec.list.appendAssumeCapacity(item);
             }
-            for (vec1.items) |item| {
-                new_vec.appendAssumeCapacity(item);
+            for (vec1.list.items) |item| {
+                new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
         },
@@ -1229,13 +1260,12 @@ fn nativePush(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .array = result });
         },
         .vector => |vec| {
-            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            new_vec.* = Vector{};
-            new_vec.ensureTotalCapacity(alloc, vec.items.len + 1) catch return error.OutOfMemory;
-            for (vec.items) |item| {
-                new_vec.appendAssumeCapacity(item);
+            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
+            new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len + 1) catch return error.OutOfMemory;
+            for (vec.list.items) |item| {
+                new_vec.list.appendAssumeCapacity(item);
             }
-            new_vec.appendAssumeCapacity(elem);
+            new_vec.list.appendAssumeCapacity(elem);
             try ctx.stack.push(.{ .vector = new_vec });
         },
         .string => |s| {
@@ -1301,18 +1331,17 @@ fn nativePop(ctx: *Context) anyerror!void {
             try ctx.stack.push(arr[arr.len - 1]);
         },
         .vector => |vec| {
-            if (vec.items.len == 0) {
+            if (vec.list.items.len == 0) {
                 setErrorContext(ctx, "cannot #pop from empty vector", .{});
                 return error.EmptySequence;
             }
-            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            new_vec.* = Vector{};
-            new_vec.ensureTotalCapacity(alloc, vec.items.len - 1) catch return error.OutOfMemory;
-            for (vec.items[0 .. vec.items.len - 1]) |item| {
-                new_vec.appendAssumeCapacity(item);
+            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
+            new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len - 1) catch return error.OutOfMemory;
+            for (vec.list.items[0 .. vec.list.items.len - 1]) |item| {
+                new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
-            try ctx.stack.push(vec.items[vec.items.len - 1]);
+            try ctx.stack.push(vec.list.items[vec.list.items.len - 1]);
         },
         .string => |s| {
             const cp_count = std.unicode.utf8CountCodepoints(s) catch {
@@ -1367,12 +1396,11 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .array = result });
         },
         .vector => |vec| {
-            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            new_vec.* = Vector{};
-            new_vec.ensureTotalCapacity(alloc, vec.items.len + 1) catch return error.OutOfMemory;
-            new_vec.appendAssumeCapacity(elem);
-            for (vec.items) |item| {
-                new_vec.appendAssumeCapacity(item);
+            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
+            new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len + 1) catch return error.OutOfMemory;
+            new_vec.list.appendAssumeCapacity(elem);
+            for (vec.list.items) |item| {
+                new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
         },
@@ -1437,18 +1465,17 @@ fn nativeShift(ctx: *Context) anyerror!void {
             try ctx.stack.push(arr[0]);
         },
         .vector => |vec| {
-            if (vec.items.len == 0) {
+            if (vec.list.items.len == 0) {
                 setErrorContext(ctx, "cannot #shift from empty vector", .{});
                 return error.EmptySequence;
             }
-            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            new_vec.* = Vector{};
-            new_vec.ensureTotalCapacity(alloc, vec.items.len - 1) catch return error.OutOfMemory;
-            for (vec.items[1..]) |item| {
-                new_vec.appendAssumeCapacity(item);
+            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
+            new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len - 1) catch return error.OutOfMemory;
+            for (vec.list.items[1..]) |item| {
+                new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
-            try ctx.stack.push(vec.items[0]);
+            try ctx.stack.push(vec.list.items[0]);
         },
         .string => |s| {
             const cp_count = std.unicode.utf8CountCodepoints(s) catch {
@@ -1517,14 +1544,25 @@ fn nativePushMut(ctx: *Context) anyerror!void {
         }
     }
 
-    var elem = try ctx.stack.pop();
-    const vec = try popVector(ctx);
+    const elem = try ctx.stack.pop();
+    const vec = popVector(ctx) catch |err| {
+        container_backing.releaseValue(elem);
+        return err;
+    };
 
-    const alloc = ctx.containerAllocator();
-    if (ctx.parent_context != null) elem = tasks.deepCopyValue(elem, alloc) catch return error.OutOfMemory;
-    container_backing.retainValue(elem);
-    vec.append(alloc, elem) catch return error.OutOfMemory;
-    try ctx.stack.push(.{ .vector = vec });
+    vec.header.lock();
+    const append_result = vec.list.append(vec.header.allocator, elem);
+    vec.header.unlock();
+    append_result catch |err| {
+        container_backing.releaseValue(elem);
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
+
+    ctx.stack.pushMoved(.{ .vector = vec }) catch |err| {
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
 }
 
 /// #pop! ( vec -- vec elem ) - Mutate vec to remove last element from vector
@@ -1556,17 +1594,26 @@ fn nativePopMut(ctx: *Context) anyerror!void {
     }
 
     const vec = try popVector(ctx);
-    if (vec.items.len == 0) {
+
+    vec.header.lock();
+    if (vec.list.items.len == 0) {
+        vec.header.unlock();
+        container_backing.releaseValue(.{ .vector = vec });
         setErrorContext(ctx, "cannot #pop! from empty vector", .{});
         return error.EmptySequence;
     }
+    const elem = vec.list.pop().?;
+    vec.header.unlock();
 
-    const elem = vec.pop().?;
-    // The vector slot is gone; release its owning reference. The
-    // subsequent `push` re-establishes ownership for the new stack slot.
-    container_backing.releaseValue(elem);
-    try ctx.stack.push(.{ .vector = vec });
-    try ctx.stack.push(elem);
+    ctx.stack.pushMoved(.{ .vector = vec }) catch |err| {
+        container_backing.releaseValue(.{ .vector = vec });
+        container_backing.releaseValue(elem);
+        return err;
+    };
+    ctx.stack.pushMoved(elem) catch |err| {
+        container_backing.releaseValue(elem);
+        return err;
+    };
 }
 
 /// #unshift! ( vec elem -- vec ) - Mutate vec to add element to start of vector
@@ -1597,14 +1644,25 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
         }
     }
 
-    var elem = try ctx.stack.pop();
-    const vec = try popVector(ctx);
-    const alloc = ctx.containerAllocator();
+    const elem = try ctx.stack.pop();
+    const vec = popVector(ctx) catch |err| {
+        container_backing.releaseValue(elem);
+        return err;
+    };
 
-    if (ctx.parent_context != null) elem = tasks.deepCopyValue(elem, alloc) catch return error.OutOfMemory;
-    container_backing.retainValue(elem);
-    vec.insert(alloc, 0, elem) catch return error.OutOfMemory;
-    try ctx.stack.push(.{ .vector = vec });
+    vec.header.lock();
+    const insert_result = vec.list.insert(vec.header.allocator, 0, elem);
+    vec.header.unlock();
+    insert_result catch |err| {
+        container_backing.releaseValue(elem);
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
+
+    ctx.stack.pushMoved(.{ .vector = vec }) catch |err| {
+        container_backing.releaseValue(.{ .vector = vec });
+        return err;
+    };
 }
 
 /// #shift! ( vec -- vec elem ) - Mutate vec to remove first element
@@ -1636,17 +1694,26 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
     }
 
     const vec = try popVector(ctx);
-    if (vec.items.len == 0) {
+
+    vec.header.lock();
+    if (vec.list.items.len == 0) {
+        vec.header.unlock();
+        container_backing.releaseValue(.{ .vector = vec });
         setErrorContext(ctx, "cannot #shift! from empty vector", .{});
         return error.EmptySequence;
     }
+    const elem = vec.list.orderedRemove(0);
+    vec.header.unlock();
 
-    const elem = vec.orderedRemove(0);
-    // The vector slot is gone; release its owning reference. The
-    // subsequent `push` re-establishes ownership for the new stack slot.
-    container_backing.releaseValue(elem);
-    try ctx.stack.push(.{ .vector = vec });
-    try ctx.stack.push(elem);
+    ctx.stack.pushMoved(.{ .vector = vec }) catch |err| {
+        container_backing.releaseValue(.{ .vector = vec });
+        container_backing.releaseValue(elem);
+        return err;
+    };
+    ctx.stack.pushMoved(elem) catch |err| {
+        container_backing.releaseValue(elem);
+        return err;
+    };
 }
 
 /// #empty? ( seq -- ? ) - Is sequence empty?
@@ -1692,12 +1759,12 @@ fn nativeStartsWith(ctx: *Context) anyerror!void {
         },
         .vector => |vec| {
             const prefix_items = try sequenceToValues(prefix, alloc);
-            if (prefix_items.len > vec.items.len) {
+            if (prefix_items.len > vec.list.items.len) {
                 try ctx.stack.push(.{ .boolean = false });
                 return;
             }
             for (prefix_items, 0..) |p, i| {
-                if (!vec.items[i].eql(p)) {
+                if (!vec.list.items[i].eql(p)) {
                     try ctx.stack.push(.{ .boolean = false });
                     return;
                 }
@@ -1764,13 +1831,13 @@ fn nativeEndsWith(ctx: *Context) anyerror!void {
         },
         .vector => |vec| {
             const suffix_items = try sequenceToValues(suffix, alloc);
-            if (suffix_items.len > vec.items.len) {
+            if (suffix_items.len > vec.list.items.len) {
                 try ctx.stack.push(.{ .boolean = false });
                 return;
             }
-            const start = vec.items.len - suffix_items.len;
+            const start = vec.list.items.len - suffix_items.len;
             for (suffix_items, 0..) |s, i| {
-                if (!vec.items[start + i].eql(s)) {
+                if (!vec.list.items[start + i].eql(s)) {
                     try ctx.stack.push(.{ .boolean = false });
                     return;
                 }
@@ -1833,7 +1900,7 @@ fn nativeIn(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .boolean = false });
         },
         .vector => |vec| {
-            for (vec.items) |item| {
+            for (vec.list.items) |item| {
                 if (item.eql(elem)) {
                     try ctx.stack.push(.{ .boolean = true });
                     return;
@@ -1911,7 +1978,7 @@ fn nativeIndexOf(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .boolean = false });
         },
         .vector => |vec| {
-            for (vec.items, 0..) |item, idx| {
+            for (vec.list.items, 0..) |item, idx| {
                 if (item.eql(elem)) {
                     try ctx.stack.push(.{ .fixnum = @intCast(idx) });
                     return;
@@ -2052,12 +2119,11 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .array = result });
         },
         .vector => |vec| {
-            const take_count = @min(n, vec.items.len);
-            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            new_vec.* = Vector{};
-            new_vec.ensureTotalCapacity(alloc, take_count) catch return error.OutOfMemory;
-            for (vec.items[0..take_count]) |item| {
-                new_vec.appendAssumeCapacity(item);
+            const take_count = @min(n, vec.list.items.len);
+            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
+            new_vec.list.ensureTotalCapacity(alloc, take_count) catch return error.OutOfMemory;
+            for (vec.list.items[0..take_count]) |item| {
+                new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
         },
@@ -2121,17 +2187,15 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .array = result });
         },
         .vector => |vec| {
-            if (n >= vec.items.len) {
-                const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
-                new_vec.* = Vector{};
+            if (n >= vec.list.items.len) {
+                const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
                 try ctx.stack.push(.{ .vector = new_vec });
                 return;
             }
-            const new_vec = alloc.create(Vector) catch return error.OutOfMemory;
-            new_vec.* = Vector{};
-            new_vec.ensureTotalCapacity(alloc, vec.items.len - n) catch return error.OutOfMemory;
-            for (vec.items[n..]) |item| {
-                new_vec.appendAssumeCapacity(item);
+            const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
+            new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len - n) catch return error.OutOfMemory;
+            for (vec.list.items[n..]) |item| {
+                new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
         },
@@ -2218,12 +2282,24 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .byte_array = ba });
         },
         .vector => |vec| {
-            if (n > vec.items.len) {
-                setErrorContext(ctx, "#shrink! count {d} exceeds vector length {d}", .{ n_val, vec.items.len });
+            vec.header.lock();
+            if (n > vec.list.items.len) {
+                const vec_len = vec.list.items.len;
+                vec.header.unlock();
+                container_backing.releaseValue(.{ .vector = vec });
+                setErrorContext(ctx, "#shrink! count {d} exceeds vector length {d}", .{ n_val, vec_len });
                 return error.IndexOutOfBounds;
             }
-            vec.items.len = n;
-            try ctx.stack.push(.{ .vector = vec });
+            // Release truncated elements before discarding their slots.
+            for (vec.list.items[n..]) |dropped| {
+                container_backing.releaseValue(dropped);
+            }
+            vec.list.items.len = n;
+            vec.header.unlock();
+            ctx.stack.pushMoved(.{ .vector = vec }) catch |err| {
+                container_backing.releaseValue(.{ .vector = vec });
+                return err;
+            };
         },
         else => {
             setErrorContext(ctx, "#shrink! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
@@ -2283,17 +2359,42 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .byte_array = ba });
         },
         .vector => |vec| {
-            if (n < vec.items.len) {
-                setErrorContext(ctx, "#grow! count {d} is less than vector length {d}", .{ n_val, vec.items.len });
+            vec.header.lock();
+            if (n < vec.list.items.len) {
+                const vec_len = vec.list.items.len;
+                vec.header.unlock();
+                container_backing.releaseValue(fill);
+                container_backing.releaseValue(.{ .vector = vec });
+                setErrorContext(ctx, "#grow! count {d} is less than vector length {d}", .{ n_val, vec_len });
                 return error.IndexOutOfBounds;
             }
-            const alloc = ctx.containerAllocator();
-            const old_len = vec.items.len;
-            vec.ensureTotalCapacity(alloc, n) catch return error.OutOfMemory;
-            vec.items.len = n;
-            const stored_fill = if (ctx.parent_context != null) tasks.deepCopyValue(fill, alloc) catch return error.OutOfMemory else fill;
-            @memset(vec.items[old_len..n], stored_fill);
-            try ctx.stack.push(.{ .vector = vec });
+            const old_len = vec.list.items.len;
+            vec.list.ensureTotalCapacity(vec.header.allocator, n) catch |err| {
+                vec.header.unlock();
+                container_backing.releaseValue(fill);
+                container_backing.releaseValue(.{ .vector = vec });
+                return err;
+            };
+            vec.list.items.len = n;
+            // Each new slot becomes a new owner of `fill`; retain (n - old_len - 1)
+            // extra times, since C-local `fill` already owns one reference that
+            // transfers into the last slot.
+            const new_slots = n - old_len;
+            if (new_slots > 0) {
+                var i: usize = 0;
+                while (i < new_slots - 1) : (i += 1) {
+                    container_backing.retainValue(fill);
+                }
+                @memset(vec.list.items[old_len..n], fill);
+            } else {
+                // n == old_len: no new slots. C-local fill ownership needs to be released.
+                container_backing.releaseValue(fill);
+            }
+            vec.header.unlock();
+            ctx.stack.pushMoved(.{ .vector = vec }) catch |err| {
+                container_backing.releaseValue(.{ .vector = vec });
+                return err;
+            };
         },
         else => {
             setErrorContext(ctx, "#grow! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
@@ -2310,7 +2411,7 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
     switch (val) {
         .vector => |vec| {
             const alloc = ctx.quotationAllocator();
-            const items = try alloc.dupe(Value, vec.items);
+            const items = try alloc.dupe(Value, vec.list.items);
             try ctx.stack.push(.{ .array = items });
         },
         else => {
@@ -2324,7 +2425,7 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
 fn nativeToArrayVector(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
-    const items = try alloc.dupe(Value, val.vector.items);
+    const items = try alloc.dupe(Value, val.vector.list.items);
     try ctx.stack.push(.{ .array = items });
 }
 

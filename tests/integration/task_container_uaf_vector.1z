@@ -1,0 +1,68 @@
+use "testing" ;
+use "time" ;
+
+\ Vector-only cross-task tests: parent creates vector, child mutates it,
+\ parent reads it back after task-scope. With refcounted vector backing,
+\ these patterns are safe under any worker count without the prior
+\ defensive value-copy that hid the underlying lifecycle race.
+
+test-vector-push-fixnum: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ 99 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield
+    drop
+  ] curry
+  task-scope
+  dup #len 1 "vector has one element after child push" assert=
+  #first 99 "vector element is 99" assert=
+] ;
+
+test-vector-push-string: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ "hello-from-child" #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+    yield
+    drop
+  ] curry
+  task-scope
+  dup #len 1 "vector has one element after child string push" assert=
+  #first "hello-from-child" "vector element is the pushed string" assert=
+] ;
+
+test-vector-multi-child-push: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ 1 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+
+    over [ 2 #push! drop ] curry
+    [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+    spawn
+
+    10 milliseconds sleep
+    dup cancel-task
+    swap dup cancel-task
+    drop drop
+    yield yield
+    drop
+  ] curry
+  task-scope
+  #len 2 "vector has two elements from two children" assert=
+] ;
+
+test-vector-push-fixnum
+test-vector-push-string
+test-vector-multi-child-push

@@ -632,7 +632,7 @@ const VariantHistogramWalker = struct {
                 const ptr_key = @intFromPtr(v);
                 if (!try enterPointer(&self.vectors, alloc, ptr_key)) return;
                 defer _ = self.vectors.remove(ptr_key);
-                for (v.items) |item| try self.walkValue(alloc, stats, item);
+                for (v.list.items) |item| try self.walkValue(alloc, stats, item);
             },
             .set => |s| {
                 const ptr_key = @intFromPtr(s);
@@ -1170,18 +1170,23 @@ test "collectVariantHistogram stops on self-referential vector cycles" {
     defer stats.deinit(std.testing.allocator);
     const Tag = std.meta.Tag(Value);
 
-    const vec = try std.testing.allocator.create(@import("value.zig").Vector);
-    defer {
-        vec.deinit(std.testing.allocator);
-        std.testing.allocator.destroy(vec);
-    }
-    vec.* = .{};
-    try vec.append(std.testing.allocator, .{ .vector = vec });
+    const cb = @import("container_backing.zig");
+    const vec = try @import("value.zig").Vector.create(std.testing.allocator);
+    // Self-referential cycle: the self-slot is a new owner of vec, so
+    // retain to match the eventual release in destroyVector.
+    cb.retainValue(.{ .vector = vec });
+    try vec.list.append(vec.header.allocator, .{ .vector = vec });
 
     const roots = [_]Value{.{ .vector = vec }};
     try stats.collectVariantHistogram(std.testing.allocator, &roots);
 
     try std.testing.expectEqual(@as(u64, 2), stats.variant_counts[@intFromEnum(Tag.vector)]);
+
+    // Refcount-only lifecycles cannot reclaim cycles. Break the cycle
+    // by hand: pop the self-slot and release its inherited ref, then
+    // release the C-local so destroy can finalize the backing.
+    while (vec.list.pop()) |item| cb.releaseValue(item);
+    vec.header.release();
 }
 
 test "formatHuman includes prelude inventory" {

@@ -12,6 +12,7 @@ const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
 const markers_mod = @import("markers.zig");
+const container_backing = @import("../container_backing.zig");
 
 // =============================================================================
 // Native dispatch entry functions
@@ -19,6 +20,7 @@ const markers_mod = @import("markers.zig");
 
 fn nativeInspectGeneric(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
     var buffer: std.ArrayListUnmanaged(u8) = .{};
     try val.write(buffer.writer(alloc));
@@ -27,6 +29,7 @@ fn nativeInspectGeneric(ctx: *Context) anyerror!void {
 
 fn nativeAsStringGeneric(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
     var buffer: std.ArrayListUnmanaged(u8) = .{};
     try val.write(buffer.writer(alloc));
@@ -102,6 +105,7 @@ fn nativeInspect(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "inspect")) return;
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
     var buffer: std.ArrayListUnmanaged(u8) = .{};
     try val.write(buffer.writer(alloc));
@@ -114,6 +118,7 @@ fn nativeAsString(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">string")) return;
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
     var buffer: std.ArrayListUnmanaged(u8) = .{};
     try val.write(buffer.writer(alloc));

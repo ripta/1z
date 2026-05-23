@@ -41,7 +41,35 @@ pub const Instruction = struct {
 pub const HashTable = std.StringHashMapUnmanaged(Value);
 
 /// Vector type for V{ } literals - mutable, dynamically-sized sequences.
-pub const Vector = std.ArrayListUnmanaged(Value);
+///
+/// Carries a `ContainerHeader` so the backing participates in the
+/// cross-worker refcount + per-container mutex lifecycle. The actual element
+/// storage lives in `list`. Create via `Vector.create` so the header is
+/// initialized with the correct destroy callback.
+pub const Vector = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    list: std.ArrayListUnmanaged(Value) = .{},
+
+    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*Vector {
+        const self = try allocator.create(Vector);
+        self.* = .{
+            .header = undefined,
+            .list = .{},
+        };
+        self.header.init(allocator, destroyVector);
+        return self;
+    }
+
+    fn destroyVector(header: *@import("container_backing.zig").ContainerHeader) void {
+        const cb = @import("container_backing.zig");
+        const self: *Vector = @fieldParentPtr("header", header);
+        for (self.list.items) |item| {
+            cb.releaseValue(item);
+        }
+        self.list.deinit(header.allocator);
+        header.allocator.destroy(self);
+    }
+};
 
 /// ByteArray type for B{ } literals - mutable, dynamically-sized byte sequences.
 pub const ByteArray = struct {
@@ -150,7 +178,7 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
             }
             break :blk false;
         },
-        .vector => |v| containsBorrowedInSlice(v.items),
+        .vector => |v| containsBorrowedInSlice(v.list.items),
         .set => |s| blk: {
             for (s.keys()) |key| {
                 if (valueContainsBorrowedBuffer(key)) break :blk true;
@@ -903,7 +931,7 @@ pub const Value = union(enum) {
             },
             .vector => |v| {
                 try writer.writeAll("V{ ");
-                for (v.items) |item| {
+                for (v.list.items) |item| {
                     try item.write(writer);
                     try writer.writeAll(" ");
                 }
@@ -1068,8 +1096,8 @@ pub const Value = union(enum) {
             },
             .vector => |a| {
                 const b = other.vector;
-                if (a.items.len != b.items.len) return false;
-                for (a.items, b.items) |ai, bi| {
+                if (a.list.items.len != b.list.items.len) return false;
+                for (a.list.items, b.list.items) |ai, bi| {
                     if (!ai.eql(bi)) return false;
                 }
                 return true;
@@ -1224,7 +1252,7 @@ pub const Value = union(enum) {
                 hasher.update(std.mem.asBytes(&combined));
             },
             .vector => |v| {
-                for (v.items) |elem| {
+                for (v.list.items) |elem| {
                     const elem_hash = elem.hashValue();
                     hasher.update(std.mem.asBytes(&elem_hash));
                 }

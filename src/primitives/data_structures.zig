@@ -93,9 +93,11 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
             };
         };
 
-        // Copy key to arena for persistence
+        // Copy key to arena for persistence. The hash table is not yet
+        // refcount-aware: stored values are borrowed for the lifetime of
+        // the owning arena. Retaining here without a matching release at
+        // hash destroy would leak refcounted containers.
         const key_copy = ctx.quotationAllocator().dupe(u8, key) catch return error.OutOfMemory;
-        container_backing.retainValue(val);
         hash.put(ctx.quotationAllocator(), key_copy, val) catch return error.OutOfMemory;
     }
 
@@ -108,28 +110,32 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const instrs = quot.instructions;
 
-    const alloc = ctx.containerAllocator();
-    const in_task = ctx.parent_context != null;
+    const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer container_backing.releaseValue(.{ .vector = vec });
 
-    const vec = alloc.create(Vector) catch return error.OutOfMemory;
-    vec.* = Vector{};
-
-    // Execute each instruction and collect values
+    // Execute each instruction and collect values. push_literal values
+    // are borrowed from the instruction stream, so a vec slot becomes a
+    // new owner and must retain. call_word values were popped from the
+    // stack into a transient C-local, so the slot inherits ownership
+    // without an additional retain.
     for (instrs) |instr| {
-        var val = switch (instr.op) {
-            .push_literal => |v| v,
+        const val = switch (instr.op) {
+            .push_literal => |v| blk: {
+                container_backing.retainValue(v);
+                break :blk v;
+            },
             .call_word => blk: {
-                // Execute the word to get the value
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
                 break :blk ctx.stack.pop() catch return error.OutOfMemory;
             },
         };
-        if (in_task) val = tasks.deepCopyValue(val, alloc) catch return error.OutOfMemory;
-        container_backing.retainValue(val);
-        vec.append(alloc, val) catch return error.OutOfMemory;
+        vec.list.append(vec.header.allocator, val) catch |err| {
+            container_backing.releaseValue(val);
+            return err;
+        };
     }
 
-    try ctx.stack.push(.{ .vector = vec });
+    try ctx.stack.pushMoved(.{ .vector = vec });
 }
 
 /// make-byte-array ( quotation -- byte-array ) - Create a byte array from values in quotation
@@ -193,7 +199,9 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
             },
         };
 
-        container_backing.retainValue(val);
+        // Sets are not yet refcount-aware; values are borrowed for the
+        // lifetime of the owning arena. Retaining without a matching
+        // release at set destroy would leak refcounted containers.
         set.put(alloc, val, {}) catch return error.OutOfMemory;
     }
 
@@ -254,10 +262,12 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
             };
         };
 
-        // Copy key to arena for persistence
+        // Copy key to arena for persistence. The mutable map is not yet
+        // refcount-aware: stored values are borrowed for the lifetime
+        // of the owning arena. Retaining without a matching release at
+        // map destroy would leak refcounted containers.
         const key_copy = alloc.dupe(u8, key) catch return error.OutOfMemory;
         const stored_val = if (in_task) tasks.deepCopyValue(val, alloc) catch return error.OutOfMemory else val;
-        container_backing.retainValue(stored_val);
         mmap.put(alloc, key_copy, stored_val) catch return error.OutOfMemory;
     }
 
@@ -306,17 +316,13 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
             else
                 new_value;
 
-            // Check if key already exists
-            if (m.get(key_str)) |prior| {
-                // Update existing key in place (use the same key pointer);
-                // release the prior slot owner before overwriting.
-                container_backing.releaseValue(prior);
-                container_backing.retainValue(stored_value);
+            // Mutable map is not yet refcount-aware; slots are borrowed.
+            // Skip retain/release on stored values to avoid leaking
+            // refcounted containers that have no map-side release.
+            if (m.get(key_str)) |_| {
                 m.putAssumeCapacity(key_str, stored_value);
             } else {
-                // New key - need to copy it
                 const key_copy = alloc.dupe(u8, key_str) catch return error.OutOfMemory;
-                container_backing.retainValue(stored_value);
                 m.put(alloc, key_copy, stored_value) catch return error.OutOfMemory;
             }
 
@@ -364,9 +370,9 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
 
     switch (obj) {
         .mutable_map => |m| {
-            if (m.fetchRemove(key_str)) |entry| {
-                container_backing.releaseValue(entry.value);
-            }
+            // Mutable map slots are borrowed; insertion did not retain,
+            // so removal must not release.
+            _ = m.fetchRemove(key_str);
             try ctx.stack.push(.{ .mutable_map = m });
         },
         else => {

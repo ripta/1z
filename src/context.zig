@@ -4370,10 +4370,14 @@ test "registerQuotationContainerLiterals: records quotations with container lite
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    var dummy_vec: value_mod.Vector = .{};
+    const dummy_vec = try value_mod.Vector.create(std.testing.allocator);
+    // Two registrations of the same instrs slice means the walk will
+    // release the embedded vector twice. Bump refcount once so total
+    // refs after create+retain (=2) match the two walk-releases.
+    dummy_vec.header.retain();
     const instrs = try ctx.quotationAllocator().alloc(Instruction, 2);
     instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .vector = dummy_vec } }, .line = 0 };
 
     try ctx.registerQuotationContainerLiterals(instrs);
     try ctx.registerQuotationContainerLiterals(instrs);
@@ -4381,17 +4385,20 @@ test "registerQuotationContainerLiterals: records quotations with container lite
 
     ctx.walkContainerReleaseList();
     try std.testing.expectEqual(@as(usize, 0), ctx.container_release_list.items.len);
+    // walkContainerReleaseList consumed both refs and destroyed dummy_vec.
 }
 
 test "Context.deinit walks release list before arena teardown" {
-    // The release helpers are no-op stubs, so this test asserts the
-    // wiring does not crash and the testing allocator does not flag a
-    // leak through the release-list storage itself.
+    // Asserts the wiring does not crash and the testing allocator does
+    // not flag a leak through the release-list storage itself.
     var ctx = Context.init(std.testing.allocator);
 
-    var dummy_vec: value_mod.Vector = .{};
+    const dummy_vec = try value_mod.Vector.create(std.testing.allocator);
+    // One registration of the slice; the deinit walk releases the
+    // embedded vector once. The create's rc=1 balances that single
+    // release, so the vec is destroyed cleanly by deinit.
     const instrs = try ctx.quotationAllocator().alloc(Instruction, 1);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 };
+    instrs[0] = .{ .op = .{ .push_literal = .{ .vector = dummy_vec } }, .line = 0 };
     try ctx.registerQuotationContainerLiterals(instrs);
 
     ctx.deinit();

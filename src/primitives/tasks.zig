@@ -704,11 +704,10 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         },
 
         .vector => |v| blk: {
-            const new_v = try alloc.create(value_mod.Vector);
-            new_v.* = .{};
-            try new_v.ensureTotalCapacity(alloc, v.items.len);
-            for (v.items) |item| {
-                new_v.appendAssumeCapacity(try deepCopyValue(item, alloc));
+            const new_v = try value_mod.Vector.create(alloc);
+            try new_v.list.ensureTotalCapacity(alloc, v.list.items.len);
+            for (v.list.items) |item| {
+                new_v.list.appendAssumeCapacity(try deepCopyValue(item, alloc));
             }
             break :blk .{ .vector = new_v };
         },

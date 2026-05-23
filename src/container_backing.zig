@@ -108,30 +108,29 @@ pub const ContainerHeader = struct {
     }
 };
 
-/// Per-variant retain dispatch. While the container types still live in
-/// the legacy arena, every container variant is a no-op stub here; each
-/// variant flips to a real `header.retain()` call when its backing is
-/// migrated to use `ContainerHeader`. Non-container variants are no-ops
-/// by construction.
+/// Per-variant retain dispatch. Vectors carry refcounted backing and
+/// route through `header.retain()`. Mutable map and byte_array remain
+/// no-op stubs until their backings migrate. Non-container variants are
+/// no-ops by construction.
 ///
 /// Storage-boundary call sites (stack push, container insertion,
 /// dictionary entry, task result) route through this single entry point
 /// so the dispatch is consistent across migrations.
 pub fn retainValue(v: Value) void {
     switch (v) {
-        .vector => |_| {},
+        .vector => |vec| vec.header.retain(),
         .mutable_map => |_| {},
         .byte_array => |_| {},
         else => {},
     }
 }
 
-/// Per-variant release dispatch. Mirror of `retainValue`; every
-/// container variant is a no-op stub until its backing migrates to use
-/// `ContainerHeader`.
+/// Per-variant release dispatch. Mirror of `retainValue`; vectors call
+/// `header.release()` (destroying the backing on last drop); mutable
+/// map and byte_array remain no-op stubs until their backings migrate.
 pub fn releaseValue(v: Value) void {
     switch (v) {
-        .vector => |_| {},
+        .vector => |vec| vec.header.release(),
         .mutable_map => |_| {},
         .byte_array => |_| {},
         else => {},
@@ -381,11 +380,9 @@ test "ContainerHeader: lock orders published writes across threads" {
     try testing.expectEqual(@as(u32, 1), tracker.fired.load(.acquire));
 }
 
-test "retainValue/releaseValue: no-op stubs while variants live in legacy arena" {
-    // Build representative values; the dispatch must not allocate, free,
-    // or panic for any variant. The scalar arms exercise the switch
-    // surface; container arms migrate later and grow real coverage at
-    // that point.
+test "retainValue/releaseValue: scalar dispatch is a no-op" {
+    // Scalar variants must traverse the dispatch without allocation or
+    // panic. Container arms grow real coverage as each variant migrates.
     const cases = [_]Value{
         .{ .fixnum = 42 },
         .{ .boolean = true },
@@ -395,6 +392,20 @@ test "retainValue/releaseValue: no-op stubs while variants live in legacy arena"
         retainValue(v);
         releaseValue(v);
     }
+}
+
+test "retainValue/releaseValue: vector dispatch exercises the header" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    retainValue(.{ .vector = vec });
+    try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    releaseValue(.{ .vector = vec });
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    releaseValue(.{ .vector = vec });
+    // Final release destroys the backing; no further refcount inspection.
 }
 
 test "instructionsHaveContainerLiteral: detects container push_literal operands" {
@@ -411,21 +422,26 @@ test "instructionsHaveContainerLiteral: detects container push_literal operands"
     // Build a one-off Vector pointer so we can construct a container Value
     // for the scan. The dispatch is no-op today so the underlying pointer
     // is never dereferenced.
-    var dummy_vec: value_mod.Vector = .{};
+    const dummy_vec = try value_mod.Vector.create(testing.allocator);
+    defer dummy_vec.header.release();
     const with_vector = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 },
-        .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .vector = dummy_vec } }, .line = 0 },
     };
     try testing.expect(instructionsHaveContainerLiteral(&with_vector));
 }
 
 test "releaseInstructionsContainerLiterals: shallow walk over push_literal operands" {
-    // Helpers are no-ops today; this test asserts the walk itself does
-    // not crash on any mix of literal variants, including nested
-    // quotation literals (which must not be recursed into).
-    var dummy_vec: value_mod.Vector = .{};
+    // Asserts the walk does not crash on any mix of literal variants,
+    // including nested quotation literals (which must not be recursed
+    // into). Walks the outer slice, which contains one container
+    // push_literal that will be released; bump the refcount so the
+    // C-local can still observe state afterwards.
+    const dummy_vec = try value_mod.Vector.create(testing.allocator);
+    dummy_vec.header.retain();
+    defer dummy_vec.header.release();
     var inner_instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .vector = dummy_vec } }, .line = 0 },
     };
     const inner_quot = value_mod.Quotation{
         .instructions = &inner_instrs,
@@ -436,9 +452,7 @@ test "releaseInstructionsContainerLiterals: shallow walk over push_literal opera
         .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 },
         .{ .op = .{ .push_literal = .{ .quotation = inner_quot } }, .line = 0 },
         .{ .op = .{ .call_word = "call" }, .line = 0 },
-        .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .vector = dummy_vec } }, .line = 0 },
     };
     releaseInstructionsContainerLiterals(&outer);
-    // No assertion beyond "does not crash"; refcount behavior is exercised
-    // once the variants migrate.
 }

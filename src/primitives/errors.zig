@@ -345,7 +345,7 @@ fn findDanglingIsolatedType(val: Value, isolation_frame: *const TypeRegistryFram
             return null;
         },
         .vector => |v| {
-            for (v.items) |item| {
+            for (v.list.items) |item| {
                 if (findDanglingIsolatedType(item, isolation_frame, depth + 1)) |name| return name;
             }
             return null;

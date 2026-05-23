@@ -106,7 +106,7 @@ pub fn sequenceLength(val: Value) ?usize {
     return switch (val) {
         .string => |s| utf8CodepointCount(s),
         .array => |a| a.len,
-        .vector => |v| v.items.len,
+        .vector => |v| v.list.items.len,
         .byte_array => |b| b.slice().len,
         .set => |s| s.count(),
         else => null,
@@ -163,7 +163,7 @@ pub const SequenceIterator = struct {
             .vector => |v| SequenceIterator{
                 .kind = .vector,
                 .allocator = allocator,
-                .state = .{ .vector = .{ .items = v.items, .index = 0 } },
+                .state = .{ .vector = .{ .items = v.list.items, .index = 0 } },
             },
             .byte_array => |b| SequenceIterator{
                 .kind = .byte_array,
@@ -276,8 +276,7 @@ pub const SequenceBuilder = struct {
                 .state = .{ .array = .{} },
             },
             .vector => blk: {
-                const vec = allocator.create(Vector) catch return error.OutOfMemory;
-                vec.* = Vector{};
+                const vec = Vector.create(allocator) catch return error.OutOfMemory;
                 break :blk SequenceBuilder{
                     .kind = kind,
                     .allocator = allocator,
@@ -311,7 +310,7 @@ pub const SequenceBuilder = struct {
         switch (kind) {
             .string => builder.state.string.ensureTotalCapacity(allocator, capacity) catch return error.OutOfMemory,
             .array => builder.state.array.ensureTotalCapacity(allocator, capacity) catch return error.OutOfMemory,
-            .vector => builder.state.vector.ensureTotalCapacity(allocator, capacity) catch return error.OutOfMemory,
+            .vector => builder.state.vector.list.ensureTotalCapacity(allocator, capacity) catch return error.OutOfMemory,
             .byte_array => builder.state.byte_array.ensureTotalCapacity(allocator, capacity) catch return error.OutOfMemory,
             .set => {}, // Sets don't have ensureCapacity
         }
@@ -332,7 +331,7 @@ pub const SequenceBuilder = struct {
                 self.state.array.append(self.allocator, val) catch return error.OutOfMemory;
             },
             .vector => {
-                self.state.vector.append(self.allocator, val) catch return error.OutOfMemory;
+                self.state.vector.list.append(self.allocator, val) catch return error.OutOfMemory;
             },
             .byte_array => {
                 // Expect fixnum value 0-255

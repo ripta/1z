@@ -258,9 +258,12 @@ test "registerCompoundBody: records bodies with container literals" {
     var dict = Dictionary.init(allocator);
     defer dict.deinit();
 
-    var dummy_vec: value_mod.Vector = .{};
+    const dummy_vec = try value_mod.Vector.create(allocator);
+    // One registration; walkContainerReleaseList will release the
+    // embedded vector once. The create's rc=1 balances that release,
+    // so dummy_vec is destroyed cleanly by the walk.
     const body = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .vector = dummy_vec } }, .line = 0 },
     };
     try dict.registerCompoundBody(&body);
     try std.testing.expectEqual(@as(usize, 1), dict.container_release_list.items.len);
