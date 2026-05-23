@@ -8,6 +8,12 @@ ZIG_PREFIX ?= zig-out
 DOCKER_IMAGE ?= gcr.io/$(GCP_PROJECT_ID)/zag:v0.15.2
 TEST_FILTER_ARG = $(if $(TEST_FILTER),-Dtest-filter=$(TEST_FILTER))
 
+# Optional CPU target for the build. Empty selects the Zig default (baseline
+# CPU for the native arch); set ZIG_CPU=native to enable host CPU features such
+# as the SIMD paths inside std.mem.indexOf.
+ZIG_CPU ?=
+ZIG_CPU_ARG = $(if $(ZIG_CPU),-Dcpu=$(ZIG_CPU))
+
 # Within each zig build invocation, the build runner parallelizes independent
 # test steps automatically. JOBS controls the zig build runner thread count.
 # Tests marked .serial=true in their .zon metadata, e.g., HTTP server tests,
@@ -18,10 +24,10 @@ ZIG_JOBS_ARG = -j$(JOBS)
 all: build test
 
 build: ## Build the project (default)
-	zig build --prefix $(ZIG_PREFIX)
+	zig build --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 
 release: ## Build with optimizations
-	zig build --release=fast --prefix $(ZIG_PREFIX)
+	zig build --release=fast --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 
 run: build ## Build and run the 1z interpreter
 	./$(ZIG_PREFIX)/bin/1z $(ARGS)
