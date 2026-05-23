@@ -23,6 +23,8 @@ const dispatch_mod = @import("dispatch.zig");
 
 const Context = @import("context.zig").Context;
 
+const container_backing = @import("container_backing.zig");
+
 const aot_image_mod = @import("aot_image.zig");
 const aot_image_emit_mod = @import("aot_image_emit.zig");
 const bail_stats_mod = @import("bail_stats.zig");
@@ -1777,6 +1779,14 @@ const CompileState = struct {
     /// the stack. Emitted from emitCallbackPostCheck on the hot-path continue
     /// branch.
     refresh_stack_fn: c.ir_ref = c.IR_UNUSED,
+    /// References to jitRetainSlot / jitReleaseSlot: read the Value at a
+    /// physical stack slot and retain / release its refcounted backing.
+    /// Emitted where the codegen logically duplicates a `.raw_at_slot`
+    /// entry (retain) or discards one without a native consuming it
+    /// (release), so the "stack slot is an owning reference" invariant
+    /// holds across the generated-code boundary.
+    retain_slot_fn: c.ir_ref = c.IR_UNUSED,
+    release_slot_fn: c.ir_ref = c.IR_UNUSED,
     validate_params_fn: c.ir_ref = c.IR_UNUSED,
     interp_ctx: ?*const Context = null,
     /// Interpreter PIC table for the word being compiled. Each instruction
@@ -2922,6 +2932,28 @@ fn emitEpilogue(
     c._ir_RETURN(ctx, state.ok_status);
 }
 
+/// Emit a retain on the refcounted backing of the Value at physical `slot`.
+/// Call after physically duplicating a `.raw_at_slot` entry so the duplicate
+/// counts as a new owning reference. No-op for scalar Values at runtime.
+fn emitRetainSlot(state: *CompileState, slot: usize) void {
+    if (state.retain_slot_fn == c.IR_UNUSED) return;
+    const ctx = state.ctx;
+    const slot_off = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
+    const slot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_off);
+    _ = c._ir_CALL_1(ctx, c.IR_I32, state.retain_slot_fn, slot_addr);
+}
+
+/// Emit a release on the refcounted backing of the Value at physical `slot`.
+/// Call before discarding a `.raw_at_slot` entry that no native consumes.
+/// No-op for scalar Values at runtime.
+fn emitReleaseSlot(state: *CompileState, slot: usize) void {
+    if (state.release_slot_fn == c.IR_UNUSED) return;
+    const ctx = state.ctx;
+    const slot_off = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
+    const slot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_off);
+    _ = c._ir_CALL_1(ctx, c.IR_I32, state.release_slot_fn, slot_addr);
+}
+
 /// Clone a stack entry to a new destination slot. For IR-ref entries
 /// (i64, f64, bool, quotation_body) the ref is shared. For raw_at_slot
 /// entries a physical copy is emitted and the new entry points to dest_slot.
@@ -2938,6 +2970,8 @@ fn cloneStackEntry(
         .quotation_body => |body| .{ .quotation_body = body },
         .raw_at_slot => |s| blk: {
             emitCopySlot(state.ctx, base_addr, s, dest_slot);
+            // The copy is a second owning reference to the same backing.
+            emitRetainSlot(state, dest_slot);
             break :blk .{ .raw_at_slot = dest_slot };
         },
         .row_region => blk: {
@@ -3689,9 +3723,13 @@ fn emitChooseBuiltin(
     const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), quot_addr, code_ptr_off);
     const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
 
-    // Copy a1 to slot 2, a2 to slot 3 (quotation consumption copies).
+    // Copy a1 to slot 2, a2 to slot 3 (quotation consumption copies). The
+    // copies are owning references the predicate consumes and releases, so
+    // retain each to balance that release.
     emitCopySlot(ctx, base_addr, a1_slot, 2);
+    emitRetainSlot(state, 2);
     emitCopySlot(ctx, base_addr, a2_slot, 3);
+    emitRetainSlot(state, 3);
     // Copy quotation to slot 4 (for interpreter fallback).
     emitCopySlot(ctx, base_addr, quot_slot, 4);
 
@@ -3756,10 +3794,12 @@ fn emitChooseBuiltin(
     const if_ref = c._ir_IF(ctx, cond_ref);
 
     c._ir_IF_TRUE(ctx, if_ref);
-    // a1 already at output_slot — no copy needed.
+    // a1 already at output_slot; release the non-selected a2.
+    emitReleaseSlot(state, output_slot + 1);
     const true_end = c._ir_END(ctx);
 
     c._ir_IF_FALSE(ctx, if_ref);
+    emitReleaseSlot(state, output_slot);
     emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot);
     const false_end = c._ir_END(ctx);
 
@@ -3955,6 +3995,14 @@ fn compileInstructions(
                     const sp_byte_offset = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, sp_byte_offset);
                     emitPushValue(ctx, &val, dest_addr);
+                    // A literal that carries a refcounted backing (e.g. an
+                    // `.array`/`.hash`/`.set` of vectors) is raw-copied here, so
+                    // the new slot must retain to match the consumer's release;
+                    // the dictionary release list owns the literal's own
+                    // reference and frees it at teardown.
+                    if (container_backing.valueCarriesBacking(val)) {
+                        emitRetainSlot(state, sp.*);
+                    }
                     stack[sp.*] = .{ .raw_at_slot = sp.* };
                     sp.* += 1;
                 }
@@ -3966,6 +4014,11 @@ fn compileInstructions(
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "drop")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
+                    // Discarding an owning slot: release its backing. Scalars
+                    // tracked as typed refs never alias a backing.
+                    if (stack[sp.* - 1] == .raw_at_slot) {
+                        emitReleaseSlot(state, stack[sp.* - 1].raw_at_slot);
+                    }
                     sp.* -= 1;
                 } else if (std.mem.eql(u8, name, "swap")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
@@ -4168,6 +4221,14 @@ fn compileInstructions(
                             return IrCodegenError.NotCompilable;
                         },
                     };
+
+                    // `if` consumes the condition; release its backing if it
+                    // carried one (mirrors the interpreter's popBoolean). The
+                    // condition slot is below the new top and no longer live, so
+                    // the release precedes the branch bodies that overwrite it.
+                    if (cond_entry == .raw_at_slot) {
+                        emitReleaseSlot(state, cond_entry.raw_at_slot);
+                    }
 
                     // Save stack state for the false branch
                     const saved_sp = sp.*;
@@ -4572,9 +4633,13 @@ fn compileInstructions(
                             sp.* = output_slot + 2;
                             flushToPhysicalStack(state, stack, sp.*);
 
-                            // Copy a1/a2 for quotation consumption.
+                            // Copy a1/a2 for quotation consumption. The copies
+                            // are owning references the predicate consumes and
+                            // releases, so retain each to balance that release.
                             emitCopySlot(ctx, state.base_addr, output_slot, output_slot + 2);
+                            emitRetainSlot(state, output_slot + 2);
                             emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot + 3);
+                            emitRetainSlot(state, output_slot + 3);
                             stack[output_slot + 2] = .{ .raw_at_slot = output_slot + 2 };
                             stack[output_slot + 3] = .{ .raw_at_slot = output_slot + 3 };
                             sp.* = output_slot + 4;
@@ -4589,14 +4654,16 @@ fn compileInstructions(
                             const result_entry = stack[sp.*];
                             const cond_ref = try emitTruthiness(state, result_entry, state.base_addr);
 
-                            // Branch: truthy keeps a1, falsy keeps a2.
+                            // Branch: truthy keeps a1, falsy keeps a2. The
+                            // non-selected operand is dropped, so release it.
                             const if_ref = c._ir_IF(ctx, cond_ref);
 
                             c._ir_IF_TRUE(ctx, if_ref);
-                            // a1 already at output_slot — nothing to copy.
+                            emitReleaseSlot(state, output_slot + 1);
                             const true_end = c._ir_END(ctx);
 
                             c._ir_IF_FALSE(ctx, if_ref);
+                            emitReleaseSlot(state, output_slot);
                             emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot);
                             const false_end = c._ir_END(ctx);
 
@@ -4625,10 +4692,15 @@ fn compileInstructions(
                             sp.* = output_slot + 2;
                             flushToPhysicalStack(state, stack, sp.*);
 
-                            // Copy a1/a2 for quotation consumption.
+                            // Copy a1/a2 for quotation consumption. The copies
+                            // are owning references the predicate consumes and
+                            // releases, so retain each to balance that release.
                             emitCopySlot(ctx, state.base_addr, output_slot, output_slot + 2);
+                            emitRetainSlot(state, output_slot + 2);
                             emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot + 3);
-                            // Copy quotation to slot after the copies.
+                            emitRetainSlot(state, output_slot + 3);
+                            // Copy quotation to slot after the copies (a
+                            // quotation carries no refcounted backing).
                             emitCopySlot(ctx, state.base_addr, quot_slot, output_slot + 4);
 
                             sp.* = output_slot + 4;
@@ -4695,9 +4767,11 @@ fn compileInstructions(
                             const if_ref = c._ir_IF(ctx, cond_ref);
 
                             c._ir_IF_TRUE(ctx, if_ref);
+                            emitReleaseSlot(state, output_slot + 1);
                             const true_end = c._ir_END(ctx);
 
                             c._ir_IF_FALSE(ctx, if_ref);
+                            emitReleaseSlot(state, output_slot);
                             emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot);
                             const false_end = c._ir_END(ctx);
 
@@ -5547,6 +5621,12 @@ fn compileWordPass(
     // of which callbacks the pre-scan flagged.
     const refresh_stack_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitRefreshStack));
 
+    // Refcount slot helpers are emitted at logical duplication / discard sites
+    // for refcounted container backings. Unconditional like jitRefreshStack:
+    // any `.raw_at_slot` value may carry a backing.
+    const retain_slot_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitRetainSlot));
+    const release_slot_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitReleaseSlot));
+
     // jitEnsureStackCapacity grows ctx.stack to cover the word's peak depth
     // when the capacity reserved by executeCompiled is insufficient. Needed
     // because compiled-to-compiled recursion bypasses executeCompiled's
@@ -5660,6 +5740,8 @@ fn compileWordPass(
         .interpreted_call_fn = interpreted_call_fn,
         .native_word_call_fn = native_word_call_fn,
         .refresh_stack_fn = refresh_stack_fn,
+        .retain_slot_fn = retain_slot_fn,
+        .release_slot_fn = release_slot_fn,
         .validate_params_fn = validate_params_fn,
         .interp_ctx = interp_ctx,
         .pic_table = pic_table,
@@ -6147,6 +6229,10 @@ fn emitWordCAotPass(
     // of which callbacks the pre-scan flagged.
     const refresh_stack_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitRefreshStack"), proto_1arg);
 
+    // Refcount slot helpers, AOT counterpart of the JIT const_addr refs.
+    const retain_slot_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitRetainSlot"), proto_1arg);
+    const release_slot_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitReleaseSlot"), proto_1arg);
+
     // jitEnsureStackCapacity is called unconditionally in the AOT prologue to
     // grow ctx.stack when the capacity reserved by executeCompiled is
     // insufficient. Unconditional (rather than branching as the JIT path does)
@@ -6266,6 +6352,8 @@ fn emitWordCAotPass(
         .pic_dispatch_fn = pic_dispatch_fn,
         .pic_match_fn = pic_match_fn,
         .refresh_stack_fn = refresh_stack_fn,
+        .retain_slot_fn = retain_slot_fn,
+        .release_slot_fn = release_slot_fn,
         .validate_params_fn = validate_params_fn,
         .pic_table = pic_table,
         .pic_stats = pic_stats_out,
@@ -7060,6 +7148,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitRetainSlot(uintptr_t value_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitReleaseSlot(uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitEnsureStackCapacity(uintptr_t jit_ctx, uintptr_t needed);\n");
     try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
@@ -8466,6 +8556,26 @@ export fn jitCallCodePtr(jit_ctx_raw: usize, code_ptr_raw: usize) callconv(.c) i
 
 /// Push a string literal onto the stack. The string data is at `str_ptr`
 /// with length `str_len`. The runtime copies the data into a managed allocation.
+/// Retain the refcounted backing of the Value at a physical stack slot.
+/// Emitted where compiled code logically duplicates a `.raw_at_slot` entry
+/// (dup, over, combinator arg-copies) so the duplicate counts as a new
+/// owning reference. No-op for scalar Values. Touches only the backing
+/// allocator, never ctx.stack, so callers need no sp store or stack refresh.
+export fn jitRetainSlot(value_ptr: usize) callconv(.c) i32 {
+    const v: *const Value = @ptrFromInt(value_ptr);
+    container_backing.retainValue(v.*);
+    return 0;
+}
+
+/// Release the refcounted backing of the Value at a physical stack slot.
+/// Emitted where compiled code discards a `.raw_at_slot` entry that no
+/// native consumes (drop, the `if` condition). Mirror of jitRetainSlot.
+export fn jitReleaseSlot(value_ptr: usize) callconv(.c) i32 {
+    const v: *const Value = @ptrFromInt(value_ptr);
+    container_backing.releaseValue(v.*);
+    return 0;
+}
+
 export fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);

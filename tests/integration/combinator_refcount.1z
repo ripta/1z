@@ -1,0 +1,37 @@
+use "testing" ;
+
+\ Refcount correctness for refcounted container operands flowing through
+\ compiled combinators. Under --compile=eager these word bodies are JIT
+\ compiled, so the generated code must retain on duplication and release on
+\ discard exactly as the interpreter does. Run under both interpreter and
+\ eager modes; the real check is zero leaks / no use-after-free at shutdown.
+
+\ choose with refcounted container operands, compiled inline.
+test-choose-containers: ( -- ) [
+  V{ 1 2 3 } V{ 9 } [ #len swap #len swap > ] choose
+  #len 3 "choose keeps the longer vector" assert=
+] ;
+
+\ tail-recursive word carrying a container argument across iterations.
+drain: ( vec n -- vec ) [
+  dup 0 = [
+    drop
+  ] [
+    1 - drain
+  ] if
+] ;
+
+test-tail-recursion-container: ( -- ) [
+  V{ 1 2 3 } 5 drain
+  #len 3 "tail recursion preserves container arg" assert=
+] ;
+
+\ keep with a container operand.
+test-keep-container: ( -- ) [
+  V{ 1 2 3 } [ #len ] keep
+  #len = "keep preserves the vector" assert-true
+] ;
+
+test-choose-containers
+test-tail-recursion-container
+test-keep-container

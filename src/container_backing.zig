@@ -210,6 +210,38 @@ pub fn releaseIteratorBacking(it: *Iterator) void {
     }
 }
 
+/// Whether `retainValue`/`releaseValue` would touch a refcounted backing for
+/// this value, directly or through a composite. Used at codegen time to decide
+/// whether a `push_literal` needs a paired retain emission: scalars and
+/// backing-free composites skip it. Mirrors the recursion of `retainValue`;
+/// `.iterator` is treated conservatively as carrying a backing.
+pub fn valueCarriesBacking(v: Value) bool {
+    return switch (v) {
+        .vector, .mutable_map => true,
+        .array => |items| valuesCarryBacking(items),
+        .hash => |h| blk: {
+            var iter = h.iterator();
+            while (iter.next()) |entry| {
+                if (valueCarriesBacking(entry.value_ptr.*)) break :blk true;
+            }
+            break :blk false;
+        },
+        .set => |s| valuesCarryBacking(s.keys()),
+        .tagged => |t| valueCarriesBacking(t.inner.*),
+        .struct_instance => |si| valuesCarryBacking(si.fields),
+        .error_value => |err| if (err.data) |data| valueCarriesBacking(data.*) else false,
+        .iterator => true,
+        else => false,
+    };
+}
+
+fn valuesCarryBacking(items: []const Value) bool {
+    for (items) |item| {
+        if (valueCarriesBacking(item)) return true;
+    }
+    return false;
+}
+
 /// Retain every value in a slice. Used by container builders that copy a
 /// source's elements into a freshly created vector: a value stored in a
 /// vector's backing list is an owning reference, so each copied element must

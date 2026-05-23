@@ -1,0 +1,10 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: choose keeps the longer vector
+Stack: [ ]
+PASS: tail recursion preserves container arg
+Stack: [ ]
+PASS: keep preserves the vector
+Stack: [ ]

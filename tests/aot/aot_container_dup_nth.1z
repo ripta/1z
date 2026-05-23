@@ -1,0 +1,13 @@
+\ A refcounted vector flows through a compiled word that duplicates the
+\ operand slot (dup -> retain), then consumes both copies via native
+\ sequence ops (#len, #nth -> native release). Under runtime-image AOT the
+\ word body is compiled, so the generated code must retain on duplication
+\ and let the natives release, matching interpreter behavior. The check is
+\ that the AOT binary reproduces the interpreter's arithmetic result without
+\ a use-after-free.
+
+vec-probe: ( v -- n ) [
+  dup #len swap 0 #nth +
+] ;
+
+V{ 10 20 30 } vec-probe .

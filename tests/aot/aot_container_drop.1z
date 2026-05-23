@@ -1,0 +1,12 @@
+\ A refcounted mutable map flows through a compiled word that duplicates the
+\ operand slot (dup -> retain) and later discards the duplicate (drop ->
+\ release). Under runtime-image AOT the word body is compiled, so the
+\ generated code must release the dropped slot exactly as the interpreter
+\ does. The check is that the AOT binary reproduces the interpreter result
+\ without leaking or double-freeing the backing.
+
+map-probe: ( m -- n ) [
+  dup a: @get swap drop
+] ;
+
+M{ a: 1 b: 2 } map-probe .
