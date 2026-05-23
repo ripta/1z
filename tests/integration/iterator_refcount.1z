@@ -1,0 +1,90 @@
+use "testing" ;
+
+\ These tests drive every iterator consumer over sequences whose elements are
+\ refcounted containers (V{} and M{}). Correctness is asserted below, but the
+\ real check is the zero-leak verification at interpreter shutdown: each kind of
+\ Iterator.next yield must be released exactly once by its consumer.
+
+\ -- #collect over container elements --
+
+test-collect-vectors: ( -- ) [
+  { V{ 1 2 } V{ 3 4 5 } } >iterator #collect
+  dup #len 2 "collect keeps both vectors" assert=
+  0 #nth #len 2 "first collected vector length" assert=
+] ;
+
+\ -- #count over container elements --
+
+test-count-maps: ( -- ) [
+  { M{ a: 1 } M{ b: 2 } M{ c: 3 } } >iterator #count
+  3 "count over maps" assert=
+] ;
+
+\ -- #each over container elements --
+
+test-each-vectors: ( -- ) [
+  0 { V{ 1 } V{ 2 3 } V{ 4 5 6 } } >iterator [ #len + ] #each
+  6 "each sums inner vector lengths" assert=
+] ;
+
+\ -- #reduce over container elements --
+
+test-reduce-vectors: ( -- ) [
+  { V{ 1 } V{ 2 3 } } >iterator 0 [ #len + ] #reduce
+  3 "reduce sums inner vector lengths" assert=
+] ;
+
+\ -- #map producing fresh containers, then #collect --
+
+test-map-fresh-containers: ( -- ) [
+  { 1 2 3 } [ V{ } swap #push! ] #map #collect
+  dup #len 3 "map produced three vectors" assert=
+  0 #nth #len 1 "each mapped vector has one element" assert=
+] ;
+
+\ -- #filter rejecting container elements --
+
+test-filter-vectors: ( -- ) [
+  { V{ 1 } V{ 1 2 } V{ 1 2 3 } } >iterator [ #len 1 > ] #filter #collect
+  #len 2 "filter keeps vectors longer than one" assert=
+] ;
+
+\ -- #take over fresh map-produced containers --
+
+test-take-map: ( -- ) [
+  { 1 2 3 4 } [ V{ } swap #push! ] #map 2 #take #collect
+  #len 2 "take two from mapped containers" assert=
+] ;
+
+\ -- #drop over fresh map-produced containers --
+
+test-drop-map: ( -- ) [
+  { 1 2 3 4 } [ V{ } swap #push! ] #map 2 #drop #collect
+  #len 2 "drop two from mapped containers" assert=
+] ;
+
+\ -- #next? on an iterator of containers --
+
+test-next-vectors: ( -- ) [
+  { V{ 1 2 } V{ 3 } } >iterator
+  #next #len 2 "first next yields a two-element vector" assert=
+] ;
+
+\ -- #sort-by over container elements (collectToMutableArray path) --
+
+test-sort-by-vectors: ( -- ) [
+  { V{ 1 2 3 } V{ 1 } V{ 1 2 } } [ #len ] #sort-by
+  dup 0 #nth #len 1 "sort-by orders by inner length, smallest first" assert=
+  2 #nth #len 3 "sort-by largest last" assert=
+] ;
+
+test-collect-vectors
+test-count-maps
+test-each-vectors
+test-reduce-vectors
+test-map-fresh-containers
+test-filter-vectors
+test-take-map
+test-drop-map
+test-next-vectors
+test-sort-by-vectors

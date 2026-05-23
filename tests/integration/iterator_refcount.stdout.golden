@@ -1,0 +1,33 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: collect keeps both vectors
+PASS: first collected vector length
+Stack: [ ]
+PASS: count over maps
+Stack: [ ]
+PASS: each sums inner vector lengths
+Stack: [ ]
+PASS: reduce sums inner vector lengths
+Stack: [ ]
+PASS: map produced three vectors
+PASS: each mapped vector has one element
+Stack: [ ]
+PASS: filter keeps vectors longer than one
+Stack: [ ]
+PASS: take two from mapped containers
+Stack: [ ]
+PASS: drop two from mapped containers
+Stack: [ ]
+PASS: first next yields a two-element vector
+Stack: [ ]
+PASS: sort-by orders by inner length, smallest first
+PASS: sort-by largest last
+Stack: [ ]

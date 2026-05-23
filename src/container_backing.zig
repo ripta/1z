@@ -175,6 +175,13 @@ pub fn releaseValue(v: Value) void {
 ///
 /// `callback` captures only quotations whose container literals are tracked by the per-arena release
 /// list, so both are no-ops.
+///
+/// This backing ownership is distinct from the per-element ownership that `Iterator.next` hands out,
+/// where `next` yields an owning reference for every iterator kind, which the consumer releases once
+/// it has consumed the value.
+///
+/// The backing retained here keeps the source elements alive for the iterator's lifetime; the
+/// per-yield retain is balanced separately by the consumer.
 pub fn retainIteratorBacking(it: *Iterator) void {
     switch (it.kind) {
         .array => |ai| retainValues(ai.items),

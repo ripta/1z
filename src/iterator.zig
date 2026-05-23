@@ -3,6 +3,7 @@ const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
 const Context = @import("context.zig").Context;
+const container_backing = @import("container_backing.zig");
 
 pub const Iterator = struct {
     kind: Kind,
@@ -102,6 +103,10 @@ pub const ArrayIter = struct {
         if (self.index >= self.items.len) return null;
         const val = self.items[self.index];
         self.index += 1;
+        // A leaf array iterator hands out an owning reference: the element also
+        // lives in the iterator's backing, so retain it so the consumer's
+        // release balances against this yield rather than the backing.
+        container_backing.retainValue(val);
         return val;
     }
 };
@@ -135,6 +140,9 @@ pub const MapIter = struct {
 
     pub fn next(self: *MapIter, ctx: *Context) anyerror!?Value {
         const elem = try self.inner.next(ctx) orelse return null;
+        // The inner element is owned; the quotation output we return is a
+        // separate owned reference, so release the consumed input here.
+        defer container_backing.releaseValue(elem);
         try ctx.stack.push(elem);
         try ctx.executeQuotationWithFrame(self.quotation);
         return try ctx.stack.pop();
@@ -151,7 +159,10 @@ pub const FilterIter = struct {
             try ctx.executeQuotationWithFrame(self.quotation);
             const result = try ctx.stack.pop();
             const keep = result != .boolean or result.boolean;
+            // The inner element is owned. Keeping forwards that ownership to the
+            // consumer; rejecting drops it here.
             if (keep) return elem;
+            container_backing.releaseValue(elem);
         }
         return null;
     }
@@ -175,7 +186,9 @@ pub const DropIter = struct {
     pub fn next(self: *DropIter, ctx: *Context) anyerror!?Value {
         while (self.to_skip > 0) {
             self.to_skip -= 1;
-            _ = try self.inner.next(ctx) orelse return null;
+            // Skipped elements are owned yields; drop them rather than leak.
+            const skipped = try self.inner.next(ctx) orelse return null;
+            container_backing.releaseValue(skipped);
         }
         return try self.inner.next(ctx);
     }
@@ -266,4 +279,25 @@ test "RangeIter empty when start equals end" {
 test "RangeIter kindName returns range" {
     const iter = Iterator{ .kind = .{ .range = .{ .current = 0, .end = 10, .step = 1, .infinite = false } } };
     try std.testing.expectEqualStrings("range", iter.kindName());
+}
+
+test "ArrayIter yields an owned reference for refcounted elements" {
+    const Vector = value_mod.Vector;
+    const vec = try Vector.create(std.testing.allocator);
+    // Creation leaves refcount=1; the backing slice below is that one owner.
+    const items = [_]Value{.{ .vector = vec }};
+    var it = ArrayIter{ .items = &items, .index = 0 };
+
+    const yielded = it.next().?;
+    // next retains, so the consumer holds a second owning reference.
+    try std.testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    // The consumer releases its owned yield.
+    container_backing.releaseValue(yielded);
+    try std.testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    try std.testing.expect(it.next() == null);
+
+    // Release the backing's reference; last drop destroys the vector.
+    container_backing.releaseValue(.{ .vector = vec });
 }

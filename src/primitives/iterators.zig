@@ -11,6 +11,7 @@ const CallbackIter = iter_mod.CallbackIter;
 const RangeIter = iter_mod.RangeIter;
 const sequence = @import("sequence.zig");
 const unwrapBaseType = @import("../dispatch.zig").unwrapBaseType;
+const container_backing = @import("../container_backing.zig");
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">iterator", .func = nativeToIterator, .stack_effect = "seq -- iterator" },
@@ -39,11 +40,19 @@ pub const primitives = [_]Primitive{
 /// >iterator ( seq -- iterator )
 pub fn nativeToIterator(ctx: *Context) anyerror!void {
     const raw_val = try ctx.stack.pop();
+    // The materialized backing co-owns the source's elements, so the source
+    // can be released once the iterator is built. An array source shares its
+    // slice directly; releasing it pairs with the iterator's backing retain.
+    defer container_backing.releaseValue(raw_val);
     const alloc = ctx.quotationAllocator();
     const val = unwrapBaseType(raw_val);
     const items: []const Value = switch (val) {
         .array => |arr| arr,
-        .string, .vector, .byte_array, .set => sequence.sequenceToValues(val, alloc) catch return error.OutOfMemory,
+        .string, .vector, .byte_array, .set => blk: {
+            const copied = sequence.sequenceToValues(val, alloc) catch return error.OutOfMemory;
+            container_backing.retainValues(copied);
+            break :blk copied;
+        },
         else => {
             helpers.setTypeMismatchError(ctx, "sequence", raw_val);
             return error.TypeMismatch;
@@ -57,10 +66,14 @@ pub fn nativeToIterator(ctx: *Context) anyerror!void {
 /// #next ( iterator -- value )
 pub fn nativeNext(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    // The popped slot owned the iterator backing; release it on exit.
+    defer container_backing.releaseValue(val);
     switch (val) {
         .iterator => |iter| {
             if (try iter.next(ctx)) |elem| {
                 try ctx.stack.push(elem);
+                // push retained the result; drop the yield's owning reference.
+                container_backing.releaseValue(elem);
             } else {
                 ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "iterator-exhausted",
@@ -79,6 +92,7 @@ pub fn nativeNext(ctx: *Context) anyerror!void {
 /// #collect ( iterator -- array )
 pub fn nativeCollect(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .iterator => |iter| {
             const alloc = ctx.quotationAllocator();
@@ -88,6 +102,9 @@ pub fn nativeCollect(ctx: *Context) anyerror!void {
             }
             const items = list.toOwnedSlice(alloc) catch return error.OutOfMemory;
             try ctx.stack.push(.{ .array = items });
+            // push retained the result array's elements; drop the owning
+            // references the iterator yields handed us.
+            container_backing.releaseValues(items);
         },
         else => {
             helpers.setTypeMismatchError(ctx, "iterator", val);
@@ -99,10 +116,12 @@ pub fn nativeCollect(ctx: *Context) anyerror!void {
 /// #count ( iterator -- n )
 pub fn nativeCount(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .iterator => |iter| {
             var count: i64 = 0;
-            while (try iter.next(ctx)) |_| {
+            while (try iter.next(ctx)) |elem| {
+                container_backing.releaseValue(elem);
                 count += 1;
             }
             try ctx.stack.push(.{ .fixnum = count });

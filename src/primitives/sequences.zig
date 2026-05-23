@@ -60,12 +60,18 @@ const arithmetic = @import("arithmetic.zig");
 const container_backing = @import("../container_backing.zig");
 
 /// Materialize any iterable to a mutable []Value for in-place sorting.
+///
+/// The returned slice owns one reference per element: array and sequence
+/// sources retain their copied elements, and the iterator source forwards the
+/// owned references its `next` already yields. The caller owns the slice and
+/// must release each element once (typically after pushing the result array).
 fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Value {
     const seq = unwrapBaseType(in_seq);
     switch (seq) {
         .array => |arr| {
             const result = alloc.alloc(Value, arr.len) catch return error.OutOfMemory;
             @memcpy(result, arr);
+            container_backing.retainValues(result);
             return result;
         },
         .iterator => |iter| {
@@ -75,7 +81,11 @@ fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Valu
             }
             return list.items;
         },
-        .string, .vector, .byte_array, .set => return try sequenceToValues(seq, alloc),
+        .string, .vector, .byte_array, .set => {
+            const result = try sequenceToValues(seq, alloc);
+            container_backing.retainValues(result);
+            return result;
+        },
         else => {
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
@@ -116,12 +126,12 @@ fn nativeSort(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
+    // collectToMutableArray hands back owned elements; pushing the result array
+    // retains them again, so release our owning references afterwards.
     const items = try collectToMutableArray(seq, ctx, alloc);
-    // The result array becomes a fresh owner of each element; retain before the
-    // source container is released on scope exit.
-    container_backing.retainValues(items);
     if (items.len <= 1) {
         try ctx.stack.push(.{ .array = items });
+        container_backing.releaseValues(items);
         return;
     }
 
@@ -131,8 +141,12 @@ fn nativeSort(ctx: *Context) anyerror!void {
         .err = null,
     };
     std.mem.sort(Value, items, &sort_ctx, sortCompareFn);
-    if (sort_ctx.err) |e| return e;
+    if (sort_ctx.err) |e| {
+        container_backing.releaseValues(items);
+        return e;
+    }
     try ctx.stack.push(.{ .array = items });
+    container_backing.releaseValues(items);
 }
 
 const SortByContext = struct {
@@ -191,12 +205,12 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
+    // collectToMutableArray hands back owned elements; the result array retains
+    // them again on push, so release our owning references afterwards.
     const items = try collectToMutableArray(seq, ctx, alloc);
-    // The result array becomes a fresh owner of each element; retain before the
-    // source container is released on scope exit.
-    container_backing.retainValues(items);
     if (items.len == 0) {
         try ctx.stack.push(.{ .array = items });
+        container_backing.releaseValues(items);
         return;
     }
 
@@ -222,6 +236,8 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
         if (e == error.NotComparable) {
             setErrorContext(ctx, "keys are not comparable", .{});
         }
+        container_backing.releaseValues(keys);
+        container_backing.releaseValues(items);
         return e;
     }
 
@@ -230,6 +246,10 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
         result[dst_idx] = items[src_idx];
     }
     try ctx.stack.push(.{ .array = result });
+    // The keys are owned quotation outputs; drop them, and drop our ownership of
+    // items now that the pushed result array holds the elements.
+    container_backing.releaseValues(keys);
+    container_backing.releaseValues(items);
 }
 
 const SequenceIterator = sequence.SequenceIterator;
@@ -744,6 +764,9 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
         while (try seq.iterator.next(ctx)) |elem| {
             try ctx.stack.push(elem);
             try ctx.executeQuotationWithFrame(quot);
+            // The iterator yield is owned; the quotation consumed the pushed
+            // copy, so drop the yield's reference here.
+            container_backing.releaseValue(elem);
         }
         return;
     }
@@ -772,6 +795,7 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
             try ctx.stack.push(elem);
             try ctx.stack.push(.{ .fixnum = idx });
             try ctx.executeQuotationWithFrame(quot);
+            container_backing.releaseValue(elem);
             idx += 1;
         }
         return;
@@ -853,9 +877,15 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
             try ctx.stack.push(acc);
             try ctx.stack.push(elem);
             try ctx.executeQuotationWithFrame(quot);
-            acc = try ctx.stack.pop();
+            const new_acc = try ctx.stack.pop();
+            // The quotation consumed the pushed copies; drop the owning
+            // references held by our locals before adopting the new accumulator.
+            container_backing.releaseValue(acc);
+            container_backing.releaseValue(elem);
+            acc = new_acc;
         }
         try ctx.stack.push(acc);
+        container_backing.releaseValue(acc);
         return;
     }
 
@@ -867,9 +897,14 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
         try ctx.stack.push(acc);
         try ctx.stack.push(elem);
         try ctx.executeQuotationWithFrame(quot);
-        acc = try ctx.stack.pop();
+        const new_acc = try ctx.stack.pop();
+        // SequenceIterator yields borrowed elements, so only the accumulator's
+        // owning reference is dropped here.
+        container_backing.releaseValue(acc);
+        acc = new_acc;
     }
     try ctx.stack.push(acc);
+    container_backing.releaseValue(acc);
 }
 
 /// #reduce-index ( seq init quot -- result ) - Fold sequence with accumulator and zero-based index
@@ -888,10 +923,14 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
             try ctx.stack.push(elem);
             try ctx.stack.push(.{ .fixnum = idx });
             try ctx.executeQuotationWithFrame(quot);
-            acc = try ctx.stack.pop();
+            const new_acc = try ctx.stack.pop();
+            container_backing.releaseValue(acc);
+            container_backing.releaseValue(elem);
+            acc = new_acc;
             idx += 1;
         }
         try ctx.stack.push(acc);
+        container_backing.releaseValue(acc);
         return;
     }
 
@@ -904,10 +943,13 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
         try ctx.stack.push(elem);
         try ctx.stack.push(.{ .fixnum = idx });
         try ctx.executeQuotationWithFrame(quot);
-        acc = try ctx.stack.pop();
+        const new_acc = try ctx.stack.pop();
+        container_backing.releaseValue(acc);
+        acc = new_acc;
         idx += 1;
     }
     try ctx.stack.push(acc);
+    container_backing.releaseValue(acc);
 }
 
 /// #slice ( seq start end -- subseq ) - Extract subsequence [start, end)
