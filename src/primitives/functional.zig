@@ -12,6 +12,7 @@ const BenchmarkReportHandle = @import("../benchmark_report.zig").BenchmarkReport
 
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
+const container_backing = @import("../container_backing.zig");
 
 const popQuotation = helpers.popQuotation;
 const popString = helpers.popString;
@@ -38,11 +39,18 @@ pub fn nativeCurry(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const new_instrs = try alloc.alloc(Instruction, 1 + quot.instructions.len);
 
-    // First instruction: push the value x
+    // First instruction: push the value x.
+    // x came from a pop (transfer); embedding here is also a transfer,
+    // no retain needed.
     new_instrs[0] = .{ .op = .{ .push_literal = x }, .line = 0 };
 
-    // Copy original quotation instructions
+    // Copy original quotation instructions. Container literals shared
+    // with the source quotation gain a second owner (this new slice
+    // will also be registered for release at teardown), so retain each.
     @memcpy(new_instrs[1..], quot.instructions);
+    container_backing.retainInstructionsContainerLiterals(new_instrs[1..]);
+
+    try ctx.registerQuotationContainerLiterals(new_instrs);
 
     // Curried quotation has no effect - effect validation happens at parameter attachment time
     try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });
@@ -58,9 +66,14 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const new_instrs = try alloc.alloc(Instruction, quot1.instructions.len + quot2.instructions.len);
 
-    // Copy quot1 then quot2
+    // Copy quot1 then quot2; container literals shared with the source
+    // quotations gain a second owner under this new registration, so
+    // retain each copied literal.
     @memcpy(new_instrs[0..quot1.instructions.len], quot1.instructions);
     @memcpy(new_instrs[quot1.instructions.len..], quot2.instructions);
+    container_backing.retainInstructionsContainerLiterals(new_instrs);
+
+    try ctx.registerQuotationContainerLiterals(new_instrs);
 
     // Composed quotation has no effect - effect validation happens at parameter attachment time
     try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });

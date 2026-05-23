@@ -51,6 +51,7 @@ fn seqToArrayIter(seq: Value, alloc: Allocator) !?*Iterator {
 }
 
 const arithmetic = @import("arithmetic.zig");
+const container_backing = @import("../container_backing.zig");
 
 /// Materialize any iterable to a mutable []Value for in-place sorting.
 fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Value {
@@ -620,6 +621,8 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
                 return error.IndexOutOfBounds;
             }
             if (ctx.parent_context != null) value = tasks.deepCopyValue(value, ctx.containerAllocator()) catch return error.OutOfMemory;
+            container_backing.releaseValue(v.items[idx]);
+            container_backing.retainValue(value);
             v.items[idx] = value;
             try ctx.stack.push(.{ .vector = v });
         },
@@ -1519,6 +1522,7 @@ fn nativePushMut(ctx: *Context) anyerror!void {
 
     const alloc = ctx.containerAllocator();
     if (ctx.parent_context != null) elem = tasks.deepCopyValue(elem, alloc) catch return error.OutOfMemory;
+    container_backing.retainValue(elem);
     vec.append(alloc, elem) catch return error.OutOfMemory;
     try ctx.stack.push(.{ .vector = vec });
 }
@@ -1558,6 +1562,9 @@ fn nativePopMut(ctx: *Context) anyerror!void {
     }
 
     const elem = vec.pop().?;
+    // The vector slot is gone; release its owning reference. The
+    // subsequent `push` re-establishes ownership for the new stack slot.
+    container_backing.releaseValue(elem);
     try ctx.stack.push(.{ .vector = vec });
     try ctx.stack.push(elem);
 }
@@ -1595,6 +1602,7 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
     const alloc = ctx.containerAllocator();
 
     if (ctx.parent_context != null) elem = tasks.deepCopyValue(elem, alloc) catch return error.OutOfMemory;
+    container_backing.retainValue(elem);
     vec.insert(alloc, 0, elem) catch return error.OutOfMemory;
     try ctx.stack.push(.{ .vector = vec });
 }
@@ -1634,6 +1642,9 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
     }
 
     const elem = vec.orderedRemove(0);
+    // The vector slot is gone; release its owning reference. The
+    // subsequent `push` re-establishes ownership for the new stack slot.
+    container_backing.releaseValue(elem);
     try ctx.stack.push(.{ .vector = vec });
     try ctx.stack.push(elem);
 }

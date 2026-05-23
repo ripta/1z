@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 
 const Stack = @import("stack.zig").Stack;
 const Dictionary = @import("dictionary.zig").Dictionary;
+const container_backing = @import("container_backing.zig");
 
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
@@ -247,6 +248,13 @@ pub const Context = struct {
     /// context and shared by pointer to all child task contexts so that
     /// container allocations outlive any individual task's arena.
     container_arena: *std.heap.ArenaAllocator,
+    /// Instruction slices belonging to quotations the parser or `curry`
+    /// allocated on this context's `arena`, recorded so the captured
+    /// container literals can be released before the arena tears down.
+    /// Only quotations whose body contains at least one container
+    /// `push_literal` are recorded; the scan happens once at
+    /// construction.
+    container_release_list: std.ArrayListUnmanaged([]const Instruction) = .{},
     allocator: Allocator,
     call_stack: std.ArrayListUnmanaged(CallFrame),
     error_details: std.ArrayListUnmanaged(ErrorDetail),
@@ -902,14 +910,25 @@ pub const Context = struct {
         // and task error_obj boxes are all arena-allocated; they are
         // reclaimed by arena.deinit.
         self.thrown_error = null;
+
+        // Drop owning references in lifecycle order: residual stack
+        // slots first, then captured container literals in word bodies
+        // (dictionary) and arena-owned quotations. All releases must
+        // happen before the arena that owns the quotation instructions
+        // is torn down.
+        self.stack.clear();
+        self.dictionary.walkContainerReleaseList();
+        self.walkContainerReleaseList();
+        self.container_release_list.deinit(self.allocator);
+
         self.arena.deinit();
+        self.dictionary.deinit();
         if (self.parent_context == null) {
             self.allocator.destroy(self.lock_order_tracker);
             self.allocator.destroy(self.shared_lock);
             self.container_arena.deinit();
             self.allocator.destroy(self.container_arena);
         }
-        self.dictionary.deinit();
         self.stack.deinit();
     }
 
@@ -922,6 +941,27 @@ pub const Context = struct {
     /// task contexts so that container data outlives any individual task's arena.
     pub fn containerAllocator(self: *Context) Allocator {
         return self.container_arena.allocator();
+    }
+
+    /// If `instructions` contains any container-variant `push_literal`,
+    /// record the slice on this context's release list. The walk at
+    /// `deinit` invokes `releaseInstructionsContainerLiterals` on every
+    /// recorded slice before the arena that owns the instructions is
+    /// torn down, keeping captured container backings alive until the
+    /// quotation that captured them is freed.
+    pub fn registerQuotationContainerLiterals(self: *Context, instructions: []const Instruction) !void {
+        if (!container_backing.instructionsHaveContainerLiteral(instructions)) return;
+        try self.container_release_list.append(self.allocator, instructions);
+    }
+
+    /// Release the container literals captured by every quotation
+    /// registered on this context. Idempotent across calls because the
+    /// list is cleared after walking.
+    pub fn walkContainerReleaseList(self: *Context) void {
+        for (self.container_release_list.items) |instrs| {
+            container_backing.releaseInstructionsContainerLiterals(instrs);
+        }
+        self.container_release_list.clearRetainingCapacity();
     }
 
     /// Clear all error details and call stack.
@@ -1289,6 +1329,14 @@ pub const Context = struct {
             try self.local_frames.items[top_index].put(self.allocator, name, def);
         } else {
             try self.dictionary.put(name, def);
+        }
+
+        // Compound bodies that capture container literals must be
+        // tracked so the captured backings can be released when the
+        // dictionary tears down.
+        switch (def.action) {
+            .compound => |instrs| try self.dictionary.registerCompoundBody(instrs),
+            .native, .host_callback => {},
         }
     }
 
@@ -4304,6 +4352,49 @@ test "quotation allocator frees on deinit" {
         .name = "test-word",
         .action = .{ .compound = instrs },
     });
+}
+
+test "registerQuotationContainerLiterals: skips scalar-only quotations" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const instrs = try ctx.quotationAllocator().alloc(Instruction, 2);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "drop" }, .line = 0 };
+
+    try ctx.registerQuotationContainerLiterals(instrs);
+    try std.testing.expectEqual(@as(usize, 0), ctx.container_release_list.items.len);
+}
+
+test "registerQuotationContainerLiterals: records quotations with container literals" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var dummy_vec: value_mod.Vector = .{};
+    const instrs = try ctx.quotationAllocator().alloc(Instruction, 2);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 };
+
+    try ctx.registerQuotationContainerLiterals(instrs);
+    try ctx.registerQuotationContainerLiterals(instrs);
+    try std.testing.expectEqual(@as(usize, 2), ctx.container_release_list.items.len);
+
+    ctx.walkContainerReleaseList();
+    try std.testing.expectEqual(@as(usize, 0), ctx.container_release_list.items.len);
+}
+
+test "Context.deinit walks release list before arena teardown" {
+    // The release helpers are no-op stubs, so this test asserts the
+    // wiring does not crash and the testing allocator does not flag a
+    // leak through the release-list storage itself.
+    var ctx = Context.init(std.testing.allocator);
+
+    var dummy_vec: value_mod.Vector = .{};
+    const instrs = try ctx.quotationAllocator().alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 };
+    try ctx.registerQuotationContainerLiterals(instrs);
+
+    ctx.deinit();
 }
 
 test "call stack captured on error, calling an unknown word" {

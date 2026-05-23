@@ -304,7 +304,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 const next_val = try ctx.stack.peek();
                 switch (next_val) {
                     .doc_string => {
-                        _ = try ctx.stack.pop();
+                        try ctx.stack.popAndRelease();
                         has_doc = true;
                     },
                     .symbol => break,
@@ -353,11 +353,11 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     const next_val = try ctx.stack.peek();
                     switch (next_val) {
                         .marker => |mk| {
-                            _ = try ctx.stack.pop();
+                            try ctx.stack.popAndRelease();
                             try collected_markers.append(alloc, mk);
                         },
                         .doc_string => |d| {
-                            _ = try ctx.stack.pop();
+                            try ctx.stack.popAndRelease();
                             if (captured_doc == null) captured_doc = d;
                         },
                         .symbol => break,
@@ -413,11 +413,11 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     const next_val = try ctx.stack.peek();
                     switch (next_val) {
                         .marker => |mk| {
-                            _ = try ctx.stack.pop();
+                            try ctx.stack.popAndRelease();
                             try collected_markers.append(alloc, mk);
                         },
                         .doc_string => |d| {
-                            _ = try ctx.stack.pop();
+                            try ctx.stack.popAndRelease();
                             doc_val = d;
                         },
                         .symbol => break,

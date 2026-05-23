@@ -575,7 +575,7 @@ test "tryDispatchGenericWithPic hits cache on matching types" {
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 2 });
     _ = try tryDispatchGenericById(&ctx, dispatch_id, &cache);
-    _ = try ctx.stack.pop();
+    try ctx.stack.popAndRelease();
 
     // Second call: should hit cache (same types)
     try ctx.stack.push(.{ .fixnum = 10 });
@@ -607,7 +607,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 2 });
     _ = try tryDispatchGenericById(&ctx, add_id, &cache);
-    _ = try ctx.stack.pop();
+    try ctx.stack.popAndRelease();
 
     const gen_before = cache.generation;
 

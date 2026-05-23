@@ -737,7 +737,7 @@ pub fn nativeInnerEq(ctx: *Context) anyerror!void {
 pub fn nativeLt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "<")) return;
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .lt)) return;
-    _ = try ctx.stack.pop();
+    try ctx.stack.popAndRelease();
     const a = try ctx.stack.pop();
     helpers.setTypeMismatchError(ctx, "fixnum or float", a);
     return error.TypeMismatch;
@@ -747,7 +747,7 @@ pub fn nativeLt(ctx: *Context) anyerror!void {
 pub fn nativeGt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, ">")) return;
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .gt)) return;
-    _ = try ctx.stack.pop();
+    try ctx.stack.popAndRelease();
     const a = try ctx.stack.pop();
     helpers.setTypeMismatchError(ctx, "fixnum or float", a);
     return error.TypeMismatch;

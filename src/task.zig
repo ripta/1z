@@ -1,4 +1,5 @@
 const std = @import("std");
+const container_backing = @import("container_backing.zig");
 const Allocator = std.mem.Allocator;
 const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
@@ -138,6 +139,7 @@ pub fn publishTaskResult(task: *Task) void {
         const result = task.ctx.stack.pop() catch null;
         if (result) |val| {
             if (value_mod.valueContainsBorrowedBuffer(val)) {
+                container_backing.releaseValue(val);
                 task.error_obj = value_mod.boxErrorObject(task.ctx.quotationAllocator(), .{
                     .error_type = "borrowed-buffer-escape",
                     .message = "borrowed buffer cannot cross task boundary via task result; call >byte-array first",
@@ -146,10 +148,25 @@ pub fn publishTaskResult(task: *Task) void {
                 task.setStatus(.failed);
                 return;
             }
+            // The `task.result` slot is a new owning reference. The pop
+            // transferred ownership to the C local; storing here re-roots
+            // ownership in the task. No extra retain needed: the original
+            // stack-slot ownership transfers into `task.result`.
             task.result = val;
         }
     }
     task.setStatus(.completed);
+}
+
+/// Release the owning reference held by `task.result`. Call when
+/// finalizing a task whose result was set (or could have been set) so
+/// the slot is properly accounted for. Idempotent: nulls the slot
+/// after releasing.
+pub fn releaseTaskResult(task: *Task) void {
+    if (task.result) |val| {
+        container_backing.releaseValue(val);
+        task.result = null;
+    }
 }
 
 /// TaskScope tracks children and completion for structured concurrency.

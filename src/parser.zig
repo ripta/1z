@@ -536,6 +536,9 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
         const column = tok.column;
         if (std.mem.eql(u8, token, close_delim)) {
             const instrs = instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+            if (ctx) |c| {
+                c.registerQuotationContainerLiterals(instrs) catch return ParseError.OutOfMemory;
+            }
             return Quotation{ .instructions = instrs, .effect = quotation_effect };
         } else if (std.mem.eql(u8, token, "[")) {
             is_first_token = false;

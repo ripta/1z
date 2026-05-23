@@ -3,6 +3,7 @@ const Context = @import("../context.zig").Context;
 const Value = @import("../value.zig").Value;
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
+const container_backing = @import("../container_backing.zig");
 
 const popQuotation = helpers.popQuotation;
 
@@ -30,31 +31,39 @@ pub fn nativeDup(ctx: *Context) anyerror!void {
 
 /// drop ( a -- ) - Remove top of stack
 pub fn nativeDrop(ctx: *Context) anyerror!void {
-    _ = try ctx.stack.pop();
+    try ctx.stack.popAndRelease();
 }
 
 /// swap ( a b -- b a ) - Swap top two items
 pub fn nativeSwap(ctx: *Context) anyerror!void {
-    const b = try ctx.stack.pop();
-    const a = try ctx.stack.pop();
-    try ctx.stack.push(b);
-    try ctx.stack.push(a);
+    const len = ctx.stack.items.items.len;
+    if (len < 2) return error.StackUnderflow;
+    const top = ctx.stack.items.items[len - 1];
+    ctx.stack.items.items[len - 1] = ctx.stack.items.items[len - 2];
+    ctx.stack.items.items[len - 2] = top;
 }
 
 /// over ( x y -- x y x ) - Copy second item to top
 pub fn nativeOver(ctx: *Context) anyerror!void {
-    const y = try ctx.stack.pop();
-    const x = try ctx.stack.peek();
-    try ctx.stack.push(y);
-    try ctx.stack.push(x);
+    const len = ctx.stack.items.items.len;
+    if (len < 2) return error.StackUnderflow;
+    const x = ctx.stack.items.items[len - 2];
+    // The copied value becomes a second owning slot; retain explicitly
+    // and use the move variant to avoid double-retain via `push`.
+    container_backing.retainValue(x);
+    try ctx.stack.pushMoved(x);
 }
 
 /// dip ( x quot -- x ) - Execute quotation with x temporarily removed
 pub fn nativeDip(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const x = try ctx.stack.pop();
+    // x was transferred to this C local by `pop`. The body may push or
+    // throw; either way we must re-establish a stack slot for x on the
+    // success path. On error the C local is forfeit, so release it.
+    errdefer container_backing.releaseValue(x);
     try ctx.executeQuotationWithFrame(quot);
-    try ctx.stack.push(x);
+    try ctx.stack.pushMoved(x);
 }
 
 /// wipe ( ... -- ) - Clear the entire stack
@@ -144,10 +153,12 @@ fn nativeDropN(ctx: *Context) anyerror!void {
     if (n < 0) return error.StackUnderflow;
 
     const count: usize = @intCast(n);
-    if (count > ctx.stack.items.items.len) return error.StackUnderflow;
+    const len = ctx.stack.items.items.len;
+    if (count > len) return error.StackUnderflow;
     if (count == 0) return;
 
-    ctx.stack.items.shrinkRetainingCapacity(ctx.stack.items.items.len - count);
+    ctx.stack.releaseRange(len - count, len);
+    ctx.stack.items.shrinkRetainingCapacity(len - count);
 }
 
 /// nip-n ( ...x1..xn y n -- y ) - Drop n items beneath the top value.
@@ -162,6 +173,11 @@ fn nativeNipN(ctx: *Context) anyerror!void {
 
     const new_len = len - count;
     const top = ctx.stack.items.items[len - 1];
+    // Drop the count slots immediately beneath the top, releasing each
+    // before overwriting `top`'s position. The slot that holds `top`
+    // after the move still owns the same value, so no extra
+    // retain/release for it.
+    ctx.stack.releaseRange(new_len - 1, len - 1);
     ctx.stack.items.items[new_len - 1] = top;
     ctx.stack.items.shrinkRetainingCapacity(new_len);
 }
@@ -178,6 +194,9 @@ fn nativeApplyN(ctx: *Context) anyerror!void {
     if (count == 0) return;
 
     // Copy n values into temp buffer, preserving order (deepest first).
+    // The temp buffer is a transient owner that inherits the popped
+    // stack slots' ownership; subsequent `pushMoved` transfers the
+    // ownership back into a new stack slot without an extra retain.
     const alloc = ctx.quotationAllocator();
     const temp = try alloc.alloc(Value, count);
     defer alloc.free(temp);
@@ -189,7 +208,7 @@ fn nativeApplyN(ctx: *Context) anyerror!void {
     ctx.stack.items.shrinkRetainingCapacity(start);
 
     for (temp) |val| {
-        try ctx.stack.push(val);
+        try ctx.stack.pushMoved(val);
         try ctx.executeQuotationWithFrame(quot);
     }
 }

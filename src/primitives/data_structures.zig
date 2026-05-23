@@ -14,6 +14,7 @@ const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const Primitive = @import("types.zig").Primitive;
 const tasks = @import("tasks.zig");
+const container_backing = @import("../container_backing.zig");
 
 const popQuotation = helpers.popQuotation;
 
@@ -94,6 +95,7 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
 
         // Copy key to arena for persistence
         const key_copy = ctx.quotationAllocator().dupe(u8, key) catch return error.OutOfMemory;
+        container_backing.retainValue(val);
         hash.put(ctx.quotationAllocator(), key_copy, val) catch return error.OutOfMemory;
     }
 
@@ -123,6 +125,7 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
             },
         };
         if (in_task) val = tasks.deepCopyValue(val, alloc) catch return error.OutOfMemory;
+        container_backing.retainValue(val);
         vec.append(alloc, val) catch return error.OutOfMemory;
     }
 
@@ -190,6 +193,7 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
             },
         };
 
+        container_backing.retainValue(val);
         set.put(alloc, val, {}) catch return error.OutOfMemory;
     }
 
@@ -253,6 +257,7 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
         // Copy key to arena for persistence
         const key_copy = alloc.dupe(u8, key) catch return error.OutOfMemory;
         const stored_val = if (in_task) tasks.deepCopyValue(val, alloc) catch return error.OutOfMemory else val;
+        container_backing.retainValue(stored_val);
         mmap.put(alloc, key_copy, stored_val) catch return error.OutOfMemory;
     }
 
@@ -302,12 +307,16 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
                 new_value;
 
             // Check if key already exists
-            if (m.get(key_str) != null) {
-                // Update existing key in place (use the same key pointer)
+            if (m.get(key_str)) |prior| {
+                // Update existing key in place (use the same key pointer);
+                // release the prior slot owner before overwriting.
+                container_backing.releaseValue(prior);
+                container_backing.retainValue(stored_value);
                 m.putAssumeCapacity(key_str, stored_value);
             } else {
                 // New key - need to copy it
                 const key_copy = alloc.dupe(u8, key_str) catch return error.OutOfMemory;
+                container_backing.retainValue(stored_value);
                 m.put(alloc, key_copy, stored_value) catch return error.OutOfMemory;
             }
 
@@ -355,7 +364,9 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
 
     switch (obj) {
         .mutable_map => |m| {
-            _ = m.remove(key_str);
+            if (m.fetchRemove(key_str)) |entry| {
+                container_backing.releaseValue(entry.value);
+            }
             try ctx.stack.push(.{ .mutable_map = m });
         },
         else => {

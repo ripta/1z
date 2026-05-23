@@ -5,6 +5,7 @@ const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const Marker = value_mod.Marker;
 const StackEffect = @import("stack_effect.zig").StackEffect;
+const container_backing = @import("container_backing.zig");
 pub const Capability = @import("primitives/types.zig").Capability;
 
 /// Native function signature: takes context, can return errors.
@@ -105,6 +106,11 @@ pub const WordDefinition = struct {
 pub const Dictionary = struct {
     entries: std.StringHashMapUnmanaged(WordDefinition),
     allocator: Allocator,
+    /// Instruction slices belonging to compound word bodies whose
+    /// `push_literal` operands include at least one container variant.
+    /// Walked at teardown so captured container backings can be
+    /// released before the arena that owns the instructions is freed.
+    container_release_list: std.ArrayListUnmanaged([]const Instruction) = .{},
 
     pub fn init(allocator: Allocator) Dictionary {
         return .{
@@ -115,6 +121,7 @@ pub const Dictionary = struct {
 
     pub fn deinit(self: *Dictionary) void {
         self.entries.deinit(self.allocator);
+        self.container_release_list.deinit(self.allocator);
     }
 
     pub fn put(self: *Dictionary, name: []const u8, definition: WordDefinition) !void {
@@ -131,6 +138,23 @@ pub const Dictionary = struct {
 
     pub fn remove(self: *Dictionary, name: []const u8) bool {
         return self.entries.remove(name);
+    }
+
+    /// If `instructions` contains any container-variant `push_literal`,
+    /// record the slice on the dictionary's release list.
+    pub fn registerCompoundBody(self: *Dictionary, instructions: []const Instruction) !void {
+        if (!container_backing.instructionsHaveContainerLiteral(instructions)) return;
+        try self.container_release_list.append(self.allocator, instructions);
+    }
+
+    /// Release captured container literals from every registered
+    /// compound body, then clear the list. Must be called before the
+    /// arena that owns the instruction memory tears down.
+    pub fn walkContainerReleaseList(self: *Dictionary) void {
+        for (self.container_release_list.items) |instrs| {
+            container_backing.releaseInstructionsContainerLiterals(instrs);
+        }
+        self.container_release_list.clearRetainingCapacity();
     }
 };
 
@@ -214,4 +238,33 @@ test "parse_time flag can be set to true" {
     };
 
     try std.testing.expectEqual(true, word.parse_time);
+}
+
+test "registerCompoundBody: skips scalar-only bodies" {
+    const allocator = std.testing.allocator;
+    var dict = Dictionary.init(allocator);
+    defer dict.deinit();
+
+    const body = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 },
+        .{ .op = .{ .call_word = "drop" }, .line = 0 },
+    };
+    try dict.registerCompoundBody(&body);
+    try std.testing.expectEqual(@as(usize, 0), dict.container_release_list.items.len);
+}
+
+test "registerCompoundBody: records bodies with container literals" {
+    const allocator = std.testing.allocator;
+    var dict = Dictionary.init(allocator);
+    defer dict.deinit();
+
+    var dummy_vec: value_mod.Vector = .{};
+    const body = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 },
+    };
+    try dict.registerCompoundBody(&body);
+    try std.testing.expectEqual(@as(usize, 1), dict.container_release_list.items.len);
+
+    dict.walkContainerReleaseList();
+    try std.testing.expectEqual(@as(usize, 0), dict.container_release_list.items.len);
 }

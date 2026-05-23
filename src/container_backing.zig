@@ -1,5 +1,7 @@
 const std = @import("std");
-const Value = @import("value.zig").Value;
+const value_mod = @import("value.zig");
+const Value = value_mod.Value;
+const Instruction = value_mod.Instruction;
 
 /// Refcounted, mutex-guarded header for mutable container backings.
 ///
@@ -134,6 +136,52 @@ pub fn releaseValue(v: Value) void {
         .byte_array => |_| {},
         else => {},
     }
+}
+
+/// Release container-variant `push_literal` operands embedded in an instruction slice.
+/// The walk is shallow: nested quotation literals are not recursed into, because each
+/// quotation is registered separately on its owning allocator's release list at
+/// construction time and will be released independently.
+///
+/// Used by the per-arena and per-dictionary container release lists at teardown,
+/// before the instruction memory itself is freed.
+pub fn releaseInstructionsContainerLiterals(instructions: []const Instruction) void {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| releaseValue(val),
+            .call_word => {},
+        }
+    }
+}
+
+/// Retain container-variant `push_literal` operands in `instructions`. Used by quotation-
+/// building primitives (`curry`, `compose`) when copying instructions out of a source
+/// quotation into a freshly allocated slice that will itself be registered for release:
+/// each copied container literal becomes a second owning reference and must be retained
+/// to balance the extra release at teardown.
+pub fn retainInstructionsContainerLiterals(instructions: []const Instruction) void {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| retainValue(val),
+            .call_word => {},
+        }
+    }
+}
+
+/// Returns `true` if any instruction in the slice is a `push_literal` carrying a
+/// container variant. Used at construction sites to decide whether a quotation needs to
+/// be registered on its owning allocators's container release list.
+pub fn instructionsHaveContainerLiteral(instructions: []const Instruction) bool {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| switch (val) {
+                .vector, .mutable_map, .byte_array => return true,
+                else => {},
+            },
+            .call_word => {},
+        }
+    }
+    return false;
 }
 
 // =============================================================================
@@ -347,4 +395,50 @@ test "retainValue/releaseValue: no-op stubs while variants live in legacy arena"
         retainValue(v);
         releaseValue(v);
     }
+}
+
+test "instructionsHaveContainerLiteral: detects container push_literal operands" {
+    const empty: []const Instruction = &.{};
+    try testing.expect(!instructionsHaveContainerLiteral(empty));
+
+    const scalars = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 },
+        .{ .op = .{ .call_word = "noop" }, .line = 0 },
+        .{ .op = .{ .push_literal = .unit }, .line = 0 },
+    };
+    try testing.expect(!instructionsHaveContainerLiteral(&scalars));
+
+    // Build a one-off Vector pointer so we can construct a container Value
+    // for the scan. The dispatch is no-op today so the underlying pointer
+    // is never dereferenced.
+    var dummy_vec: value_mod.Vector = .{};
+    const with_vector = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 },
+    };
+    try testing.expect(instructionsHaveContainerLiteral(&with_vector));
+}
+
+test "releaseInstructionsContainerLiterals: shallow walk over push_literal operands" {
+    // Helpers are no-ops today; this test asserts the walk itself does
+    // not crash on any mix of literal variants, including nested
+    // quotation literals (which must not be recursed into).
+    var dummy_vec: value_mod.Vector = .{};
+    var inner_instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 },
+    };
+    const inner_quot = value_mod.Quotation{
+        .instructions = &inner_instrs,
+        .effect = null,
+        .code_ptr = null,
+    };
+    const outer = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .quotation = inner_quot } }, .line = 0 },
+        .{ .op = .{ .call_word = "call" }, .line = 0 },
+        .{ .op = .{ .push_literal = .{ .vector = &dummy_vec } }, .line = 0 },
+    };
+    releaseInstructionsContainerLiterals(&outer);
+    // No assertion beyond "does not crash"; refcount behavior is exercised
+    // once the variants migrate.
 }

@@ -188,6 +188,7 @@ pub const Scheduler = struct {
     pub fn deinit(self: *Scheduler) void {
         for (self.finished_tasks.items) |t| {
             task_mod.coroDestroy(t);
+            task_mod.releaseTaskResult(t);
             t.ctx.deinit();
             self.allocator.destroy(t.ctx);
             self.allocator.destroy(t);
