@@ -413,7 +413,9 @@ fn populateModulesAndWords(ctx: *Context, header: *const Header) LoaderError!voi
             module_ptr.words.put(arena, word_name, mw) catch return LoaderError.OutOfMemory;
         }
 
-        ctx.module_cache_value.put(arena, name, .{ .module = module_ptr }) catch
+        const cache_alloc = ctx.module_cache_value.header.allocator;
+        const name_owned = cache_alloc.dupe(u8, name) catch return LoaderError.OutOfMemory;
+        ctx.module_cache_value.map.put(cache_alloc, name_owned, .{ .module = module_ptr }) catch
             return LoaderError.OutOfMemory;
     }
 }
@@ -1133,7 +1135,7 @@ fn replaceWordBodyWithTypeValuePush(
     const module_name = nameSlice(m.name, m.name_len);
     const word_name = nameSlice(w.name, w.name_len);
 
-    const cache_entry = ctx.module_cache_value.getPtr(module_name) orelse return;
+    const cache_entry = ctx.module_cache_value.map.getPtr(module_name) orelse return;
     if (cache_entry.* != .module) return;
     const module_ptr = cache_entry.*.module;
     const word_entry = module_ptr.words.getPtr(word_name) orelse return;
@@ -1329,7 +1331,7 @@ test "loadIntoContext: empty header populates nothing" {
 
     try loadIntoContext(&ctx, &header, .{}, null);
 
-    var iter = ctx.module_cache_value.iterator();
+    var iter = ctx.module_cache_value.map.iterator();
     var seen: u32 = 0;
     while (iter.next()) |_| seen += 1;
     try testing.expectEqual(@as(u32, 0), seen);
@@ -1358,7 +1360,7 @@ test "loadIntoContext: structural-only image populates module cache" {
 
     try loadIntoContext(&ctx, &header, .{}, null);
 
-    const entry = ctx.module_cache_value.get(m_name) orelse {
+    const entry = ctx.module_cache_value.map.get(m_name) orelse {
         try testing.expect(false);
         return;
     };
@@ -1448,7 +1450,7 @@ test "loadIntoContext: resource TypeValue rehydrates kind + universal bools + re
     try testing.expectEqual(true, desc.mutable);
     try testing.expectEqualStrings("demo-handle", desc.kind.resource.resource_kind);
 
-    const cache_entry = ctx.module_cache_value.get(m_name) orelse return error.TestUnexpectedResult;
+    const cache_entry = ctx.module_cache_value.map.get(m_name) orelse return error.TestUnexpectedResult;
     const module_ptr = cache_entry.module;
     const w = module_ptr.words.get(w_name) orelse return error.TestUnexpectedResult;
     try testing.expect(w.action == .compound);
@@ -1886,7 +1888,7 @@ test "loadIntoContext: bytecode body decodes into compound action" {
 
     try loadIntoContext(&ctx, &header, .{}, null);
 
-    const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
+    const entry = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
     const module_ptr = entry.module;
     const mw = module_ptr.words.get(w_name) orelse return error.TestExpectedWord;
     try testing.expect(mw.action == .compound);
@@ -1916,7 +1918,7 @@ test "loadIntoContext: null body bytecode preserves empty compound" {
 
     try loadIntoContext(&ctx, &header, .{}, null);
 
-    const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
+    const entry = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
     const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
     try testing.expect(mw.action == .compound);
     try testing.expectEqual(@as(usize, 0), mw.action.compound.len);
@@ -1955,7 +1957,7 @@ test "loadIntoContext: nested quotation literal round-trips" {
 
     try loadIntoContext(&ctx, &header, .{}, null);
 
-    const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
+    const entry = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
     const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
     const decoded = mw.action.compound;
     try testing.expectEqual(@as(usize, 2), decoded.len);
@@ -2031,7 +2033,7 @@ test "loadIntoContext: diagnostic metadata fields round-trip into ModuleWord" {
 
     try loadIntoContext(&ctx, &header, .{}, null);
 
-    const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
+    const entry = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
     const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
     try testing.expectEqualStrings(doc_str, mw.doc orelse return error.TestExpectedDoc);
     try testing.expectEqualStrings(file_str, mw.source_file orelse return error.TestExpectedSourceFile);
@@ -2061,7 +2063,7 @@ test "loadIntoContext: absent diagnostic metadata leaves ModuleWord fields null"
 
     try loadIntoContext(&ctx, &header, .{}, null);
 
-    const entry = ctx.module_cache_value.get(m_name) orelse return error.TestExpectedModule;
+    const entry = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
     const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
     try testing.expect(mw.doc == null);
     try testing.expect(mw.source_file == null);

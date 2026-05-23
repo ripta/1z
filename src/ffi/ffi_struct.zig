@@ -9,6 +9,7 @@ const Marker = value_mod.Marker;
 const BigIntManaged = value_mod.BigIntManaged;
 
 const dispatch_mod = @import("../dispatch.zig");
+const container_backing = @import("../container_backing.zig");
 
 const helpers = @import("../primitives/helpers.zig");
 const markers_mod = @import("../primitives/markers.zig");
@@ -66,6 +67,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
     const markers_slice = try markers_list.toOwnedSlice(alloc);
 
     const desc_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(desc_val);
     const src_map: *value_mod.MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
@@ -74,7 +76,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
         },
     };
 
-    const fields_val = src_map.get("fields") orelse {
+    const fields_val = src_map.map.get("fields") orelse {
         helpers.setErrorContext(ctx, "ffi-struct{{ descriptor missing 'fields' key", .{});
         return error.MissingField;
     };

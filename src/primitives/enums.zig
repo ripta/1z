@@ -12,6 +12,7 @@ const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
 const structs = @import("structs.zig");
 const virtual = @import("virtual.zig");
+const container_backing = @import("../container_backing.zig");
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
@@ -156,6 +157,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     const markers_slice = try markers_list.toOwnedSlice(alloc);
 
     const desc_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(desc_val);
     const desc_map = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
@@ -163,7 +165,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    const variants_val = desc_map.get("variants") orelse {
+    const variants_val = desc_map.map.get("variants") orelse {
         helpers.setErrorContext(ctx, "enum descriptor missing variants key", .{});
         return error.MissingField;
     };

@@ -732,14 +732,13 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         },
 
         .mutable_map => |m| blk: {
-            const new_m = try alloc.create(value_mod.MutableMap);
-            new_m.* = .{};
-            try new_m.ensureTotalCapacity(alloc, @intCast(m.count()));
-            var iter = m.iterator();
+            const new_m = try value_mod.MutableMap.create(alloc);
+            try new_m.map.ensureTotalCapacity(alloc, @intCast(m.map.count()));
+            var iter = m.map.iterator();
             while (iter.next()) |entry| {
                 const key = try alloc.dupe(u8, entry.key_ptr.*);
                 const v = try deepCopyValue(entry.value_ptr.*, alloc);
-                new_m.putAssumeCapacityNoClobber(key, v);
+                new_m.map.putAssumeCapacityNoClobber(key, v);
             }
             break :blk .{ .mutable_map = new_m };
         },

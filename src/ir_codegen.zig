@@ -3943,6 +3943,14 @@ fn compileInstructions(
                     // reconstructed from a named word lookup.
                     state.not_compilable_reason = .non_serializable_literal;
                     return IrCodegenError.NotCompilable;
+                } else if (val == .vector or val == .mutable_map or val == .byte_array) {
+                    // Refcounted container literals must not be JIT-pushed via
+                    // a raw byte copy: JIT push/pop is refcount-neutral, but
+                    // the interpreter pop on the other side of the JIT
+                    // boundary releases. Bail to the interpreter so the
+                    // boundary stays refcount-symmetric.
+                    state.not_compilable_reason = .non_serializable_literal;
+                    return IrCodegenError.NotCompilable;
                 } else {
                     const sp_byte_offset = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, sp_byte_offset);
@@ -8821,7 +8829,7 @@ fn lookupAnyModuleWord(ctx: *Context, word_name: []const u8) ?ModuleWordHit {
         return null;
     }
 
-    var iter = ctx.module_cache_value.iterator();
+    var iter = ctx.module_cache_value.map.iterator();
     while (iter.next()) |entry| {
         if (entry.value_ptr.* != .module) continue;
         const module = entry.value_ptr.*.module;

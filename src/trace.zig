@@ -105,7 +105,7 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
         .byte_array => |b| try writer.print("<byte-array:{d}>", .{b.slice().len}),
         .set => |s| try writer.print("<set:{d}>", .{s.count()}),
         .hash => |h| try writer.print("<hash:{d}>", .{h.count()}),
-        .mutable_map => |m| try writer.print("<mutable-map:{d}>", .{m.count()}),
+        .mutable_map => |m| try writer.print("<mutable-map:{d}>", .{m.map.count()}),
         .bignum => try writer.writeAll("<bignum>"),
         .tagged => |t| try writer.print("<{s}>", .{t.tag.name}),
         .struct_instance => |si| try writer.print("<{s}>", .{si.struct_type.name}),

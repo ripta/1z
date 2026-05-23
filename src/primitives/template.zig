@@ -97,7 +97,7 @@ fn lookupNamed(ctx: ?*Context, source: Value, name: []const u8) !Value {
             return h.get(name) orelse return error.KeyNotFound;
         },
         .mutable_map => |m| {
-            return m.get(name) orelse return error.KeyNotFound;
+            return m.map.get(name) orelse return error.KeyNotFound;
         },
         else => {
             if (ctx) |c| helpers.setTypeMismatchError(c, "struct, hash, or mutable-map", source);

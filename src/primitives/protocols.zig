@@ -8,6 +8,7 @@ const StackEffect = @import("../stack_effect.zig").StackEffect;
 
 const markers_mod = @import("markers.zig");
 const dispatch_mod = @import("../dispatch.zig");
+const container_backing = @import("../container_backing.zig");
 
 const helpers = @import("helpers.zig");
 
@@ -45,6 +46,7 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
     };
 
     const desc_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(desc_val);
     const desc_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
@@ -53,7 +55,7 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
         },
     };
 
-    const methods_val = desc_map.get("methods") orelse return error.MissingField;
+    const methods_val = desc_map.map.get("methods") orelse return error.MissingField;
     const methods_array = switch (methods_val) {
         .array => |arr| arr,
         else => {

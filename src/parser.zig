@@ -499,7 +499,11 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
         }
     }
 
-    return instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+    const instrs = instructions.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+    if (ctx) |c| {
+        c.registerQuotationContainerLiterals(instrs) catch return ParseError.OutOfMemory;
+    }
+    return instrs;
 }
 
 /// Parse a quotation. If ctx is provided, parse-time words will be executed.

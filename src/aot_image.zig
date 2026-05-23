@@ -231,7 +231,7 @@ pub fn buildImageManifest(ctx: *Context, allocator: Allocator) Allocator.Error!I
     var module_ptrs: std.ArrayListUnmanaged(*Module) = .{};
     defer module_ptrs.deinit(allocator);
 
-    var cache_iter = ctx.module_cache_value.iterator();
+    var cache_iter = ctx.module_cache_value.map.iterator();
     while (cache_iter.next()) |entry| {
         if (entry.value_ptr.* != .module) continue;
         const mod = entry.value_ptr.*.module;
@@ -511,9 +511,10 @@ test "classifyValue: quotation with type_val literal is structural" {
 }
 
 test "classifyValue: quotation with blob literal is blob" {
-    var mm = value_mod.MutableMap{};
+    const mm = try value_mod.MutableMap.create(testing.allocator);
+    defer mm.header.release();
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .mutable_map = &mm } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .mutable_map = mm } }, .line = 0, .column = 0 },
     };
     const q = value_mod.Quotation{ .instructions = &instrs };
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .quotation = q }).path);
@@ -524,9 +525,10 @@ test "classifyValue: hash, mutable_map, vector, byte_array, set are blob" {
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .hash = &ht }).path);
     try testing.expectEqual(BlobReason.mutable_map, classifyValue(.{ .hash = &ht }).reason);
 
-    var mm = value_mod.MutableMap{};
-    try testing.expectEqual(ImagePath.blob, classifyValue(.{ .mutable_map = &mm }).path);
-    try testing.expectEqual(BlobReason.mutable_map, classifyValue(.{ .mutable_map = &mm }).reason);
+    const mm = try value_mod.MutableMap.create(testing.allocator);
+    defer mm.header.release();
+    try testing.expectEqual(ImagePath.blob, classifyValue(.{ .mutable_map = mm }).path);
+    try testing.expectEqual(BlobReason.mutable_map, classifyValue(.{ .mutable_map = mm }).reason);
 
     const vec = try value_mod.Vector.create(testing.allocator);
     defer vec.header.release();
@@ -601,9 +603,11 @@ test "buildImageManifest: synthetic modules produce sorted, classified entries" 
 
     // A bare mutable_map literal forces the blob path: dynamic
     // containers carry heap state that no static initializer can
-    // express.
-    const blob_mm = try arena.create(value_mod.MutableMap);
-    blob_mm.* = .{};
+    // express. The blob_mm refcount is never explicitly released; the
+    // ctx-owned module cache that captures it via the instruction stream
+    // releases on its own teardown.
+    const blob_mm = try value_mod.MutableMap.create(testing.allocator);
+    defer blob_mm.header.release();
     const blob_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .mutable_map = blob_mm } }, .line = 0, .column = 0 },
     });
@@ -624,8 +628,9 @@ test "buildImageManifest: synthetic modules produce sorted, classified entries" 
         fn f(_: *Context) anyerror!void {}
     }.f } });
 
-    try ctx.module_cache_value.put(arena, "zeta", .{ .module = zeta });
-    try ctx.module_cache_value.put(arena, "alpha", .{ .module = alpha });
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "zeta"), .{ .module = zeta });
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "alpha"), .{ .module = alpha });
 
     var manifest = try buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -663,7 +668,8 @@ test "buildImageManifest: skipped modules are excluded" {
     prelude_mod.* = .{ .name = "prelude", .words = .{} };
     try prelude_mod.words.put(arena, "should-not-appear", .{ .action = .{ .compound = instrs } });
 
-    try ctx.module_cache_value.put(arena, "prelude", .{ .module = prelude_mod });
+    const prelude_cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(prelude_cache_alloc, try prelude_cache_alloc.dupe(u8, "prelude"), .{ .module = prelude_mod });
 
     var manifest = try buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -678,8 +684,8 @@ test "writeManifestDump: deterministic output" {
     const struct_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
-    const blob_mm = try arena.create(value_mod.MutableMap);
-    blob_mm.* = .{};
+    const blob_mm = try value_mod.MutableMap.create(testing.allocator);
+    defer blob_mm.header.release();
     const blob_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .mutable_map = blob_mm } }, .line = 0, .column = 0 },
     });
@@ -688,7 +694,8 @@ test "writeManifestDump: deterministic output" {
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "ok", .{ .action = .{ .compound = struct_instrs } });
     try m.words.put(arena, "needs-blob", .{ .action = .{ .compound = blob_instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    const demo_cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(demo_cache_alloc, try demo_cache_alloc.dupe(u8, "demo"), .{ .module = m });
 
     var manifest = try buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);

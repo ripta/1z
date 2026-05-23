@@ -265,7 +265,8 @@ fn nativeLenHash(ctx: *Context) anyerror!void {
 
 fn nativeLenMutableMap(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
-    try ctx.stack.push(.{ .fixnum = @intCast(val.mutable_map.count()) });
+    defer container_backing.releaseValue(val);
+    try ctx.stack.push(.{ .fixnum = @intCast(val.mutable_map.map.count()) });
 }
 
 fn nativeLenModule(ctx: *Context) anyerror!void {
@@ -947,7 +948,9 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
 /// seq1 determines the result type. seq2 elements are converted/iterated into seq1's type.
 pub fn nativeAppend(ctx: *Context) anyerror!void {
     const seq2 = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq2);
     const seq1 = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq1);
 
     const alloc = ctx.quotationAllocator();
 
@@ -2521,11 +2524,12 @@ fn nativeToByteArray(ctx: *Context) anyerror!void {
 /// >hash ( mutable-map -- hash ) - Snapshot mutable-map into an immutable hash
 fn nativeToHashMutableMap(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const m = val.mutable_map;
     const alloc = ctx.quotationAllocator();
     const new_hash = alloc.create(HashTable) catch return error.OutOfMemory;
     new_hash.* = HashTable{};
-    var iter = m.iterator();
+    var iter = m.map.iterator();
     while (iter.next()) |entry| {
         const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
         new_hash.put(alloc, key_copy, entry.value_ptr.*) catch return error.OutOfMemory;

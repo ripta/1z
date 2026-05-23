@@ -644,7 +644,7 @@ const VariantHistogramWalker = struct {
                 const ptr_key = @intFromPtr(m);
                 if (!try enterPointer(&self.mutable_maps, alloc, ptr_key)) return;
                 defer _ = self.mutable_maps.remove(ptr_key);
-                var iter = m.iterator();
+                var iter = m.map.iterator();
                 while (iter.next()) |entry| {
                     try self.walkValue(alloc, stats, entry.value_ptr.*);
                 }

@@ -7,6 +7,7 @@ const dispatch_mod = @import("../dispatch.zig");
 const DispatchKey = dispatch_mod.DispatchKey;
 const DispatchEntry = dispatch_mod.DispatchEntry;
 
+const container_backing = @import("../container_backing.zig");
 const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
 
@@ -47,6 +48,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     }
 
     const desc_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(desc_val);
     const desc_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
@@ -55,7 +57,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         },
     };
 
-    const types_val = desc_map.get("types") orelse return error.MissingField;
+    const types_val = desc_map.map.get("types") orelse return error.MissingField;
     const types_array = switch (types_val) {
         .array => |arr| arr,
         else => {
@@ -73,7 +75,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         return error.InvalidArgument;
     }
 
-    const body_val = desc_map.get("body") orelse return error.MissingField;
+    const body_val = desc_map.map.get("body") orelse return error.MissingField;
     const body = switch (body_val) {
         .quotation => |q| q,
         else => {

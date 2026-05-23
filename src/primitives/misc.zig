@@ -16,6 +16,7 @@ const trace_mod = @import("../trace.zig");
 const call_graph_mod = @import("../call_graph.zig");
 const ir_codegen = @import("../ir_codegen.zig");
 const stack_effect_mod = @import("../stack_effect.zig");
+const container_backing = @import("../container_backing.zig");
 
 const popString = helpers.popString;
 
@@ -46,11 +47,12 @@ pub const registry_entries = [_]RegistryEntry{
 fn nativeToModule(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const ht_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(ht_val);
     const name = try popString(ctx);
 
     const entries: *std.StringHashMapUnmanaged(Value) = switch (ht_val) {
         .hash => |h| h,
-        .mutable_map => |m| m,
+        .mutable_map => |m| &m.map,
         else => {
             helpers.setTypeMismatchError(ctx, "hashtable", ht_val);
             return error.TypeMismatch;
@@ -101,7 +103,12 @@ fn nativeToModule(ctx: *Context) anyerror!void {
                 return error.TypeMismatch;
             },
         };
-        try module.words.put(alloc, entry.key_ptr.*, .{
+        // The module outlives `ht_val`; dupe the key into the module's
+        // allocator so freeing the source M{} (or its arena, for the
+        // legacy hash variant) does not leave dangling key pointers in
+        // `module.words`.
+        const key_copy = try alloc.dupe(u8, entry.key_ptr.*);
+        try module.words.put(alloc, key_copy, .{
             .stack_effect = if (quot.effect) |eff| eff.* else null,
             .action = .{ .compound = quot.instructions },
         });
@@ -339,7 +346,15 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
         trace_mod.traceModuleLoadEnd(&tw, filename, module.words.count());
     }
 
-    cache.put(alloc, resolved, .{ .module = module }) catch {};
+    // Only insert if the resolved path is not already in the cache; an
+    // overwrite would silently drop the fresh key dupe.
+    if (!cache.map.contains(resolved)) {
+        if (cache.header.allocator.dupe(u8, resolved)) |resolved_owned| {
+            cache.map.put(cache.header.allocator, resolved_owned, .{ .module = module }) catch {
+                cache.header.allocator.free(resolved_owned);
+            };
+        } else |_| {}
+    }
     ctx.popPragmaFrame();
     ctx.popLocalFrame();
     hooks.fireScopedHooks(ctx, "module-loaded-hooks", &.{ .{ .string = filename }, .{ .string = resolved } });
@@ -947,6 +962,7 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
 
     const filename = try popString(ctx);
     const cache_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(cache_val);
     const cache: *value_mod.MutableMap = switch (cache_val) {
         .mutable_map => |m| m,
         else => {
@@ -980,6 +996,7 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
 
     const filename = try popString(ctx);
     const cache_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(cache_val);
     const cache: *value_mod.MutableMap = switch (cache_val) {
         .mutable_map => |m| m,
         else => {
@@ -1002,7 +1019,7 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
 
     // Return cached module if already loaded, avoiding duplicate side effects
     // such as import-history records from re-executing use statements.
-    if (cache.get(resolved)) |cached| {
+    if (cache.map.get(resolved)) |cached| {
         try ctx.stack.push(cached);
         return;
     }

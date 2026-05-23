@@ -2015,7 +2015,7 @@ fn writeWordMarkersSym(
 /// a pointer into the module's words map so callers may take stable
 /// addresses of nested fields (e.g., the stack effect).
 fn lookupModuleWord(ctx: *const Context, entry: ImageEntry) ?*const ModuleWord {
-    var it = ctx.module_cache_value.iterator();
+    var it = ctx.module_cache_value.map.iterator();
     while (it.next()) |cached| {
         if (cached.value_ptr.* != .module) continue;
         const mod = cached.value_ptr.*.module;
@@ -2969,8 +2969,7 @@ fn buildSyntheticImageContext(ctx: *Context) !void {
     const struct_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
-    const blob_mm = try arena.create(value_mod.MutableMap);
-    blob_mm.* = .{};
+    const blob_mm = try value_mod.MutableMap.create(arena);
     const blob_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .mutable_map = blob_mm } }, .line = 0, .column = 0 },
     });
@@ -2985,8 +2984,9 @@ fn buildSyntheticImageContext(ctx: *Context) !void {
     try alpha.words.put(arena, "good", .{ .action = .{ .compound = struct_instrs } });
     try alpha.words.put(arena, "needs-blob", .{ .action = .{ .compound = blob_instrs } });
 
-    try ctx.module_cache_value.put(arena, "zeta", .{ .module = zeta });
-    try ctx.module_cache_value.put(arena, "alpha", .{ .module = alpha });
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "zeta"), .{ .module = zeta });
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "alpha"), .{ .module = alpha });
 }
 
 test "emitImageC: module and word tables match the manifest order" {
@@ -3074,7 +3074,10 @@ test "emitImageC: marker pool dedupes shared marker names across words" {
         .markers = markers_b,
     });
 
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3157,7 +3160,10 @@ test "emitImageC: stack-effect table dedupes type slots and emits sentinel index
         .action = .{ .compound = struct_instrs },
         .stack_effect = .{ .inputs = eff_b_inputs, .outputs = eff_b_outputs },
     });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3262,7 +3268,10 @@ test "emitImageC: type_val word writes typevalue_slot and reserves a slot" {
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "color", .{ .action = .{ .compound = instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3303,7 +3312,10 @@ test "emitImageC: same TypeValue across multiple words shares one slot" {
     try m.words.put(arena, "color", .{ .action = .{ .compound = instrs } });
     try m.words.put(arena, ">color", .{ .action = .{ .compound = instrs } });
     try m.words.put(arena, "color?", .{ .action = .{ .compound = instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3386,7 +3398,10 @@ test "collectTypeValueData dedupes against stack-effect-discovered TypeValues" {
         .action = .{ .compound = instrs },
         .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
     });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3433,7 +3448,10 @@ test "collectDescriptorCrossRefs interns struct field_types into the slot table"
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "point", .{ .action = .{ .compound = instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3479,7 +3497,10 @@ test "collectDescriptorCrossRefs interns enum variant inner_types" {
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "option", .{ .action = .{ .compound = instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3525,7 +3546,10 @@ test "collectDescriptorCrossRefs reaches transitively through multiple descripto
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "A", .{ .action = .{ .compound = instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3569,7 +3593,10 @@ test "emitTypeValueData emits typevalue/descriptor tables with slot-indexed cros
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "point", .{ .action = .{ .compound = instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3615,7 +3642,10 @@ test "emitTypeValueData emits enum variant pool referenced from descriptor row" 
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "color", .{ .action = .{ .compound = instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3667,7 +3697,10 @@ test "emitTypeValueData emits struct-type table for virtual anon_struct" {
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "wrap", .{ .action = .{ .compound = instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3718,7 +3751,10 @@ test "collectDescriptorCrossRefs collects virtual anon_struct and its field type
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "wrapper", .{ .action = .{ .compound = instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3753,7 +3789,10 @@ test "emitTypeValueData renders resource descriptor with resource_kind string" {
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "res-kinds", .{ .action = .{ .compound = res_instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3789,7 +3828,10 @@ test "emitTypeValueData renders ffi_struct descriptor with ffi_layout" {
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "ffi-kinds", .{ .action = .{ .compound = ffi_instrs } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3819,7 +3861,10 @@ test "emitImageC: structural compound emits body bytecode symbol" {
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "twiddle", .{ .action = .{ .compound = body } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3856,7 +3901,10 @@ test "emitImageC: blob word does not emit body bytecode" {
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "color", .{ .action = .{ .compound = body } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3882,7 +3930,10 @@ test "emitImageC: empty compound body emits NULL bytecode" {
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "noop", .{ .action = .{ .compound = empty_body } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3916,7 +3967,10 @@ test "emitImageC: structural bytecode round-trips through decoder" {
     const m = try arena.create(Module);
     m.* = .{ .name = "demo", .words = .{} };
     try m.words.put(arena, "twiddle", .{ .action = .{ .compound = body } });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);
@@ -3983,7 +4037,10 @@ test "emitImageC: generator-provenanced word skips body bytecode" {
         .action = .{ .compound = body },
         .provenance = .{ .generator = "virtual", .parent = "color", .role = "predicate" },
     });
-    try ctx.module_cache_value.put(arena, "demo", .{ .module = m });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
 
     var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
     defer manifest.deinit(testing.allocator);

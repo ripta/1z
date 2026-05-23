@@ -637,11 +637,12 @@ pub const Context = struct {
         };
         ctx.lock_order_tracker.* = .{};
 
-        // Allocate the module cache M{} on the arena.
-        ctx.module_cache_value = ctx.arena.allocator().create(value_mod.MutableMap) catch |err| {
+        // Allocate the module cache M{} via the refcounted container path so
+        // it survives cross-worker mutation and is freed deterministically
+        // during root-context teardown.
+        ctx.module_cache_value = value_mod.MutableMap.create(allocator) catch |err| {
             std.debug.panic("Failed to allocate module cache: {any}", .{err});
         };
-        ctx.module_cache_value.* = .{};
 
         // Allocate the shared hook registry on the container arena.
         ctx.hook_registry = ca.allocator().create(HookRegistry) catch |err| {
@@ -924,6 +925,10 @@ pub const Context = struct {
         self.arena.deinit();
         self.dictionary.deinit();
         if (self.parent_context == null) {
+            // Release the refcounted module cache before tearing down the
+            // root-owned allocators it sits in front of. Child contexts share
+            // the parent's pointer without retaining and skip this branch.
+            container_backing.releaseValue(.{ .mutable_map = self.module_cache_value });
             self.allocator.destroy(self.lock_order_tracker);
             self.allocator.destroy(self.shared_lock);
             self.container_arena.deinit();
@@ -962,6 +967,22 @@ pub const Context = struct {
             container_backing.releaseInstructionsContainerLiterals(instrs);
         }
         self.container_release_list.clearRetainingCapacity();
+    }
+
+    /// Remove every entry from this context's release list whose slice
+    /// pointer matches `instructions`. Called by `defineWord` when a
+    /// parsed quotation is about to become a word body so the dictionary
+    /// becomes the sole owner of the release callback and we don't
+    /// double-release at teardown.
+    pub fn unregisterQuotationContainerLiterals(self: *Context, instructions: []const Instruction) void {
+        var i: usize = 0;
+        while (i < self.container_release_list.items.len) {
+            if (self.container_release_list.items[i].ptr == instructions.ptr) {
+                _ = self.container_release_list.swapRemove(i);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// Clear all error details and call stack.
@@ -1333,9 +1354,15 @@ pub const Context = struct {
 
         // Compound bodies that capture container literals must be
         // tracked so the captured backings can be released when the
-        // dictionary tears down.
+        // dictionary tears down. A parsed quotation literal already sits
+        // on the context's release list; transfer ownership by removing
+        // it there before re-registering on the dictionary so teardown
+        // doesn't double-release.
         switch (def.action) {
-            .compound => |instrs| try self.dictionary.registerCompoundBody(instrs),
+            .compound => |instrs| {
+                self.unregisterQuotationContainerLiterals(instrs);
+                try self.dictionary.registerCompoundBody(instrs);
+            },
             .native, .host_callback => {},
         }
     }

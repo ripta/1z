@@ -295,7 +295,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
         .vector => |v| std.fmt.allocPrint(allocator, "vector[{d}]", .{v.list.items.len}),
         .byte_array => |b| std.fmt.allocPrint(allocator, "byte-array[{d}]", .{b.slice().len}),
         .set => |s| std.fmt.allocPrint(allocator, "set[{d}]", .{s.count()}),
-        .mutable_map => |m| std.fmt.allocPrint(allocator, "mutable-map[{d}]", .{m.count()}),
+        .mutable_map => |m| std.fmt.allocPrint(allocator, "mutable-map[{d}]", .{m.map.count()}),
         .stream => allocator.dupe(u8, "<stream>"),
         .resource => |r| std.fmt.allocPrint(allocator, "<resource:{s}>", .{r.type_name}),
         .parameter => |p| std.fmt.allocPrint(allocator, "<parameter {s}>", .{p.name}),

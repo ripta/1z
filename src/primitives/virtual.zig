@@ -16,6 +16,7 @@ const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
 const struct_field_spec = @import("struct_field_spec.zig");
 const dispatch_mod = @import("../dispatch.zig");
+const container_backing = @import("../container_backing.zig");
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
@@ -82,6 +83,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     // Clone the map so each virtual type gets its own descriptor,
     // since parse-time literals like M{ } are shared across invocations.
     const desc_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(desc_val);
     const src_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
@@ -90,19 +92,19 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
         },
     };
     const descriptor_flags = value_mod.DescriptorFlags{
-        .numeric = if (src_map.get("numeric")) |v| switch (v) {
+        .numeric = if (src_map.map.get("numeric")) |v| switch (v) {
             .boolean => |b| b,
             else => true,
         } else false,
-        .exact = if (src_map.get("exact")) |v| switch (v) {
+        .exact = if (src_map.map.get("exact")) |v| switch (v) {
             .boolean => |b| b,
             else => true,
         } else false,
-        .integer = if (src_map.get("integer")) |v| switch (v) {
+        .integer = if (src_map.map.get("integer")) |v| switch (v) {
             .boolean => |b| b,
             else => true,
         } else false,
-        .mutable = if (src_map.get("mutable")) |v| switch (v) {
+        .mutable = if (src_map.map.get("mutable")) |v| switch (v) {
             .boolean => |b| b,
             else => true,
         } else false,
@@ -115,7 +117,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
         .{ .virtual = .{} },
         descriptor_flags,
     );
-    const inner_type_raw = src_map.get("inner-type") orelse return error.MissingField;
+    const inner_type_raw = src_map.map.get("inner-type") orelse return error.MissingField;
     const inner_type_val = switch (inner_type_raw) {
         .array => |arr| blk: {
             if (arr.len != 1) {
@@ -199,7 +201,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             try ctx.registerTypeDescriptor(name, desc_map);
         },
         .mutable_map => |struct_desc| {
-            const fields_val = struct_desc.get("fields") orelse return error.MissingField;
+            const fields_val = struct_desc.map.get("fields") orelse return error.MissingField;
             const fields_array = switch (fields_val) {
                 .array => |arr| arr,
                 else => {
@@ -210,7 +212,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
             const parsed_fields = try struct_field_spec.parse(alloc, ctx, fields_array, "virtual{");
             const fields_slice = parsed_fields.names;
             const field_types_slice = parsed_fields.types;
-            const inner_mutable = if (struct_desc.get("mutable")) |v| switch (v) {
+            const inner_mutable = if (struct_desc.map.get("mutable")) |v| switch (v) {
                 .boolean => |b| b,
                 else => false,
             } else false;
@@ -1080,6 +1082,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     };
 
     const desc_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(desc_val);
     const desc_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
@@ -1088,7 +1091,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
         },
     };
 
-    const base_type_val = desc_map.get("inner-type") orelse {
+    const base_type_val = desc_map.map.get("inner-type") orelse {
         helpers.setErrorContext(ctx, "define-parameterized-type descriptor missing 'inner-type' field", .{});
         return error.MissingField;
     };
@@ -1100,7 +1103,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
         },
     };
 
-    const elem_type_val = desc_map.get("element-type") orelse {
+    const elem_type_val = desc_map.map.get("element-type") orelse {
         helpers.setErrorContext(ctx, "define-parameterized-type descriptor missing 'element-type' field", .{});
         return error.MissingField;
     };

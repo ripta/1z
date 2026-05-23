@@ -36,6 +36,11 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
 
     var tokens = std.ArrayListUnmanaged(Value){};
     defer tokens.deinit(alloc);
+    // The loop transfers ownership of popped values into `tokens`. On the
+    // happy path those refs move on into the returned `.array`. On error
+    // the partial list must release each owning ref so containers don't
+    // leak.
+    errdefer for (tokens.items) |item| @import("../container_backing.zig").releaseValue(item);
 
     while (tokenizer.nextOrYield()) |tok| {
         if (isSkippable(tok.kind)) continue;
@@ -175,14 +180,14 @@ pub fn nativeParseUntil(ctx: *Context) anyerror!void {
 pub fn nativeParseTokensUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
     const result = try parseTokensUntilCore(ctx, delimiter, .raw);
-    try ctx.stack.push(result);
+    try ctx.stack.pushMoved(result);
 }
 
 /// parse-values-until ( delimiter -- array ) - Read tokens until delimiter, executing parse-time words
 pub fn nativeParseValuesUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
     const result = try parseTokensUntilCore(ctx, delimiter, .evaluate_parse_time);
-    try ctx.stack.push(result);
+    try ctx.stack.pushMoved(result);
 }
 
 /// parse-types-until ( delimiter -- array ) - Read tokens until delimiter, executing parse-time words.
@@ -190,7 +195,7 @@ pub fn nativeParseValuesUntil(ctx: *Context) anyerror!void {
 fn nativeParseTypesUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
     const result = try parseTokensUntilCore(ctx, delimiter, .evaluate_parse_time_strict);
-    try ctx.stack.push(result);
+    try ctx.stack.pushMoved(result);
 }
 
 /// parse-token ( -- string ) - Read one raw token from the tokenizer

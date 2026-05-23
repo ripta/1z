@@ -357,7 +357,7 @@ fn findDanglingIsolatedType(val: Value, isolation_frame: *const TypeRegistryFram
             return null;
         },
         .mutable_map => |m| {
-            var it = m.iterator();
+            var it = m.map.iterator();
             while (it.next()) |entry| {
                 if (findDanglingIsolatedType(entry.value_ptr.*, isolation_frame, depth + 1)) |name| return name;
             }

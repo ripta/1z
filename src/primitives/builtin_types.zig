@@ -12,6 +12,7 @@ const RegistryEntry = types_mod.RegistryEntry;
 
 const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
+const container_backing = @import("../container_backing.zig");
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-builtin-type", .stack_effect = "name: descriptor markers --", .doc = "Define a built-in type word from a descriptor map.", .func = nativeDefineBuiltinType },
@@ -59,6 +60,7 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     };
 
     const desc_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(desc_val);
     const source_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
@@ -139,7 +141,7 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
 /// the previous put-everything behavior, since no reader consumed
 /// keys beyond the bools).
 fn applyDescriptorMerge(desc: *value_mod.TypeDescriptor, source: *const value_mod.MutableMap) void {
-    var iter = source.iterator();
+    var iter = source.map.iterator();
     while (iter.next()) |entry| {
         const key = entry.key_ptr.*;
         const val = entry.value_ptr.*;

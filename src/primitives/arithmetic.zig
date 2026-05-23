@@ -9,6 +9,7 @@ const Primitive = @import("types.zig").Primitive;
 const RegistryEntry = @import("types.zig").RegistryEntry;
 const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
+const container_backing = @import("../container_backing.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
 const markers_mod = @import("markers.zig");
 
@@ -720,14 +721,18 @@ pub fn nativeEq(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "=")) return;
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .eq)) return;
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     try ctx.stack.push(.{ .boolean = a.eql(b) });
 }
 
 /// (=) ( a b -- ? ) - Inner equality: unwraps one layer of tagged values, then compares
 pub fn nativeInnerEq(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     const a_inner: Value = if (a == .tagged) a.tagged.inner.* else a;
     const b_inner: Value = if (b == .tagged) b.tagged.inner.* else b;
     try ctx.stack.push(.{ .boolean = a_inner.eql(b_inner) });

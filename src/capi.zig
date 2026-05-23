@@ -1817,7 +1817,7 @@ export fn onez_use_module(ptr: ?*anyopaque, name: [*]const u8, name_len: usize) 
     };
 
     // Check cache first
-    const module = if (ctx.module_cache_value.get(resolved)) |cached| blk: {
+    const module = if (ctx.module_cache_value.map.get(resolved)) |cached| blk: {
         switch (cached) {
             .module => |m| break :blk m,
             else => {

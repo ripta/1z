@@ -615,7 +615,7 @@ fn discoverReachableWords(
     // visible for the duration of discovery.
     var pushed_module_frames: usize = 0;
     {
-        var cache_iter = ctx.module_cache_value.iterator();
+        var cache_iter = ctx.module_cache_value.map.iterator();
         while (cache_iter.next()) |entry| {
             if (entry.value_ptr.* == .module) {
                 ctx.pushModuleDepsFrame(entry.value_ptr.*.module) catch continue;

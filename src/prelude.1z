@@ -278,7 +278,7 @@ type-union?: ( type -- ? ) [ type-members f = not ] ;
 \\ Throw a type-mismatch error with expected/got/value context.
 throw-type-error: ( value expected-str -- * ) [
   over type-name
-  M{ } swap got: swap @set! swap expected: swap @set! swap value: swap @set!
+  H{ } swap got: swap @set swap expected: swap @set swap value: swap @set
   dup expected: @get over got: @get
   swap "expected " swap #append ", got " #append swap #append
   ETypeMismatch make-error throw

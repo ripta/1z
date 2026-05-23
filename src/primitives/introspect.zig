@@ -246,7 +246,7 @@ fn popStringArray(ctx: *Context, val: Value) anyerror![]const []const u8 {
 }
 
 fn moduleFromCache(cache: *const MutableMap, resolved_path: []const u8) ?*const Module {
-    const cached = cache.get(resolved_path) orelse return null;
+    const cached = cache.map.get(resolved_path) orelse return null;
     return switch (cached) {
         .module => |m| m,
         else => null,

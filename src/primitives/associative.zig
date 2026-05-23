@@ -8,6 +8,7 @@ const Module = value_mod.Module;
 const Quotation = value_mod.Quotation;
 
 const dispatch_mod = @import("../dispatch.zig");
+const container_backing = @import("../container_backing.zig");
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const setErrorContext = helpers.setErrorContext;
@@ -65,8 +66,10 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
 /// Polymorphic on hash, mutable-map, error, module
 pub fn nativeAtGet(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
-    var obj = try ctx.stack.pop();
-    obj = dispatch_mod.unwrapBaseType(obj);
+    defer container_backing.releaseValue(key);
+    const obj_orig = try ctx.stack.pop();
+    defer container_backing.releaseValue(obj_orig);
+    const obj = dispatch_mod.unwrapBaseType(obj_orig);
 
     const key_str = try extractKeyString(ctx, key);
 
@@ -80,7 +83,7 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
             }
         },
         .mutable_map => |m| {
-            if (m.get(key_str)) |val| {
+            if (m.map.get(key_str)) |val| {
                 try ctx.stack.push(val);
             } else {
                 setErrorContext(ctx, "key '{s}' not found in mutable-map", .{key_str});
@@ -124,9 +127,12 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
 /// Polymorphic on hash, mutable-map, error, module
 fn nativeAtGetOr(ctx: *Context) anyerror!void {
     const default = try ctx.stack.pop();
+    defer container_backing.releaseValue(default);
     const key = try ctx.stack.pop();
-    var obj = try ctx.stack.pop();
-    obj = dispatch_mod.unwrapBaseType(obj);
+    defer container_backing.releaseValue(key);
+    const obj_orig = try ctx.stack.pop();
+    defer container_backing.releaseValue(obj_orig);
+    const obj = dispatch_mod.unwrapBaseType(obj_orig);
 
     const key_str = try extractKeyString(ctx, key);
 
@@ -139,7 +145,7 @@ fn nativeAtGetOr(ctx: *Context) anyerror!void {
             }
         },
         .mutable_map => |m| {
-            if (m.get(key_str)) |val| {
+            if (m.map.get(key_str)) |val| {
                 try ctx.stack.push(val);
             } else {
                 try ctx.stack.push(default);
@@ -187,8 +193,10 @@ fn nativeAtGetOr(ctx: *Context) anyerror!void {
 /// Polymorphic on hash, mmap, module, error
 pub fn nativeAtHas(ctx: *Context) anyerror!void {
     const key = try ctx.stack.pop();
-    var obj = try ctx.stack.pop();
-    obj = dispatch_mod.unwrapBaseType(obj);
+    defer container_backing.releaseValue(key);
+    const obj_orig = try ctx.stack.pop();
+    defer container_backing.releaseValue(obj_orig);
+    const obj = dispatch_mod.unwrapBaseType(obj_orig);
 
     const key_str = try extractKeyString(ctx, key);
 
@@ -198,7 +206,7 @@ pub fn nativeAtHas(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .boolean = exists });
         },
         .mutable_map => |m| {
-            const exists = m.get(key_str) != null;
+            const exists = m.map.get(key_str) != null;
             try ctx.stack.push(.{ .boolean = exists });
         },
         .error_value => {
@@ -223,9 +231,16 @@ pub fn nativeAtHas(ctx: *Context) anyerror!void {
 /// @set ( assoc key value -- assoc' ) - Set value, returns new hash
 /// Non-polymorphic, only works on hash tables
 pub fn nativeAtSet(ctx: *Context) anyerror!void {
+    // Hash isn't refcount-aware: `new_value` is stored in the new hash
+    // slot without a retain (see the comment in `nativeMakeHash`). Releasing
+    // the popped local here would dangle the hash's borrowed pointer, so we
+    // intentionally let the popped ownership flow into the slot. `obj` and
+    // `key` are pure consumes -- they don't end up referenced by the result.
     const new_value = try ctx.stack.pop();
     const key = try ctx.stack.pop();
+    defer container_backing.releaseValue(key);
     const obj = try ctx.stack.pop();
+    defer container_backing.releaseValue(obj);
 
     const key_str = try extractKeyString(ctx, key);
 
@@ -262,8 +277,9 @@ pub fn nativeAtSet(ctx: *Context) anyerror!void {
 /// @keys ( assoc -- array ) - Get all keys
 /// Polymorphic on hash, error, module, mutable-map
 pub fn nativeAtKeys(ctx: *Context) anyerror!void {
-    var obj = try ctx.stack.pop();
-    obj = dispatch_mod.unwrapBaseType(obj);
+    const obj_orig = try ctx.stack.pop();
+    defer container_backing.releaseValue(obj_orig);
+    const obj = dispatch_mod.unwrapBaseType(obj_orig);
 
     switch (obj) {
         .hash => |h| {
@@ -279,8 +295,8 @@ pub fn nativeAtKeys(ctx: *Context) anyerror!void {
         },
         .mutable_map => |m| {
             const alloc = ctx.quotationAllocator();
-            const keys = alloc.alloc(Value, m.count()) catch return error.OutOfMemory;
-            var iter = m.iterator();
+            const keys = alloc.alloc(Value, m.map.count()) catch return error.OutOfMemory;
+            var iter = m.map.iterator();
             var i: usize = 0;
             while (iter.next()) |entry| {
                 keys[i] = .{ .symbol = entry.key_ptr.* };
@@ -319,8 +335,9 @@ pub fn nativeAtKeys(ctx: *Context) anyerror!void {
 /// @values ( assoc -- array ) - Get all values
 /// Polymorphic on hash, mutable-map, error
 pub fn nativeAtValues(ctx: *Context) anyerror!void {
-    var obj = try ctx.stack.pop();
-    obj = dispatch_mod.unwrapBaseType(obj);
+    const obj_orig = try ctx.stack.pop();
+    defer container_backing.releaseValue(obj_orig);
+    const obj = dispatch_mod.unwrapBaseType(obj_orig);
     switch (obj) {
         .hash => |h| {
             const alloc = ctx.quotationAllocator();
@@ -335,8 +352,8 @@ pub fn nativeAtValues(ctx: *Context) anyerror!void {
         },
         .mutable_map => |m| {
             const alloc = ctx.quotationAllocator();
-            const values = alloc.alloc(Value, m.count()) catch return error.OutOfMemory;
-            var iter = m.iterator();
+            const values = alloc.alloc(Value, m.map.count()) catch return error.OutOfMemory;
+            var iter = m.map.iterator();
             var i: usize = 0;
             while (iter.next()) |entry| {
                 values[i] = entry.value_ptr.*;

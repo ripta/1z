@@ -108,9 +108,9 @@ pub const ContainerHeader = struct {
     }
 };
 
-/// Per-variant retain dispatch. Vectors carry refcounted backing and
-/// route through `header.retain()`. Mutable map and byte_array remain
-/// no-op stubs until their backings migrate. Non-container variants are
+/// Per-variant retain dispatch. Vector and mutable_map carry refcounted
+/// backing and route through `header.retain()`. byte_array remains a
+/// no-op stub until its backing migrates. Non-container variants are
 /// no-ops by construction.
 ///
 /// Storage-boundary call sites (stack push, container insertion,
@@ -119,19 +119,19 @@ pub const ContainerHeader = struct {
 pub fn retainValue(v: Value) void {
     switch (v) {
         .vector => |vec| vec.header.retain(),
-        .mutable_map => |_| {},
+        .mutable_map => |mm| mm.header.retain(),
         .byte_array => |_| {},
         else => {},
     }
 }
 
-/// Per-variant release dispatch. Mirror of `retainValue`; vectors call
-/// `header.release()` (destroying the backing on last drop); mutable
-/// map and byte_array remain no-op stubs until their backings migrate.
+/// Per-variant release dispatch. Mirror of `retainValue`; vector and
+/// mutable_map call `header.release()` (destroying the backing on last
+/// drop); byte_array remains a no-op stub until its backing migrates.
 pub fn releaseValue(v: Value) void {
     switch (v) {
         .vector => |vec| vec.header.release(),
-        .mutable_map => |_| {},
+        .mutable_map => |mm| mm.header.release(),
         .byte_array => |_| {},
         else => {},
     }
@@ -405,6 +405,20 @@ test "retainValue/releaseValue: vector dispatch exercises the header" {
     try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 
     releaseValue(.{ .vector = vec });
+    // Final release destroys the backing; no further refcount inspection.
+}
+
+test "retainValue/releaseValue: mutable_map dispatch exercises the header" {
+    const mm = try value_mod.MutableMap.create(testing.allocator);
+    try testing.expectEqual(@as(u32, 1), mm.header.refcountValue());
+
+    retainValue(.{ .mutable_map = mm });
+    try testing.expectEqual(@as(u32, 2), mm.header.refcountValue());
+
+    releaseValue(.{ .mutable_map = mm });
+    try testing.expectEqual(@as(u32, 1), mm.header.refcountValue());
+
+    releaseValue(.{ .mutable_map = mm });
     // Final release destroys the backing; no further refcount inspection.
 }
 

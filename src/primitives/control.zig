@@ -29,7 +29,7 @@ const popSymbol = helpers.popSymbol;
 fn isDefinitionDescriptor(val: Value) bool {
     const define_val_opt: ?Value = switch (val) {
         .hash => |h| h.get("define"),
-        .mutable_map => |m| m.get("define"),
+        .mutable_map => |m| m.map.get("define"),
         else => null,
     };
 
@@ -43,11 +43,13 @@ fn isDefinitionDescriptor(val: Value) bool {
     return false;
 }
 
-/// Get the underlying map from a definition descriptor
-fn getDescriptorMap(val: Value) ?*value_mod.MutableMap {
+/// Get the underlying map from a definition descriptor. Both `hash` and
+/// `mutable_map` ultimately store a `std.StringHashMapUnmanaged(Value)`; the
+/// MutableMap wrapper exposes it as `m.map`.
+fn getDescriptorMap(val: Value) ?*value_mod.HashTable {
     return switch (val) {
         .hash => |h| h,
-        .mutable_map => |m| m,
+        .mutable_map => |m| &m.map,
         else => null,
     };
 }
@@ -372,12 +374,23 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 try enforceRequireDoc(ctx, name, captured_doc != null, false, true, false);
                 if (captured_doc) |doc_text| {
                     if (!desc_map.contains("doc")) {
-                        try desc_map.put(alloc, "doc", .{ .doc_string = doc_text });
+                        const map_alloc = switch (top_val) {
+                            .mutable_map => |m| m.header.allocator,
+                            else => alloc,
+                        };
+                        const key_copy = try map_alloc.dupe(u8, "doc");
+                        try desc_map.put(map_alloc, key_copy, .{ .doc_string = doc_text });
                     }
                 }
                 try ctx.stack.push(.{ .symbol = name });
 
-                try ctx.stack.push(top_val);
+                // Move ownership of `top_val` into the slot the consumer
+                // will pop. `pop` (line 294) already transferred the prior
+                // slot's reference to this local; pushing via `pushMoved`
+                // forwards that same reference into the new slot without
+                // an extra retain. The consumer's `releaseValue` on its
+                // descriptor local then balances the original creation.
+                try ctx.stack.pushMoved(top_val);
 
                 const markers_array = try alloc.alloc(Value, collected_markers.items.len);
                 for (collected_markers.items, 0..) |mk, i| {

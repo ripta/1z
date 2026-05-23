@@ -8,6 +8,7 @@ const Parameter = value_mod.Parameter;
 
 const dictionary_mod = @import("../dictionary.zig");
 const WordDefinition = dictionary_mod.WordDefinition;
+const container_backing = @import("../container_backing.zig");
 
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
@@ -56,6 +57,7 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
     };
 
     const desc_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(desc_val);
     const desc_map: *MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
@@ -64,7 +66,7 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
         },
     };
 
-    const default_val = desc_map.get("default") orelse {
+    const default_val = desc_map.map.get("default") orelse {
         helpers.setErrorContext(ctx, "define-parameter descriptor missing 'default' field", .{});
         return error.MissingField;
     };
@@ -76,7 +78,7 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
         },
     };
 
-    const doc_val: ?[]const u8 = if (desc_map.get("doc")) |v| switch (v) {
+    const doc_val: ?[]const u8 = if (desc_map.map.get("doc")) |v| switch (v) {
         .doc_string, .string => |s| s,
         else => null,
     } else null;

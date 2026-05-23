@@ -186,7 +186,7 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
             break :blk false;
         },
         .mutable_map => |m| blk: {
-            var iter = m.iterator();
+            var iter = m.map.iterator();
             while (iter.next()) |entry| {
                 if (valueContainsBorrowedBuffer(entry.value_ptr.*)) break :blk true;
             }
@@ -249,7 +249,38 @@ pub const ValueContext = struct {
 pub const Set = std.ArrayHashMapUnmanaged(Value, void, ValueContext, true);
 
 /// MutableMap type for M{ } literals - mutable key-value store.
-pub const MutableMap = std.StringHashMapUnmanaged(Value);
+///
+/// Storage layout mirrors `Vector`: a refcounted, mutex-guarded
+/// `ContainerHeader` at the top of the struct, followed by the
+/// `StringHashMapUnmanaged` that holds the entries. Create via
+/// `MutableMap.create` so the header is initialised before the value
+/// can be observed by any other thread.
+pub const MutableMap = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    map: std.StringHashMapUnmanaged(Value) = .{},
+
+    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*MutableMap {
+        const self = try allocator.create(MutableMap);
+        self.* = .{
+            .header = undefined,
+            .map = .{},
+        };
+        self.header.init(allocator, destroyMutableMap);
+        return self;
+    }
+
+    fn destroyMutableMap(header: *@import("container_backing.zig").ContainerHeader) void {
+        const cb = @import("container_backing.zig");
+        const self: *MutableMap = @fieldParentPtr("header", header);
+        var iter = self.map.iterator();
+        while (iter.next()) |entry| {
+            header.allocator.free(entry.key_ptr.*);
+            cb.releaseValue(entry.value_ptr.*);
+        }
+        self.map.deinit(header.allocator);
+        header.allocator.destroy(self);
+    }
+};
 
 /// StreamMode indicates how a stream was opened.
 pub const StreamMode = enum {
@@ -954,7 +985,7 @@ pub const Value = union(enum) {
             },
             .mutable_map => |m| {
                 try writer.writeAll("M{ ");
-                var iter = m.iterator();
+                var iter = m.map.iterator();
                 while (iter.next()) |entry| {
                     try writer.print("{s}: ", .{entry.key_ptr.*});
                     try entry.value_ptr.write(writer);
@@ -1119,10 +1150,10 @@ pub const Value = union(enum) {
             },
             .mutable_map => |a| {
                 const b = other.mutable_map;
-                if (a.count() != b.count()) return false;
-                var iter = a.iterator();
+                if (a.map.count() != b.map.count()) return false;
+                var iter = a.map.iterator();
                 while (iter.next()) |entry| {
-                    if (b.get(entry.key_ptr.*)) |bval| {
+                    if (b.map.get(entry.key_ptr.*)) |bval| {
                         if (!entry.value_ptr.eql(bval)) return false;
                     } else {
                         return false;
@@ -1269,7 +1300,7 @@ pub const Value = union(enum) {
             .mutable_map => |m| {
                 // Order-independent hash using XOR (same as immutable hash)
                 var combined: u64 = 0;
-                var iter = m.iterator();
+                var iter = m.map.iterator();
                 while (iter.next()) |entry| {
                     var pair_hasher = Hasher.init(0);
                     pair_hasher.update(entry.key_ptr.*);

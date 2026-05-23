@@ -8,6 +8,7 @@ const StructInstance = value_mod.StructInstance;
 const Marker = value_mod.Marker;
 const markers_mod = @import("markers.zig");
 const dispatch_mod = @import("../dispatch.zig");
+const container_backing = @import("../container_backing.zig");
 
 const helpers = @import("helpers.zig");
 const struct_field_spec = @import("struct_field_spec.zig");
@@ -67,6 +68,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const markers_slice = try markers_list.toOwnedSlice(alloc);
 
     const desc_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(desc_val);
     const raw_desc_map: *value_mod.MutableMap = switch (desc_val) {
         .mutable_map => |m| m,
         else => {
@@ -74,7 +76,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    const fields_val = raw_desc_map.get("fields") orelse return error.MissingField;
+    const fields_val = raw_desc_map.map.get("fields") orelse return error.MissingField;
     const fields_array = switch (fields_val) {
         .array => |arr| arr,
         else => {

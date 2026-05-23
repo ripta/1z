@@ -213,12 +213,10 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
 pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const instrs = quot.instructions;
-    const alloc = ctx.containerAllocator();
-    const in_task = ctx.parent_context != null;
 
-    // Create a new mutable map
-    const mmap = alloc.create(MutableMap) catch return error.OutOfMemory;
-    mmap.* = MutableMap{};
+    const mmap = MutableMap.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer container_backing.releaseValue(.{ .mutable_map = mmap });
+    const alloc = mmap.header.allocator;
 
     // Parse instructions as key: value pairs (same as make-hash)
     var i: usize = 0;
@@ -252,9 +250,15 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
         const val_start = i;
         i += 1;
         while (i < instrs.len and instrs[i].op == .call_word) : (i += 1) {}
-        const val = if (i - val_start == 1 and instrs[val_start].op == .push_literal)
-            instrs[val_start].op.push_literal
-        else blk: {
+        // push_literal values are borrowed from the instruction stream, so a
+        // map slot becomes a new owner and must retain. call_word values were
+        // popped from the stack into a transient C-local, so the slot inherits
+        // ownership without an additional retain.
+        const stored_val = if (i - val_start == 1 and instrs[val_start].op == .push_literal) blk: {
+            const v = instrs[val_start].op.push_literal;
+            container_backing.retainValue(v);
+            break :blk v;
+        } else blk: {
             try ctx.executeQuotation(.{ .instructions = instrs[val_start..i] });
             break :blk ctx.stack.pop() catch {
                 helpers.setErrorContext(ctx, "value for key '{s}' produced no result", .{key});
@@ -262,16 +266,18 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
             };
         };
 
-        // Copy key to arena for persistence. The mutable map is not yet
-        // refcount-aware: stored values are borrowed for the lifetime
-        // of the owning arena. Retaining without a matching release at
-        // map destroy would leak refcounted containers.
-        const key_copy = alloc.dupe(u8, key) catch return error.OutOfMemory;
-        const stored_val = if (in_task) tasks.deepCopyValue(val, alloc) catch return error.OutOfMemory else val;
-        mmap.put(alloc, key_copy, stored_val) catch return error.OutOfMemory;
+        const key_copy = alloc.dupe(u8, key) catch {
+            container_backing.releaseValue(stored_val);
+            return error.OutOfMemory;
+        };
+        mmap.map.put(alloc, key_copy, stored_val) catch |err| {
+            alloc.free(key_copy);
+            container_backing.releaseValue(stored_val);
+            return err;
+        };
     }
 
-    try ctx.stack.push(.{ .mutable_map = mmap });
+    try ctx.stack.pushMoved(.{ .mutable_map = mmap });
 }
 
 /// @set! ( mmap key value -- mmap ) - Set value in mutable map, mutate in place
@@ -310,25 +316,44 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
 
     switch (obj) {
         .mutable_map => |m| {
-            const alloc = ctx.containerAllocator();
-            const stored_value = if (ctx.parent_context != null)
-                tasks.deepCopyValue(new_value, alloc) catch return error.OutOfMemory
-            else
-                new_value;
+            const alloc = m.header.allocator;
 
-            // Mutable map is not yet refcount-aware; slots are borrowed.
-            // Skip retain/release on stored values to avoid leaking
-            // refcounted containers that have no map-side release.
-            if (m.get(key_str)) |_| {
-                m.putAssumeCapacity(key_str, stored_value);
+            // `new_value` and `obj` were popped into C locals with ownership
+            // transferred from their stack slots. The map slot below takes
+            // over `new_value`'s reference; `obj` flows into the result slot
+            // via `pushMoved`. No extra retains are needed in either path.
+            m.header.lock();
+            const existing_entry = m.map.getEntry(key_str);
+            if (existing_entry) |entry| {
+                const displaced = entry.value_ptr.*;
+                entry.value_ptr.* = new_value;
+                m.header.unlock();
+                container_backing.releaseValue(displaced);
             } else {
-                const key_copy = alloc.dupe(u8, key_str) catch return error.OutOfMemory;
-                m.put(alloc, key_copy, stored_value) catch return error.OutOfMemory;
+                const key_copy = alloc.dupe(u8, key_str) catch {
+                    m.header.unlock();
+                    container_backing.releaseValue(new_value);
+                    container_backing.releaseValue(.{ .mutable_map = m });
+                    return error.OutOfMemory;
+                };
+                m.map.put(alloc, key_copy, new_value) catch |err| {
+                    m.header.unlock();
+                    alloc.free(key_copy);
+                    container_backing.releaseValue(new_value);
+                    container_backing.releaseValue(.{ .mutable_map = m });
+                    return err;
+                };
+                m.header.unlock();
             }
 
-            try ctx.stack.push(.{ .mutable_map = m });
+            ctx.stack.pushMoved(.{ .mutable_map = m }) catch |err| {
+                container_backing.releaseValue(.{ .mutable_map = m });
+                return err;
+            };
         },
         else => {
+            container_backing.releaseValue(new_value);
+            container_backing.releaseValue(obj);
             helpers.setTypeMismatchError(ctx, "mutable-map", obj);
             return error.TypeMismatch;
         },
@@ -370,12 +395,20 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
 
     switch (obj) {
         .mutable_map => |m| {
-            // Mutable map slots are borrowed; insertion did not retain,
-            // so removal must not release.
-            _ = m.fetchRemove(key_str);
-            try ctx.stack.push(.{ .mutable_map = m });
+            m.header.lock();
+            const removed = m.map.fetchRemove(key_str);
+            m.header.unlock();
+            if (removed) |kv| {
+                m.header.allocator.free(kv.key);
+                container_backing.releaseValue(kv.value);
+            }
+            ctx.stack.pushMoved(.{ .mutable_map = m }) catch |err| {
+                container_backing.releaseValue(.{ .mutable_map = m });
+                return err;
+            };
         },
         else => {
+            container_backing.releaseValue(obj);
             helpers.setTypeMismatchError(ctx, "mutable-map", obj);
             return error.TypeMismatch;
         },
