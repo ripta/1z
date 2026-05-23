@@ -14,6 +14,7 @@ const StackEffect = stack_effect_mod.StackEffect;
 
 const helpers = @import("helpers.zig");
 const popQuotation = helpers.popQuotation;
+const container_backing = @import("../container_backing.zig");
 
 const Marker = value_mod.Marker;
 const Primitive = @import("types.zig").Primitive;
@@ -140,7 +141,10 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
                     }
                 }
 
-                try ctx.stack.push(.{ .error_value = thrown_ptr });
+                // The stash held the sole owning reference to the thrown
+                // error's data; transfer it to the stack slot without an
+                // extra retain.
+                try ctx.stack.pushMoved(.{ .error_value = thrown_ptr });
                 ctx.clearExecutionDetails();
                 try ctx.executeQuotationWithFrame(recover_quot);
                 return;
@@ -245,6 +249,10 @@ fn nativeMakeError(ctx: *Context) anyerror!void {
     const type_val = try ctx.stack.pop();
     const message_val = try ctx.stack.pop();
     const data_val = try ctx.stack.pop();
+    // The data value's owning reference is transferred into the error box and
+    // re-published by the final `pushMoved`. Until that succeeds, an early
+    // type-error return must release it so the operand does not leak.
+    errdefer container_backing.releaseValue(data_val);
 
     // Extract error type from string or symbol
     const error_type = switch (type_val) {
@@ -290,7 +298,8 @@ fn nativeMakeError(ctx: *Context) anyerror!void {
         .message = try ctx.quotationAllocator().dupe(u8, message),
         .data = data,
     });
-    try ctx.stack.push(.{ .error_value = error_ptr });
+    // `data_val` was moved into the error box; publish without re-retaining.
+    try ctx.stack.pushMoved(.{ .error_value = error_ptr });
 }
 
 /// throw ( error -- ) - Raise an error object as an actual error.

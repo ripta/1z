@@ -22,6 +22,7 @@ const RegistryEntry = types_mod.RegistryEntry;
 
 const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
+const container_backing = @import("../container_backing.zig");
 
 pub const primitives = [_]Primitive{};
 
@@ -285,9 +286,11 @@ fn nativeDeadDefinitions(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const files_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(files_val);
     const file_paths = try popStringArray(ctx, files_val);
 
     const cache_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(cache_val);
     const cache = switch (cache_val) {
         .mutable_map => |m| m,
         else => {

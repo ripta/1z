@@ -42,13 +42,7 @@ fn seqToArrayIter(seq: Value, alloc: Allocator) !?*Iterator {
     const s = unwrapBaseType(seq);
     const items: []const Value = switch (s) {
         .array => |arr| arr,
-        .string, .vector, .byte_array, .set => blk: {
-            const copied = try sequenceToValues(s, alloc);
-            // The iterator co-owns the copied elements so the caller can
-            // release the source container once this iterator is built.
-            container_backing.retainValues(copied);
-            break :blk copied;
-        },
+        .string, .vector, .byte_array, .set => try sequenceToValues(s, alloc),
         else => return null,
     };
     const iter = try alloc.create(Iterator);
@@ -820,8 +814,9 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
 pub fn nativeMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
-    // seqToArrayIter copies and co-owns the source's elements, so the source
-    // container can be released here. An iterator source is a no-op release.
+    // Pushing the wrapper iterator retains the materialized backing through
+    // `retainIteratorBacking`, so releasing the source here transfers its
+    // element ownership to the iterator value rather than dropping it.
     defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
@@ -845,8 +840,9 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
 pub fn nativeFilter(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
-    // seqToArrayIter copies and co-owns the source's elements, so the source
-    // container can be released here. An iterator source is a no-op release.
+    // Pushing the wrapper iterator retains the materialized backing through
+    // `retainIteratorBacking`, so releasing the source here transfers its
+    // element ownership to the iterator value rather than dropping it.
     defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
@@ -2561,10 +2557,9 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
         .vector => |vec| {
             const alloc = ctx.quotationAllocator();
             const items = try alloc.dupe(Value, vec.list.items);
-            // The snapshot array becomes a fresh owner of each element; retain
-            // before the vector is released so destroying it does not drop the
-            // last reference to a refcounted element the array still points at.
-            container_backing.retainValues(items);
+            // Pushing the array retains each element through `retainValue`;
+            // that retain happens before the deferred source release below, so
+            // the snapshot keeps its own reference without an extra retain here.
             try ctx.stack.push(.{ .array = items });
         },
         else => {
@@ -2580,10 +2575,9 @@ fn nativeToArrayVector(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
     const items = try alloc.dupe(Value, val.vector.list.items);
-    // The snapshot array becomes a fresh owner of each element. Retain before
-    // the vector is released below, otherwise destroying the vector drops the
-    // last reference to a refcounted element the array still points at.
-    container_backing.retainValues(items);
+    // Pushing the array retains each element through `retainValue`; that retain
+    // happens before the deferred source release below, so the snapshot keeps
+    // its own reference without an extra retain here.
     try ctx.stack.push(.{ .array = items });
 }
 

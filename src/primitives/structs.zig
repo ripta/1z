@@ -205,10 +205,16 @@ fn makeStructInstanceHelper(ctx: *Context) anyerror!void {
     const num_fields = st.fields.len;
 
     const field_values = try alloc.alloc(Value, num_fields);
+    // Fields are popped (moved) off the stack into field_values, so each slot
+    // owns its value. `lowest` marks the range field_values[lowest..num_fields]
+    // that has been populated; on any error path those owned values are released.
+    var lowest: usize = num_fields;
+    errdefer container_backing.releaseValues(field_values[lowest..num_fields]);
     var i: usize = num_fields;
     while (i > 0) {
         i -= 1;
         field_values[i] = try ctx.stack.pop();
+        lowest = i;
         if (st.field_types.len != 0) {
             const expected_tv = st.field_types[i] orelse unreachable;
             if (!helpers.valueMatchesType(ctx, field_values[i], expected_tv)) {
@@ -225,7 +231,9 @@ fn makeStructInstanceHelper(ctx: *Context) anyerror!void {
         .fields = field_values,
     };
 
-    try ctx.stack.push(.{ .struct_instance = instance });
+    // The popped field values were moved in; the instance now owns them, so
+    // push without an additional retain.
+    try ctx.stack.pushMoved(.{ .struct_instance = instance });
 }
 
 /// Trampoline helper ( hash struct-type -- instance )
@@ -234,6 +242,8 @@ fn hashToStructHelper(ctx: *Context) anyerror!void {
     const st = try helpers.popStructType(ctx);
 
     const hash_val = try ctx.stack.pop();
+    // The popped hash is consumed by this word; release it on every path.
+    defer container_backing.releaseValue(hash_val);
     const hash = switch (hash_val) {
         .hash => |h| h,
         else => {
@@ -260,13 +270,17 @@ fn hashToStructHelper(ctx: *Context) anyerror!void {
         }
     }
 
+    // Fields are borrowed from the source hash; retain each so the instance
+    // becomes an independent owner before the hash is released above.
+    container_backing.retainValues(field_values);
+
     const instance = try alloc.create(StructInstance);
     instance.* = .{
         .struct_type = st,
         .fields = field_values,
     };
 
-    try ctx.stack.push(.{ .struct_instance = instance });
+    try ctx.stack.pushMoved(.{ .struct_instance = instance });
 }
 
 /// Trampoline helper ( val struct-type -- ? )
@@ -274,6 +288,7 @@ fn structTypePredicateHelper(ctx: *Context) anyerror!void {
     const st = try helpers.popStructType(ctx);
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const is_instance = switch (val) {
         .struct_instance => |si| si.struct_type.type_val.?.descriptor.? == st.type_val.?.descriptor.?,
         else => false,
@@ -287,6 +302,9 @@ fn structFieldGetHelper(ctx: *Context) anyerror!void {
     const idx: usize = @intCast(try helpers.popFixnum(ctx));
     const st = try helpers.popStructType(ctx);
     const inst = try helpers.popStructInstance(ctx);
+    // The instance was popped (moved) into this word; release it once the
+    // extracted field has been pushed (push retains the field for its new slot).
+    defer container_backing.releaseValue(.{ .struct_instance = inst });
 
     if (inst.struct_type.type_val.?.descriptor.? != st.type_val.?.descriptor.?) {
         helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });
@@ -301,30 +319,52 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
     const idx: usize = @intCast(try helpers.popFixnum(ctx));
     const st = try helpers.popStructType(ctx);
     const new_val = try ctx.stack.pop();
-    const inst = try helpers.popStructInstance(ctx);
+    const inst = helpers.popStructInstance(ctx) catch |err| {
+        container_backing.releaseValue(new_val);
+        return err;
+    };
+    // Both `new_val` and `inst` are owned (moved off the stack). The block's
+    // errdefer releases them on the validation-error paths; it is discharged
+    // once validation passes, after which `new_val` is moved into the field
+    // and `inst` is returned via pushMoved.
+    {
+        errdefer {
+            container_backing.releaseValue(new_val);
+            container_backing.releaseValue(.{ .struct_instance = inst });
+        }
 
-    if (inst.struct_type.type_val.?.descriptor.? != st.type_val.?.descriptor.?) {
-        helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });
-        return error.TypeMismatch;
-    }
+        if (inst.struct_type.type_val.?.descriptor.? != st.type_val.?.descriptor.?) {
+            helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });
+            return error.TypeMismatch;
+        }
 
-    if (st.field_types.len != 0) {
-        const expected_tv = st.field_types[idx] orelse unreachable;
-        if (!helpers.valueMatchesType(ctx, new_val, expected_tv)) {
-            const actual_tv = helpers.resolveValueTypeValue(ctx, new_val) orelse unreachable;
-            helpers.setErrorContext(ctx, ">>{s}: field '{s}' expects {s}, got {s}", .{ st.fields[idx], st.fields[idx], expected_tv.name, actual_tv.name });
-            return error.TypeError;
+        if (st.field_types.len != 0) {
+            const expected_tv = st.field_types[idx] orelse unreachable;
+            if (!helpers.valueMatchesType(ctx, new_val, expected_tv)) {
+                const actual_tv = helpers.resolveValueTypeValue(ctx, new_val) orelse unreachable;
+                helpers.setErrorContext(ctx, ">>{s}: field '{s}' expects {s}, got {s}", .{ st.fields[idx], st.fields[idx], expected_tv.name, actual_tv.name });
+                return error.TypeError;
+            }
         }
     }
 
+    // Replace the stored field: release the old owning reference, move the new
+    // value in, and return the instance without re-retaining its fields.
+    container_backing.releaseValue(inst.fields[idx]);
     inst.fields[idx] = new_val;
-    try ctx.stack.push(.{ .struct_instance = inst });
+    ctx.stack.pushMoved(.{ .struct_instance = inst }) catch |err| {
+        container_backing.releaseValue(.{ .struct_instance = inst });
+        return err;
+    };
 }
 
 /// Trampoline helper ( instance struct-type -- field1 ... fieldN )
 fn structInstanceDestructureHelper(ctx: *Context) anyerror!void {
     const st = try helpers.popStructType(ctx);
     const inst = try helpers.popStructInstance(ctx);
+    // The instance was popped (moved) here; release it once each field has been
+    // pushed (push retains every field for its new slot).
+    defer container_backing.releaseValue(.{ .struct_instance = inst });
 
     if (inst.struct_type != st) {
         helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });
@@ -341,6 +381,9 @@ fn structInstanceToHashHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const st = try helpers.popStructType(ctx);
     const inst = try helpers.popStructInstance(ctx);
+    // The instance was popped (moved) here; release it once the hash has been
+    // pushed (push retains every value it stores).
+    defer container_backing.releaseValue(.{ .struct_instance = inst });
 
     if (inst.struct_type != st) {
         helpers.setErrorContext(ctx, "expected struct '{s}', got struct '{s}'", .{ st.name, inst.struct_type.name });

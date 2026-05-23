@@ -12,6 +12,7 @@ const MutableMap = value_mod.MutableMap;
 
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
+const container_backing = @import("../container_backing.zig");
 
 pub const primitives = [_]Primitive{
     .{ .name = ">template", .stack_effect = "string -- template", .doc = "Parse format string into template value.", .func = nativeTemplate },
@@ -40,6 +41,9 @@ fn nativeInterpolate(ctx: *Context) anyerror!void {
         },
     };
     const source = try ctx.stack.pop();
+    // The source operand is consumed: its looked-up fields are read but not
+    // stored, so release the owning reference once interpolation is done.
+    defer container_backing.releaseValue(source);
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     const writer = buf.writer(alloc);

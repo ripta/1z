@@ -564,7 +564,9 @@ fn native1Array(ctx: *Context) anyerror!void {
     const arr = alloc.alloc(Value, 1) catch return error.OutOfMemory;
     arr[0] = elem;
 
-    try ctx.stack.push(.{ .array = arr });
+    // `elem` was moved into the array slot, which already owns its reference;
+    // publish without re-retaining.
+    try ctx.stack.pushMoved(.{ .array = arr });
 }
 
 const ResolverState = struct {

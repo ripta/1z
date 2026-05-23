@@ -114,8 +114,9 @@ pub const ContainerHeader = struct {
 /// The header-backed variants (i.e., `vector`, `mutable_map`) carry a refcounted backing and route through
 /// `header.retain()`. Their contents are accounted only at `destroy`, so we don't recurse into them here.
 ///
-/// The headerless composites (i.e., `array`, `hash`, `set`, `tagged`, `iterator`) owns a reference to each
-/// refcounted value they embeds, so a stack slot holding one must retain those embedded values recursively.
+/// The headerless composites (i.e., `array`, `hash`, `set`, `tagged`, `struct_instance`, `error_value`,
+/// `iterator`) own a reference to each refcounted value they embed, so a stack slot holding one must
+/// retain those embedded values recursively. An `error_value` owns the value carried in its `data` field.
 ///
 /// Bytearray remains a noöp stub until its backing migrates.
 ///
@@ -134,6 +135,8 @@ pub fn retainValue(v: Value) void {
         },
         .set => |s| retainValues(s.keys()),
         .tagged => |t| retainValue(t.inner.*),
+        .struct_instance => |si| retainValues(si.fields),
+        .error_value => |err| if (err.data) |data| retainValue(data.*),
         .iterator => |it| retainIteratorBacking(it),
         .byte_array => |_| {},
         else => {},
@@ -159,6 +162,8 @@ pub fn releaseValue(v: Value) void {
         },
         .set => |s| releaseValues(s.keys()),
         .tagged => |t| releaseValue(t.inner.*),
+        .struct_instance => |si| releaseValues(si.fields),
+        .error_value => |err| if (err.data) |data| releaseValue(data.*),
         .iterator => |it| releaseIteratorBacking(it),
         .byte_array => |_| {},
         else => {},
@@ -276,6 +281,13 @@ pub fn valueHoldsRefcountedBacking(val: Value) bool {
             return false;
         },
         .tagged => |t| valueHoldsRefcountedBacking(t.inner.*),
+        .struct_instance => |si| {
+            for (si.fields) |field| {
+                if (valueHoldsRefcountedBacking(field)) return true;
+            }
+            return false;
+        },
+        .error_value => |err| if (err.data) |data| valueHoldsRefcountedBacking(data.*) else false,
         else => false,
     };
 }
@@ -560,6 +572,21 @@ test "retainValue/releaseValue: tagged propagates to inner vector" {
     try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
 
     releaseValue(.{ .tagged = .{ .tag = &dummy_vt, .inner = &inner } });
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    vec.header.release();
+}
+
+test "retainValue/releaseValue: struct_instance propagates to field vector" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    var fields = [_]Value{.{ .vector = vec }};
+    var st = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
+    var inst = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
+
+    retainValue(.{ .struct_instance = &inst });
+    try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    releaseValue(.{ .struct_instance = &inst });
     try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 
     vec.header.release();

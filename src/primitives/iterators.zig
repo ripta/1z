@@ -40,19 +40,16 @@ pub const primitives = [_]Primitive{
 /// >iterator ( seq -- iterator )
 pub fn nativeToIterator(ctx: *Context) anyerror!void {
     const raw_val = try ctx.stack.pop();
-    // The materialized backing co-owns the source's elements, so the source
-    // can be released once the iterator is built. An array source shares its
-    // slice directly; releasing it pairs with the iterator's backing retain.
+    // Releasing the source pairs with the backing ownership the pushed
+    // iterator value takes on via `retainIteratorBacking`. The materialized
+    // backing borrows the source's element references; the push below retains
+    // them before this release drops the source's own references.
     defer container_backing.releaseValue(raw_val);
     const alloc = ctx.quotationAllocator();
     const val = unwrapBaseType(raw_val);
     const items: []const Value = switch (val) {
         .array => |arr| arr,
-        .string, .vector, .byte_array, .set => blk: {
-            const copied = sequence.sequenceToValues(val, alloc) catch return error.OutOfMemory;
-            container_backing.retainValues(copied);
-            break :blk copied;
-        },
+        .string, .vector, .byte_array, .set => sequence.sequenceToValues(val, alloc) catch return error.OutOfMemory,
         else => {
             helpers.setTypeMismatchError(ctx, "sequence", raw_val);
             return error.TypeMismatch;

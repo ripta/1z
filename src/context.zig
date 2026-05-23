@@ -912,7 +912,12 @@ pub const Context = struct {
         self.pic_cache.deinit(self.allocator);
         // thrown_error, error_value boxes, bignum boxes (header and limbs),
         // and task error_obj boxes are all arena-allocated; they are
-        // reclaimed by arena.deinit.
+        // reclaimed by arena.deinit. The refcounted backing carried in an
+        // unrecovered error's `data` field is not arena-owned, so release it
+        // here before discarding the stash.
+        if (self.thrown_error) |thrown| {
+            if (thrown.data) |data| container_backing.releaseValue(data.*);
+        }
         self.thrown_error = null;
 
         // Drop owning references in lifecycle order: residual stack

@@ -144,7 +144,9 @@ fn nativeArrayN(ctx: *Context) anyerror!void {
         arr[i] = try ctx.stack.pop();
     }
 
-    try ctx.stack.push(.{ .array = arr });
+    // Elements were popped (moved) into `arr`, so each slot already owns its
+    // value; push the array without re-retaining its elements.
+    try ctx.stack.pushMoved(.{ .array = arr });
 }
 
 /// drop-n ( x1...xn n -- ) - Drop n items from the stack in O(1).

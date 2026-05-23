@@ -16,6 +16,7 @@ const StructInstance = value_mod.StructInstance;
 const Task = @import("../task.zig").Task;
 const Channel = @import("../channel.zig").Channel;
 const dispatch_mod = @import("../dispatch.zig");
+const container_backing = @import("../container_backing.zig");
 
 const stack_effect_mod = @import("../stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -363,6 +364,7 @@ pub fn popAs(comptime tag: std.meta.Tag(Value), ctx: *Context) !std.meta.TagPayl
         tag => |payload| return payload,
         else => {
             setTypeMismatchError(ctx, comptime tagDisplayName(tag), val);
+            container_backing.releaseValue(val);
             return error.TypeMismatch;
         },
     }
@@ -388,6 +390,7 @@ pub fn popFixnum(ctx: *Context) !i64 {
 /// Only the explicit false value is false. All other values are true.
 pub fn popBoolean(ctx: *Context) !bool {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     return switch (val) {
         .boolean => |b| b,
         else => true,
