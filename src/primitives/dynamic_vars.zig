@@ -152,6 +152,9 @@ pub fn nativeWithParameter(ctx: *Context) anyerror!void {
         },
     };
     const new_value = try ctx.stack.pop();
+    // The frame takes its own owning reference in setParameterInTopFrame, so
+    // release the reference this pop transferred to us once the binding ends.
+    defer container_backing.releaseValue(new_value);
 
     // Push new frame with binding
     try ctx.pushParameterFrame();

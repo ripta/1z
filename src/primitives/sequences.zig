@@ -42,7 +42,13 @@ fn seqToArrayIter(seq: Value, alloc: Allocator) !?*Iterator {
     const s = unwrapBaseType(seq);
     const items: []const Value = switch (s) {
         .array => |arr| arr,
-        .string, .vector, .byte_array, .set => try sequenceToValues(s, alloc),
+        .string, .vector, .byte_array, .set => blk: {
+            const copied = try sequenceToValues(s, alloc);
+            // The iterator co-owns the copied elements so the caller can
+            // release the source container once this iterator is built.
+            container_backing.retainValues(copied);
+            break :blk copied;
+        },
         else => return null,
     };
     const iter = try alloc.create(Iterator);
@@ -107,9 +113,13 @@ fn sortCompareFn(sort_ctx: *SortContext, a: Value, b: Value) bool {
 fn nativeSort(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     const items = try collectToMutableArray(seq, ctx, alloc);
+    // The result array becomes a fresh owner of each element; retain before the
+    // source container is released on scope exit.
+    container_backing.retainValues(items);
     if (items.len <= 1) {
         try ctx.stack.push(.{ .array = items });
         return;
@@ -178,9 +188,13 @@ fn sortByKeyCompareFn(sort_ctx: *SortByContext, a_idx: usize, b_idx: usize) bool
 fn nativeSortBy(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     const items = try collectToMutableArray(seq, ctx, alloc);
+    // The result array becomes a fresh owner of each element; retain before the
+    // source container is released on scope exit.
+    container_backing.retainValues(items);
     if (items.len == 0) {
         try ctx.stack.push(.{ .array = items });
         return;
@@ -615,6 +629,8 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
 
     if (index < 0) {
+        container_backing.releaseValue(value);
+        container_backing.releaseValue(seq);
         setErrorContext(ctx, "negative index {d}", .{index});
         return error.IndexOutOfBounds;
     }
@@ -643,30 +659,41 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
         .byte_array => |b| {
             const bytes = b.slice();
             if (idx >= bytes.len) {
+                container_backing.releaseValue(value);
+                container_backing.releaseValue(seq);
                 setErrorContext(ctx, "index {d} out of bounds for byte-array of length {d}", .{ idx, bytes.len });
                 return error.IndexOutOfBounds;
             }
             const byte_val: u8 = switch (value) {
                 .fixnum => |i| blk: {
                     if (i < 0 or i > 255) {
+                        container_backing.releaseValue(value);
+                        container_backing.releaseValue(seq);
                         setErrorContext(ctx, "#nth! byte value {d} out of range 0-255", .{i});
                         return error.FixnumOverflow;
                     }
                     break :blk @intCast(i);
                 },
                 else => {
+                    container_backing.releaseValue(value);
+                    container_backing.releaseValue(seq);
                     setErrorContext(ctx, "#nth! on byte-array requires fixnum value 0-255, got {s}", .{valueTypeName(value)});
                     return error.TypeMismatch;
                 },
             };
             bytes[idx] = byte_val;
+            container_backing.releaseValue(value);
             try ctx.stack.push(.{ .byte_array = b });
         },
         .array, .string => {
+            container_backing.releaseValue(value);
+            container_backing.releaseValue(seq);
             setErrorContext(ctx, "cannot mutate immutable {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
         else => {
+            container_backing.releaseValue(value);
+            container_backing.releaseValue(seq);
             setErrorContext(ctx, "expected mutable sequence, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
@@ -701,6 +728,9 @@ pub fn nativeLast(ctx: *Context) anyerror!void {
 pub fn nativeEach(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const raw_seq = try ctx.stack.pop();
+    // The iterator below borrows the container and is fully consumed before
+    // this scope exits, so releasing the source on exit is safe.
+    defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
     const seq = unwrapBaseType(raw_seq);
 
@@ -726,6 +756,7 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
 pub fn nativeEachIndex(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const raw_seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
     const seq = unwrapBaseType(raw_seq);
     var idx: i64 = 0;
@@ -759,6 +790,9 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
 pub fn nativeMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
+    // seqToArrayIter copies and co-owns the source's elements, so the source
+    // container can be released here. An iterator source is a no-op release.
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     const inner = if (seq == .iterator)
@@ -781,6 +815,9 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
 pub fn nativeFilter(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
+    // seqToArrayIter copies and co-owns the source's elements, so the source
+    // container can be released here. An iterator source is a no-op release.
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     const inner = if (seq == .iterator)
@@ -801,6 +838,7 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     var acc = try ctx.stack.pop(); // initial accumulator
     const raw_seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
     const seq = unwrapBaseType(raw_seq);
 
@@ -833,6 +871,7 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     var acc = try ctx.stack.pop();
     const raw_seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
     const seq = unwrapBaseType(raw_seq);
     var idx: i64 = 0;
@@ -870,6 +909,7 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
     const end_val = try popFixnum(ctx);
     const start_val = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq);
 
     if (start_val < 0) {
         setErrorContext(ctx, "negative start index {d}", .{start_val});
@@ -919,6 +959,8 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
             for (v.list.items[start..end]) |elem| {
                 result_vec.list.appendAssumeCapacity(elem);
             }
+            // Each element copied into the new vector is a new owning reference.
+            container_backing.retainValues(result_vec.list.items);
             try ctx.stack.push(.{ .vector = result_vec });
         },
         .byte_array => |b| {
@@ -972,6 +1014,8 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             for (items2) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
+            // Each element copied into the new vector is a new owning reference.
+            container_backing.retainValues(new_vec.list.items);
             try ctx.stack.push(.{ .vector = new_vec });
         },
         .string => |s1| {
@@ -1131,7 +1175,9 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
 /// Result contains seq2's elements followed by seq1's elements, with type of seq1.
 pub fn nativePrepend(ctx: *Context) anyerror!void {
     const seq2 = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq2);
     const seq1 = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq1);
 
     const alloc = ctx.quotationAllocator();
 
@@ -1153,6 +1199,8 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
             for (vec1.list.items) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
+            // Each element copied into the new vector is a new owning reference.
+            container_backing.retainValues(new_vec.list.items);
             try ctx.stack.push(.{ .vector = new_vec });
         },
         .string => |s1| {
@@ -1253,6 +1301,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
 fn nativePush(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     switch (seq) {
@@ -1265,6 +1314,7 @@ fn nativePush(ctx: *Context) anyerror!void {
         .vector => |vec| {
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
             new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len + 1) catch return error.OutOfMemory;
+            container_backing.retainValues(vec.list.items);
             for (vec.list.items) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
@@ -1276,6 +1326,7 @@ fn nativePush(ctx: *Context) anyerror!void {
             const elem_str = switch (elem) {
                 .string => |es| es,
                 else => {
+                    container_backing.releaseValue(elem);
                     setErrorContext(ctx, "#push on string requires string element, got {s}", .{valueTypeName(elem)});
                     return error.TypeMismatch;
                 },
@@ -1283,6 +1334,7 @@ fn nativePush(ctx: *Context) anyerror!void {
             const result = alloc.alloc(u8, s.len + elem_str.len) catch return error.OutOfMemory;
             @memcpy(result[0..s.len], s);
             @memcpy(result[s.len..], elem_str);
+            container_backing.releaseValue(elem);
             try ctx.stack.push(.{ .string = result });
         },
         .byte_array => |b| {
@@ -1296,6 +1348,7 @@ fn nativePush(ctx: *Context) anyerror!void {
                     break :blk @intCast(i);
                 },
                 else => {
+                    container_backing.releaseValue(elem);
                     setErrorContext(ctx, "#push on byte-array requires fixnum element, got {s}", .{valueTypeName(elem)});
                     return error.TypeMismatch;
                 },
@@ -1308,9 +1361,11 @@ fn nativePush(ctx: *Context) anyerror!void {
                 result_ba.appendAssumeCapacity(byte);
             }
             result_ba.appendAssumeCapacity(byte_val);
+            container_backing.releaseValue(elem);
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
         else => {
+            container_backing.releaseValue(elem);
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
@@ -1320,6 +1375,7 @@ fn nativePush(ctx: *Context) anyerror!void {
 /// #pop ( seq -- seq' elem ) - Remove last element, return both sequence and element
 fn nativePop(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     switch (seq) {
@@ -1340,7 +1396,9 @@ fn nativePop(ctx: *Context) anyerror!void {
             }
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
             new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len - 1) catch return error.OutOfMemory;
-            for (vec.list.items[0 .. vec.list.items.len - 1]) |item| {
+            const kept = vec.list.items[0 .. vec.list.items.len - 1];
+            container_backing.retainValues(kept);
+            for (kept) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
@@ -1389,6 +1447,7 @@ fn nativePop(ctx: *Context) anyerror!void {
 fn nativeUnshift(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     switch (seq) {
@@ -1402,6 +1461,7 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
             new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len + 1) catch return error.OutOfMemory;
             new_vec.list.appendAssumeCapacity(elem);
+            container_backing.retainValues(vec.list.items);
             for (vec.list.items) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
@@ -1411,6 +1471,7 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
             const elem_str = switch (elem) {
                 .string => |es| es,
                 else => {
+                    container_backing.releaseValue(elem);
                     setErrorContext(ctx, "#unshift on string requires string element, got {s}", .{valueTypeName(elem)});
                     return error.TypeMismatch;
                 },
@@ -1418,6 +1479,7 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
             const result = alloc.alloc(u8, elem_str.len + s.len) catch return error.OutOfMemory;
             @memcpy(result[0..elem_str.len], elem_str);
             @memcpy(result[elem_str.len..], s);
+            container_backing.releaseValue(elem);
             try ctx.stack.push(.{ .string = result });
         },
         .byte_array => |b| {
@@ -1430,6 +1492,7 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
                     break :blk @intCast(i);
                 },
                 else => {
+                    container_backing.releaseValue(elem);
                     setErrorContext(ctx, "#unshift on byte-array requires fixnum element, got {s}", .{valueTypeName(elem)});
                     return error.TypeMismatch;
                 },
@@ -1442,9 +1505,11 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
             for (bytes) |byte| {
                 result_ba.appendAssumeCapacity(byte);
             }
+            container_backing.releaseValue(elem);
             try ctx.stack.push(.{ .byte_array = result_ba });
         },
         else => {
+            container_backing.releaseValue(elem);
             setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
@@ -1454,6 +1519,7 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
 /// #shift ( seq -- seq' elem ) - Remove first element, return both truncated sequence and element
 fn nativeShift(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     switch (seq) {
@@ -1474,7 +1540,9 @@ fn nativeShift(ctx: *Context) anyerror!void {
             }
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
             new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len - 1) catch return error.OutOfMemory;
-            for (vec.list.items[1..]) |item| {
+            const kept = vec.list.items[1..];
+            container_backing.retainValues(kept);
+            for (kept) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
@@ -1722,6 +1790,7 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
 /// #empty? ( seq -- ? ) - Is sequence empty?
 fn nativeEmpty(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const len = sequenceLength(val) orelse {
         setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
         return error.TypeMismatch;
@@ -1733,6 +1802,8 @@ fn nativeEmpty(ctx: *Context) anyerror!void {
 fn nativeStartsWith(ctx: *Context) anyerror!void {
     const prefix = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(prefix);
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     switch (seq) {
@@ -1804,6 +1875,8 @@ fn nativeStartsWith(ctx: *Context) anyerror!void {
 fn nativeEndsWith(ctx: *Context) anyerror!void {
     const suffix = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(suffix);
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     switch (seq) {
@@ -1878,6 +1951,8 @@ fn nativeEndsWith(ctx: *Context) anyerror!void {
 fn nativeIn(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(elem);
+    defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
     switch (seq) {
@@ -1954,6 +2029,8 @@ fn nativeIn(ctx: *Context) anyerror!void {
 fn nativeIndexOf(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(elem);
+    defer container_backing.releaseValue(seq);
 
     switch (seq) {
         .string => |s| {
@@ -2021,6 +2098,9 @@ fn nativeIndexOfFrom(ctx: *Context) anyerror!void {
     const start_val = try ctx.stack.pop();
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(start_val);
+    defer container_backing.releaseValue(elem);
+    defer container_backing.releaseValue(seq);
 
     const start_fixnum = switch (start_val) {
         .fixnum => |i| i,
@@ -2088,6 +2168,7 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
 
     if (n_val < 0) {
+        container_backing.releaseValue(seq);
         setErrorContext(ctx, "negative count {d}", .{n_val});
         return error.IndexOutOfBounds;
     }
@@ -2100,6 +2181,7 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
         try ctx.stack.push(.{ .iterator = iter });
         return;
     }
+    defer container_backing.releaseValue(seq);
 
     switch (seq) {
         .string => |s| {
@@ -2125,7 +2207,9 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
             const take_count = @min(n, vec.list.items.len);
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
             new_vec.list.ensureTotalCapacity(alloc, take_count) catch return error.OutOfMemory;
-            for (vec.list.items[0..take_count]) |item| {
+            const taken = vec.list.items[0..take_count];
+            container_backing.retainValues(taken);
+            for (taken) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
@@ -2154,6 +2238,7 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
 
     if (n_val < 0) {
+        container_backing.releaseValue(seq);
         setErrorContext(ctx, "negative count {d}", .{n_val});
         return error.IndexOutOfBounds;
     }
@@ -2166,6 +2251,7 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
         try ctx.stack.push(.{ .iterator = iter });
         return;
     }
+    defer container_backing.releaseValue(seq);
 
     switch (seq) {
         .string => |s| {
@@ -2197,7 +2283,9 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
             }
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
             new_vec.list.ensureTotalCapacity(alloc, vec.list.items.len - n) catch return error.OutOfMemory;
-            for (vec.list.items[n..]) |item| {
+            const kept = vec.list.items[n..];
+            container_backing.retainValues(kept);
+            for (kept) |item| {
                 new_vec.list.appendAssumeCapacity(item);
             }
             try ctx.stack.push(.{ .vector = new_vec });
@@ -2260,6 +2348,7 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
 
     if (n_val < 0) {
+        container_backing.releaseValue(seq);
         setErrorContext(ctx, "#shrink! count must be non-negative, got {d}", .{n_val});
         return error.IndexOutOfBounds;
     }
@@ -2305,6 +2394,7 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
             };
         },
         else => {
+            container_backing.releaseValue(seq);
             setErrorContext(ctx, "#shrink! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
@@ -2320,6 +2410,8 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
 
     if (n_val < 0) {
+        container_backing.releaseValue(fill);
+        container_backing.releaseValue(seq);
         setErrorContext(ctx, "#grow! count must be non-negative, got {d}", .{n_val});
         return error.IndexOutOfBounds;
     }
@@ -2329,18 +2421,21 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
         .byte_array => |ba| {
             const bytes = ba.slice();
             if (n < bytes.len) {
+                container_backing.releaseValue(fill);
                 setErrorContext(ctx, "#grow! count {d} is less than byte-array length {d}", .{ n_val, bytes.len });
                 return error.IndexOutOfBounds;
             }
             const fill_byte: u8 = switch (fill) {
                 .fixnum => |i| blk: {
                     if (i < 0 or i > 255) {
+                        container_backing.releaseValue(fill);
                         setErrorContext(ctx, "#grow! fill byte {d} out of range 0-255", .{i});
                         return error.FixnumOverflow;
                     }
                     break :blk @intCast(i);
                 },
                 else => {
+                    container_backing.releaseValue(fill);
                     setErrorContext(ctx, "#grow! on byte-array requires fixnum fill, got {s}", .{valueTypeName(fill)});
                     return error.TypeMismatch;
                 },
@@ -2400,6 +2495,8 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
             };
         },
         else => {
+            container_backing.releaseValue(fill);
+            container_backing.releaseValue(seq);
             setErrorContext(ctx, "#grow! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
             return error.TypeMismatch;
         },
@@ -2411,10 +2508,15 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "freeze")) return;
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .vector => |vec| {
             const alloc = ctx.quotationAllocator();
             const items = try alloc.dupe(Value, vec.list.items);
+            // The snapshot array becomes a fresh owner of each element; retain
+            // before the vector is released so destroying it does not drop the
+            // last reference to a refcounted element the array still points at.
+            container_backing.retainValues(items);
             try ctx.stack.push(.{ .array = items });
         },
         else => {
@@ -2427,8 +2529,13 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
 /// >array ( vector -- array ) - Snapshot vector items into an immutable array
 fn nativeToArrayVector(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
     const items = try alloc.dupe(Value, val.vector.list.items);
+    // The snapshot array becomes a fresh owner of each element. Retain before
+    // the vector is released below, otherwise destroying the vector drops the
+    // last reference to a refcounted element the array still points at.
+    container_backing.retainValues(items);
     try ctx.stack.push(.{ .array = items });
 }
 
@@ -2532,6 +2639,10 @@ fn nativeToHashMutableMap(ctx: *Context) anyerror!void {
     var iter = m.map.iterator();
     while (iter.next()) |entry| {
         const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
+        // The hash becomes a fresh owner of each value; retain before the
+        // mutable-map is released below so destroying it does not drop the last
+        // reference to a refcounted value the hash still points at.
+        container_backing.retainValue(entry.value_ptr.*);
         new_hash.put(alloc, key_copy, entry.value_ptr.*) catch return error.OutOfMemory;
     }
     try ctx.stack.push(.{ .hash = new_hash });

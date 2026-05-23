@@ -652,7 +652,9 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
 pub fn nativeAdd(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "+")) return;
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
     helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
     return error.TypeMismatch;
@@ -661,7 +663,9 @@ pub fn nativeAdd(ctx: *Context) anyerror!void {
 pub fn nativeSub(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "-")) return;
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
     helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
     return error.TypeMismatch;
@@ -670,7 +674,9 @@ pub fn nativeSub(ctx: *Context) anyerror!void {
 pub fn nativeMul(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "*")) return;
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
     helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
     return error.TypeMismatch;
@@ -680,7 +686,9 @@ pub fn nativeMul(ctx: *Context) anyerror!void {
 pub fn nativeDiv(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "/")) return;
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
     helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
     return error.TypeMismatch;
@@ -690,7 +698,9 @@ pub fn nativeDiv(ctx: *Context) anyerror!void {
 pub fn nativeMod(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "%")) return;
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     helpers.setErrorHint(ctx, "operands must be numbers (fixnum, float, bignum, or ratio)");
     helpers.setTypeMismatchError(ctx, "number", if (!isNativeNumeric(a)) a else b);
     return error.TypeMismatch;
@@ -744,6 +754,7 @@ pub fn nativeLt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .lt)) return;
     try ctx.stack.popAndRelease();
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     helpers.setTypeMismatchError(ctx, "fixnum or float", a);
     return error.TypeMismatch;
 }
@@ -754,6 +765,7 @@ pub fn nativeGt(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .gt)) return;
     try ctx.stack.popAndRelease();
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     helpers.setTypeMismatchError(ctx, "fixnum or float", a);
     return error.TypeMismatch;
 }
@@ -762,6 +774,7 @@ pub fn nativeGt(ctx: *Context) anyerror!void {
 fn nativeToFloat(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">float")) return;
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     helpers.setTypeMismatchError(ctx, "fixnum, bignum, float, or string", val);
     return error.TypeMismatch;
 }
@@ -770,6 +783,7 @@ fn nativeToFloat(ctx: *Context) anyerror!void {
 fn nativeToInteger(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">integer")) return;
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     helpers.setTypeMismatchError(ctx, "float or fixnum", val);
     return error.TypeMismatch;
 }
@@ -777,6 +791,7 @@ fn nativeToInteger(ctx: *Context) anyerror!void {
 /// float-parts ( f -- mantissa exponent sign ) - Decompose an IEEE 754 double
 fn nativeFloatParts(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (val != .float) {
         helpers.setTypeMismatchError(ctx, "float", val);
         return error.TypeMismatch;
@@ -818,6 +833,7 @@ fn nativeFloatParts(ctx: *Context) anyerror!void {
 fn nativeAbs(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "abs")) return;
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     helpers.setTypeMismatchError(ctx, "number", val);
     return error.TypeMismatch;
 }
@@ -825,7 +841,9 @@ fn nativeAbs(ctx: *Context) anyerror!void {
 /// div ( a b -- q ) - Truncating integer division toward zero
 fn nativeTruncDiv(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     if (a == .fixnum and b == .fixnum) {
         if (b.fixnum == 0) return error.DivisionByZero;
         if (a.fixnum == std.math.minInt(i64) and b.fixnum == -1) {
@@ -867,7 +885,9 @@ fn nativeTruncDiv(ctx: *Context) anyerror!void {
 /// rem ( a b -- r ) - Truncating integer remainder
 fn nativeTruncRem(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     if (a == .fixnum and b == .fixnum) {
         if (b.fixnum == 0) return error.DivisionByZero;
         if (a.fixnum == std.math.minInt(i64) and b.fixnum == -1) {
@@ -905,6 +925,7 @@ pub const registry_entries = [_]RegistryEntry{
 /// float-approx-ratio ( f -- numer denom ) - Continued fraction approximation
 fn nativeFloatApproxRatio(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (val != .float) {
         helpers.setTypeMismatchError(ctx, "float", val);
         return error.TypeMismatch;
@@ -949,7 +970,9 @@ fn nativeFloatApproxRatio(ctx: *Context) anyerror!void {
 /// gcd ( a b -- gcd ) - Greatest common divisor, always non-negative
 fn nativeGcd(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     if (a == .fixnum and b == .fixnum) {
         const av = a.fixnum;
         const bv = b.fixnum;
@@ -1011,7 +1034,9 @@ fn nativeCmp(ctx: *Context) anyerror!void {
     const alloc = ctx.arena.allocator();
 
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
 
     const result: i64 = switch (a) {
         .fixnum => |av| switch (b) {

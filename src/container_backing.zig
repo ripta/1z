@@ -137,6 +137,19 @@ pub fn releaseValue(v: Value) void {
     }
 }
 
+/// Retain every value in a slice. Used by container builders that copy a
+/// source's elements into a freshly created vector: a value stored in a
+/// vector's backing list is an owning reference, so each copied element must
+/// be retained to balance the release performed when the vector is destroyed.
+pub fn retainValues(items: []const Value) void {
+    for (items) |item| retainValue(item);
+}
+
+/// Release every value in a slice. Mirror of `retainValues`.
+pub fn releaseValues(items: []const Value) void {
+    for (items) |item| releaseValue(item);
+}
+
 /// Release container-variant `push_literal` operands embedded in an instruction slice.
 /// The walk is shallow: nested quotation literals are not recursed into, because each
 /// quotation is registered separately on its owning allocator's release list at

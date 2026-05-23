@@ -755,6 +755,9 @@ pub const Context = struct {
             var cloned_frame = ParameterFrame{};
             var iter = parent_frame.iterator();
             while (iter.next()) |entry| {
+                // The cloned task context co-owns the shared container backing,
+                // so it takes its own owning reference.
+                container_backing.retainValue(entry.value_ptr.*);
                 try cloned_frame.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
             }
             try ctx.parameter_env.append(allocator, cloned_frame);
@@ -868,7 +871,7 @@ pub const Context = struct {
     /// Free all resources used by the context.
     pub fn deinit(self: *Context) void {
         for (self.parameter_env.items) |*frame| {
-            frame.deinit(self.allocator);
+            self.deinitParameterFrame(frame);
         }
         self.parameter_env.deinit(self.allocator);
         for (self.local_frames.items) |*frame| {
@@ -1036,11 +1039,22 @@ pub const Context = struct {
         try self.parameter_env.append(self.allocator, ParameterFrame{});
     }
 
+    /// Release the owning reference each binding in a parameter frame holds
+    /// over its container value, then free the frame's storage. A frame slot
+    /// is an owning reference, so tearing the frame down drops those refs.
+    fn deinitParameterFrame(self: *Context, frame: *ParameterFrame) void {
+        var iter = frame.iterator();
+        while (iter.next()) |entry| {
+            container_backing.releaseValue(entry.value_ptr.*);
+        }
+        frame.deinit(self.allocator);
+    }
+
     /// Pop the top parameter frame from the environment stack.
     pub fn popParameterFrame(self: *Context) void {
         if (self.parameter_env.items.len > 0) {
             const last_idx = self.parameter_env.items.len - 1;
-            self.parameter_env.items[last_idx].deinit(self.allocator);
+            self.deinitParameterFrame(&self.parameter_env.items[last_idx]);
             self.parameter_env.items.len -= 1;
         }
     }
@@ -1052,7 +1066,14 @@ pub const Context = struct {
             return error.OutOfMemory; // Should never happen if pushParameterFrame was called
         }
         const top_index = self.parameter_env.items.len - 1;
-        try self.parameter_env.items[top_index].put(self.allocator, name, value);
+        // The frame slot takes an owning reference; release any value it
+        // displaces so a rebinding within the same frame does not leak.
+        const gop = try self.parameter_env.items[top_index].getOrPut(self.allocator, name);
+        if (gop.found_existing) {
+            container_backing.releaseValue(gop.value_ptr.*);
+        }
+        container_backing.retainValue(value);
+        gop.value_ptr.* = value;
     }
 
     // =========================================================================

@@ -389,6 +389,7 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     }
 
     const key = try ctx.stack.pop();
+    defer container_backing.releaseValue(key);
     const obj = try ctx.stack.pop();
 
     const key_str = try extractKeyString(ctx, key);

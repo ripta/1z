@@ -4,6 +4,7 @@ const dispatch_mod = @import("../dispatch.zig");
 const pic_mod = @import("../pic.zig");
 const PolymorphicCache = pic_mod.PolymorphicCache;
 const value_mod = @import("../value.zig");
+const container_backing = @import("../container_backing.zig");
 const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
 
@@ -252,6 +253,7 @@ pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) 
         }
         try executeDispatchBody(ctx, result.entry.body);
         const cmp_result = try ctx.stack.pop();
+        defer container_backing.releaseValue(cmp_result);
         const boolean = switch (cmp_result) {
             .fixnum => |cmp_val| switch (op) {
                 .eq => cmp_val == 0,

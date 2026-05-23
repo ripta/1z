@@ -128,6 +128,12 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
         },
         else => inner_type_raw,
     };
+    // The inner type rides inside the outer descriptor's `inner-type` array.
+    // Releasing the outer descriptor walks its entries but stops at the array,
+    // which is not refcount-aware, so a `struct{ }` inner descriptor would
+    // otherwise never reach refcount zero. Release it here once consumed; the
+    // `.type_val` case is a no-op release.
+    defer container_backing.releaseValue(inner_type_val);
 
     const name_val = try ctx.stack.pop();
     const name = switch (name_val) {
