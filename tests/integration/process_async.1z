@@ -40,10 +40,9 @@ test-cancel-process-waiter: ( -- ) [
     spawn
     yield
     10 milliseconds sleep
-    dup cancel-task drop
-    yield
-    dup 15 native.kill-pid
-    drop
+    dup cancel-task
+    await-terminal
+    15 native.kill-pid
     dup #len 1 "cancel-task wakes process-blocked waiter" assert=
     #first t "process waiter sees cancellation during cleanup" assert=
   ] task-scope
