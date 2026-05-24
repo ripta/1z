@@ -1284,6 +1284,9 @@ fn addAotTests(
             continue;
         }
 
+        // Capturing keeps the step cacheable and leaves the cache key unchanged.
+        _ = compile_run.captureStdErr();
+
         // chmod +x the compiled binary
         const chmod = b.addSystemCommand(&.{ "chmod", "+x" });
         chmod.addFileArg(aot_binary);
