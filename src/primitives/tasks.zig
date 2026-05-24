@@ -38,7 +38,7 @@ pub const registry_entries = [_]RegistryEntry{
 };
 
 pub const primitives = [_]Primitive{
-    .{ .name = "task-scope", .stack_effect = "quot --", .doc = "Run quotation in a structured concurrency scope. Waits for every child task to reach a terminal status regardless of which worker each child ran on.", .func = nativeTaskScope },
+    .{ .name = "task-scope", .stack_effect = "quot --", .doc = "Run quotation in a structured concurrency scope. Waits for every child task to reach a terminal status regardless of which worker each child ran on. When task-scope returns, normally or by re-throwing a child's error, every child has reached terminal status and its registered cleanup handler has run to completion.", .func = nativeTaskScope },
     .{ .name = "spawn", .stack_effect = "quot -- task", .doc = "Spawn a new task from a quotation. The task is pinned to the worker with the fewest active tasks at spawn time for its entire lifetime.", .func = nativeSpawn },
     .{ .name = "spawn-named", .stack_effect = "quot name -- task", .doc = "Spawn a named task from a quotation.", .func = nativeSpawnNamed },
     .{ .name = "task-self", .stack_effect = "-- task", .doc = "Push the current task handle.", .func = nativeTaskSelf },
@@ -119,6 +119,11 @@ fn allocateTaskWithEntry(
 /// completion is signalled via the `active_children` atomic counter; the
 /// worker that drives the counter to zero wakes the scope's owner task via
 /// its home worker's external queue.
+///
+/// When this returns, which happens either normally or by re-throwing a child's error, every
+/// task spawned within the scope has reached a terminal status, which means each child's
+/// registered cleanup handler has already run to completion. The guarantee covers tasks
+/// spawned within the scope, not arbitrary task handles referenced inside it.
 fn nativeTaskScope(ctx: *Context) anyerror!void {
     const quot = try helpers.popQuotation(ctx);
 
