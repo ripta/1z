@@ -33,7 +33,7 @@ drop
 
 \\ toy_checksum(B{ 1 2 3 4 }, 4) = 10
 dup "toy_checksum" lib-symbol ffi{ ptr i32 -> i32 } bind-sig
-B{ 1 2 3 4 } bytes>ffi-ptr+len 2 pick-n ffi-call
+B{ 1 2 3 4 } dup bytes>ffi-ptr+len 3 pick-n ffi-call swap drop
 10 "toy_checksum(B{ 1 2 3 4 }, 4) = 10" assert=
 drop
 
@@ -41,8 +41,9 @@ drop
 toy-checksum: ( dylib byte-array -- checksum ) [
   __sym: ( dylib -- ffi-fn ) [ "toy_checksum" ffi{ ptr i32 -> i32 } bound-symbol ] ;
 
-  bytes>ffi-ptr+len
-  2 pick-n __sym ffi-call
+  dup bytes>ffi-ptr+len
+  3 pick-n __sym ffi-call
+  swap drop
 ] ;
 
 dup B{ 1 2 3 4 } toy-checksum

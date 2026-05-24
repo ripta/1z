@@ -4,6 +4,7 @@ const helpers = @import("../primitives/helpers.zig");
 const error_mapping = @import("../primitives/error_mapping.zig");
 const RegistryEntry = @import("../primitives/types.zig").RegistryEntry;
 const Resource = @import("../value.zig").Resource;
+const container_backing = @import("../container_backing.zig");
 
 const c = @cImport({
     @cInclude("toy.h");
@@ -48,6 +49,7 @@ fn nativeToyGreeting(ctx: *Context) anyerror!void {
 
 fn nativeToyChecksum(ctx: *Context) anyerror!void {
     const ba = try helpers.popByteArray(ctx);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
     const bytes = ba.slice();
     const result = c.toy_checksum(bytes.ptr, @intCast(bytes.len));
     try ctx.stack.push(.{ .fixnum = @intCast(result) });
@@ -56,6 +58,7 @@ fn nativeToyChecksum(ctx: *Context) anyerror!void {
 fn nativeToyFill(ctx: *Context) anyerror!void {
     const val = try helpers.popFixnum(ctx);
     const ba = try helpers.popByteArray(ctx);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
     const bytes = ba.slice();
     c.toy_fill(bytes.ptr, @intCast(bytes.len), @intCast(val));
 }

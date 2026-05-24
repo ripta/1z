@@ -118,7 +118,8 @@ pub const ContainerHeader = struct {
 /// `iterator`) own a reference to each refcounted value they embed, so a stack slot holding one must
 /// retain those embedded values recursively. An `error_value` owns the value carried in its `data` field.
 ///
-/// Bytearray remains a noöp stub until its backing migrates.
+/// `byte_array` carries a refcounted backing like `vector` and `mutable_map`; its bytes are not Values,
+/// so there is nothing to recurse into.
 ///
 /// Non-container variants are noöps by construction.
 ///
@@ -128,6 +129,7 @@ pub fn retainValue(v: Value) void {
     switch (v) {
         .vector => |vec| vec.header.retain(),
         .mutable_map => |mm| mm.header.retain(),
+        .byte_array => |ba| ba.header.retain(),
         .array => |items| retainValues(items),
         .hash => |h| {
             var iter = h.iterator();
@@ -138,7 +140,6 @@ pub fn retainValue(v: Value) void {
         .struct_instance => |si| retainValues(si.fields),
         .error_value => |err| if (err.data) |data| retainValue(data.*),
         .iterator => |it| retainIteratorBacking(it),
-        .byte_array => |_| {},
         else => {},
     }
 }
@@ -150,11 +151,12 @@ pub fn retainValue(v: Value) void {
 /// Headerless composites recurse into their embedded values so the inner backings drop exactly once per
 /// owning slot.
 ///
-/// Bytearray remains a noöp stub until its backing migrates.
+/// `byte_array` releases its header like `vector` and `mutable_map`, destroying the backing on last drop.
 pub fn releaseValue(v: Value) void {
     switch (v) {
         .vector => |vec| vec.header.release(),
         .mutable_map => |mm| mm.header.release(),
+        .byte_array => |ba| ba.header.release(),
         .array => |items| releaseValues(items),
         .hash => |h| {
             var iter = h.iterator();
@@ -165,7 +167,6 @@ pub fn releaseValue(v: Value) void {
         .struct_instance => |si| releaseValues(si.fields),
         .error_value => |err| if (err.data) |data| releaseValue(data.*),
         .iterator => |it| releaseIteratorBacking(it),
-        .byte_array => |_| {},
         else => {},
     }
 }
@@ -217,7 +218,7 @@ pub fn releaseIteratorBacking(it: *Iterator) void {
 /// `.iterator` is treated conservatively as carrying a backing.
 pub fn valueCarriesBacking(v: Value) bool {
     return switch (v) {
-        .vector, .mutable_map => true,
+        .vector, .mutable_map, .byte_array => true,
         .array => |items| valuesCarryBacking(items),
         .hash => |h| blk: {
             var iter = h.iterator();
@@ -577,6 +578,20 @@ test "retainValue/releaseValue: mutable_map dispatch exercises the header" {
     try testing.expectEqual(@as(u32, 1), mm.header.refcountValue());
 
     releaseValue(.{ .mutable_map = mm });
+    // Final release destroys the backing; no further refcount inspection.
+}
+
+test "retainValue/releaseValue: byte_array dispatch exercises the header" {
+    const ba = try value_mod.ByteArray.create(testing.allocator);
+    try testing.expectEqual(@as(u32, 1), ba.header.refcountValue());
+
+    retainValue(.{ .byte_array = ba });
+    try testing.expectEqual(@as(u32, 2), ba.header.refcountValue());
+
+    releaseValue(.{ .byte_array = ba });
+    try testing.expectEqual(@as(u32, 1), ba.header.refcountValue());
+
+    releaseValue(.{ .byte_array = ba });
     // Final release destroys the backing; no further refcount inspection.
 }
 

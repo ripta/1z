@@ -8,6 +8,7 @@ const helpers = @import("../primitives/helpers.zig");
 const error_mapping = @import("../primitives/error_mapping.zig");
 const RegistryEntry = @import("../primitives/types.zig").RegistryEntry;
 
+const container_backing = @import("../container_backing.zig");
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const BigIntManaged = value_mod.BigIntManaged;
@@ -481,8 +482,7 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
 
     if (sig.return_type.tag == .struct_type) {
         const layout = sig.return_type.struct_layout.?;
-        const ba = try alloc.create(ByteArray);
-        ba.* = ByteArray{};
+        const ba = try ByteArray.create(alloc);
         try ba.ensureTotalCapacity(alloc, layout.total_size);
         ba.items.len = layout.total_size;
         @memset(ba.items[0..layout.total_size], 0);
@@ -726,8 +726,7 @@ fn nativeFfiCallVariadic(ctx: *Context, ffi_fn: *Resource, sig: *const FfiSignat
 
     if (sig.return_type.tag == .struct_type) {
         const layout = sig.return_type.struct_layout.?;
-        const ba = try alloc.create(ByteArray);
-        ba.* = ByteArray{};
+        const ba = try ByteArray.create(alloc);
         try ba.ensureTotalCapacity(alloc, layout.total_size);
         ba.items.len = layout.total_size;
         @memset(ba.items[0..layout.total_size], 0);
@@ -1100,17 +1099,22 @@ fn nativeBytesRawPtr(ctx: *Context) anyerror!void {
     const alloc = ctx.arena.allocator();
 
     const ba = try helpers.popByteArray(ctx);
+    // The returned resource borrows a raw pointer into the buffer; the caller
+    // is responsible for keeping the byte array alive across any FFI use. We
+    // release our popped reference, since this native consumes the operand.
+    defer container_backing.releaseValue(.{ .byte_array = ba });
 
+    const slice = ba.slice();
     const r = try alloc.create(Resource);
     r.* = .{
         .type_name = "ffi-bytes",
-        .ptr = @ptrCast(ba.slice().ptr),
+        .ptr = @ptrCast(slice.ptr),
         .closed = false,
         .close_fn = .none,
     };
 
     try ctx.stack.push(.{ .resource = r });
-    try ctx.stack.push(.{ .fixnum = @intCast(ba.slice().len) });
+    try ctx.stack.push(.{ .fixnum = @intCast(slice.len) });
 }
 
 /// ffi-ptr+len>bytes ( resource n -- byte-array )
@@ -1137,8 +1141,7 @@ fn nativeFfiPtrLenToBytes(ctx: *Context) anyerror!void {
     const n: usize = @intCast(n_val);
 
     const alloc = ctx.quotationAllocator();
-    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-    ba.* = ByteArray{};
+    const ba = ByteArray.create(alloc) catch return error.OutOfMemory;
 
     if (n > 0) {
         const raw_ptr = resource.ptr orelse {

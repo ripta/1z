@@ -520,7 +520,9 @@ fn makeBytesLtEntry(comptime ta: ByteType, comptime tb: ByteType) *const fn (*Co
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const b = try ctx.stack.pop();
+            defer container_backing.releaseValue(b);
             const a = try ctx.stack.pop();
+            defer container_backing.releaseValue(a);
             try ctx.stack.push(.{ .boolean = lexOrder(extractBytes(ta, a), extractBytes(tb, b)) == .lt });
         }
     }.func;
@@ -530,7 +532,9 @@ fn makeBytesGtEntry(comptime ta: ByteType, comptime tb: ByteType) *const fn (*Co
     return &struct {
         fn func(ctx: *Context) anyerror!void {
             const b = try ctx.stack.pop();
+            defer container_backing.releaseValue(b);
             const a = try ctx.stack.pop();
+            defer container_backing.releaseValue(a);
             try ctx.stack.push(.{ .boolean = lexOrder(extractBytes(ta, a), extractBytes(tb, b)) == .gt });
         }
     }.func;

@@ -483,7 +483,9 @@ fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
     const inner = try alloc.create(Value);
     inner.* = .{ .struct_instance = instance };
 
-    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    // Fields were popped (ownership transferred); the tagged value inherits
+    // that ownership, so move it onto the stack without an extra retain.
+    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
 /// Trampoline helper ( tagged tv -- field1..fieldN )
@@ -492,6 +494,9 @@ fn virtualStructUnwrapHelper(ctx: *Context) anyerror!void {
     const vt = tv.virtual_type.?;
 
     const val = try ctx.stack.pop();
+    // The popped tagged value is consumed; release it on every path. The
+    // pushed fields take their own owning reference via push.
+    defer container_backing.releaseValue(val);
     switch (val) {
         .tagged => |t| {
             if (t.tag != vt) {
@@ -532,6 +537,9 @@ fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
     };
 
     const val = try ctx.stack.pop();
+    // The popped tagged value is consumed; release it on every path. Pushing
+    // the resulting hash retains every field value it stores.
+    defer container_backing.releaseValue(val);
     switch (val) {
         .tagged => |t| {
             if (t.tag != vt) {
@@ -578,6 +586,8 @@ fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
     };
 
     const val = try ctx.stack.pop();
+    // The popped hash is consumed by this word; release it on every path.
+    defer container_backing.releaseValue(val);
     const hash = switch (val) {
         .hash => |h| h,
         else => {
@@ -599,6 +609,10 @@ fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
         };
     }
 
+    // Fields are borrowed from the source hash; retain each so the tagged
+    // instance becomes an independent owner before the hash is released above.
+    container_backing.retainValues(field_values);
+
     const instance = try alloc.create(StructInstance);
     instance.* = .{
         .struct_type = st,
@@ -608,7 +622,7 @@ fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
     const inner = try alloc.create(Value);
     inner.* = .{ .struct_instance = instance };
 
-    try ctx.stack.push(.{ .tagged = .{ .tag = vt, .inner = inner } });
+    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
 /// >NAME: ( hash -- tagged ) - hash-based wrap for struct-backed virtuals

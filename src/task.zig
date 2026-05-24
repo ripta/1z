@@ -455,7 +455,7 @@ test "publishTaskResult rejects borrowed buffer results" {
 
     var bytes = [_]u8{ 1, 2, 3 };
     const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, bytes[0..]);
-    defer std.testing.allocator.destroy(ba);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
 
     try ctx.stack.push(.{ .byte_array = ba });
 

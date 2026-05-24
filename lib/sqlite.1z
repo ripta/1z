@@ -85,7 +85,7 @@ bind: ( stmt i value -- ) [
       { "fixnum" [ (bind-int64) ] }
       { "float" [ (bind-double) ] }
       { "string" [ -1 -1 (bind-text) ] }
-      { "byte-array" [ bytes>ffi-ptr+len -1 (bind-blob) ] }
+      { "byte-array" [ dup [ bytes>ffi-ptr+len -1 (bind-blob) ] dip drop ] }
       [ "fixnum, float, string, byte-array, or option:none" throw-type-error ]
     } case
   ] if

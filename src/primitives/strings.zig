@@ -179,8 +179,7 @@ fn nativeToBytes(ctx: *Context) anyerror!void {
     switch (val) {
         .string => |s| {
             const alloc = ctx.quotationAllocator();
-            const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            ba.* = ByteArray{};
+            const ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             ba.ensureTotalCapacity(alloc, s.len) catch return error.OutOfMemory;
             for (s) |byte| {
                 ba.appendAssumeCapacity(byte);
@@ -197,6 +196,7 @@ fn nativeToBytes(ctx: *Context) anyerror!void {
 /// bytes> ( byte-array -- string ) - Convert byte array to string (interprets as UTF-8)
 fn nativeBytesToString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .byte_array => |b| {
             const alloc = ctx.quotationAllocator();

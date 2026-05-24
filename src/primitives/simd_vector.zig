@@ -233,8 +233,7 @@ fn validateSimdSize(ctx: *Context, ba: *ByteArray) !*[simd_kernels.SIMD_BYTES]u8
 }
 
 fn allocSimdByteArray(alloc: Allocator) !*ByteArray {
-    const ba = try alloc.create(ByteArray);
-    ba.* = ByteArray{};
+    const ba = try ByteArray.create(alloc);
     try ba.ensureTotalCapacity(alloc, simd_kernels.SIMD_BYTES);
     ba.items.len = simd_kernels.SIMD_BYTES;
     return ba;

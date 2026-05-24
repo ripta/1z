@@ -1,17 +1,20 @@
 === packed-from-ptr:u8 returns borrowed packed backing ===
 Stack: [ ]
+Stack: [ B{ 0x01 0x02 0x03 0x04 } t ]
 Stack: [ t ]
 PASS: packed-from-ptr:u8 produces borrowed packed value
 Stack: [ ]
 === packed-from-ptr:u8 shares backing with source bytes ===
 Stack: [ ]
 Stack: [ B{ 0x01 0x02 0x03 0x04 } <packed-u8 B{ 0x01 0x02 0x03 0x04 }> ]
-Stack: [ <packed-u8 B{ 0x01 0x63 0x03 0x04 }> ]
+Stack: [ <packed-u8 B{ 0x01 0x63 0x03 0x04 }> B{ 0x01 0x63 0x03 0x04 } ]
+Stack: [ B{ 0x01 0x63 0x03 0x04 } { 1 99 3 4 } ]
 Stack: [ { 1 99 3 4 } ]
 PASS: source byte-array mutation is visible through packed value
 Stack: [ ]
 === packed-from-ptr:u8 can be copied to owned storage ===
 Stack: [ ]
+Stack: [ B{ 0x09 0x08 0x07 0x06 } f ]
 Stack: [ f ]
 PASS: >byte-array copies borrowed packed backing to owned storage
 Stack: [ ]

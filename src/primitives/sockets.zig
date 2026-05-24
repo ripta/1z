@@ -440,8 +440,7 @@ fn extractDataBytes(ctx: *Context, val: Value) ![]const u8 {
 
 /// Create a ByteArray value from a slice of bytes.
 fn makeBytesValue(alloc: std.mem.Allocator, data: []const u8) !Value {
-    const ba = try alloc.create(value_mod.ByteArray);
-    ba.* = .{};
+    const ba = try value_mod.ByteArray.create(alloc);
     try ba.ensureTotalCapacity(alloc, data.len);
     for (data) |byte| {
         ba.appendAssumeCapacity(byte);

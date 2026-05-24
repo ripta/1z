@@ -153,13 +153,16 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
 pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const instrs = quot.instructions;
-    const alloc = ctx.containerAllocator();
 
-    // Create a new byte array
-    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-    ba.* = ByteArray{};
+    // Create a new byte array on the thread-safe heap so the backing
+    // participates in the refcounted cross-worker lifecycle.
+    const ba = ByteArray.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer container_backing.releaseValue(.{ .byte_array = ba });
+    const alloc = ba.header.allocator;
 
-    // Execute each instruction and collect byte values
+    // Execute each instruction and collect byte values. Byte values are
+    // always fixnums, so the popped `call_word` results carry no refcounted
+    // backing and need no release.
     for (instrs) |instr| {
         const val = switch (instr.op) {
             .push_literal => |v| v,
@@ -183,7 +186,7 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
         }
     }
 
-    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.pushMoved(.{ .byte_array = ba });
 }
 
 /// make-set ( quotation -- set ) - Create a set from unique values in quotation

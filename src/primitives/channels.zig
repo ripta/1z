@@ -12,6 +12,7 @@ const channel_mod = @import("../channel.zig");
 const Channel = channel_mod.Channel;
 const Scheduler = @import("../scheduler.zig").Scheduler;
 const tasks = @import("tasks.zig");
+const container_backing = @import("../container_backing.zig");
 
 fn acquireChannel(ctx: *Context, ch: *Channel) void {
     ctx.lock_order_tracker.acquire(.channel);
@@ -111,7 +112,10 @@ fn nativeSend(ctx: *Context) anyerror!void {
 
     const ch = try helpers.popChannel(ctx);
     const value = try ctx.stack.pop();
-    try ensureSendValueEscapable(ctx, value);
+    ensureSendValueEscapable(ctx, value) catch |err| {
+        container_backing.releaseValue(value);
+        return err;
+    };
 
     acquireChannel(ctx, ch);
 
@@ -648,12 +652,8 @@ test "send accepts owned buffer into buffered channel" {
         std.testing.allocator.destroy(ch);
     }
 
-    const ba = try std.testing.allocator.create(value_mod.ByteArray);
-    defer {
-        ba.deinit(std.testing.allocator);
-        std.testing.allocator.destroy(ba);
-    }
-    ba.* = .{};
+    const ba = try value_mod.ByteArray.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(std.testing.allocator, 3);
     ba.appendAssumeCapacity(1);
     ba.appendAssumeCapacity(2);
@@ -666,4 +666,9 @@ test "send accepts owned buffer into buffered channel" {
 
     try std.testing.expectEqual(@as(usize, 1), ch.buffer.count);
     try std.testing.expect(ctx.thrown_error == null);
+
+    // send moved the stack reference into the buffer; release it so the
+    // refcount balances, since RingBuffer.deinit does not drain contents.
+    const buffered = ch.buffer.pop();
+    container_backing.releaseValue(buffered);
 }

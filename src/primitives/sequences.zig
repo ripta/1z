@@ -279,6 +279,7 @@ fn nativeLenVector(ctx: *Context) anyerror!void {
 
 fn nativeLenByteArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     try ctx.stack.push(.{ .fixnum = @intCast(val.byte_array.slice().len) });
 }
 
@@ -364,6 +365,7 @@ fn nativeNthVector(ctx: *Context) anyerror!void {
 fn nativeNthByteArray(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     const index = b.fixnum;
     if (index < 0) {
         setErrorContext(ctx, "negative index {d}", .{index});
@@ -414,6 +416,7 @@ fn nativeFirstVector(ctx: *Context) anyerror!void {
 
 fn nativeFirstByteArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const b = val.byte_array;
     const bytes = b.slice();
     if (bytes.len == 0) {
@@ -461,6 +464,7 @@ fn nativeLastVector(ctx: *Context) anyerror!void {
 
 fn nativeLastByteArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const b = val.byte_array;
     const bytes = b.slice();
     if (bytes.len == 0) {
@@ -677,16 +681,20 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
             };
         },
         .byte_array => |b| {
+            b.header.lock();
             const bytes = b.slice();
             if (idx >= bytes.len) {
+                const ba_len = bytes.len;
+                b.header.unlock();
                 container_backing.releaseValue(value);
                 container_backing.releaseValue(seq);
-                setErrorContext(ctx, "index {d} out of bounds for byte-array of length {d}", .{ idx, bytes.len });
+                setErrorContext(ctx, "index {d} out of bounds for byte-array of length {d}", .{ idx, ba_len });
                 return error.IndexOutOfBounds;
             }
             const byte_val: u8 = switch (value) {
                 .fixnum => |i| blk: {
                     if (i < 0 or i > 255) {
+                        b.header.unlock();
                         container_backing.releaseValue(value);
                         container_backing.releaseValue(seq);
                         setErrorContext(ctx, "#nth! byte value {d} out of range 0-255", .{i});
@@ -695,6 +703,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
                     break :blk @intCast(i);
                 },
                 else => {
+                    b.header.unlock();
                     container_backing.releaseValue(value);
                     container_backing.releaseValue(seq);
                     setErrorContext(ctx, "#nth! on byte-array requires fixnum value 0-255, got {s}", .{valueTypeName(value)});
@@ -702,8 +711,12 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
                 },
             };
             bytes[idx] = byte_val;
+            b.header.unlock();
             container_backing.releaseValue(value);
-            try ctx.stack.push(.{ .byte_array = b });
+            ctx.stack.pushMoved(.{ .byte_array = b }) catch |err| {
+                container_backing.releaseValue(.{ .byte_array = b });
+                return err;
+            };
         },
         .array, .string => {
             container_backing.releaseValue(value);
@@ -1014,8 +1027,7 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
                 return error.IndexOutOfBounds;
             }
             const slice_len = end - start;
-            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            result_ba.* = ByteArray{};
+            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             result_ba.ensureTotalCapacity(alloc, slice_len) catch return error.OutOfMemory;
             for (bytes[start..end]) |byte| {
                 result_ba.appendAssumeCapacity(byte);
@@ -1122,8 +1134,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
                     },
                 }
             }
-            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            result_ba.* = ByteArray{};
+            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             const bytes1 = b1.slice();
             result_ba.ensureTotalCapacity(alloc, bytes1.len + extra_len) catch return error.OutOfMemory;
             for (bytes1) |byte| {
@@ -1310,8 +1321,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
                 }
             }
 
-            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            result_ba.* = ByteArray{};
+            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             const bytes1 = b1.slice();
             result_ba.ensureTotalCapacity(alloc, extra_len + bytes1.len) catch return error.OutOfMemory;
             for (items2) |item| {
@@ -1397,8 +1407,7 @@ fn nativePush(ctx: *Context) anyerror!void {
                     return error.TypeMismatch;
                 },
             };
-            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            result_ba.* = ByteArray{};
+            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             const bytes = b.slice();
             result_ba.ensureTotalCapacity(alloc, bytes.len + 1) catch return error.OutOfMemory;
             for (bytes) |byte| {
@@ -1471,8 +1480,7 @@ fn nativePop(ctx: *Context) anyerror!void {
                 return error.EmptySequence;
             }
             const last_byte = bytes[bytes.len - 1];
-            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            result_ba.* = ByteArray{};
+            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             result_ba.ensureTotalCapacity(alloc, bytes.len - 1) catch return error.OutOfMemory;
             for (bytes[0 .. bytes.len - 1]) |byte| {
                 result_ba.appendAssumeCapacity(byte);
@@ -1541,8 +1549,7 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
                     return error.TypeMismatch;
                 },
             };
-            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            result_ba.* = ByteArray{};
+            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             const bytes = b.slice();
             result_ba.ensureTotalCapacity(alloc, bytes.len + 1) catch return error.OutOfMemory;
             result_ba.appendAssumeCapacity(byte_val);
@@ -1615,8 +1622,7 @@ fn nativeShift(ctx: *Context) anyerror!void {
                 return error.EmptySequence;
             }
             const first_byte = bytes[0];
-            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            result_ba.* = ByteArray{};
+            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             result_ba.ensureTotalCapacity(alloc, bytes.len - 1) catch return error.OutOfMemory;
             for (bytes[1..]) |byte| {
                 result_ba.appendAssumeCapacity(byte);
@@ -2261,8 +2267,7 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
         .byte_array => |b| {
             const bytes = b.slice();
             const take_count = @min(n, bytes.len);
-            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            result_ba.* = ByteArray{};
+            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             result_ba.ensureTotalCapacity(alloc, take_count) catch return error.OutOfMemory;
             for (bytes[0..take_count]) |byte| {
                 result_ba.appendAssumeCapacity(byte);
@@ -2337,13 +2342,11 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
         .byte_array => |b| {
             const bytes = b.slice();
             if (n >= bytes.len) {
-                const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-                result_ba.* = ByteArray{};
+                const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
                 try ctx.stack.push(.{ .byte_array = result_ba });
                 return;
             }
-            const result_ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-            result_ba.* = ByteArray{};
+            const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             result_ba.ensureTotalCapacity(alloc, bytes.len - n) catch return error.OutOfMemory;
             for (bytes[n..]) |byte| {
                 result_ba.appendAssumeCapacity(byte);
@@ -2373,15 +2376,15 @@ fn nativeBytesAlloc(ctx: *Context) anyerror!void {
         return error.IndexOutOfBounds;
     }
     const n: usize = @intCast(n_val);
-    const alloc = ctx.containerAllocator();
-    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-    ba.* = ByteArray{};
+    const ba = ByteArray.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer container_backing.releaseValue(.{ .byte_array = ba });
+    const alloc = ba.header.allocator;
     if (n > 0) {
         ba.ensureTotalCapacity(alloc, n) catch return error.OutOfMemory;
         ba.items.len = n;
         @memset(ba.items[0..n], 0);
     }
-    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.pushMoved(.{ .byte_array = ba });
 }
 
 /// #shrink! ( seq n -- seq ) - Truncate a mutable sequence to n elements.
@@ -2400,9 +2403,13 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .byte_array => |ba| {
+            ba.header.lock();
             const bytes = ba.slice();
             if (n > bytes.len) {
-                setErrorContext(ctx, "#shrink! count {d} exceeds byte-array length {d}", .{ n_val, bytes.len });
+                const ba_len = bytes.len;
+                ba.header.unlock();
+                container_backing.releaseValue(seq);
+                setErrorContext(ctx, "#shrink! count {d} exceeds byte-array length {d}", .{ n_val, ba_len });
                 return error.IndexOutOfBounds;
             }
             switch (ba.storage) {
@@ -2411,11 +2418,17 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
                     ba.syncOwnedView();
                 },
                 .borrowed => {
+                    ba.header.unlock();
+                    container_backing.releaseValue(seq);
                     setErrorContext(ctx, "#shrink! cannot resize borrowed byte-array", .{});
                     return error.InvalidArgument;
                 },
             }
-            try ctx.stack.push(.{ .byte_array = ba });
+            ba.header.unlock();
+            ctx.stack.pushMoved(.{ .byte_array = ba }) catch |err| {
+                container_backing.releaseValue(.{ .byte_array = ba });
+                return err;
+            };
         },
         .vector => |vec| {
             vec.header.lock();
@@ -2463,23 +2476,31 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .byte_array => |ba| {
+            ba.header.lock();
             const bytes = ba.slice();
             if (n < bytes.len) {
+                const ba_len = bytes.len;
+                ba.header.unlock();
                 container_backing.releaseValue(fill);
-                setErrorContext(ctx, "#grow! count {d} is less than byte-array length {d}", .{ n_val, bytes.len });
+                container_backing.releaseValue(seq);
+                setErrorContext(ctx, "#grow! count {d} is less than byte-array length {d}", .{ n_val, ba_len });
                 return error.IndexOutOfBounds;
             }
             const fill_byte: u8 = switch (fill) {
                 .fixnum => |i| blk: {
                     if (i < 0 or i > 255) {
+                        ba.header.unlock();
                         container_backing.releaseValue(fill);
+                        container_backing.releaseValue(seq);
                         setErrorContext(ctx, "#grow! fill byte {d} out of range 0-255", .{i});
                         return error.FixnumOverflow;
                     }
                     break :blk @intCast(i);
                 },
                 else => {
+                    ba.header.unlock();
                     container_backing.releaseValue(fill);
+                    container_backing.releaseValue(seq);
                     setErrorContext(ctx, "#grow! on byte-array requires fixnum fill, got {s}", .{valueTypeName(fill)});
                     return error.TypeMismatch;
                 },
@@ -2488,17 +2509,30 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
                 .owned => {
                     const alloc = ctx.containerAllocator();
                     const old_len = ba.items.len;
-                    ba.ensureTotalCapacity(alloc, n) catch return error.OutOfMemory;
+                    ba.ensureTotalCapacity(alloc, n) catch {
+                        ba.header.unlock();
+                        container_backing.releaseValue(fill);
+                        container_backing.releaseValue(seq);
+                        return error.OutOfMemory;
+                    };
                     ba.items.len = n;
                     ba.syncOwnedView();
                     @memset(ba.items[old_len..n], fill_byte);
                 },
                 .borrowed => {
+                    ba.header.unlock();
+                    container_backing.releaseValue(fill);
+                    container_backing.releaseValue(seq);
                     setErrorContext(ctx, "#grow! cannot resize borrowed byte-array", .{});
                     return error.InvalidArgument;
                 },
             }
-            try ctx.stack.push(.{ .byte_array = ba });
+            ba.header.unlock();
+            container_backing.releaseValue(fill);
+            ctx.stack.pushMoved(.{ .byte_array = ba }) catch |err| {
+                container_backing.releaseValue(.{ .byte_array = ba });
+                return err;
+            };
         },
         .vector => |vec| {
             vec.header.lock();
@@ -2584,6 +2618,7 @@ fn nativeToArrayVector(ctx: *Context) anyerror!void {
 /// >array ( byte-array -- array ) - Convert each byte to a fixnum element
 fn nativeToArrayByteArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
     const items = try sequenceToValues(val, alloc);
     try ctx.stack.push(.{ .array = items });
@@ -2611,16 +2646,17 @@ fn nativeToArray(ctx: *Context) anyerror!void {
 }
 
 fn copyByteArrayToOwned(alloc: Allocator, src: *ByteArray) !*ByteArray {
-    const dst = try alloc.create(ByteArray);
-    dst.* = ByteArray{};
+    const dst = try ByteArray.create(alloc);
     try dst.ensureTotalCapacity(alloc, src.slice().len);
     dst.items.len = src.slice().len;
     @memcpy(dst.items, src.slice());
     return dst;
 }
 
-fn clonePackedToOwned(ctx: *Context, tagged: TaggedPayload) !void {
+fn clonePackedToOwned(ctx: *Context, val: Value) !void {
+    const tagged = val.tagged;
     if (!std.mem.startsWith(u8, tagged.tag.name, "packed-")) {
+        container_backing.releaseValue(val);
         setErrorContext(ctx, ">byte-array expected byte-array or packed value, got {s}", .{tagged.tag.name});
         return error.TypeMismatch;
     }
@@ -2628,26 +2664,43 @@ fn clonePackedToOwned(ctx: *Context, tagged: TaggedPayload) !void {
     const inner_ba = switch (tagged.inner.*) {
         .byte_array => |ba| ba,
         else => {
+            container_backing.releaseValue(val);
             setErrorContext(ctx, ">byte-array expected packed value backed by byte-array", .{});
             return error.TypeMismatch;
         },
     };
 
     if (!inner_ba.isBorrowed()) {
-        try ctx.stack.push(.{ .tagged = tagged });
+        // Already owned; transfer the popped reference back unchanged.
+        ctx.stack.pushMoved(val) catch |err| {
+            container_backing.releaseValue(val);
+            return err;
+        };
         return;
     }
 
     const alloc = ctx.containerAllocator();
-    const owned_ba = try copyByteArrayToOwned(alloc, inner_ba);
-    const new_inner = try alloc.create(Value);
+    const owned_ba = copyByteArrayToOwned(alloc, inner_ba) catch |err| {
+        container_backing.releaseValue(val);
+        return err;
+    };
+    const new_inner = alloc.create(Value) catch {
+        container_backing.releaseValue(.{ .byte_array = owned_ba });
+        container_backing.releaseValue(val);
+        return error.OutOfMemory;
+    };
     new_inner.* = .{ .byte_array = owned_ba };
-    try ctx.stack.push(.{
+    // The original borrowed packed value is consumed.
+    container_backing.releaseValue(val);
+    ctx.stack.pushMoved(.{
         .tagged = .{
             .tag = tagged.tag,
             .inner = new_inner,
         },
-    });
+    }) catch |err| {
+        container_backing.releaseValue(.{ .tagged = .{ .tag = tagged.tag, .inner = new_inner } });
+        return err;
+    };
 }
 
 /// >byte-array ( value -- value ) - Ensure byte-array backing storage is owned
@@ -2656,14 +2709,27 @@ fn nativeToByteArray(ctx: *Context) anyerror!void {
     switch (val) {
         .byte_array => |ba| {
             if (!ba.isBorrowed()) {
-                try ctx.stack.push(val);
+                // Already owned; transfer the popped reference straight back.
+                ctx.stack.pushMoved(val) catch |err| {
+                    container_backing.releaseValue(val);
+                    return err;
+                };
                 return;
             }
 
-            try ctx.stack.push(.{ .byte_array = try copyByteArrayToOwned(ctx.containerAllocator(), ba) });
+            const owned = copyByteArrayToOwned(ctx.containerAllocator(), ba) catch |err| {
+                container_backing.releaseValue(val);
+                return err;
+            };
+            container_backing.releaseValue(val);
+            ctx.stack.pushMoved(.{ .byte_array = owned }) catch |err| {
+                container_backing.releaseValue(.{ .byte_array = owned });
+                return err;
+            };
         },
-        .tagged => |tagged| try clonePackedToOwned(ctx, tagged),
+        .tagged => try clonePackedToOwned(ctx, val),
         else => {
+            container_backing.releaseValue(val);
             setErrorContext(ctx, ">byte-array expected byte-array or packed value, got {s}", .{valueTypeName(val)});
             return error.TypeMismatch;
         },
@@ -2721,9 +2787,9 @@ fn nativePeekByteArray(ctx: *Context) anyerror!void {
     const width_val = try popFixnum(ctx);
     const offset_val = try popFixnum(ctx);
     const ba_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(ba_val);
 
     const ba = ba_val.byte_array;
-    const bytes = ba.slice();
 
     _ = try validateWidth(ctx, width_val);
     const width: usize = @intCast(width_val);
@@ -2733,6 +2799,10 @@ fn nativePeekByteArray(ctx: *Context) anyerror!void {
         return error.IndexOutOfBounds;
     }
     const offset: usize = @intCast(offset_val);
+
+    ba.header.lock();
+    defer ba.header.unlock();
+    const bytes = ba.slice();
 
     if (offset + width > bytes.len) {
         setErrorContext(ctx, "offset {d} + width {d} exceeds byte-array length {d}", .{ offset, width, bytes.len });
@@ -2772,19 +2842,31 @@ fn nativePokeByteArray(ctx: *Context) anyerror!void {
     const ba_val = try ctx.stack.pop();
 
     const ba = ba_val.byte_array;
-    const bytes = ba.slice();
 
-    _ = try validateWidth(ctx, width_val);
+    _ = validateWidth(ctx, width_val) catch |err| {
+        container_backing.releaseValue(value);
+        container_backing.releaseValue(ba_val);
+        return err;
+    };
     const width: usize = @intCast(width_val);
 
     if (offset_val < 0) {
+        container_backing.releaseValue(value);
+        container_backing.releaseValue(ba_val);
         setErrorContext(ctx, "negative offset {d}", .{offset_val});
         return error.IndexOutOfBounds;
     }
     const offset: usize = @intCast(offset_val);
 
+    ba.header.lock();
+    const bytes = ba.slice();
+
     if (offset + width > bytes.len) {
-        setErrorContext(ctx, "offset {d} + width {d} exceeds byte-array length {d}", .{ offset, width, bytes.len });
+        const ba_len = bytes.len;
+        ba.header.unlock();
+        container_backing.releaseValue(value);
+        container_backing.releaseValue(ba_val);
+        setErrorContext(ctx, "offset {d} + width {d} exceeds byte-array length {d}", .{ offset, width, ba_len });
         return error.IndexOutOfBounds;
     }
 
@@ -2794,11 +2876,17 @@ fn nativePokeByteArray(ctx: *Context) anyerror!void {
     const bits: u64 = switch (value) {
         .fixnum => |i| blk: {
             if (i < 0) {
+                ba.header.unlock();
+                container_backing.releaseValue(value);
+                container_backing.releaseValue(ba_val);
                 setErrorContext(ctx, "#poke! value must be non-negative, got {d}", .{i});
                 return error.FixnumOverflow;
             }
             const u: u64 = @intCast(i);
             if (u > max_val) {
+                ba.header.unlock();
+                container_backing.releaseValue(value);
+                container_backing.releaseValue(ba_val);
                 setErrorContext(ctx, "#poke! value {d} exceeds range for width {d} (max {d})", .{ u, width, max_val });
                 return error.FixnumOverflow;
             }
@@ -2806,17 +2894,26 @@ fn nativePokeByteArray(ctx: *Context) anyerror!void {
         },
         .bignum => |b| blk: {
             if (!b.fits(u64)) {
+                ba.header.unlock();
+                container_backing.releaseValue(value);
+                container_backing.releaseValue(ba_val);
                 setErrorContext(ctx, "#poke! value exceeds range for width {d}", .{width});
                 return error.FixnumOverflow;
             }
             const u = b.toInt(u64) catch unreachable;
             if (u > max_val) {
+                ba.header.unlock();
+                container_backing.releaseValue(value);
+                container_backing.releaseValue(ba_val);
                 setErrorContext(ctx, "#poke! value {d} exceeds range for width {d} (max {d})", .{ u, width, max_val });
                 return error.FixnumOverflow;
             }
             break :blk u;
         },
         else => {
+            ba.header.unlock();
+            container_backing.releaseValue(value);
+            container_backing.releaseValue(ba_val);
             setErrorContext(ctx, "#poke! expected fixnum or bignum value, got {s}", .{valueTypeName(value)});
             return error.TypeMismatch;
         },
@@ -2830,8 +2927,13 @@ fn nativePokeByteArray(ctx: *Context) anyerror!void {
         8 => std.mem.writeInt(u64, slice[0..8], bits, native_endian),
         else => unreachable,
     }
+    ba.header.unlock();
+    container_backing.releaseValue(value);
 
-    try ctx.stack.push(.{ .byte_array = ba });
+    ctx.stack.pushMoved(.{ .byte_array = ba }) catch |err| {
+        container_backing.releaseValue(.{ .byte_array = ba });
+        return err;
+    };
 }
 
 /// #peek ( byte-array offset width -- fixnum ) - Entry point with dispatch
@@ -2919,12 +3021,10 @@ test "borrowed byte-array #nth! allows element writes" {
     defer ctx.deinit();
 
     var backing = [_]u8{ 10, 20, 30 };
-    var ba = ByteArray{
-        .items = backing[0..],
-        .storage = .{ .borrowed = backing[0..] },
-    };
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
 
-    try ctx.stack.push(.{ .byte_array = &ba });
+    try ctx.stack.push(.{ .byte_array = ba });
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 99 });
 
@@ -2933,8 +3033,9 @@ test "borrowed byte-array #nth! allows element writes" {
     try std.testing.expectEqual(@as(u8, 99), backing[1]);
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try std.testing.expect(result == .byte_array);
-    try std.testing.expect(result.byte_array == &ba);
+    try std.testing.expect(result.byte_array == ba);
 }
 
 test "borrowed byte-array #poke! allows element writes" {
@@ -2942,12 +3043,10 @@ test "borrowed byte-array #poke! allows element writes" {
     defer ctx.deinit();
 
     var backing = [_]u8{ 0x00, 0x00, 0x00, 0x00 };
-    var ba = ByteArray{
-        .items = backing[0..],
-        .storage = .{ .borrowed = backing[0..] },
-    };
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
 
-    try ctx.stack.push(.{ .byte_array = &ba });
+    try ctx.stack.push(.{ .byte_array = ba });
     try ctx.stack.push(.{ .fixnum = 1 });
     try ctx.stack.push(.{ .fixnum = 0xABCD });
     try ctx.stack.push(.{ .fixnum = 2 });
@@ -2958,8 +3057,9 @@ test "borrowed byte-array #poke! allows element writes" {
     try std.testing.expectEqual(@as(u8, 0xAB), backing[2]);
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try std.testing.expect(result == .byte_array);
-    try std.testing.expect(result.byte_array == &ba);
+    try std.testing.expect(result.byte_array == ba);
 }
 
 test "borrowed byte-array structural mutations are rejected" {
@@ -2967,18 +3067,16 @@ test "borrowed byte-array structural mutations are rejected" {
     defer ctx.deinit();
 
     var backing = [_]u8{ 1, 2, 3 };
-    var ba = ByteArray{
-        .items = backing[0..],
-        .storage = .{ .borrowed = backing[0..] },
-    };
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, backing[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
 
-    try ctx.stack.push(.{ .byte_array = &ba });
+    try ctx.stack.push(.{ .byte_array = ba });
     try ctx.stack.push(.{ .fixnum = 2 });
     try std.testing.expectError(error.InvalidArgument, nativeShrinkMut(&ctx));
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
     try std.testing.expectEqual(@as(usize, 3), backing.len);
 
-    try ctx.stack.push(.{ .byte_array = &ba });
+    try ctx.stack.push(.{ .byte_array = ba });
     try ctx.stack.push(.{ .fixnum = 5 });
     try ctx.stack.push(.{ .fixnum = 0 });
     try std.testing.expectError(error.InvalidArgument, nativeGrowMut(&ctx));
@@ -2990,19 +3088,19 @@ test ">byte-array on owned byte-array is a no-op" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
-    var items = [_]u8{ 1, 2, 3 };
-    var ba = ByteArray{
-        .items = items[0..],
-        .owned_items = .{ .items = items[0..], .capacity = items.len },
-        .storage = .owned,
-    };
+    const items = [_]u8{ 1, 2, 3 };
+    const ba = try ByteArray.create(std.testing.allocator);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+    try ba.ensureTotalCapacity(std.testing.allocator, items.len);
+    ba.appendSliceAssumeCapacity(items[0..]);
 
-    try ctx.stack.push(.{ .byte_array = &ba });
+    try ctx.stack.push(.{ .byte_array = ba });
     try nativeToByteArray(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try std.testing.expect(result == .byte_array);
-    try std.testing.expect(result.byte_array == &ba);
+    try std.testing.expect(result.byte_array == ba);
 }
 
 test ">byte-array copies borrowed byte-array to owned storage" {
@@ -3010,17 +3108,16 @@ test ">byte-array copies borrowed byte-array to owned storage" {
     defer ctx.deinit();
 
     var items = [_]u8{ 9, 8, 7 };
-    var ba = ByteArray{
-        .items = items[0..],
-        .storage = .{ .borrowed = items[0..] },
-    };
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, items[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
 
-    try ctx.stack.push(.{ .byte_array = &ba });
+    try ctx.stack.push(.{ .byte_array = ba });
     try nativeToByteArray(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try std.testing.expect(result == .byte_array);
-    try std.testing.expect(result.byte_array != &ba);
+    try std.testing.expect(result.byte_array != ba);
     try std.testing.expect(!result.byte_array.isBorrowed());
     try std.testing.expectEqualSlices(u8, items[0..], result.byte_array.slice());
 }
@@ -3030,11 +3127,9 @@ test ">byte-array copies borrowed packed backing and preserves tag" {
     defer ctx.deinit();
 
     var items = [_]u8{ 0xAA, 0xBB, 0xCC, 0xDD };
-    var ba = ByteArray{
-        .items = items[0..],
-        .storage = .{ .borrowed = items[0..] },
-    };
-    const inner = Value{ .byte_array = &ba };
+    const ba = try value_mod.makeBorrowedByteArray(std.testing.allocator, items[0..]);
+    defer container_backing.releaseValue(.{ .byte_array = ba });
+    const inner = Value{ .byte_array = ba };
     const packed_type = value_mod.VirtualType{
         .name = "packed-u8",
         .inner_type = "byte-array",
@@ -3049,6 +3144,7 @@ test ">byte-array copies borrowed packed backing and preserves tag" {
     try nativeToByteArray(&ctx);
 
     const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
     try std.testing.expect(result == .tagged);
     try std.testing.expect(result.tagged.tag == &packed_type);
     try std.testing.expect(result.tagged.inner.* == .byte_array);

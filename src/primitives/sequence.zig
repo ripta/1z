@@ -284,8 +284,7 @@ pub const SequenceBuilder = struct {
                 };
             },
             .byte_array => blk: {
-                const ba = allocator.create(ByteArray) catch return error.OutOfMemory;
-                ba.* = ByteArray{};
+                const ba = ByteArray.create(allocator) catch return error.OutOfMemory;
                 break :blk SequenceBuilder{
                     .kind = kind,
                     .allocator = allocator,

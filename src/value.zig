@@ -72,13 +72,52 @@ pub const Vector = struct {
 };
 
 /// ByteArray type for B{ } literals - mutable, dynamically-sized byte sequences.
+///
+/// Carries a `ContainerHeader` so the backing participates in the cross-worker
+/// refcount + per-container mutex lifecycle, uniform with `Vector` and
+/// `MutableMap`. The header is uniform across storage variants; only the
+/// destroy callback differs: `.owned` frees the underlying bytes, `.borrowed`
+/// frees only the struct because the bytes belong to an external owner per the
+/// borrowed-buffer model. Create via `ByteArray.create` (owned) or
+/// `makeBorrowedByteArray` (borrowed) so the header is initialized before the
+/// value can be observed by another thread.
 pub const ByteArray = struct {
+    header: @import("container_backing.zig").ContainerHeader,
     items: []u8 = &.{},
     owned_items: std.ArrayListUnmanaged(u8) = .{},
     storage: union(enum) {
         owned,
         borrowed: []u8,
     } = .owned,
+
+    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*ByteArray {
+        const self = try allocator.create(ByteArray);
+        self.* = .{
+            .header = undefined,
+            .items = &.{},
+            .owned_items = .{},
+            .storage = .owned,
+        };
+        self.header.init(allocator, destroyByteArray);
+        return self;
+    }
+
+    fn destroyByteArray(header: *@import("container_backing.zig").ContainerHeader) void {
+        const self: *ByteArray = @fieldParentPtr("header", header);
+        switch (self.storage) {
+            .owned => {
+                self.syncOwnedView();
+                self.owned_items.deinit(header.allocator);
+            },
+            .borrowed => {
+                // The bytes belong to an external owner; free only the struct.
+                // A non-empty owned_items view on a borrowed struct would mean
+                // the borrowed contract was violated somewhere upstream.
+                std.debug.assert(self.owned_items.capacity == 0);
+            },
+        }
+        header.allocator.destroy(self);
+    }
 
     pub fn slice(self: ByteArray) []u8 {
         return self.items;
@@ -150,9 +189,11 @@ pub const ByteArray = struct {
 pub fn makeBorrowedByteArray(allocator: std.mem.Allocator, bytes: []u8) !*ByteArray {
     const ba = try allocator.create(ByteArray);
     ba.* = .{
+        .header = undefined,
         .items = bytes,
         .storage = .{ .borrowed = bytes },
     };
+    ba.header.init(allocator, ByteArray.destroyByteArray);
     return ba;
 }
 
@@ -1644,6 +1685,7 @@ test "byte array slice owned" {
         .capacity = items.len,
     };
     const ba = ByteArray{
+        .header = undefined,
         .items = items[0..],
         .owned_items = backing,
         .storage = .owned,
@@ -1655,6 +1697,7 @@ test "byte array slice owned" {
 test "byte array slice borrowed" {
     var items = [_]u8{ 0x10, 0x20, 0x30 };
     const ba = ByteArray{
+        .header = undefined,
         .items = items[0..],
         .storage = .{ .borrowed = items[0..] },
     };
@@ -1681,11 +1724,13 @@ test "byte array value uses slice for equality write and hash" {
     var borrowed_items = [_]u8{ 0xDE, 0xAD, 0xBE, 0xEF };
 
     var owned = ByteArray{
+        .header = undefined,
         .items = owned_items[0..],
         .owned_items = owned_list,
         .storage = .owned,
     };
     var borrowed = ByteArray{
+        .header = undefined,
         .items = borrowed_items[0..],
         .storage = .{ .borrowed = borrowed_items[0..] },
     };
@@ -1706,6 +1751,7 @@ test "valueContainsBorrowedBuffer detects direct packed and nested borrowed buff
     var borrowed_items = [_]u8{ 4, 5, 6 };
 
     var owned_ba = ByteArray{
+        .header = undefined,
         .items = owned_items[0..],
         .owned_items = .{
             .items = owned_items[0..],
@@ -1714,6 +1760,7 @@ test "valueContainsBorrowedBuffer detects direct packed and nested borrowed buff
         .storage = .owned,
     };
     var borrowed_ba = ByteArray{
+        .header = undefined,
         .items = borrowed_items[0..],
         .storage = .{ .borrowed = borrowed_items[0..] },
     };

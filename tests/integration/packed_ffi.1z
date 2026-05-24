@@ -6,17 +6,20 @@ use "math/packed" ;
 use "math/packed-ffi" ;
 
 "packed-from-ptr:u8 returns borrowed packed backing" test-section
-B{ 1 2 3 4 } bytes>ffi-ptr+len drop 4 packed-from-ptr:u8 borrowed?
+B{ 1 2 3 4 } dup bytes>ffi-ptr+len drop 4 packed-from-ptr:u8 borrowed?
+swap drop
 t "packed-from-ptr:u8 produces borrowed packed value" assert=
 
 "packed-from-ptr:u8 shares backing with source bytes" test-section
 B{ 1 2 3 4 } dup bytes>ffi-ptr+len drop 4 packed-from-ptr:u8
-swap 1 99 #nth! drop
-packed>array
+swap 1 99 #nth!
+swap packed>array
+swap drop
 { 1 99 3 4 } "source byte-array mutation is visible through packed value" assert=
 
 "packed-from-ptr:u8 can be copied to owned storage" test-section
-B{ 9 8 7 6 } bytes>ffi-ptr+len drop 4 packed-from-ptr:u8 >byte-array borrowed?
+B{ 9 8 7 6 } dup bytes>ffi-ptr+len drop 4 packed-from-ptr:u8 >byte-array borrowed?
+swap drop
 f ">byte-array copies borrowed packed backing to owned storage" assert=
 
 "All packed FFI tests complete!" print-line

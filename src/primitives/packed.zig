@@ -125,8 +125,7 @@ fn nativePackedFromArray(ctx: *Context) anyerror!void {
     };
 
     const byte_len = items.len * elem_type.elemSize();
-    const ba = try alloc.create(ByteArray);
-    ba.* = ByteArray{};
+    const ba = try ByteArray.create(alloc);
     try ba.ensureTotalCapacity(alloc, byte_len);
     ba.items.len = byte_len;
 
@@ -237,8 +236,7 @@ fn nativePackedFill(ctx: *Context) anyerror!void {
     };
 
     const byte_len = count * elem_type.elemSize();
-    const ba = try alloc.create(ByteArray);
-    ba.* = ByteArray{};
+    const ba = try ByteArray.create(alloc);
     try ba.ensureTotalCapacity(alloc, byte_len);
     ba.items.len = byte_len;
 
@@ -415,8 +413,7 @@ fn packedArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!vo
         return error.TypeMismatch;
     }
 
-    const out_ba = try alloc.create(ByteArray);
-    out_ba.* = ByteArray{};
+    const out_ba = try ByteArray.create(alloc);
     try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
     out_ba.items.len = a_bytes.len;
 
@@ -505,8 +502,7 @@ fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyer
         return error.TypeMismatch;
     };
 
-    const out_ba = try alloc.create(ByteArray);
-    out_ba.* = ByteArray{};
+    const out_ba = try ByteArray.create(alloc);
     const a_bytes = a_ba.slice();
     try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
     out_ba.items.len = a_bytes.len;

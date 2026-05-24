@@ -425,8 +425,7 @@ fn nativeFfiStructMake(ctx: *Context) anyerror!void {
     }
 
     // zero-initialize byte array allocation of total_size
-    const ba = try alloc.create(ByteArray);
-    ba.* = ByteArray{};
+    const ba = try ByteArray.create(alloc);
     try ba.ensureTotalCapacity(alloc, layout.total_size);
     ba.items.len = layout.total_size;
     @memset(ba.items[0..layout.total_size], 0);
@@ -618,8 +617,7 @@ fn nativeFfiStructFieldGet(ctx: *Context) anyerror!void {
             return error.FFITypeMismatch;
         };
 
-        const new_ba = try alloc.create(ByteArray);
-        new_ba.* = ByteArray{};
+        const new_ba = try ByteArray.create(alloc);
         try new_ba.ensureTotalCapacity(alloc, field.size);
         new_ba.items.len = field.size;
         @memcpy(new_ba.items[0..field.size], buf);

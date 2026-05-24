@@ -15,6 +15,7 @@ const Primitive = @import("types.zig").Primitive;
 const Capability = @import("types.zig").Capability;
 const helpers = @import("helpers.zig");
 const error_mapping = @import("error_mapping.zig");
+const container_backing = @import("../container_backing.zig");
 
 const popFixnum = helpers.popFixnum;
 const popSymbol = helpers.popSymbol;
@@ -280,6 +281,7 @@ pub fn nativeStreamClose(ctx: *Context) anyerror!void {
 /// stream-write ( stream bytes -- n ) - Write bytes to stream, return count written
 pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
     const bytes_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(bytes_val);
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
 
@@ -330,8 +332,7 @@ pub fn nativeStreamRead(ctx: *Context) anyerror!void {
         return mapStreamReadError(err);
     };
 
-    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-    ba.* = ByteArray{};
+    const ba = ByteArray.create(alloc) catch return error.OutOfMemory;
     ba.ensureTotalCapacity(alloc, bytes_read) catch return error.OutOfMemory;
     for (buffer[0..bytes_read]) |byte| {
         ba.appendAssumeCapacity(byte);
@@ -427,8 +428,7 @@ pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
         content.appendSlice(alloc, buffer[0..bytes_read]) catch return error.OutOfMemory;
     }
 
-    const ba = alloc.create(ByteArray) catch return error.OutOfMemory;
-    ba.* = ByteArray{};
+    const ba = ByteArray.create(alloc) catch return error.OutOfMemory;
     ba.ensureTotalCapacity(alloc, content.items.len) catch return error.OutOfMemory;
     for (content.items) |byte| {
         ba.appendAssumeCapacity(byte);

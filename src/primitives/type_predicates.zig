@@ -71,6 +71,7 @@ fn nativeInstanceOf(ctx: *Context) anyerror!void {
 
 fn nativeBorrowed(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     try ctx.stack.push(.{ .boolean = valueIsBorrowed(val) });
 }
 
@@ -92,6 +93,7 @@ test "borrowed? reports byte-array and packed backing ownership" {
     var owned_bytes = [_]u8{ 1, 2, 3, 4 };
     var borrowed_bytes = [_]u8{ 5, 6, 7, 8 };
     var owned_ba = value_mod.ByteArray{
+        .header = undefined,
         .items = owned_bytes[0..],
         .owned_items = .{
             .items = owned_bytes[0..],
@@ -100,6 +102,7 @@ test "borrowed? reports byte-array and packed backing ownership" {
         .storage = .owned,
     };
     var borrowed_ba = value_mod.ByteArray{
+        .header = undefined,
         .items = borrowed_bytes[0..],
         .storage = .{
             .borrowed = borrowed_bytes[0..],
