@@ -130,6 +130,41 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
 
+    // Refcount-audit tripwire: a host-target tool that scans src/primitives for
+    // consumer-native pops missing a matching release, plus its own unit tests.
+    // Both run under `zig build test` so the audited tree is checked on every
+    // test run; the directory walk auto-covers newly added primitive files.
+    const refcount_audit_module = b.createModule(.{
+        .root_source_file = b.path("src/refcount_audit_main.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const refcount_audit_exe = b.addExecutable(.{
+        .name = "refcount-audit",
+        .root_module = refcount_audit_module,
+    });
+    const run_refcount_audit = b.addRunArtifact(refcount_audit_exe);
+    run_refcount_audit.setName("refcount audit");
+    run_refcount_audit.setCwd(b.path("."));
+    run_refcount_audit.addArg("src/primitives");
+
+    const refcount_audit_step = b.step("refcount-audit", "Scan native primitives for pops missing a refcount release");
+    refcount_audit_step.dependOn(&run_refcount_audit.step);
+
+    const refcount_audit_tests_module = b.createModule(.{
+        .root_source_file = b.path("src/refcount_audit.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const refcount_audit_tests = b.addTest(.{
+        .root_module = refcount_audit_tests_module,
+    });
+    const run_refcount_audit_tests = b.addRunArtifact(refcount_audit_tests);
+    run_refcount_audit_tests.setName("refcount audit unit tests");
+
+    test_step.dependOn(&run_refcount_audit_tests.step);
+    test_step.dependOn(&run_refcount_audit.step);
+
     // Shared library build for dynamic FFI tests
     const toy_shared_module = b.createModule(.{
         .target = target,
