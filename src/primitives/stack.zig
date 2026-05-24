@@ -135,7 +135,7 @@ fn nativeArrayN(ctx: *Context) anyerror!void {
     const count: usize = @intCast(n);
     if (count > ctx.stack.items.items.len) return error.StackUnderflow;
 
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.quotationAllocator();
     const arr = try alloc.alloc(Value, count);
 
     var i: usize = count;

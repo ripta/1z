@@ -11,6 +11,19 @@ const RegistryEntry = @import("types.zig").RegistryEntry;
 
 pub const HookRegistry = struct {
     hooks: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(Quotation)) = .{},
+
+    /// Free the registry's owned storage: each event's quotation list, the
+    /// duped event-name keys, and the map itself. Quotation instruction
+    /// bodies are borrowed from the dictionary or a per-context arena and are
+    /// not freed here.
+    pub fn deinit(self: *HookRegistry, allocator: std.mem.Allocator) void {
+        var iter = self.hooks.iterator();
+        while (iter.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(allocator);
+        }
+        self.hooks.deinit(allocator);
+    }
 };
 
 pub const registry_entries = [_]RegistryEntry{
@@ -33,7 +46,7 @@ fn nativeRegisterHook(ctx: *Context) anyerror!void {
     };
 
     const registry = ctx.hook_registry;
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.allocator;
 
     const result = registry.hooks.getOrPut(alloc, sym) catch return error.OutOfMemory;
     if (!result.found_existing) {
@@ -95,7 +108,7 @@ fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
         },
     }
 
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.quotationAllocator();
 
     const current = ctx.getParameterBinding(param.name) orelse blk: {
         ctx.executeQuotation(param.default_quotation) catch return error.OutOfMemory;
@@ -166,14 +179,15 @@ test "LIFO ordering" {
     defer ctx.deinit();
     ctx.loadPrelude(null) catch unreachable;
 
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.allocator;
+    const ialloc = ctx.quotationAllocator();
     const registry = ctx.hook_registry;
 
-    const instrs1 = try alloc.alloc(Instruction, 1);
+    const instrs1 = try ialloc.alloc(Instruction, 1);
     instrs1[0] = makeInstr(.{ .push_literal = .{ .fixnum = 1 } });
     const quot1 = Quotation{ .instructions = instrs1 };
 
-    const instrs2 = try alloc.alloc(Instruction, 1);
+    const instrs2 = try ialloc.alloc(Instruction, 1);
     instrs2[0] = makeInstr(.{ .push_literal = .{ .fixnum = 2 } });
     const quot2 = Quotation{ .instructions = instrs2 };
 
@@ -197,19 +211,20 @@ test "error resilience" {
     defer ctx.deinit();
     ctx.loadPrelude(null) catch unreachable;
 
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.allocator;
+    const ialloc = ctx.quotationAllocator();
     const registry = ctx.hook_registry;
 
-    const instrs1 = try alloc.alloc(Instruction, 1);
+    const instrs1 = try ialloc.alloc(Instruction, 1);
     instrs1[0] = makeInstr(.{ .push_literal = .{ .fixnum = 42 } });
     const quot1 = Quotation{ .instructions = instrs1 };
 
     // Second hook: reference an undefined word (will error without consuming stack)
-    const instrs2 = try alloc.alloc(Instruction, 1);
+    const instrs2 = try ialloc.alloc(Instruction, 1);
     instrs2[0] = makeInstr(.{ .call_word = "nonexistent-word-for-hook-test" });
     const quot2 = Quotation{ .instructions = instrs2 };
 
-    const instrs3 = try alloc.alloc(Instruction, 1);
+    const instrs3 = try ialloc.alloc(Instruction, 1);
     instrs3[0] = makeInstr(.{ .push_literal = .{ .fixnum = 99 } });
     const quot3 = Quotation{ .instructions = instrs3 };
 

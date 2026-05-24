@@ -1196,7 +1196,7 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
         return err;
     };
 
-    const items = sequenceToValues(seq, ctx.containerAllocator()) catch |err| {
+    const items = sequenceToValues(seq, ctx.quotationAllocator()) catch |err| {
         container_backing.releaseValue(seq);
         container_backing.releaseValue(.{ .vector = vec });
         return err;
@@ -2507,7 +2507,7 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
             };
             switch (ba.storage) {
                 .owned => {
-                    const alloc = ctx.containerAllocator();
+                    const alloc = ba.header.allocator;
                     const old_len = ba.items.len;
                     ba.ensureTotalCapacity(alloc, n) catch {
                         ba.header.unlock();
@@ -2679,12 +2679,11 @@ fn clonePackedToOwned(ctx: *Context, val: Value) !void {
         return;
     }
 
-    const alloc = ctx.containerAllocator();
-    const owned_ba = copyByteArrayToOwned(alloc, inner_ba) catch |err| {
+    const owned_ba = copyByteArrayToOwned(ctx.allocator, inner_ba) catch |err| {
         container_backing.releaseValue(val);
         return err;
     };
-    const new_inner = alloc.create(Value) catch {
+    const new_inner = ctx.quotationAllocator().create(Value) catch {
         container_backing.releaseValue(.{ .byte_array = owned_ba });
         container_backing.releaseValue(val);
         return error.OutOfMemory;
@@ -2717,7 +2716,7 @@ fn nativeToByteArray(ctx: *Context) anyerror!void {
                 return;
             }
 
-            const owned = copyByteArrayToOwned(ctx.containerAllocator(), ba) catch |err| {
+            const owned = copyByteArrayToOwned(ctx.allocator, ba) catch |err| {
                 container_backing.releaseValue(val);
                 return err;
             };

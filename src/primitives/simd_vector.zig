@@ -8,6 +8,7 @@ const VirtualType = value_mod.VirtualType;
 const helpers = @import("helpers.zig");
 const RegistryEntry = @import("types.zig").RegistryEntry;
 const simd_kernels = @import("../simd_vector.zig");
+const container_backing = @import("../container_backing.zig");
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "simd-from-stack", .func = nativeSimdFromStack, .stack_effect = "v0..vN-1 type-str -- byte-array" },
@@ -239,12 +240,13 @@ fn allocSimdByteArray(alloc: Allocator) !*ByteArray {
     return ba;
 }
 
-fn wrapSimdResult(ctx: *Context, alloc: Allocator, tag: *const VirtualType, out_bytes: [simd_kernels.SIMD_BYTES]u8) !void {
-    const out_ba = try allocSimdByteArray(alloc);
+fn wrapSimdResult(ctx: *Context, tag: *const VirtualType, out_bytes: [simd_kernels.SIMD_BYTES]u8) !void {
+    const out_ba = try allocSimdByteArray(ctx.allocator);
+    errdefer container_backing.releaseValue(.{ .byte_array = out_ba });
     out_ba.items[0..simd_kernels.SIMD_BYTES].* = out_bytes;
-    const inner = try alloc.create(Value);
+    const inner = try ctx.quotationAllocator().create(Value);
     inner.* = .{ .byte_array = out_ba };
-    try ctx.stack.push(.{ .tagged = .{ .tag = tag, .inner = inner } });
+    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = tag, .inner = inner } });
 }
 
 // ---------------------------------------------------------------------------
@@ -252,7 +254,7 @@ fn wrapSimdResult(ctx: *Context, alloc: Allocator, tag: *const VirtualType, out_
 // ---------------------------------------------------------------------------
 
 fn nativeSimdFromStack(ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.allocator;
     const arena = ctx.arena.allocator();
 
     const type_str_val = try ctx.stack.pop();
@@ -280,6 +282,7 @@ fn nativeSimdFromStack(ctx: *Context) anyerror!void {
     }
 
     const ba = try allocSimdByteArray(alloc);
+    errdefer container_backing.releaseValue(.{ .byte_array = ba });
 
     switch (simd_type) {
         inline .@"2xf64", .@"4xf32", .@"2xi64", .@"4xi32", .@"8xi16", .@"16xi8", .@"2xu64", .@"4xu32", .@"8xu16", .@"16xu8" => |et| {
@@ -294,7 +297,7 @@ fn nativeSimdFromStack(ctx: *Context) anyerror!void {
         },
     }
 
-    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.pushMoved(.{ .byte_array = ba });
 }
 
 // ---------------------------------------------------------------------------
@@ -302,7 +305,7 @@ fn nativeSimdFromStack(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn nativeSimdSplat(ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.allocator;
     const arena = ctx.arena.allocator();
 
     const type_str_val = try ctx.stack.pop();
@@ -322,6 +325,7 @@ fn nativeSimdSplat(ctx: *Context) anyerror!void {
     };
 
     const ba = try allocSimdByteArray(alloc);
+    errdefer container_backing.releaseValue(.{ .byte_array = ba });
 
     switch (simd_type) {
         inline .@"2xf64", .@"4xf32", .@"2xi64", .@"4xi32", .@"8xi16", .@"16xi8", .@"2xu64", .@"4xu32", .@"8xu16", .@"16xu8" => |et| {
@@ -332,7 +336,7 @@ fn nativeSimdSplat(ctx: *Context) anyerror!void {
         },
     }
 
-    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.pushMoved(.{ .byte_array = ba });
 }
 
 // ---------------------------------------------------------------------------
@@ -340,9 +344,10 @@ fn nativeSimdSplat(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn nativeSimdToArray(ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.quotationAllocator();
 
     const tagged = try popSimdTagged(ctx);
+    defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
     const simd_type = try extractSimdType(ctx, tagged);
     const bytes = try validateSimdSize(ctx, ba);
@@ -370,6 +375,7 @@ fn nativeSimdToArray(ctx: *Context) anyerror!void {
 fn nativeSimdLaneGet(ctx: *Context) anyerror!void {
     const idx_val = try ctx.stack.pop();
     const tagged = try popSimdTagged(ctx);
+    defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
     const simd_type = try extractSimdType(ctx, tagged);
     const bytes = try validateSimdSize(ctx, ba);
@@ -403,12 +409,12 @@ fn nativeSimdLaneGet(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn nativeSimdLaneSet(ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
     const arena = ctx.arena.allocator();
 
     const idx_val = try ctx.stack.pop();
     const value_val = try ctx.stack.pop();
     const tagged = try popSimdTagged(ctx);
+    defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
     const simd_type = try extractSimdType(ctx, tagged);
     const bytes = try validateSimdSize(ctx, ba);
@@ -435,7 +441,7 @@ fn nativeSimdLaneSet(ctx: *Context) anyerror!void {
             const value = try valueToElement(T, ctx, arena, value_val);
             var out_bytes: [simd_kernels.SIMD_BYTES]u8 = undefined;
             simd_kernels.simdSetLane(N, T, bytes, lane, value, &out_bytes);
-            try wrapSimdResult(ctx, alloc, tagged.tag, out_bytes);
+            try wrapSimdResult(ctx, tagged.tag, out_bytes);
         },
     }
 }
@@ -445,10 +451,10 @@ fn nativeSimdLaneSet(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn simdArithmeticOp(comptime op: simd_kernels.Op, ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
-
     const b_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(b_val);
     const a_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(a_val);
 
     const a_tagged = switch (a_val) {
         .tagged => |t| t,
@@ -488,7 +494,7 @@ fn simdArithmeticOp(comptime op: simd_kernels.Op, ctx: *Context) anyerror!void {
             const N = comptime etToLaneCount(et);
             var out_bytes: [simd_kernels.SIMD_BYTES]u8 = undefined;
             simd_kernels.simdBinaryOp(N, T, op, a_bytes, b_bytes, &out_bytes);
-            try wrapSimdResult(ctx, alloc, a_tagged.tag, out_bytes);
+            try wrapSimdResult(ctx, a_tagged.tag, out_bytes);
         },
     }
 }
@@ -514,10 +520,10 @@ fn nativeSimdDiv(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn nativeSimdShuffle(ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
-
     const indices_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(indices_val);
     const tagged = try popSimdTagged(ctx);
+    defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
     const simd_type = try extractSimdType(ctx, tagged);
     const bytes = try validateSimdSize(ctx, ba);
@@ -557,7 +563,7 @@ fn nativeSimdShuffle(ctx: *Context) anyerror!void {
             }
             var out_bytes: [simd_kernels.SIMD_BYTES]u8 = undefined;
             simd_kernels.simdPermute(N, T, bytes, indices, &out_bytes);
-            try wrapSimdResult(ctx, alloc, tagged.tag, out_bytes);
+            try wrapSimdResult(ctx, tagged.tag, out_bytes);
         },
     }
 }
@@ -567,11 +573,12 @@ fn nativeSimdShuffle(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn nativeSimdSelect(ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
-
     const b_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(b_val);
     const a_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(a_val);
     const mask_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(mask_val);
 
     const mask_tagged = switch (mask_val) {
         .tagged => |t| t,
@@ -614,7 +621,7 @@ fn nativeSimdSelect(ctx: *Context) anyerror!void {
             const N = comptime etToLaneCount(et);
             var out_bytes: [simd_kernels.SIMD_BYTES]u8 = undefined;
             simd_kernels.simdSelect(N, T, mask_bytes, a_bytes, b_bytes, &out_bytes);
-            try wrapSimdResult(ctx, alloc, a_tagged.tag, out_bytes);
+            try wrapSimdResult(ctx, a_tagged.tag, out_bytes);
         },
     }
 }
@@ -624,11 +631,11 @@ fn nativeSimdSelect(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn nativeSimdBlend(ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
-
     const bitmask_val = try ctx.stack.pop();
     const b_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(b_val);
     const a_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(a_val);
 
     const a_tagged = switch (a_val) {
         .tagged => |t| t,
@@ -675,7 +682,7 @@ fn nativeSimdBlend(ctx: *Context) anyerror!void {
             const N = comptime etToLaneCount(et);
             var out_bytes: [simd_kernels.SIMD_BYTES]u8 = undefined;
             simd_kernels.simdBlend(N, T, a_bytes, b_bytes, @intCast(bitmask), &out_bytes);
-            try wrapSimdResult(ctx, alloc, a_tagged.tag, out_bytes);
+            try wrapSimdResult(ctx, a_tagged.tag, out_bytes);
         },
     }
 }

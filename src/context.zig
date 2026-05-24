@@ -244,10 +244,6 @@ pub const Context = struct {
     stack: Stack,
     dictionary: Dictionary,
     arena: std.heap.ArenaAllocator,
-    /// Shared arena for mutable container backing storage. Owned by the root
-    /// context and shared by pointer to all child task contexts so that
-    /// container allocations outlive any individual task's arena.
-    container_arena: *std.heap.ArenaAllocator,
     /// Instruction slices belonging to quotations the parser or `curry`
     /// allocated on this context's `arena`, recorded so the captured
     /// container literals can be released before the arena tears down.
@@ -606,16 +602,10 @@ pub const Context = struct {
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
     pub fn init(allocator: Allocator) Context {
-        const ca = allocator.create(std.heap.ArenaAllocator) catch |err| {
-            std.debug.panic("Failed to allocate container arena: {any}", .{err});
-        };
-        ca.* = std.heap.ArenaAllocator.init(allocator);
-
         var ctx = Context{
             .stack = Stack.init(allocator),
             .dictionary = Dictionary.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .container_arena = ca,
             .allocator = allocator,
             .call_stack = .{},
             .error_details = .{},
@@ -644,8 +634,9 @@ pub const Context = struct {
             std.debug.panic("Failed to allocate module cache: {any}", .{err});
         };
 
-        // Allocate the shared hook registry on the container arena.
-        ctx.hook_registry = ca.allocator().create(HookRegistry) catch |err| {
+        // Allocate the shared hook registry on the long-lived allocator; the
+        // root context frees it in deinit.
+        ctx.hook_registry = allocator.create(HookRegistry) catch |err| {
             std.debug.panic("Failed to allocate hook registry: {any}", .{err});
         };
         ctx.hook_registry.* = .{};
@@ -705,7 +696,6 @@ pub const Context = struct {
             .stack = Stack.init(allocator),
             .dictionary = Dictionary.init(allocator),
             .arena = std.heap.ArenaAllocator.init(allocator),
-            .container_arena = parent.container_arena,
             .allocator = allocator,
             .call_stack = .{},
             .error_details = .{},
@@ -937,10 +927,10 @@ pub const Context = struct {
             // root-owned allocators it sits in front of. Child contexts share
             // the parent's pointer without retaining and skip this branch.
             container_backing.releaseValue(.{ .mutable_map = self.module_cache_value });
+            self.hook_registry.deinit(self.allocator);
+            self.allocator.destroy(self.hook_registry);
             self.allocator.destroy(self.lock_order_tracker);
             self.allocator.destroy(self.shared_lock);
-            self.container_arena.deinit();
-            self.allocator.destroy(self.container_arena);
         }
         self.stack.deinit();
     }
@@ -948,12 +938,6 @@ pub const Context = struct {
     /// Allocator for quotations and other parsed data.
     pub fn quotationAllocator(self: *Context) Allocator {
         return self.arena.allocator();
-    }
-
-    /// Allocator for mutable container backing storage. Shared across all
-    /// task contexts so that container data outlives any individual task's arena.
-    pub fn containerAllocator(self: *Context) Allocator {
-        return self.container_arena.allocator();
     }
 
     /// If `instructions` contains any container-variant `push_literal`,

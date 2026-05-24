@@ -9,6 +9,7 @@ const BigIntManaged = value_mod.BigIntManaged;
 const helpers = @import("helpers.zig");
 const RegistryEntry = @import("types.zig").RegistryEntry;
 const packed_kernels = @import("../packed.zig");
+const container_backing = @import("../container_backing.zig");
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "packed-from-array", .func = nativePackedFromArray, .stack_effect = "array elem-type-str -- byte-array" },
@@ -97,11 +98,12 @@ const PackedElementType = enum {
 
 /// Convert a 1z array of numbers to a byte-array with packed element encoding.
 fn nativePackedFromArray(ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.allocator;
     const arena = ctx.arena.allocator();
 
     const type_str_val = try ctx.stack.pop();
     const arr_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(arr_val);
 
     const type_str = switch (type_str_val) {
         .string => |s| s,
@@ -126,6 +128,7 @@ fn nativePackedFromArray(ctx: *Context) anyerror!void {
 
     const byte_len = items.len * elem_type.elemSize();
     const ba = try ByteArray.create(alloc);
+    errdefer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(alloc, byte_len);
     ba.items.len = byte_len;
 
@@ -142,7 +145,7 @@ fn nativePackedFromArray(ctx: *Context) anyerror!void {
         .u64 => try writeElements(u64, ctx, arena, items, ba.items),
     }
 
-    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.pushMoved(.{ .byte_array = ba });
 }
 
 fn writeElements(comptime T: type, ctx: *Context, arena: Allocator, items: []const Value, out: []u8) !void {
@@ -201,7 +204,7 @@ fn valueToElement(comptime T: type, ctx: *Context, arena: Allocator, val: Value)
 // ---------------------------------------------------------------------------
 
 fn nativePackedFill(ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.allocator;
     const arena = ctx.arena.allocator();
 
     const type_str_val = try ctx.stack.pop();
@@ -237,6 +240,7 @@ fn nativePackedFill(ctx: *Context) anyerror!void {
 
     const byte_len = count * elem_type.elemSize();
     const ba = try ByteArray.create(alloc);
+    errdefer container_backing.releaseValue(.{ .byte_array = ba });
     try ba.ensureTotalCapacity(alloc, byte_len);
     ba.items.len = byte_len;
 
@@ -253,7 +257,7 @@ fn nativePackedFill(ctx: *Context) anyerror!void {
         .u64 => packed_kernels.fillPacked(u64, ba.items, try valueToElement(u64, ctx, arena, value_val)),
     }
 
-    try ctx.stack.push(.{ .byte_array = ba });
+    try ctx.stack.pushMoved(.{ .byte_array = ba });
 }
 
 // ---------------------------------------------------------------------------
@@ -261,9 +265,10 @@ fn nativePackedFill(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn nativePackedToArray(ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.quotationAllocator();
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const tagged = switch (val) {
         .tagged => |t| t,
         else => {
@@ -345,10 +350,12 @@ fn elementToValue(comptime T: type, elem: T) Value {
 // ---------------------------------------------------------------------------
 
 fn packedArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.allocator;
 
     const b_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(b_val);
     const a_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(a_val);
 
     const a_tagged = switch (a_val) {
         .tagged => |t| t,
@@ -414,14 +421,15 @@ fn packedArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!vo
     }
 
     const out_ba = try ByteArray.create(alloc);
+    errdefer container_backing.releaseValue(.{ .byte_array = out_ba });
     try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
     out_ba.items.len = a_bytes.len;
 
     callKernel(op, elem_type, a_bytes, b_bytes, out_ba.items);
 
-    const inner = try alloc.create(Value);
+    const inner = try ctx.quotationAllocator().create(Value);
     inner.* = .{ .byte_array = out_ba };
-    try ctx.stack.push(.{
+    try ctx.stack.pushMoved(.{
         .tagged = .{
             .tag = a_tagged.tag,
             .inner = inner,
@@ -475,11 +483,12 @@ fn nativePackedDiv(ctx: *Context) anyerror!void {
 // ---------------------------------------------------------------------------
 
 fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!void {
-    const alloc = ctx.containerAllocator();
+    const alloc = ctx.allocator;
     const arena = ctx.arena.allocator();
 
     const scalar_val = try ctx.stack.pop();
     const a_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(a_val);
 
     const a_tagged = switch (a_val) {
         .tagged => |t| t,
@@ -503,6 +512,7 @@ fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyer
     };
 
     const out_ba = try ByteArray.create(alloc);
+    errdefer container_backing.releaseValue(.{ .byte_array = out_ba });
     const a_bytes = a_ba.slice();
     try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
     out_ba.items.len = a_bytes.len;
@@ -515,9 +525,9 @@ fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyer
         },
     }
 
-    const inner = try alloc.create(Value);
+    const inner = try ctx.quotationAllocator().create(Value);
     inner.* = .{ .byte_array = out_ba };
-    try ctx.stack.push(.{ .tagged = .{ .tag = a_tagged.tag, .inner = inner } });
+    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = a_tagged.tag, .inner = inner } });
 }
 
 fn nativePackedScalarAdd(ctx: *Context) anyerror!void {
@@ -543,6 +553,7 @@ fn nativePackedScalarDiv(ctx: *Context) anyerror!void {
 /// packed-sum-impl ( packed-T -- number )
 fn nativePackedSum(ctx: *Context) anyerror!void {
     const tagged = try popPackedTagged(ctx);
+    defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
     const elem_type = try extractElemType(ctx, tagged);
 
@@ -557,6 +568,7 @@ fn nativePackedSum(ctx: *Context) anyerror!void {
 /// packed-product-impl ( packed-T -- number )
 fn nativePackedProduct(ctx: *Context) anyerror!void {
     const tagged = try popPackedTagged(ctx);
+    defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
     const elem_type = try extractElemType(ctx, tagged);
 
@@ -571,6 +583,7 @@ fn nativePackedProduct(ctx: *Context) anyerror!void {
 /// packed-min-impl ( packed-T -- number )
 fn nativePackedMin(ctx: *Context) anyerror!void {
     const tagged = try popPackedTagged(ctx);
+    defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
     const elem_type = try extractElemType(ctx, tagged);
 
@@ -589,6 +602,7 @@ fn nativePackedMin(ctx: *Context) anyerror!void {
 /// packed-max-impl ( packed-T -- number )
 fn nativePackedMax(ctx: *Context) anyerror!void {
     const tagged = try popPackedTagged(ctx);
+    defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
     const elem_type = try extractElemType(ctx, tagged);
 
@@ -607,7 +621,9 @@ fn nativePackedMax(ctx: *Context) anyerror!void {
 /// packed-dot-impl ( packed-T packed-T -- number )
 fn nativePackedDot(ctx: *Context) anyerror!void {
     const b_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(b_val);
     const a_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(a_val);
 
     const a_tagged = switch (a_val) {
         .tagged => |t| t,
@@ -657,6 +673,7 @@ fn nativePackedDot(ctx: *Context) anyerror!void {
 /// packed-len ( packed-T -- fixnum )
 fn nativePackedLen(ctx: *Context) anyerror!void {
     const tagged = try popPackedTagged(ctx);
+    defer container_backing.releaseValue(.{ .tagged = tagged });
     const ba = try extractByteArray(ctx, tagged);
     const elem_type = try extractElemType(ctx, tagged);
     const count = ba.slice().len / elem_type.elemSize();
@@ -667,6 +684,7 @@ fn nativePackedLen(ctx: *Context) anyerror!void {
 fn nativePackedNth(ctx: *Context) anyerror!void {
     const idx_val = try ctx.stack.pop();
     const a_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(a_val);
 
     const idx: i64 = switch (idx_val) {
         .fixnum => |n| n,
