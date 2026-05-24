@@ -8,8 +8,8 @@ use "net/tcp" shadow-ok ;
 "basic HTTPS request over TLS" test-section
 "example.com" 443 make-addr:tcp connect
 <tls-config> "example.com" tls-upgrade
-dup "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n" stream-write drop
-stream-read-line "HTTP/" #starts-with? t "response starts with HTTP" assert=
+dup "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n" stream-write drop
+dup stream-read-line "HTTP/" #starts-with? t "response starts with HTTP" assert= stream-close
 
 "TLS stream display includes tls" test-section
 "example.com" 443 make-addr:tcp connect

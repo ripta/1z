@@ -3,18 +3,43 @@
 use "testing" ;
 use "net/tls" ;
 
+http-request: ( -- str ) [ "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n" ] ;
+
+read-http-status?: ( stream -- ? ) [
+  dup http-request stream-write drop
+  dup stream-read-line swap stream-close
+  dup string?
+  [ "HTTP/" #starts-with? ]
+  [ drop f ]
+  if
+] ;
+
+connect-with-added-pem?: ( -- ? ) [
+  "/etc/ssl/cert.pem" read: stream-open dup stream-read-all swap stream-close
+  <tls-config> swap add-ca-pem
+  [ "example.com" 443 ] dip connect-with
+  read-http-status?
+] ;
+
+connect-with-added-pem-retry?: ( -- ? ) [
+  connect-with-added-pem? dup [ ] [ drop connect-with-added-pem? ] if
+] ;
+
+connect-with-added-file?: ( -- ? ) [
+  <tls-config> "/etc/ssl/cert.pem" add-ca-file
+  [ "example.com" 443 ] dip connect-with
+  read-http-status?
+] ;
+
+connect-with-added-file-retry?: ( -- ? ) [
+  connect-with-added-file? dup [ ] [ drop connect-with-added-file? ] if
+] ;
+
 "add-ca-pem adds certificates to config" test-section
-"/etc/ssl/cert.pem" read: stream-open dup stream-read-all swap stream-close
-<tls-config> swap add-ca-pem
-[ "example.com" 443 ] dip connect-with
-dup "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n" stream-write drop
-stream-read-line "HTTP/" #starts-with? t "connect with added PEM CAs" assert=
+connect-with-added-pem-retry? t "connect with added PEM CAs" assert=
 
 "add-ca-file adds certificates from file" test-section
-<tls-config> "/etc/ssl/cert.pem" add-ca-file
-[ "example.com" 443 ] dip connect-with
-dup "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n" stream-write drop
-stream-read-line "HTTP/" #starts-with? t "connect with file CAs" assert=
+connect-with-added-file-retry? t "connect with file CAs" assert=
 
 "add-ca-pem on no-verify config does not crash" test-section
 "/etc/ssl/cert.pem" read: stream-open dup stream-read-all swap stream-close

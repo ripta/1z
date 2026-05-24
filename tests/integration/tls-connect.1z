@@ -3,15 +3,28 @@
 use "testing" ;
 use "net/tls" ;
 
+http-request: ( -- str ) [ "GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n" ] ;
+
+read-http-status?: ( stream -- ? ) [
+  dup http-request stream-write drop
+  dup stream-read-line swap stream-close
+  dup string?
+  [ "HTTP/" #starts-with? ]
+  [ drop f ]
+  if
+] ;
+
+connect-status?: ( -- ? ) [ "example.com" 443 connect read-http-status? ] ;
+connect-status-retry?: ( -- ? ) [ connect-status? dup [ ] [ drop connect-status? ] if ] ;
+
+connect-with-status?: ( -- ? ) [ "example.com" 443 <tls-config> connect-with read-http-status? ] ;
+connect-with-status-retry?: ( -- ? ) [ connect-with-status? dup [ ] [ drop connect-with-status? ] if ] ;
+
 "connect with system CAs" test-section
-"example.com" 443 connect
-dup "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n" stream-write drop
-stream-read-line "HTTP/" #starts-with? t "response starts with HTTP" assert=
+connect-status-retry? t "response starts with HTTP" assert=
 
 "connect-with explicit config" test-section
-"example.com" 443 <tls-config> connect-with
-dup "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n" stream-write drop
-stream-read-line "HTTP/" #starts-with? t "response starts with HTTP" assert=
+connect-with-status-retry? t "response starts with HTTP" assert=
 
 "connect stream inspect shows tls" test-section
 "example.com" 443 connect
@@ -21,5 +34,4 @@ stream-close
 "qualified access via load" test-section
 tlsmod: "net/tls" load ;
 "example.com" 443 tlsmod.connect
-dup "GET / HTTP/1.0\r\nHost: example.com\r\n\r\n" stream-write drop
-stream-read-line "HTTP/" #starts-with? t "qualified access works" assert=
+read-http-status? t "qualified access works" assert=

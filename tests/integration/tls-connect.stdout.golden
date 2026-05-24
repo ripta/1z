@@ -1,13 +1,15 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 === connect with system CAs ===
 Stack: [ ]
-Stack: [ <stream tls fd read-write> ]
-Stack: [ <stream tls fd read-write> ]
 PASS: response starts with HTTP
 Stack: [ ]
 === connect-with explicit config ===
 Stack: [ ]
-Stack: [ <stream tls fd read-write> ]
-Stack: [ <stream tls fd read-write> ]
 PASS: response starts with HTTP
 Stack: [ ]
 === connect stream inspect shows tls ===
@@ -19,7 +21,6 @@ Stack: [ ]
 === qualified access via load ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ <stream tls fd read-write> ]
 Stack: [ <stream tls fd read-write> ]
 PASS: qualified access works
 Stack: [ ]
