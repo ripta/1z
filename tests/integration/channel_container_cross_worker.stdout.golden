@@ -1,0 +1,6 @@
+Stack: [ ]
+PASS: child mutated its own copy to length 4
+PASS: child copy has 99 appended at index 3
+PASS: parent original length unchanged
+PASS: parent original first element unchanged
+Stack: [ ]

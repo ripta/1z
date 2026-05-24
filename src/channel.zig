@@ -3,6 +3,8 @@ const Allocator = std.mem.Allocator;
 const Value = @import("value.zig").Value;
 const Task = @import("task.zig").Task;
 
+const container_backing = @import("container_backing.zig");
+
 pub const Channel = struct {
     capacity: usize,
     closed: bool = false,
@@ -25,6 +27,18 @@ pub const Channel = struct {
     }
 
     pub fn deinit(self: *Channel) void {
+        // Release values the channel still owns at teardown: anything left in
+        // the buffer (never received) and any sender that was abandoned while
+        // blocked (e.g., a task suspended on send at shutdown). Normal
+        // completion drains both, so this only fires on shutdown residue.
+        var i: usize = 0;
+        while (i < self.buffer.count) : (i += 1) {
+            const idx = (self.buffer.head + i) % self.buffer.items.len;
+            container_backing.releaseValue(self.buffer.items[idx]);
+        }
+        for (self.waiting_senders.items) |entry| {
+            container_backing.releaseValue(entry.value);
+        }
         self.buffer.deinit(self.allocator);
         self.waiting_senders.deinit(self.allocator);
         self.waiting_receivers.deinit(self.allocator);

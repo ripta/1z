@@ -1,0 +1,43 @@
+use "testing" ;
+
+\ Cross-worker container value semantics through a channel.
+\
+\ The parent owns a vector and sends it to a child that, with several
+\ workers, almost always lands on a different OS thread. Channel
+\ send/receive deep-copies the value, so the child mutates an
+\ independent copy. The parent's original must be untouched.
+\
+\ All assertions run in the parent: the child only receives, mutates, and
+\ sends its copy back, so output order is deterministic under threading.
+
+test-vector-through-channel-isolated: ( -- ) [
+  [
+    <channel>  \ data channel: parent -> child
+    <channel>  \ ack channel:  child  -> parent
+    \ stack: data ack
+    2dup  \ data ack data ack
+    [
+      \ child body, stack on entry: data ack
+      swap receive  \ ack vec'   (independent copy of the original)
+      99 #push!     \ ack vec'   (mutated copy, now length 4)
+      swap send     \ --         (send the mutated copy back on ack)
+    ] curry curry spawn drop
+    \ stack: data ack
+    swap        \ ack data
+    V{ 1 2 3 }  \ ack data vec   (parent's original)
+    tuck        \ ack vec data vec
+    swap        \ ack vec vec data
+    send        \ ack vec        (sent a copy of vec on data)
+    swap        \ vec ack
+    receive     \ vec result     (child's mutated copy, length 4)
+    \ assert on the child's mutated copy
+    dup #len 4 "child mutated its own copy to length 4" assert=
+    3 #nth 99 "child copy has 99 appended at index 3" assert=
+    \ stack: vec
+    \ assert the parent's original is unchanged
+    dup #len 3 "parent original length unchanged" assert=
+    0 #nth 1 "parent original first element unchanged" assert=
+  ] task-scope
+] ;
+
+test-vector-through-channel-isolated

@@ -148,24 +148,29 @@ fn nativeSend(ctx: *Context) anyerror!void {
             sel.result_channel = ch;
         } else {
             const copied = try tasks.deepCopyValue(value, receiver.ctx.arena.allocator());
-            try receiver.ctx.stack.push(copied);
+            try receiver.ctx.stack.pushMoved(copied);
         }
 
         receiver.blocked_on_channel = null;
         receiver.value_delivered = true;
         releaseChannel(ctx, ch);
+        // The receiver holds an independent deep copy, so the sender's
+        // owning reference to the popped value ends here.
+        container_backing.releaseValue(value);
         try scheduler.wakeTask(receiver);
         return;
     }
 
-    // if buffer has space, which is never true for unbuffered, push to buffer
+    // if buffer has space, which is never true for unbuffered, push to buffer.
+    // Ownership of the popped value transfers to the buffer, so no release.
     if (ch.capacity > 0 and !ch.buffer.isFull()) {
         ch.buffer.push(value);
         releaseChannel(ctx, ch);
         return;
     }
 
-    // blocking send: add to waiting list, release lock, then suspend
+    // blocking send: add to waiting list, release lock, then suspend.
+    // The entry holds the sender's owning reference while suspended.
     try ch.waiting_senders.append(ch.allocator, .{
         .task = current,
         .value = value,
@@ -178,17 +183,23 @@ fn nativeSend(ctx: *Context) anyerror!void {
     acquireChannel(ctx, ch);
     current.blocked_on_channel = null;
 
+    const delivered = current.value_delivered;
+    current.value_delivered = false;
+    const closed = ch.closed;
+    releaseChannel(ctx, ch);
+
+    // The sender's owning reference is done in every post-suspend case: a
+    // receiver either deep-copied the value (independent copy) or moved it
+    // into the buffer (retained there); on a failed send the popped value is
+    // simply dropped.
+    container_backing.releaseValue(value);
+
     // A receiver may have taken our value directly while we were suspended.
     // If so, the send is complete regardless of whether the channel was
     // subsequently closed.
-    if (current.value_delivered) {
-        current.value_delivered = false;
-        releaseChannel(ctx, ch);
+    if (delivered) {
         return;
     }
-
-    const closed = ch.closed;
-    releaseChannel(ctx, ch);
 
     try helpers.checkCancellation(ctx);
 
@@ -238,7 +249,7 @@ fn nativeReceive(ctx: *Context) anyerror!void {
         const sender = sender_entry.task;
 
         const copied = try tasks.deepCopyValue(sender_entry.value, ctx.arena.allocator());
-        try ctx.stack.push(copied);
+        try ctx.stack.pushMoved(copied);
 
         sender.blocked_on_channel = null;
         sender.value_delivered = true;
@@ -252,10 +263,15 @@ fn nativeReceive(ctx: *Context) anyerror!void {
     if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
         const val = ch.buffer.pop();
         const copied = try tasks.deepCopyValue(val, ctx.arena.allocator());
-        try ctx.stack.push(copied);
+        try ctx.stack.pushMoved(copied);
+        // The buffer's owning reference to the popped value ends here.
+        container_backing.releaseValue(val);
 
         if (ch.waiting_senders.items.len > 0) {
             const sender_entry = ch.waiting_senders.orderedRemove(0);
+            // The buffer becomes a new owner of the sender's value; the
+            // woken sender releases its own reference.
+            container_backing.retainValue(sender_entry.value);
             ch.buffer.push(sender_entry.value);
             sender_entry.task.blocked_on_channel = null;
             sender_entry.task.value_delivered = true;
@@ -325,7 +341,7 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
     if (ch.waiting_senders.items.len > 0) {
         const sender_entry = ch.waiting_senders.orderedRemove(0);
         const copied = try tasks.deepCopyValue(sender_entry.value, ctx.arena.allocator());
-        try ctx.stack.push(copied);
+        try ctx.stack.pushMoved(copied);
         try ctx.stack.push(.{ .boolean = true });
         sender_entry.task.blocked_on_channel = null;
         sender_entry.task.value_delivered = true;
@@ -336,11 +352,16 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
     if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
         const val = ch.buffer.pop();
         const copied = try tasks.deepCopyValue(val, ctx.arena.allocator());
-        try ctx.stack.push(copied);
+        try ctx.stack.pushMoved(copied);
         try ctx.stack.push(.{ .boolean = true });
+        // The buffer's owning reference to the popped value ends here.
+        container_backing.releaseValue(val);
 
         if (ch.waiting_senders.items.len > 0) {
             const sender_entry = ch.waiting_senders.orderedRemove(0);
+            // The buffer becomes a new owner of the sender's value; the
+            // woken sender releases its own reference.
+            container_backing.retainValue(sender_entry.value);
             ch.buffer.push(sender_entry.value);
             sender_entry.task.blocked_on_channel = null;
             sender_entry.task.value_delivered = true;
@@ -476,7 +497,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
         if (ch.waiting_senders.items.len > 0) {
             const sender_entry = ch.waiting_senders.orderedRemove(0);
             const copied = try tasks.deepCopyValue(sender_entry.value, alloc);
-            try ctx.stack.push(copied);
+            try ctx.stack.pushMoved(copied);
             try ctx.stack.push(.{ .channel = ch });
 
             sender_entry.task.blocked_on_channel = null;
@@ -489,11 +510,16 @@ fn nativeSelect(ctx: *Context) anyerror!void {
             const buf_val = ch.buffer.pop();
             const copied = try tasks.deepCopyValue(buf_val, alloc);
 
-            try ctx.stack.push(copied);
+            try ctx.stack.pushMoved(copied);
             try ctx.stack.push(.{ .channel = ch });
+            // The buffer's owning reference to the popped value ends here.
+            container_backing.releaseValue(buf_val);
 
             if (ch.waiting_senders.items.len > 0) {
                 const sender_entry = ch.waiting_senders.orderedRemove(0);
+                // The buffer becomes a new owner of the sender's value; the
+                // woken sender releases its own reference.
+                container_backing.retainValue(sender_entry.value);
                 ch.buffer.push(sender_entry.value);
                 sender_entry.task.blocked_on_channel = null;
                 try scheduler.wakeTask(sender_entry.task);
@@ -546,7 +572,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
     try helpers.checkCancellation(ctx);
 
     if (result_value) |result_val| {
-        try ctx.stack.push(result_val);
+        try ctx.stack.pushMoved(result_val);
         try ctx.stack.push(.{ .channel = result_channel.? });
         return;
     }
