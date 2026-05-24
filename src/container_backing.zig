@@ -4,6 +4,48 @@ const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 const Iterator = @import("iterator.zig").Iterator;
 
+/// Live-backing accounting for the `--benchmark` "Live backings" metric.
+///
+/// `bench_enabled` is written once at startup, before any container is
+/// created, and read-only thereafter; non-benchmark and AOT runs pay only a
+/// cheap, well-predicted branch on the two accounting sites and never touch
+/// the global counters. Only `--benchmark` runs incur the global atomics.
+var bench_enabled = std.atomic.Value(bool).init(false);
+var live_backings = std.atomic.Value(usize).init(0);
+var peak_backings = std.atomic.Value(usize).init(0);
+
+/// Enable live-backing accounting. Called once at startup, before any
+/// container is created, when `--benchmark` is active.
+pub fn setBenchEnabled(on: bool) void {
+    bench_enabled.store(on, .monotonic);
+}
+
+/// Current count of live container backings. Meaningful only when accounting
+/// is enabled.
+pub fn liveBackingCount() usize {
+    return live_backings.load(.monotonic);
+}
+
+/// Peak concurrent live container backings observed. Meaningful only when
+/// accounting is enabled.
+pub fn peakBackingCount() usize {
+    return peak_backings.load(.monotonic);
+}
+
+fn accountBackingCreated() void {
+    if (!bench_enabled.load(.monotonic)) return;
+    const new = live_backings.fetchAdd(1, .monotonic) + 1;
+    var cur = peak_backings.load(.monotonic);
+    while (new > cur) {
+        cur = peak_backings.cmpxchgWeak(cur, new, .monotonic, .monotonic) orelse break;
+    }
+}
+
+fn accountBackingDestroyed() void {
+    if (!bench_enabled.load(.monotonic)) return;
+    _ = live_backings.fetchSub(1, .monotonic);
+}
+
 /// Refcounted, mutex-guarded header for mutable container backings.
 ///
 /// `ContainerHeader` is the foundation for the cross-worker safe lifecycle
@@ -68,6 +110,7 @@ pub const ContainerHeader = struct {
             .destroy_fn = destroy_fn,
             .flags = 0,
         };
+        accountBackingCreated();
     }
 
     /// Increment the refcount. Cheap, monotonic; safe to call from any
@@ -87,6 +130,7 @@ pub const ContainerHeader = struct {
         const prev = self.refcount.fetchSub(1, .acq_rel);
         std.debug.assert(prev != 0);
         if (prev == 1) {
+            accountBackingDestroyed();
             self.destroy_fn(self);
         }
     }
@@ -551,6 +595,45 @@ test "retainValue/releaseValue: scalar dispatch is a no-op" {
         retainValue(v);
         releaseValue(v);
     }
+}
+
+test "live-backing accounting tracks create and destroy under bench guard" {
+    setBenchEnabled(true);
+    defer {
+        setBenchEnabled(false);
+        live_backings.store(0, .monotonic);
+        peak_backings.store(0, .monotonic);
+    }
+    live_backings.store(0, .monotonic);
+    peak_backings.store(0, .monotonic);
+
+    const vec = try value_mod.Vector.create(testing.allocator);
+    const mm = try value_mod.MutableMap.create(testing.allocator);
+    const ba = try value_mod.ByteArray.create(testing.allocator);
+    try testing.expectEqual(@as(usize, 3), liveBackingCount());
+    try testing.expectEqual(@as(usize, 3), peakBackingCount());
+
+    vec.header.release();
+    mm.header.release();
+    try testing.expectEqual(@as(usize, 1), liveBackingCount());
+    // Peak holds the high-water mark after backings drop.
+    try testing.expectEqual(@as(usize, 3), peakBackingCount());
+
+    ba.header.release();
+    try testing.expectEqual(@as(usize, 0), liveBackingCount());
+    try testing.expectEqual(@as(usize, 3), peakBackingCount());
+}
+
+test "live-backing accounting is inert when bench guard is off" {
+    setBenchEnabled(false);
+    live_backings.store(0, .monotonic);
+    peak_backings.store(0, .monotonic);
+
+    const vec = try value_mod.Vector.create(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), liveBackingCount());
+    try testing.expectEqual(@as(usize, 0), peakBackingCount());
+    vec.header.release();
+    try testing.expectEqual(@as(usize, 0), liveBackingCount());
 }
 
 test "retainValue/releaseValue: vector dispatch exercises the header" {

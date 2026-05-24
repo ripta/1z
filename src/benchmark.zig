@@ -81,6 +81,10 @@ pub const BenchmarkStats = struct {
     peak_live_bytes: usize = 0,
     current_live_bytes: usize = 0,
 
+    // Live container backings, snapshotted at benchmark stop
+    live_container_backings: usize = 0,
+    peak_container_backings: usize = 0,
+
     // JIT compilation metrics
     jit_compile_time_ns: i128 = 0,
     jit_words_compiled: u64 = 0,
@@ -397,6 +401,11 @@ pub const BenchmarkStats = struct {
         try writer.writeAll("  Peak live:       ");
         try formatBytes(writer, self.peak_live_bytes);
         try writer.writeAll("\n");
+        try writer.writeAll("  Live backings:   ");
+        try formatNumber(writer, self.live_container_backings);
+        try writer.writeAll(" (peak ");
+        try formatNumber(writer, self.peak_container_backings);
+        try writer.writeAll(")\n");
 
         if (self.variant_counts.len > 0) {
             var total_variants: u64 = 0;
@@ -457,7 +466,7 @@ pub const BenchmarkStats = struct {
         for (self.variant_counts) |count| total_variants += count;
 
         try writer.print(
-            \\{{"timing":{{"prelude_ns":{d},"prelude_parse_ns":{d},"prelude_exec_ns":{d},"user_ns":{d},"total_ns":{d}}},"prelude_inventory":{{"dict_entries":{d},"dispatch_user":{d},"dispatch_native":{d},"type_values":{d},"enum_entries":{d},"pragma_entries":{d},"virtual_types":{d},"struct_types":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"jit":{{"words_compiled":{d},"compile_time_ns":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d}}},"value_variants":{{
+            \\{{"timing":{{"prelude_ns":{d},"prelude_parse_ns":{d},"prelude_exec_ns":{d},"user_ns":{d},"total_ns":{d}}},"prelude_inventory":{{"dict_entries":{d},"dispatch_user":{d},"dispatch_native":{d},"type_values":{d},"enum_entries":{d},"pragma_entries":{d},"virtual_types":{d},"struct_types":{d}}},"instructions":{{"push_literal":{d},"call_word":{d},"total":{d}}},"stack":{{"peak_depth":{d},"peak_task_stack_usage":{d}}},"jit":{{"words_compiled":{d},"compile_time_ns":{d}}},"memory":{{"allocations":{d},"bytes":{d},"peak_live_bytes":{d},"live_container_backings":{d},"peak_container_backings":{d}}},"value_variants":{{
         , .{
             @as(i64, @intCast(self.preludeTimeNs())),
             @as(i64, @intCast(self.prelude_parse_ns)),
@@ -482,6 +491,8 @@ pub const BenchmarkStats = struct {
             self.total_allocations,
             self.total_bytes,
             self.peak_live_bytes,
+            self.live_container_backings,
+            self.peak_container_backings,
         });
 
         if (total_variants > 0) {

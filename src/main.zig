@@ -15,6 +15,7 @@ const Value = value_mod.Value;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 const formatter = @import("formatter.zig");
 const benchmark = @import("benchmark.zig");
+const container_backing = @import("container_backing.zig");
 const profile = @import("profile.zig");
 const debugger_mod = @import("debugger/mod.zig");
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
@@ -775,6 +776,9 @@ const ExecutionContext = struct {
 
         if (bench_enabled) {
             bench_stats_ptr.start();
+            // Enable live-backing accounting before any prelude container is
+            // created so the count does not undershoot.
+            container_backing.setBenchEnabled(true);
         }
 
         ec.* = .{
@@ -908,6 +912,10 @@ const ExecutionContext = struct {
     fn finalizeBenchmark(self: *ExecutionContext, exec: *const ExecutionFlags) void {
         if (!self.bench_enabled) return;
         self.bench_stats.collectVariantHistogram(self.allocator, self.ctx.stack.items.items) catch {};
+        // Snapshot while ctx.stack is still alive, so the live count reflects
+        // backings still referenced at program end.
+        self.bench_stats.live_container_backings = container_backing.liveBackingCount();
+        self.bench_stats.peak_container_backings = container_backing.peakBackingCount();
         self.bench_stats.stop();
 
         if (exec.bench_config.output != .none) {
