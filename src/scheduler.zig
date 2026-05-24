@@ -837,6 +837,19 @@ pub const Scheduler = struct {
             .pending, .running => {},
         }
 
+        // A task that has already observed the cancellation is either unwinding or shielding a cleanup handler.
+        //
+        // A late drain of the cross-worker cancellation queue can land here after the task advanced past
+        // `.pending` on its own. This happens when a compiled loop reaches a safepoint and reads the atomically-
+        // set flag before its home worker returns to the loop top to drain the queue.
+        //
+        // Resetting the phase here would reärm cancellation and abort a shielded cleanup handler the next time
+        // it suspends. The task is already running or requeued, so it needs no rerouting.
+        switch (task.getCancellationPhase()) {
+            .unwinding, .shielded => return,
+            .none, .pending => {},
+        }
+
         task.setCancellationPhase(.pending);
 
         if (task.blocked_on_channel != null) {
