@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test eager-test fmt-test lsp-test aot-test aot-run aot-interpreter-strip-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter profiles build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter profiles build-example clean help docs docker-build docker-test
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -36,7 +36,14 @@ fmt: build ## Format zig and 1z source files
 	timeout $(TARGET_TIMEOUT) zig fmt src/ build.zig
 	timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z fmt $$(find . \( -path './.zig-cache' -o -path './$(ZIG_PREFIX)' \) -prune -o -name '*.1z' -print)
 
-test: test-threads-1 test-threads-auto ## Run all tests under both --threads=1 and --threads=auto
+test: leak-goldens-check test-threads-1 test-threads-auto ## Run all tests under both --threads=1 and --threads=auto
+
+leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
+	@if grep -rl 'error(gpa)' tests/ --include='*.golden'; then \
+		echo "FAIL: GPA leak text baked into the golden(s) above; a leaking test is being masked"; \
+		exit 1; \
+	fi
+	@echo "PASS: no GPA leak text in golden files"
 
 test-threads-1: ## Run all tests with default --threads=1 for integration tests
 	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
