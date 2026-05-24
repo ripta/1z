@@ -1,0 +1,9 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: await-terminal returns after completed task ran
+Stack: [ ]
+PASS: await-terminal waits for cancelled task cleanup
+Stack: [ ]
+PASS: await-terminal re-throws failed task error
+Stack: [ ]

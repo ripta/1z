@@ -1,0 +1,47 @@
+use "testing" ;
+use "time" ;
+
+\ -- 1. Completed task: await-terminal waits for the task to finish, pushes --
+\      no result, and the task's effect on a shared vector is observable.    --
+
+test-terminal-completed: ( -- ) [
+  V{ }
+  dup
+  [ dup [ 7 #push! drop ] curry spawn await-terminal drop ] curry
+  task-scope
+  #len 1 "await-terminal returns after completed task ran" assert=
+] ;
+
+\ -- 2. Cancelled task with cleanup: cancel-task is fire-and-forget, but     --
+\      await-terminal blocks until the target reaches terminal status, so    --
+\      the cancelled task's cleanup handler has run by the time it returns.  --
+\      It swallows the cancellation rather than throwing task-cancelled:.    --
+
+test-terminal-cancelled-cleanup: ( -- ) [
+  V{ }
+  dup
+  [
+    dup [ 88 #push! drop ] curry
+    [ [ [ t ] [ yield ] while ] swap cleanup ] curry
+    spawn
+    10 milliseconds sleep
+    dup cancel-task await-terminal
+    drop
+  ] curry
+  task-scope
+  #len 1 "await-terminal waits for cancelled task cleanup" assert=
+] ;
+
+\ -- 3. Failed task: await-terminal re-throws the task's error, matching await. --
+
+test-terminal-failed: ( -- ) [
+  [
+    [
+      [ f "boom" test-error: make-error throw ] spawn await-terminal
+    ] task-scope
+  ] test-error: "await-terminal re-throws failed task error" assert-error-type
+] ;
+
+test-terminal-completed
+test-terminal-cancelled-cleanup
+test-terminal-failed

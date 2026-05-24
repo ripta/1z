@@ -44,6 +44,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "task-self", .stack_effect = "-- task", .doc = "Push the current task handle.", .func = nativeTaskSelf },
     .{ .name = "yield", .stack_effect = "--", .doc = "Voluntarily yield the current task.", .func = nativeYield },
     .{ .name = "await", .stack_effect = "task -- value", .doc = "Wait for a task to complete and push its result.", .func = nativeAwait },
+    .{ .name = "await-terminal", .stack_effect = "task --", .doc = "Wait for a task to reach a terminal status without pushing its result. Swallows cancellation, re-throws failure. Pairs with cancel-task to wait for cross-worker cleanup.", .func = nativeAwaitTerminal },
     .{ .name = "await-all", .stack_effect = "array -- array", .doc = "Wait for all tasks in array and return array of results.", .func = nativeAwaitAll },
     .{ .name = "sleep", .stack_effect = "duration --", .doc = "Suspend the current task for a duration.", .func = nativeSleep },
     .{ .name = "cancel-task", .stack_effect = "task --", .doc = "Cancel a task.", .func = nativeCancelTask },
@@ -524,6 +525,65 @@ fn nativeAwait(ctx: *Context) anyerror!void {
     try helpers.checkCancellation(ctx);
 
     return handleAwaitResult(ctx, task);
+}
+
+/// await-terminal ( task -- )
+///
+/// Wait for a task to reach a terminal status (completed, failed, or
+/// cancelled) without pushing the task's result. On a completed task it
+/// returns normally; on a failed task it re-throws the task's error, matching
+/// `await`; on a cancelled task it returns normally and does not throw
+/// `task-cancelled:`. The target may live on a different worker, in which case
+/// the caller blocks until the target reaches terminal status on whichever
+/// worker ran it.
+///
+/// This is the building block for cancel-and-wait, where the caller cancels a
+/// task and then waits for the task's registered cleanup handler to finish:
+///
+///     dup cancel-task await-terminal
+fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
+    if (ctx.in_module_load) {
+        ctx.pending_error_message = "await-terminal cannot be called during module loading";
+        return error.InvalidState;
+    }
+
+    const task = try helpers.popTask(ctx);
+
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "await-terminal must be called within a task-scope";
+        return error.InvalidState;
+    };
+
+    const current = scheduler.current_task orelse {
+        ctx.pending_error_message = "await-terminal must be called from a running task";
+        return error.InvalidState;
+    };
+
+    switch (task.getStatus()) {
+        .pending, .running => {
+            task.awaiting_task = current;
+            scheduler.suspendCurrentTask();
+        },
+        .completed, .failed, .cancelled => {},
+    }
+
+    try helpers.checkCancellation(ctx);
+
+    switch (task.getStatus()) {
+        .completed, .cancelled => {},
+        .failed => {
+            if (task.error_obj) |err_obj| {
+                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
+            } else {
+                ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+                    .error_type = "task-error",
+                    .message = "task failed without error details",
+                });
+            }
+            return error.UserThrown;
+        },
+        .pending, .running => unreachable,
+    }
 }
 
 /// await-all ( array -- array )
