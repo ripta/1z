@@ -3983,23 +3983,15 @@ fn compileInstructions(
                     // reconstructed from a named word lookup.
                     state.not_compilable_reason = .non_serializable_literal;
                     return IrCodegenError.NotCompilable;
-                } else if (val == .vector or val == .mutable_map or val == .byte_array) {
-                    // Refcounted container literals must not be JIT-pushed via
-                    // a raw byte copy: JIT push/pop is refcount-neutral, but
-                    // the interpreter pop on the other side of the JIT
-                    // boundary releases. Bail to the interpreter so the
-                    // boundary stays refcount-symmetric.
-                    state.not_compilable_reason = .non_serializable_literal;
-                    return IrCodegenError.NotCompilable;
                 } else {
                     const sp_byte_offset = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, sp_byte_offset);
                     emitPushValue(ctx, &val, dest_addr);
-                    // A literal that carries a refcounted backing (e.g. an
-                    // `.array`/`.hash`/`.set` of vectors) is raw-copied here, so
-                    // the new slot must retain to match the consumer's release;
-                    // the dictionary release list owns the literal's own
-                    // reference and frees it at teardown.
+                    // A literal that carries a refcounted backing (a `.vector`
+                    // or `.mutable_map`, or an `.array`/`.hash`/`.set` holding
+                    // them) is raw-copied here, so the new slot must retain to
+                    // match the consumer's release; the dictionary release list
+                    // owns the literal's own reference and frees it at teardown.
                     if (container_backing.valueCarriesBacking(val)) {
                         emitRetainSlot(state, sp.*);
                     }

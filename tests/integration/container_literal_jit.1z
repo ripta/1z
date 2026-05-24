@@ -1,0 +1,39 @@
+use "testing" ;
+
+\ Refcounted container push-literals in compiled word bodies. Before the
+\ JIT push-literal restoration these bodies bailed to the interpreter; now
+\ the compiler raw-copies the literal and retains on push, matching the
+\ release on the consuming side so the JIT/interpreter boundary stays
+\ refcount-symmetric. Run under --compile=eager; the real check is correct
+\ output plus zero leaks / no refcount underflow at shutdown.
+
+\ Bodies that push a refcounted container literal and consume it in-body.
+vec-len: ( -- n ) [ V{ 1 2 3 } #len ] ;
+map-get: ( -- v ) [ M{ a: 1 b: 2 } "a" @get ] ;
+
+\ dup of a container literal: exercises the clone retain and the drop
+\ release on the compiled path.
+vec-twice-len: ( -- n ) [ V{ 1 2 } dup #len swap #len + ] ;
+
+\ Container literal pushed then discarded in-body: exercises drop release.
+vec-drop: ( -- n ) [ V{ 9 8 7 } drop 42 ] ;
+
+vec-len 3 "vector literal body returns length 3" assert=
+map-get 1 "map literal body returns a:1" assert=
+vec-twice-len 4 "dup of vector literal sums both lengths" assert=
+vec-drop 42 "vector literal dropped in body, fixnum returned" assert=
+
+t vec-len: >word-info compiled?>> "vec-len is compiled" assert=
+t map-get: >word-info compiled?>> "map-get is compiled" assert=
+t vec-twice-len: >word-info compiled?>> "vec-twice-len is compiled" assert=
+t vec-drop: >word-info compiled?>> "vec-drop is compiled" assert=
+
+\ Stress the compiled push/pop path: each call pushes a fresh refcounted
+\ literal and consumes it; the refcount must return to the dictionary
+\ baseline every iteration.
+2000 [ vec-len drop ] times
+2000 [ map-get drop ] times
+2000 [ vec-twice-len drop ] times
+2000 [ vec-drop drop ] times
+
+"stress complete" print-line
