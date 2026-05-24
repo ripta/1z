@@ -17,10 +17,11 @@ pub const TraceConfig = struct {
     trace_modules: bool = false,
     trace_jit: bool = false,
     trace_pic: bool = false,
+    trace_container_detect: bool = false,
     dump_scope: ?[]const u8 = null,
 
     pub fn isEnabled(self: TraceConfig) bool {
-        return self.trace_words or self.trace_resolve or self.trace_modules or self.trace_jit or self.trace_pic or self.dump_scope != null;
+        return self.trace_words or self.trace_resolve or self.trace_modules or self.trace_jit or self.trace_pic or self.trace_container_detect or self.dump_scope != null;
     }
 };
 
@@ -436,6 +437,11 @@ test "TraceConfig.isEnabled: trace_resolve" {
 
 test "TraceConfig.isEnabled: trace_modules" {
     const config = TraceConfig{ .trace_modules = true };
+    try std.testing.expect(config.isEnabled());
+}
+
+test "TraceConfig.isEnabled: trace_container_detect" {
+    const config = TraceConfig{ .trace_container_detect = true };
     try std.testing.expect(config.isEnabled());
 }
 

@@ -28,6 +28,7 @@ const ProfileConfig = profile.ProfileConfig;
 const CountingAllocator = benchmark.CountingAllocator;
 const memory_limit = @import("memory_limit.zig");
 const MemoryLimitAllocator = memory_limit.MemoryLimitAllocator;
+const container_limits = @import("container_limits.zig");
 const trace_mod = @import("trace.zig");
 const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
@@ -382,6 +383,10 @@ fn parseExecutionFlag(
         state.trace_config.trace_pic = true;
         return .consumed;
     }
+    if (std.mem.eql(u8, arg, "--trace-container-detect")) {
+        state.trace_config.trace_container_detect = true;
+        return .consumed;
+    }
     if (std.mem.startsWith(u8, arg, "--dump-scope=")) {
         state.trace_config.dump_scope = arg["--dump-scope=".len..];
         return .consumed;
@@ -534,6 +539,7 @@ const execution_flags_help =
     \\  --trace-modules           Trace module loading
     \\  --trace-jit               Trace JIT compilation
     \\  --trace-pic               Trace inline PIC hits
+    \\  --trace-container-detect  Trace container CPU/memory detection fallbacks
     \\  --dump-scope=WORD         Dump scope after loading WORD
     \\  --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
     \\  --test-timeout=SECS       Set test timeout in seconds
@@ -3806,6 +3812,7 @@ test {
     _ = @import("benchmark.zig");
     _ = @import("profile.zig");
     _ = @import("memory_limit.zig");
+    _ = @import("container_limits.zig");
     _ = @import("container_backing.zig");
     _ = @import("line_editor.zig");
     _ = @import("debugger/mod.zig");
