@@ -1,0 +1,9 @@
+Usage: 1z version
+
+Print the 1z version string and exit. Takes no options.
+
+Global options:
+  --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
+  --load-path=PATH          Add a module search path (repeatable)
+  --stdlib-path=PATH        Override standard library path
+  --prelude=PATH            Override prelude file path

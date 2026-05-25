@@ -1,0 +1,14 @@
+Usage: 1z fmt [options] <file...>
+       1z fmt [--check] .
+
+Format 1z source files in place.
+
+Fmt options:
+  --check                   Report files needing formatting; exit 1 if any do
+  --stdout                  Write formatted output to stdout instead of in place
+
+Global options:
+  --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
+  --load-path=PATH          Add a module search path (repeatable)
+  --stdlib-path=PATH        Override standard library path
+  --prelude=PATH            Override prelude file path

@@ -1,0 +1,22 @@
+Usage: 1z build [options] <file.1z>
+
+Compile a 1z file to a native executable.
+
+Build options:
+  -o <output>                   Output path (default: source with .1z stripped)
+  --save-temps                  Keep intermediate C source and object files
+  --compilation-stats           Print compilation statistics
+  --compile-all-prelude         Compile every prelude word, not just reachable ones
+  --allow-interpreter-fallback  Suppress quotation fallback warnings
+  --interpreter-fallback=MODE   Interpreter fallback policy: true, false, auto (default: auto)
+  --lock-interpreter-setting    Lock the fallback policy into the binary
+  --link-static=LIB             Statically link library LIB (repeatable)
+  --dump-aot-image-classification  Print AOT image word classification
+  --dump-aot-image-c            Print the generated runtime-image C source
+  --emit-runtime-image          Embed a runtime program image in the binary
+
+Global options:
+  --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
+  --load-path=PATH          Add a module search path (repeatable)
+  --stdlib-path=PATH        Override standard library path
+  --prelude=PATH            Override prelude file path

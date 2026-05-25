@@ -715,6 +715,61 @@ fn printInspectHelp() void {
     w.flush() catch {};
 }
 
+fn printFmtHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z fmt [options] <file...>\n") catch {};
+    w.writeAll("       1z fmt [--check] .\n\n") catch {};
+    w.writeAll("Format 1z source files in place.\n\n") catch {};
+    w.writeAll("Fmt options:\n") catch {};
+    w.writeAll("  --check                   Report files needing formatting; exit 1 if any do\n") catch {};
+    w.writeAll("  --stdout                  Write formatted output to stdout instead of in place\n\n") catch {};
+    w.writeAll("Global options:\n") catch {};
+    w.writeAll(global_flags_help) catch {};
+    w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
+fn printBuildHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z build [options] <file.1z>\n\n") catch {};
+    w.writeAll("Compile a 1z file to a native executable.\n\n") catch {};
+    w.writeAll("Build options:\n") catch {};
+    w.writeAll("  -o <output>                   Output path (default: source with .1z stripped)\n") catch {};
+    w.writeAll("  --save-temps                  Keep intermediate C source and object files\n") catch {};
+    w.writeAll("  --compilation-stats           Print compilation statistics\n") catch {};
+    w.writeAll("  --compile-all-prelude         Compile every prelude word, not just reachable ones\n") catch {};
+    w.writeAll("  --allow-interpreter-fallback  Suppress quotation fallback warnings\n") catch {};
+    w.writeAll("  --interpreter-fallback=MODE   Interpreter fallback policy: true, false, auto (default: auto)\n") catch {};
+    w.writeAll("  --lock-interpreter-setting    Lock the fallback policy into the binary\n") catch {};
+    w.writeAll("  --link-static=LIB             Statically link library LIB (repeatable)\n") catch {};
+    w.writeAll("  --dump-aot-image-classification  Print AOT image word classification\n") catch {};
+    w.writeAll("  --dump-aot-image-c            Print the generated runtime-image C source\n") catch {};
+    w.writeAll("  --emit-runtime-image          Embed a runtime program image in the binary\n\n") catch {};
+    w.writeAll("Global options:\n") catch {};
+    w.writeAll(global_flags_help) catch {};
+    w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
+fn printVersionHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z version\n\n") catch {};
+    w.writeAll("Print the 1z version string and exit. Takes no options.\n\n") catch {};
+    w.writeAll("Global options:\n") catch {};
+    w.writeAll(global_flags_help) catch {};
+    w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
 const ExecutionContext = struct {
     gpa: std.mem.Allocator,
     mem_limit: *MemoryLimitAllocator,
@@ -1020,6 +1075,10 @@ pub fn main() u8 {
     if (std.mem.eql(u8, first, "build")) return handleBuild(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "inspect")) return handleInspect(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "version")) {
+        if (hasHelpFlag(args[2..])) {
+            printVersionHelp();
+            return 0;
+        }
         printVersion();
         return 0;
     }
@@ -1440,6 +1499,11 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var stderr_buf: [4096]u8 = undefined;
     var stderr = stderr_file.writerStreaming(&stderr_buf);
     const err_writer = &stderr.interface;
+
+    if (hasHelpFlag(args)) {
+        printFmtHelp();
+        return 0;
+    }
 
     var global = GlobalFlags{};
     defer global.deinit(base_allocator);
@@ -2121,6 +2185,11 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var stderr_buf: [4096]u8 = undefined;
     var stderr = stderr_file.writerStreaming(&stderr_buf);
     const err_writer = &stderr.interface;
+
+    if (hasHelpFlag(args)) {
+        printBuildHelp();
+        return 0;
+    }
 
     // Parse build-specific args.
     var global = GlobalFlags{};
