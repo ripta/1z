@@ -492,7 +492,7 @@ or: ( ? ? -- ? ) [ [ drop t ] [ ] if ] ;
 xor: ( ? ? -- ? ) [ 2dup and not -rot> or and ] ;
 
 \\ Write a string to a stream as bytes, returning bytes written.
-stream-write-string: ( stream str -- n ) [ >bytes stream-write ] ;
+stream-write-string: ( stream str -- n ) [ stream-write ] ;
 
 \ Internal helper: tail-recursive read loop used by stream-read(exact).
 \ State carries (stream acc n): stream to read from, accumulator so far,

@@ -14,21 +14,21 @@ use "./string_assembly_common.1z" ;
 "--- tiny fragment (4 bytes) ---" print-line
 
 [
-  "fraglist tiny 1k"     [ tiny-frag   1000 build-fraglist drop ] benchmark-run
-  "stream   tiny 1k"     [ tiny-frag   1000 build-stream        ] benchmark-run
-  "fraglist tiny 10k"    [ tiny-frag  10000 build-fraglist drop ] benchmark-run
-  "stream   tiny 10k"    [ tiny-frag  10000 build-stream        ] benchmark-run
-  "fraglist tiny 100k"   [ tiny-frag 100000 build-fraglist drop ] benchmark-run
-  "stream   tiny 100k"   [ tiny-frag 100000 build-stream        ] benchmark-run
+  "fraglist tiny 1k" [ tiny-frag 1000 build-fraglist drop ] benchmark-run
+  "stream   tiny 1k" [ tiny-frag 1000 build-stream ] benchmark-run
+  "fraglist tiny 10k" [ tiny-frag 10000 build-fraglist drop ] benchmark-run
+  "stream   tiny 10k" [ tiny-frag 10000 build-stream ] benchmark-run
+  "fraglist tiny 100k" [ tiny-frag 100000 build-fraglist drop ] benchmark-run
+  "stream   tiny 100k" [ tiny-frag 100000 build-stream ] benchmark-run
 ] run-benchmarks
 
 nl "--- medium fragment (22 bytes) ---" print-line
 
 [
-  "fraglist med 1k"      [ medium-frag   1000 build-fraglist drop ] benchmark-run
-  "stream   med 1k"      [ medium-frag   1000 build-stream        ] benchmark-run
-  "fraglist med 10k"     [ medium-frag  10000 build-fraglist drop ] benchmark-run
-  "stream   med 10k"     [ medium-frag  10000 build-stream        ] benchmark-run
-  "fraglist med 100k"    [ medium-frag 100000 build-fraglist drop ] benchmark-run
-  "stream   med 100k"    [ medium-frag 100000 build-stream        ] benchmark-run
+  "fraglist med 1k" [ medium-frag 1000 build-fraglist drop ] benchmark-run
+  "stream   med 1k" [ medium-frag 1000 build-stream ] benchmark-run
+  "fraglist med 10k" [ medium-frag 10000 build-fraglist drop ] benchmark-run
+  "stream   med 10k" [ medium-frag 10000 build-stream ] benchmark-run
+  "fraglist med 100k" [ medium-frag 100000 build-fraglist drop ] benchmark-run
+  "stream   med 100k" [ medium-frag 100000 build-stream ] benchmark-run
 ] run-benchmarks

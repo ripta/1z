@@ -102,6 +102,12 @@ split: ( str delim -- array ) [
 \\   { } #concat              →  ""
 #concat: ( seq -- string ) [ "" swap #append ] ;
 
+\\ Create a write-only in-memory string stream with initial capacity n.
+<sized-string-builder>: ( n -- stream ) [ <string-stream> ] ;
+
+\\ Create a write-only in-memory string stream with a 256-byte reservation.
+<string-builder>: ( -- stream ) [ 256 <sized-string-builder> ] ;
+
 \\ Append pattern to result n more times, recurring until n reaches zero.
 repeat-loop: ( pattern result n -- pattern result ) [
   dup 0 >

@@ -18,7 +18,7 @@ use "strings" ;
 
 \ --- Fragment fixtures (bare definitions: evaluated once) ---
 
-tiny-frag:   "<td>" ;
+tiny-frag: "<td>" ;
 medium-frag: "<span>text-here</span>" ;
 
 \ --- Reused sink for the stream variant (opened once) ---

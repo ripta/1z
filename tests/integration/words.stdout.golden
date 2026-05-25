@@ -55,6 +55,7 @@ Stack: [ ]
 <channel> ( -- ch )
 <pipe> ( -- rd wr )
 <rot-n ( n -- )
+<string-stream> ( n -- stream )
 <test-resource> ( name -- resource )
 = ( a b -- ? )
 > ( a b -- ? )

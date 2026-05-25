@@ -1,4 +1,4 @@
 artifact: runtime-image-aot
 interpreter: not linked (auto: all reachable code compiled)
 jitInterpretedCall: not linked
-runtime-image: words=139 stack-effects=128 typevalue-slots=72 blob-present=true
+runtime-image: words=141 stack-effects=130 typevalue-slots=72 blob-present=true

@@ -1,0 +1,37 @@
+\ Integration tests for the write-only in-memory string stream
+
+use "testing" ;
+use "strings" ;
+
+"In-memory stream writes" test-section
+16 <string-stream>  \ stream
+dup "hello" stream-write 5 "first write returns byte count" assert=
+dup "!" stream-write 1 "second write returns byte count" assert=
+dup B{ 0x41 0x42 } stream-write 2 "byte-array write returns count" assert=
+stream-close
+
+"Redirected emit" test-section
+8 <string-stream>
+dup [ "abc" print "de" print ] with-output-stream
+stream-close
+"PASS: print under with-output-stream into in-memory stream" print-line
+
+"Library wrappers" test-section
+<string-builder> dup "hi" stream-write 2 "<string-builder> write count" assert=
+stream-close
+42 <sized-string-builder> dup "x" stream-write 1 "<sized-string-builder> write count" assert=
+stream-close
+
+"Positioning words error" test-section
+\ Hold the stream in a parameter so assert-error-type's stack cleanup does not
+\ discard it; close it once after all three checks.
+mem-stream: parameter{ [ f ] } ;
+8 <string-stream> mem-stream [
+  [ mem-stream get stream-tell ] not-seekable: "stream-tell errors on in-memory stream" assert-error-type
+  [ mem-stream get 0 stream-seek ] not-seekable: "stream-seek errors on in-memory stream" assert-error-type
+  [ mem-stream get 0 stream-seek-end ] not-seekable: "stream-seek-end errors on in-memory stream" assert-error-type
+  mem-stream get stream-close
+] with-parameter
+
+"Closed stream errors" test-section
+[ 8 <string-stream> dup stream-close "x" stream-write ] closed-stream: "write after close errors" assert-error-type

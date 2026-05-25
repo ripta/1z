@@ -1,0 +1,36 @@
+=== In-memory stream writes ===
+Stack: [ ]
+Stack: [ <stream string-stream write> ]
+PASS: first write returns byte count
+Stack: [ <stream string-stream write> ]
+PASS: second write returns byte count
+Stack: [ <stream string-stream write> ]
+PASS: byte-array write returns count
+Stack: [ <stream string-stream write> ]
+Stack: [ ]
+=== Redirected emit ===
+Stack: [ ]
+Stack: [ <stream string-stream write> ]
+Stack: [ <stream string-stream write> ]
+Stack: [ ]
+PASS: print under with-output-stream into in-memory stream
+Stack: [ ]
+=== Library wrappers ===
+Stack: [ ]
+PASS: <string-builder> write count
+Stack: [ <stream string-stream write> ]
+Stack: [ ]
+PASS: <sized-string-builder> write count
+Stack: [ <stream string-stream write> ]
+Stack: [ ]
+=== Positioning words error ===
+Stack: [ ]
+Stack: [ ]
+PASS: stream-tell errors on in-memory stream
+PASS: stream-seek errors on in-memory stream
+PASS: stream-seek-end errors on in-memory stream
+Stack: [ ]
+=== Closed stream errors ===
+Stack: [ ]
+PASS: write after close errors
+Stack: [ ]

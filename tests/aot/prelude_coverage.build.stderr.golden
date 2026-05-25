@@ -100,13 +100,12 @@ Prelude compilation: 320/353 words compiled (90.7%)
       hint: blocked until the AOT resolver includes this word
 Quotation bodies compiled: 0
 Inline PIC sites: 0/37 generic call sites preseeded
-AOT interpreter fallbacks: 250 total
-  native: 237
+AOT interpreter fallbacks: 249 total
+  native: 236
   compound-uncompiled: 6
   quotation: 7
   sites:
     native: flush -> stream-flush (line 587)
-    native: stream-write-string -> >bytes (line 495)
     native: stream-write-string -> stream-write (line 495)
     native: provenance? -> native.struct-type-predicate (line 0)
     native: nan? -> = (line 329)
@@ -121,8 +120,9 @@ AOT interpreter fallbacks: 250 total
     native: >iterator -> native.make-callback-iter (line 838)
     native: >iterator -> native.>iterator (line 840)
     native: >dispatch-provenance -> native.hash-to-struct (line 0)
-    ... 234 more
-  static-check: jitInterpretedCall=6/6 jitNativeWordCall=237/237 jitCallQuotation=7/7 (matches build-time inventory)
+    native: descriptor-variant? -> native.struct-type-predicate (line 0)
+    ... 233 more
+  static-check: jitInterpretedCall=6/6 jitNativeWordCall=236/236 jitCallQuotation=7/7 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter

@@ -5,5 +5,5 @@ Error: --interpreter-fallback=false rejects compound-fallback dispatch; 1 call s
   '__entry__' -> 'bi' (line 1)
       callee uncompiled: NC.8: a quotation in abstract form must become a concrete runtime value
       hint: blocked until quotation bodies can be compiled
-AOT interpreter fallbacks: 6 total (native=5 compound-uncompiled=1)
-  static-check: jitInterpretedCall=1/1 jitNativeWordCall=5/5 jitCallQuotation=0/0 (matches build-time inventory)
+AOT interpreter fallbacks: 5 total (native=4 compound-uncompiled=1)
+  static-check: jitInterpretedCall=1/1 jitNativeWordCall=4/4 jitCallQuotation=0/0 (matches build-time inventory)

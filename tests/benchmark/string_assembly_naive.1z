@@ -12,8 +12,8 @@ use "./string_assembly_common.1z" ;
 "--- naive pairwise #append (quadratic) ---" print-line
 
 [
-  "naive tiny 1k"   [ tiny-frag 1000 build-naive drop ] benchmark-run
-  "naive tiny 2k"   [ tiny-frag 2000 build-naive drop ] benchmark-run
-  "naive tiny 4k"   [ tiny-frag 4000 build-naive drop ] benchmark-run
-  "naive tiny 8k"   [ tiny-frag 8000 build-naive drop ] benchmark-run
+  "naive tiny 1k" [ tiny-frag 1000 build-naive drop ] benchmark-run
+  "naive tiny 2k" [ tiny-frag 2000 build-naive drop ] benchmark-run
+  "naive tiny 4k" [ tiny-frag 4000 build-naive drop ] benchmark-run
+  "naive tiny 8k" [ tiny-frag 8000 build-naive drop ] benchmark-run
 ] run-benchmarks

@@ -1,10 +1,9 @@
 Quotation bodies compiled: 10/10 (100.0%)
 Inline PIC sites: 0/1 generic call sites preseeded
-AOT interpreter fallbacks: 4 total
-  native: 4
+AOT interpreter fallbacks: 3 total
+  native: 3
   sites:
     native: flush -> stream-flush (line 587)
-    native: stream-write-string -> >bytes (line 495)
     native: stream-write-string -> stream-write (line 495)
     native: . -> inspect (line 593)
 Error: 1 word could not be compiled to C

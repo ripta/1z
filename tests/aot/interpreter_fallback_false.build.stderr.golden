@@ -37,5 +37,5 @@ Error: --interpreter-fallback=false rejects compound-fallback dispatch; 6 call s
   '@get?' -> '>option:some' (line 819)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-AOT interpreter fallbacks: 250 total (native=237 compound-uncompiled=6 quotation=7)
-  static-check: jitInterpretedCall=6/6 jitNativeWordCall=237/237 jitCallQuotation=7/7 (matches build-time inventory)
+AOT interpreter fallbacks: 249 total (native=236 compound-uncompiled=6 quotation=7)
+  static-check: jitInterpretedCall=6/6 jitNativeWordCall=236/236 jitCallQuotation=7/7 (matches build-time inventory)

@@ -4,7 +4,7 @@ target: <target>
 build-mode: <build-mode>
 interpreter: linked=no, fallback=auto, locked=no
 aot-callbacks: jit-interpreted-call=no
-runtime-image: present=yes, format-version=4, blob-present=yes, word-count=139
+runtime-image: present=yes, format-version=4, blob-present=yes, word-count=141
 dynamic-features: none
 1z-version: <version>
 prelude-hash: <prelude-hash>

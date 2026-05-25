@@ -60,6 +60,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "stream>fd", .stack_effect = "stream -- int", .doc = "Get file descriptor from stream (Unix only).", .func = nativeStreamToFd, .capability = .io },
     .{ .name = "fd>stream", .stack_effect = "fd -- stream", .doc = "Create stream from file descriptor (Unix only). Opens in read-write mode.", .func = nativeFdToStream, .capability = .io },
     .{ .name = "<pipe>", .stack_effect = "-- rd wr", .doc = "Create a Unix pipe, returning read-end and write-end streams.", .func = nativePipe, .capability = .io },
+    .{ .name = "<string-stream>", .stack_effect = "n -- stream", .doc = "Create a write-only in-memory stream with initial capacity n.", .func = nativeStringStream, .capability = .io },
     .{ .name = ">char", .stack_effect = "codepoint -- str", .doc = "Convert Unicode codepoint to single-character string.", .func = nativeChr },
     .{ .name = ">codepoint", .stack_effect = "str -- int", .doc = "Convert single-character string to Unicode codepoint.", .func = nativeToCodepoint },
 };
@@ -165,6 +166,83 @@ pub fn createFileStream(fd: std.posix.fd_t, mode: StreamMode, name: []const u8) 
         .mode = mode,
         .name = name,
     };
+}
+
+// =============================================================================
+// In-memory stream vtable
+// =============================================================================
+
+/// Growable byte buffer behind an in-memory stream, held in `Stream.impl`.
+/// Backed by the general-purpose allocator so geometric growth frees old
+/// buffers immediately and the buffer can later be moved into a refcounted
+/// byte-array on a zero-copy drain.
+const MemBuffer = struct {
+    list: std.ArrayListUnmanaged(u8) = .{},
+    allocator: std.mem.Allocator,
+};
+
+pub const in_memory_vtable = StreamVTable{
+    .read = memRead,
+    .write = memWrite,
+    .close = memClose,
+    .flush = memFlush,
+};
+
+/// Append to the in-memory buffer. Pure synchronous append; never touches the
+/// scheduler or fd.
+fn memWrite(stream: *Stream, bytes: []const u8, _: *Context) anyerror!usize {
+    const buf: *MemBuffer = @ptrCast(@alignCast(stream.impl.?));
+    try buf.list.appendSlice(buf.allocator, bytes);
+    return bytes.len;
+}
+
+/// Reads error: the in-memory stream is a write-only sink.
+fn memRead(_: *Stream, _: []u8, _: *Context) anyerror!usize {
+    return error.NotOpenForReading;
+}
+
+/// Release the buffer. The `closed` flag is set by the caller.
+fn memClose(stream: *Stream) void {
+    const buf: *MemBuffer = @ptrCast(@alignCast(stream.impl.?));
+    buf.list.deinit(buf.allocator);
+    buf.allocator.destroy(buf);
+    stream.impl = null;
+}
+
+fn memFlush(_: *Stream) anyerror!void {}
+
+/// <string-stream> ( n -- stream ) - Create a write-only in-memory stream
+/// with initial capacity n.
+pub fn nativeStringStream(ctx: *Context) anyerror!void {
+    const n = try popFixnum(ctx);
+    if (n < 0) {
+        return error.InvalidArgument;
+    }
+
+    // Buffer is GPA-backed; the Stream object lives in the quotation arena like
+    // every other stream value.
+    const buf = ctx.allocator.create(MemBuffer) catch return error.OutOfMemory;
+    buf.* = .{ .allocator = ctx.allocator };
+    buf.list.ensureTotalCapacity(ctx.allocator, @intCast(n)) catch {
+        ctx.allocator.destroy(buf);
+        return error.OutOfMemory;
+    };
+
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch return error.OutOfMemory;
+    stream.* = Stream{
+        .vtable = &in_memory_vtable,
+        // Invalid fd sentinel: an in-memory stream has no OS resource. The
+        // fd-based positioning words guard against a negative fd and error.
+        .fd = -1,
+        .mode = .write,
+        .name = "string-stream",
+        .impl = buf,
+    };
+    // The .io capability tracks the write path (stream-write / print already
+    // require .io), not an intrinsic need to construct an in-memory stream.
+    // Revisit if the write path stops requiring .io.
+    try ctx.stack.push(.{ .stream = stream });
 }
 
 // =============================================================================
@@ -445,6 +523,7 @@ pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
 pub fn nativeStreamTell(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
+    if (stream.fd < 0) return error.NotSeekable;
 
     const file = std.fs.File{ .handle = stream.fd };
     const pos = file.getPos() catch |err| {
@@ -459,6 +538,7 @@ pub fn nativeStreamSeek(ctx: *Context) anyerror!void {
     const pos = try popFixnum(ctx);
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
+    if (stream.fd < 0) return error.NotSeekable;
 
     if (pos < 0) {
         return error.InvalidArgument;
@@ -475,6 +555,7 @@ pub fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
     const offset = try popFixnum(ctx);
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
+    if (stream.fd < 0) return error.NotSeekable;
 
     const file = std.fs.File{ .handle = stream.fd };
     file.seekFromEnd(offset) catch |err| {
