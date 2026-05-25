@@ -25,6 +25,18 @@ use "ranges" ;
 dup #len 2999 "#join large input length" assert=
 0 5 #slice "ab-ab" "#join large input prefix" assert=
 
+"#concat basic" test-section
+{ } #concat "" "#concat empty" assert=
+{ "only" } #concat "only" "#concat single" assert=
+{ "a" "b" "c" } #concat "abc" "#concat many" assert=
+{ "a" "" "b" } #concat "ab" "#concat empty fragments" assert=
+
+"#concat large input" test-section
+\ 1000 string fragments concatenated: linear-time, formerly quadratic.
+1000 iota >iterator [ drop "ab" ] #map #collect #concat
+dup #len 2000 "#concat large input length" assert=
+0 4 #slice "abab" "#concat large input prefix" assert=
+
 "repeat" test-section
 "ab" 3 repeat "ababab" "repeat 3 times" assert=
 "x" 1 repeat "x" "repeat 1 time" assert=

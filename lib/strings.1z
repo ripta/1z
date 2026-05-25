@@ -78,6 +78,20 @@ split: ( str delim -- array ) [
   ] if
 ] ;
 
+\\ Concatenate a sequence of string fragments into one string.
+\\
+\\ A single #append over the whole sequence is O(total length); building the
+\\ result with repeated pairwise #append would re-copy the growing accumulator
+\\ on every fragment. Fragments must already be strings; coerce with >string
+\\ first if needed.
+\\
+\\ Examples:
+\\
+\\   { "a" "b" "c" } #concat  →  "abc"
+\\   { "only" } #concat       →  "only"
+\\   { } #concat              →  ""
+#concat: ( seq -- string ) [ "" swap #append ] ;
+
 \ Helper for repeat.
 repeat-loop: ( pattern result n -- pattern result ) [
   dup 0 >

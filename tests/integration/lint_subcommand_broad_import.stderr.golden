@@ -1,2 +1,2 @@
-tests/fixtures/lint/broad-import.1z:1:1: info: [broad-import] only 1 of 12 words from "strings" are used; consider selective import
+tests/fixtures/lint/broad-import.1z:1:1: info: [broad-import] only 1 of 13 words from "strings" are used; consider selective import
 tests/fixtures/lint/broad-import.1z:4:38: info: [dead-definition] definition is not referenced by any other checked-file word
