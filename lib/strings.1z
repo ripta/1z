@@ -108,6 +108,25 @@ split: ( str delim -- array ) [
 \\ Create a write-only in-memory string stream with a 256-byte reservation.
 <string-builder>: ( -- stream ) [ 256 <sized-string-builder> ] ;
 
+\ Construct a string-builder, run quot with the builder threaded in (quot has
+\ effect ( stream -- )), then drain it with drain-quot. If quot or the drain
+\ throws, the builder is closed and the error re-raised, so its buffer is never
+\ leaked.
+(with-builder-drain): ( quot drain-quot -- result ) [
+  <string-builder>
+  dup [ stream-close rethrow ] curry
+  [ -rot> [ bi ] curry curry curry ] dip
+  recover
+] ;
+
+\\ Run quot with a fresh in-memory string-builder threaded in (quot has effect
+\\ ( stream -- )) and return the accumulated string. The builder is closed even
+\\ if quot throws.
+using-string-builder: ( quot -- string ) [ [ >string! ] (with-builder-drain) ] ;
+
+\\ As `using-string-builder`, but returns the accumulated bytes as a byte-array.
+using-string-builder(bytes): ( quot -- byte-array ) [ [ >bytes! ] (with-builder-drain) ] ;
+
 \\ Append pattern to result n more times, recurring until n reaches zero.
 repeat-loop: ( pattern result n -- pattern result ) [
   dup 0 >

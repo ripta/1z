@@ -1,0 +1,49 @@
+\ Integration tests for in-memory string-builder drains and combinators.
+
+use "testing" ;
+use "strings" ;
+
+"Direct drain to string" test-section
+<string-builder> dup "hello " stream-write-string drop dup "world" stream-write-string drop
+>string! "hello world" "drain to string returns written content" assert=
+
+<string-builder> >string! "" "drain of empty builder is empty string" assert=
+
+"Direct drain to bytes" test-section
+<string-builder> dup "xyz" stream-write-string drop >bytes!
+#len 3 "drain to bytes length" assert=
+<string-builder> dup "xyz" stream-write-string drop >bytes!
+0 #nth 0x78 "drain to bytes first byte" assert=
+<string-builder> dup "xyz" stream-write-string drop >bytes!
+2 #nth 0x7A "drain to bytes last byte" assert=
+
+"Drain implies close" test-section
+[ <string-builder> dup >string! drop dup "late" stream-write-string drop ]
+closed-stream: "write after string drain throws closed-stream" assert-error-type
+[ <string-builder> dup >bytes! drop dup "late" stream-write-string drop ]
+closed-stream: "write after bytes drain throws closed-stream" assert-error-type
+
+"Drains reject non-builder streams" test-section
+[ stdout >string! ] type-mismatch: ">string! on a file stream throws type-mismatch" assert-error-type
+[ stdout >bytes! ] type-mismatch: ">bytes! on a file stream throws type-mismatch" assert-error-type
+
+"using-string-builder, threaded" test-section
+[ dup "abc" stream-write-string drop drop ] using-string-builder
+"abc" "using-string-builder returns the built string" assert=
+
+[ dup "a" stream-write-string drop dup "b" stream-write-string drop drop ] using-string-builder
+"ab" "using-string-builder accumulates fragments" assert=
+
+"using-string-builder(bytes), threaded" test-section
+[ dup "AB" stream-write-string drop drop ] using-string-builder(bytes)
+#len 2 "using-string-builder(bytes) length" assert=
+[ dup "AB" stream-write-string drop drop ] using-string-builder(bytes)
+0 #nth 0x41 "using-string-builder(bytes) first byte" assert=
+
+"using-string-builder, redirected emit by composition" test-section
+[ [ "x" print "y" print ] with-output-stream ] using-string-builder
+"xy" "redirected emit inside using-string-builder" assert=
+
+"using-string-builder closes on error path" test-section
+[ [ dup "partial" stream-write-string drop drop f "boom" EUserThrown make-error throw ] using-string-builder ]
+"using-string-builder rethrows the body error" assert-error

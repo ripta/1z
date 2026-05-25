@@ -11,8 +11,10 @@ const StreamVTable = value_mod.StreamVTable;
 const BufferingMode = value_mod.BufferingMode;
 const ByteArray = value_mod.ByteArray;
 
-const Primitive = @import("types.zig").Primitive;
-const Capability = @import("types.zig").Capability;
+const types_mod = @import("types.zig");
+const Primitive = types_mod.Primitive;
+const RegistryEntry = types_mod.RegistryEntry;
+const Capability = types_mod.Capability;
 const helpers = @import("helpers.zig");
 const error_mapping = @import("error_mapping.zig");
 const container_backing = @import("../container_backing.zig");
@@ -63,6 +65,13 @@ pub const primitives = [_]Primitive{
     .{ .name = "<string-stream>", .stack_effect = "n -- stream", .doc = "Create a write-only in-memory stream with initial capacity n.", .func = nativeStringStream, .capability = .io },
     .{ .name = ">char", .stack_effect = "codepoint -- str", .doc = "Convert Unicode codepoint to single-character string.", .func = nativeChr },
     .{ .name = ">codepoint", .stack_effect = "str -- int", .doc = "Convert single-character string to Unicode codepoint.", .func = nativeToCodepoint },
+};
+
+/// Internal natives reached via `native.` and wrapped by the prelude generics
+/// `>string!` / `>bytes!`; deliberately kept out of the global dictionary.
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "string-stream>bytes!", .func = nativeStringStreamToBytes, .stack_effect = "stream -- bytes", .capability = .io },
+    .{ .name = "string-stream>string!", .func = nativeStringStreamToString, .stack_effect = "stream -- str", .capability = .io },
 };
 
 // =============================================================================
@@ -243,6 +252,58 @@ pub fn nativeStringStream(ctx: *Context) anyerror!void {
     // require .io), not an intrinsic need to construct an in-memory stream.
     // Revisit if the write path stops requiring .io.
     try ctx.stack.push(.{ .stream = stream });
+}
+
+/// Reject any stream that is not an in-memory string-stream, leaving its
+/// reference on the stack untouched for the caller's error handling.
+fn requireMemStream(ctx: *Context, stream: *Stream) !void {
+    if (stream.vtable != &in_memory_vtable) {
+        helpers.setTypeMismatchError(ctx, "in-memory string-builder stream", .{ .stream = stream });
+        return error.TypeMismatch;
+    }
+}
+
+/// string-stream>bytes! ( stream -- bytes ) - Drain an in-memory stream into a
+/// byte-array and close it. Zero-copy: the buffer's growable list is moved into
+/// the refcounted byte-array, so the geometric capacity slack rides along and
+/// is freed through the byte-array's header allocator. A later write throws
+/// ClosedStream.
+pub fn nativeStringStreamToBytes(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+    try requireMemStream(ctx, stream);
+
+    const buf: *MemBuffer = @ptrCast(@alignCast(stream.impl.?));
+    // Header allocator is the GPA that backs the buffer, so destroyByteArray
+    // frees the moved allocation correctly.
+    const ba = ByteArray.create(buf.allocator) catch return error.OutOfMemory;
+    ba.owned_items = buf.list;
+    ba.refreshOwnedView();
+    // Empty the buffer's view so close releases nothing the byte-array now owns.
+    buf.list = .{};
+
+    stream.vtable.close(stream);
+    stream.closed = true;
+    // create gives one owning reference; transfer it to the stack slot rather
+    // than retaining a second.
+    try ctx.stack.pushMoved(.{ .byte_array = ba });
+}
+
+/// string-stream>string! ( stream -- str ) - Drain an in-memory stream into a
+/// string and close it. The live bytes are copied into the quotation arena
+/// because 1z strings are never freed individually, and the GPA buffer is
+/// released. A later write throws ClosedStream.
+pub fn nativeStringStreamToString(ctx: *Context) anyerror!void {
+    const stream = try popStream(ctx);
+    try ensureStreamOpen(stream);
+    try requireMemStream(ctx, stream);
+
+    const buf: *MemBuffer = @ptrCast(@alignCast(stream.impl.?));
+    const out = ctx.quotationAllocator().dupe(u8, buf.list.items) catch return error.OutOfMemory;
+
+    stream.vtable.close(stream);
+    stream.closed = true;
+    try ctx.stack.push(.{ .string = out });
 }
 
 // =============================================================================

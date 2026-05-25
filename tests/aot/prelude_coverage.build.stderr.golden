@@ -1,4 +1,4 @@
-Prelude compilation: 320/353 words compiled (90.7%)
+Prelude compilation: 322/355 words compiled (90.7%)
   word '>option:some' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
@@ -105,20 +105,20 @@ AOT interpreter fallbacks: 249 total
   compound-uncompiled: 6
   quotation: 7
   sites:
-    native: flush -> stream-flush (line 587)
+    native: flush -> stream-flush (line 599)
     native: stream-write-string -> stream-write (line 495)
     native: provenance? -> native.struct-type-predicate (line 0)
     native: nan? -> = (line 329)
-    native: run-benchmarks -> make-benchmark-report (line 781)
-    quotation: run-benchmarks -> <quotation> (line 781)
-    native: run-benchmarks -> print-benchmark-report (line 781)
+    native: run-benchmarks -> make-benchmark-report (line 793)
+    quotation: run-benchmarks -> <quotation> (line 793)
+    native: run-benchmarks -> print-benchmark-report (line 793)
     native: 4nip -> nip-n (line 387)
     native: quotation? -> type-of (line 293)
     native: quotation? -> = (line 293)
     native: unmake-descriptor-variant -> native.struct-instance-destructure (line 0)
-    native: >iterator -> curry (line 837)
-    native: >iterator -> native.make-callback-iter (line 838)
-    native: >iterator -> native.>iterator (line 840)
+    native: >iterator -> curry (line 849)
+    native: >iterator -> native.make-callback-iter (line 850)
+    native: >iterator -> native.>iterator (line 852)
     native: >dispatch-provenance -> native.hash-to-struct (line 0)
     native: descriptor-variant? -> native.struct-type-predicate (line 0)
     ... 233 more

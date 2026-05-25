@@ -494,6 +494,18 @@ xor: ( ? ? -- ? ) [ 2dup and not -rot> or and ] ;
 \\ Write a string to a stream as bytes, returning bytes written.
 stream-write-string: ( stream str -- n ) [ stream-write ] ;
 
+\\ Drain a value into a string, consuming it. On an in-memory string-builder
+\\ stream this moves out the accumulated bytes and closes the stream, so a
+\\ later write throws.
+>string!: generic ( drainable -- str ) [ "string-builder stream" throw-type-error ] ;
+>string!: method{ stream } [ native.string-stream>string! ] ;
+
+\\ Drain a value into a byte-array, consuming it. On an in-memory
+\\ string-builder stream this moves out the accumulated bytes zero-copy and
+\\ closes the stream, so a later write throws.
+>bytes!: generic ( drainable -- bytes ) [ "string-builder stream" throw-type-error ] ;
+>bytes!: method{ stream } [ native.string-stream>bytes! ] ;
+
 \ Internal helper: tail-recursive read loop used by stream-read(exact).
 \ State carries (stream acc n): stream to read from, accumulator so far,
 \ bytes still required.

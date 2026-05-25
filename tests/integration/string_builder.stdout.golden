@@ -1,0 +1,58 @@
+=== Direct drain to string ===
+Stack: [ ]
+Stack: [ <stream string-stream write> ]
+PASS: drain to string returns written content
+Stack: [ ]
+PASS: drain of empty builder is empty string
+Stack: [ ]
+=== Direct drain to bytes ===
+Stack: [ ]
+Stack: [ B{ 0x78 0x79 0x7A } ]
+PASS: drain to bytes length
+Stack: [ ]
+Stack: [ B{ 0x78 0x79 0x7A } ]
+PASS: drain to bytes first byte
+Stack: [ ]
+Stack: [ B{ 0x78 0x79 0x7A } ]
+PASS: drain to bytes last byte
+Stack: [ ]
+=== Drain implies close ===
+Stack: [ ]
+Stack: [ [ <string-builder> dup >string! drop dup "late" stream-write-string drop ] ]
+PASS: write after string drain throws closed-stream
+Stack: [ ]
+Stack: [ [ <string-builder> dup >bytes! drop dup "late" stream-write-string drop ] ]
+PASS: write after bytes drain throws closed-stream
+Stack: [ ]
+=== Drains reject non-builder streams ===
+Stack: [ ]
+PASS: >string! on a file stream throws type-mismatch
+Stack: [ ]
+PASS: >bytes! on a file stream throws type-mismatch
+Stack: [ ]
+=== using-string-builder, threaded ===
+Stack: [ ]
+Stack: [ "abc" ]
+PASS: using-string-builder returns the built string
+Stack: [ ]
+Stack: [ "ab" ]
+PASS: using-string-builder accumulates fragments
+Stack: [ ]
+=== using-string-builder(bytes), threaded ===
+Stack: [ ]
+Stack: [ B{ 0x41 0x42 } ]
+PASS: using-string-builder(bytes) length
+Stack: [ ]
+Stack: [ B{ 0x41 0x42 } ]
+PASS: using-string-builder(bytes) first byte
+Stack: [ ]
+=== using-string-builder, redirected emit by composition ===
+Stack: [ ]
+Stack: [ "xy" ]
+PASS: redirected emit inside using-string-builder
+Stack: [ ]
+=== using-string-builder closes on error path ===
+Stack: [ ]
+Stack: [ [ [ dup "partial" stream-write-string drop drop f "boom" EUserThrown make-error throw ] using-string-builder ] ]
+PASS: using-string-builder rethrows the body error
+Stack: [ ]
