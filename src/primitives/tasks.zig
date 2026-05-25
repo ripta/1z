@@ -51,6 +51,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "cancel-task", .stack_effect = "task --", .doc = "Cancel a task.", .func = nativeCancelTask },
     .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration. The main task and the timer task may run on different workers; cancellation crosses workers via the scheduler's cross-thread cancel path.", .func = nativeWithTimeout },
     .{ .name = "multiplexer-stats", .stack_effect = "-- hash", .doc = "Return a hash of I/O multiplexer statistics. Requires an active task-scope.", .func = nativeMultiplexerStats },
+    .{ .name = "container-limits", .stack_effect = "-- hash", .doc = "Return a hash of detected container CPU and memory limits: cpu-count, cpu-source, cpu-raw, memory-cap, memory-source, memory-raw.", .func = nativeContainerLimits },
     .{ .name = "cancelled?", .stack_effect = "-- bool", .doc = "Push t if the current task has a pending cancellation, f otherwise.", .func = nativeCancelledQuery },
     .{ .name = "task-stack-peak", .stack_effect = "-- n", .doc = "Return the current task's peak native stack usage in bytes.", .func = nativeTaskStackPeak },
 };
@@ -1009,6 +1010,52 @@ fn nativeMultiplexerStats(ctx: *Context) anyerror!void {
     hash.put(alloc, try alloc.dupe(u8, "run-queue"), .{
         .fixnum = @intCast(scheduler.run_queue.items.len),
     }) catch return error.OutOfMemory;
+
+    try ctx.stack.push(.{ .hash = hash });
+}
+
+fn cpuSourceSymbol(s: container_limits.CpuSource) []const u8 {
+    return switch (s) {
+        .cgroup_v2 => "cgroup-v2",
+        .cgroup_v1 => "cgroup-v1",
+        .affinity => "affinity",
+        .fallback => "fallback",
+    };
+}
+
+fn memSourceSymbol(s: container_limits.MemorySource) []const u8 {
+    return switch (s) {
+        .cgroup_v2 => "cgroup-v2",
+        .cgroup_v1 => "cgroup-v1",
+        .fallback => "fallback",
+    };
+}
+
+/// container-limits ( -- hash )
+fn nativeContainerLimits(ctx: *Context) anyerror!void {
+    const trace_enabled = ctx.trace.trace_container_detect;
+    const cpu = container_limits.detectCpus(trace_enabled);
+    const mem = container_limits.detectMemory(trace_enabled);
+
+    const alloc = ctx.quotationAllocator();
+    const hash = alloc.create(value_mod.HashTable) catch return error.OutOfMemory;
+    hash.* = value_mod.HashTable{};
+
+    hash.put(alloc, try alloc.dupe(u8, "cpu-count"), .{ .fixnum = @intCast(cpu.count) }) catch return error.OutOfMemory;
+    hash.put(alloc, try alloc.dupe(u8, "cpu-source"), .{ .symbol = cpuSourceSymbol(cpu.source) }) catch return error.OutOfMemory;
+    const cpu_raw: Value = if (cpu.raw_quota != null and cpu.raw_period != null) blk: {
+        const inner = alloc.create(value_mod.HashTable) catch return error.OutOfMemory;
+        inner.* = value_mod.HashTable{};
+        inner.put(alloc, try alloc.dupe(u8, "quota"), .{ .fixnum = cpu.raw_quota.? }) catch return error.OutOfMemory;
+        inner.put(alloc, try alloc.dupe(u8, "period"), .{ .fixnum = cpu.raw_period.? }) catch return error.OutOfMemory;
+        break :blk .{ .hash = inner };
+    } else .{ .unit = {} };
+    hash.put(alloc, try alloc.dupe(u8, "cpu-raw"), cpu_raw) catch return error.OutOfMemory;
+
+    hash.put(alloc, try alloc.dupe(u8, "memory-cap"), .{ .fixnum = @intCast(mem.cap) }) catch return error.OutOfMemory;
+    hash.put(alloc, try alloc.dupe(u8, "memory-source"), .{ .symbol = memSourceSymbol(mem.source) }) catch return error.OutOfMemory;
+    const mem_raw: Value = if (mem.raw) |r| .{ .fixnum = @intCast(r) } else .{ .unit = {} };
+    hash.put(alloc, try alloc.dupe(u8, "memory-raw"), mem_raw) catch return error.OutOfMemory;
 
     try ctx.stack.push(.{ .hash = hash });
 }

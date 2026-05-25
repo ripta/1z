@@ -1,0 +1,15 @@
+use "testing" ;
+
+\ Shape assertions only. The actual source values and counts depend on the runtime environment (i.e., bare host vs.
+\ a cgroup-limited container), so exact values are not asserted. Each statement fully consumes the hash so the
+\ residual stack stays empty and the golden output is environment-independent.
+
+"container-limits" test-section
+
+container-limits type-of hash "container-limits returns a hash" assert=
+container-limits "cpu-count" @get type-of fixnum "cpu-count is a fixnum" assert=
+container-limits "memory-cap" @get type-of fixnum "memory-cap is a fixnum" assert=
+container-limits "cpu-source" @get type-of symbol "cpu-source is a symbol" assert=
+container-limits "memory-source" @get type-of symbol "memory-source is a symbol" assert=
+container-limits "cpu-raw" @has? "cpu-raw key present" assert-true
+container-limits "memory-raw" @has? "memory-raw key present" assert-true

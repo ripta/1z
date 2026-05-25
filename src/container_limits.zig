@@ -5,6 +5,13 @@ const trace = @import("trace.zig");
 /// Root of the cgroup filesystem hierarchy on Linux.
 const cgroup_root = "/sys/fs/cgroup";
 
+/// Filesystem roots the Linux detectors read from. The defaults are the real system paths;
+/// tests inject temp-dir fixtures by overriding them.
+const Roots = struct {
+    cgroup: []const u8 = cgroup_root,
+    proc_cgroup: []const u8 = "/proc/self/cgroup",
+};
+
 /// Where the resolved CPU count came from.
 pub const CpuSource = enum { cgroup_v2, cgroup_v1, affinity, fallback };
 
@@ -43,7 +50,7 @@ pub fn detectCpus(trace_enabled: bool) CpuDetection {
         return .{ .count = affinity, .source = base_source };
     }
 
-    if (detectCpuQuotaLinux(trace_enabled)) |q| {
+    if (detectCpuQuotaLinux(.{}, trace_enabled)) |q| {
         const cgroup_cpus = cpusFromQuota(q.quota, q.period);
         const count = @min(cgroup_cpus, affinity);
         return .{
@@ -68,7 +75,7 @@ pub fn detectMemory(trace_enabled: bool) MemoryDetection {
         return .{ .cap = 0, .source = .fallback };
     }
 
-    if (detectMemoryLinux(trace_enabled)) |res| return res;
+    if (detectMemoryLinux(.{}, trace_enabled)) |res| return res;
 
     if (trace_enabled) traceLine("memory: no cgroup limit detected, caller uses its default", .{});
     return .{ .cap = 0, .source = .fallback };
@@ -80,9 +87,9 @@ pub fn detectMemory(trace_enabled: bool) MemoryDetection {
 
 const CpuQuota = struct { quota: i64, period: i64, source: CpuSource };
 
-fn detectCpuQuotaLinux(trace_enabled: bool) ?CpuQuota {
+fn detectCpuQuotaLinux(roots: Roots, trace_enabled: bool) ?CpuQuota {
     var proc_buf: [4096]u8 = undefined;
-    const proc = readSmallFile("/proc/self/cgroup", &proc_buf) orelse {
+    const proc = readSmallFile(roots.proc_cgroup, &proc_buf) orelse {
         if (trace_enabled) traceLine("cpu: cannot read /proc/self/cgroup", .{});
         return null;
     };
@@ -94,18 +101,20 @@ fn detectCpuQuotaLinux(trace_enabled: bool) ?CpuQuota {
     // leaf cgroup; cpu.max lives at /sys/fs/cgroup<path>/cpu.max. Fall back to
     // the root cpu.max when the leaf file is absent.
     if (parseProcCgroupV2(proc)) |subpath| {
-        if (std.fmt.bufPrint(&path_buf, "{s}{s}/cpu.max", .{ cgroup_root, subpath })) |leaf_path| {
+        if (std.fmt.bufPrint(&path_buf, "{s}{s}/cpu.max", .{ roots.cgroup, subpath })) |leaf_path| {
             if (readSmallFile(leaf_path, &val_buf)) |content| {
                 if (parseCpuMaxV2(content)) |q| {
                     return .{ .quota = q.quota, .period = q.period, .source = .cgroup_v2 };
                 }
             }
         } else |_| {}
-        if (readSmallFile(cgroup_root ++ "/cpu.max", &val_buf)) |content| {
-            if (parseCpuMaxV2(content)) |q| {
-                return .{ .quota = q.quota, .period = q.period, .source = .cgroup_v2 };
+        if (std.fmt.bufPrint(&path_buf, "{s}/cpu.max", .{roots.cgroup})) |root_path| {
+            if (readSmallFile(root_path, &val_buf)) |content| {
+                if (parseCpuMaxV2(content)) |q| {
+                    return .{ .quota = q.quota, .period = q.period, .source = .cgroup_v2 };
+                }
             }
-        }
+        } else |_| {}
         if (trace_enabled) traceLine("cpu: cgroup v2 cpu.max missing, unparseable, or unlimited", .{});
         return null;
     }
@@ -114,7 +123,7 @@ fn detectCpuQuotaLinux(trace_enabled: bool) ?CpuQuota {
     // as cpu,cpuacct but may be a bare cpu directory on some systems.
     if (parseProcCgroupV1(proc, "cpu")) |subpath| {
         const cpu_dirs = [_][]const u8{ "cpu,cpuacct", "cpu" };
-        const quota_content = readV1ControllerFile(&path_buf, &val_buf, &cpu_dirs, subpath, "cpu.cfs_quota_us") orelse {
+        const quota_content = readV1ControllerFile(roots.cgroup, &path_buf, &val_buf, &cpu_dirs, subpath, "cpu.cfs_quota_us") orelse {
             if (trace_enabled) traceLine("cpu: cgroup v1 cpu.cfs_quota_us unreadable", .{});
             return null;
         };
@@ -122,7 +131,7 @@ fn detectCpuQuotaLinux(trace_enabled: bool) ?CpuQuota {
             if (trace_enabled) traceLine("cpu: cgroup v1 quota unset or unparseable", .{});
             return null;
         };
-        const period_content = readV1ControllerFile(&path_buf, &val_buf, &cpu_dirs, subpath, "cpu.cfs_period_us") orelse {
+        const period_content = readV1ControllerFile(roots.cgroup, &path_buf, &val_buf, &cpu_dirs, subpath, "cpu.cfs_period_us") orelse {
             if (trace_enabled) traceLine("cpu: cgroup v1 cpu.cfs_period_us unreadable", .{});
             return null;
         };
@@ -137,9 +146,9 @@ fn detectCpuQuotaLinux(trace_enabled: bool) ?CpuQuota {
     return null;
 }
 
-fn detectMemoryLinux(trace_enabled: bool) ?MemoryDetection {
+fn detectMemoryLinux(roots: Roots, trace_enabled: bool) ?MemoryDetection {
     var proc_buf: [4096]u8 = undefined;
-    const proc = readSmallFile("/proc/self/cgroup", &proc_buf) orelse {
+    const proc = readSmallFile(roots.proc_cgroup, &proc_buf) orelse {
         if (trace_enabled) traceLine("memory: cannot read /proc/self/cgroup", .{});
         return null;
     };
@@ -148,25 +157,27 @@ fn detectMemoryLinux(trace_enabled: bool) ?MemoryDetection {
     var val_buf: [256]u8 = undefined;
 
     if (parseProcCgroupV2(proc)) |subpath| {
-        if (std.fmt.bufPrint(&path_buf, "{s}{s}/memory.max", .{ cgroup_root, subpath })) |leaf_path| {
+        if (std.fmt.bufPrint(&path_buf, "{s}{s}/memory.max", .{ roots.cgroup, subpath })) |leaf_path| {
             if (readSmallFile(leaf_path, &val_buf)) |content| {
                 if (parseMemLimit(content)) |v| {
                     return .{ .cap = v, .source = .cgroup_v2, .raw = v };
                 }
             }
         } else |_| {}
-        if (readSmallFile(cgroup_root ++ "/memory.max", &val_buf)) |content| {
-            if (parseMemLimit(content)) |v| {
-                return .{ .cap = v, .source = .cgroup_v2, .raw = v };
+        if (std.fmt.bufPrint(&path_buf, "{s}/memory.max", .{roots.cgroup})) |root_path| {
+            if (readSmallFile(root_path, &val_buf)) |content| {
+                if (parseMemLimit(content)) |v| {
+                    return .{ .cap = v, .source = .cgroup_v2, .raw = v };
+                }
             }
-        }
+        } else |_| {}
         if (trace_enabled) traceLine("memory: cgroup v2 memory.max missing, unparseable, or unlimited", .{});
         return null;
     }
 
     if (parseProcCgroupV1(proc, "memory")) |subpath| {
         const mem_dirs = [_][]const u8{"memory"};
-        const content = readV1ControllerFile(&path_buf, &val_buf, &mem_dirs, subpath, "memory.limit_in_bytes") orelse {
+        const content = readV1ControllerFile(roots.cgroup, &path_buf, &val_buf, &mem_dirs, subpath, "memory.limit_in_bytes") orelse {
             if (trace_enabled) traceLine("memory: cgroup v1 memory.limit_in_bytes unreadable", .{});
             return null;
         };
@@ -199,6 +210,7 @@ fn readSmallFile(path: []const u8, buf: []u8) ?[]const u8 {
 /// file under `<root>/<dir><subpath>/<filename>`. Returns the first readable
 /// content, or null when none exist.
 fn readV1ControllerFile(
+    root: []const u8,
     path_buf: []u8,
     val_buf: []u8,
     dir_candidates: []const []const u8,
@@ -206,7 +218,7 @@ fn readV1ControllerFile(
     filename: []const u8,
 ) ?[]const u8 {
     for (dir_candidates) |dir| {
-        const path = std.fmt.bufPrint(path_buf, "{s}/{s}{s}/{s}", .{ cgroup_root, dir, subpath, filename }) catch continue;
+        const path = std.fmt.bufPrint(path_buf, "{s}/{s}{s}/{s}", .{ root, dir, subpath, filename }) catch continue;
         if (readSmallFile(path, val_buf)) |content| return content;
     }
     return null;
@@ -399,4 +411,62 @@ test "cpusFromQuota: rounds up and clamps" {
     try std.testing.expectEqual(@as(usize, 3), cpusFromQuota(250000, 100000)); // 2.5 -> 3
     try std.testing.expectEqual(@as(usize, 1), cpusFromQuota(100000, 100000));
     try std.testing.expectEqual(@as(usize, 1), cpusFromQuota(-1, 100000));
+}
+
+test "detect orchestration: cgroup v2 leaf files" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("mygroup");
+    try tmp.dir.writeFile(.{ .sub_path = "mygroup/cpu.max", .data = "200000 100000\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "mygroup/memory.max", .data = "4294967296\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "proc_cgroup", .data = "0::/mygroup\n" });
+
+    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root);
+    const proc = try tmp.dir.realpathAlloc(std.testing.allocator, "proc_cgroup");
+    defer std.testing.allocator.free(proc);
+    const roots = Roots{ .cgroup = root, .proc_cgroup = proc };
+
+    const cpu = detectCpuQuotaLinux(roots, false).?;
+    try std.testing.expectEqual(CpuSource.cgroup_v2, cpu.source);
+    try std.testing.expectEqual(@as(i64, 200000), cpu.quota);
+    try std.testing.expectEqual(@as(i64, 100000), cpu.period);
+
+    const mem = detectMemoryLinux(roots, false).?;
+    try std.testing.expectEqual(MemorySource.cgroup_v2, mem.source);
+    try std.testing.expectEqual(@as(usize, 4294967296), mem.cap);
+}
+
+test "detect orchestration: cgroup v1 per-controller files" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.makePath("cpu,cpuacct/docker/abc");
+    try tmp.dir.writeFile(.{ .sub_path = "cpu,cpuacct/docker/abc/cpu.cfs_quota_us", .data = "50000\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "cpu,cpuacct/docker/abc/cpu.cfs_period_us", .data = "100000\n" });
+    try tmp.dir.makePath("memory/docker/xyz");
+    try tmp.dir.writeFile(.{ .sub_path = "memory/docker/xyz/memory.limit_in_bytes", .data = "104857600\n" });
+    try tmp.dir.writeFile(.{ .sub_path = "proc_cgroup", .data = "12:cpu,cpuacct:/docker/abc\n11:memory:/docker/xyz\n" });
+
+    const root = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(root);
+    const proc = try tmp.dir.realpathAlloc(std.testing.allocator, "proc_cgroup");
+    defer std.testing.allocator.free(proc);
+    const roots = Roots{ .cgroup = root, .proc_cgroup = proc };
+
+    const cpu = detectCpuQuotaLinux(roots, false).?;
+    try std.testing.expectEqual(CpuSource.cgroup_v1, cpu.source);
+    try std.testing.expectEqual(@as(i64, 50000), cpu.quota);
+    try std.testing.expectEqual(@as(i64, 100000), cpu.period);
+
+    const mem = detectMemoryLinux(roots, false).?;
+    try std.testing.expectEqual(MemorySource.cgroup_v1, mem.source);
+    try std.testing.expectEqual(@as(usize, 104857600), mem.cap);
+}
+
+test "detect orchestration: bare host with no cgroup file" {
+    const roots = Roots{ .cgroup = "/nonexistent/cgroup/root", .proc_cgroup = "/nonexistent/proc/cgroup" };
+    try std.testing.expectEqual(@as(?CpuQuota, null), detectCpuQuotaLinux(roots, false));
+    try std.testing.expectEqual(@as(?MemoryDetection, null), detectMemoryLinux(roots, false));
 }

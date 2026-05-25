@@ -1,0 +1,16 @@
+=== container-limits ===
+Stack: [ ]
+PASS: container-limits returns a hash
+Stack: [ ]
+PASS: cpu-count is a fixnum
+Stack: [ ]
+PASS: memory-cap is a fixnum
+Stack: [ ]
+PASS: cpu-source is a symbol
+Stack: [ ]
+PASS: memory-source is a symbol
+Stack: [ ]
+PASS: cpu-raw key present
+Stack: [ ]
+PASS: memory-raw key present
+Stack: [ ]
