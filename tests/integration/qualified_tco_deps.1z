@@ -1,0 +1,14 @@
+\ Regression: qualified access (module.word) of a word that tail-calls one of
+\ its module's dependencies must leave its result on the stack when another
+\ word follows the qualified call in the same instruction stream.
+use "testing" ;
+
+"qualified tail-call into a dep, composed inline" test-section
+
+\ call-from-a tail-calls from-a, a dep imported via use "mod_a.1z".
+ma: "mod_b_calls_a.1z" load ;
+ma.call-from-a "from-a" "qualified call resolves an imported dep inline" assert=
+
+\ public tail-calls its private local-scope helper (helper), a dep.
+ml: "local_scope_lib.1z" load ;
+ml.public "cleaned" "qualified call resolves a private local-scope helper" assert=

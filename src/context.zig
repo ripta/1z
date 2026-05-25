@@ -2750,7 +2750,12 @@ pub const Context = struct {
                         }
                     }
 
-                    try self.executeInstructions(instrs, null);
+                    // NOTE(ripta): Route through the TCO loop rather than executeInstructions directly,
+                    //              because a body whose final word tail-calls one of the module's deps
+                    //              must have that tail call resolved here, while this module-deps frame
+                    //              is still live, instead of leaking a pending tail call past the
+                    //              deps-frame teardown.
+                    try self.executeQuotationWithPic(.{ .instructions = instrs }, null);
                 },
                 .native => |func| try func(self),
                 .host_callback => |host| {

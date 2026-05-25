@@ -1,0 +1,8 @@
+=== qualified tail-call into a dep, composed inline ===
+Stack: [ ]
+Stack: [ ]
+PASS: qualified call resolves an imported dep inline
+Stack: [ ]
+Stack: [ ]
+PASS: qualified call resolves a private local-scope helper
+Stack: [ ]
