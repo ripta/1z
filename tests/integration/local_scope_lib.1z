@@ -1,0 +1,9 @@
+\ Library exercising local-scope: a private helper captured from a transient
+\ frame, plus a public word that calls it. The helper must land in this
+\ module's deps (private), the public word in its words (public API).
+
+[ (helper): [ "cleaned" ] ;
+  local-scope
+] call import
+
+public: ( -- string ) [ (helper) ] ;

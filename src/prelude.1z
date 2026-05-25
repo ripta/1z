@@ -977,6 +977,12 @@ word-info: struct{ name: string stack-effect: any doc: any markers: array native
 \\ Return an array of word-info structs for every word in the dictionary.
 all-words: ( -- array ) [ native.all-words [ (raw>word-info) ] #map #collect ] ;
 
+\\ Snapshot the topmost local frame into an importable module. Intended for
+\\ capturing private helpers defined inside a quotation: define the helpers as
+\\ ordinary `name: [ ... ] ;` definitions, then `[ ... local-scope ] call import`
+\\ routes them into the consuming module's private deps.
+local-scope: ( -- module ) [ native.local-scope ] ;
+
 \\ Safe variant of >word-info that returns an option instead of throwing.
 >word-info?: ( symbol -- option ) [ [ >word-info >option:some ] [ drop option:none ] recover ] ;
 

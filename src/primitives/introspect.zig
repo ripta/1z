@@ -30,6 +30,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = ">word", .func = nativeToWord, .stack_effect = "module name -- word-info" },
     .{ .name = "all-words", .func = nativeAllWords, .stack_effect = "-- array" },
     .{ .name = "current-scope", .func = nativeCurrentScope, .stack_effect = "-- module" },
+    .{ .name = "local-scope", .func = nativeLocalScope, .stack_effect = "-- module" },
     .{ .name = "dead-definitions", .func = nativeDeadDefinitions },
     .{ .name = "defined?", .func = nativeDefined, .stack_effect = "module name -- ?" },
     .{ .name = "locally-defined?", .func = nativeLocallyDefined },
@@ -492,6 +493,34 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
         }
 
         ancestor = anc.parent_context;
+    }
+
+    try ctx.stack.push(.{ .module = module });
+}
+
+/// local-scope ( -- module ) - Snapshot the topmost local frame into an importable Module.
+fn nativeLocalScope(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    // At a definition scope (top level, load-top, REPL, eval) the topmost frame
+    // is the import frame, so capturing it and feeding it to `import` would
+    // silently demote the surrounding module's public API into private deps. A
+    // transient frame above the import frame -- the frame a `call` pushes -- is
+    // required.
+    if (ctx.local_frames.items.len == 0 or
+        (ctx.import_frame_index orelse 0) == ctx.local_frames.items.len - 1)
+    {
+        ctx.pending_error_message =
+            "local-scope: no enclosing transient frame; call inside a quotation via `[ ... ] call`";
+        return error.InvalidScope;
+    }
+
+    const module = try alloc.create(Module);
+    module.* = .{ .name = "<local-scope>", .words = .{}, .importable = true };
+
+    var iter = ctx.local_frames.items[ctx.local_frames.items.len - 1].iterator();
+    while (iter.next()) |entry| {
+        try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
     }
 
     try ctx.stack.push(.{ .module = module });
