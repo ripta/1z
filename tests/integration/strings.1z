@@ -2,12 +2,14 @@
 
 use "testing" ;
 use "strings" ;
+use "ranges" ;
 
 "#join basic" test-section
 { "a" "b" "c" } ", " #join "a, b, c" "#join with comma" assert=
 { "one" "two" } "" #join "onetwo" "#join empty sep" assert=
 { } ", " #join "" "#join empty array" assert=
 { "only" } "-" #join "only" "#join single element" assert=
+{ "a" "b" "c" } "::" #join "a::b::c" "#join multi-char sep" assert=
 
 "#join with non-strings" test-section
 { 1 2 3 } ", " #join "1, 2, 3" "#join integers" assert=
@@ -16,6 +18,12 @@ use "strings" ;
 
 "#join mixed types" test-section
 { "count" 42 } ": " #join "count: 42" "#join string and int" assert=
+
+"#join large input" test-section
+\ 1000 fragments joined with a separator: linear-time, formerly quadratic.
+1000 iota >iterator [ drop "ab" ] #map #collect "-" #join
+dup #len 2999 "#join large input length" assert=
+0 5 #slice "ab-ab" "#join large input prefix" assert=
 
 "repeat" test-section
 "ab" 3 repeat "ababab" "repeat 3 times" assert=

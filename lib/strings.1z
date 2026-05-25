@@ -47,13 +47,10 @@ split: ( str delim -- array ) [
   if
 ] ;
 
-(join-append): ( sep acc item -- sep acc' ) [
-  >string
-  swap      \ sep item acc
-  2 pick-n  \ sep item acc sep
-  #append   \ sep item acc+sep
-  swap      \ sep acc+sep item
-  #append   \ sep acc+sep+item
+(join-push): ( sep vec item -- sep vec ) [
+  >string              \ sep vec itemstr
+  [ over #push! ] dip  \ push separator before this element
+  #push!               \ push the element's string
 ] ;
 
 \ Join array of values into string with separator
@@ -62,19 +59,21 @@ split: ( str delim -- array ) [
 \   { 1 2 3 } "-" #join         →  "1-2-3"
 \   { } ", " #join              →  ""
 \   { "only" } ", " #join       →  "only"
-\ ( sep acc item -- sep acc+sep+item )
-\ Always prepends sep -- callers must seed acc with the first element
-\ to avoid a leading separator on the result.
+\ Collects the fragments into a vector, then concatenates once. A single
+\ #append over the whole vector is O(total length); repeated pairwise
+\ #append would re-copy the growing accumulator on every element.
 #join: ( array sep -- string ) [
   over #len 0 = [ 2drop "" ] [
     over #len 1 = [ drop #first >string ] [
-      swap                       \ sep array
-      dup #first >string         \ sep array first-str
-      swap                       \ sep first-str array
-      1 over #len #slice         \ sep first-str rest
-      swap                       \ sep rest first-str
-      [ (join-append) ] #reduce  \ sep result
-      nip                        \ result
+      swap                     \ sep array
+      dup #first >string       \ sep array first-str
+      V{ } swap #push!         \ sep array vec   (vec = [ first-str ])
+      swap                     \ sep vec array
+      1 over #len #slice       \ sep vec rest    (array[1..])
+      swap                     \ sep rest vec
+      [ (join-push) ] #reduce  \ sep vec         (all fragments collected)
+      "" swap #append          \ sep result      (single O(total) concat)
+      nip                      \ result
     ] if
   ] if
 ] ;
