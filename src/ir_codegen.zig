@@ -2784,74 +2784,166 @@ fn symbolicShapeMatches(stack_a: []const StackEntry, sp_a: usize, stack_b: []con
     return true;
 }
 
+/// A single physical-memory move emitted while materializing the abstract stack into Value slots.
+const MoveOp = union(enum) {
+    box_i64: struct { slot: usize, ref: c.ir_ref },
+    box_f64: struct { slot: usize, ref: c.ir_ref },
+    box_bool: struct { slot: usize, ref: c.ir_ref },
+    copy: struct { src: usize, dest: usize },
+    swap: struct { a: usize, b: usize },
+};
+
+/// Per-slot classification for flush moves.
+///
+/// `.none` marks a slot that is never written: an identity `raw_at_slot` whose value is already
+/// in place, or a `quotation_body` / `row_region` entry the planner leaves to the caller.
+const SlotMove = union(enum) {
+    none,
+    box_i64: c.ir_ref,
+    box_f64: c.ir_ref,
+    box_bool: c.ir_ref,
+    copy: usize,
+};
+
+/// Count pending copy moves whose source is slot `d`. A slot may only be overwritten once this
+/// reaches zero, so that no later move reads a value that has already been clobbered.
+fn countSlotReaders(op: []const SlotMove, pending: []const bool, sp: usize, d: usize) usize {
+    var count: usize = 0;
+    for (0..sp) |j| {
+        if (!pending[j]) continue;
+        if (op[j] == .copy and op[j].copy == d) count += 1;
+    }
+    return count;
+}
+
+/// Sequentialize the parallel assignment "physical slot i := stack[i]" into an ordered move plan
+/// that never destroys a source value before every dependent read has consumed it. Returns the
+/// number of `MoveOp`s written to `out`, which must hold at least `sp` entries.
+///
+/// The earlier implementation boxed symbolic entries first and resolved raw aliases second, with
+/// a hazard prepass bolted on to rescue the one shape where first-pass boxing clobbered a slot a
+/// later copy still needed
+///
+///     1 - over swap (sum2) *
+///
+/// collapsing `[base, base, exp-1]` into `[base, exp-1, exp-1]`), plus a 2-cycle swap special case.
+///
+/// That pass order mishandled copy-copy cycles longer than two. Modeling materialization as a
+/// dependency problem subsumes both repairs: a topological emit handles every acyclic case, and a
+/// swap breaks each remaining permutation cycle.
+fn planFlushMoves(stack: []const StackEntry, sp: usize, out: []MoveOp) usize {
+    std.debug.assert(sp <= max_abstract_stack_depth);
+    var op: [max_abstract_stack_depth]SlotMove = undefined;
+    var pending: [max_abstract_stack_depth]bool = undefined;
+    for (0..sp) |i| {
+        op[i] = switch (stack[i]) {
+            .i64_ref => |r| .{ .box_i64 = r },
+            .f64_ref => |r| .{ .box_f64 = r },
+            .bool_ref => |r| .{ .box_bool = r },
+            .raw_at_slot => |s| if (s == i) .none else .{ .copy = s },
+            .quotation_body, .row_region => .none,
+        };
+        pending[i] = op[i] != .none;
+    }
+
+    var n_out: usize = 0;
+    while (true) {
+        // Topological pass: emit any write whose destination is no longer read
+        // by a pending move. Boxing writes have no source, so they only ever
+        // wait on readers of their own destination slot.
+        var progressed = false;
+        var any_pending = false;
+        for (0..sp) |d| {
+            if (!pending[d]) continue;
+            any_pending = true;
+            if (countSlotReaders(&op, &pending, sp, d) != 0) continue;
+            out[n_out] = switch (op[d]) {
+                .box_i64 => |r| .{ .box_i64 = .{ .slot = d, .ref = r } },
+                .box_f64 => |r| .{ .box_f64 = .{ .slot = d, .ref = r } },
+                .box_bool => |r| .{ .box_bool = .{ .slot = d, .ref = r } },
+                .copy => |s| .{ .copy = .{ .src = s, .dest = d } },
+                .none => unreachable,
+            };
+            n_out += 1;
+            pending[d] = false;
+            progressed = true;
+        }
+        if (!any_pending) break;
+        if (progressed) continue;
+
+        // XXX(ripta): Deadlock! Only permutation cycles of copies remain; boxing writes are never
+        //             sources, so they never deadlock. Some pending copy must read a pending slot.
+        //             Otherwise, no pending slot would be read at all, yet a stuck slot is read by
+        //             definition.
+        //
+        //             Swap such a copy `(d := s)`: slot d becomes correct, the old d value moves
+        //             into slot s, so redirect every pending copy that read d to read s.
+        //
+        //             This retires one move per swap.
+        var di: usize = 0;
+        var found = false;
+        while (di < sp) : (di += 1) {
+            if (!pending[di]) continue;
+            if (op[di] == .copy and op[di].copy < sp and pending[op[di].copy]) {
+                found = true;
+                break;
+            }
+        }
+        std.debug.assert(found);
+        const s = op[di].copy;
+        out[n_out] = .{ .swap = .{ .a = di, .b = s } };
+        n_out += 1;
+        pending[di] = false;
+        for (0..sp) |j| {
+            if (!pending[j]) continue;
+            if (op[j] == .copy and op[j].copy == di) {
+                // The swap moved the old `di` value into slot `s`. A reader
+                // whose own destination is `s` is now already satisfied (it
+                // wanted that value, which the swap just placed); retire it.
+                // Every other reader re-reads it from `s`.
+                if (j == s) pending[j] = false else op[j] = .{ .copy = s };
+            }
+        }
+    }
+    return n_out;
+}
+
+/// Emit the IR for a single planned move against the live `base_addr`.
+fn emitMoveOp(state: *CompileState, base_addr: c.ir_ref, m: MoveOp) void {
+    const ctx = state.ctx;
+    switch (m) {
+        .box_i64 => |b| {
+            const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, b.slot * ValueLayout.value_size));
+            emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, b.ref);
+        },
+        .box_f64 => |b| {
+            const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, b.slot * ValueLayout.value_size));
+            emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.float_tag_const, b.ref);
+        },
+        .box_bool => |b| {
+            const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, b.slot * ValueLayout.value_size));
+            emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.boolean_tag_const, b.ref);
+        },
+        .copy => |cp| emitCopySlot(ctx, base_addr, cp.src, cp.dest),
+        .swap => |sw| emitSwapSlots(ctx, base_addr, sw.a, sw.b),
+    }
+}
+
 /// Write all pending symbolic stack entries to their physical memory slots.
 /// After this, every entry is materialized in the Value array at base_addr.
 fn flushToPhysicalStack(state: *CompileState, stack: []StackEntry, sp: usize) void {
-    const ctx = state.ctx;
     const base_addr = state.base_addr;
 
-    // Preserve raw aliases whose source slot would be overwritten by
-    // first-pass boxing before they get a chance to copy from it.
-    for (0..sp) |i| {
-        switch (stack[i]) {
-            .raw_at_slot => |s| {
-                if (s == i or s >= sp) continue;
-                switch (stack[s]) {
-                    .i64_ref, .f64_ref, .bool_ref => {
-                        emitCopySlot(ctx, base_addr, s, i);
-                        stack[i] = .{ .raw_at_slot = i };
-                    },
-                    else => {},
-                }
-            },
-            else => {},
-        }
-    }
+    var plan: [max_abstract_stack_depth]MoveOp = undefined;
+    const n = planFlushMoves(stack, sp, &plan);
+    for (plan[0..n]) |m| emitMoveOp(state, base_addr, m);
 
-    // First pass: handle non-raw entries and detect swap patterns.
+    // The abstract stack now mirrors physical layout. `quotation_body` and
+    // `row_region` entries are not materialized here, so leave them untouched.
     for (0..sp) |i| {
         switch (stack[i]) {
-            .i64_ref => |ref| {
-                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
-                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, ref);
-                stack[i] = .{ .raw_at_slot = i };
-            },
-            .f64_ref => |ref| {
-                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
-                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.float_tag_const, ref);
-                stack[i] = .{ .raw_at_slot = i };
-            },
-            .bool_ref => |ref| {
-                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
-                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.boolean_tag_const, ref);
-                stack[i] = .{ .raw_at_slot = i };
-            },
-            .quotation_body => {},
-            .raw_at_slot => {},
-            .row_region => {},
-        }
-    }
-
-    // Second pass: resolve raw_at_slot entries, using swap for cross-references.
-    for (0..sp) |i| {
-        switch (stack[i]) {
-            .raw_at_slot => |s| {
-                if (s != i) {
-                    // Check for swap pattern: stack[i] -> s and stack[s] -> i
-                    if (s < sp and stack[s].isAtSlot() and stack[s].slotIndex().? == i) {
-                        emitSwapSlots(ctx, base_addr, i, s);
-                        stack[i] = .{ .raw_at_slot = i };
-                        stack[s] = .{ .raw_at_slot = s };
-                    } else {
-                        emitCopySlot(ctx, base_addr, s, i);
-                        stack[i] = .{ .raw_at_slot = i };
-                    }
-                }
-            },
-            else => {},
+            .quotation_body, .row_region => {},
+            else => stack[i] = .{ .raw_at_slot = i },
         }
     }
 }
@@ -2871,48 +2963,21 @@ fn emitEpilogue(
 
     if (sp != output_count) return IrCodegenError.StackShapeMismatch;
 
-    // Two-pass epilogue: relocate `raw_at_slot` entries first so copies read original physical
-    // slot values before unboxing overwrites them.
+    // The epilogue cannot materialize quotation bodies or symbolic rows as a
+    // word result.
     for (0..sp) |i| {
         switch (stack[i]) {
-            .raw_at_slot => |s| {
-                if (s != i) {
-                    if (s < sp and stack[s].isAtSlot() and stack[s].slotIndex().? == i) {
-                        emitSwapSlots(ctx, base_addr, i, s);
-                        stack[s] = .{ .raw_at_slot = s };
-                    } else {
-                        emitCopySlot(ctx, base_addr, s, i);
-                    }
-                }
+            .quotation_body, .row_region => {
+                state.not_compilable_reason = .quotation_truthiness;
+                return IrCodegenError.NotCompilable;
             },
             else => {},
         }
     }
 
-    for (0..sp) |i| {
-        switch (stack[i]) {
-            .i64_ref => |ref| {
-                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
-                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.fixnum_tag_const, ref);
-            },
-            .f64_ref => |ref| {
-                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
-                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.float_tag_const, ref);
-            },
-            .bool_ref => |ref| {
-                const slot_byte_offset = c.ir_const_addr(ctx, i * ValueLayout.value_size);
-                const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-                emitBoxPayload(ctx, dest_addr, state.tag_offset_const, state.payload_offset_const, state.boolean_tag_const, ref);
-            },
-            .quotation_body, .row_region => {
-                state.not_compilable_reason = .quotation_truthiness;
-                return IrCodegenError.NotCompilable;
-            },
-            .raw_at_slot => {},
-        }
-    }
+    var plan: [max_abstract_stack_depth]MoveOp = undefined;
+    const n = planFlushMoves(stack, sp, &plan);
+    for (plan[0..n]) |m| emitMoveOp(state, base_addr, m);
 
     if (input_count > output_count) {
         const sp_delta = c.ir_const_addr(ctx, input_count - output_count);
@@ -9321,6 +9386,113 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
 // =============================================================================
 
 const testing = std.testing;
+
+/// Build a flush plan for `stack[0...sp]`, simulate it over an integer slot array where each slot
+/// starts holding its own index as a marker, then assert every output slot ends up holding the
+/// value its abstract entry designated.
+///
+/// This proves the plan never destroys a source before its dependents read it, independent of the
+/// emit order chosen.
+fn checkFlushPlan(stack: []const StackEntry, sp: usize) !void {
+    var plan: [max_abstract_stack_depth]MoveOp = undefined;
+    const n = planFlushMoves(stack, sp, &plan);
+
+    const box_base: i64 = 1000;
+    var slots: [max_abstract_stack_depth]i64 = undefined;
+    for (0..max_abstract_stack_depth) |i| slots[i] = @intCast(i);
+    for (plan[0..n]) |m| {
+        switch (m) {
+            .box_i64 => |b| slots[b.slot] = box_base + @as(i64, @intCast(b.slot)),
+            .box_f64 => |b| slots[b.slot] = box_base + @as(i64, @intCast(b.slot)),
+            .box_bool => |b| slots[b.slot] = box_base + @as(i64, @intCast(b.slot)),
+            .copy => |cp| slots[cp.dest] = slots[cp.src],
+            .swap => |sw| {
+                const t = slots[sw.a];
+                slots[sw.a] = slots[sw.b];
+                slots[sw.b] = t;
+            },
+        }
+    }
+
+    for (0..sp) |i| {
+        const expected: i64 = switch (stack[i]) {
+            .i64_ref, .f64_ref, .bool_ref => box_base + @as(i64, @intCast(i)),
+            .raw_at_slot => |s| @intCast(s),
+            .quotation_body, .row_region => continue,
+        };
+        try testing.expectEqual(expected, slots[i]);
+    }
+}
+
+test "flush planner: aliased copy is ordered before the boxing that clobbers it" {
+    // stack[1] aliases slot 0, which stack[0] will box over. The copy must run
+    // first. This is the shape the old hazard prepass existed to rescue.
+    const stack = [_]StackEntry{ .{ .i64_ref = 0 }, .{ .raw_at_slot = 0 } };
+    var plan: [max_abstract_stack_depth]MoveOp = undefined;
+    const n = planFlushMoves(&stack, 2, &plan);
+    try testing.expectEqual(@as(usize, 2), n);
+    try testing.expect(plan[0] == .copy);
+    try testing.expectEqual(@as(usize, 0), plan[0].copy.src);
+    try testing.expectEqual(@as(usize, 1), plan[0].copy.dest);
+    try testing.expect(plan[1] == .box_i64);
+    try testing.expectEqual(@as(usize, 0), plan[1].box_i64.slot);
+    try checkFlushPlan(&stack, 2);
+}
+
+test "flush planner: two-cycle resolves with a swap" {
+    const stack = [_]StackEntry{ .{ .raw_at_slot = 1 }, .{ .raw_at_slot = 0 } };
+    var plan: [max_abstract_stack_depth]MoveOp = undefined;
+    const n = planFlushMoves(&stack, 2, &plan);
+    try testing.expectEqual(@as(usize, 1), n);
+    try testing.expect(plan[0] == .swap);
+    try checkFlushPlan(&stack, 2);
+}
+
+test "flush planner: three-cycle (rot shape) is materialized correctly" {
+    // rot-shaped permutation: slot 0 <- 1, slot 1 <- 2, slot 2 <- 0. The old
+    // pass-order flush only special-cased two-cycles and corrupted this.
+    const stack = [_]StackEntry{ .{ .raw_at_slot = 1 }, .{ .raw_at_slot = 2 }, .{ .raw_at_slot = 0 } };
+    try checkFlushPlan(&stack, 3);
+}
+
+test "flush planner: source above the live top is read safely" {
+    // raw_at_slot 2 with sp == 1 reads a slot that is never a destination.
+    const stack = [_]StackEntry{ .{ .raw_at_slot = 2 }, .{ .raw_at_slot = 0 }, .{ .raw_at_slot = 0 } };
+    try checkFlushPlan(&stack, 1);
+}
+
+test "flush planner: independent boxes need no ordering" {
+    const stack = [_]StackEntry{ .{ .i64_ref = 0 }, .{ .f64_ref = 0 } };
+    var plan: [max_abstract_stack_depth]MoveOp = undefined;
+    const n = planFlushMoves(&stack, 2, &plan);
+    try testing.expectEqual(@as(usize, 2), n);
+    try checkFlushPlan(&stack, 2);
+}
+
+test "flush planner: identity-only stack emits no moves" {
+    const stack = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .raw_at_slot = 1 } };
+    var plan: [max_abstract_stack_depth]MoveOp = undefined;
+    const n = planFlushMoves(&stack, 2, &plan);
+    try testing.expectEqual(@as(usize, 0), n);
+    try checkFlushPlan(&stack, 2);
+}
+
+test "flush planner: fan-out duplicates one source into several slots" {
+    // slot 2 is identity; slots 0 and 1 both copy from slot 2.
+    const stack = [_]StackEntry{ .{ .raw_at_slot = 2 }, .{ .raw_at_slot = 2 }, .{ .raw_at_slot = 2 } };
+    try checkFlushPlan(&stack, 3);
+}
+
+test "flush planner: cycle mixed with a dependent box" {
+    // two-cycle on slots 0,1 plus a box at slot 2 that an alias at slot 3 reads first.
+    const stack = [_]StackEntry{
+        .{ .raw_at_slot = 1 },
+        .{ .raw_at_slot = 0 },
+        .{ .i64_ref = 0 },
+        .{ .raw_at_slot = 2 },
+    };
+    try checkFlushPlan(&stack, 4);
+}
 
 fn makeInstructions(comptime ops: anytype) [ops.len]Instruction {
     var instrs: [ops.len]Instruction = undefined;
