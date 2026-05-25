@@ -1,0 +1,4 @@
+\ Single naive build for --benchmark allocation isolation. Count kept small:
+\ the quadratic builder retains O(n^2) intermediate bytes for the eval.
+use "./string_assembly_common.1z" ;
+tiny-frag 4000 build-naive drop

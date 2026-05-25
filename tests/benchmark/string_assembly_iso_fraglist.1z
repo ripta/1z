@@ -1,0 +1,3 @@
+\ Single fragment-list build for --benchmark allocation isolation.
+use "./string_assembly_common.1z" ;
+tiny-frag 100000 build-fraglist drop

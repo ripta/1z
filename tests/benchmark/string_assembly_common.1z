@@ -1,0 +1,53 @@
+\ Shared definitions for the string-assembly benchmark. Definitions only; no
+\ top-level side effects, so this file is safe to `use` from the runnable
+\ benchmark files.
+\
+\ Three ways to assemble a string from many small fragments:
+\   1. naive  - pairwise #append into a growing accumulator (quadratic)
+\   2. fragment-list - V{ } + #push! per fragment, one #concat
+\   3. stream - print each fragment to a redirected sink via with-output-stream
+\
+\ Caveat on the stream variant: no in-memory stream exists yet, so we redirect
+\ to a pre-opened, block-buffered /dev/null stream. That carries the real
+\ vtable + output-stream dynamic-variable + ensureStreamOpen per-write overhead
+\ and a native incremental buffer copy, but adds fd-flush syscalls a true
+\ in-memory stream would not. It is therefore an upper bound on the cost of a
+\ real in-memory sink.
+
+use "strings" ;
+
+\ --- Fragment fixtures (bare definitions: evaluated once) ---
+
+tiny-frag:   "<td>" ;
+medium-frag: "<span>text-here</span>" ;
+
+\ --- Reused sink for the stream variant (opened once) ---
+
+null-stream: "/dev/null" write: stream-open dup block: set-buffering-mode ;
+
+\ --- Variant 1: naive pairwise #append (quadratic baseline) ---
+
+(naive-loop): ( f acc n -- acc ) [
+  dup 0 > [ 1 - [ over #append ] dip (naive-loop) ] [ drop nip ] if
+] ;
+
+\ Build a string of n copies of fragment f via repeated pairwise #append.
+build-naive: ( f n -- str ) [ "" swap (naive-loop) ] ;
+
+\ --- Variant 2: fragment-list (V{ } + #push!, single #concat) ---
+
+(frag-push-loop): ( f vec n -- vec ) [
+  dup 0 > [ 1 - [ over #push! ] dip (frag-push-loop) ] [ drop nip ] if
+] ;
+
+\ Collect n copies of fragment f into a vector, then concatenate once.
+build-fraglist: ( f n -- str ) [ V{ } swap (frag-push-loop) #concat ] ;
+
+\ --- Variant 3: stream (print to the reused /dev/null sink) ---
+
+(stream-print-loop): ( f n -- ) [
+  dup 0 > [ 1 - [ dup print ] dip (stream-print-loop) ] [ 2drop ] if
+] ;
+
+\ Print n copies of fragment f to the reused null sink under output redirection.
+build-stream: ( f n -- ) [ null-stream [ (stream-print-loop) ] with-output-stream ] ;

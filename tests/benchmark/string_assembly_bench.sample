@@ -1,0 +1,19 @@
+--- tiny fragment (4 bytes) ---
+Name                 Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+------------------   -----   -----------   ------------   -----------   ----------
+fraglist tiny 1k         1     31.398 ms      31.398 ms        13,023            6
+stream   tiny 1k         1     34.735 ms      34.735 ms        21,022            5
+fraglist tiny 10k        1    356.701 ms     356.701 ms       130,023            6
+stream   tiny 10k        1    363.909 ms     363.909 ms       210,022            5
+fraglist tiny 100k       1   3538.417 ms    3538.417 ms     1,300,023            6
+stream   tiny 100k       1   3508.401 ms    3508.401 ms     2,100,022            5
+
+--- medium fragment (22 bytes) ---
+Name                Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+-----------------   -----   -----------   ------------   -----------   ----------
+fraglist med 1k         1     29.116 ms      29.116 ms        13,023            6
+stream   med 1k         1     34.231 ms      34.231 ms        21,022            5
+fraglist med 10k        1    330.658 ms     330.658 ms       130,023            6
+stream   med 10k        1    347.048 ms     347.048 ms       210,022            5
+fraglist med 100k       1   3355.503 ms    3355.503 ms     1,300,023            6
+stream   med 100k       1   3570.514 ms    3570.514 ms     2,100,022            5

@@ -1,0 +1,7 @@
+--- naive pairwise #append (quadratic) ---
+Name            Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+-------------   -----   ----------   ------------   -----------   ----------
+naive tiny 1k       1    33.340 ms      33.340 ms        13,018            6
+naive tiny 2k       1    64.266 ms      64.266 ms        26,018            6
+naive tiny 4k       1   137.376 ms     137.376 ms        52,018            6
+naive tiny 8k       1   284.489 ms     284.489 ms       104,018            6

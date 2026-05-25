@@ -1,0 +1,19 @@
+\ Benchmark: the quadratic naive string builder (pairwise #append).
+\
+\ Counts are kept small: pairwise #append re-copies the growing accumulator on
+\ every fragment, and each intermediate string is retained for the eval, so the
+\ bytes copied and held grow as O(n^2). The interpreter's per-fragment loop cost
+\ dominates wall time at these counts, so the quadratic shows up mainly in
+\ retained bytes; run under `run --benchmark=verbose` to see total bytes grow
+\ quadratically as the count doubles.
+
+use "./string_assembly_common.1z" ;
+
+"--- naive pairwise #append (quadratic) ---" print-line
+
+[
+  "naive tiny 1k"   [ tiny-frag 1000 build-naive drop ] benchmark-run
+  "naive tiny 2k"   [ tiny-frag 2000 build-naive drop ] benchmark-run
+  "naive tiny 4k"   [ tiny-frag 4000 build-naive drop ] benchmark-run
+  "naive tiny 8k"   [ tiny-frag 8000 build-naive drop ] benchmark-run
+] run-benchmarks

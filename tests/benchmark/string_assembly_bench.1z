@@ -1,0 +1,34 @@
+\ Benchmark: assembling a string from many small fragments, linear variants.
+\
+\   fraglist - V{ } + #push! per fragment, one #concat (copies payload once,
+\              creates a single result string)
+\   stream   - print each fragment to a redirected, block-buffered /dev/null
+\              sink (proxy for an in-memory stream; upper bound, see common file)
+\
+\ Each case runs once via benchmark-run, which reports per-run instruction
+\ counts, allocations, and bytes alongside elapsed time. The quadratic naive
+\ variant is measured separately (string_assembly_naive.1z).
+
+use "./string_assembly_common.1z" ;
+
+"--- tiny fragment (4 bytes) ---" print-line
+
+[
+  "fraglist tiny 1k"     [ tiny-frag   1000 build-fraglist drop ] benchmark-run
+  "stream   tiny 1k"     [ tiny-frag   1000 build-stream        ] benchmark-run
+  "fraglist tiny 10k"    [ tiny-frag  10000 build-fraglist drop ] benchmark-run
+  "stream   tiny 10k"    [ tiny-frag  10000 build-stream        ] benchmark-run
+  "fraglist tiny 100k"   [ tiny-frag 100000 build-fraglist drop ] benchmark-run
+  "stream   tiny 100k"   [ tiny-frag 100000 build-stream        ] benchmark-run
+] run-benchmarks
+
+nl "--- medium fragment (22 bytes) ---" print-line
+
+[
+  "fraglist med 1k"      [ medium-frag   1000 build-fraglist drop ] benchmark-run
+  "stream   med 1k"      [ medium-frag   1000 build-stream        ] benchmark-run
+  "fraglist med 10k"     [ medium-frag  10000 build-fraglist drop ] benchmark-run
+  "stream   med 10k"     [ medium-frag  10000 build-stream        ] benchmark-run
+  "fraglist med 100k"    [ medium-frag 100000 build-fraglist drop ] benchmark-run
+  "stream   med 100k"    [ medium-frag 100000 build-stream        ] benchmark-run
+] run-benchmarks
