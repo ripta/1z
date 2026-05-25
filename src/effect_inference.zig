@@ -566,20 +566,29 @@ pub const InferenceEngine = struct {
         var uncertain_is_polymorphic: bool = false;
         var dead_code: bool = false;
         var dead_code_warned: bool = false;
+        var dead_code_terminal: ?[]const u8 = null;
 
         for (instructions) |instr| {
             if (dead_code) {
                 if (!dead_code_warned) {
+                    const message = if (dead_code_terminal) |terminal|
+                        try std.fmt.allocPrint(
+                            self.allocator,
+                            "dead code: unreachable after call to never-returns word '{s}'",
+                            .{terminal},
+                        )
+                    else
+                        try std.fmt.allocPrint(
+                            self.allocator,
+                            "dead code: unreachable after guaranteed underflow",
+                            .{},
+                        );
                     try self.emitDiagnostic(.{
                         .word_name = caller.word_name,
                         .source_file = caller.source_file,
                         .source_line = instr.line,
                         .severity = .warning,
-                        .message = try std.fmt.allocPrint(
-                            self.allocator,
-                            "dead code: unreachable after guaranteed underflow",
-                            .{},
-                        ),
+                        .message = message,
                     });
                     dead_code_warned = true;
                 }
@@ -711,6 +720,15 @@ pub const InferenceEngine = struct {
                             continue;
                         }
                     }
+
+                    for (wd.markers) |mk| {
+                        if (markers.isNeverReturnsMarker(mk)) {
+                            dead_code = true;
+                            dead_code_terminal = name;
+                            break;
+                        }
+                    }
+                    if (dead_code) continue;
 
                     if (isDynamicCall(name)) {
                         if (wd.stack_effect) |eff| {

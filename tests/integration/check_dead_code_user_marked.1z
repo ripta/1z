@@ -1,0 +1,3 @@
+\ A user word declared never-returns makes following code unreachable
+fatal-error: ( -- ) never-returns [ 0 sys-exit ] ;
+caller: ( -- ) [ fatal-error 99 drop ] ;

@@ -1,0 +1,2 @@
+\ Code after sys-exit is unreachable
+after-exit: ( -- ) [ 0 sys-exit 42 drop ] ;
