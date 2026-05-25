@@ -21,7 +21,7 @@ Global options (available to all subcommands):
   --prelude=PATH          Override prelude file path
 
 Execution options (run, eval, repl, check):
-  --threads=N             Number of worker threads (default: CPU count)
+  --threads=N|auto        Worker threads, or 'auto' to detect (default: auto)
   (see `1z <subcommand> --help` for more)
 
 Bare forms:

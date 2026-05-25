@@ -446,6 +446,10 @@ fn parseExecutionFlag(
     }
     if (std.mem.startsWith(u8, arg, "--threads=")) {
         const value = arg["--threads=".len..];
+        if (std.mem.eql(u8, value, "auto")) {
+            state.worker_count = 0; // 0 means auto-detect from CPU/cgroup count
+            return .consumed;
+        }
         const n = std.fmt.parseUnsigned(usize, value, 10) catch {
             err_writer.print("Error: invalid value for --threads: '{s}'\n", .{value}) catch {};
             err_writer.flush() catch {};
@@ -522,7 +526,7 @@ fn printUsage() void {
         \\  --prelude=PATH          Override prelude file path
         \\
         \\Execution options (run, eval, repl, check):
-        \\  --threads=N             Number of worker threads (default: CPU count)
+        \\  --threads=N|auto        Worker threads, or 'auto' to detect (default: auto)
         \\  (see `1z <subcommand> --help` for more)
         \\
         \\Bare forms:
@@ -544,7 +548,7 @@ fn printUsage() void {
 
 const execution_flags_help =
     \\  --show-stack              Print the stack after execution
-    \\  --threads=N               Number of worker threads (default: CPU count)
+    \\  --threads=N|auto          Worker threads, or 'auto' to detect (default: auto)
     \\  --debug                   Start in the interactive debugger
     \\  --break=WORD              Set a breakpoint on WORD (implies --debug)
     \\  --allow-all-recursion     Suppress non-tail recursion warnings
@@ -619,7 +623,7 @@ fn printCheckHelp() void {
     w.writeAll("The following execution flags are NOT accepted by `check`:\n") catch {};
     w.writeAll("  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile, --profile-top=N\n\n") catch {};
     w.writeAll("Execution options:\n") catch {};
-    w.writeAll("  --threads=N               Number of worker threads (default: CPU count)\n\n") catch {};
+    w.writeAll("  --threads=N|auto          Worker threads, or 'auto' to detect (default: auto)\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};

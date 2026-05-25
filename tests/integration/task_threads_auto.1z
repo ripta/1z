@@ -1,0 +1,13 @@
+use "testing" ;
+
+\ Verifies the CLI accepts `--threads=auto`, which maps to the same
+\ auto-detected worker count as omitting the flag. Spawning tasks in a
+\ task-scope forces the worker pool to be sized from the resolved count.
+
+[
+  10 [
+    [ 1 2 + drop ] spawn drop
+  ] times
+] task-scope
+
+t "auto-threaded tasks finished" assert-true

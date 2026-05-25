@@ -6,7 +6,7 @@ The following execution flags are NOT accepted by `check`:
   --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile, --profile-top=N
 
 Execution options:
-  --threads=N               Number of worker threads (default: CPU count)
+  --threads=N|auto          Worker threads, or 'auto' to detect (default: auto)
 
 Global options:
   --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
