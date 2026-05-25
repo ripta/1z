@@ -1,0 +1,4 @@
+\ A >name method returning the wrong type fails --check
+
+>fixnum: ( x -- n ) generic [ drop 0 ] ;
+>fixnum: method{ string } [ drop "wrong" ] ;

@@ -452,6 +452,11 @@ pub const InferenceEngine = struct {
 
                 if (isGeneric(&word_def)) {
                     try self.validateDispatchEntries(name, inferred_for_delta, &word_def, caller_info);
+                    if (inferred == .known) {
+                        if (self.conversionTarget(name, &word_def)) |target| {
+                            try self.checkConversionOutput(name, &word_def, target, &body_out_stack, null);
+                        }
+                    }
                 }
 
                 if (word_def.stack_effect) |eff| {
@@ -1194,12 +1199,16 @@ pub const InferenceEngine = struct {
         const dispatch_entries = try self.dispatch_table.entriesForDispatchId(word_def.dispatch_id, self.allocator);
         defer self.allocator.free(dispatch_entries);
 
+        const conv_target = self.conversionTarget(name, word_def);
+
         for (dispatch_entries) |pair| {
             const entry_instrs = switch (pair.entry.body) {
                 .quotation => |instrs| instrs,
                 .native_fn, .host_callback => continue,
             };
-            const entry_result = try self.inferInstructions(entry_instrs, caller, null);
+            var entry_out: std.ArrayListUnmanaged(StackEntry) = .{};
+            defer entry_out.deinit(self.allocator);
+            const entry_result = try self.inferInstructions(entry_instrs, caller, &entry_out);
             if (base_result == .known and entry_result == .known) {
                 if (base_result.known != entry_result.known) {
                     try self.emitDiagnostic(.{
@@ -1215,7 +1224,79 @@ pub const InferenceEngine = struct {
                     });
                 }
             }
+            if (conv_target) |target| {
+                if (entry_result == .known) {
+                    try self.checkConversionOutput(name, word_def, target, &entry_out, self.descriptorName(pair.key.type_a));
+                }
+            }
         }
+    }
+
+    /// Convention-derived output type for a `>name` conversion word, or null
+    /// when the word is not subject to the check. A `>name` word is expected to
+    /// return a value of type `name`. The check is skipped unless the suffix
+    /// names a known builtin type and the word declares no explicit typed top
+    /// output, since an explicit annotation is the user's deliberate override.
+    fn conversionTarget(self: *const InferenceEngine, name: []const u8, word_def: *const WordDefinition) ?*const TypeValue {
+        if (self.type_check_mode == .off) return null;
+        if (name.len < 2 or name[0] != '>') return null;
+        if (!self.isInCheckedSource(word_def.source_file)) return null;
+
+        if (word_def.stack_effect) |eff| {
+            if (eff.outputs.len > 0) {
+                if (eff.outputs[eff.outputs.len - 1].type_annotation != null) return null;
+            }
+        }
+
+        const btv = self.builtin_type_values orelse return null;
+        return btv.get(name[1..]);
+    }
+
+    /// Compare the inferred top-of-stack output of a `>name` conversion body
+    /// against the convention-derived target type and emit a diagnostic on
+    /// mismatch. `method_type` is the dispatching type name for a method entry,
+    /// or null for the base body.
+    fn checkConversionOutput(
+        self: *InferenceEngine,
+        name: []const u8,
+        word_def: *const WordDefinition,
+        target: *const TypeValue,
+        out_stack: *const std.ArrayListUnmanaged(StackEntry),
+        method_type: ?[]const u8,
+    ) Allocator.Error!void {
+        if (out_stack.items.len == 0) return;
+        const top = out_stack.items[out_stack.items.len - 1];
+
+        const mismatch_actual: ?[]const u8 = switch (top) {
+            .typed => |typed| if (!typed.matches(target, self.any_type_sentinel)) typed.tv.name else null,
+            .typed_union => |tu| if (!tu.allMatch(target, self.any_type_sentinel)) blk: {
+                break :blk tu.format(self.allocator) catch null;
+            } else null,
+            .quotation, .other => null,
+        };
+
+        const actual_name = mismatch_actual orelse return;
+
+        const severity: Severity = if (self.type_check_mode == .warning) .warning else .err;
+        const message = if (method_type) |mt|
+            try std.fmt.allocPrint(
+                self.allocator,
+                "{s} is declared to return {s}, but method{{ {s} }} returns {s} instead",
+                .{ name, target.name, mt, actual_name },
+            )
+        else
+            try std.fmt.allocPrint(
+                self.allocator,
+                "{s} is declared to return {s}, but its body returns {s} instead",
+                .{ name, target.name, actual_name },
+            );
+        try self.emitDiagnostic(.{
+            .word_name = name,
+            .source_file = word_def.source_file,
+            .source_line = word_def.source_line,
+            .severity = severity,
+            .message = message,
+        });
     }
 
     fn checkInputTypes(

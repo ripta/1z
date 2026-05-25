@@ -1,0 +1,4 @@
+\ An explicit typed stack-effect output overrides the >name convention
+
+>fixnum: ( x -- s: string ) generic [ drop "ok" ] ;
+>fixnum: method{ string } [ drop "wrong" ] ;

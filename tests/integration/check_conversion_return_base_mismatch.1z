@@ -1,0 +1,4 @@
+\ The base body of a >name generic word is checked too
+
+>fixnum: ( x -- n ) generic [ drop "wrong" ] ;
+>fixnum: method{ string } [ drop 1 ] ;

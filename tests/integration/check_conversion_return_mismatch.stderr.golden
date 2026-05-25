@@ -1,0 +1,1 @@
+tests/integration/check_conversion_return_mismatch.1z:3: err: >fixnum: >fixnum is declared to return fixnum, but method{ string } returns string instead
