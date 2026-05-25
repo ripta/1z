@@ -1270,8 +1270,7 @@ fn emitPolymorphicBinaryArith(
     c._ir_IF_TRUE(ctx, if_numeric);
     {
         // Destination address
-        const dest_byte_offset = c.ir_const_addr(ctx, dest_slot * ValueLayout.value_size);
-        const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, dest_byte_offset);
+        const dest_addr = liveSlotAddr(state, dest_slot);
 
         // Branch: both fixnum?
         const both_fixnum = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), va.is_fixnum, vb.is_fixnum);
@@ -2498,8 +2497,7 @@ fn requireI64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
         .i64_ref => |ref| ref,
         .raw_at_slot => |s| {
             const ctx = state.ctx;
-            const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
-            const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_byte_offset);
+            const elem_addr = liveSlotAddr(state, s);
             emitTagCheck(ctx, elem_addr, state.fixnum_tag_const, state.tag_offset_const, state.bail_status);
             return emitUnboxI64(ctx, elem_addr, state.payload_offset_const);
         },
@@ -2517,8 +2515,7 @@ fn requireF64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
         .f64_ref => |ref| ref,
         .raw_at_slot => |s| {
             const ctx = state.ctx;
-            const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
-            const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_byte_offset);
+            const elem_addr = liveSlotAddr(state, s);
             emitTagCheck(ctx, elem_addr, state.float_tag_const, state.tag_offset_const, state.bail_status);
             return emitUnboxF64(ctx, elem_addr, state.payload_offset_const);
         },
@@ -2665,11 +2662,11 @@ fn reloadBaseAfterDynamicCall(state: *CompileState) void {
     const new_sp_val = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
     const one_const = c.ir_const_addr(ctx, 1);
     const adjusted = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), new_sp_val, one_const);
-    const byte_off = c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), adjusted, state.value_size_const);
-    const new_base = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.items_ptr, byte_off);
-    state.base_addr = new_base;
     state.base_idx = adjusted;
     state.sp_val = new_sp_val;
+    // Derive the base from a fresh items_ptr load rather than the cached
+    // state.items_ptr: the dynamic call may have relocated the value buffer.
+    refreshCachedStackPointer(state);
 }
 
 /// Check whether any stack entry in 0..sp is a row_region.
@@ -2938,8 +2935,7 @@ fn emitEpilogue(
 fn emitRetainSlot(state: *CompileState, slot: usize) void {
     if (state.retain_slot_fn == c.IR_UNUSED) return;
     const ctx = state.ctx;
-    const slot_off = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
-    const slot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_off);
+    const slot_addr = liveSlotAddr(state, slot);
     _ = c._ir_CALL_1(ctx, c.IR_I32, state.retain_slot_fn, slot_addr);
 }
 
@@ -2949,8 +2945,7 @@ fn emitRetainSlot(state: *CompileState, slot: usize) void {
 fn emitReleaseSlot(state: *CompileState, slot: usize) void {
     if (state.release_slot_fn == c.IR_UNUSED) return;
     const ctx = state.ctx;
-    const slot_off = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
-    const slot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_off);
+    const slot_addr = liveSlotAddr(state, slot);
     _ = c._ir_CALL_1(ctx, c.IR_I32, state.release_slot_fn, slot_addr);
 }
 
@@ -3984,8 +3979,7 @@ fn compileInstructions(
                     state.not_compilable_reason = .non_serializable_literal;
                     return IrCodegenError.NotCompilable;
                 } else {
-                    const sp_byte_offset = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
-                    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, sp_byte_offset);
+                    const dest_addr = liveSlotAddr(state, sp.*);
                     emitPushValue(ctx, &val, dest_addr);
                     // A literal that carries a refcounted backing (a `.vector`
                     // or `.mutable_map`, or an `.array`/`.hash`/`.set` holding
@@ -4370,8 +4364,7 @@ fn compileInstructions(
                         },
                         .raw_at_slot => |s| {
                             {
-                                const slot_byte_offset = c.ir_const_addr(ctx, s * ValueLayout.value_size);
-                                const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_byte_offset);
+                                const elem_addr = liveSlotAddr(state, s);
 
                                 // Check tag is quotation
                                 const quotation_tag_const = emitTagConst(ctx, .quotation);
@@ -4666,8 +4659,7 @@ fn compileInstructions(
                         },
                         .raw_at_slot => |quot_slot| {
                             // Dynamic quotation: load code_ptr before rearranging.
-                            const quot_byte_offset = c.ir_const_addr(ctx, quot_slot * ValueLayout.value_size);
-                            const quot_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, quot_byte_offset);
+                            const quot_addr = liveSlotAddr(state, quot_slot);
 
                             // Tag-check: must be a quotation.
                             const quotation_tag_const = emitTagConst(ctx, .quotation);
@@ -7952,19 +7944,53 @@ fn emitCallbackPostCheck(
     refreshCachedStackPointer(state);
 }
 
+/// Fresh items_ptr and the base address derived from it.
+const LiveBase = struct {
+    items_ptr: c.ir_ref,
+    base_addr: c.ir_ref,
+};
+
+/// Derive the physical stack base address from the live JitContext.
+///
+/// Physical stack addresses are derived views of the live JitContext, never
+/// long-lived state: the value buffer can move whenever a nested interpreted or
+/// compiled call pushes onto the shared stack and triggers an ArrayList
+/// reallocation. This helper emits a fresh LOAD of items_ptr from jit_ctx_ptr
+/// and computes `items_ptr + base_idx * value_size`, returning the fresh
+/// items_ptr alongside the base address so callers can cache both. IR treats
+/// every CALL as a memory-clobbering barrier, so the fresh LOAD is never CSE'd
+/// across a preceding call; within a barrier-free region IR folds repeated
+/// loads, so re-deriving more than once per region costs nothing.
+///
+/// The addressing contract: after any boundary that can execute arbitrary 1z
+/// code, the cached base address must be re-derived from this helper before the
+/// next physical slot access.
+fn liveBaseAddr(state: *CompileState) LiveBase {
+    const ctx = state.ctx;
+    const fresh_items_ptr = c._ir_LOAD(ctx, c.IR_ADDR, state.jit_ctx_ptr);
+    const base_byte_offset = c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), state.base_idx, state.value_size_const);
+    const base_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), fresh_items_ptr, base_byte_offset);
+    return .{ .items_ptr = fresh_items_ptr, .base_addr = base_addr };
+}
+
+/// Address of physical stack slot `slot` relative to the region-current base:
+/// `base_addr + slot * value_size`, which is the materialized form of
+/// `items_ptr + (base_idx + slot) * value_size`. Centralizes the
+/// slot-byte-offset add duplicated across codegen. The base address is whatever
+/// was last derived from liveBaseAddr for the current barrier-free region.
+fn liveSlotAddr(state: *CompileState, slot: usize) c.ir_ref {
+    const slot_byte_offset = c.ir_const_addr(state.ctx, slot * ValueLayout.value_size);
+    return c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_byte_offset);
+}
+
 /// Re-LOAD items_ptr from the JitContext struct and recompute base_addr,
 /// updating state.items_ptr and state.base_addr so subsequent emissions use
 /// the fresh refs. Call this immediately after any IR call that may have
 /// moved ctx.stack.items (jitRefreshStack or jitEnsureStackCapacity).
-/// IR treats calls as memory-clobbering barriers, so the fresh LOAD will
-/// not be CSE'd across the preceding call.
 fn refreshCachedStackPointer(state: *CompileState) void {
-    const ctx = state.ctx;
-    const fresh_items_ptr = c._ir_LOAD(ctx, c.IR_ADDR, state.jit_ctx_ptr);
-    const base_byte_offset = c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), state.base_idx, state.value_size_const);
-    const fresh_base_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), fresh_items_ptr, base_byte_offset);
-    state.items_ptr = fresh_items_ptr;
-    state.base_addr = fresh_base_addr;
+    const live = liveBaseAddr(state);
+    state.items_ptr = live.items_ptr;
+    state.base_addr = live.base_addr;
 }
 
 /// Emit a safepoint call at the current IR position. Loads the ctx field
@@ -9434,6 +9460,164 @@ test "compiled direct call preserves aliased lower stack values" {
     var out: i64 = undefined;
     try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{ 2, 4 }, &out));
     try testing.expectEqual(@as(i64, 10), out);
+}
+
+/// Run a compiled function against a real interpreter Context whose value
+/// stack can actually relocate. Inputs must already be pushed onto ctx.stack;
+/// the JitContext points at the live stack pointers so jitEnsureStackCapacity
+/// reallocation during execution is observed through the same JitContext the
+/// generated code reads. Returns the status and, on success, the top-of-stack
+/// fixnum read back from the (possibly relocated) buffer.
+fn runOnContext(func: CompiledFn, ctx: *Context, result: *i64) i32 {
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = @ptrCast(ctx),
+    };
+    const status = func(&jit_ctx);
+    const len = ctx.stack.items.items.len;
+    if (status == 0 and len > 0) {
+        result.* = ctx.stack.items.items[len - 1].fixnum;
+    }
+    return status;
+}
+
+test "relocation across a direct compiled call preserves a lower-stack alias" {
+    // The `1 - over swap (callee) *` shape keeps `base` aliased at slot 0 while
+    // the callee runs. Here the callee forces a real stack reallocation in its
+    // prologue (jitEnsureStackCapacity), so the value buffer moves mid-call. The
+    // caller must read its preserved slot-0 alias from the relocated buffer
+    // after the call boundary, which only holds if the base address is
+    // re-derived from the live JitContext rather than a stale cached pointer.
+    var dispatch = JitDispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    // Callee: ( a b -- a+b ), but with a deep transient stack so its prologue
+    // capacity check must grow (and relocate) the shared value buffer.
+    const deep: usize = 30;
+    var callee_ops: [2 * deep + 1]Instruction = undefined;
+    for (0..deep) |i| callee_ops[i] = .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 };
+    for (0..deep) |i| callee_ops[deep + i] = .{ .op = .{ .call_word = "drop" }, .line = 1 };
+    callee_ops[2 * deep] = .{ .op = .{ .call_word = "+" }, .line = 1 };
+
+    const callee = try compileWord(&callee_ops, 2, 1, null, null, null, null, null);
+    const callee_id = try dispatch.assignId("deepsum");
+    dispatch.update(callee_id, callee.code_ptr, callee.jit_buf, callee.peak_stack_depth);
+
+    const ResolverState = struct { callee_id: u32 };
+    var resolver_state = ResolverState{ .callee_id = callee_id };
+    const Resolver = struct {
+        fn resolve(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+            const state: *ResolverState = @ptrCast(@alignCast(user_data));
+            if (!std.mem.eql(u8, name, "deepsum")) return null;
+            return .{ .word_id = state.callee_id, .input_count = 2, .output_count = 1 };
+        }
+    };
+    const resolver = WordResolver{
+        .resolve = &Resolver.resolve,
+        .user_data = @ptrCast(&resolver_state),
+        .dispatch_table_ptr = @ptrCast(&dispatch),
+    };
+
+    const caller_instrs = makeInstructions(.{ @as(i64, 1), "-", "over", "swap", "deepsum", "*" });
+    const caller = try compileWord(&caller_instrs, 2, 1, resolver, null, null, null, null);
+    defer caller.jit_buf.deinit();
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try ctx.stack.push(.{ .fixnum = 4 });
+    // Reserve enough that the caller's own prologue does not relocate, so the
+    // only relocation happens inside the deep callee's prologue.
+    try ctx.stack.items.ensureTotalCapacityPrecise(ctx.allocator, 16);
+
+    const func: CompiledFn = @ptrCast(@alignCast(caller.code_ptr));
+    var out: i64 = undefined;
+    try testing.expectEqual(@as(i32, 0), runOnContext(func, &ctx, &out));
+    // 2 * (2 + (4 - 1)) = 2 * 5 = 10
+    try testing.expectEqual(@as(i64, 10), out);
+}
+
+test "relocation across a recursive compiled call preserves a lower-stack alias" {
+    // Non-tail recursive factorial: each frame keeps `n` aliased on its slot
+    // for the trailing `*`, across a recursive dispatch call. A tight starting
+    // capacity forces repeated reallocations as the recursion deepens, so every
+    // frame must re-derive its base address from the live JitContext after the
+    // recursive call returns.
+    var dispatch = JitDispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    const fact_id = try dispatch.assignId("fact");
+
+    const ResolverState = struct { fact_id: u32 };
+    var resolver_state = ResolverState{ .fact_id = fact_id };
+    const Resolver = struct {
+        fn resolve(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+            const state: *ResolverState = @ptrCast(@alignCast(user_data));
+            if (!std.mem.eql(u8, name, "fact")) return null;
+            return .{ .word_id = state.fact_id, .input_count = 1, .output_count = 1 };
+        }
+    };
+    const resolver = WordResolver{
+        .resolve = &Resolver.resolve,
+        .user_data = @ptrCast(&resolver_state),
+        .dispatch_table_ptr = @ptrCast(&dispatch),
+    };
+
+    const true_body = [_]Instruction{
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = "-" }, .line = 1 },
+        .{ .op = .{ .call_word = "fact" }, .line = 1 },
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    };
+    const false_body = [_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+    };
+    const fact_ops = [_]Instruction{
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = ">" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &true_body } } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &false_body } } }, .line = 1 },
+        .{ .op = .{ .call_word = "if" }, .line = 1 },
+    };
+
+    const compiled = try compileWord(&fact_ops, 1, 1, resolver, null, null, null, null);
+    dispatch.update(fact_id, compiled.code_ptr, compiled.jit_buf, compiled.peak_stack_depth);
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.stack.push(.{ .fixnum = 5 });
+    // Shrink to a tight capacity so the recursion must reallocate as it deepens.
+    ctx.stack.items.shrinkAndFree(ctx.allocator, 1);
+
+    const func: CompiledFn = @ptrCast(@alignCast(compiled.code_ptr));
+    var out: i64 = undefined;
+    try testing.expectEqual(@as(i32, 0), runOnContext(func, &ctx, &out));
+    try testing.expectEqual(@as(i64, 120), out);
+}
+
+test "no relocation: swap arithmetic on a real context stays correct" {
+    // Non-hazard regression guard: with ample capacity the stack never moves,
+    // so the live-derivation change must reproduce the existing swap behavior.
+    const instrs = makeInstructions(.{ "swap", "-" });
+    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.stack.push(.{ .fixnum = 10 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try ctx.stack.items.ensureTotalCapacityPrecise(ctx.allocator, 16);
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var out: i64 = undefined;
+    try testing.expectEqual(@as(i32, 0), runOnContext(func, &ctx, &out));
+    // swap [10 3] -> [3 10], then - is (a b -- a-b) -> 3 - 10 = -7
+    try testing.expectEqual(@as(i64, -7), out);
 }
 
 test "overflow bails out on non-polymorphic path" {
