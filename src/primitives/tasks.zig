@@ -19,6 +19,7 @@ const Quotation = value_mod.Quotation;
 const stack_effect_mod = @import("../stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
+const container_limits = @import("../container_limits.zig");
 
 // Keep extra headroom so overflow handling can still unwind and materialize an
 // error object after detecting that a task exhausted its native stack.
@@ -159,7 +160,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     // there by `spawn`'s least-loaded selection.
     const n: usize = blk: {
         if (ctx.worker_count > 0) break :blk ctx.worker_count;
-        break :blk std.Thread.getCpuCount() catch 1;
+        break :blk container_limits.detectCpus(ctx.trace.trace_container_detect).count;
     };
 
     var pool: WorkerPool = undefined;

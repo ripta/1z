@@ -223,6 +223,22 @@ const GlobalFlags = struct {
     }
 };
 
+/// Resolve the default memory cap when --max-memory was not given on the CLI.
+/// ONEZ_MAX_MEMORY wins over cgroup detection; cgroup detection wins over the
+/// 256 MiB hard default already in `max_memory_bytes`.
+fn resolveMemoryDefault(global: *GlobalFlags, trace_enabled: bool) void {
+    if (global.cli_set_max_memory) return;
+    if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
+        if (memory_limit.parseSize(env_val)) |bytes| {
+            global.max_memory_bytes = bytes;
+        }
+        // env var present: honor the user's intent, skip cgroup detection
+        return;
+    }
+    const det = container_limits.detectMemory(trace_enabled);
+    if (det.source != .fallback) global.max_memory_bytes = det.cap;
+}
+
 /// Shared state for flags that affect the runtime environment regardless of which subcommand is running.
 const ExecutionFlags = struct {
     show_stack: bool = false,
@@ -716,13 +732,7 @@ const ExecutionContext = struct {
         exec: *ExecutionFlags,
         err_writer: anytype,
     ) !*ExecutionContext {
-        if (!global.cli_set_max_memory) {
-            if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
-                if (memory_limit.parseSize(env_val)) |bytes| {
-                    global.max_memory_bytes = bytes;
-                }
-            }
-        }
+        resolveMemoryDefault(global, exec.trace_config.trace_container_detect);
         if (!exec.cli_set_compile) {
             if (std.posix.getenv("ONEZ_COMPILE")) |env_val| {
                 if (std.mem.eql(u8, env_val, "off")) {
@@ -1453,14 +1463,7 @@ fn handleFmt(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         };
     }
 
-    if (!global.cli_set_max_memory) {
-        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
-            if (memory_limit.parseSize(env_val)) |bytes| {
-                global.max_memory_bytes = bytes;
-            }
-            // Silently ignore invalid env var values.
-        }
-    }
+    resolveMemoryDefault(&global, false);
 
     var mem_limit = MemoryLimitAllocator.init(base_allocator, global.max_memory_bytes);
     const allocator = mem_limit.allocator();
@@ -1622,13 +1625,7 @@ fn handleLint(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         };
     }
 
-    if (!global.cli_set_max_memory) {
-        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
-            if (memory_limit.parseSize(env_val)) |bytes| {
-                global.max_memory_bytes = bytes;
-            }
-        }
-    }
+    resolveMemoryDefault(&global, false);
 
     if (paths.items.len == 0) {
         err_writer.writeAll("Usage: 1z lint [options] <file|dir...>\n") catch {};
@@ -2088,13 +2085,7 @@ fn handleHighlight(base_allocator: std.mem.Allocator, args: []const []const u8) 
         file_path = arg;
     }
 
-    if (!global.cli_set_max_memory) {
-        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
-            if (memory_limit.parseSize(env_val)) |bytes| {
-                global.max_memory_bytes = bytes;
-            }
-        }
-    }
+    resolveMemoryDefault(&global, false);
 
     // program_args: [path-or-"-", "ansi"/"html", theme-path-or-""]
     const path_arg = file_path orelse "-";
@@ -2235,15 +2226,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         return 1;
     }
 
-    // Apply ONEZ_MAX_MEMORY fallback if --max-memory was not set.
-    if (!global.cli_set_max_memory) {
-        if (std.posix.getenv("ONEZ_MAX_MEMORY")) |env_val| {
-            if (memory_limit.parseSize(env_val)) |bytes| {
-                global.max_memory_bytes = bytes;
-            }
-            // Silently ignore invalid env var values.
-        }
-    }
+    resolveMemoryDefault(&global, false);
 
     // Wrap the allocator in a memory limit for the rest of the build.
     var mem_limit = MemoryLimitAllocator.init(base_allocator, global.max_memory_bytes);
