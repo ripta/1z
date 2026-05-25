@@ -1,0 +1,2 @@
+\ A branch whose arms each end in terminal branches is itself terminal
+nested: ( -- ) [ t [ t [ 0 sys-exit ] [ 1 sys-exit ] if ] [ 2 sys-exit ] if 99 drop ] ;

@@ -1,0 +1,1 @@
+tests/integration/check_dead_code_concrete_branch.1z:4: warning: caller: dead code: unreachable after branch where every arm is terminal

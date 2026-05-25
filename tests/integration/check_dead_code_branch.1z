@@ -1,0 +1,2 @@
+\ Code after a branch whose every arm is terminal is unreachable
+both-exit: ( -- ) [ t [ 0 sys-exit ] [ 1 sys-exit ] if 42 drop ] ;

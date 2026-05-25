@@ -1,0 +1,3 @@
+\ A single-arm conditional (when) has an implicit skip path, so code after a
+\ terminal arm is still reachable and must not be flagged as dead code.
+when-ok: ( -- ) [ t [ 0 sys-exit ] when 42 drop ] ;

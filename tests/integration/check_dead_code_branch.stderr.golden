@@ -1,0 +1,1 @@
+tests/integration/check_dead_code_branch.1z:2: warning: both-exit: dead code: unreachable after branch where every arm is terminal

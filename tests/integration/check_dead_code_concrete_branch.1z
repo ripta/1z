@@ -1,0 +1,4 @@
+\ A user-defined concrete (non-row-poly) branch combinator with two arms:
+\ when both arms are terminal, code after the call is unreachable.
+my-branch: branch-combinator ( ? q1 q2 -- ) [ drop drop drop ] ;
+caller: ( -- ) [ t [ 0 sys-exit ] [ 1 sys-exit ] my-branch 99 drop ] ;

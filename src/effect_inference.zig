@@ -235,6 +235,11 @@ pub const InferenceEngine = struct {
     last_unknown_callee: ?[]const u8 = null,
     last_unknown_is_polymorphic: bool = false,
 
+    // Set by inferInstructions on every exit: true when the body it just
+    // walked diverges (ends dead-code), false otherwise. Read by the
+    // combinator handlers immediately after analyzing a quotation arm.
+    body_terminal: bool = false,
+
     pub const TypeCheckMode = enum { err, warning, off };
     pub const ArityCheckMode = enum { err, warning, off };
 
@@ -558,6 +563,8 @@ pub const InferenceEngine = struct {
     ) Allocator.Error!InferenceResult {
         self.last_unknown_callee = null;
         self.last_unknown_is_polymorphic = false;
+        var body_is_terminal = false;
+        defer self.body_terminal = body_is_terminal;
         var delta: i64 = 0;
         var stack_model: std.ArrayListUnmanaged(StackEntry) = .{};
         defer stack_model.deinit(self.allocator);
@@ -566,23 +573,29 @@ pub const InferenceEngine = struct {
         var uncertain_is_polymorphic: bool = false;
         var dead_code: bool = false;
         var dead_code_warned: bool = false;
-        var dead_code_terminal: ?[]const u8 = null;
+        const DeadCodeCause = union(enum) { underflow, terminal_call: []const u8, terminal_branch };
+        var dead_code_cause: ?DeadCodeCause = null;
 
         for (instructions) |instr| {
             if (dead_code) {
                 if (!dead_code_warned) {
-                    const message = if (dead_code_terminal) |terminal|
-                        try std.fmt.allocPrint(
+                    const message = switch (dead_code_cause orelse .underflow) {
+                        .terminal_call => |terminal| try std.fmt.allocPrint(
                             self.allocator,
                             "dead code: unreachable after call to never-returns word '{s}'",
                             .{terminal},
-                        )
-                    else
-                        try std.fmt.allocPrint(
+                        ),
+                        .terminal_branch => try std.fmt.allocPrint(
+                            self.allocator,
+                            "dead code: unreachable after branch where every arm is terminal",
+                            .{},
+                        ),
+                        .underflow => try std.fmt.allocPrint(
                             self.allocator,
                             "dead code: unreachable after guaranteed underflow",
                             .{},
-                        );
+                        ),
+                    };
                     try self.emitDiagnostic(.{
                         .word_name = caller.word_name,
                         .source_file = caller.source_file,
@@ -665,6 +678,10 @@ pub const InferenceEngine = struct {
                                             try stack_model.append(self.allocator, .other);
                                         }
                                     }
+                                    if (applied.terminal) {
+                                        dead_code = true;
+                                        dead_code_cause = .terminal_branch;
+                                    }
                                     continue;
                                 },
                                 .unknown => return .unknown,
@@ -700,6 +717,10 @@ pub const InferenceEngine = struct {
                                                 try stack_model.append(self.allocator, .other);
                                             }
                                         }
+                                        if (applied.terminal) {
+                                            dead_code = true;
+                                            dead_code_cause = .terminal_branch;
+                                        }
                                         continue;
                                     },
                                     .unknown => return .unknown,
@@ -717,6 +738,7 @@ pub const InferenceEngine = struct {
                         const guaranteed = try self.checkCallsiteArity(&wd, name, delta, caller, instr.line, uncertain, uncertain_source);
                         if (guaranteed) {
                             dead_code = true;
+                            dead_code_cause = .underflow;
                             continue;
                         }
                     }
@@ -724,7 +746,7 @@ pub const InferenceEngine = struct {
                     for (wd.markers) |mk| {
                         if (markers.isNeverReturnsMarker(mk)) {
                             dead_code = true;
-                            dead_code_terminal = name;
+                            dead_code_cause = .{ .terminal_call = name };
                             break;
                         }
                     }
@@ -765,6 +787,8 @@ pub const InferenceEngine = struct {
             }
         }
 
+        body_is_terminal = dead_code;
+
         if (dead_code or uncertain) {
             if (uncertain and uncertain_source != null and !isDynamicCall(uncertain_source.?)) {
                 self.last_unknown_callee = uncertain_source;
@@ -804,6 +828,7 @@ pub const InferenceEngine = struct {
             new_delta: i64,
             new_model_size: usize,
             output_types: ?[]StackEntry = null,
+            terminal: bool = false,
         },
         unknown,
         fallthrough,
@@ -826,6 +851,8 @@ pub const InferenceEngine = struct {
         defer quot_deltas.deinit(self.allocator);
         var all_literal = true;
         var found_any_quot = false;
+        var quot_arm_count: usize = 0;
+        var all_arms_terminal = true;
 
         const max_branch_stacks = 8;
         var branch_stacks: [max_branch_stacks]std.ArrayListUnmanaged(StackEntry) = undefined;
@@ -839,11 +866,13 @@ pub const InferenceEngine = struct {
             switch (stack_model.items[stack_pos]) {
                 .quotation => |quot| {
                     found_any_quot = true;
+                    quot_arm_count += 1;
                     var branch_out: std.ArrayListUnmanaged(StackEntry) = .{};
                     var quot_caller = caller;
                     quot_caller.declared_input_count = null;
 
                     const qd = try self.inferInstructions(quot.instructions, quot_caller, &branch_out);
+                    if (!self.body_terminal) all_arms_terminal = false;
                     switch (qd) {
                         .known => |d| {
                             try quot_deltas.append(self.allocator, d);
@@ -862,6 +891,16 @@ pub const InferenceEngine = struct {
                 },
                 .typed, .typed_union, .other => {},
             }
+        }
+
+        if (kind == .branch and quot_arm_count >= 2 and all_arms_terminal) {
+            const consumed = @min(stack_model.items.len, input_count);
+            const new_model_size = stack_model.items.len - consumed;
+            return .{ .applied = .{
+                .new_delta = current_delta + declared.known,
+                .new_model_size = new_model_size,
+                .terminal = true,
+            } };
         }
 
         if (!all_literal or !found_any_quot or quot_deltas.items.len == 0) {
@@ -1014,6 +1053,8 @@ pub const InferenceEngine = struct {
 
         var all_literal = true;
         var found_any_quot = false;
+        var quot_arm_count: usize = 0;
+        var all_arms_terminal = true;
         var concrete_index: usize = 0;
         for (eff.inputs) |param| {
             if (param.is_row_variable) continue;
@@ -1024,11 +1065,13 @@ pub const InferenceEngine = struct {
                 const stack_pos = stack_model.items.len - concrete_inputs + concrete_index;
                 switch (stack_model.items[stack_pos]) {
                     .quotation => |quot| {
+                        quot_arm_count += 1;
                         var rp_out: std.ArrayListUnmanaged(StackEntry) = .{};
                         var quot_caller = caller;
                         quot_caller.declared_input_count = null;
 
                         const qd = try self.inferInstructions(quot.instructions, quot_caller, &rp_out);
+                        if (!self.body_terminal) all_arms_terminal = false;
                         switch (qd) {
                             .known => |d| {
                                 const annotated_qcd = annotation.concreteDelta();
@@ -1048,9 +1091,20 @@ pub const InferenceEngine = struct {
                     },
                     .typed, .typed_union, .other => {
                         all_literal = false;
+                        all_arms_terminal = false;
                     },
                 }
             }
+        }
+
+        if (kind == .branch and quot_arm_count >= 2 and all_arms_terminal) {
+            const consumed = @min(stack_model.items.len, concrete_inputs);
+            const new_model_size = stack_model.items.len - consumed;
+            return .{ .applied = .{
+                .new_delta = current_delta + eff.concreteDelta(),
+                .new_model_size = new_model_size,
+                .terminal = true,
+            } };
         }
 
         if (!all_literal or !found_any_quot or adjustments.items.len == 0) return .fallthrough;
