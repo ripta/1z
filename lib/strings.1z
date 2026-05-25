@@ -8,6 +8,9 @@
 use "sequences" ;
 use "scanner" ;
 
+\\ Recursively scan str for delim starting at pos, pushing each segment onto
+\\ vec; once no further delimiter is found, push the trailing segment and
+\\ freeze vec into an array.
 (split-scan): stack-recursive ( str delim vec pos -- array ) [
   3 pick-n 3 pick-n 2 pick-n #index-of-from
   dup
@@ -28,13 +31,15 @@ use "scanner" ;
   if
 ] ;
 
-\ Split string by delimiter (any string), keeping empty segments
-\ Examples:
-\   "a,b,c" "," split        →  { "a" "b" "c" }
-\   "a,,b" "," split          →  { "a" "" "b" }
-\   "hello" "," split         →  { "hello" }
-\   "" "," split              →  { "" }
-\   "a::b::c" "::" split      →  { "a" "b" "c" }
+\\ Split string by delimiter (any string), keeping empty segments.
+\\
+\\ Examples:
+\\
+\\   "a,b,c" "," split      →  { "a" "b" "c" }
+\\   "a,,b" "," split       →  { "a" "" "b" }
+\\   "hello" "," split      →  { "hello" }
+\\   "" "," split           →  { "" }
+\\   "a::b::c" "::" split   →  { "a" "b" "c" }
 split: ( str delim -- array ) [
   dup #len 0 =
   [ drop 1array ]
@@ -47,21 +52,26 @@ split: ( str delim -- array ) [
   if
 ] ;
 
+\\ Reduce step for #join: coerce item to a string, then push the separator
+\\ and that string onto the accumulator vector.
 (join-push): ( sep vec item -- sep vec ) [
   >string              \ sep vec itemstr
   [ over #push! ] dip  \ push separator before this element
   #push!               \ push the element's string
 ] ;
 
-\ Join array of values into string with separator
-\ Examples:
-\   { "a" "b" "c" } ", " #join  →  "a, b, c"
-\   { 1 2 3 } "-" #join         →  "1-2-3"
-\   { } ", " #join              →  ""
-\   { "only" } ", " #join       →  "only"
-\ Collects the fragments into a vector, then concatenates once. A single
-\ #append over the whole vector is O(total length); repeated pairwise
-\ #append would re-copy the growing accumulator on every element.
+\\ Join array of values into string with separator.
+\\
+\\ Collects the fragments into a vector, then concatenates once. A single
+\\ #append over the whole vector is O(total length); repeated pairwise
+\\ #append would re-copy the growing accumulator on every element.
+\\
+\\ Examples:
+\\
+\\   { "a" "b" "c" } ", " #join  →  "a, b, c"
+\\   { 1 2 3 } "-" #join         →  "1-2-3"
+\\   { } ", " #join              →  ""
+\\   { "only" } ", " #join       →  "only"
 #join: ( array sep -- string ) [
   over #len 0 = [ 2drop "" ] [
     over #len 1 = [ drop #first >string ] [
@@ -92,7 +102,7 @@ split: ( str delim -- array ) [
 \\   { } #concat              →  ""
 #concat: ( seq -- string ) [ "" swap #append ] ;
 
-\ Helper for repeat.
+\\ Append pattern to result n more times, recurring until n reaches zero.
 repeat-loop: ( pattern result n -- pattern result ) [
   dup 0 >
   [
@@ -104,7 +114,12 @@ repeat-loop: ( pattern result n -- pattern result ) [
   if
 ] ;
 
-\ Repeat string n times
+\\ Repeat string n times.
+\\
+\\ Examples:
+\\
+\\   "ab" 3 repeat  →  "ababab"
+\\   "x" 0 repeat   →  ""
 repeat: ( str n -- str ) [
   dup 1 < [ 2drop "" ] [
     \ Stack: str n (n >= 1)
