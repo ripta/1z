@@ -20,29 +20,37 @@ discover-modules: ( -- array ) [
   #collect
 ] ;
 
-\ --- Step 2: Load all modules ---
+\ --- Step 2: Load modules and collect their words ---
 
-try-load-module: ( name -- ) [
-  [ load import ] [ drop "  skipped: " swap #append eprint-line ] recover
+\ Enumerate a loaded module's own words as raw word-info arrays.
+module-word-infos: ( module -- array ) [
+  dup @keys swap
+  [ swap native.>word (raw>word-info) ] curry
+  #map #collect
 ] ;
 
-load-all-modules: ( modules -- ) [
-  [ try-load-module ] #each
+\ Load one module without importing it, then file its words under its name in
+\ the grouped hash. Loading without importing avoids the const-redefinition and
+\ parse-time collisions that arise from merging every module into one scope; a
+\ module that still cannot load, such as one needing an absent FFI library, is
+\ reported and skipped. The pre-load `dup` keeps the name available to the
+\ handler no matter where `load` failed.
+add-module: ( grouped name -- grouped ) [
+  dup
+  [ load module-word-infos @set ]
+  [ drop dup "  skipped: " swap #append eprint-line drop ]
+  recover
 ] ;
 
-\ --- Step 3: Collect and group words ---
-
-\ Extract module key from a word-info's module>> field.
-module-key: ( wi -- string ) [
-  module>> dup f =
-  [ drop "prelude" ]
-  [
-    inspect
-    8 #drop
-    " (" split-once?
-    dup option:some? [ option:some> #first ] [ drop "unknown" ] if
-  ]
-  if
+\ Capture the prelude and native words, which belong to no loadable module.
+\ The current scope also holds words this tool imported with `use`, so keep
+\ only words with no source module; those imports are documented on their own
+\ module pages.
+prelude-group: ( grouped -- grouped ) [
+  "prelude"
+  native.current-scope module-word-infos
+  [ module>> f = ] #filter #collect
+  @set
 ] ;
 
 \ --- Step 4: Generate markdown ---
@@ -208,10 +216,8 @@ discover-modules
 dup "Found " swap #len inspect #append " modules" #append eprint-line
 
 "Loading modules..." eprint-line
-dup load-all-modules
-
-"Collecting words..." eprint-line
-all-words [ module-key ] #group-by
+H{ } prelude-group
+[ add-module ] #reduce
 
 "docs/reference" ensure-directory
 
