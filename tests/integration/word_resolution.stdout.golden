@@ -1,0 +1,26 @@
+=== simple calls ===
+PASS: simple call resolves a defined word
+=== redefinition visibility ===
+PASS: caller sees original target
+PASS: already-parsed caller sees redefined target
+=== forward references ===
+PASS: body binds a name defined later in the file
+=== self-recursion ===
+PASS: self-recursive word runs to its base case
+=== mutual recursion ===
+PASS: mutual recursion: 4 is even
+PASS: mutual recursion: 4 is odd
+PASS: mutual recursion: 7 is even
+PASS: mutual recursion: 7 is odd
+=== module imports ===
+PASS: imported word resolves in scope
+PASS: second imported word resolves
+=== qualified names ===
+PASS: qualified call resolves module word
+PASS: qualified call resolves second module word
+PASS: qualified call resolves third module word
+=== module-dependency late binding ===
+PASS: module body late-binds to its dep, not the global
+PASS: the same-named global is left intact
+=== import-frame resolution ===
+PASS: captured helper resolves through the import frame

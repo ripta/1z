@@ -1,0 +1,70 @@
+\ Regression net for word-resolution semantics. These behaviors must hold
+\ unchanged whether word references resolve via the runtime dictionary lookup
+\ or via pre-resolved direct slots.
+
+use "testing" ;
+
+"simple calls" test-section
+
+add10: ( n -- n ) [ 10 + ] ;
+5 add10 15 "simple call resolves a defined word" assert=
+
+"redefinition visibility" test-section
+
+target: ( -- n ) [ 1 ] ;
+caller: ( -- n ) [ target 100 + ] ;
+caller 101 "caller sees original target" assert=
+target: ( -- n ) [ 2 ] ;
+caller 102 "already-parsed caller sees redefined target" assert=
+
+"forward references" test-section
+
+uses-later: ( -- n ) [ later-word ] ;
+later-word: ( -- n ) [ 42 ] ;
+uses-later 42 "body binds a name defined later in the file" assert=
+
+"self-recursion" test-section
+
+countdown: ( n -- n ) [ dup 0 > [ 1 - countdown ] when ] ;
+5 countdown 0 "self-recursive word runs to its base case" assert=
+
+"mutual recursion" test-section
+
+is-even?: ( n -- ? ) [ dup 0 = [ drop t ] [ 1 - is-odd? ] if ] ;
+is-odd?: ( n -- ? ) [ dup 0 = [ drop f ] [ 1 - is-even? ] if ] ;
+4 is-even? t "mutual recursion: 4 is even" assert=
+4 is-odd? f "mutual recursion: 4 is odd" assert=
+7 is-even? f "mutual recursion: 7 is even" assert=
+7 is-odd? t "mutual recursion: 7 is odd" assert=
+
+"module imports" test-section
+
+use "module_lib.1z" shadow-ok ;
+5 double 10 "imported word resolves in scope" assert=
+4 triple 12 "second imported word resolves" assert=
+
+"qualified names" test-section
+
+m: "module_lib.1z" load ;
+5 m.double 10 "qualified call resolves module word" assert=
+3 m.triple 9 "qualified call resolves second module word" assert=
+4 m.squared 16 "qualified call resolves third module word" assert=
+
+"module-dependency late binding" test-section
+
+\ A global of the same name as a module's dependency must not capture a
+\ reference inside the module body: the module-deps frame wins at call time.
+from-a: ( -- s ) [ "GLOBAL" ] ;
+ma: "mod_b_calls_a.1z" load ;
+ma.call-from-a "from-a" "module body late-binds to its dep, not the global" assert=
+from-a "GLOBAL" "the same-named global is left intact" assert=
+
+"import-frame resolution" test-section
+
+\ A helper with no stable global slot, captured into an import frame and
+\ resolved by a public word at runtime.
+[ (h): [ 7 ] ;
+  local-scope
+] call import
+use-helper: ( -- n ) [ (h) ] ;
+use-helper 7 "captured helper resolves through the import frame" assert=
