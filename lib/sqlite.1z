@@ -32,6 +32,14 @@ SQLITE_OK:   0 ;
 SQLITE_ROW:  100 ;
 SQLITE_DONE: 101 ;
 
+\ Handle types
+
+\\ A distinct type for an open SQLite database connection.
+db-handle: virtual{ resource } ;
+
+\\ A distinct type for a prepared SQLite statement.
+stmt-handle: virtual{ resource } ;
+
 \ Error handling
 ESqliteError: [ sqlite-error: ] ;
 
@@ -47,8 +55,8 @@ ESqliteError: [ sqlite-error: ] ;
 
 \ Resource management
 
-\\ Open a SQLite database, returning a resource. Throws ESqliteError on failure.
-open: ( path -- resource ) [
+\\ Open a SQLite database, returning a db-handle. Throws ESqliteError on failure.
+open: ( path -- db-handle ) [
   (open)
   \\ Stack: resource rc
   dup SQLITE_OK = [ drop ] [
@@ -56,22 +64,29 @@ open: ( path -- resource ) [
     swap dup (errmsg) swap resource-close
     ESqliteError make-error throw
   ] if
+  >db-handle
 ] ;
 
+\\ Close a database handle opened with `open`.
+close-db: ( db-handle -- ) [ unmake-db-handle resource-close ] ;
+
 \\ Open a database for the duration of a quotation, closing it on exit.
-with-db: ( path quot -- ... ) [ [ open ] dip over [ resource-close ] curry cleanup ] ;
+with-db: ( path quot -- ... ) [ [ open ] dip over [ close-db ] curry cleanup ] ;
 
 \\ Prepare a statement for the duration of a quotation, finalizing it on exit.
 with-stmt: ( db sql quot -- ... ) [
-  [ -1 0 (prepare-v2) over (check-ok-stmt) ] dip
-  over [ resource-close ] curry cleanup
+  [ [ unmake-db-handle ] dip -1 0 (prepare-v2) over (check-ok-stmt) >stmt-handle ] dip
+  over [ unmake-stmt-handle resource-close ] curry cleanup
 ] ;
 
 \ Polymorphic parameter binding
 
 \\ Bind a value to a prepared statement parameter by index (1-based).
 \\ Dispatches on the value's type: fixnum, float, string, byte-array, or option:none.
-bind: ( stmt i value -- ) [
+bind: ( stmt i value -- ) [ [ unmake-stmt-handle ] 2dip (bind) ] ;
+
+\\ Bind against the unwrapped raw statement resource.
+(bind): ( stmt i value -- ) [
   2 pick-n
   -rot> (bind-dispatch) swap (check-ok-stmt)
 ] ;
@@ -154,6 +169,7 @@ bind: ( stmt i value -- ) [
 \\ Step a prepared statement and return the current row as an option hash.
 \\ Returns option:some with a hash on SQLITE_ROW, option:none on SQLITE_DONE.
 step-hash: ( stmt -- option ) [
+  unmake-stmt-handle
   dup (step) dup SQLITE_ROW = [
     drop (read-row-hash) >option:some
   ] [
@@ -168,6 +184,7 @@ step-hash: ( stmt -- option ) [
 \\ Step a prepared statement and return the current row as an option array.
 \\ Returns option:some with an array on SQLITE_ROW, option:none on SQLITE_DONE.
 step-array: ( stmt -- option ) [
+  unmake-stmt-handle
   dup (step) dup SQLITE_ROW = [
     drop (read-row-array) >option:some
   ] [
@@ -192,7 +209,7 @@ step-array: ( stmt -- option ) [
     2drop
   ] [
     over 3 pick-n over -- #nth
-    5 pick-n -rot> bind
+    5 pick-n -rot> (bind)
     swap ++ swap (bind-loop)
   ] if
 ] ;
@@ -200,7 +217,7 @@ step-array: ( stmt -- option ) [
 \\ Execute a SQL statement with parameters, discarding all results.
 \\ Use for INSERT, UPDATE, DELETE, and DDL statements.
 execute: ( db sql params -- ) [
-  [ over swap (bind-params) (step-until-done) ] curry
+  [ [ unmake-stmt-handle ] dip over swap (bind-params) (step-until-done) ] curry
   with-stmt
 ] ;
 
@@ -222,24 +239,24 @@ execute: ( db sql params -- ) [
 \\ Query returning a lazy iterator of hash rows. Prepares and binds the statement,
 \\ then returns a callback iterator that steps through results and finalizes on cleanup.
 query-hash: ( db sql params -- iterator ) [
-  (query-prepare-bind)
+  (query-prepare-bind) >stmt-handle
   dup [ step-hash ] curry
-  swap [ resource-close ] curry
+  swap [ unmake-stmt-handle resource-close ] curry
   >iterator(with-cleanup)
 ] ;
 
 \\ Query returning a lazy iterator of array rows. Same lifecycle as query-hash
 \\ but each row is an array of option values.
 query-array: ( db sql params -- iterator ) [
-  (query-prepare-bind)
+  (query-prepare-bind) >stmt-handle
   dup [ step-array ] curry
-  swap [ resource-close ] curry
+  swap [ unmake-stmt-handle resource-close ] curry
   >iterator(with-cleanup)
 ] ;
 
 \\ Shared helper: prepare a statement and bind parameters, returning the statement.
 (query-prepare-bind): ( db sql params -- stmt ) [
-  [ -1 0 (prepare-v2) over (check-ok-stmt) ] dip
+  [ [ unmake-db-handle ] dip -1 0 (prepare-v2) over (check-ok-stmt) ] dip
   over swap (bind-params)
 ] ;
 
@@ -248,9 +265,9 @@ query-array: ( db sql params -- iterator ) [
 \\ Execute a quotation inside a transaction. Commits on success, rolls back on error.
 \\ The quotation receives db on the stack.
 with-transaction: ( db quot -- ... ) [
-  over dup "BEGIN" 0 0 0 (exec) swap (check-ok)
-  over [ dup "COMMIT" 0 0 0 (exec) swap (check-ok) ] curry
+  over unmake-db-handle dup "BEGIN" 0 0 0 (exec) swap (check-ok)
+  over [ unmake-db-handle dup "COMMIT" 0 0 0 (exec) swap (check-ok) ] curry
   compose
-  over [ dup "ROLLBACK" 0 0 0 (exec) swap (check-ok) throw ] curry
+  over [ unmake-db-handle dup "ROLLBACK" 0 0 0 (exec) swap (check-ok) throw ] curry
   recover
 ] ;

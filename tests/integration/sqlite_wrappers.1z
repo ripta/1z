@@ -5,7 +5,8 @@ use "sqlite" ;
 
 "open succeeds on :memory:" test-section
 ":memory:" open
-resource-close
+dup db-handle? "open returns a db-handle" assert-true
+close-db
 
 "with-db cleanup on normal exit" test-section
 ":memory:" [ "CREATE TABLE t (x INTEGER)" { } execute ] with-db
@@ -15,6 +16,7 @@ t "with-db completed" assert-true
 ":memory:" [
   dup "CREATE TABLE t (x INTEGER)" { } execute
   dup "SELECT 1" [
+    dup stmt-handle? "with-stmt body receives a stmt-handle" assert-true
     dup step-hash option:some? "step-hash returns some" assert-true
   ] with-stmt
 ] with-db
@@ -66,8 +68,8 @@ t "with-db completed" assert-true
 "bind option:none for NULL via low-level" test-section
 ":memory:" [
   dup "CREATE TABLE t (n INTEGER)" { } execute
-  dup "INSERT INTO t VALUES (?1)" -1 0 (prepare-v2) over (check-ok-stmt)
-  dup 1 option:none bind
+  dup unmake-db-handle "INSERT INTO t VALUES (?1)" -1 0 (prepare-v2) over (check-ok-stmt)
+  dup 1 option:none (bind)
   dup (step) SQLITE_DONE "step done" assert=
   resource-close
   dup "SELECT n FROM t" [

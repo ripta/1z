@@ -1,6 +1,8 @@
 === open succeeds on :memory: ===
 Stack: [ ]
-Stack: [ <resource:sqlite3> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+PASS: open returns a db-handle
+Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ ]
 === with-db cleanup on normal exit ===
 Stack: [ ]
@@ -9,45 +11,46 @@ PASS: with-db completed
 Stack: [ ]
 === with-stmt lifecycle ===
 Stack: [ ]
+PASS: with-stmt body receives a stmt-handle
 PASS: step-hash returns some
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> ]
 === execute with empty params ===
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> ]
 PASS: execute no-params insert
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 === execute with one fixnum param ===
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 PASS: fixnum param
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 === bind fixnum, float, string ===
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 PASS: fixnum column
 PASS: float column
 PASS: string column
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 === step-hash multiple rows and exhaustion ===
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 PASS: first row
 PASS: second row
 PASS: exhausted after last row
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 === bind option:none for NULL via low-level ===
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 PASS: step done
 PASS: NULL column omitted from hash
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 === execute with params ===
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 PASS: execute inserted fixnum
 PASS: execute inserted string
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 === with-transaction commit ===
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 PASS: first row after commit
 PASS: second row after commit
 PASS: no more rows
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 === with-transaction rollback on error ===
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 PASS: rolled back data not visible
-Stack: [ <resource:sqlite3 (closed)> <resource:sqlite3-stmt (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> <resource:sqlite3 (closed)> ]
+Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]

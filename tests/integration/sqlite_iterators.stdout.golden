@@ -1,86 +1,86 @@
 Stack: [ ]
 === query-hash full consumption via #collect ===
 Stack: [ ]
-Stack: [ <resource:sqlite3> ]
-Stack: [ <resource:sqlite3> <iterator callback callback> ]
-Stack: [ <resource:sqlite3> { H{ id: 1 name: "alice" } H{ id: 2 name: "bob" } H{ id: 3 name: "carol" } } ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+Stack: [ <db-handle <resource:sqlite3>> <iterator callback callback> ]
+Stack: [ <db-handle <resource:sqlite3>> { H{ id: 1 name: "alice" } H{ id: 2 name: "bob" } H{ id: 3 name: "carol" } } ]
 PASS: collected 3 hash rows
-Stack: [ <resource:sqlite3> { H{ id: 1 name: "alice" } H{ id: 2 name: "bob" } H{ id: 3 name: "carol" } } ]
+Stack: [ <db-handle <resource:sqlite3>> { H{ id: 1 name: "alice" } H{ id: 2 name: "bob" } H{ id: 3 name: "carol" } } ]
 PASS: first row name
-Stack: [ <resource:sqlite3> { H{ id: 1 name: "alice" } H{ id: 2 name: "bob" } H{ id: 3 name: "carol" } } ]
+Stack: [ <db-handle <resource:sqlite3>> { H{ id: 1 name: "alice" } H{ id: 2 name: "bob" } H{ id: 3 name: "carol" } } ]
 PASS: second row name
-Stack: [ <resource:sqlite3> { H{ id: 1 name: "alice" } H{ id: 2 name: "bob" } H{ id: 3 name: "carol" } } ]
+Stack: [ <db-handle <resource:sqlite3>> { H{ id: 1 name: "alice" } H{ id: 2 name: "bob" } H{ id: 3 name: "carol" } } ]
 PASS: third row name
-Stack: [ <resource:sqlite3> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ ]
 === query-array full consumption via #collect ===
 Stack: [ ]
-Stack: [ <resource:sqlite3> ]
-Stack: [ <resource:sqlite3> <iterator callback callback> ]
-Stack: [ <resource:sqlite3> { { <option:some option-payload{ value: 1 }> <option:some option-payload{ value: "alice" }> } { <option:some option-payload{ value: 2 }> <option:some option-payload{ value: "bob" }> } { <option:some option-payload{ value: 3 }> <option:some option-payload{ value: "carol" }> } } ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+Stack: [ <db-handle <resource:sqlite3>> <iterator callback callback> ]
+Stack: [ <db-handle <resource:sqlite3>> { { <option:some option-payload{ value: 1 }> <option:some option-payload{ value: "alice" }> } { <option:some option-payload{ value: 2 }> <option:some option-payload{ value: "bob" }> } { <option:some option-payload{ value: 3 }> <option:some option-payload{ value: "carol" }> } } ]
 PASS: collected 3 array rows
-Stack: [ <resource:sqlite3> { { <option:some option-payload{ value: 1 }> <option:some option-payload{ value: "alice" }> } { <option:some option-payload{ value: 2 }> <option:some option-payload{ value: "bob" }> } { <option:some option-payload{ value: 3 }> <option:some option-payload{ value: "carol" }> } } ]
+Stack: [ <db-handle <resource:sqlite3>> { { <option:some option-payload{ value: 1 }> <option:some option-payload{ value: "alice" }> } { <option:some option-payload{ value: 2 }> <option:some option-payload{ value: "bob" }> } { <option:some option-payload{ value: 3 }> <option:some option-payload{ value: "carol" }> } } ]
 PASS: first row id
-Stack: [ <resource:sqlite3> { { <option:some option-payload{ value: 1 }> <option:some option-payload{ value: "alice" }> } { <option:some option-payload{ value: 2 }> <option:some option-payload{ value: "bob" }> } { <option:some option-payload{ value: 3 }> <option:some option-payload{ value: "carol" }> } } ]
+Stack: [ <db-handle <resource:sqlite3>> { { <option:some option-payload{ value: 1 }> <option:some option-payload{ value: "alice" }> } { <option:some option-payload{ value: 2 }> <option:some option-payload{ value: "bob" }> } { <option:some option-payload{ value: 3 }> <option:some option-payload{ value: "carol" }> } } ]
 PASS: first row name
-Stack: [ <resource:sqlite3> { { <option:some option-payload{ value: 1 }> <option:some option-payload{ value: "alice" }> } { <option:some option-payload{ value: 2 }> <option:some option-payload{ value: "bob" }> } { <option:some option-payload{ value: 3 }> <option:some option-payload{ value: "carol" }> } } ]
+Stack: [ <db-handle <resource:sqlite3>> { { <option:some option-payload{ value: 1 }> <option:some option-payload{ value: "alice" }> } { <option:some option-payload{ value: 2 }> <option:some option-payload{ value: "bob" }> } { <option:some option-payload{ value: 3 }> <option:some option-payload{ value: "carol" }> } } ]
 PASS: third row id
-Stack: [ <resource:sqlite3> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ ]
 === query-hash with bound parameters ===
 Stack: [ ]
-Stack: [ <resource:sqlite3> ]
-Stack: [ <resource:sqlite3> <iterator callback callback> ]
-Stack: [ <resource:sqlite3> { H{ name: "alice" } H{ name: "carol" } } ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+Stack: [ <db-handle <resource:sqlite3>> <iterator callback callback> ]
+Stack: [ <db-handle <resource:sqlite3>> { H{ name: "alice" } H{ name: "carol" } } ]
 PASS: filtered to 2 rows
-Stack: [ <resource:sqlite3> { H{ name: "alice" } H{ name: "carol" } } ]
+Stack: [ <db-handle <resource:sqlite3>> { H{ name: "alice" } H{ name: "carol" } } ]
 PASS: first filtered name
-Stack: [ <resource:sqlite3> { H{ name: "alice" } H{ name: "carol" } } ]
+Stack: [ <db-handle <resource:sqlite3>> { H{ name: "alice" } H{ name: "carol" } } ]
 PASS: second filtered name
-Stack: [ <resource:sqlite3> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ ]
 === query-hash partial consumption with with-iterator ===
 Stack: [ ]
-Stack: [ <resource:sqlite3> ]
-Stack: [ <resource:sqlite3> <iterator callback callback> ]
-Stack: [ <resource:sqlite3> { H{ id: 1 } H{ id: 2 } } ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+Stack: [ <db-handle <resource:sqlite3>> <iterator callback callback> ]
+Stack: [ <db-handle <resource:sqlite3>> { H{ id: 1 } H{ id: 2 } } ]
 PASS: took 2 rows
-Stack: [ <resource:sqlite3> { H{ id: 1 } H{ id: 2 } } ]
+Stack: [ <db-handle <resource:sqlite3>> { H{ id: 1 } H{ id: 2 } } ]
 PASS: first taken id
-Stack: [ <resource:sqlite3> { H{ id: 1 } H{ id: 2 } } ]
+Stack: [ <db-handle <resource:sqlite3>> { H{ id: 1 } H{ id: 2 } } ]
 PASS: second taken id
-Stack: [ <resource:sqlite3> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ ]
 === query-hash on empty result set ===
 Stack: [ ]
-Stack: [ <resource:sqlite3> ]
-Stack: [ <resource:sqlite3> <iterator callback callback> ]
-Stack: [ <resource:sqlite3> { } ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+Stack: [ <db-handle <resource:sqlite3>> <iterator callback callback> ]
+Stack: [ <db-handle <resource:sqlite3>> { } ]
 PASS: empty result set
-Stack: [ <resource:sqlite3> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ ]
 === query-hash with #each consumer ===
 Stack: [ ]
-Stack: [ <resource:sqlite3> ]
-Stack: [ <resource:sqlite3> <iterator callback callback> ]
-Stack: [ <resource:sqlite3> 6 ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+Stack: [ <db-handle <resource:sqlite3>> <iterator callback callback> ]
+Stack: [ <db-handle <resource:sqlite3>> 6 ]
 PASS: sum of ids via #each
-Stack: [ <resource:sqlite3> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ ]
 === query-array NULL handling ===
 Stack: [ ]
-Stack: [ <resource:sqlite3> ]
-Stack: [ <resource:sqlite3> ]
-Stack: [ <resource:sqlite3> ]
-Stack: [ <resource:sqlite3> ]
-Stack: [ <resource:sqlite3> <iterator callback callback> ]
-Stack: [ <resource:sqlite3> { { <option:some option-payload{ value: 1 }> <option:none none:> } { <option:none none:> <option:some option-payload{ value: "hello" }> } } ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
+Stack: [ <db-handle <resource:sqlite3>> <iterator callback callback> ]
+Stack: [ <db-handle <resource:sqlite3>> { { <option:some option-payload{ value: 1 }> <option:none none:> } { <option:none none:> <option:some option-payload{ value: "hello" }> } } ]
 PASS: first row col a is 1
-Stack: [ <resource:sqlite3> { { <option:some option-payload{ value: 1 }> <option:none none:> } { <option:none none:> <option:some option-payload{ value: "hello" }> } } ]
+Stack: [ <db-handle <resource:sqlite3>> { { <option:some option-payload{ value: 1 }> <option:none none:> } { <option:none none:> <option:some option-payload{ value: "hello" }> } } ]
 PASS: first row col b is none
-Stack: [ <resource:sqlite3> { { <option:some option-payload{ value: 1 }> <option:none none:> } { <option:none none:> <option:some option-payload{ value: "hello" }> } } ]
+Stack: [ <db-handle <resource:sqlite3>> { { <option:some option-payload{ value: 1 }> <option:none none:> } { <option:none none:> <option:some option-payload{ value: "hello" }> } } ]
 PASS: second row col a is none
-Stack: [ <resource:sqlite3> { { <option:some option-payload{ value: 1 }> <option:none none:> } { <option:none none:> <option:some option-payload{ value: "hello" }> } } ]
+Stack: [ <db-handle <resource:sqlite3>> { { <option:some option-payload{ value: 1 }> <option:none none:> } { <option:none none:> <option:some option-payload{ value: "hello" }> } } ]
 PASS: second row col b is hello
-Stack: [ <resource:sqlite3> ]
+Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ ]
