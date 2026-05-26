@@ -97,7 +97,10 @@ next-event: ( watcher -- event ) [ unmake-watcher watcher-read (raw-event>watch-
 close-watcher: ( watcher -- ) [ unmake-watcher resource-close ] ;
 
 \\ Run a quotation with a watcher and close it on exit.
-with-watcher: ( watcher quot -- ... ) [ over [ close-watcher ] curry cleanup ] ;
+using-watcher: ( ..a w: watcher quot: ( ..a w: watcher -- ..b ) -- ..b ) [ over [ close-watcher ] curry cleanup ] ;
+
+\\ Deprecated alias of `using-watcher`.
+with-watcher: deprecated ( ..a w: watcher quot: ( ..a w: watcher -- ..b ) -- ..b ) [ using-watcher ] ;
 
 \\ Loop forever, calling quot with each event as it arrives.
 each: stack-recursive ( watcher quot -- ) [

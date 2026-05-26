@@ -149,21 +149,21 @@ count: @get 1 "close-iterator cleanup ran exactly once" assert=
 { 1 2 3 } >iterator
 close-iterator
 
-"with-iterator normal exit" test-section
+"using-iterator normal exit" test-section
 
 [ cleaned: f ] make-mutable-map
 dup [ cleaned: t @set! drop ] curry
 counter5-gen swap
 >iterator(with-cleanup)
-[ 2 #take #collect ] with-iterator
-{ 1 2 } "with-iterator consumed partial" assert=
-cleaned: @get "with-iterator cleanup ran on normal exit" assert-true
+[ 2 #take #collect ] using-iterator
+{ 1 2 } "using-iterator consumed partial" assert=
+cleaned: @get "using-iterator cleanup ran on normal exit" assert-true
 
-"with-iterator error exit" test-section
+"using-iterator error exit" test-section
 
 [ cleaned: f ] make-mutable-map
 dup [ cleaned: t @set! drop ] curry
 counter5-gen swap
 >iterator(with-cleanup)
-[ [ #next drop "boom" throw ] with-iterator ] [ drop ] recover
-cleaned: @get "with-iterator cleanup ran on error exit" assert-true
+[ [ #next drop "boom" throw ] using-iterator ] [ drop ] recover
+cleaned: @get "using-iterator cleanup ran on error exit" assert-true

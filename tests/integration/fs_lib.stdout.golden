@@ -37,9 +37,9 @@ PASS: ensure-directory creates dir
 PASS: ensure-directory idempotent
 === delete-directory-recursive ===
 PASS: delete-directory-recursive removes all
-=== with-temp-directory ===
-PASS: with-temp-directory: dir exists inside quot
-PASS: with-temp-directory: quotation executed
+=== using-temp-directory ===
+PASS: using-temp-directory: dir exists inside quot
+PASS: using-temp-directory: quotation executed
 === walk ===
 PASS: walk returns all entries
 PASS: walk includes top-level file

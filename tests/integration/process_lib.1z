@@ -76,13 +76,13 @@ stderr>> "err" >bytes "capture-all captures stderr" assert=
   wait-process 143 "kill-process accepts raw fixnum" assert=
 ] call
 
-"with-process cleanup terminates child" test-section
+"using-process cleanup terminates child" test-section
 
 [
-  [ { "/bin/sh" "-c" "sleep 1" } <stdio-opts> [ drop ] with-process ] elapsed
+  [ { "/bin/sh" "-c" "sleep 1" } <stdio-opts> [ drop ] using-process ] elapsed
   1500 milliseconds <
 ] call
-"with-process sends SIGTERM and waits on scope exit" assert-true
+"using-process sends SIGTERM and waits on scope exit" assert-true
 
 "capture helper async compatibility" test-section
 

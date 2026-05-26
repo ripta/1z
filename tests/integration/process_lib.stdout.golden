@@ -69,10 +69,10 @@ PASS: kill-process accepts signal virtual type
 Stack: [ ]
 PASS: kill-process accepts raw fixnum
 Stack: [ ]
-=== with-process cleanup terminates child ===
+=== using-process cleanup terminates child ===
 Stack: [ ]
 Stack: [ t ]
-PASS: with-process sends SIGTERM and waits on scope exit
+PASS: using-process sends SIGTERM and waits on scope exit
 Stack: [ ]
 === capture helper async compatibility ===
 Stack: [ ]

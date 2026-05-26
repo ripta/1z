@@ -16,18 +16,18 @@ Stack: [ ]
 PASS: polling watcher reports modified event
 PASS: polling watcher preserves watched path
 Stack: [ ]
-=== with-watcher closes on exit ===
+=== using-watcher closes on exit ===
 Stack: [ ]
-PASS: with-watcher closes returned watcher value
+PASS: using-watcher closes returned watcher value
 Stack: [ ]
 === each forwards events to callback ===
 Stack: [ ]
 PASS: each forwards modified event
 PASS: each forwards watched path
 Stack: [ ]
-=== polling with-watcher closes on exit ===
+=== polling using-watcher closes on exit ===
 Stack: [ ]
-PASS: with-watcher closes returned polling watcher value
+PASS: using-watcher closes returned polling watcher value
 Stack: [ ]
 === add-watch-recursive with subdirs ===
 Stack: [ ]

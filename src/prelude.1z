@@ -871,7 +871,10 @@ receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recov
 close-iterator: ( iterator -- ) [ native.close-iterator ] ;
 
 \\ Execute a quotation with an iterator, guaranteeing close-iterator on exit.
-with-iterator: ( iterator quot -- ... ) [ over [ close-iterator ] curry cleanup ] ;
+using-iterator: ( ..a it: iterator quot: ( ..a it: iterator -- ..b ) -- ..b ) [ over [ close-iterator ] curry cleanup ] ;
+
+\\ Deprecated alias of `using-iterator`.
+with-iterator: deprecated ( ..a it: iterator quot: ( ..a it: iterator -- ..b ) -- ..b ) [ using-iterator ] ;
 
 \\ Push each element of a sequence onto the stack individually.
 ...: ( seq -- ...elems ) [ [ ] #each ] ;

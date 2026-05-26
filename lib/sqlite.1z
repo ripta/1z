@@ -71,13 +71,19 @@ open: ( path -- db-handle ) [
 close-db: ( db-handle -- ) [ unmake-db-handle resource-close ] ;
 
 \\ Open a database for the duration of a quotation, closing it on exit.
-with-db: ( path quot -- ... ) [ [ open ] dip over [ close-db ] curry cleanup ] ;
+using-db: ( ..a path: string quot: ( ..a db: db-handle -- ..b ) -- ..b ) [ [ open ] dip over [ close-db ] curry cleanup ] ;
+
+\\ Deprecated alias of `using-db`.
+with-db: deprecated ( ..a path: string quot: ( ..a db: db-handle -- ..b ) -- ..b ) [ using-db ] ;
 
 \\ Prepare a statement for the duration of a quotation, finalizing it on exit.
-with-stmt: ( db sql quot -- ... ) [
+using-stmt: ( ..a db: db-handle sql: string quot: ( ..a stmt: stmt-handle -- ..b ) -- ..b ) [
   [ [ unmake-db-handle ] dip -1 0 (prepare-v2) over (check-ok-stmt) >stmt-handle ] dip
   over [ unmake-stmt-handle resource-close ] curry cleanup
 ] ;
+
+\\ Deprecated alias of `using-stmt`.
+with-stmt: deprecated ( ..a db: db-handle sql: string quot: ( ..a stmt: stmt-handle -- ..b ) -- ..b ) [ using-stmt ] ;
 
 \ Polymorphic parameter binding
 
@@ -218,7 +224,7 @@ step-array: ( stmt -- option ) [
 \\ Use for INSERT, UPDATE, DELETE, and DDL statements.
 execute: ( db sql params -- ) [
   [ [ unmake-stmt-handle ] dip over swap (bind-params) (step-until-done) ] curry
-  with-stmt
+  using-stmt
 ] ;
 
 \\ Step until SQLITE_DONE, discarding all rows.
@@ -264,10 +270,13 @@ query-array: ( db sql params -- iterator ) [
 
 \\ Execute a quotation inside a transaction. Commits on success, rolls back on error.
 \\ The quotation receives db on the stack.
-with-transaction: ( db quot -- ... ) [
+using-transaction: ( ..a db: db-handle quot: ( ..a db: db-handle -- ..b ) -- ..b ) [
   over unmake-db-handle dup "BEGIN" 0 0 0 (exec) swap (check-ok)
   over [ unmake-db-handle dup "COMMIT" 0 0 0 (exec) swap (check-ok) ] curry
   compose
   over [ unmake-db-handle dup "ROLLBACK" 0 0 0 (exec) swap (check-ok) throw ] curry
   recover
 ] ;
+
+\\ Deprecated alias of `using-transaction`.
+with-transaction: deprecated ( ..a db: db-handle quot: ( ..a db: db-handle -- ..b ) -- ..b ) [ using-transaction ] ;

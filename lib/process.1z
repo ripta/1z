@@ -190,10 +190,13 @@ capture-all: ( argv opts -- process-result ) [
 
 \\ Execute a quotation with a running child process.
 \\ Sends SIGTERM and waits for exit during cleanup.
-with-process: ( argv opts quot -- ... ) [
+using-process: ( ..a argv: array opts: stdio-opts quot: ( ..a p: process -- ..b ) -- ..b ) [
   [ spawn-process ] dip
   over [ (terminate-and-wait) ] curry cleanup
 ] ;
+
+\\ Deprecated alias of `using-process`.
+with-process: deprecated ( ..a argv: array opts: stdio-opts quot: ( ..a p: process -- ..b ) -- ..b ) [ using-process ] ;
 
 \\ Execute a shell-safe command string via /bin/sh -c.
 run-shell: ( shell-safe -- process-result ) [

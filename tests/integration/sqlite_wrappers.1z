@@ -8,18 +8,18 @@ use "sqlite" ;
 dup db-handle? "open returns a db-handle" assert-true
 close-db
 
-"with-db cleanup on normal exit" test-section
-":memory:" [ "CREATE TABLE t (x INTEGER)" { } execute ] with-db
-t "with-db completed" assert-true
+"using-db cleanup on normal exit" test-section
+":memory:" [ "CREATE TABLE t (x INTEGER)" { } execute ] using-db
+t "using-db completed" assert-true
 
-"with-stmt lifecycle" test-section
+"using-stmt lifecycle" test-section
 ":memory:" [
   dup "CREATE TABLE t (x INTEGER)" { } execute
   dup "SELECT 1" [
-    dup stmt-handle? "with-stmt body receives a stmt-handle" assert-true
+    dup stmt-handle? "using-stmt body receives a stmt-handle" assert-true
     dup step-hash option:some? "step-hash returns some" assert-true
-  ] with-stmt
-] with-db
+  ] using-stmt
+] using-db
 
 "execute with empty params" test-section
 ":memory:" [
@@ -28,8 +28,8 @@ t "with-db completed" assert-true
   dup "SELECT x FROM t" [
     step-hash unwrap-or-throw
     "x" @get 42 "execute no-params insert" assert=
-  ] with-stmt
-] with-db
+  ] using-stmt
+] using-db
 
 "execute with one fixnum param" test-section
 ":memory:" [
@@ -38,8 +38,8 @@ t "with-db completed" assert-true
   dup "SELECT x FROM t" [
     step-hash unwrap-or-throw
     "x" @get 99 "fixnum param" assert=
-  ] with-stmt
-] with-db
+  ] using-stmt
+] using-db
 
 "bind fixnum, float, string" test-section
 ":memory:" [
@@ -50,8 +50,8 @@ t "with-db completed" assert-true
     dup "i" @get 42 "fixnum column" assert=
     dup "f" @get 3.14 "float column" assert=
     "s" @get "hello" "string column" assert=
-  ] with-stmt
-] with-db
+  ] using-stmt
+] using-db
 
 "step-hash multiple rows and exhaustion" test-section
 ":memory:" [
@@ -62,8 +62,8 @@ t "with-db completed" assert-true
     dup step-hash unwrap-or-throw "name" @get "alice" "first row" assert=
     dup step-hash unwrap-or-throw "name" @get "bob" "second row" assert=
     step-hash option:none? "exhausted after last row" assert-true
-  ] with-stmt
-] with-db
+  ] using-stmt
+] using-db
 
 "bind option:none for NULL via low-level" test-section
 ":memory:" [
@@ -75,8 +75,8 @@ t "with-db completed" assert-true
   dup "SELECT n FROM t" [
     step-hash unwrap-or-throw
     "n" @has? f "NULL column omitted from hash" assert=
-  ] with-stmt
-] with-db
+  ] using-stmt
+] using-db
 
 "execute with params" test-section
 ":memory:" [
@@ -86,35 +86,35 @@ t "with-db completed" assert-true
     step-hash unwrap-or-throw
     dup "x" @get 99 "execute inserted fixnum" assert=
     "y" @get "world" "execute inserted string" assert=
-  ] with-stmt
-] with-db
+  ] using-stmt
+] using-db
 
-"with-transaction commit" test-section
+"using-transaction commit" test-section
 ":memory:" [
   dup "CREATE TABLE t (x INTEGER)" { } execute
   [
     dup "INSERT INTO t VALUES (?1)" { 1 } execute
     dup "INSERT INTO t VALUES (?1)" { 2 } execute
-  ] with-transaction
+  ] using-transaction
   dup "SELECT x FROM t ORDER BY x" [
     dup step-hash unwrap-or-throw "x" @get 1 "first row after commit" assert=
     dup step-hash unwrap-or-throw "x" @get 2 "second row after commit" assert=
     step-hash option:none? "no more rows" assert-true
-  ] with-stmt
+  ] using-stmt
   drop
-] with-db
+] using-db
 
-"with-transaction rollback on error" test-section
+"using-transaction rollback on error" test-section
 ":memory:" [
   dup "CREATE TABLE t (x INTEGER)" { } execute
   [
     dup [
       dup "INSERT INTO t VALUES (?1)" { 999 } execute
       f "deliberate error" "test-error" make-error throw
-    ] with-transaction
+    ] using-transaction
   ] [ drop ] recover
   dup "SELECT COUNT(*) as c FROM t" [
     step-hash unwrap-or-throw "c" @get 0 "rolled back data not visible" assert=
-  ] with-stmt
+  ] using-stmt
   drop
-] with-db
+] using-db

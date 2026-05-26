@@ -4,14 +4,14 @@ Stack: [ <db-handle <resource:sqlite3>> ]
 PASS: open returns a db-handle
 Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ ]
-=== with-db cleanup on normal exit ===
+=== using-db cleanup on normal exit ===
 Stack: [ ]
 Stack: [ ]
-PASS: with-db completed
+PASS: using-db completed
 Stack: [ ]
-=== with-stmt lifecycle ===
+=== using-stmt lifecycle ===
 Stack: [ ]
-PASS: with-stmt body receives a stmt-handle
+PASS: using-stmt body receives a stmt-handle
 PASS: step-hash returns some
 Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> ]
 === execute with empty params ===
@@ -44,13 +44,13 @@ Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-
 PASS: execute inserted fixnum
 PASS: execute inserted string
 Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
-=== with-transaction commit ===
+=== using-transaction commit ===
 Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 PASS: first row after commit
 PASS: second row after commit
 PASS: no more rows
 Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
-=== with-transaction rollback on error ===
+=== using-transaction rollback on error ===
 Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]
 PASS: rolled back data not visible
 Stack: [ <db-handle <resource:sqlite3 (closed)>> <stmt-handle <resource:sqlite3-stmt (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> <db-handle <resource:sqlite3 (closed)>> ]

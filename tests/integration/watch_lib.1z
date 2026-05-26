@@ -23,7 +23,7 @@ use "time" ;
       drop
       "native event watch unsupported on this platform/filesystem" skip
     ] if
-  ] with-temp-directory
+  ] using-temp-directory
 ] ;
 
 "watcher type and probe" test-section
@@ -50,7 +50,7 @@ use "time" ;
     next-event
     dup watch-event:modified? "file write produces modified event" assert-true
     unmake-watch-event:modified path>> swap "next-event preserves watched path" assert=
-  ] with-watcher
+  ] using-watcher
 ] (with-supported-watch-file)
 
 "polling watcher translates file changes" test-section
@@ -62,16 +62,16 @@ use "time" ;
     next-event
     dup watch-event:modified? "polling watcher reports modified event" assert-true
     unmake-watch-event:modified path>> swap "polling watcher preserves watched path" assert=
-  ] with-watcher
+  ] using-watcher
 ] (with-supported-watch-file)
 
-"with-watcher closes on exit" test-section
+"using-watcher closes on exit" test-section
 
 [
   <event-watcher>
-  [ dup ] with-watcher
+  [ dup ] using-watcher
   next-event
-] use-after-close: "with-watcher closes returned watcher value" assert-error-type
+] use-after-close: "using-watcher closes returned watcher value" assert-error-type
 
 "each forwards events to callback" test-section
 
@@ -88,18 +88,18 @@ use "time" ;
         assert=
         f "stop each loop" EUserThrown make-error throw
       ] each
-    ] with-watcher
+    ] using-watcher
   ] [ drop ] recover
   3drop
 ] (with-supported-watch-file)
 
-"polling with-watcher closes on exit" test-section
+"polling using-watcher closes on exit" test-section
 
 [
   <polling-watcher>
-  [ dup ] with-watcher
+  [ dup ] using-watcher
   next-event
-] use-after-close: "with-watcher closes returned polling watcher value" assert-error-type
+] use-after-close: "using-watcher closes returned polling watcher value" assert-error-type
 
 "add-watch-recursive with subdirs" test-section
 
@@ -113,13 +113,13 @@ use "time" ;
       <event-watcher> [
         over add-watch-recursive
         #len 4 "add-watch-recursive returns one id per directory" assert=
-      ] with-watcher
+      ] using-watcher
       drop
     ] [
       drop
       "native event watch unsupported on this platform/filesystem" skip
     ] if
-  ] with-temp-directory
+  ] using-temp-directory
 ] [ drop ] recover
 
 "add-watch-recursive on flat dir" test-section
@@ -130,13 +130,13 @@ use "time" ;
       <event-watcher> [
         over add-watch-recursive
         #len 1 "add-watch-recursive on flat dir returns one id" assert=
-      ] with-watcher
+      ] using-watcher
       drop
     ] [
       drop
       "native event watch unsupported on this platform/filesystem" skip
     ] if
-  ] with-temp-directory
+  ] using-temp-directory
 ] [ drop ] recover
 
 "debounced-each delivers events" test-section
@@ -157,7 +157,7 @@ use "time" ;
         assert=
         f "stop debounce loop" EUserThrown make-error throw
       ] curry debounced-each
-    ] with-watcher
+    ] using-watcher
   ] [ drop ] recover
   drop
 ] (with-supported-watch-file)

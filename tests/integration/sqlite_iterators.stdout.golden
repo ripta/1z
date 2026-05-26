@@ -39,7 +39,7 @@ Stack: [ <db-handle <resource:sqlite3>> { H{ name: "alice" } H{ name: "carol" } 
 PASS: second filtered name
 Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ ]
-=== query-hash partial consumption with with-iterator ===
+=== query-hash partial consumption with using-iterator ===
 Stack: [ ]
 Stack: [ <db-handle <resource:sqlite3>> ]
 Stack: [ <db-handle <resource:sqlite3>> <iterator callback callback> ]

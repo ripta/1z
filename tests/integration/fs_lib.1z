@@ -91,12 +91,12 @@ stream-close
 "tests/integration/_tmp_fs_lib_recursive" delete-directory-recursive
 f "tests/integration/_tmp_fs_lib_recursive" path-exists? "delete-directory-recursive removes all" assert=
 
-"with-temp-directory" test-section
+"using-temp-directory" test-section
 t [
-  dup path-exists? "with-temp-directory: dir exists inside quot" assert-true
+  dup path-exists? "using-temp-directory: dir exists inside quot" assert-true
   drop
-] with-temp-directory
-"with-temp-directory: quotation executed" assert-true
+] using-temp-directory
+"using-temp-directory: quotation executed" assert-true
 
 "walk" test-section
 "tests/integration/_tmp_fs_lib_walk/sub1" create-directory

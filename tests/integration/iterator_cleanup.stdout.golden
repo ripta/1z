@@ -126,23 +126,23 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ <iterator array 0/3> ]
 Stack: [ ]
-=== with-iterator normal exit ===
+=== using-iterator normal exit ===
 Stack: [ ]
 Stack: [ M{ cleaned: f } ]
 Stack: [ M{ cleaned: f } [ M{ cleaned: f } cleaned: t @set! drop ] ]
 Stack: [ M{ cleaned: f } [ M{ n: 0 } dup n: @get 1 + dup 5 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ cleaned: f } cleaned: t @set! drop ] ]
 Stack: [ M{ cleaned: f } <iterator callback callback> ]
 Stack: [ M{ cleaned: t } { 1 2 } ]
-PASS: with-iterator consumed partial
+PASS: using-iterator consumed partial
 Stack: [ M{ cleaned: t } ]
-PASS: with-iterator cleanup ran on normal exit
+PASS: using-iterator cleanup ran on normal exit
 Stack: [ ]
-=== with-iterator error exit ===
+=== using-iterator error exit ===
 Stack: [ ]
 Stack: [ M{ cleaned: f } ]
 Stack: [ M{ cleaned: f } [ M{ cleaned: f } cleaned: t @set! drop ] ]
 Stack: [ M{ cleaned: f } [ M{ n: 0 } dup n: @get 1 + dup 5 > [ 2drop option:none ] [ swap over n: swap @set! drop >option:some ] if ] [ M{ cleaned: f } cleaned: t @set! drop ] ]
 Stack: [ M{ cleaned: f } <iterator callback callback> ]
 Stack: [ M{ cleaned: t } ]
-PASS: with-iterator cleanup ran on error exit
+PASS: using-iterator cleanup ran on error exit
 Stack: [ ]

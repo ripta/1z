@@ -4,6 +4,7 @@ Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back t
 Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'with-iterator' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'q' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'r' has row-variable effect; quotation call falls back to interpreter
@@ -17,15 +18,16 @@ Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls 
 Warning: 'while' parameter 'body' has row-variable effect; quotation call falls back to interpreter
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'using-iterator' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Error: --interpreter-fallback=false rejects compound-fallback dispatch; 6 call sites still route through the interpreter
   'stream-write(exact)' -> '(stream-write-exact-step)' (line 562)
       callee uncompiled: NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
-  'pragma-get' -> 'pragma-get?' (line 994)
+  'pragma-get' -> 'pragma-get?' (line 997)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-  'pragma-get' -> 'option:some>' (line 996)
+  'pragma-get' -> 'option:some>' (line 999)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
   '#none' -> '#any' (line 364)

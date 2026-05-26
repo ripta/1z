@@ -86,13 +86,16 @@ delete-directory-recursive: stack-recursive ( path -- ) [
 
 \\ Execute a quotation with a temporary directory path on the stack.
 \\ The directory is created before and deleted after execution.
-with-temp-directory: ( quot -- ... ) [
+using-temp-directory: ( ..a quot: ( ..a dir: string -- ..b ) -- ..b ) [
   environ "TMPDIR" "/tmp" @get-or
   monotonic-nanos inspect "1z-tmp-" swap #append
   path-join
   dup create-directory
   swap over [ delete-directory-recursive ] curry cleanup
 ] ;
+
+\\ Deprecated alias of `using-temp-directory`.
+with-temp-directory: deprecated ( ..a quot: ( ..a dir: string -- ..b ) -- ..b ) [ using-temp-directory ] ;
 
 \ Walk iterator (BFS)
 

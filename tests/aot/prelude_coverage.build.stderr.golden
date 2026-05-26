@@ -1,4 +1,4 @@
-Prelude compilation: 323/356 words compiled (90.7%)
+Prelude compilation: 324/357 words compiled (90.8%)
   word '>option:some' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
@@ -129,6 +129,7 @@ Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back t
 Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'with-iterator' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'q' has row-variable effect; quotation call falls back to interpreter
 Warning: 'tri' parameter 'r' has row-variable effect; quotation call falls back to interpreter
@@ -142,6 +143,7 @@ Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls 
 Warning: 'while' parameter 'body' has row-variable effect; quotation call falls back to interpreter
 Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'using-iterator' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)

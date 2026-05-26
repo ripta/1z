@@ -41,10 +41,10 @@ dup 0 #nth "name" @get "alice" "first filtered name" assert=
 1 #nth "name" @get "carol" "second filtered name" assert=
 close-db
 
-"query-hash partial consumption with with-iterator" test-section
+"query-hash partial consumption with using-iterator" test-section
 (setup-test-db)
 dup "SELECT id FROM t ORDER BY id" { } query-hash
-[ 2 #take #collect ] with-iterator
+[ 2 #take #collect ] using-iterator
 dup #len 2 "took 2 rows" assert=
 dup 0 #nth "id" @get 1 "first taken id" assert=
 1 #nth "id" @get 2 "second taken id" assert=
