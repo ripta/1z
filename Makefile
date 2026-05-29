@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter profiles build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -162,6 +162,9 @@ benchmark-quotation: build ## Run quotation sequence benchmark across all execut
 
 benchmark-scanner: build ## Run scanner vs direct benchmark across interpreter modes
 	@scripts/benchmark-scanner.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/scanner_vs_direct.1z
+
+benchmark-word-resolution: build ## Run word-resolution benchmark across interpreter modes
+	@scripts/benchmark-word-resolution.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/word_resolution.1z
 
 # NOTE(ripta): The focused split-based, index-based, flat (struct-free), and `while`-driven harnesses
 #              build successfully with `--emit-runtime-image`. Their AOT runtime currently errors at

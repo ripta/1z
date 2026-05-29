@@ -1,0 +1,48 @@
+\ Benchmark: pre-resolved word ID dispatch (call_word_direct vs call_word)
+\
+\ Three scenarios isolate the interpreter's call-dispatch path:
+\
+\   chain-N-deep    forward-referenced globals defined in order, so each
+\                   inner call is emitted as call_word_direct. The headline
+\                   workload for the optimization.
+\
+\   countdown-self  self-recursive word. Self-recursion always falls back to
+\                   call_word at parse time, so this scenario should NOT
+\                   speed up; it is the experimental control.
+\
+\   mutual          mutual recursion. The forward leg falls back to
+\                   call_word, the backward leg emits call_word_direct. Shows
+\                   the partial benefit when forward references are mixed in.
+\
+\ Run with --compile=off for the headline number. --compile=hybrid/eager runs
+\ confirm the benefit shrinks once compilation kicks in.
+
+\ --- chain scenario: every inner call is pre-resolved ---
+
+inc:    ( n -- n ) [ 1 + ] ;
+chain1: ( n -- n ) [ inc ] ;
+chain2: ( n -- n ) [ chain1 inc ] ;
+chain3: ( n -- n ) [ chain2 inc ] ;
+chain4: ( n -- n ) [ chain3 inc ] ;
+
+\ --- self-recursion control: always uses call_word ---
+
+countdown: ( n -- ) [
+  dup 0 = [ drop ] [ 1 - countdown ] if
+] ;
+
+\ --- mutual recursion: forward leg uses call_word, backward leg direct ---
+
+mut-even?: ( n -- b ) [
+  dup 0 = [ drop t ] [ 1 - mut-odd? ] if
+] ;
+
+mut-odd?: ( n -- b ) [
+  dup 0 = [ drop f ] [ 1 - mut-even? ] if
+] ;
+
+[
+  "chain-4-deep" 100000 [ 0 chain4 drop ] benchmark-n
+  "countdown-200" 500 [ 200 countdown ] benchmark-n
+  "mutual-200" 500 [ 200 mut-even? drop ] benchmark-n
+] run-benchmarks

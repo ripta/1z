@@ -1,0 +1,32 @@
+Running tests/benchmark/word_resolution.1z in all interpreter modes...
+
+--- interpreted ---
+Name              Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack    Allocs      Bytes
+-------------   -------   -----------   ------------   -----------   ----------   -------   --------
+chain-4-deep    100,000   1369.535 ms      13.695 us            18            2        12    5.15 KB
+countdown-200       500   7545.381 ms      15.090 ms         1,809            4   402,002   46.00 MB
+mutual-200          500   7626.272 ms      15.252 ms         1,811            4   402,005   46.00 MB
+
+--- hybrid ---
+Name              Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
+-------------   -------   ----------   ------------   -----------   ----------   ------   ---------
+chain-4-deep    100,000   210.673 ms       2.106 us             3            2       20     8.83 KB
+countdown-200       500    15.693 ms      31.386 us             3            4      401    47.15 KB
+mutual-200          500    18.664 ms      37.328 us             6            4      807   101.01 KB
+
+--- eager ---
+Name              Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack    Allocs      Bytes
+-------------   -------   -----------   ------------   -----------   ----------   -------   --------
+chain-4-deep    100,000    204.469 ms       2.044 us             3            1         2      528 B
+countdown-200       500     10.561 ms      21.122 us             2            1         1      288 B
+mutual-200          500   4661.683 ms       9.323 ms           911            4   202,014   23.14 MB
+
+=== Summary ===
+
+Mode               Prelude        JIT       User      Total
+--------------- ---------- ---------- ---------- ----------
+interpreted           19ms        0ms    16.542s    16.562s
+hybrid                17ms        0ms      245ms      263ms
+eager                 18ms        0ms     4.879s     4.897s
+
+(AOT skipped: optimization affects interpreter dispatch only.)
