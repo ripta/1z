@@ -66,7 +66,8 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
                     return error.InvalidHashSyntax;
                 },
             },
-            .call_word => |name| {
+            .call_word, .call_word_direct => {
+                const name = key_instr.op.callTargetName().?;
                 helpers.setErrorContext(ctx, "expected symbol or string key, got word '{s}'", .{name});
                 return error.InvalidHashSyntax;
             },
@@ -83,7 +84,7 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
         const val_start = i;
         i += 1;
 
-        while (i < instrs.len and instrs[i].op == .call_word) : (i += 1) {}
+        while (i < instrs.len and instrs[i].op.isCall()) : (i += 1) {}
         // push_literal values are borrowed from the instruction stream, so a
         // hash slot becomes a new owner and must retain. call_word values were
         // popped from the stack into a transient C-local, so the slot inherits
@@ -133,7 +134,7 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
                 container_backing.retainValue(v);
                 break :blk v;
             },
-            .call_word => blk: {
+            .call_word, .call_word_direct => blk: {
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
                 break :blk ctx.stack.pop() catch return error.OutOfMemory;
             },
@@ -166,7 +167,7 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
     for (instrs) |instr| {
         const val = switch (instr.op) {
             .push_literal => |v| v,
-            .call_word => blk: {
+            .call_word, .call_word_direct => blk: {
                 // Execute the word to get the value
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
                 break :blk ctx.stack.pop() catch return error.OutOfMemory;
@@ -211,7 +212,7 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
                 container_backing.retainValue(v);
                 break :blk v;
             },
-            .call_word => blk: {
+            .call_word, .call_word_direct => blk: {
                 // Execute the word to get the value
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
                 break :blk ctx.stack.pop() catch return error.OutOfMemory;
@@ -256,7 +257,8 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
                     return error.InvalidHashSyntax;
                 },
             },
-            .call_word => |name| {
+            .call_word, .call_word_direct => {
+                const name = key_instr.op.callTargetName().?;
                 helpers.setErrorContext(ctx, "expected symbol or string key, got word '{s}'", .{name});
                 return error.InvalidHashSyntax;
             },
@@ -273,7 +275,7 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
         // push_literal [1 2 3] + call_word make-vector).
         const val_start = i;
         i += 1;
-        while (i < instrs.len and instrs[i].op == .call_word) : (i += 1) {}
+        while (i < instrs.len and instrs[i].op.isCall()) : (i += 1) {}
         // push_literal values are borrowed from the instruction stream, so a
         // map slot becomes a new owner and must retain. call_word values were
         // popped from the stack into a transient C-local, so the slot inherits

@@ -327,9 +327,8 @@ fn nativeDeadDefinitions(ctx: *Context) anyerror!void {
             const word = moduleWordToWordDef(name, entry.value_ptr.*);
             if (!isLintSemanticWord(name, word)) continue;
 
-            const gop = try dictionary.entries.getOrPut(alloc, name);
-            if (!gop.found_existing) {
-                gop.value_ptr.* = word;
+            if (dictionary.get(name) == null) {
+                try dictionary.put(name, word);
                 const source_file = word.source_file orelse continue;
                 try word_info.put(alloc, name, .{
                     .name = name,
@@ -462,7 +461,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
         while (iter.next()) |entry| {
             const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
             if (!gop.found_existing) {
-                try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+                try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(dictionary_mod.loadSlot(entry.value_ptr.*).*));
             }
         }
     }
@@ -487,7 +486,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
             while (iter.next()) |entry| {
                 const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
                 if (!gop.found_existing) {
-                    try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+                    try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(dictionary_mod.loadSlot(entry.value_ptr.*).*));
                 }
             }
         }
@@ -926,7 +925,7 @@ fn collectFrameWords(
     while (dict_iter.next()) |entry| {
         const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
         if (!gop.found_existing) {
-            try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, entry.key_ptr.*, entry.value_ptr.*));
+            try results.append(alloc, try buildWordInfo(alloc, lookup_ctx, entry.key_ptr.*, dictionary_mod.loadSlot(entry.value_ptr.*).*));
         }
     }
 }
@@ -973,6 +972,10 @@ fn nativeQuotationToOpcodes(ctx: *Context) anyerror!void {
             .call_word => |name| {
                 pair[0] = .{ .symbol = "call-word" };
                 pair[1] = .{ .string = name };
+            },
+            .call_word_direct => |slot| {
+                pair[0] = .{ .symbol = "call-word" };
+                pair[1] = .{ .string = slot.name };
             },
         }
         result[i] = .{ .array = pair };

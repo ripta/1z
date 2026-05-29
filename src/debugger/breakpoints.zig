@@ -108,16 +108,10 @@ pub const BreakpointManager = struct {
         for (self.breakpoints.items) |*bp| {
             if (!bp.enabled) continue;
             const matches = switch (bp.kind) {
-                .word_name => |name| switch (instr.op) {
-                    .call_word => |word| std.mem.eql(u8, word, name),
-                    .push_literal => false,
-                },
+                .word_name => |name| if (instr.op.callTargetName()) |word| std.mem.eql(u8, word, name) else false,
                 .source_location => |loc| instr.line == loc.line and std.mem.eql(u8, ctx.current_source, loc.source),
                 .conditional => |cond| blk: {
-                    const word_matches = switch (instr.op) {
-                        .call_word => |word| std.mem.eql(u8, word, cond.word_name),
-                        .push_literal => false,
-                    };
+                    const word_matches = if (instr.op.callTargetName()) |word| std.mem.eql(u8, word, cond.word_name) else false;
 
                     if (!word_matches) break :blk false;
 

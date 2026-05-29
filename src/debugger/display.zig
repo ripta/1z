@@ -27,6 +27,9 @@ pub const DisplayRenderer = struct {
             .call_word => |name| {
                 try writer.print("call  {s}", .{name});
             },
+            .call_word_direct => |slot| {
+                try writer.print("call  {s}", .{slot.name});
+            },
         }
         try writer.writeAll("\n");
 

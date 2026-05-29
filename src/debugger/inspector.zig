@@ -2,6 +2,7 @@ const std = @import("std");
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const value_mod = @import("../value.zig");
+const dict_mod = @import("../dictionary.zig");
 const Value = value_mod.Value;
 const BenchmarkStats = @import("../benchmark.zig").BenchmarkStats;
 
@@ -66,6 +67,9 @@ pub const Inspector = struct {
                             },
                             .call_word => |w| {
                                 try writer.print("call  {s}", .{w});
+                            },
+                            .call_word_direct => |slot| {
+                                try writer.print("call  {s}", .{slot.name});
                             },
                         }
                         try writer.writeAll("\n");
@@ -229,7 +233,7 @@ pub const Inspector = struct {
         var imported_count: usize = 0;
         var iter = ctx.dictionary.entries.iterator();
         while (iter.next()) |entry| {
-            const word = entry.value_ptr.*;
+            const word = dict_mod.loadSlot(entry.value_ptr.*);
             switch (word.action) {
                 .native, .host_callback => native_count += 1,
                 .compound => compound_count += 1,

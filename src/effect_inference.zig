@@ -617,7 +617,8 @@ pub const InferenceEngine = struct {
                     delta += 1;
                     try stack_model.append(self.allocator, self.stackEntryForValue(val));
                 },
-                .call_word => |name| {
+                .call_word, .call_word_direct => {
+                    const name = instr.op.callTargetName().?;
                     const word_def = self.lookupWord(name);
                     if (word_def == null) {
                         if (std.mem.indexOfScalar(u8, name, '.') != null) {

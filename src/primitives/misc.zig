@@ -17,6 +17,7 @@ const call_graph_mod = @import("../call_graph.zig");
 const ir_codegen = @import("../ir_codegen.zig");
 const stack_effect_mod = @import("../stack_effect.zig");
 const container_backing = @import("../container_backing.zig");
+const dict_mod = @import("../dictionary.zig");
 
 const popString = helpers.popString;
 
@@ -922,8 +923,8 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
             return;
         }
     }
-    if (ctx.dictionary.entries.getPtr(name)) |entry| {
-        entry.word_id = word_id;
+    if (ctx.dictionary.entries.get(name)) |slot| {
+        dict_mod.loadSlot(slot).word_id = word_id;
         return;
     }
     var ancestor = ctx.parent_context;
@@ -936,8 +937,8 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
                 return;
             }
         }
-        if (anc.dictionary.entries.getPtr(name)) |entry| {
-            entry.word_id = word_id;
+        if (anc.dictionary.entries.get(name)) |slot| {
+            dict_mod.loadSlot(slot).word_id = word_id;
             return;
         }
         ancestor = anc.parent_context;

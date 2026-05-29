@@ -5,7 +5,8 @@ const Context = @import("../context.zig").Context;
 const tokenizer_mod = @import("../tokenizer.zig");
 const Tokenizer = tokenizer_mod.Tokenizer;
 const Token = tokenizer_mod.Token;
-const WordDefinition = @import("../dictionary.zig").WordDefinition;
+const dict_mod = @import("../dictionary.zig");
+const WordDefinition = dict_mod.WordDefinition;
 const StackEffect = @import("../stack_effect.zig").StackEffect;
 const effect_inference = @import("../effect_inference.zig");
 const call_graph = @import("../call_graph.zig");
@@ -578,7 +579,7 @@ pub const Server = struct {
                 if (items.items.len >= max_items) break;
                 const name = entry.key_ptr.*;
                 if (prefix.len == 0 or std.mem.startsWith(u8, name, prefix)) {
-                    try items.append(self.allocator, makeCompletionItem(name, entry.value_ptr.*));
+                    try items.append(self.allocator, makeCompletionItem(name, dict_mod.loadSlot(entry.value_ptr.*).*));
                 }
             }
         }

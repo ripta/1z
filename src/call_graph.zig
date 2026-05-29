@@ -1,8 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const Dictionary = @import("dictionary.zig").Dictionary;
-const WordDefinition = @import("dictionary.zig").WordDefinition;
+const dict_mod = @import("dictionary.zig");
+const Dictionary = dict_mod.Dictionary;
+const WordDefinition = dict_mod.WordDefinition;
 const Context = @import("context.zig").Context;
 
 const dispatch_mod = @import("dispatch.zig");
@@ -34,9 +35,9 @@ pub fn build(dictionary: *const Dictionary, dispatch_table: *const DispatchTable
     var iter = dictionary.entries.iterator();
     while (iter.next()) |entry| {
         const word_name = entry.key_ptr.*;
-        const word_def = entry.value_ptr.*;
+        const word_def = dict_mod.loadSlot(entry.value_ptr.*);
 
-        const graph_entry = try buildEntry(word_name, &word_def, dispatch_table, allocator);
+        const graph_entry = try buildEntry(word_name, word_def, dispatch_table, allocator);
         try graph.put(allocator, word_name, graph_entry);
     }
 
@@ -77,7 +78,8 @@ pub fn collectCalleesPublic(instructions: []const Instruction, callee_set: *std.
 fn collectCallees(instructions: []const Instruction, callee_set: *std.StringHashMapUnmanaged(void), has_opaque: *bool, allocator: Allocator) !void {
     for (instructions) |instr| {
         switch (instr.op) {
-            .call_word => |name| {
+            .call_word, .call_word_direct => {
+                const name = instr.op.callTargetName().?;
                 if (std.mem.eql(u8, name, ">quotation")) {
                     has_opaque.* = true;
                 }
@@ -129,7 +131,8 @@ pub fn hasTailCallTo(instructions: []const Instruction, target_name: []const u8)
     if (instructions.len == 0) return false;
     const last = instructions[instructions.len - 1];
     switch (last.op) {
-        .call_word => |name| {
+        .call_word, .call_word_direct => {
+            const name = last.op.callTargetName().?;
             if (std.mem.eql(u8, name, target_name)) return true;
 
             // check the two quotation literals preceding `if`

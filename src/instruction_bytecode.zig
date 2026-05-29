@@ -179,6 +179,9 @@ pub fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions:
             .call_word => |name| {
                 try writeCallWord(buf, allocator, name);
             },
+            .call_word_direct => |slot| {
+                try writeCallWord(buf, allocator, slot.name);
+            },
         }
     }
 }
@@ -618,6 +621,10 @@ fn freeDecodedOp(op: Instruction.Op) void {
     switch (op) {
         .push_literal => |v| freeDecodedValue(v),
         .call_word => |n| testing.allocator.free(n),
+        // Direct-call instructions reference a heap-stable `WordSlot` owned
+        // by the dictionary; nothing here to free, and direct-call ops are
+        // not produced by the bytecode decoder in the first place.
+        .call_word_direct => {},
     }
 }
 

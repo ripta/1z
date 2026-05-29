@@ -69,7 +69,8 @@ fn isBranchCombinator(ctx: *const Context, name: []const u8) bool {
 fn containsSelfCallAnywhere(instructions: []const Instruction, name: []const u8) bool {
     for (instructions) |instr| {
         switch (instr.op) {
-            .call_word => |w| {
+            .call_word, .call_word_direct => {
+                const w = instr.op.callTargetName().?;
                 if (std.mem.eql(u8, w, name)) return true;
             },
             .push_literal => |val| {
@@ -94,13 +95,15 @@ fn containsNonTailSelfCall(ctx: *const Context, instructions: []const Instructio
     const last_idx = instructions.len - 1;
     const last_is_branch = switch (instructions[last_idx].op) {
         .call_word => |w| isBranchCombinator(ctx, w),
+        .call_word_direct => |slot| isBranchCombinator(ctx, slot.name),
         else => false,
     };
 
     for (instructions, 0..) |instr, i| {
         const is_last = (i == last_idx);
         switch (instr.op) {
-            .call_word => |w| {
+            .call_word, .call_word_direct => {
+                const w = instr.op.callTargetName().?;
                 if (std.mem.eql(u8, w, name)) {
                     if (!is_last) return true;
                     // Last instruction: tail self-call, not an error

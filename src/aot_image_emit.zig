@@ -575,7 +575,7 @@ fn findTypeValueLiteral(mw: *const ModuleWord) ?*const TypeValue {
                 .type_val => |tv| return tv,
                 else => {},
             },
-            .call_word => {},
+            .call_word, .call_word_direct => {},
         }
     }
     return null;
@@ -618,7 +618,7 @@ fn internInstructionTypeLiterals(
     for (instrs) |instr| {
         switch (instr.op) {
             .push_literal => |lit| try internValueTypeLiterals(struct_plans, struct_index, effect_table, lit),
-            .call_word => {},
+            .call_word, .call_word_direct => {},
         }
     }
 }

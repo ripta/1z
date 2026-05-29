@@ -853,6 +853,7 @@ fn deepCopyQuotation(quot: value_mod.Quotation, alloc: Allocator) DeepCopyError!
             .op = switch (instr.op) {
                 .push_literal => |v| .{ .push_literal = try deepCopyValue(v, alloc) },
                 .call_word => |name| .{ .call_word = try alloc.dupe(u8, name) },
+                .call_word_direct => |slot| .{ .call_word_direct = slot },
             },
             .line = instr.line,
         };

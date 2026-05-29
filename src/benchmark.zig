@@ -608,7 +608,7 @@ const VariantHistogramWalker = struct {
         for (instructions) |instr| {
             switch (instr.op) {
                 .push_literal => |literal| try self.walkValue(alloc, stats, literal),
-                .call_word => {},
+                .call_word, .call_word_direct => {},
             }
         }
     }

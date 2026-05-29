@@ -2082,39 +2082,40 @@ pub fn inferQuotationEffect(
                 sp += 1;
                 delta += 1;
             },
-            .call_word => |name| {
+            .call_word, .call_word_direct => blk: {
+                const name = instr.op.callTargetName().?;
                 if (try inferBuiltinEffect(name, &mini_stack, &sp, &delta, &min_delta, resolver)) |ok| {
                     if (!ok) return null;
-                } else {
-                    // Not a built-in word: resolve via WordResolver.
-                    const res = resolver orelse return null;
-                    const resolved = res.resolve(name, res.user_data) orelse return null;
+                    break :blk;
+                }
+                // Not a built-in word: resolve via WordResolver.
+                const res = resolver orelse return null;
+                const resolved = res.resolve(name, res.user_data) orelse return null;
 
-                    // Row-variable callees have input_count/output_count
-                    // that include row variable params. Without knowing their
-                    // quotation arguments, the counts are unusable here.
-                    if (resolved.callee_effect != null) return null;
+                // Row-variable callees have input_count/output_count
+                // that include row variable params. Without knowing their
+                // quotation arguments, the counts are unusable here.
+                if (resolved.callee_effect != null) return null;
 
-                    // Consume inputs.
-                    const in: i32 = @intCast(resolved.input_count);
-                    const out: i32 = @intCast(resolved.output_count);
-                    delta -= in;
-                    min_delta = @min(min_delta, delta);
-                    delta += out;
+                // Consume inputs.
+                const in: i32 = @intCast(resolved.input_count);
+                const out: i32 = @intCast(resolved.output_count);
+                delta -= in;
+                min_delta = @min(min_delta, delta);
+                delta += out;
 
-                    // Update mini-stack: pop consumed entries, push opaque outputs.
-                    var pops: usize = resolved.input_count;
-                    while (pops > 0 and sp > 0) {
-                        sp -= 1;
-                        pops -= 1;
-                    }
-                    var pushes: usize = resolved.output_count;
-                    while (pushes > 0) {
-                        if (sp >= max_mini_stack_depth) return error.EffectInferenceOverflow;
-                        mini_stack[sp] = .other;
-                        sp += 1;
-                        pushes -= 1;
-                    }
+                // Update mini-stack: pop consumed entries, push opaque outputs.
+                var pops: usize = resolved.input_count;
+                while (pops > 0 and sp > 0) {
+                    sp -= 1;
+                    pops -= 1;
+                }
+                var pushes: usize = resolved.output_count;
+                while (pushes > 0) {
+                    if (sp >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+                    mini_stack[sp] = .other;
+                    sp += 1;
+                    pushes -= 1;
                 }
             },
         }
@@ -4058,7 +4059,8 @@ fn compileInstructions(
                     sp.* += 1;
                 }
             },
-            .call_word => |name| {
+            .call_word, .call_word_direct => {
+                const name = instr.op.callTargetName().?;
                 if (std.mem.eql(u8, name, "dup")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
                     stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 1], sp.*);
@@ -5426,7 +5428,8 @@ fn hasSelfTailCall(instructions: []const Instruction, self_name: []const u8) boo
     if (instructions.len == 0) return false;
     const last = instructions[instructions.len - 1];
     switch (last.op) {
-        .call_word => |name| {
+        .call_word, .call_word_direct => {
+            const name = last.op.callTargetName().?;
             if (std.mem.eql(u8, name, self_name)) return true;
             if (std.mem.eql(u8, name, "if")) {
                 // Check the two quotation literals preceding `if`
@@ -5483,7 +5486,8 @@ fn preScanInstructions(
                     try preScanInstructions(val.quotation.instructions, resolver, flags, true);
                 }
             },
-            .call_word => |name| {
+            .call_word, .call_word_direct => {
+                const name = instr.op.callTargetName().?;
                 if (polyArithOpFromName(name) != null or isComparisonOp(name)) {
                     flags.needs_poly_fallback = true;
                 }

@@ -382,7 +382,8 @@ pub fn freezeModuleGraphOpts(
             };
             for (instrs) |instr| {
                 switch (instr.op) {
-                    .call_word => |call_name| {
+                    .call_word, .call_word_direct => {
+                        const call_name = instr.op.callTargetName().?;
                         if (qual_seen.contains(call_name)) continue;
                         try qual_seen.put(temp_allocator, call_name, {});
                         if (options.artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
@@ -401,7 +402,8 @@ pub fn freezeModuleGraphOpts(
                         if (val == .quotation) {
                             for (val.quotation.instructions) |q_instr| {
                                 switch (q_instr.op) {
-                                    .call_word => |call_name| {
+                                    .call_word, .call_word_direct => {
+                                        const call_name = q_instr.op.callTargetName().?;
                                         if (qual_seen.contains(call_name)) continue;
                                         try qual_seen.put(temp_allocator, call_name, {});
                                         if (options.artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
@@ -791,7 +793,8 @@ fn collectCallWords(
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
     for (instrs, 0..) |instr, idx| {
         switch (instr.op) {
-            .call_word => |name| {
+            .call_word, .call_word_direct => {
+                const name = instr.op.callTargetName().?;
                 if (bannedDynamicFeatureForCall(ctx, name, artifact_class)) |_| {
                     diagnostics.fatal_dynamic_feature = .{
                         .caller_name = caller_name,

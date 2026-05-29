@@ -2,7 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const Stack = @import("stack.zig").Stack;
-const Dictionary = @import("dictionary.zig").Dictionary;
+const dict_mod = @import("dictionary.zig");
+const Dictionary = dict_mod.Dictionary;
 const container_backing = @import("container_backing.zig");
 
 const value_mod = @import("value.zig");
@@ -536,6 +537,7 @@ pub const Context = struct {
         if (instrs.len == 0) return false;
         return switch (instrs[instrs.len - 1].op) {
             .call_word => |name| std.mem.eql(u8, name, ";"),
+            .call_word_direct => |slot| std.mem.eql(u8, slot.name, ";"),
             .push_literal => false,
         };
     }
@@ -2106,7 +2108,8 @@ pub const Context = struct {
 
             var dict_iter = ancestor.dictionary.entries.iterator();
             while (dict_iter.next()) |entry| {
-                switch (entry.value_ptr.action) {
+                const def = dict_mod.loadSlot(entry.value_ptr.*);
+                switch (def.action) {
                     .compound => |instrs| {
                         if (instrs.len != 1 or instrs[0].op != .push_literal) continue;
                         switch (instrs[0].op.push_literal) {
@@ -2885,7 +2888,8 @@ pub const Context = struct {
                         shadow.clearRetainingCapacity();
                     };
                 },
-                .call_word => |name| {
+                .call_word, .call_word_direct => {
+                    const name = instr.op.callTargetName().?;
                     if (matchShuffleWord(name)) |shuffle| {
                         if (self.lookupWord(name)) |word| {
                             if (word.stack_effect) |word_effect| {
@@ -3934,6 +3938,258 @@ pub const Context = struct {
         if (tci_module) |mod| self.popModuleDepsFrameTraced(mod);
     }
 
+    /// Signal returned by `executeResolvedWord` to the dispatch loop.
+    const ResolvedWordResult = enum {
+        /// Advance to the next instruction (`continue` at the call site).
+        proceed,
+        /// The tail-call slot has been set; the caller must return so the
+        /// outer dispatch loop replays the trampolined body.
+        tail_call_set,
+    };
+
+    /// Shared body of the `call_word` and `call_word_direct` dispatch arms,
+    /// taking the resolved name and definition. Caller is responsible for the
+    /// signal check, profiling start, and (for `call_word`) the lookup or
+    /// fallback path; this helper handles sandbox, parse-time-only,
+    /// JIT dispatch, generic dispatch, recursion-marker check, tail-call
+    /// setup, stack-limit check, and the native/host/compound call itself.
+    fn executeResolvedWord(
+        self: *Context,
+        name: []const u8,
+        word: WordDefinition,
+        instr: Instruction,
+        idx: usize,
+        pic_table: ?*PicTable,
+        is_last: bool,
+    ) anyerror!ResolvedWordResult {
+        if (self.active_sandbox) |sandbox| {
+            if (!sandbox.allows(word.capability)) {
+                self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                self.pending_error_message = std.fmt.allocPrint(
+                    self.arena.allocator(),
+                    "'{s}' requires capability '{s}' which is not granted by the active sandbox",
+                    .{ name, word.capability.displayName() },
+                ) catch "word denied by sandbox";
+                return self.wordErrorCleanup(name, error.PermissionDenied);
+            }
+        }
+
+        if (word.parse_time_only and self.parse_tokenizer == null) {
+            self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+            self.pending_error_message = "parse-time-only word cannot be called at runtime";
+            return self.wordErrorCleanup(name, error.ParseError);
+        }
+
+        // Try JIT-compiled dispatch before interpreter path
+        if (word.word_id) |wid| {
+            if (word.stack_effect) |effect| {
+                self.validateParameterEffects(&effect) catch |err| {
+                    self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                    return self.wordErrorCleanup(name, err);
+                };
+                if (!shouldSkipTypeAnnotationValidation(word)) {
+                    self.validateTypeAnnotations(&effect) catch |err| {
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        return self.wordErrorCleanup(name, err);
+                    };
+                }
+            }
+            const saved_source = self.current_source;
+            if (word.source_file) |sf| self.current_source = sf;
+            const jit_result = if (word.source_module) |mod| blk: {
+                self.pushModuleDepsFrame(mod) catch |err| {
+                    self.current_source = saved_source;
+                    self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                    return self.wordErrorCleanup(name, err);
+                };
+                defer self.popModuleDepsFrameTraced(mod);
+                break :blk ir_codegen.executeCompiled(self, wid);
+            } else ir_codegen.executeCompiled(self, wid);
+            self.current_source = saved_source;
+            if (self.trace.trace_jit) {
+                var tw = trace_mod.TraceWriter.init();
+                trace_mod.traceJitDispatch(&tw, name, wid, jit_result != .bail);
+            }
+            switch (jit_result) {
+                .ok => {
+                    if (self.benchmark) |bm| bm.endWordProfile(self.allocator, name);
+                    if (self.profile) |p| p.recordWordEnd(self.allocator, name);
+                    return .proceed;
+                },
+                .error_propagate => {
+                    const err = self.jit_pending_error orelse error.UserThrown;
+                    self.jit_pending_error = null;
+                    return err;
+                },
+                .bail => {
+                    if (self.compile_mode == .hybrid) {
+                        self.tryHybridCompile(wid, name, word);
+                    }
+                },
+            }
+        }
+
+        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+        self.traceWordExecution(name, instr);
+
+        if (word.stack_effect) |effect| {
+            self.validateParameterEffects(&effect) catch |err|
+                return self.wordErrorCleanup(name, err);
+            if (!shouldSkipTypeAnnotationValidation(word)) {
+                self.validateTypeAnnotations(&effect) catch |err|
+                    return self.wordErrorCleanup(name, err);
+            }
+        }
+
+        if (word.action == .compound) {
+            const has_generic = blk: {
+                for (word.markers) |mk| {
+                    if (markers_mod.isGenericMarker(mk)) break :blk true;
+                }
+                break :blk false;
+            };
+
+            if (has_generic) {
+                const pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                const dispatched = dispatch_helpers.tryDispatchGenericById(self, word.dispatch_id, pic_entry) catch |err|
+                    return self.wordErrorCleanup(name, err);
+
+                if (dispatched) {
+                    try self.wordSuccessCleanup(name, null);
+                    return .proceed;
+                }
+
+                if (word.action.compound.len == 0) {
+                    self.setGenericDispatchErrorDetails(name, word.stack_effect);
+                    return self.wordErrorCleanup(name, error.TypeError);
+                }
+            }
+
+            if (!self.allow_all_recursion) {
+                const has_non_tco = for (word.markers) |mk| {
+                    if (mk == &markers_mod.recursive_non_tco_marker) break true;
+                } else false;
+
+                if (has_non_tco) {
+                    const has_stack_recursive = for (word.markers) |mk| {
+                        if (markers_mod.isStackRecursiveMarker(mk)) break true;
+                    } else false;
+
+                    if (!has_stack_recursive) {
+                        self.pending_error_message = "word has recursive-non-tco marker but lacks stack-recursive marker";
+                        return self.wordErrorCleanup(name, error.NonTailRecursion);
+                    }
+                }
+            }
+        }
+
+        if (is_last) {
+            switch (word.action) {
+                .compound => |instrs| {
+                    if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
+                    if (self.profile) |p| p.recordWordEnd(self.allocator, name);
+                    self.tail_call_instructions = instrs;
+                    self.tail_call_module = word.source_module;
+                    self.tail_call_source = word.source_file;
+                    return .tail_call_set;
+                },
+                .native => |func| {
+                    self.tail_call_instructions = null;
+                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                    defer self.current_pic_entry = null;
+                    if (func(self)) |_| {
+                        try self.wordSuccessCleanup(name, word.stack_effect);
+                    } else |err| {
+                        return self.wordErrorCleanup(name, err);
+                    }
+                },
+                .host_callback => |host| {
+                    self.tail_call_instructions = null;
+                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                    defer self.current_pic_entry = null;
+                    const result: anyerror!void = blk: {
+                        const rc = host.callback(host.handle, host.user_data);
+                        if (rc != 0) break :blk error.HostCallbackFailed;
+                    };
+                    if (result) |_| {
+                        try self.wordSuccessCleanup(name, word.stack_effect);
+                    } else |err| {
+                        return self.wordErrorCleanup(name, err);
+                    }
+                },
+            }
+        } else {
+            if (self.stack_limit != 0) {
+                const sp = @frameAddress();
+                const usage = self.stack_high -| sp;
+                if (self.scheduler) |sched| {
+                    if (sched.current_task) |task| {
+                        if (usage > task.peak_stack_usage) {
+                            task.peak_stack_usage = usage;
+                        }
+                    }
+                }
+                if (sp <= self.stack_limit) {
+                    const used = self.stack_high -| sp;
+                    const total = self.stack_high -| self.stack_limit +| (32 * 1024);
+                    self.pending_error_message = std.fmt.allocPrint(
+                        self.arena.allocator(),
+                        "stack overflow: {} of {} bytes used",
+                        .{ used, total },
+                    ) catch "stack overflow";
+                    return self.wordErrorCleanup(name, error.StackOverflow);
+                }
+            }
+
+            const callee_pic = if (word.action == .compound) self.getOrAllocPicTable(word.action.compound) else null;
+
+            if (word.isNativeLike()) {
+                self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+            }
+            defer self.current_pic_entry = null;
+
+            const result = blk: {
+                const saved_source = self.current_source;
+                defer self.current_source = saved_source;
+                if (word.source_file) |sf| self.current_source = sf;
+                if (word.source_module) |mod| {
+                    switch (word.action) {
+                        .compound => |instrs| {
+                            self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
+                            defer self.popModuleDepsFrameTraced(mod);
+                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic);
+                        },
+                        .native => |func| break :blk func(self),
+                        .host_callback => |host| break :blk host_result: {
+                            const rc = host.callback(host.handle, host.user_data);
+                            if (rc != 0) break :host_result error.HostCallbackFailed;
+                            break :host_result;
+                        },
+                    }
+                } else {
+                    break :blk switch (word.action) {
+                        .native => |func| func(self),
+                        .host_callback => |host| host_result: {
+                            const rc = host.callback(host.handle, host.user_data);
+                            if (rc != 0) break :host_result error.HostCallbackFailed;
+                            break :host_result;
+                        },
+                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic),
+                    };
+                }
+            };
+
+            if (result) |_| {
+                try self.consumePropagatedTailCall(name);
+                try self.wordSuccessCleanup(name, word.stack_effect);
+            } else |err| {
+                return self.wordErrorCleanup(name, err);
+            }
+        }
+
+        return .proceed;
+    }
+
     /// Execute raw instructions without stack-effect validation.
     ///
     /// Supports generic word dispatch.
@@ -3975,229 +4231,9 @@ pub const Context = struct {
                     if (self.profile) |p| p.recordWordStart(self.allocator);
 
                     if (self.lookupWord(name)) |word| {
-                        if (self.active_sandbox) |sandbox| {
-                            if (!sandbox.allows(word.capability)) {
-                                self.pushCallFrame(name, self.current_source, instr.line, instr.column);
-                                self.pending_error_message = std.fmt.allocPrint(
-                                    self.arena.allocator(),
-                                    "'{s}' requires capability '{s}' which is not granted by the active sandbox",
-                                    .{ name, word.capability.displayName() },
-                                ) catch "word denied by sandbox";
-                                return self.wordErrorCleanup(name, error.PermissionDenied);
-                            }
-                        }
-
-                        if (word.parse_time_only and self.parse_tokenizer == null) {
-                            self.pushCallFrame(name, self.current_source, instr.line, instr.column);
-                            self.pending_error_message = "parse-time-only word cannot be called at runtime";
-                            return self.wordErrorCleanup(name, error.ParseError);
-                        }
-
-                        // Try JIT-compiled dispatch before interpreter path
-                        if (word.word_id) |wid| {
-                            if (word.stack_effect) |effect| {
-                                self.validateParameterEffects(&effect) catch |err| {
-                                    self.pushCallFrame(name, self.current_source, instr.line, instr.column);
-                                    return self.wordErrorCleanup(name, err);
-                                };
-                                if (!shouldSkipTypeAnnotationValidation(word)) {
-                                    self.validateTypeAnnotations(&effect) catch |err| {
-                                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
-                                        return self.wordErrorCleanup(name, err);
-                                    };
-                                }
-                            }
-                            const saved_source = self.current_source;
-                            if (word.source_file) |sf| self.current_source = sf;
-                            const jit_result = if (word.source_module) |mod| blk: {
-                                self.pushModuleDepsFrame(mod) catch |err| {
-                                    self.current_source = saved_source;
-                                    self.pushCallFrame(name, self.current_source, instr.line, instr.column);
-                                    return self.wordErrorCleanup(name, err);
-                                };
-                                defer self.popModuleDepsFrameTraced(mod);
-                                break :blk ir_codegen.executeCompiled(self, wid);
-                            } else ir_codegen.executeCompiled(self, wid);
-                            self.current_source = saved_source;
-                            if (self.trace.trace_jit) {
-                                var tw = trace_mod.TraceWriter.init();
-                                trace_mod.traceJitDispatch(&tw, name, wid, jit_result != .bail);
-                            }
-                            switch (jit_result) {
-                                .ok => {
-                                    if (self.benchmark) |bm| bm.endWordProfile(self.allocator, name);
-                                    if (self.profile) |p| p.recordWordEnd(self.allocator, name);
-                                    continue;
-                                },
-                                .error_propagate => {
-                                    const err = self.jit_pending_error orelse error.UserThrown;
-                                    self.jit_pending_error = null;
-                                    return err;
-                                },
-                                .bail => {
-                                    if (self.compile_mode == .hybrid) {
-                                        self.tryHybridCompile(wid, name, word);
-                                    }
-                                },
-                            }
-                        }
-
-                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
-                        self.traceWordExecution(name, instr);
-
-                        if (word.stack_effect) |effect| {
-                            self.validateParameterEffects(&effect) catch |err|
-                                return self.wordErrorCleanup(name, err);
-                            if (!shouldSkipTypeAnnotationValidation(word)) {
-                                self.validateTypeAnnotations(&effect) catch |err|
-                                    return self.wordErrorCleanup(name, err);
-                            }
-                        }
-
-                        if (word.action == .compound) {
-                            const has_generic = blk: {
-                                for (word.markers) |mk| {
-                                    if (markers_mod.isGenericMarker(mk)) break :blk true;
-                                }
-                                break :blk false;
-                            };
-
-                            if (has_generic) {
-                                const pic_entry = if (pic_table) |pt| pt.get(idx) else null;
-                                const dispatched = dispatch_helpers.tryDispatchGenericById(self, word.dispatch_id, pic_entry) catch |err|
-                                    return self.wordErrorCleanup(name, err);
-
-                                if (dispatched) {
-                                    try self.wordSuccessCleanup(name, null);
-                                    continue;
-                                }
-
-                                if (word.action.compound.len == 0) {
-                                    self.setGenericDispatchErrorDetails(name, word.stack_effect);
-                                    return self.wordErrorCleanup(name, error.TypeError);
-                                }
-                            }
-
-                            if (!self.allow_all_recursion) {
-                                const has_non_tco = for (word.markers) |mk| {
-                                    if (mk == &markers_mod.recursive_non_tco_marker) break true;
-                                } else false;
-
-                                if (has_non_tco) {
-                                    const has_stack_recursive = for (word.markers) |mk| {
-                                        if (markers_mod.isStackRecursiveMarker(mk)) break true;
-                                    } else false;
-
-                                    if (!has_stack_recursive) {
-                                        self.pending_error_message = "word has recursive-non-tco marker but lacks stack-recursive marker";
-                                        return self.wordErrorCleanup(name, error.NonTailRecursion);
-                                    }
-                                }
-                            }
-                        }
-
-                        if (is_last) {
-                            switch (word.action) {
-                                .compound => |instrs| {
-                                    if (self.benchmark) |b| b.endWordProfile(self.allocator, name);
-                                    if (self.profile) |p| p.recordWordEnd(self.allocator, name);
-                                    self.tail_call_instructions = instrs;
-                                    self.tail_call_module = word.source_module;
-                                    self.tail_call_source = word.source_file;
-                                    return;
-                                },
-                                .native => |func| {
-                                    self.tail_call_instructions = null;
-                                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
-                                    defer self.current_pic_entry = null;
-                                    if (func(self)) |_| {
-                                        try self.wordSuccessCleanup(name, word.stack_effect);
-                                    } else |err| {
-                                        return self.wordErrorCleanup(name, err);
-                                    }
-                                },
-                                .host_callback => |host| {
-                                    self.tail_call_instructions = null;
-                                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
-                                    defer self.current_pic_entry = null;
-                                    const result: anyerror!void = blk: {
-                                        const rc = host.callback(host.handle, host.user_data);
-                                        if (rc != 0) break :blk error.HostCallbackFailed;
-                                    };
-                                    if (result) |_| {
-                                        try self.wordSuccessCleanup(name, word.stack_effect);
-                                    } else |err| {
-                                        return self.wordErrorCleanup(name, err);
-                                    }
-                                },
-                            }
-                        } else {
-                            if (self.stack_limit != 0) {
-                                const sp = @frameAddress();
-                                const usage = self.stack_high -| sp;
-                                if (self.scheduler) |sched| {
-                                    if (sched.current_task) |task| {
-                                        if (usage > task.peak_stack_usage) {
-                                            task.peak_stack_usage = usage;
-                                        }
-                                    }
-                                }
-                                if (sp <= self.stack_limit) {
-                                    const used = self.stack_high -| sp;
-                                    const total = self.stack_high -| self.stack_limit +| (32 * 1024);
-                                    self.pending_error_message = std.fmt.allocPrint(
-                                        self.arena.allocator(),
-                                        "stack overflow: {} of {} bytes used",
-                                        .{ used, total },
-                                    ) catch "stack overflow";
-                                    return self.wordErrorCleanup(name, error.StackOverflow);
-                                }
-                            }
-
-                            const callee_pic = if (word.action == .compound) self.getOrAllocPicTable(word.action.compound) else null;
-
-                            if (word.isNativeLike()) {
-                                self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
-                            }
-                            defer self.current_pic_entry = null;
-
-                            const result = blk: {
-                                const saved_source = self.current_source;
-                                defer self.current_source = saved_source;
-                                if (word.source_file) |sf| self.current_source = sf;
-                                if (word.source_module) |mod| {
-                                    switch (word.action) {
-                                        .compound => |instrs| {
-                                            self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
-                                            defer self.popModuleDepsFrameTraced(mod);
-                                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic);
-                                        },
-                                        .native => |func| break :blk func(self),
-                                        .host_callback => |host| break :blk host_result: {
-                                            const rc = host.callback(host.handle, host.user_data);
-                                            if (rc != 0) break :host_result error.HostCallbackFailed;
-                                            break :host_result;
-                                        },
-                                    }
-                                } else {
-                                    break :blk switch (word.action) {
-                                        .native => |func| func(self),
-                                        .host_callback => |host| host_result: {
-                                            const rc = host.callback(host.handle, host.user_data);
-                                            if (rc != 0) break :host_result error.HostCallbackFailed;
-                                            break :host_result;
-                                        },
-                                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic),
-                                    };
-                                }
-                            };
-
-                            if (result) |_| {
-                                try self.consumePropagatedTailCall(name);
-                                try self.wordSuccessCleanup(name, word.stack_effect);
-                            } else |err| {
-                                return self.wordErrorCleanup(name, err);
-                            }
+                        switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                            .proceed => {},
+                            .tail_call_set => return,
                         }
                     } else if (isQualifiedName(name)) {
                         self.executeQualifiedName(name, instr.line, instr.column) catch |err| {
@@ -4218,6 +4254,25 @@ pub const Context = struct {
                         self.captureCallStackOnError(ExecutionError.UnknownWord);
                         self.popCallFrame();
                         return ExecutionError.UnknownWord;
+                    }
+                },
+                .call_word_direct => |slot| {
+                    const name = slot.name;
+                    signal.checkPendingSignals(self) catch |err| {
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        return self.wordErrorCleanup(name, err);
+                    };
+
+                    if (self.benchmark) |b| {
+                        b.recordCallWord();
+                        b.beginWordProfile();
+                    }
+                    if (self.profile) |p| p.recordWordStart(self.allocator);
+
+                    const word = dict_mod.loadSlot(slot).*;
+                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                        .proceed => {},
+                        .tail_call_set => return,
                     }
                 },
             }
@@ -4336,8 +4391,8 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
             return;
         }
     }
-    if (ctx.dictionary.entries.getPtr(name)) |entry| {
-        entry.word_id = word_id;
+    if (ctx.dictionary.entries.get(name)) |slot| {
+        dict_mod.loadSlot(slot).word_id = word_id;
         return;
     }
     var ancestor = ctx.parent_context;
@@ -4350,8 +4405,8 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
                 return;
             }
         }
-        if (anc.dictionary.entries.getPtr(name)) |entry| {
-            entry.word_id = word_id;
+        if (anc.dictionary.entries.get(name)) |slot| {
+            dict_mod.loadSlot(slot).word_id = word_id;
             return;
         }
         ancestor = anc.parent_context;

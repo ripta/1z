@@ -6,6 +6,8 @@ const Instruction = value_mod.Instruction;
 const Marker = value_mod.Marker;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const container_backing = @import("container_backing.zig");
+const word_slot_mod = @import("word_slot.zig");
+pub const WordSlot = word_slot_mod.WordSlot;
 pub const Capability = @import("primitives/types.zig").Capability;
 
 /// Native function signature: takes context, can return errors.
@@ -102,15 +104,34 @@ pub const WordDefinition = struct {
     }
 };
 
+/// Typed view onto a `WordSlot`'s current definition pointer. The slot
+/// itself stores the pointer as `*word_slot.WordDefinition` (an opaque type
+/// declared in `word_slot.zig`) so that `value.zig` can reference
+/// `*WordSlot` without dragging the dictionary's full type graph into Value's
+/// resolution path. Use these helpers anywhere a typed `*WordDefinition` is
+/// expected.
+pub fn loadSlot(slot: *const WordSlot) *WordDefinition {
+    return @ptrCast(@alignCast(slot.load()));
+}
+
+fn storeSlot(slot: *WordSlot, def: *WordDefinition) void {
+    slot.store(@ptrCast(def));
+}
+
 /// Dictionary maps word names to their definitions.
 pub const Dictionary = struct {
-    entries: std.StringHashMapUnmanaged(WordDefinition),
+    entries: std.StringHashMapUnmanaged(*WordSlot),
     allocator: Allocator,
     /// Instruction slices belonging to compound word bodies whose
     /// `push_literal` operands include at least one container variant.
     /// Walked at teardown so captured container backings can be
     /// released before the arena that owns the instructions is freed.
     container_release_list: std.ArrayListUnmanaged([]const Instruction) = .{},
+    /// Heap-boxed `WordDefinition` values displaced by redefinition. Each
+    /// entry was once the current definition for some slot; after an atomic
+    /// swap there may still be readers holding the pointer, so the box stays
+    /// allocated for the dictionary's lifetime and is freed in `deinit`.
+    retired: std.ArrayListUnmanaged(*WordDefinition) = .{},
 
     pub fn init(allocator: Allocator) Dictionary {
         return .{
@@ -120,24 +141,72 @@ pub const Dictionary = struct {
     }
 
     pub fn deinit(self: *Dictionary) void {
+        var it = self.entries.valueIterator();
+        while (it.next()) |slot_ptr| {
+            const slot = slot_ptr.*;
+            self.allocator.destroy(loadSlot(slot));
+            self.allocator.destroy(slot);
+        }
         self.entries.deinit(self.allocator);
+        for (self.retired.items) |def| self.allocator.destroy(def);
+        self.retired.deinit(self.allocator);
         self.container_release_list.deinit(self.allocator);
     }
 
     pub fn put(self: *Dictionary, name: []const u8, definition: WordDefinition) !void {
-        try self.entries.put(self.allocator, name, definition);
+        const def_box = try self.allocator.create(WordDefinition);
+        def_box.* = definition;
+        const gop = try self.entries.getOrPut(self.allocator, name);
+        if (gop.found_existing) {
+            const slot = gop.value_ptr.*;
+            const old = loadSlot(slot);
+            storeSlot(slot, def_box);
+            self.retired.append(self.allocator, old) catch |err| {
+                storeSlot(slot, old);
+                self.allocator.destroy(def_box);
+                return err;
+            };
+        } else {
+            const slot = self.allocator.create(WordSlot) catch |err| {
+                self.allocator.destroy(def_box);
+                _ = self.entries.remove(name);
+                return err;
+            };
+            slot.* = .{
+                .name = name,
+                .definition = std.atomic.Value(*word_slot_mod.WordDefinition).init(@ptrCast(def_box)),
+            };
+            gop.value_ptr.* = slot;
+        }
     }
 
     pub fn get(self: *const Dictionary, name: []const u8) ?WordDefinition {
-        return self.entries.get(name);
+        const slot = self.entries.get(name) orelse return null;
+        return loadSlot(slot).*;
     }
 
     pub fn getPtr(self: *const Dictionary, name: []const u8) ?*WordDefinition {
-        return self.entries.getPtr(name);
+        const slot = self.entries.get(name) orelse return null;
+        return loadSlot(slot);
+    }
+
+    /// Return the heap-stable `WordSlot` for `name`, or null if absent. The
+    /// pointer is stable across rehash and across redefinition; pre-resolved
+    /// callers carry it as the operand of a direct-call instruction.
+    pub fn getSlot(self: *const Dictionary, name: []const u8) ?*WordSlot {
+        return self.entries.get(name);
     }
 
     pub fn remove(self: *Dictionary, name: []const u8) bool {
-        return self.entries.remove(name);
+        const removed = self.entries.fetchRemove(name) orelse return false;
+        const slot = removed.value;
+        const def = loadSlot(slot);
+        self.retired.append(self.allocator, def) catch {
+            // Reclamation is best-effort; on OOM the box stays leaked but
+            // the slot itself is destroyed and the entry is gone.
+        };
+        self.allocator.destroy(slot);
+        return true;
     }
 
     /// If `instructions` contains any container-variant `push_literal`,
@@ -251,6 +320,72 @@ test "registerCompoundBody: skips scalar-only bodies" {
     };
     try dict.registerCompoundBody(&body);
     try std.testing.expectEqual(@as(usize, 0), dict.container_release_list.items.len);
+}
+
+test "dictionary slot address is stable across rehash" {
+    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const name_alloc = arena.allocator();
+
+    var dict = Dictionary.init(allocator);
+    defer dict.deinit();
+
+    const testFn: NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try dict.put("anchor", .{ .name = "anchor", .action = .{ .native = testFn } });
+    const anchor_slot = dict.getSlot("anchor").?;
+
+    var i: usize = 0;
+    while (i < 256) : (i += 1) {
+        const name = try std.fmt.allocPrint(name_alloc, "filler-{d}", .{i});
+        try dict.put(name, .{ .name = name, .action = .{ .native = testFn } });
+    }
+
+    try std.testing.expectEqual(anchor_slot, dict.getSlot("anchor").?);
+}
+
+test "dictionary redefinition swaps slot contents" {
+    const allocator = std.testing.allocator;
+    var dict = Dictionary.init(allocator);
+    defer dict.deinit();
+
+    const fnA: NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    const fnB: NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try dict.put("target", .{ .name = "target", .action = .{ .native = fnA } });
+    const slot_before = dict.getSlot("target").?;
+    const def_before = loadSlot(slot_before);
+    try std.testing.expectEqual(fnA, def_before.action.native);
+
+    try dict.put("target", .{ .name = "target", .action = .{ .native = fnB } });
+    const slot_after = dict.getSlot("target").?;
+    try std.testing.expectEqual(slot_before, slot_after);
+    try std.testing.expectEqual(fnB, loadSlot(slot_after).action.native);
+    try std.testing.expectEqual(@as(usize, 1), dict.retired.items.len);
+}
+
+test "dictionary redefinition keeps retired definitions until deinit" {
+    const allocator = std.testing.allocator;
+    var dict = Dictionary.init(allocator);
+    defer dict.deinit();
+
+    const testFn: NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try dict.put("churn", .{ .name = "churn", .action = .{ .native = testFn } });
+    try dict.put("churn", .{ .name = "churn", .action = .{ .native = testFn } });
+    try dict.put("churn", .{ .name = "churn", .action = .{ .native = testFn } });
+
+    try std.testing.expectEqual(@as(usize, 2), dict.retired.items.len);
+    try std.testing.expect(dict.get("churn") != null);
 }
 
 test "registerCompoundBody: records bodies with container literals" {
