@@ -1612,6 +1612,42 @@ pub const Context = struct {
         return null;
     }
 
+    /// Resolve a parse-time call reference to a stable dictionary slot
+    /// when it provably matches the runtime lookup. Returns the slot only
+    /// when the name lives in this context's global dictionary and can
+    /// never be shadowed by a local frame: it must be absent from every
+    /// current frame here and in every ancestor context, and absent from
+    /// every loaded module's `words` and `deps` so that a runtime
+    /// module-deps frame push cannot replace the binding. Coverage is
+    /// traded for a provable parse-time == runtime guarantee.
+    pub fn preResolveCallTarget(self: *const Context, name: []const u8) ?*dict_mod.WordSlot {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+
+        const slot = self.dictionary.getSlot(name) orelse return null;
+
+        for (self.local_frames.items) |frame| {
+            if (frame.contains(name)) return null;
+        }
+
+        var ancestor = self.parent_context;
+        while (ancestor) |ctx| : (ancestor = ctx.parent_context) {
+            for (ctx.local_frames.items) |frame| {
+                if (frame.contains(name)) return null;
+            }
+        }
+
+        var iter = self.module_cache_value.map.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.* != .module) continue;
+            const module = entry.value_ptr.*.module;
+            if (module.words.contains(name)) return null;
+            if (module.deps.contains(name)) return null;
+        }
+
+        return slot;
+    }
+
     /// Look up a word and return a stable pointer to its stack effect field.
     /// Used by the JIT compiler to bake effect pointers as compile-time constants.
     pub fn lookupWordStackEffectPtr(self: *const Context, name: []const u8) ?*const StackEffect {
@@ -5048,4 +5084,92 @@ test "initBuiltinTypeValues creates TypeValues with normalized descriptors" {
     try std.testing.expect(desc.exact);
     try std.testing.expect(desc.integer);
     try std.testing.expect(!desc.mutable);
+}
+
+test "preResolveCallTarget: returns slot for dictionary-only name" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    try ctx.dictionary.put("dict-only", .{ .name = "dict-only", .action = .{ .native = noop } });
+
+    const slot = ctx.preResolveCallTarget("dict-only");
+    try std.testing.expect(slot != null);
+    try std.testing.expectEqual(ctx.dictionary.getSlot("dict-only").?, slot.?);
+}
+
+test "preResolveCallTarget: returns null for unknown name" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try std.testing.expectEqual(@as(?*dict_mod.WordSlot, null), ctx.preResolveCallTarget("never-defined"));
+}
+
+test "preResolveCallTarget: returns null when shadowed by a local frame" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    try ctx.dictionary.put("shadowed", .{ .name = "shadowed", .action = .{ .native = noop } });
+
+    try ctx.pushLocalFrame();
+    const top_idx = ctx.local_frames.items.len - 1;
+    try ctx.local_frames.items[top_idx].put(ctx.allocator, "shadowed", .{
+        .name = "shadowed",
+        .action = .{ .native = noop },
+    });
+
+    try std.testing.expectEqual(@as(?*dict_mod.WordSlot, null), ctx.preResolveCallTarget("shadowed"));
+}
+
+test "preResolveCallTarget: returns null when a loaded module exposes the name in words" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    try ctx.dictionary.put("module-claimed", .{ .name = "module-claimed", .action = .{ .native = noop } });
+
+    const arena_alloc = ctx.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "fake-words", .words = .{} };
+    try module.words.put(arena_alloc, "module-claimed", .{ .action = .{ .native = noop } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "fake-words"),
+        .{ .module = module },
+    );
+
+    try std.testing.expectEqual(@as(?*dict_mod.WordSlot, null), ctx.preResolveCallTarget("module-claimed"));
+}
+
+test "preResolveCallTarget: returns null when a loaded module carries the name as a dep" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    try ctx.dictionary.put("dep-claimed", .{ .name = "dep-claimed", .action = .{ .native = noop } });
+
+    const arena_alloc = ctx.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "fake-deps", .words = .{} };
+    try module.deps.put(arena_alloc, "dep-claimed", .{ .action = .{ .native = noop } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "fake-deps"),
+        .{ .module = module },
+    );
+
+    try std.testing.expectEqual(@as(?*dict_mod.WordSlot, null), ctx.preResolveCallTarget("dep-claimed"));
 }

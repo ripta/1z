@@ -316,7 +316,11 @@ fn executeParseTimeWord(
 
     // 6. Emit deferred call_word instructions requested via `emit-call`
     for (c.parse_time_deferred_calls.items) |call_name| {
-        instructions.append(allocator, .{ .op = .{ .call_word = call_name }, .line = line }) catch return ParseError.OutOfMemory;
+        if (c.preResolveCallTarget(call_name)) |slot| {
+            instructions.append(allocator, .{ .op = .{ .call_word_direct = slot }, .line = line }) catch return ParseError.OutOfMemory;
+        } else {
+            instructions.append(allocator, .{ .op = .{ .call_word = call_name }, .line = line }) catch return ParseError.OutOfMemory;
+        }
     }
     c.parse_time_deferred_calls.clearRetainingCapacity();
 }
@@ -487,8 +491,17 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                         }
                     }
 
-                    const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
-                    instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                    if (ctx) |c| {
+                        if (c.preResolveCallTarget(token)) |slot| {
+                            instructions.append(allocator, .{ .op = .{ .call_word_direct = slot }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                        } else {
+                            const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                            instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                        }
+                    } else {
+                        const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                        instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                    }
                 },
             }
         }
@@ -648,8 +661,17 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                     }
 
                     is_first_token = false;
-                    const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
-                    instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                    if (ctx) |c| {
+                        if (c.preResolveCallTarget(token)) |slot| {
+                            instructions.append(allocator, .{ .op = .{ .call_word_direct = slot }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                        } else {
+                            const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                            instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                        }
+                    } else {
+                        const name_copy = allocator.dupe(u8, token) catch return ParseError.OutOfMemory;
+                        instructions.append(allocator, .{ .op = .{ .call_word = name_copy }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                    }
                 },
             }
         }
