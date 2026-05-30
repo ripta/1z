@@ -4,8 +4,10 @@
 \ carries its source_module (which restores the module's deps frame on
 \ invocation, resolving `assert=` and same-file helpers), enumerates the
 \ `test-` prefixed entries, and calls each one. Filters tests by markers
-\ when ONEZ_TEST_TAGS is set. Leaves the testing library's failure count
-\ on the stack so the caller can derive an exit code.
+\ when ONEZ_TEST_TAGS is set. When the test file defines `before-each` or
+\ `after-each` words, they run around every test that actually executes;
+\ skipped tests fire neither hook. Leaves the testing library's failure
+\ count on the stack so the caller can derive an exit code.
 
 use "testing" ;
 use "sequences" ;
@@ -82,16 +84,33 @@ use "strings" ;
   if
 ] ;
 
+\ Call (module name) if the module defines a word by that name; otherwise
+\ leave the stack untouched. Used to dispatch optional `before-each` and
+\ `after-each` hooks around each executed test.
+(call-if-defined): ( module name -- ) [
+  2dup @has?
+  [ @get call ]
+  [ 2drop ]
+  if
+] ;
+
 \ Run or skip a single test word from the loaded module.
 \ The module was `import`ed into the runner's scope, so the prelude
 \ `word-markers` finds the test word via `current-scope`.
-(run-or-skip): ( spec name -- spec ) [
-  >string                              \ spec name-str
-  dup word-markers                     \ spec name-str markers
-  >iterator [ >string ] #map #collect  \ spec name-str marker-strs
-  2 pick-n                             \ spec name-str marker-strs spec
-  (should-run?)                        \ spec name-str run?
-  [ eval-string ]
+(run-or-skip): ( module spec name -- module spec ) [
+  >string                              \ module spec name-str
+  dup word-markers                     \ module spec name-str markers
+  >iterator [ >string ] #map #collect  \ module spec name-str marker-strs
+  2 pick-n                             \ module spec name-str marker-strs spec
+  (should-run?)                        \ module spec name-str run?
+  [
+    \ Run path: before-each, the test, after-each.
+    \ stack: module spec name-str
+    2 pick-n "before-each" (call-if-defined)
+    eval-string
+    \ stack: module spec
+    over "after-each" (call-if-defined)
+  ]
   [ skip ]
   if
 ] ;
@@ -108,12 +127,12 @@ run-test-file: ( filepath -- failed ) [
   \ stack: module
   (parse-tag-spec)
   \ stack: module spec
-  swap @keys
+  over @keys
   [ >string "test-" #starts-with? ] #filter
   [ >string ] #sort-by
-  \ stack: spec names
+  \ stack: module spec names
   [ (run-or-skip) ] #each
-  \ stack: spec
-  drop
+  \ stack: module spec
+  drop drop
   test-counts failed: @get
 ] ;

@@ -1,0 +1,13 @@
+\ Verifies before-each / after-each do not fire for skipped tests.
+\ The env sidecar sets ONEZ_TEST_TAGS=run, so test-skipped is skipped
+\ and only test-run executes -- the absence of a second BEFORE/AFTER
+\ block in the golden proves the hooks did not fire for the skip.
+use "testing" ;
+
+run: make-marker ;
+
+before-each: ( -- ) [ "BEFORE" print-line ] ;
+after-each: ( -- ) [ "AFTER" print-line ] ;
+
+test-skipped: ( -- ) [ 1 1 "skipped body" assert= ] ;
+test-run: run ( -- ) [ 2 2 "run body" assert= ] ;

@@ -1,0 +1,8 @@
+use "testing" ;
+
+before-each: ( -- ) [ "BEFORE" print-line ] ;
+after-each: ( -- ) [ "AFTER" print-line ] ;
+
+test-one: ( -- ) [ 1 1 "one" assert= ] ;
+test-two: ( -- ) [ 2 2 "two" assert= ] ;
+test-zee: ( -- ) [ 3 3 "three" assert= ] ;
