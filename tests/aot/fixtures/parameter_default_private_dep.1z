@@ -1,0 +1,7 @@
+\ Fixture for parameter_default_private_lookup. The parameter's lazy
+\ default quotation calls a module-private helper, so AOT runtime-image
+\ execution has to resolve that helper through the loaded module cache.
+
+(private-default): ( -- str ) [ "module-private-default" ] ;
+
+private-param: parameter{ [ (private-default) ] } ;

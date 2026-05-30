@@ -1611,7 +1611,50 @@ pub const Context = struct {
             ancestor = ctx.parent_context;
         }
 
+        if (self.lookupModuleCacheWordLocked(name)) |def| return def;
+
         return null;
+    }
+
+    fn lookupModuleCacheWordLocked(self: *const Context, name: []const u8) ?WordDefinition {
+        var iter = self.module_cache_value.map.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.* != .module) continue;
+            const module = entry.value_ptr.*.module;
+            if (module.words.get(name)) |mod_word| {
+                return wordDefFromModuleWord(name, mod_word, module);
+            }
+            if (module.deps.get(name)) |mod_word| {
+                return wordDefFromModuleWord(name, mod_word, mod_word.source_module orelse module);
+            }
+        }
+        return null;
+    }
+
+    fn wordDefFromModuleWord(
+        name: []const u8,
+        mod_word: value_mod.ModuleWord,
+        module: *const value_mod.Module,
+    ) WordDefinition {
+        return .{
+            .name = name,
+            .stack_effect = mod_word.stack_effect,
+            .markers = mod_word.markers,
+            .doc = mod_word.doc,
+            .source_file = mod_word.source_file,
+            .source_line = mod_word.source_line,
+            .source_column = mod_word.source_column,
+            .source_module = mod_word.source_module orelse module,
+            .provenance = mod_word.provenance,
+            .capability = mod_word.capability,
+            .word_id = mod_word.word_id,
+            .dispatch_id = mod_word.dispatch_id,
+            .action = switch (mod_word.action) {
+                .compound => |instrs| .{ .compound = instrs },
+                .native => |func| .{ .native = func },
+                .host_callback => |host| .{ .host_callback = host },
+            },
+        };
     }
 
     /// Resolve a parse-time call reference to a stable dictionary slot
@@ -5174,4 +5217,70 @@ test "preResolveCallTarget: returns null when a loaded module carries the name a
     );
 
     try std.testing.expectEqual(@as(?*dict_mod.WordSlot, null), ctx.preResolveCallTarget("dep-claimed"));
+}
+
+test "lookupWord: falls through to loaded module words on dictionary miss" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const push77: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 77 });
+        }
+    }.f;
+
+    const arena_alloc = ctx.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "fake-runtime-image", .words = .{} };
+    try module.words.put(arena_alloc, "(private-default)", .{
+        .source_module = module,
+        .action = .{ .native = push77 },
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "fake-runtime-image"),
+        .{ .module = module },
+    );
+
+    const found = ctx.lookupWord("(private-default)") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqual(module, found.source_module.?);
+
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "(private-default)" }, .line = 1 };
+    try ctx.executeQuotation(.{ .instructions = instrs });
+
+    const value = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(i64, 77), value.fixnum);
+}
+
+test "lookupWord: falls through to loaded module deps on dictionary miss" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const arena_alloc = ctx.arena.allocator();
+    const dep_module = try arena_alloc.create(value_mod.Module);
+    dep_module.* = .{ .name = "dep-source", .words = .{} };
+
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "dep-holder", .words = .{} };
+    try module.deps.put(arena_alloc, "dep-only", .{
+        .source_module = dep_module,
+        .action = .{ .native = noop },
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "dep-holder"),
+        .{ .module = module },
+    );
+
+    const found = ctx.lookupWord("dep-only") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqual(dep_module, found.source_module.?);
 }

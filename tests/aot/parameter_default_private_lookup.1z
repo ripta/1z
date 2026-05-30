@@ -1,0 +1,3 @@
+use "fixtures/parameter_default_private_dep.1z" ;
+
+private-param get print-line
