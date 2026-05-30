@@ -436,6 +436,10 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                             try ctx.stack.popAndRelease();
                             doc_val = d;
                         },
+                        .stack_effect => |eff| {
+                            try ctx.stack.popAndRelease();
+                            if (stack_effect_val == null) stack_effect_val = eff;
+                        },
                         .symbol => break,
                         else => {
                             helpers.setTypeMismatchError(ctx, "symbol, marker, or doc-string before word definition", next_val);

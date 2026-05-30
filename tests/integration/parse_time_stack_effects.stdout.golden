@@ -53,11 +53,11 @@ Stack: [ ]
 Stack: [ "( a b -- c )" ]
 PASS: effect >string
 Stack: [ ]
-=== effect without following [ is rejected by ; ===
+=== effect on bare-literal body ===
 Stack: [ ]
-PASS: orphan effect rejected
 Stack: [ ]
-=== effect separated from [ by call_word is rejected ===
+PASS: literal body callable
 Stack: [ ]
-PASS: separated effect rejected
+Stack: [ "( -- reasons: hash )" ]
+PASS: effect on bare-literal body
 Stack: [ ]

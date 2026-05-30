@@ -44,8 +44,10 @@ with-effect: ( a b -- c ) [ + ] ;
 with-effect: >word-info stack-effect>> >string
 "( a b -- c )" "effect >string" assert=
 
-"effect without following [ is rejected by ;" test-section
-[ "bad-const: ( n -- n ) 42 ;" eval-string ] "orphan effect rejected" assert-error
-
-"effect separated from [ by call_word is rejected" test-section
-[ "bad-sep: ( n -- n ) dup [ 1 + ] ;" eval-string ] "separated effect rejected" assert-error
+"effect on bare-literal body" test-section
+\ A stack effect preceding a non-quotation literal body attaches to the
+\ definition the same way `quotation.effect` does for `[ ... ]` bodies.
+status-reasons: ( -- reasons: hash ) H{ "100" "Continue" "200" "OK" } ;
+status-reasons "200" @get "OK" "literal body callable" assert=
+status-reasons: >word-info stack-effect>> >string
+"( -- reasons: hash )" "effect on bare-literal body" assert=
