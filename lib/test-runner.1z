@@ -3,11 +3,98 @@
 \ Loads a test file as a module, imports its definitions so each test word
 \ carries its source_module (which restores the module's deps frame on
 \ invocation, resolving `assert=` and same-file helpers), enumerates the
-\ `test-` prefixed entries, and calls each one. Leaves the testing library's
-\ failure count on the stack so the caller can derive an exit code.
+\ `test-` prefixed entries, and calls each one. Filters tests by markers
+\ when ONEZ_TEST_TAGS is set. Leaves the testing library's failure count
+\ on the stack so the caller can derive an exit code.
 
 use "testing" ;
 use "sequences" ;
+use "strings" ;
+
+\ Build a tag-spec hash from include and exclude arrays.
+(make-tag-spec): ( includes excludes -- hash ) [
+  H{ } swap exclude: swap @set
+  swap include: swap @set
+] ;
+
+\ Parse ONEZ_TEST_TAGS into a tag-spec, or return f when the variable is
+\ unset or yields no usable entries. Entries are comma-separated; whitespace
+\ is trimmed; an entry beginning with `-` is an exclude (the prefix is
+\ stripped), everything else is an include.
+(parse-tag-spec): ( -- spec ) [
+  environ "ONEZ_TEST_TAGS" @has? not
+  [ f ]
+  [
+    environ "ONEZ_TEST_TAGS" @get
+    "," split
+    >iterator
+    [ trim ] #map
+    [ #empty? not ] #filter
+    [ "-" #starts-with? ] #partition
+    \ stack: excludes-prefixed includes
+    swap
+    \ stack: includes excludes-prefixed
+    >iterator [ 1 #drop ] #map #collect
+    \ stack: includes excludes
+    2dup #empty? swap #empty? and
+    [ 2drop f ]
+    [ (make-tag-spec) ]
+    if
+  ]
+  if
+] ;
+
+\ True iff at least one element of seq is present in entries.
+(any-in?): ( seq entries -- ? ) [
+  [ swap #in? ] curry #any
+] ;
+
+\ Decide whether a test with the given marker names should run under the spec.
+\ - spec = f          → always run.
+\ - empty markers     → skip (filter is active, but the test is untagged).
+\ - any in excludes   → skip.
+\ - includes empty    → run (exclude-only filter).
+\ - any in includes   → run; otherwise skip.
+(should-run?): ( marker-strs spec -- ? ) [
+  dup f =
+  [ 2drop t ]
+  [
+    over #empty?
+    [ 2drop f ]
+    [
+      dup exclude: @get
+      2 pick-n swap (any-in?)
+      [ 2drop f ]
+      [
+        dup include: @get
+        dup #empty?
+        [ drop 2drop t ]
+        [
+          2 pick-n swap (any-in?)
+          -rot> 2drop
+        ]
+        if
+      ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+\ Run or skip a single test word from the loaded module.
+\ The module was `import`ed into the runner's scope, so the prelude
+\ `word-markers` finds the test word via `current-scope`.
+(run-or-skip): ( spec name -- spec ) [
+  >string                              \ spec name-str
+  dup word-markers                     \ spec name-str markers
+  >iterator [ >string ] #map #collect  \ spec name-str marker-strs
+  2 pick-n                             \ spec name-str marker-strs spec
+  (should-run?)                        \ spec name-str run?
+  [ eval-string ]
+  [ skip ]
+  if
+] ;
 
 \ Run every `test-` word defined in the given file.
 \
@@ -16,11 +103,17 @@ use "sequences" ;
 \   - filepath: path to a *_test.1z file
 \   - failed: number of failed assertions across all tests in the file
 run-test-file: ( filepath -- failed ) [
-  load        \ module
-  dup import  \ module (words now in scope)
-  @keys       \ test-names-array
+  load
+  dup import
+  \ stack: module
+  (parse-tag-spec)
+  \ stack: module spec
+  swap @keys
   [ >string "test-" #starts-with? ] #filter
-  [ >string ] #sort-by  \ deterministic order
-  [ >string eval-string ] #each
+  [ >string ] #sort-by
+  \ stack: spec names
+  [ (run-or-skip) ] #each
+  \ stack: spec
+  drop
   test-counts failed: @get
 ] ;

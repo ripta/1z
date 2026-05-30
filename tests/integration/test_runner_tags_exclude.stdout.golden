@@ -1,0 +1,6 @@
+TAP version 13
+ok 1 - test-fast # SKIP
+ok 2 - test-flaky-net # SKIP
+ok 3 - net ok
+ok 4 - slow ok
+1..4

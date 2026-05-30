@@ -11,7 +11,7 @@ use "testing" ;
 
 \ 2. stack-recursive marker allows non-tail self-call and adds recursive-non-tco
 ok: stack-recursive [ ok 1 + ] ;
-"ok" word-markers [ >string "<marker:recursive-non-tco>" = ] #any
+"ok" word-markers [ >string "recursive-non-tco" = ] #any
 t "stack-recursive adds recursive-non-tco" assert=
 
 "tail via branch combinator" test-section

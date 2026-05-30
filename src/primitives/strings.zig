@@ -45,6 +45,11 @@ fn nativeAsStringSymbol(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .string = val.symbol });
 }
 
+fn nativeAsStringMarker(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    try ctx.stack.push(.{ .string = val.marker.name });
+}
+
 // =============================================================================
 // Registration of all native dispatch entries
 // =============================================================================
@@ -73,6 +78,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
 
     const string_tv = ctx.lookupBuiltinTypeValue("string").?;
     const symbol_tv = ctx.lookupBuiltinTypeValue("symbol").?;
+    const marker_tv = ctx.lookupBuiltinTypeValue("marker").?;
 
     const to_string_id = ctx.resolveDispatchId(">string").?;
     for (inspect_type_names) |name| {
@@ -81,6 +87,8 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
             try dispatch.registerNative(to_string_id, tv, unary, nativeAsStringPassthrough);
         } else if (tv == symbol_tv) {
             try dispatch.registerNative(to_string_id, tv, unary, nativeAsStringSymbol);
+        } else if (tv == marker_tv) {
+            try dispatch.registerNative(to_string_id, tv, unary, nativeAsStringMarker);
         } else {
             try dispatch.registerNative(to_string_id, tv, unary, nativeAsStringGeneric);
         }

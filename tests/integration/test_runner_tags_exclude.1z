@@ -1,0 +1,16 @@
+\ Test fixture for ONEZ_TEST_TAGS exclude-only filtering.
+\ The env sidecar sets ONEZ_TEST_TAGS=-flaky, so:
+\   - test-fast       (untagged)        is skipped (filter active, untagged)
+\   - test-slow       (slow)            runs (no includes → exclude-only)
+\   - test-net        (network)         runs
+\   - test-flaky-net  (network flaky)   is skipped (-flaky excludes)
+use "testing" ;
+
+slow:    make-marker ;
+network: make-marker ;
+flaky:   make-marker ;
+
+test-fast: ( -- ) [ 1 1 "fast ok" assert= ] ;
+test-slow:      slow ( -- ) [ 2 2 "slow ok" assert= ] ;
+test-net:       network ( -- ) [ 3 3 "net ok" assert= ] ;
+test-flaky-net: network flaky ( -- ) [ 4 4 "flaky net ok" assert= ] ;
