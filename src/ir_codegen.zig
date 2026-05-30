@@ -540,6 +540,8 @@ fn isSupportedOp(name: []const u8) bool {
     if (std.mem.eql(u8, name, "native.struct-instance-to-hash")) return true;
     if (std.mem.eql(u8, name, "native.struct-type-predicate")) return true;
     if (std.mem.eql(u8, name, "native.hash-to-struct")) return true;
+    if (std.mem.eql(u8, name, "native.virtual-struct-wrap")) return true;
+    if (std.mem.eql(u8, name, "native.virtual-struct-unwrap")) return true;
 
     return false;
 }
@@ -550,7 +552,9 @@ fn isStructNativeOp(name: []const u8) bool {
         std.mem.eql(u8, name, "native.struct-instance-destructure") or
         std.mem.eql(u8, name, "native.struct-instance-to-hash") or
         std.mem.eql(u8, name, "native.struct-type-predicate") or
-        std.mem.eql(u8, name, "native.hash-to-struct");
+        std.mem.eql(u8, name, "native.hash-to-struct") or
+        std.mem.eql(u8, name, "native.virtual-struct-wrap") or
+        std.mem.eql(u8, name, "native.virtual-struct-unwrap");
 }
 
 fn isBinaryOp(name: []const u8) bool {
@@ -3084,9 +3088,12 @@ fn emitResolvedNativeCallback(
     }
 }
 
-/// Emit a polymorphic struct native call (make-struct-instance or
-/// struct-instance-destructure). Derives input/output counts from the
-/// struct_type in the preceding push_literal instruction.
+/// Emit a polymorphic struct native call (make-struct-instance,
+/// struct-instance-destructure, virtual-struct-wrap, or
+/// virtual-struct-unwrap). Derives input/output counts from the struct
+/// fields in the preceding push_literal: a .struct_type literal for the
+/// plain struct path, or a .type_val carrying a struct-backed
+/// VirtualType for the virtual path.
 fn emitStructNativeCall(
     state: *CompileState,
     instructions: []const Instruction,
@@ -3096,15 +3103,35 @@ fn emitStructNativeCall(
     sp: *usize,
     line: usize,
 ) IrCodegenError!void {
-    // Extract struct_type from the preceding push_literal(.struct_type)
     if (idx < 1) {
         state.not_compilable_reason = .pre_scan_failure;
         return IrCodegenError.NotCompilable;
     }
+
+    const is_virtual = std.mem.eql(u8, name, "native.virtual-struct-wrap") or
+        std.mem.eql(u8, name, "native.virtual-struct-unwrap");
+
     const struct_type_ptr: *const StructType = switch (instructions[idx - 1].op) {
-        .push_literal => |v| if (v == .struct_type) v.struct_type else {
-            state.not_compilable_reason = .pre_scan_failure;
-            return IrCodegenError.NotCompilable;
+        .push_literal => |v| blk: {
+            if (is_virtual) {
+                if (v != .type_val) {
+                    state.not_compilable_reason = .pre_scan_failure;
+                    return IrCodegenError.NotCompilable;
+                }
+                const vt = v.type_val.virtual_type orelse {
+                    state.not_compilable_reason = .pre_scan_failure;
+                    return IrCodegenError.NotCompilable;
+                };
+                break :blk vt.anon_struct orelse {
+                    state.not_compilable_reason = .pre_scan_failure;
+                    return IrCodegenError.NotCompilable;
+                };
+            }
+            if (v != .struct_type) {
+                state.not_compilable_reason = .pre_scan_failure;
+                return IrCodegenError.NotCompilable;
+            }
+            break :blk v.struct_type;
         },
         else => {
             state.not_compilable_reason = .pre_scan_failure;
@@ -3113,10 +3140,11 @@ fn emitStructNativeCall(
     };
 
     const num_fields: u8 = @intCast(struct_type_ptr.fields.len);
-    const is_constructor = std.mem.eql(u8, name, "native.make-struct-instance");
+    const is_constructor = std.mem.eql(u8, name, "native.make-struct-instance") or
+        std.mem.eql(u8, name, "native.virtual-struct-wrap");
 
-    // make-struct-instance: ( field1..fieldN struct_type -- instance )
-    // struct-instance-destructure: ( instance struct_type -- field1..fieldN )
+    // make-struct-instance / virtual-struct-wrap:    ( field1..fieldN literal -- instance )
+    // struct-instance-destructure / virtual-struct-unwrap: ( instance literal -- field1..fieldN )
     const effective_in: u8 = if (is_constructor) num_fields + 1 else 2;
     const effective_out: u8 = if (is_constructor) 1 else num_fields;
 
@@ -5092,10 +5120,14 @@ fn compileInstructions(
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
                 } else if (std.mem.eql(u8, name, "native.make-struct-instance") or
-                    std.mem.eql(u8, name, "native.struct-instance-destructure"))
+                    std.mem.eql(u8, name, "native.struct-instance-destructure") or
+                    std.mem.eql(u8, name, "native.virtual-struct-wrap") or
+                    std.mem.eql(u8, name, "native.virtual-struct-unwrap"))
                 {
                     // Polymorphic struct operations: derive input/output counts
-                    // from the struct_type in the preceding push_literal.
+                    // from the struct fields in the preceding push_literal
+                    // (a .struct_type for the plain shape, a .type_val whose
+                    // virtual_type is struct-backed for the virtual shape).
                     try emitStructNativeCall(state, instructions, idx, name, stack, sp, instr.line);
                 } else if (std.mem.eql(u8, name, "native.struct-instance-to-hash") or
                     std.mem.eql(u8, name, "native.struct-type-predicate") or

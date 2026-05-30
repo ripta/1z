@@ -27,10 +27,10 @@ pub const primitives = [_]Primitive{
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "listen", .func = nativeListen, .capability = .io_net },
-    .{ .name = "accept", .func = nativeAccept, .capability = .io_net },
-    .{ .name = "connect", .func = nativeConnect, .capability = .io_net },
-    .{ .name = "setsockopt", .func = nativeSetsockopt, .capability = .io_net },
+    .{ .name = "listen", .func = nativeListen, .stack_effect = "fd backlog --", .capability = .io_net },
+    .{ .name = "accept", .func = nativeAccept, .stack_effect = "fd -- fd host port", .capability = .io_net },
+    .{ .name = "connect", .func = nativeConnect, .stack_effect = "fd addr --", .capability = .io_net },
+    .{ .name = "setsockopt", .func = nativeSetsockopt, .stack_effect = "fd level optname value --", .capability = .io_net },
 };
 
 /// Addr variant info extracted from a tagged addr enum value.
