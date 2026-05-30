@@ -107,7 +107,7 @@ pub const StatementProcessor = struct {
                 self.coroutine = null;
                 switch (result) {
                     .success => |instrs| {
-                        if (instrs.len == 0 and self.stmt_len > 0 and bufferHasDocComment(self.stmt_buf[0..self.stmt_len])) {
+                        if (instrs.len == 0 and self.stmt_len > 0 and bufferOnlyHasDocComments(self.stmt_buf[0..self.stmt_len])) {
                             return .needs_more_input;
                         }
                         adjustInstructionLines(instrs, self.start_line);
@@ -187,12 +187,17 @@ fn adjustInstructionLines(instrs: []const Instruction, line_offset: usize) void 
     }
 }
 
-fn bufferHasDocComment(buf: []const u8) bool {
+fn bufferOnlyHasDocComments(buf: []const u8) bool {
     var tokenizer = Tokenizer.init(buf);
+    var saw_doc_comment = false;
     while (tokenizer.next()) |tok| {
-        if (tok.kind == .doc_comment) return true;
+        switch (tok.kind) {
+            .doc_comment => saw_doc_comment = true,
+            .comment, .newline => {},
+            else => return false,
+        }
     }
-    return false;
+    return saw_doc_comment;
 }
 
 // =============================================================================
@@ -256,6 +261,13 @@ test "StatementProcessor empty line" {
         },
         else => return error.UnexpectedResult,
     }
+}
+
+test "StatementProcessor only accumulates doc-comment-only buffer" {
+    try std.testing.expect(bufferOnlyHasDocComments("\\\\ doc"));
+    try std.testing.expect(bufferOnlyHasDocComments("\\\\ doc\n\\ ordinary comment"));
+    try std.testing.expect(!bufferOnlyHasDocComments("\\\\ doc\nuse \"testing\" ;"));
+    try std.testing.expect(!bufferOnlyHasDocComments("\\ ordinary comment"));
 }
 
 test "StatementProcessor flush" {

@@ -22,6 +22,8 @@ PASS: non-conflicting selective import works
 Stack: [ ]
 === Library-internal chain imports work without cascading errors ===
 Stack: [ ]
+PASS: doc-comment before use imports once
+Stack: [ ]
 PASS: chain import via strings works
 Stack: [ ]
 === Importing a word with the same name as a prelude word succeeds ===

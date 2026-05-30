@@ -37,7 +37,11 @@ use { sub: } "strict_use_mod_c.1z" ;
 \ === Chain imports do not cause false positives ===
 "Library-internal chain imports work without cascading errors" test-section
 
+\\ A doc comment before a parse-time-only `use` used to leave the statement
+\\ buffer open and replay the import at EOF, producing a bogus self-conflict.
 use "strings" ;
+"a,b,c" "," split #len 3 "doc-comment before use imports once" assert=
+
 "a,b,c" "," split #len 3 "chain import via strings works" assert=
 
 \ === Prelude word shadowing is allowed ===
