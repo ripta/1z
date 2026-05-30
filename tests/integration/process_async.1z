@@ -16,7 +16,7 @@ test-async-wait-pid: ( -- ) [
 
 test-async-process-stdout: ( -- ) [
   [
-    { "/bin/sh" "-c" "sleep 0.1; printf hello" } f f inherit: pipe: inherit: native.spawn-process
+    { "/bin/sh" "-c" "sleep 0.1; printf hello; sleep 0.1" } f f inherit: pipe: inherit: native.spawn-process
     f "stderr inherit returns false for async stdout test" assert=
     swap f "stdin inherit returns false for async stdout test" assert=
     dup [ dup 5 stream-read "hello" >bytes "reader gets delayed child stdout" assert= stream-close ] curry spawn
