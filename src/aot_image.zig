@@ -47,7 +47,10 @@ pub const ImagePath = enum {
 /// structural path.
 pub const BlobReason = enum {
     none,
-    /// A bare `hash` or `mutable_map` literal.
+    /// A bare `hash` literal. The reason name predates the mutable_map
+    /// slot-table mechanism, when both hash and mutable_map shared this
+    /// classification; the enum value is retained so diagnostic output
+    /// stays stable for the hash case.
     mutable_map,
     /// A `vector`, `byte_array`, or `set` literal -- dynamically sized
     /// containers.
@@ -137,7 +140,12 @@ pub fn classifyValue(val: Value) Classification {
         .type_val => Classification.structural_unit,
 
         // Blob path: leaf reasons.
-        .hash, .mutable_map => Classification.blobOf(.mutable_map),
+        .hash => Classification.blobOf(.mutable_map),
+        // `mutable_map` is structural via the runtime image's mutable_map
+        // slot table: each unique freeze-time pointer is allocated once
+        // at load and shared by every push site that referenced it, so
+        // identity matches the in-process AOT behavior.
+        .mutable_map => Classification.structural_unit,
         .vector, .byte_array, .set => Classification.blobOf(.dynamic_container),
         .parameter => Classification.blobOf(.parameter_runtime_state),
         .bignum => Classification.blobOf(.bignum),
@@ -511,24 +519,22 @@ test "classifyValue: quotation with type_val literal is structural" {
 }
 
 test "classifyValue: quotation with blob literal is blob" {
-    const mm = try value_mod.MutableMap.create(testing.allocator);
-    defer mm.header.release();
+    var ht = value_mod.HashTable{};
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .mutable_map = mm } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .hash = &ht } }, .line = 0, .column = 0 },
     };
     const q = value_mod.Quotation{ .instructions = &instrs };
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .quotation = q }).path);
 }
 
-test "classifyValue: hash, mutable_map, vector, byte_array, set are blob" {
+test "classifyValue: hash, vector, byte_array, set are blob; mutable_map is structural" {
     var ht = value_mod.HashTable{};
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .hash = &ht }).path);
     try testing.expectEqual(BlobReason.mutable_map, classifyValue(.{ .hash = &ht }).reason);
 
     const mm = try value_mod.MutableMap.create(testing.allocator);
     defer mm.header.release();
-    try testing.expectEqual(ImagePath.blob, classifyValue(.{ .mutable_map = mm }).path);
-    try testing.expectEqual(BlobReason.mutable_map, classifyValue(.{ .mutable_map = mm }).reason);
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .mutable_map = mm }).path);
 
     const vec = try value_mod.Vector.create(testing.allocator);
     defer vec.header.release();
@@ -601,15 +607,12 @@ test "buildImageManifest: synthetic modules produce sorted, classified entries" 
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
 
-    // A bare mutable_map literal forces the blob path: dynamic
-    // containers carry heap state that no static initializer can
-    // express. The blob_mm refcount is never explicitly released; the
-    // ctx-owned module cache that captures it via the instruction stream
-    // releases on its own teardown.
-    const blob_mm = try value_mod.MutableMap.create(testing.allocator);
-    defer blob_mm.header.release();
+    // A bare hash literal forces the blob path: dynamic-container
+    // contents carry heap state that no static initializer can express.
+    const blob_ht_ptr = try arena.create(value_mod.HashTable);
+    blob_ht_ptr.* = .{};
     const blob_instrs = try arena.dupe(Instruction, &.{
-        .{ .op = .{ .push_literal = .{ .mutable_map = blob_mm } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .hash = blob_ht_ptr } }, .line = 0, .column = 0 },
     });
 
     // Module "zeta" -- comes second alphabetically, both words structural.
@@ -684,10 +687,10 @@ test "writeManifestDump: deterministic output" {
     const struct_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
-    const blob_mm = try value_mod.MutableMap.create(testing.allocator);
-    defer blob_mm.header.release();
+    const blob_ht_ptr = try arena.create(value_mod.HashTable);
+    blob_ht_ptr.* = .{};
     const blob_instrs = try arena.dupe(Instruction, &.{
-        .{ .op = .{ .push_literal = .{ .mutable_map = blob_mm } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .hash = blob_ht_ptr } }, .line = 0, .column = 0 },
     });
 
     const m = try arena.create(Module);

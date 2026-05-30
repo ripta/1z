@@ -44,6 +44,11 @@
 //!   params[]` where each param is `u8 is_row_variable | u32 name_len |
 //!   name_bytes`
 //! - `9 = unit`: empty payload
+//! - `15 = mutable_map`: same wire shape as hash, but the loader
+//!   allocates a fresh `MutableMap` so mutations persist across pushes.
+//!   Image-mode encoding prefers `16 = mutable_map_slot` so freeze-time
+//!   identity is preserved; the non-image form is used by JIT
+//!   round-tripping where no slot map is available.
 //!
 //! All multi-byte integers are little-endian.
 //!
@@ -76,6 +81,7 @@ const VirtualType = value_mod.VirtualType;
 const StructType = value_mod.StructType;
 const Marker = value_mod.Marker;
 const Parameter = value_mod.Parameter;
+const MutableMap = value_mod.MutableMap;
 
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -98,6 +104,7 @@ pub const SlotEncodingMaps = struct {
     marker_slot_index: *const std.AutoHashMapUnmanaged(*const Marker, u32),
     parameter_slot_index: *const std.AutoHashMapUnmanaged(*const Parameter, u32),
     tagged_slot_index: *const std.AutoHashMapUnmanaged(TaggedKey, u32),
+    mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const MutableMap, u32),
 };
 
 /// Key for the tagged slot map, mirrored from `aot_image_emit.TaggedSlotKey`
@@ -122,6 +129,8 @@ pub const SlotResolutionTables = struct {
     parameter_slot_count: u32,
     tagged_slots: ?[*]?*const Value,
     tagged_slot_count: u32,
+    mutable_map_slots: ?[*]?*MutableMap,
+    mutable_map_slot_count: u32,
 };
 
 /// Op tags. Stored in the bytecode stream.
@@ -148,6 +157,19 @@ const value_tag_struct_type_slot: u8 = 11;
 const value_tag_marker_slot: u8 = 12;
 const value_tag_parameter_slot: u8 = 13;
 const value_tag_tagged_slot: u8 = 14;
+
+/// Bare `mutable_map` literal in non-image bytecode. Image-mode
+/// encoding prefers `value_tag_mutable_map_slot` so freeze-time
+/// identity is preserved; the bare form is used by JIT round-tripping
+/// where no slot map is available, in which case each decode allocates
+/// a fresh `MutableMap`.
+const value_tag_mutable_map: u8 = 15;
+
+/// Slot-indexed `mutable_map` literal used in image-mode bytecode.
+/// Carries a `u32 slot_index` resolved through
+/// `SlotResolutionTables.mutable_map_slots`. Preserves the identity of
+/// a parse-time-materialized mutable map across an AOT freeze boundary.
+const value_tag_mutable_map_slot: u8 = 16;
 
 /// Serialize an instruction slice into a freshly allocated byte buffer.
 /// Caller owns the returned slice.
@@ -257,6 +279,19 @@ pub fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocato
                 try serializeValueInto(buf, entry.value_ptr.*, allocator);
             }
         },
+        .mutable_map => |m| {
+            try buf.append(allocator, value_tag_mutable_map);
+            const entry_count: u32 = @intCast(m.map.count());
+            try buf.appendSlice(allocator, std.mem.asBytes(&entry_count));
+            var iter = m.map.iterator();
+            while (iter.next()) |entry| {
+                const key = entry.key_ptr.*;
+                const key_len: u32 = @intCast(key.len);
+                try buf.appendSlice(allocator, std.mem.asBytes(&key_len));
+                try buf.appendSlice(allocator, key);
+                try serializeValueInto(buf, entry.value_ptr.*, allocator);
+            }
+        },
         .stack_effect => |effect| {
             try buf.append(allocator, value_tag_stack_effect);
             try writeParamArray(buf, allocator, effect.inputs);
@@ -311,6 +346,11 @@ pub fn serializeValueIntoForImage(
             const key: TaggedKey = .{ .tag = t.tag, .inner_ptr = t.inner };
             const slot = maps.tagged_slot_index.get(key) orelse return error.NotEncodable;
             try buf.append(allocator, value_tag_tagged_slot);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot));
+        },
+        .mutable_map => |m| {
+            const slot = maps.mutable_map_slot_index.get(m) orelse return error.NotEncodable;
+            try buf.append(allocator, value_tag_mutable_map_slot);
             try buf.appendSlice(allocator, std.mem.asBytes(&slot));
         },
         .array => |elems| {
@@ -472,6 +512,24 @@ pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator
             h_ptr.* = h;
             break :blk .{ .hash = h_ptr };
         },
+        value_tag_mutable_map => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const entry_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            const m = MutableMap.create(allocator) catch return error.OutOfMemory;
+            try m.map.ensureTotalCapacity(allocator, entry_count);
+            for (0..entry_count) |_| {
+                if (offset.* + 4 > data.len) return error.OutOfMemory;
+                const klen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+                offset.* += 4;
+                if (offset.* + klen > data.len) return error.OutOfMemory;
+                const key = try allocator.dupe(u8, data[offset.*..][0..klen]);
+                offset.* += klen;
+                const value = try deserializeValueAt(data, offset, allocator);
+                m.map.putAssumeCapacity(key, value);
+            }
+            break :blk .{ .mutable_map = m };
+        },
         value_tag_stack_effect => blk: {
             const inputs = try readParamArray(data, offset, allocator);
             const outputs = try readParamArray(data, offset, allocator);
@@ -546,6 +604,15 @@ pub fn deserializeValueAtForImage(
             const table = tables.tagged_slots orelse return error.OutOfMemory;
             const tv = table[slot] orelse return error.OutOfMemory;
             break :blk tv.*;
+        },
+        value_tag_mutable_map_slot => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (slot >= tables.mutable_map_slot_count) return error.OutOfMemory;
+            const table = tables.mutable_map_slots orelse return error.OutOfMemory;
+            const m = table[slot] orelse return error.OutOfMemory;
+            break :blk .{ .mutable_map = m };
         },
         value_tag_array => blk: {
             if (offset.* + 4 > data.len) return error.OutOfMemory;

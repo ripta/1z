@@ -19,6 +19,7 @@ const value_mod = @import("value.zig");
 const stack_effect_mod = @import("stack_effect.zig");
 const aot_image_emit = @import("aot_image_emit.zig");
 const instruction_bytecode = @import("instruction_bytecode.zig");
+const container_backing = @import("container_backing.zig");
 const Context = @import("context.zig").Context;
 const dictionary_mod = @import("dictionary.zig");
 const WordProvenance = dictionary_mod.WordProvenance;
@@ -211,6 +212,17 @@ pub const TaggedDescription = extern struct {
     inner_bytecode_len: u32,
 };
 
+/// Zig mirror of `onez_image_mutable_map_description_t`. One row per
+/// slot in `onez_image_mutable_map_slots[]`. The loader allocates a
+/// fresh `*MutableMap`, decodes the entries via
+/// `instruction_bytecode.deserializeValueAtForImage`, populates the
+/// map, and patches the slot.
+pub const MutableMapDescription = extern struct {
+    slot: u32,
+    entries_bytecode: ?[*]const u8,
+    entries_bytecode_len: u32,
+};
+
 pub const Header = extern struct {
     format_version: u32,
     module_count: u32,
@@ -223,6 +235,7 @@ pub const Header = extern struct {
     marker_slot_count: u32,
     parameter_slot_count: u32,
     tagged_slot_count: u32,
+    mutable_map_slot_count: u32,
     modules: ?[*]const Module,
     words: ?[*]const Word,
     markers: ?[*]const Marker,
@@ -233,6 +246,7 @@ pub const Header = extern struct {
     marker_descriptions: ?[*]const MarkerDescription,
     parameter_descriptions: ?[*]const ParameterDescription,
     tagged_descriptions: ?[*]const TaggedDescription,
+    mutable_map_descriptions: ?[*]const MutableMapDescription,
 };
 
 /// Slot table type matching the C declaration:
@@ -269,6 +283,13 @@ pub const ParameterSlotTable = [*]?*value_mod.Parameter;
 /// the freeze-time tagged identity at runtime.
 pub const TaggedSlotTable = [*]?*const value_mod.Value;
 
+/// Slot table for `.mutable_map` pointers. Each entry is allocated by
+/// the loader via `MutableMap.create`; the entries are populated from
+/// the matching description row's bytecode. The compiled-code helper
+/// retains the pointer before pushing so the cache's strong reference
+/// is preserved.
+pub const MutableMapSlotTable = [*]?*value_mod.MutableMap;
+
 /// All loader-populated slot tables, passed together so the
 /// `loadIntoContext` signature stays compact as new tables land. Any
 /// individual field may be null when its corresponding C symbol was
@@ -279,6 +300,7 @@ pub const SlotTables = struct {
     markers: ?MarkerSlotTable = null,
     parameters: ?ParameterSlotTable = null,
     tagged: ?TaggedSlotTable = null,
+    mutable_maps: ?MutableMapSlotTable = null,
 };
 
 /// PIC snapshot relocation entry. Each entry says "rewrite this
@@ -349,12 +371,18 @@ pub fn loadIntoContext(
     ctx.image_parameter_slot_count = header.parameter_slot_count;
     ctx.image_tagged_slots = slots.tagged;
     ctx.image_tagged_slot_count = header.tagged_slot_count;
+    ctx.image_mutable_map_slots = slots.mutable_maps;
+    ctx.image_mutable_map_slot_count = header.mutable_map_slot_count;
+
+    // Mutable_map slots populate before tagged slots so a tagged
+    // inner value carrying a `.mutable_map` resolves correctly.
+    try populateMutableMapSlots(ctx, header, slots.mutable_maps);
 
     // Tagged slot population runs last because each row's inner
-    // bytecode may reference the typevalue, struct-type, marker, or
-    // parameter slot tables (recursive `.tagged.inner` routes through
-    // `deserializeValueAtForImage`), so those tables must be patched
-    // first.
+    // bytecode may reference the typevalue, struct-type, marker,
+    // parameter, or mutable_map slot tables (recursive `.tagged.inner`
+    // routes through `deserializeValueAtForImage`), so those tables
+    // must be patched first.
     try populateTaggedSlots(ctx, header, slots.tagged);
 }
 
@@ -879,6 +907,102 @@ fn populateParameterSlots(
     }
 }
 
+/// Walk the mutable_map description table and patch
+/// `onez_image_mutable_map_slots[]`. For each row: allocate a fresh
+/// `*MutableMap` via `MutableMap.create(ctx.allocator)`, decode the
+/// entries blob (u32 entry_count followed by u32 key_len + key bytes +
+/// image-mode serialized Value per entry), and put each key/value pair
+/// into the map. The map's initial refcount of 1 is donated to the slot;
+/// the slot holds a strong reference for the process lifetime. Entry
+/// values are retained before storage so the map's destroy path remains
+/// ownership-balanced even though it never fires in practice.
+///
+/// Runs before `populateTaggedSlots` so a tagged-inner value carrying a
+/// `.mutable_map` resolves correctly; entries that themselves reference
+/// later mutable_map slots or any tagged slot are not supported by the
+/// single-pass ordering, which matches the existing constraint on
+/// tagged-slot self-references.
+fn populateMutableMapSlots(
+    ctx: *Context,
+    header: *const Header,
+    slots: ?MutableMapSlotTable,
+) LoaderError!void {
+    if (header.mutable_map_slot_count == 0) return;
+    const descs = header.mutable_map_descriptions orelse return;
+    const slot_table = slots orelse return;
+
+    // The slot maps and their interior allocations all sit on the
+    // context arena. The arena is freed wholesale at `Context.deinit`,
+    // so the slot table never needs explicit release; storing the
+    // header allocator as the arena keeps any runtime mutation of the
+    // map (key dupes, hashmap grows) flowing through the same arena
+    // for the same wholesale teardown. The slot's refcount of 1 is
+    // ignored at teardown because nothing decrements it; the destroy
+    // callback would no-op anyway since the arena does not free
+    // individual allocations.
+    const arena = ctx.quotationAllocator();
+
+    const slot_tables: instruction_bytecode.SlotResolutionTables = .{
+        .typevalue_slots = ctx.image_typevalue_slots,
+        .typevalue_slot_count = ctx.image_typevalue_slot_count,
+        .struct_type_slots = ctx.image_struct_type_slots,
+        .struct_type_slot_count = ctx.image_struct_type_slot_count,
+        .marker_slots = ctx.image_marker_slots,
+        .marker_slot_count = ctx.image_marker_slot_count,
+        .parameter_slots = ctx.image_parameter_slots,
+        .parameter_slot_count = ctx.image_parameter_slot_count,
+        .tagged_slots = ctx.image_tagged_slots,
+        .tagged_slot_count = ctx.image_tagged_slot_count,
+        .mutable_map_slots = ctx.image_mutable_map_slots,
+        .mutable_map_slot_count = ctx.image_mutable_map_slot_count,
+    };
+
+    var i: u32 = 0;
+    while (i < header.mutable_map_slot_count) : (i += 1) {
+        const row = descs[i];
+        if (row.slot >= header.mutable_map_slot_count) return LoaderError.BadSlotIndex;
+
+        const mmap = value_mod.MutableMap.create(arena) catch return LoaderError.OutOfMemory;
+
+        // Patch the slot now so any entry whose value resolves through
+        // this same slot table (e.g., recursive references) sees the
+        // allocated map. Initial refcount is 1; the slot owns it.
+        slot_table[row.slot] = mmap;
+
+        const bytes = if (row.entries_bytecode) |p|
+            if (row.entries_bytecode_len > 0) p[0..row.entries_bytecode_len] else &[_]u8{}
+        else
+            &[_]u8{};
+
+        if (bytes.len == 0) continue;
+        if (bytes.len < @sizeOf(u32)) return LoaderError.OutOfMemory;
+
+        var offset: usize = 0;
+        const entry_count = std.mem.bytesToValue(u32, bytes[offset .. offset + @sizeOf(u32)]);
+        offset += @sizeOf(u32);
+
+        var e: u32 = 0;
+        while (e < entry_count) : (e += 1) {
+            if (offset + @sizeOf(u32) > bytes.len) return LoaderError.OutOfMemory;
+            const key_len = std.mem.bytesToValue(u32, bytes[offset .. offset + @sizeOf(u32)]);
+            offset += @sizeOf(u32);
+            if (offset + key_len > bytes.len) return LoaderError.OutOfMemory;
+            const key_src = bytes[offset .. offset + key_len];
+            offset += key_len;
+
+            const value = instruction_bytecode.deserializeValueAtForImage(
+                bytes,
+                &offset,
+                arena,
+                &slot_tables,
+            ) catch return LoaderError.OutOfMemory;
+
+            const key_copy = arena.dupe(u8, key_src) catch return LoaderError.OutOfMemory;
+            mmap.map.put(arena, key_copy, value) catch return LoaderError.OutOfMemory;
+        }
+    }
+}
+
 /// Walk the tagged description table and patch
 /// `onez_image_tagged_slots[]`. For each row, recover the tag's
 /// `*const VirtualType` by reading the typevalue slot at
@@ -910,6 +1034,8 @@ fn populateTaggedSlots(
         .parameter_slot_count = ctx.image_parameter_slot_count,
         .tagged_slots = ctx.image_tagged_slots,
         .tagged_slot_count = ctx.image_tagged_slot_count,
+        .mutable_map_slots = ctx.image_mutable_map_slots,
+        .mutable_map_slot_count = ctx.image_mutable_map_slot_count,
     };
 
     var i: u32 = 0;
@@ -1237,6 +1363,7 @@ fn emptyHeader() Header {
         .marker_slot_count = 0,
         .parameter_slot_count = 0,
         .tagged_slot_count = 0,
+        .mutable_map_slot_count = 0,
         .modules = null,
         .words = null,
         .markers = null,
@@ -1247,6 +1374,7 @@ fn emptyHeader() Header {
         .marker_descriptions = null,
         .parameter_descriptions = null,
         .tagged_descriptions = null,
+        .mutable_map_descriptions = null,
     };
 }
 

@@ -1686,6 +1686,7 @@ pub const AotImageSlotMaps = struct {
     marker_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.Marker, u32),
     parameter_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.Parameter, u32),
     tagged_slot_index: *const std.AutoHashMapUnmanaged(ibc.TaggedKey, u32),
+    mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32),
 };
 
 /// Resolution result for a typed-literal slot lookup. Carries the
@@ -1730,6 +1731,10 @@ fn resolveTypedLiteralSlot(state: *const CompileState, val: Value) ?TypedLiteral
             null,
         .tagged => |t| if (maps.tagged_slot_index.get(.{ .tag = t.tag, .inner_ptr = t.inner })) |slot|
             .{ .slot = slot, .helper_name = "onez_push_tagged_slot" }
+        else
+            null,
+        .mutable_map => |m| if (maps.mutable_map_slot_index.get(m)) |slot|
+            .{ .slot = slot, .helper_name = "onez_push_mutable_map_slot" }
         else
             null,
         else => null,
@@ -6650,6 +6655,7 @@ pub const AotMetadata = struct {
     runtime_image_marker_slot_count: u32 = 0,
     runtime_image_parameter_slot_count: u32 = 0,
     runtime_image_tagged_slot_count: u32 = 0,
+    runtime_image_mutable_map_slot_count: u32 = 0,
     /// Optional toolchain provenance. An empty slice means the field
     /// was unavailable at build time and must not appear in the
     /// embedded metadata or in `1z inspect` output.
@@ -6724,7 +6730,7 @@ pub fn emitProgramC(
         \\extern void onez_deinit(void *rt);
         \\extern int onez_set_static_libs(void *rt, const char **names, unsigned int count);
         \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
-        \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots);
+        \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots);
         \\
         \\
     );
@@ -6815,6 +6821,7 @@ pub fn emitProgramC(
             .marker_slot_index = &image_collection.?.effect_table.marker_slot_index,
             .parameter_slot_index = &image_collection.?.effect_table.parameter_slot_index,
             .tagged_slot_index = &image_collection.?.effect_table.tagged_slot_index,
+            .mutable_map_slot_index = &image_collection.?.effect_table.mutable_map_slot_index,
         };
     }
     const slot_maps_ptr: ?*const AotImageSlotMaps = if (image_slot_maps) |*m| m else null;
@@ -7271,6 +7278,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static inline int32_t onez_push_parameter_slot(uintptr_t ctx, uintptr_t slot) { return jitPushParameterSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushTaggedSlot(uintptr_t ctx, uintptr_t slot);\n");
     try out.appendSlice(allocator, "static inline int32_t onez_push_tagged_slot(uintptr_t ctx, uintptr_t slot) { return jitPushTaggedSlot(ctx, slot); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushMutableMapSlot(uintptr_t ctx, uintptr_t slot);\n");
+    try out.appendSlice(allocator, "static inline int32_t onez_push_mutable_map_slot(uintptr_t ctx, uintptr_t slot) { return jitPushMutableMapSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "\n");
 
     // 4a. Forward declarations (only for successfully compiled words)
@@ -7443,6 +7452,7 @@ pub fn emitProgramC(
         meta.runtime_image_word_count = stats.word_count;
         meta.runtime_image_struct_type_slot_count = stats.struct_type_slot_count;
         meta.runtime_image_marker_slot_count = stats.marker_slot_count;
+        meta.runtime_image_mutable_map_slot_count = stats.mutable_map_slot_count;
         meta.runtime_image_parameter_slot_count = stats.parameter_slot_count;
         meta.runtime_image_tagged_slot_count = stats.tagged_slot_count;
     }
@@ -7574,6 +7584,12 @@ pub fn emitProgramC(
                 \\
             );
         }
+        if (meta.runtime_image_mutable_map_slot_count > 0) {
+            try out.appendSlice(allocator,
+                \\    extern struct onez_mutable_map *onez_image_mutable_map_slots[];
+                \\
+            );
+        }
 
         try out.appendSlice(allocator, "    if (onez_load_runtime_image(rt, &onez_image_v1, onez_image_typevalue_slots, ");
         try out.appendSlice(allocator, if (meta.runtime_image_struct_type_slot_count > 0)
@@ -7589,7 +7605,11 @@ pub fn emitProgramC(
         else
             "NULL, ");
         try out.appendSlice(allocator, if (meta.runtime_image_tagged_slot_count > 0)
-            "onez_image_tagged_slots"
+            "onez_image_tagged_slots, "
+        else
+            "NULL, ");
+        try out.appendSlice(allocator, if (meta.runtime_image_mutable_map_slot_count > 0)
+            "onez_image_mutable_map_slots"
         else
             "NULL");
         try out.appendSlice(allocator,
@@ -8858,6 +8878,34 @@ export fn jitPushTaggedSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
         return 2;
     };
     ctx.stack.push(entry.*) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    return 0;
+}
+
+/// Push a `.mutable_map` literal by reading slot `slot` from
+/// `onez_image_mutable_map_slots[]`. The loader allocated and populated
+/// the `*MutableMap` during runtime-image rehydration; the slot holds a
+/// single strong reference for the process lifetime. The helper retains
+/// before pushing so each push site donates its own reference and the
+/// slot's anchor reference remains intact.
+export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const table = ctx.image_mutable_map_slots orelse {
+        recordSlotMiss(ctx, "mutable_map", slot);
+        ctx.jit_pending_error = error.WordNotFound;
+        return 2;
+    };
+    const mmap = table[slot] orelse {
+        recordSlotMiss(ctx, "mutable_map", slot);
+        ctx.jit_pending_error = error.WordNotFound;
+        return 2;
+    };
+    mmap.header.retain();
+    ctx.stack.push(.{ .mutable_map = mmap }) catch {
+        mmap.header.release();
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };

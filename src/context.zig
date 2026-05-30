@@ -393,11 +393,13 @@ pub const Context = struct {
     image_marker_slots: ?[*]?*value_mod.Marker = null,
     image_parameter_slots: ?[*]?*value_mod.Parameter = null,
     image_tagged_slots: ?[*]?*const value_mod.Value = null,
+    image_mutable_map_slots: ?[*]?*value_mod.MutableMap = null,
     image_typevalue_slot_count: u32 = 0,
     image_struct_type_slot_count: u32 = 0,
     image_marker_slot_count: u32 = 0,
     image_parameter_slot_count: u32 = 0,
     image_tagged_slot_count: u32 = 0,
+    image_mutable_map_slot_count: u32 = 0,
     /// Pending error from a JIT error-handling callback (recover/cleanup).
     /// Set by the callback when it returns error_propagate status, consumed
     /// by the interpreter dispatch loop.

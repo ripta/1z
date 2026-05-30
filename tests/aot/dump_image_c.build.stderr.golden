@@ -178,6 +178,20 @@ typedef struct onez_image_tagged_description {
     uint32_t       inner_bytecode_len;
 } onez_image_tagged_description_t;
 
+/* Per-slot description for `.mutable_map` literal pushes. The loader  */
+/* allocates a fresh `*MutableMap` per row, decodes the serialized    */
+/* entry bytes through `deserializeValueAtForImage` (so nested type-  */
+/* carrier values resolve through their slot tables), populates the   */
+/* map, and patches `onez_image_mutable_map_slots[slot]` with the     */
+/* allocated pointer. Identity is preserved across the freeze        */
+/* boundary: every push site that referenced the same parse-time     */
+/* MutableMap shares the same runtime instance.                       */
+typedef struct onez_image_mutable_map_description {
+    uint32_t    slot;                 /* index into onez_image_mutable_map_slots */
+    const uint8_t *entries_bytecode;
+    uint32_t       entries_bytecode_len;
+} onez_image_mutable_map_description_t;
+
 typedef struct onez_image_header {
     uint32_t format_version;
     uint32_t module_count;
@@ -190,6 +204,7 @@ typedef struct onez_image_header {
     uint32_t marker_slot_count;
     uint32_t parameter_slot_count;
     uint32_t tagged_slot_count;
+    uint32_t mutable_map_slot_count;
     const struct onez_image_module *modules;
     const struct onez_image_word *words;
     const struct onez_image_marker *markers;
@@ -200,6 +215,7 @@ typedef struct onez_image_header {
     const struct onez_image_marker_description *marker_descriptions;
     const struct onez_image_parameter_description *parameter_descriptions;
     const struct onez_image_tagged_description *tagged_descriptions;
+    const struct onez_image_mutable_map_description *mutable_map_descriptions;
 } onez_image_header_t;
 
 static const char onez_image_mk_0_name[] = "generic";
@@ -1157,6 +1173,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .marker_slot_count = 2,
     .parameter_slot_count = 6,
     .tagged_slot_count = 10,
+    .mutable_map_slot_count = 0,
     .modules = onez_image_modules_storage,
     .words = onez_image_words_storage,
     .markers = onez_image_markers_storage,
@@ -1167,5 +1184,6 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .marker_descriptions = onez_image_marker_descriptions_storage,
     .parameter_descriptions = onez_image_parameter_descriptions_storage,
     .tagged_descriptions = onez_image_tagged_descriptions_storage,
+    .mutable_map_descriptions = NULL,
 };
 
