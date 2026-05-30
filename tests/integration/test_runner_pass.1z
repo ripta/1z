@@ -1,0 +1,13 @@
+use "testing" ;
+
+test-addition: ( -- ) [
+  4 2 2 + "two plus two" assert=
+] ;
+
+test-multiplication: ( -- ) [
+  12 3 4 * "three times four" assert=
+] ;
+
+test-truth: ( -- ) [
+  t "t is true" assert-true
+] ;

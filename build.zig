@@ -571,6 +571,7 @@ fn hasExcludedJitFlag(flags_lines: ?[]const u8) bool {
 fn isSubcommandWord(line: []const u8) bool {
     return std.mem.eql(u8, line, "run") or
         std.mem.eql(u8, line, "eval") or
+        std.mem.eql(u8, line, "test") or
         std.mem.eql(u8, line, "check") or
         std.mem.eql(u8, line, "repl") or
         std.mem.eql(u8, line, "version") or

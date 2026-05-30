@@ -1,0 +1,13 @@
+use "testing" ;
+
+test-passing-addition: ( -- ) [
+  4 2 2 + "two plus two" assert=
+] ;
+
+test-failing-subtraction: ( -- ) [
+  99 10 5 - "ten minus five is not 99" assert=
+] ;
+
+test-passing-truth: ( -- ) [
+  t "t is true" assert-true
+] ;

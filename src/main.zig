@@ -508,6 +508,7 @@ fn printUsage() void {
         \\Subcommands:
         \\  run <file> [args...]   Execute a 1z source file
         \\  eval '<expr>'          Evaluate an expression string
+        \\  test <file>            Run `test-` words discovered in a *_test.1z file
         \\  check <file>           Run static analysis without executing
         \\  repl                   Start the interactive REPL (default)
         \\  fmt [files...]         Format 1z source files
@@ -626,6 +627,27 @@ fn printCheckHelp() void {
     w.writeAll("  --threads=N|auto          Worker threads, or 'auto' to detect (default: auto)\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
+    w.writeAll("\n") catch {};
+    w.flush() catch {};
+}
+
+fn printTestHelp() void {
+    const stdout_file: File = .stdout();
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout = stdout_file.writerStreaming(&stdout_buf);
+    const w = &stdout.interface;
+    w.writeAll("Usage: 1z test [options] <file>\n\n") catch {};
+    w.writeAll("Run every `test-` prefixed word defined in <file>.\n\n") catch {};
+    w.writeAll("The file is loaded as a module so its imports (e.g. `assert=` from\n") catch {};
+    w.writeAll("the testing library) resolve correctly when each test word runs.\n\n") catch {};
+    w.writeAll("Exit codes:\n") catch {};
+    w.writeAll("  0   All assertions passed\n") catch {};
+    w.writeAll("  1   One or more assertions failed\n") catch {};
+    w.writeAll("  2   Parse or runtime error\n\n") catch {};
+    w.writeAll("Global options:\n") catch {};
+    w.writeAll(global_flags_help) catch {};
+    w.writeAll("\n\nExecution options:\n") catch {};
+    w.writeAll(execution_flags_help) catch {};
     w.writeAll("\n") catch {};
     w.flush() catch {};
 }
@@ -1067,6 +1089,7 @@ pub fn main() u8 {
 
     if (std.mem.eql(u8, first, "run")) return handleRun(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "eval")) return handleEval(gpa_allocator, args[2..]);
+    if (std.mem.eql(u8, first, "test")) return handleTest(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "check")) return handleCheck(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "repl")) return handleRepl(gpa_allocator, args[2..]);
     if (std.mem.eql(u8, first, "fmt")) return handleFmt(gpa_allocator, args[2..]);
@@ -1475,6 +1498,169 @@ fn runEval(
     }
 
     return exit_code;
+}
+
+fn handleTest(gpa: std.mem.Allocator, args: []const []const u8) u8 {
+    const stderr_file: File = .stderr();
+    var stderr_buf: [4096]u8 = undefined;
+    var stderr = stderr_file.writerStreaming(&stderr_buf);
+    const err_writer = &stderr.interface;
+
+    if (hasHelpFlag(args)) {
+        printTestHelp();
+        return 0;
+    }
+
+    var global = GlobalFlags{};
+    defer global.deinit(gpa);
+    var exec = ExecutionFlags{};
+
+    var file_path: ?[]const u8 = null;
+
+    for (args) |arg| {
+        const g = parseGlobalFlag(arg, &global, gpa, err_writer) catch return 1;
+        if (g == .consumed) continue;
+        const e = parseExecutionFlag(arg, &exec, err_writer) catch return 1;
+        if (e == .consumed) continue;
+        if (arg.len > 0 and arg[0] == '-') {
+            err_writer.print("Error: unknown flag '{s}'\n", .{arg}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
+        if (file_path != null) {
+            err_writer.writeAll("Error: `test` accepts a single file argument\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
+        file_path = arg;
+    }
+
+    const path = file_path orelse {
+        err_writer.writeAll("Usage: 1z test [options] <file>\n") catch {};
+        err_writer.flush() catch {};
+        return 1;
+    };
+
+    const ec = ExecutionContext.init(gpa, &global, &exec, err_writer) catch return 2;
+    defer ec.deinit();
+
+    if (exec.test_timeout_ns) |timeout_ns| {
+        ec.armWatchdog(timeout_ns);
+    }
+
+    const result = runTest(&ec.ctx, path, err_writer);
+    ec.fireExitHooks(result);
+    ec.finalizeBenchmark(&exec);
+    ec.finalizeProfile();
+    return result;
+}
+
+/// Exit codes: 0 = all tests passed, 1 = one or more tests failed,
+/// 2 = parse/runtime error in the runner or test file.
+fn runTest(ctx: *Context, file_path: []const u8, err_writer: anytype) u8 {
+    ctx.current_source = "<test>";
+
+    ctx.pushLocalFrame() catch return 2;
+    defer ctx.popLocalFrame();
+    ctx.pushPragmaFrame() catch return 2;
+    defer ctx.popPragmaFrame();
+
+    const old_import_frame = ctx.import_frame_index;
+    ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    defer ctx.import_frame_index = old_import_frame;
+
+    const alloc = ctx.quotationAllocator();
+
+    const path_owned = alloc.dupe(u8, file_path) catch {
+        err_writer.writeAll("Error: out of memory\n") catch {};
+        err_writer.flush() catch {};
+        return 2;
+    };
+    ctx.stack.push(.{ .string = path_owned }) catch {
+        err_writer.writeAll("Error: out of memory\n") catch {};
+        err_writer.flush() catch {};
+        return 2;
+    };
+
+    const code =
+        \\use "test-runner" ;
+        \\run-test-file
+        \\
+    ;
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    var start: usize = 0;
+    var line_num: usize = 0;
+    while (start < code.len) {
+        const end = std.mem.indexOfScalarPos(u8, code, start, '\n') orelse code.len;
+        const line = code[start..end];
+        start = end + 1;
+        line_num += 1;
+        processor.trackLine(line_num);
+
+        switch (processor.feedLine(alloc, line, ctx)) {
+            .needs_more_input => continue,
+            .parse_error => |err| {
+                if (ctx.parse_diagnostics != null) {
+                    printParseDiagnostics(ctx, err_writer, ctx.current_source, line_num, processor.start_line);
+                } else {
+                    err_writer.print("Error: {any}\n", .{err}) catch {};
+                }
+                err_writer.flush() catch {};
+                ctx.clearExecutionDetails();
+                return 2;
+            },
+            .complete => |instrs| {
+                if (instrs.len > 0) {
+                    ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                        printErrorDetails(ctx, err_writer, err);
+                        err_writer.flush() catch {};
+                        return 2;
+                    };
+                }
+                processor.reset();
+            },
+        }
+    }
+
+    switch (processor.flush(alloc, ctx)) {
+        .needs_more_input => {},
+        .parse_error => |err| {
+            if (ctx.parse_diagnostics != null) {
+                printParseDiagnostics(ctx, err_writer, ctx.current_source, line_num, processor.start_line);
+            } else {
+                err_writer.print("Error: {any}\n", .{err}) catch {};
+            }
+            err_writer.flush() catch {};
+            ctx.clearExecutionDetails();
+            return 2;
+        },
+        .complete => |instrs| {
+            if (instrs.len > 0) {
+                ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
+                    printErrorDetails(ctx, err_writer, err);
+                    err_writer.flush() catch {};
+                    return 2;
+                };
+            }
+        },
+    }
+
+    const top = ctx.stack.pop() catch {
+        err_writer.writeAll("Error: test runner left no result on the stack\n") catch {};
+        err_writer.flush() catch {};
+        return 2;
+    };
+    switch (top) {
+        .fixnum => |n| return if (n == 0) 0 else 1,
+        else => {
+            err_writer.writeAll("Error: test runner produced a non-fixnum result\n") catch {};
+            err_writer.flush() catch {};
+            return 2;
+        },
+    }
 }
 
 fn testTimeoutWatchdog(timeout_ns: u64, ctx: *Context) void {

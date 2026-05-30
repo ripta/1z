@@ -1,0 +1,26 @@
+\ lib/test-runner.1z - Unit test runner for *_test.1z files
+\
+\ Loads a test file as a module, imports its definitions so each test word
+\ carries its source_module (which restores the module's deps frame on
+\ invocation, resolving `assert=` and same-file helpers), enumerates the
+\ `test-` prefixed entries, and calls each one. Leaves the testing library's
+\ failure count on the stack so the caller can derive an exit code.
+
+use "testing" ;
+use "sequences" ;
+
+\ Run every `test-` word defined in the given file.
+\
+\ Stack: ( filepath -- failed )
+\
+\   - filepath: path to a *_test.1z file
+\   - failed: number of failed assertions across all tests in the file
+run-test-file: ( filepath -- failed ) [
+  load        \ module
+  dup import  \ module (words now in scope)
+  @keys       \ test-names-array
+  [ >string "test-" #starts-with? ] #filter
+  [ >string ] #sort-by  \ deterministic order
+  [ >string eval-string ] #each
+  test-counts failed: @get
+] ;

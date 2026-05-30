@@ -3,6 +3,7 @@ Usage: 1z [<subcommand>] [options] [args...]
 Subcommands:
   run <file> [args...]   Execute a 1z source file
   eval '<expr>'          Evaluate an expression string
+  test <file>            Run `test-` words discovered in a *_test.1z file
   check <file>           Run static analysis without executing
   repl                   Start the interactive REPL (default)
   fmt [files...]         Format 1z source files
