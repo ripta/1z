@@ -1,0 +1,28 @@
+\ Unit tests for lib/strings.1z.
+
+use "testing" ;
+use "strings" ;
+
+test-trim-empty: ( -- ) [
+  "" "" trim "trim of empty string" assert=
+] ;
+
+test-trim-leading: ( -- ) [
+  "hello" "   hello" trim "trim strips leading whitespace" assert=
+] ;
+
+test-trim-trailing: ( -- ) [
+  "hello" "hello   " trim "trim strips trailing whitespace" assert=
+] ;
+
+test-trim-both: ( -- ) [
+  "hello" "  hello  " trim "trim strips leading and trailing whitespace" assert=
+] ;
+
+test-repeat-zero: ( -- ) [
+  "" "x" 0 repeat "repeat 0 yields the empty string" assert=
+] ;
+
+test-repeat-three: ( -- ) [
+  "ababab" "ab" 3 repeat "repeat 3 yields three concatenated copies" assert=
+] ;
