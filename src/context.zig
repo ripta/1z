@@ -742,6 +742,33 @@ pub const Context = struct {
         // Share the parent's module cache so tasks don't re-load from disk.
         ctx.module_cache_value = parent.module_cache_value;
 
+        // Inherit AOT runtime-image state from the parent so spawned tasks
+        // can resolve image-backed literals (typed values, parameters,
+        // markers, struct types, tagged values, mutable maps) and fall
+        // through to the module-cache word table in `lookupWordForExecution`.
+        // These tables and the gate flag are populated by
+        // `aot_image_loader.loadIntoContext` on the parent only; without
+        // propagation, the spawned task hits `image-slot-miss` for any
+        // compiled body that references a slot.
+        ctx.runtime_image_loaded = parent.runtime_image_loaded;
+        ctx.image_typevalue_slots = parent.image_typevalue_slots;
+        ctx.image_struct_type_slots = parent.image_struct_type_slots;
+        ctx.image_marker_slots = parent.image_marker_slots;
+        ctx.image_parameter_slots = parent.image_parameter_slots;
+        ctx.image_tagged_slots = parent.image_tagged_slots;
+        ctx.image_mutable_map_slots = parent.image_mutable_map_slots;
+        ctx.image_typevalue_slot_count = parent.image_typevalue_slot_count;
+        ctx.image_struct_type_slot_count = parent.image_struct_type_slot_count;
+        ctx.image_marker_slot_count = parent.image_marker_slot_count;
+        ctx.image_parameter_slot_count = parent.image_parameter_slot_count;
+        ctx.image_tagged_slot_count = parent.image_tagged_slot_count;
+        ctx.image_mutable_map_slot_count = parent.image_mutable_map_slot_count;
+
+        // Inherit AOT-emitted quotation code pointer table so quotation
+        // literals constructed in the task ctx via `jitPushQuotation`
+        // pick up their compiled bodies, matching the parent.
+        ctx.aot_quotation_fns = parent.aot_quotation_fns;
+
         // Share the parent's hook registry so all contexts fire the same hooks.
         ctx.hook_registry = parent.hook_registry;
 
@@ -1616,7 +1643,36 @@ pub const Context = struct {
         defer self.releaseSharedRead();
         if (self.lookupWordLocked(name)) |def| return def;
         if (!self.runtime_image_loaded) return null;
-        return self.lookupModuleCacheWordLocked(name);
+        if (self.lookupModuleCacheWordLocked(name)) |def| return def;
+        return self.lookupAotCompiledWordLocked(name);
+    }
+
+    /// Final fallback for AOT runtimes: a user word may live only in `jit_dispatch` with no entry in
+    /// any dictionary or module cache. This is the shape of top-level user words in interpreter-class
+    /// AOT binaries that did not embed a full runtime image.
+    ///
+    /// Walks `self` and the `parent_context` chain, scanning each `jit_dispatch` for a registered name.
+    /// On hit, synthesizes a `WordDefinition` carrying the entry's `word_id` so `executeResolvedWord`'s
+    /// JIT path dispatches via `executeCompiled`. Action is a sentinel that errors out if the compiled
+    /// call bails, since there is no interpretable body to fall back to.
+    ///
+    /// Gated by the caller on `runtime_image_loaded` so non-AOT sessions keep `jit_dispatch` opaque.
+    /// In interpreter sessions the same table can carry library-private words promoted to JIT,
+    /// and a name-based sweep would leak them across module boundaries.
+    fn lookupAotCompiledWordLocked(self: *const Context, name: []const u8) ?WordDefinition {
+        var ctx_opt: ?*const Context = self;
+        while (ctx_opt) |ctx| : (ctx_opt = ctx.parent_context) {
+            for (ctx.jit_dispatch.entries.items, 0..) |entry, idx| {
+                if (entry.code_ptr == null) continue;
+                if (!std.mem.eql(u8, entry.word_name, name)) continue;
+                return .{
+                    .name = entry.word_name,
+                    .word_id = @intCast(idx),
+                    .action = .{ .native = aotCompiledOnlyBailSentinel },
+                };
+            }
+        }
+        return null;
     }
 
     fn lookupWordLocked(self: *const Context, name: []const u8) ?WordDefinition {
@@ -1662,6 +1718,16 @@ pub const Context = struct {
             }
         }
         return null;
+    }
+
+    /// Sentinel `.native` action for AOT-compiled-only words synthesized
+    /// by `lookupAotCompiledWordLocked`. The intended dispatch path is
+    /// the JIT one in `executeResolvedWord`, driven by the word's
+    /// `word_id`. This sentinel runs only if the JIT path bails, in
+    /// which case there is no interpretable body to fall back to and we
+    /// surface the failure as an unknown-word error.
+    fn aotCompiledOnlyBailSentinel(_: *Context) anyerror!void {
+        return ExecutionError.UnknownWord;
     }
 
     fn wordDefFromModuleWord(
@@ -5353,4 +5419,67 @@ test "lookupWordForExecution: does not leak module deps across modules" {
     // module's `deps` is private to that module and must not be visible.
     ctx.runtime_image_loaded = true;
     try std.testing.expectEqual(@as(?WordDefinition, null), ctx.lookupWordForExecution("dep-only"));
+}
+
+test "lookupWordForExecution: walks parent jit_dispatch for AOT-compiled-only words" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // The fallback is gated on runtime_image_loaded: the AOT runtime sets
+    // this flag at startup, and interpreter sessions leave it false so that
+    // a library-private word promoted to JIT can't leak across module
+    // boundaries via a name sweep of jit_dispatch.
+    parent.runtime_image_loaded = true;
+
+    // Register a fake AOT-compiled word in the parent's jit_dispatch. The
+    // code_ptr is non-null so the entry is considered live; we never invoke
+    // it in this test (we only check that the lookup synthesizes a
+    // WordDefinition with the correct word_id).
+    const fake_code: *const anyopaque = @ptrCast(&fakeAotCodeMarker);
+    const wid = try parent.jit_dispatch.assignId("ghost-word");
+    parent.jit_dispatch.setCodePtr(wid, fake_code);
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    // Strict in-context lookup must not find it (no dictionary entry exists
+    // anywhere in the chain).
+    try std.testing.expectEqual(@as(?WordDefinition, null), task_ctx.lookupWord("ghost-word"));
+
+    // Execution-time lookup falls through to the jit_dispatch sweep across
+    // the parent chain.
+    const found = task_ctx.lookupWordForExecution("ghost-word") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqual(@as(?u32, wid), found.word_id);
+    try std.testing.expectEqualStrings("ghost-word", found.name);
+}
+
+var fakeAotCodeMarker: u8 = 0;
+
+test "initForTask: inherits AOT runtime-image state from parent" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // Mark the parent as having an image loaded with bogus-but-non-null
+    // slot tables and counts. The task should inherit each field verbatim
+    // so compiled bodies in spawned tasks can resolve image-backed literals.
+    parent.runtime_image_loaded = true;
+    parent.image_typevalue_slot_count = 7;
+    parent.image_parameter_slot_count = 3;
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(true, task_ctx.runtime_image_loaded);
+    try std.testing.expectEqual(@as(u32, 7), task_ctx.image_typevalue_slot_count);
+    try std.testing.expectEqual(@as(u32, 3), task_ctx.image_parameter_slot_count);
 }

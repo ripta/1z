@@ -1,0 +1,3 @@
+greet: ( -- ) [ "hello" print-line ] ;
+
+[ greet ] task-scope
