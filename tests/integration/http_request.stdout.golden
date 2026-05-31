@@ -3,51 +3,78 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
 PASS: method
-Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
 PASS: path
-Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
 PASS: version
-Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
 PASS: host header
 Stack: [ ]
 === read-request: multiple headers ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "GET" path: "/index.html" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
 PASS: method
-Stack: [ request{ method: "GET" path: "/index.html" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
 PASS: path
-Stack: [ request{ method: "GET" path: "/index.html" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
 PASS: host header
-Stack: [ request{ method: "GET" path: "/index.html" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
 PASS: content-type lowercase
-Stack: [ request{ method: "GET" path: "/index.html" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
 PASS: custom header
 Stack: [ ]
 === read-request: POST method ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "POST" path: "/submit" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
 PASS: POST method
-Stack: [ request{ method: "POST" path: "/submit" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
 PASS: POST path
-Stack: [ request{ method: "POST" path: "/submit" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
 PASS: POST version
-Stack: [ request{ method: "POST" path: "/submit" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
 PASS: content-length header
 Stack: [ ]
 === read-request: no headers ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } } ]
 PASS: no-headers method
-Stack: [ request{ method: "GET" path: "/" version: "HTTP/1.1" headers: H{ } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } } ]
 PASS: no headers count
+Stack: [ ]
+=== read-request: no query string ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+PASS: no-query path
+Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+PASS: no-query empty string
+Stack: [ ]
+=== read-request: non-empty query string ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ request{ method: "GET" path: "/path" query-string: "a=1&b=2" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+PASS: non-empty-query path
+Stack: [ request{ method: "GET" path: "/path" query-string: "a=1&b=2" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+PASS: non-empty query string
+Stack: [ ]
+=== read-request: empty query string ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+PASS: empty-query path
+Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+PASS: empty query string
 Stack: [ ]
 === read-request: EOF throws EUnexpectedEOF ===
 Stack: [ ]

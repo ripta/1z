@@ -7,7 +7,7 @@ use "time" ;
 
 \\ Helper: create a GET request for a path.
 make-get: ( path -- request ) [
-  "GET" swap "HTTP/1.1" H{ } make-request
+  "GET" swap "" "HTTP/1.1" H{ } make-request
 ] ;
 
 \\ Helper: dispatch a GET request through a handler and return the status line.

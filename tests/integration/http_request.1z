@@ -52,6 +52,27 @@ read-request
 dup method>> "GET" "no-headers method" assert=
 headers>> @keys #len 0 "no headers count" assert=
 
+"read-request: no query string" test-section
+<pipe> dup "GET /path HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup path>> "/path" "no-query path" assert=
+query-string>> "" "no-query empty string" assert=
+
+"read-request: non-empty query string" test-section
+<pipe> dup "GET /path?a=1&b=2 HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup path>> "/path" "non-empty-query path" assert=
+query-string>> "a=1&b=2" "non-empty query string" assert=
+
+"read-request: empty query string" test-section
+<pipe> dup "GET /path? HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup path>> "/path" "empty-query path" assert=
+query-string>> "" "empty query string" assert=
+
 "read-request: EOF throws EUnexpectedEOF" test-section
 [ <pipe> stream-close read-request ] unexpected-eof: "EOF on empty stream" assert-error-type
 

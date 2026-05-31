@@ -8,7 +8,7 @@ use "data/url" ;
 
 EMalformedRequest: ( -- err: symbol ) [ malformed-request: ] ;
 
-request: struct{ method path version headers } ;
+request: struct{ method path query-string version headers } ;
 
 \\ Parse header lines from a stream into a hash with lowercased keys.
 read-headers: ( stream -- headers ) [
@@ -27,17 +27,35 @@ read-headers-loop: ( stream headers -- headers ) [
   ] if
 ] ;
 
+\ Split a request-target on the first `?` into a path and a query-string.
+\ A target with no `?` keeps the whole target as the path and yields an
+\ empty query-string. A target with `?` and an empty tail also yields an
+\ empty query-string.
+(split-target): ( target -- path query-string ) [
+  dup "?" split-once?
+  dup option:some?
+  [ option:some> nip
+    dup #first swap #last
+  ]
+  [ drop "" ]
+  if
+] ;
+
 \\ Read and parse an HTTP request line and headers from a stream.
-\\ Returns a request struct with method, path, version, and headers hash.
+\\ Returns a request struct with method, path, query-string, version, and
+\\ headers hash. The path and query-string are split on the first `?` in
+\\ the request-target.
 read-request: ( stream -- request ) [
   dup stream-read-line
   dup f = [ f "unexpected EOF reading request line" EUnexpectedEOF make-error throw ] when
   " " split
   dup #len 3 < [ dup " " #join "malformed request line" EMalformedRequest make-error throw ] when
-  dup #first swap
-  dup 1 #nth swap
-  2 #nth
-  3 pick-n read-headers
+  dup 2 #nth
+  over 0 #nth
+  -rot>
+  swap 1 #nth (split-target)
+  <rot-
+  4 pick-n read-headers
   make-request
   swap drop
 ] ;
