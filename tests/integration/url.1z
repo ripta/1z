@@ -96,3 +96,59 @@ B{ 0x2F 0x3F 0x3D } B{ 0x2F 0x3F 0x3D } decode-bytes
 [ B{ 0x25 0x41 0x47 } decode-bytes ] "%AG (second non-hex) throws" assert-error
 [ B{ 0x25 0x21 0x22 } decode-bytes ] "%!\" (both non-hex) throws" assert-error
 [ B{ 0x41 0x25 } decode-bytes ] "trailing % after content throws" assert-error
+
+"encode: string-layer wrapper" test-section
+
+"" "" encode "empty string round-trips" assert=
+
+"hello" "hello" encode "unreserved ASCII passes through" assert=
+
+"abcXYZ-._~0123" "abcXYZ-._~0123" encode "full unreserved set passes through" assert=
+
+"a%20b" "a b" encode "space in string encodes to %20" assert=
+
+"a%2Fb%3Fc%3Dd%26e%2Bf%25g" "a/b?c=d&e+f%g" encode
+"ASCII reserved characters encode to %HH" assert=
+
+"caf%C3%A9" "café" encode "multibyte UTF-8 (é) encodes pairwise" assert=
+
+"%E4%B8%AD" "中" encode "multibyte UTF-8 (CJK 中) encodes pairwise" assert=
+
+"a%20caf%C3%A9%2F%E4%B8%AD" "a café/中" encode
+"mixed ASCII and multibyte string encodes pairwise" assert=
+
+"decode: string-layer wrapper" test-section
+
+"" "" decode "empty string round-trips" assert=
+
+"hello" "hello" decode "unreserved ASCII passes through" assert=
+
+"a b" "a%20b" decode "space %20 decodes back" assert=
+
+"café" "caf%C3%A9" decode "multibyte UTF-8 (é) decodes back" assert=
+
+"中" "%E4%B8%AD" decode "multibyte UTF-8 (CJK 中) decodes back" assert=
+
+"a/b?c=d&e+f%g" "a%2Fb%3Fc%3Dd%26e%2Bf%25g" decode
+"reserved characters decode back" assert=
+
+"encode/decode: string round-trip" test-section
+
+"hello" dup encode decode "ASCII unreserved round-trips" assert=
+
+"a b/c?d=e&f+g%h" dup encode decode "ASCII reserved round-trips" assert=
+
+"café" dup encode decode "café round-trips" assert=
+
+"中文" dup encode decode "CJK 中文 round-trips" assert=
+
+"a café/中" dup encode decode "mixed ASCII and multibyte round-trips" assert=
+
+"decode: malformed string input throws" test-section
+
+[ "%" decode ] "trailing % alone (string) throws" assert-error
+[ "%" decode ] EInvalidArgument
+"trailing % alone (string) is EInvalidArgument" assert-error-type
+
+[ "%G1" decode ] "%G1 (first non-hex, string) throws" assert-error
+[ "%1G" decode ] "%1G (second non-hex, string) throws" assert-error

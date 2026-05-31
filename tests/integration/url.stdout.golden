@@ -97,3 +97,61 @@ PASS: %!" (both non-hex) throws
 Stack: [ ]
 PASS: trailing % after content throws
 Stack: [ ]
+=== encode: string-layer wrapper ===
+Stack: [ ]
+PASS: empty string round-trips
+Stack: [ ]
+PASS: unreserved ASCII passes through
+Stack: [ ]
+PASS: full unreserved set passes through
+Stack: [ ]
+PASS: space in string encodes to %20
+Stack: [ ]
+Stack: [ "a%2Fb%3Fc%3Dd%26e%2Bf%25g" "a%2Fb%3Fc%3Dd%26e%2Bf%25g" ]
+PASS: ASCII reserved characters encode to %HH
+Stack: [ ]
+PASS: multibyte UTF-8 (é) encodes pairwise
+Stack: [ ]
+PASS: multibyte UTF-8 (CJK 中) encodes pairwise
+Stack: [ ]
+Stack: [ "a%20caf%C3%A9%2F%E4%B8%AD" "a%20caf%C3%A9%2F%E4%B8%AD" ]
+PASS: mixed ASCII and multibyte string encodes pairwise
+Stack: [ ]
+=== decode: string-layer wrapper ===
+Stack: [ ]
+PASS: empty string round-trips
+Stack: [ ]
+PASS: unreserved ASCII passes through
+Stack: [ ]
+PASS: space %20 decodes back
+Stack: [ ]
+PASS: multibyte UTF-8 (é) decodes back
+Stack: [ ]
+PASS: multibyte UTF-8 (CJK 中) decodes back
+Stack: [ ]
+Stack: [ "a/b?c=d&e+f%g" "a/b?c=d&e+f%g" ]
+PASS: reserved characters decode back
+Stack: [ ]
+=== encode/decode: string round-trip ===
+Stack: [ ]
+PASS: ASCII unreserved round-trips
+Stack: [ ]
+PASS: ASCII reserved round-trips
+Stack: [ ]
+PASS: café round-trips
+Stack: [ ]
+PASS: CJK 中文 round-trips
+Stack: [ ]
+PASS: mixed ASCII and multibyte round-trips
+Stack: [ ]
+=== decode: malformed string input throws ===
+Stack: [ ]
+PASS: trailing % alone (string) throws
+Stack: [ ]
+Stack: [ [ "%" decode ] invalid-argument: ]
+PASS: trailing % alone (string) is EInvalidArgument
+Stack: [ ]
+PASS: %G1 (first non-hex, string) throws
+Stack: [ ]
+PASS: %1G (second non-hex, string) throws
+Stack: [ ]

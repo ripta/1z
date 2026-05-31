@@ -119,3 +119,14 @@ decode-bytes: ( bytes -- bytes ) [
   [ dup (dec-remaining) 0 > ] [ (dec-step) ] while
   out>>
 ] ;
+
+\\ RFC 3986 percent-encode a string. The string is interpreted as UTF-8 bytes
+\\ and passed to `encode-bytes`; the result is ASCII (unreserved characters
+\\ plus `%HH` triples) and is re-wrapped as a string.
+encode: ( string -- string ) [ >bytes encode-bytes bytes> ] ;
+
+\\ RFC 3986 percent-decode a string. The string is interpreted as UTF-8 bytes
+\\ and passed to `decode-bytes`; the resulting bytes are re-wrapped as a
+\\ string. Throws `EInvalidArgument` on malformed `%HH` sequences, matching
+\\ the byte-level decoder.
+decode: ( string -- string ) [ >bytes decode-bytes bytes> ] ;
