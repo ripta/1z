@@ -1,0 +1,20 @@
+\ AOT regression test for lib/net/http.1z and its dependency closure.
+\ The full networked driver lives at
+\ tests/integration/http_server_example.1z; this file exercises a
+\ narrow slice of the surface so the regression runs without spawning
+\ a listener.
+\
+\ Importing net/http drags its dependency closure (lib/strings.1z,
+\ lib/os/path.1z, lib/mimetype.1z, lib/net/server.1z, lib/net/tcp.1z,
+\ lib/net.1z) through the freeze frontend and IR codegen, so any
+\ backslide on the missing-stack-effect or row-variable-effect fixes
+\ surfaces as a build failure. reason-for additionally drives the
+\ parse-time status-reasons mutable-map literal through the
+\ runtime-image slot table at execution time.
+
+use "net/http" ;
+
+200 reason-for print-line
+404 reason-for print-line
+500 reason-for print-line
+999 reason-for print-line
