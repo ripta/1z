@@ -51,7 +51,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "stream-close", .stack_effect = "stream --", .doc = "Close a stream.", .func = nativeStreamClose, .capability = .io },
     .{ .name = "stream-write", .stack_effect = "stream bytes -- n", .doc = "Write bytes to stream, return count written.", .func = nativeStreamWrite, .capability = .io },
     .{ .name = "stream-flush", .stack_effect = "stream --", .doc = "Flush stream buffer.", .func = nativeStreamFlush, .capability = .io },
-    .{ .name = "stream-read", .stack_effect = "stream n -- bytes", .doc = "Read up to n bytes from stream.", .func = nativeStreamRead, .capability = .io },
+    .{ .name = "stream-read", .stack_effect = "stream n -- bytes", .doc = "Read up to n bytes from stream. A single call may return fewer than n bytes for reasons other than EOF (a short pipe wake, a syscall returning early); EOF is signaled by a return of zero bytes. Callers that need exactly n bytes should loop, or use stream-read(exact) which loops until n bytes or EOF.", .func = nativeStreamRead, .capability = .io },
     .{ .name = "stream-read-line", .stack_effect = "stream -- str/f", .doc = "Read one line (no newline), or f at EOF.", .func = nativeStreamReadLine, .capability = .io },
     .{ .name = "stream-read-all", .stack_effect = "stream -- bytes", .doc = "Read all remaining content from stream.", .func = nativeStreamReadAll, .capability = .io },
     .{ .name = "stream-tell", .stack_effect = "stream -- pos", .doc = "Get current stream position.", .func = nativeStreamTell, .capability = .io },
