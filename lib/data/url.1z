@@ -1,0 +1,121 @@
+\ lib/data/url.1z - RFC 3986 percent-encoding for URLs
+
+(url-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
+
+(invalid-hex-error): ( -- * ) [
+  "invalid percent-encoded hex digit" (url-error)
+] ;
+
+(truncated-error): ( -- * ) [
+  "truncated percent-encoded sequence" (url-error)
+] ;
+
+(upper-byte?): ( byte -- ? ) [ dup 0x41 >= swap 0x5A <= and ] ;
+
+(lower-byte?): ( byte -- ? ) [ dup 0x61 >= swap 0x7A <= and ] ;
+
+(digit-byte?): ( byte -- ? ) [ dup 0x30 >= swap 0x39 <= and ] ;
+
+(special-unreserved-byte?): ( byte -- ? ) [
+  dup 0x2D =
+  over 0x2E = or
+  over 0x5F = or
+  swap 0x7E = or
+] ;
+
+(unreserved-byte?): ( byte -- ? ) [
+  dup (upper-byte?)
+  over (lower-byte?) or
+  over (digit-byte?) or
+  swap (special-unreserved-byte?) or
+] ;
+
+\ Map 0..9 to 0x30..0x39 and 10..15 to 0x41..0x46 (uppercase hex).
+(nibble>hex-byte): ( n -- byte ) [
+  dup 10 < [ 0x30 + ] [ 55 + ] if
+] ;
+
+\ Map a hex-digit byte (0-9, A-F, a-f) to its 0..15 value; throw otherwise.
+(hex-byte>nibble): ( byte -- n ) [
+  dup 0x30 >= over 0x39 <= and
+  [ 0x30 - ]
+  [
+    dup 0x41 >= over 0x46 <= and
+    [ 0x41 - 10 + ]
+    [
+      dup 0x61 >= over 0x66 <= and
+      [ 0x61 - 10 + ]
+      [ drop (invalid-hex-error) ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+(encode-reserved): ( acc byte -- acc' ) [
+  dup 4 ushift-right (nibble>hex-byte)
+  swap 15 bitand (nibble>hex-byte)
+  [ 0x25 #push ] 2dip
+  [ #push ] dip
+  #push
+] ;
+
+(encode-byte-into): ( acc byte -- acc' ) [
+  dup (unreserved-byte?)
+  [ #push ]
+  [ (encode-reserved) ]
+  if
+] ;
+
+\\ RFC 3986 percent-encode a byte sequence. Each byte outside the unreserved
+\\ set (A-Z / a-z / 0-9 / `-` / `.` / `_` / `~`) is replaced with `%HH` using
+\\ uppercase hex digits; unreserved bytes pass through unchanged. The `%`
+\\ byte itself has no special treatment and is encoded as `%25`, so the
+\\ operation is well-defined on arbitrary opaque byte input.
+encode-bytes: ( bytes -- bytes ) [
+  B{ } [ (encode-byte-into) ] #reduce
+] ;
+
+url-decode-state: mutable struct{ src pos out } ;
+
+(dec-remaining): ( state -- n ) [ dup src>> #len swap pos>> - ] ;
+
+(dec-src-at): ( state offset -- byte ) [
+  over pos>> + over src>> swap #nth nip
+] ;
+
+(dec-append): ( state byte -- state ) [
+  over out>> swap #push >>out
+] ;
+
+(dec-advance): ( state n -- state ) [
+  over pos>> + >>pos
+] ;
+
+(dec-step): ( state -- state ) [
+  dup 0 (dec-src-at)
+  dup 0x25 =
+  [
+    drop
+    dup (dec-remaining) 3 < [ (truncated-error) ] when
+    dup 1 (dec-src-at) (hex-byte>nibble) 4 shift-left
+    over 2 (dec-src-at) (hex-byte>nibble) bitor
+    (dec-append) 3 (dec-advance)
+  ]
+  [
+    (dec-append) 1 (dec-advance)
+  ]
+  if
+] ;
+
+\\ RFC 3986 percent-decode a byte sequence. Any `%HH` triple (hex digits in
+\\ either case) decodes to the byte it represents; every other byte passes
+\\ through unchanged. Throws `EInvalidArgument` on a trailing `%` with fewer
+\\ than two hex digits remaining, or on a `%XY` triple where `X` or `Y` is
+\\ not a hex digit.
+decode-bytes: ( bytes -- bytes ) [
+  0 B{ } make-url-decode-state
+  [ dup (dec-remaining) 0 > ] [ (dec-step) ] while
+  out>>
+] ;

@@ -1,0 +1,99 @@
+=== encode-bytes: unreserved passthrough ===
+Stack: [ ]
+PASS: empty byte-array round-trips
+Stack: [ ]
+Stack: [ B{ 0x41 0x42 0x43 0x58 0x59 0x5A } B{ 0x41 0x42 0x43 0x58 0x59 0x5A } ]
+PASS: uppercase letters pass through
+Stack: [ ]
+Stack: [ B{ 0x61 0x62 0x63 0x78 0x79 0x7A } B{ 0x61 0x62 0x63 0x78 0x79 0x7A } ]
+PASS: lowercase letters pass through
+Stack: [ ]
+Stack: [ B{ 0x30 0x35 0x39 } B{ 0x30 0x35 0x39 } ]
+PASS: digits pass through
+Stack: [ ]
+Stack: [ B{ 0x2D 0x2E 0x5F 0x7E } B{ 0x2D 0x2E 0x5F 0x7E } ]
+PASS: dash dot underscore tilde pass through
+Stack: [ ]
+=== encode-bytes: reserved bytes encode to %HH ===
+Stack: [ ]
+PASS: space encodes to %20
+Stack: [ ]
+PASS: slash encodes to %2F
+Stack: [ ]
+PASS: question mark encodes to %3F
+Stack: [ ]
+PASS: equals encodes to %3D
+Stack: [ ]
+PASS: ampersand encodes to %26
+Stack: [ ]
+PASS: plus encodes to %2B
+Stack: [ ]
+PASS: percent encodes to %25 (no passthrough)
+Stack: [ ]
+Stack: [ B{ 0x25 0x32 0x35 0x47 } B{ 0x25 0x32 0x35 0x47 } ]
+PASS: literal %G encodes to %25G (encoder treats % as ordinary)
+Stack: [ ]
+=== encode-bytes: non-ASCII bytes ===
+Stack: [ ]
+PASS: 0x80 encodes to %80
+Stack: [ ]
+PASS: 0xFF encodes to %FF (uppercase hex)
+Stack: [ ]
+PASS: 0xAB encodes to %AB (both nibbles letters)
+Stack: [ ]
+Stack: [ B{ 0x25 0x43 0x33 0x25 0x41 0x39 } B{ 0x25 0x43 0x33 0x25 0x41 0x39 } ]
+PASS: multi-byte UTF-8 bytes encode pairwise
+Stack: [ ]
+=== decode-bytes: round-trip with encode-bytes ===
+Stack: [ ]
+PASS: empty round-trip
+Stack: [ ]
+Stack: [ B{ 0x41 0x42 0x43 } B{ 0x41 0x42 0x43 } ]
+PASS: unreserved letters round-trip
+Stack: [ ]
+Stack: [ B{ 0x20 0x2F 0x3F 0x3D 0x26 0x2B 0x25 } ]
+Stack: [ B{ 0x20 0x2F 0x3F 0x3D 0x26 0x2B 0x25 } B{ 0x20 0x2F 0x3F 0x3D 0x26 0x2B 0x25 } ]
+PASS: reserved bytes round-trip
+Stack: [ ]
+Stack: [ B{ 0x00 0x7F 0x80 0xFF } B{ 0x00 0x7F 0x80 0xFF } ]
+PASS: binary bytes round-trip
+Stack: [ ]
+=== decode-bytes: lowercase and uppercase hex both decode ===
+Stack: [ ]
+PASS: uppercase %2F decodes to /
+Stack: [ ]
+PASS: lowercase %2f decodes to /
+Stack: [ ]
+PASS: uppercase %FF decodes to 0xFF
+Stack: [ ]
+PASS: lowercase %ff decodes to 0xFF
+Stack: [ ]
+PASS: mixed-case %aB decodes to 0xAB
+Stack: [ ]
+=== decode-bytes: literal non-percent bytes pass through ===
+Stack: [ ]
+PASS: plus is literal in non-form mode
+Stack: [ ]
+Stack: [ B{ 0x2F 0x3F 0x3D } B{ 0x2F 0x3F 0x3D } ]
+PASS: sub-delims pass through when not percent-prefixed
+Stack: [ ]
+=== decode-bytes: malformed input throws ===
+Stack: [ ]
+PASS: trailing % alone throws
+Stack: [ ]
+Stack: [ [ [ 37 ] make-byte-array decode-bytes ] invalid-argument: ]
+PASS: trailing % alone is EInvalidArgument
+Stack: [ ]
+PASS: %A with one trailing digit throws
+Stack: [ ]
+Stack: [ [ [ 37 65 ] make-byte-array decode-bytes ] invalid-argument: ]
+PASS: %A is EInvalidArgument
+Stack: [ ]
+PASS: %GA (first non-hex) throws
+Stack: [ ]
+PASS: %AG (second non-hex) throws
+Stack: [ ]
+PASS: %!" (both non-hex) throws
+Stack: [ ]
+PASS: trailing % after content throws
+Stack: [ ]
