@@ -13,6 +13,16 @@ addr: enum{
 
 ip: virtual{ byte-array } ;
 
+\\ Extract host and port from an addr enum value. Unix addresses produce
+\\ sentinel values ("" and 0) since they have no host or port.
+addr-host-port: ( addr -- host port ) [
+  match{
+    addr:tcp:  [ ]
+    addr:udp:  [ ]
+    addr:unix: [ drop "" 0 ]
+  }
+] ;
+
 AF_INET: ( -- n: fixnum ) 2 ;
 AF_INET6: ( -- n: fixnum ) 30 ;
 

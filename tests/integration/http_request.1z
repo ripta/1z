@@ -365,3 +365,36 @@ port>> 9999 "serve config port" assert=
   stream-read-line "/ok" "after-crash body" assert=
   await drop
 ] task-scope
+
+\ TODO: extend with a TLS-wrapped variant once server TLS lands so
+\ is-tls? / tls-version / tls-cipher are exercised against a real handshake
+\ instead of sentinels.
+"serve: socket-derived fields populated under plaintext" test-section
+[
+  39495
+  dup "127.0.0.1" swap make-addr:tcp 128 listen
+
+  dup [
+    accept
+    "127.0.0.1" 39495 [
+      dup remote-addr>> "127.0.0.1" "remote-addr populated from peer" assert=
+      dup remote-port>> 0 > "remote-port positive" assert-true
+      dup server-name>> "127.0.0.1" "server-name from config" assert=
+      dup server-port>> 39495 "server-port from config" assert=
+      dup is-tls?>> f "is-tls? sentinel under plaintext" assert=
+      dup tls-version>> "" "tls-version sentinel under plaintext" assert=
+      dup tls-cipher>> "" "tls-cipher sentinel under plaintext" assert=
+      drop
+      "populated" "text/plain; charset=utf-8" ok send-response
+    ] (serve-dispatch)
+  ] curry spawn
+
+  "127.0.0.1" 3 pick-n make-addr:tcp connect
+  dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "populated-fields status" assert=
+  stream-close
+
+  await drop
+  swap drop
+  close
+] task-scope

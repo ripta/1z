@@ -15,7 +15,7 @@ use "time" ;
   <server-config>
   "127.0.0.1" >>host
   39421 >>port
-  [ echo-handler ] >>handler
+  [ drop echo-handler ] >>handler
 
   [ serve-forever ] curry spawn
 

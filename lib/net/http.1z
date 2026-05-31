@@ -44,11 +44,10 @@ read-headers-loop: ( stream headers -- headers ) [
   if
 ] ;
 
-\\ Read and parse an HTTP request line and headers from a stream.
-\\ Returns a request struct with method, path, query-string, version, and
-\\ headers hash. The path and query-string are split on the first `?` in
-\\ the request-target.
-read-request: ( stream -- request ) [
+\ Read the wire-derived portion of an HTTP request from a stream. Returns the
+\ five wire fields on the stack with `headers` on top. Used by `read-request`
+\ and the server-path dispatch.
+(read-request-wire): ( stream -- method path query-string version headers ) [
   dup stream-read-line
   dup f = [ f "unexpected EOF reading request line" EUnexpectedEOF make-error throw ] when
   " " split
@@ -59,9 +58,16 @@ read-request: ( stream -- request ) [
   swap 1 #nth (split-target)
   <rot-
   4 pick-n read-headers
+  5 drop-at
+] ;
+
+\\ Read and parse an HTTP request line and headers from a stream. The returned
+\\ request rides sentinel defaults for the socket-derived fields; the server
+\\ path overrides them when dispatching to a handler.
+read-request: ( stream -- request ) [
+  (read-request-wire)
   "" 0 "" 0 f "" ""
   make-request
-  swap drop
 ] ;
 
 \ Parse a single form-body segment into the accumulator hash. Empty
@@ -177,17 +183,57 @@ error-response: ( status reason message -- response ) [
   "text/plain; charset=utf-8" swap <response>
 ] ;
 
+\ Per-connection dispatch. Invoked by serve-loop with ( stream addr ) and the
+\ curried context ( server-host server-port user-handler ). Reads the wire
+\ request fields, populates the socket-derived fields from the addr and the
+\ server config, calls the user handler with ( stream request ), and closes
+\ the stream.
+(serve-dispatch): ( stream addr server-host server-port user-handler -- ) [
+  3 <rot-n             \ ( stream sh sp uh addr )
+  addr-host-port       \ ( stream sh sp uh rh rp )
+  5 pick-n             \ ( stream sh sp uh rh rp stream' )
+  (read-request-wire)  \ ( stream sh sp uh rh rp m p q v h )
+  6 pick-n             \ append rh
+  6 pick-n             \ append rp
+  11 pick-n            \ append sh
+  11 pick-n            \ append sp
+  f "" ""              \ TLS sentinels
+  make-request         \ ( stream sh sp uh rh rp request )
+  1 drop-at            \ drop rp
+  1 drop-at            \ drop rh
+  2 drop-at            \ drop sp
+  2 drop-at            \ drop sh; stack now ( stream uh request )
+  swap                 \ ( stream request uh )
+  2keep                \ user handler runs with ( stream request ); restored
+  drop                 \ ( stream )
+  stream-close
+] ;
+
 \\ Start an HTTP server.
-\\ The handler receives the client stream and parsed request.
+\\
+\\ The handler reads request data through:
+\\
+\\ - the wire-derived fields `method>>`, `path>>`, `query-string>>`, `version>>`, and `headers>>`;
+\\ - the socket-derived fields `remote-addr>>` and `remote-port>>` from the accepted connection;
+\\ - the server config-derived fields `server-name>>` and `server-port>>`; and
+\\ - the TLS-handshake fields `is-tls?>>`, `tls-version>>`, and `tls-cipher>>`.
+\\
+\\ The TLS fields stay at sentinel defaults (`f`, `""`, `""`) until server-side TLS lands.
 \\ The stream is closed automatically after the handler returns.
-\\ Blocks forever; creates its own task-scope.
-serve: ( host port handler -- ) [
-  [ swap dup -rot> dup read-request <rot- call stream-close ] curry
+\\ This word blocks forever, creating its own task-scope.
+serve: ( host: string port: fixnum handler: ( s: stream req: request -- ) -- ) [
+  \ Duplicate host, port, and handler so they can be curried into the wrapper
+  \ while the originals remain on the stack for server-config setup. The
+  \ wrapper's body sees ( stream addr server-host server-port user-handler ).
+  pick 2 pick-n 2 pick-n
+  [ (serve-dispatch) ] curry curry curry
+  1 drop-at
   <server-config> swap >>handler swap >>port swap >>host
   [ serve-forever ] curry task-scope
 ] ;
 
 \\ Serve a single static file request.
+\\
 \\ Normalizes the path, appends index.html for directory paths,
 \\ resolves the file from the document root, and sends the response.
 static-file-handler: ( stream request doc-root -- ) [
@@ -206,6 +252,7 @@ static-file-handler: ( stream request doc-root -- ) [
 ] ;
 
 \\ Start an HTTP server that serves static files from a directory.
+\\
 \\ Normalizes request paths to prevent directory traversal.
 \\ Serves index.html for paths ending in /.
 serve-static: ( host port doc-root -- ) [

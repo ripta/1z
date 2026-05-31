@@ -17,7 +17,7 @@ use "time" ;
 ] route
 build
 
-[ swap dup -rot> dup read-request <rot- call stream-close ] curry
+[ nip swap dup -rot> dup read-request <rot- call stream-close ] curry
 
 <server-config>
 "127.0.0.1" >>host

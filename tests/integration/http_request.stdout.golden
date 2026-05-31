@@ -329,3 +329,14 @@ PASS: after-crash status
 PASS: after-crash blank
 PASS: after-crash body
 Stack: [ ]
+=== serve: socket-derived fields populated under plaintext ===
+Stack: [ ]
+PASS: remote-addr populated from peer
+PASS: remote-port positive
+PASS: server-name from config
+PASS: server-port from config
+PASS: is-tls? sentinel under plaintext
+PASS: tls-version sentinel under plaintext
+PASS: tls-cipher sentinel under plaintext
+PASS: populated-fields status
+Stack: [ ]

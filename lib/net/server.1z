@@ -19,14 +19,14 @@ start-server: ( config -- server ) [
 ] ;
 
 \ Run a server forever: start, then loop accepting connections.
-\ Each connection spawns a task that runs the handler with the stream.
-\ Must be called inside task-scope.
+\ Each connection spawns a task that runs the handler with the stream
+\ and the peer address. Must be called inside task-scope.
 serve-forever: ( config -- ) [
   \ Repeatedly accept connections and spawn handler tasks.
   serve-loop: ( handler on-error server -- ) [
-    dup accept drop                   \ handler on-error server stream
-    3 pick-n curry                    \ handler on-error server [stream handler...]
-    2 pick-n [ recover ] curry curry  \ handler on-error server [[stream handler...] on-error recover]
+    dup accept                        \ handler on-error server stream addr
+    4 pick-n curry curry              \ handler on-error server [stream addr handler...]
+    2 pick-n [ recover ] curry curry  \ handler on-error server [[stream addr handler...] on-error recover]
     spawn drop                        \ handler on-error server
     serve-loop
   ] ;

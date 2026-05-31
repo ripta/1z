@@ -21,6 +21,6 @@ echo-loop: ( stream -- ) [
   <server-config>
   "127.0.0.1" >>host
   9000 >>port
-  [ echo-loop ] >>handler
+  [ drop echo-loop ] >>handler
   serve-forever
 ] task-scope
