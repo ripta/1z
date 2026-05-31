@@ -1,4 +1,12 @@
-\ HTTP server with routing
+\ HTTP server with routing.
+\
+\ Inside a route handler the request value carries three field categories:
+\   wire-derived:    method>> path>> query-string>> version>> headers>>
+\   socket-derived:  remote-addr>> remote-port>> server-name>> server-port>>
+\   TLS-derived:     is-tls?>> tls-version>> tls-cipher>>
+\ The TLS fields ride sentinel defaults under plaintext HTTP.
+\ See docs/guides/http.md for the full surface.
+
 use "net/http" ;
 use "net/http/router" ;
 use "net/server" ;

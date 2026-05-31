@@ -114,4 +114,4 @@ Without the `yield` inside the loop, the second task would not run until
 the loop finishes. I/O-heavy code does not need manual yields -- every
 `stream-read`, `stream-write`, and `sleep` yields implicitly.
 
-The [next guide](ffi.md) covers calling C libraries from 1z.
+The [next guide](http.md) walks through the HTTP library.

@@ -1,4 +1,10 @@
-\ lib/http.1z - HTTP/1.0 library
+\ lib/net/http.1z - HTTP/1.1 server library.
+\
+\ Exposes a `request` value (wire-derived, socket-derived, and TLS-derived
+\ fields), a `response` value, and the `serve` entry point that accepts
+\ connections and dispatches them to a user-supplied `( stream request -- )`
+\ handler. `serve-static` serves a directory of files; routing lives in
+\ `lib/net/http/router.1z`. See `docs/guides/http.md` for an overview.
 
 use "strings" ;
 use "os/path" ;
