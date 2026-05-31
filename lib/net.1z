@@ -13,8 +13,8 @@ addr: enum{
 
 ip: virtual{ byte-array } ;
 
-AF_INET: 2 ;
-AF_INET6: 30 ;
+AF_INET: ( -- n: fixnum ) 2 ;
+AF_INET6: ( -- n: fixnum ) 30 ;
 
 \\ Parse an IPv4 address string into an ip value.
 parse-ipv4: ( str -- ip ) [ AF_INET swap inet-pton make-ip ] ;

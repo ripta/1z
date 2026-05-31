@@ -1,0 +1,11 @@
+\ AOT regression test for lib/sequences.1z.
+
+use "sequences" ;
+
+"abcdef" "abc" #starts-with? >string print-line
+"abcdef" "xyz" #starts-with? >string print-line
+"abcdef" "def" #ends-with? >string print-line
+"abcdef" "xyz" #ends-with? >string print-line
+0 "abc" #in-bounds? >string print-line
+3 "abc" #in-bounds? >string print-line
+{ 1 2 } 3 #suffix #len >string print-line

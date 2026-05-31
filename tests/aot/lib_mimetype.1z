@@ -1,0 +1,8 @@
+\ AOT regression test for lib/mimetype.1z.
+
+use "mimetype" ;
+
+".html" for-extension print-line
+".png" for-extension print-line
+".unknown" for-extension print-line
+"" for-extension print-line

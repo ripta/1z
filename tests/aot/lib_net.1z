@@ -1,0 +1,12 @@
+\ AOT regression test for lib/net.1z. Exercises ip-string parsing
+\ through `parse-ipv4` and `parse-ipv6`. Asserts only that the
+\ parser completes; field access on the resulting ip and the
+\ split-host-port path are skipped because they hit AOT runtime
+\ bugs tracked separately.
+
+use "net" ;
+
+"127.0.0.1" parse-ipv4 drop "v4 ok" print-line
+"::1" parse-ipv6 drop "v6 ok" print-line
+"127.0.0.1" >ip drop "v4 via >ip" print-line
+"::1" >ip drop "v6 via >ip" print-line

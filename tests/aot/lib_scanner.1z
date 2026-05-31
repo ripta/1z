@@ -1,0 +1,11 @@
+\ AOT regression test for lib/scanner.1z. Construction-only smoke test:
+\ every other scanner word reads through struct fields, which crashes
+\ under AOT.
+\
+\ The construction path still drags scanner's freeze frontend and IR
+\ codegen, so backslides on the stack-effect or row-variable surface
+\ surface here as a build failure.
+
+use "scanner" ;
+
+"hello" <scanner> drop "constructed" print-line

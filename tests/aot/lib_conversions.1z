@@ -1,0 +1,9 @@
+\ AOT regression test for lib/conversions.1z.
+
+use "conversions" ;
+
+"5" digit? >string print-line
+"a" digit? >string print-line
+"7" char>digit >string print-line
+"42" parse-integer >string print-line
+"0xff" parse-integer >string print-line

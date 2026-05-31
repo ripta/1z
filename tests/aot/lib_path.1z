@@ -1,0 +1,10 @@
+\ AOT regression test for lib/os/path.1z. Limited to words that do not
+\ go through `split` or struct accessors, which trip AOT runtime bugs
+\ tracked separately.
+
+use "os/path" ;
+
+"/foo/bar/" strip-trailing-slashes print-line
+"/foo" "bar.txt" path-join print-line
+"/foo" "/bar" path-join print-line
+"/foo/" "bar.txt" path-join print-line
