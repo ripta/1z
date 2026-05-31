@@ -1,0 +1,41 @@
+=== send-response: default HTTP/1.1 prefix ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> response{ status: 200 reason: "OK" headers: H{ } body: "" } ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ "HTTP/1.1 200 OK
+Connection: close
+Content-Length: 0
+
+" ]
+PASS: default prefix
+Stack: [ ]
+=== send-response: bound prefix produces Status: shape ===
+Stack: [ ]
+Stack: [ "Status: 200 OK
+Connection: close
+Content-Length: 0
+
+" ]
+PASS: Status: prefix
+Stack: [ ]
+=== send-response: unbinding restores default ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> response{ status: 200 reason: "OK" headers: H{ } body: "" } ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ "HTTP/1.1 200 OK
+Connection: close
+Content-Length: 0
+
+" ]
+PASS: restored default
+Stack: [ ]
+=== send-response: binding does not affect non-send-response words ===
+Stack: [ ]
+Stack: [ "OK" ]
+PASS: reason-for unaffected by binding
+Stack: [ ]

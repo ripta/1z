@@ -1,0 +1,40 @@
+use "testing" ;
+use "net/http" ;
+
+"send-response: default HTTP/1.1 prefix" test-section
+<pipe> dup
+200 "OK" H{ } "" make-response
+send-response
+stream-close
+8192 stream-read(exact) bytes>
+"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n" "default prefix" assert=
+
+"send-response: bound prefix produces Status: shape" test-section
+"Status: " response-status-line-prefix [
+  <pipe> dup
+  200 "OK" H{ } "" make-response
+  send-response
+  stream-close
+  8192 stream-read(exact) bytes>
+] with-parameter
+"Status: 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n" "Status: prefix" assert=
+
+"send-response: unbinding restores default" test-section
+"Status: " response-status-line-prefix [
+  <pipe> dup
+  200 "OK" H{ } "" make-response
+  send-response
+  stream-close drop
+] with-parameter
+<pipe> dup
+200 "OK" H{ } "" make-response
+send-response
+stream-close
+8192 stream-read(exact) bytes>
+"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n" "restored default" assert=
+
+"send-response: binding does not affect non-send-response words" test-section
+"Status: " response-status-line-prefix [
+  200 reason-for
+] with-parameter
+"OK" "reason-for unaffected by binding" assert=

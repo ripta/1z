@@ -150,10 +150,16 @@ format-headers-loop: ( headers keys accum -- string ) [
   ] if
 ] ;
 
+\\ First-line prefix that `send-response` emits in front of the status code
+\\ and reason phrase. Defaults to the HTTP/1.1 wire format. Parsed-CGI
+\\ consumers bind `"Status: "` around their handler invocation so the same
+\\ `send-response` call site produces a CGI-shaped status line instead.
+response-status-line-prefix: parameter{ [ "HTTP/1.1 " ] } ;
+
 \\ Write a complete HTTP response to a stream.
 \\ Builds the full response as a single string and writes it in one call.
 send-response: ( stream response -- ) [
-  "HTTP/1.1 " over status>> >string #append
+  response-status-line-prefix get over status>> >string #append
   " " #append over reason>> #append "\r\n" #append
   "Connection: close\r\n" #append
   "Content-Length: " #append over body>> #len >string #append "\r\n" #append
