@@ -8,7 +8,10 @@ use "data/url" ;
 
 EMalformedRequest: ( -- err: symbol ) [ malformed-request: ] ;
 
-request: struct{ method path query-string version headers } ;
+request: struct{ method path query-string version headers
+  remote-addr remote-port server-name server-port
+  is-tls? tls-version tls-cipher
+} ;
 
 \\ Parse header lines from a stream into a hash with lowercased keys.
 read-headers: ( stream -- headers ) [
@@ -56,6 +59,7 @@ read-request: ( stream -- request ) [
   swap 1 #nth (split-target)
   <rot-
   4 pick-n read-headers
+  "" 0 "" 0 f "" ""
   make-request
   swap drop
 ] ;

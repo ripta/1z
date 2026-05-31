@@ -79,6 +79,30 @@ query-string>> "" "empty query string" assert=
 "read-request: malformed request line throws EMalformedRequest" test-section
 [ <pipe> dup "GET /\r\n\r\n" stream-write drop stream-close read-request ] malformed-request: "too few parts" assert-error-type
 
+"make-request: socket-derived fields round-trip" test-section
+"GET" "/" "" "HTTP/1.1" H{ }
+"192.0.2.1" 54321 "example.com" 8443 t "TLSv1.3" "TLS_AES_128_GCM_SHA256"
+make-request
+dup remote-addr>> "192.0.2.1" "remote-addr round-trip" assert=
+dup remote-port>> 54321 "remote-port round-trip" assert=
+dup server-name>> "example.com" "server-name round-trip" assert=
+dup server-port>> 8443 "server-port round-trip" assert=
+dup is-tls?>> t "is-tls? round-trip" assert=
+dup tls-version>> "TLSv1.3" "tls-version round-trip" assert=
+tls-cipher>> "TLS_AES_128_GCM_SHA256" "tls-cipher round-trip" assert=
+
+"read-request: socket-derived fields use sentinel defaults" test-section
+<pipe> dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+stream-close
+read-request
+dup remote-addr>> "" "sentinel remote-addr" assert=
+dup remote-port>> 0 "sentinel remote-port" assert=
+dup server-name>> "" "sentinel server-name" assert=
+dup server-port>> 0 "sentinel server-port" assert=
+dup is-tls?>> f "sentinel is-tls?" assert=
+dup tls-version>> "" "sentinel tls-version" assert=
+tls-cipher>> "" "sentinel tls-cipher" assert=
+
 "read-form: empty body" test-section
 <pipe> dup "" stream-write drop
 stream-close

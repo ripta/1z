@@ -3,77 +3,77 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: method
-Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: path
-Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: version
-Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: host header
 Stack: [ ]
 === read-request: multiple headers ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: method
-Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: path
-Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: host header
-Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: content-type lowercase
-Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } } ]
+Stack: [ request{ method: "GET" path: "/index.html" query-string: "" version: "HTTP/1.1" headers: H{ host: "example.com" content-type: "text/html" x-custom: "hello world" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: custom header
 Stack: [ ]
 === read-request: POST method ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: POST method
-Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: POST path
-Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: POST version
-Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } } ]
+Stack: [ request{ method: "POST" path: "/submit" query-string: "" version: "HTTP/1.0" headers: H{ host: "localhost" content-length: "0" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: content-length header
 Stack: [ ]
 === read-request: no headers ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: no-headers method
-Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } } ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: no headers count
 Stack: [ ]
 === read-request: no query string ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: no-query path
-Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: no-query empty string
 Stack: [ ]
 === read-request: non-empty query string ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "GET" path: "/path" query-string: "a=1&b=2" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/path" query-string: "a=1&b=2" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: non-empty-query path
-Stack: [ request{ method: "GET" path: "/path" query-string: "a=1&b=2" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/path" query-string: "a=1&b=2" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: non-empty query string
 Stack: [ ]
 === read-request: empty query string ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: empty-query path
-Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } } ]
+Stack: [ request{ method: "GET" path: "/path" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: empty query string
 Stack: [ ]
 === read-request: EOF throws EUnexpectedEOF ===
@@ -83,6 +83,44 @@ Stack: [ ]
 === read-request: malformed request line throws EMalformedRequest ===
 Stack: [ ]
 PASS: too few parts
+Stack: [ ]
+=== make-request: socket-derived fields round-trip ===
+Stack: [ ]
+Stack: [ "GET" "/" "" "HTTP/1.1" H{ } ]
+Stack: [ "GET" "/" "" "HTTP/1.1" H{ } "192.0.2.1" 54321 "example.com" 8443 t "TLSv1.3" "TLS_AES_128_GCM_SHA256" ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: remote-addr round-trip
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: remote-port round-trip
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: server-name round-trip
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: server-port round-trip
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: is-tls? round-trip
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: tls-version round-trip
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: tls-cipher round-trip
+Stack: [ ]
+=== read-request: socket-derived fields use sentinel defaults ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: sentinel remote-addr
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: sentinel remote-port
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: sentinel server-name
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: sentinel server-port
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: sentinel is-tls?
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: sentinel tls-version
+Stack: [ request{ method: "GET" path: "/" query-string: "" version: "HTTP/1.1" headers: H{ host: "localhost" } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: sentinel tls-cipher
 Stack: [ ]
 === read-form: empty body ===
 Stack: [ ]
