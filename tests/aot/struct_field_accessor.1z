@@ -1,0 +1,15 @@
+\ Regression for the bare struct field accessor crash: reading a freshly
+\ defined struct's field via the generated `field>>` getter under AOT
+\ used to fail with `error: unknown runtime error` because the generated
+\ accessor body was skipped from the AOT compilation set and never
+\ rehydrated at runtime. The fix devirtualizes the single-method
+\ dispatch so the body compiles directly; the typed-literal slot table
+\ then handles the cross-process struct-type descriptor pointer.
+
+point: struct{ x y } ;
+
+3 4 make-point
+x>> >string print-line
+
+5 6 make-point
+y>> >string print-line

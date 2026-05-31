@@ -376,52 +376,68 @@ pub fn freezeModuleGraphOpts(
         }
 
         for (discovered.defs.items) |def| {
-            const instrs = switch (def.action) {
+            const compound_instrs = switch (def.action) {
                 .compound => |c| c,
                 else => continue,
             };
-            for (instrs) |instr| {
-                switch (instr.op) {
-                    .call_word, .call_word_direct => {
-                        const call_name = instr.op.callTargetName().?;
-                        if (qual_seen.contains(call_name)) continue;
-                        try qual_seen.put(temp_allocator, call_name, {});
-                        if (options.artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
-                            diagnostics.fatal_native_interpreter_dependency = .{
-                                .caller_name = def.name,
-                                .feature_name = call_name,
-                            };
-                            ctx.popPragmaFrame();
-                            ctx.popLocalFrame();
-                            return error.DisallowedNativeInterpreterDependency;
-                        }
-                        try discoverCalleeWord(ctx, call_name, &discovered, temp_allocator);
-                    },
-                    .push_literal => |val| {
-                        // Also scan nested quotations
-                        if (val == .quotation) {
-                            for (val.quotation.instructions) |q_instr| {
-                                switch (q_instr.op) {
-                                    .call_word, .call_word_direct => {
-                                        const call_name = q_instr.op.callTargetName().?;
-                                        if (qual_seen.contains(call_name)) continue;
-                                        try qual_seen.put(temp_allocator, call_name, {});
-                                        if (options.artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
-                                            diagnostics.fatal_native_interpreter_dependency = .{
-                                                .caller_name = def.name,
-                                                .feature_name = call_name,
-                                            };
-                                            ctx.popPragmaFrame();
-                                            ctx.popLocalFrame();
-                                            return error.DisallowedNativeInterpreterDependency;
-                                        }
-                                        try discoverCalleeWord(ctx, call_name, &discovered, temp_allocator);
-                                    },
-                                    else => {},
+
+            // Dispatch-only generics may be devirtualized at AOT freeze. When that fires, the compiled body
+            // is the dispatch table's single method, not the empty compound body.
+            //
+            // Inspect that body too so its native calls, typically `native.struct-field-get` et al., land in
+            // the resolver's discovered set even when the word arrived htrough `--compile-all-prelude`,
+            // and never went through the BFS, which would have called `walkSingleMethodDispatch`.
+            const instrs_list: [2][]const Instruction = blk: {
+                if (try devirtualizeSingleMethod(ctx, def, temp_allocator)) |devirt_body| {
+                    break :blk .{ compound_instrs, devirt_body };
+                }
+                break :blk .{ compound_instrs, &.{} };
+            };
+
+            for (instrs_list) |instrs| {
+                for (instrs) |instr| {
+                    switch (instr.op) {
+                        .call_word, .call_word_direct => {
+                            const call_name = instr.op.callTargetName().?;
+                            if (qual_seen.contains(call_name)) continue;
+                            try qual_seen.put(temp_allocator, call_name, {});
+                            if (options.artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
+                                diagnostics.fatal_native_interpreter_dependency = .{
+                                    .caller_name = def.name,
+                                    .feature_name = call_name,
+                                };
+                                ctx.popPragmaFrame();
+                                ctx.popLocalFrame();
+                                return error.DisallowedNativeInterpreterDependency;
+                            }
+                            try discoverCalleeWord(ctx, call_name, &discovered, temp_allocator);
+                        },
+                        .push_literal => |val| {
+                            // Also scan nested quotations
+                            if (val == .quotation) {
+                                for (val.quotation.instructions) |q_instr| {
+                                    switch (q_instr.op) {
+                                        .call_word, .call_word_direct => {
+                                            const call_name = q_instr.op.callTargetName().?;
+                                            if (qual_seen.contains(call_name)) continue;
+                                            try qual_seen.put(temp_allocator, call_name, {});
+                                            if (options.artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
+                                                diagnostics.fatal_native_interpreter_dependency = .{
+                                                    .caller_name = def.name,
+                                                    .feature_name = call_name,
+                                                };
+                                                ctx.popPragmaFrame();
+                                                ctx.popLocalFrame();
+                                                return error.DisallowedNativeInterpreterDependency;
+                                            }
+                                            try discoverCalleeWord(ctx, call_name, &discovered, temp_allocator);
+                                        },
+                                        else => {},
+                                    }
                                 }
                             }
-                        }
-                    },
+                        },
+                    }
                 }
             }
         }
@@ -1297,6 +1313,51 @@ fn isDispatchOnlyGeneric(def: WordDefinition) bool {
     return def.action == .compound and def.action.compound.len == 0 and hasGenericMarker(def);
 }
 
+/// If `def` is a dispatch-only generic whose dispatch table holds exactly one method, and that method is a
+/// `.quotation` body, return that body so the AOT freeze pipeline can bind it directly as the word's compiled
+/// body.
+///
+/// Returns null otherwise.
+///
+/// Devirtualization turns the single-method dispatch into a direct, statically-compiled call. The replacement
+/// body still carries the `push_literal(.struct_type)` / `push_literal(.type_val)` instructions the dispatch
+/// wrapper used, so AOT type-value slot routing produces the runtime-image descriptor pointer; downstream
+/// natives like `native.struct-field-get` compare descriptor identity through that pointer and behave correctly
+/// across the process boundary.
+///
+/// These are known scenarios under which this devirtualization is unsafe as-is:
+///
+/// - This only fires when there is exactly one method at freeze time. Multi-method generics still take the
+///   runtime-dispatch path and are subject to the existing dispatch-callback machinery.
+/// - Assumes the freeze-time dispatch table is final. If user code installs additional methods after freeze
+///   (e.g., a future `define-method` primitive, a hot-reload of a module redefining a generic, or a dynamically-
+///   constructed struct registering itself at runtime), the devirtualized binary will keep executing the freeze-
+///   time method regardless of the runtime type. Today there is no such path: struct, virtual, and enum generators
+///   install their methods at parse time only, and the AOT pipeline bans dynamic-define markers through the
+///   `bannedDynamicMarker`. If any of those constraints ever relax, this helper must consult the same banned-
+///   marker policy or be disabled for that generic.
+/// - Only walks `.quotation` bodies. `.native_fn` and `.host_callback` entries do not have a serializable
+///   instruction stream and must keep the dispatch-callback path. The dictionary scan needed to recover a
+///   `WordDefinition` from a raw `NativeFn` pointer is deliberately out of scope here.
+/// - The PIC interpreter path remains the source of truth in non-AOT modes. JIT-compiled callers still cache
+///   method bodies in the PIC table and bail to the dispatch callback on a type-tag miss; this helper only
+///   affects what AOT chooses to emit when freezing.
+fn devirtualizeSingleMethod(
+    ctx: ?*Context,
+    def: WordDefinition,
+    allocator: Allocator,
+) Allocator.Error!?[]const Instruction {
+    if (!isDispatchOnlyGeneric(def)) return null;
+    const ictx = ctx orelse return null;
+    const pairs = try ictx.dispatchEntriesForId(def.dispatch_id, allocator);
+    defer allocator.free(pairs);
+    if (pairs.len != 1) return null;
+    return switch (pairs[0].entry.body) {
+        .quotation => |q| q,
+        .native_fn, .host_callback => null,
+    };
+}
+
 /// Assign word IDs and build the AotWordDesc array. When `ctx` is
 /// provided, PIC snapshots are captured from the interpreter's cache
 /// and stored on each compound word descriptor.
@@ -1332,13 +1393,32 @@ fn buildAotDescs(
         const id = next_id;
         next_id += 1;
 
-        // Generic words with empty compound bodies (struct/virtual/enum
-        // setters, getters, predicates) are runtime-dispatched on type;
-        // their compiled body would either fail to satisfy the declared
-        // effect or silently no-op. Route them through interpreter
-        // dispatch by marking them like natives -- skipped during
-        // compilation, looked up by name at runtime.
+        // Generic words with empty compound bodies (struct/virtual/enum setters, getters, predicates)
+        // are runtime-dispatched on type; their compiled body would either fail to satisfy the declared
+        // effect or silently no-op. When the dispatch table holds exactly one method, bind that
+        // method's body directly as the word's compiled body
+        //
+        // See `DevirtualizeSingleMethod` for the safety conditions this relies on.
+        //
+        // Otherwise mark the word like a native so the AOT runtime takes the dispatch-callback path.
+        //
+        // Without devirtualization, the AOT binary would have neither a compiled body for the word nor
+        // a runtime dictionary entry to look up at call time, so the dispatch callback would fail with
+        // a bare "unknown runtime error" the first time the word ran.
         if (isDispatchOnlyGeneric(def)) {
+            if (try devirtualizeSingleMethod(ctx, def, allocator)) |devirt_body| {
+                try words.append(allocator, .{
+                    .name = name,
+                    .instructions = devirt_body,
+                    .input_count = @intCast(effect.concreteInputCount()),
+                    .output_count = @intCast(effect.concreteOutputCount()),
+                    .word_id = id,
+                    .is_prelude = prelude_words.contains(name),
+                    .stack_effect = effect,
+                    .never_returns = hasNeverReturnsMarker(def),
+                });
+                continue;
+            }
             try words.append(allocator, .{
                 .name = name,
                 .instructions = &.{},

@@ -3618,6 +3618,10 @@ fn tryEmitInlineTypedValidateAndPromote(
 ///     call_word("native.struct-field-get")
 ///
 /// Returns true if inlined; or false to fall back to runtime callback.
+///
+/// JIT-only: bakes a freeze-time `StructType` pointer constant for the expected-type check. AOT must
+/// use the native callback, because its runtime image holds an independently-allocated descriptor.
+/// The callsite gate in the dispatch loop enforces this.
 fn tryEmitInlineStructFieldGet(
     state: *CompileState,
     instructions: []const Instruction,
@@ -3708,6 +3712,10 @@ fn tryEmitInlineStructFieldGet(
 /// since runtime type validation isn't inlined here.
 ///
 /// Returns true if inlined; or false to fall back to runtime callback.
+///
+/// JIT-only: bakes a freeze-time `StructType` pointer constant for the expected-type check. AOT must
+/// use the native callback because its runtime image holds an independently-allocated descriptor.
+/// Tthe callsite gate in the dispatch loop enforces this.
 fn tryEmitInlineStructFieldSet(
     state: *CompileState,
     instructions: []const Instruction,
@@ -5111,16 +5119,21 @@ fn compileInstructions(
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
                 } else if (std.mem.eql(u8, name, "native.struct-field-get")) {
-                    if (!tryEmitInlineStructFieldGet(state, instructions, idx, stack, sp)) {
+                    // JIT-only inline emitter; AOT uses the native callback because the preceding .struct_type
+                    // literal goes through the runtime-image slot table. The inline emitter bakes a freeze-time
+                    // StructType pointer that does not match the runtime-image pointer across the process boundary.
+                    if (state.aot_mode or !tryEmitInlineStructFieldGet(state, instructions, idx, stack, sp)) {
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
                 } else if (std.mem.eql(u8, name, "native.struct-field-set")) {
-                    if (!tryEmitInlineStructFieldSet(state, instructions, idx, stack, sp)) {
+                    // JIT-only inline emitter; AOT uses the native callback for the same freeze-time vs runtime-
+                    // image pointer mismatch reason as native.struct-field-get above.
+                    if (state.aot_mode or !tryEmitInlineStructFieldSet(state, instructions, idx, stack, sp)) {
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
                 } else if (std.mem.eql(u8, name, "native.typed-validate-and-promote")) {
-                    // JIT-only inline emitter; AOT uses the native callback because
-                    // the preceding .type_val literal goes through the slot table.
+                    // JIT-only inline emitter; AOT uses the native callback because the preceding .type_val
+                    // literal goes through the slot table.
                     if (state.aot_mode or !tryEmitInlineTypedValidateAndPromote(state, instructions, idx, stack, sp)) {
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
