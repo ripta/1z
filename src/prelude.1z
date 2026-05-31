@@ -986,6 +986,22 @@ all-words: ( -- array ) [ native.all-words [ (raw>word-info) ] #map #collect ] ;
 \\ routes them into the consuming module's private deps.
 local-scope: ( -- module ) [ native.local-scope ] ;
 
+\\ Run a quotation in a fresh local frame, snapshot that frame, and import
+\\ the snapshot into the consuming module's deps. The body's `name: [ ... ] ;`
+\\ definitions become private helpers visible to the module's own public
+\\ words but not to importers.
+import-locals: ( quotation -- ) [ [ local-scope ] compose call import ] ;
+
+\\ Block-syntax sugar over `import-locals`. Inside `private{ ... }`, ordinary
+\\ `name: [ ... ] ;` definitions become private helpers of the enclosing module:
+\\
+\\   private{
+\\     (helper): [ ... ] ;
+\\   }
+\\
+\\   foo: ( -- string ) [ (helper) ] ;
+private{: parse-time [ "}" parse-until import-locals: emit-call ] ;
+
 \\ Safe variant of >word-info that returns an option instead of throwing.
 >word-info?: ( symbol -- option ) [ [ >word-info >option:some ] [ drop option:none ] recover ] ;
 

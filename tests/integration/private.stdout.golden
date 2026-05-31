@@ -1,0 +1,55 @@
+=== capture and runtime use ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: captured helper resolves at runtime
+Stack: [ ]
+PASS: captured helper is imported into scope
+Stack: [ ]
+=== empty block is a no-op ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: sentinel survives an empty private{ } block
+Stack: [ ]
+=== direct load view ===
+Stack: [ ]
+Stack: [ ]
+PASS: loaded module exposes public word
+Stack: [ ]
+PASS: helper is not in the module's public words
+Stack: [ ]
+PASS: module exports only its public word
+Stack: [ ]
+=== load import view ===
+Stack: [ ]
+Stack: [ ]
+PASS: load import brings in the public word
+Stack: [ ]
+PASS: load import does not bring in the helper
+Stack: [ ]
+=== use consumer view ===
+Stack: [ ]
+PASS: use brings in the public word
+Stack: [ ]
+PASS: use does not bring in the helper
+Stack: [ ]
+=== quotation isolation ===
+Stack: [ ]
+Stack: [ ]
+PASS: uncaptured definition is discarded
+Stack: [ ]
+=== use versus load inside the captured quotation ===
+Stack: [ ]
+Stack: [ ]
+PASS: use'd words escape the capture
+Stack: [ ]
+PASS: captured module holds the lone helper
+Stack: [ ]
+=== top-level safety ===
+Stack: [ ]
+Stack: [ ]
+PASS: private{ at top level captures cleanly
+Stack: [ ]
+PASS: top-level captured helper resolves
+Stack: [ ]

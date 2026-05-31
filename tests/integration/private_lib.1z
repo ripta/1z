@@ -1,0 +1,9 @@
+\ Library exercising private{: a private helper captured into deps, plus a
+\ public word that calls it. The helper must land in this module's deps
+\ (private), the public word in its words (public API).
+
+private{
+  (helper): [ "cleaned" ] ;
+}
+
+public: ( -- string ) [ (helper) ] ;

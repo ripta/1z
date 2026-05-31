@@ -2,53 +2,57 @@ use "testing" ;
 
 "capture and runtime use" test-section
 
-\ A helper defined inside a call'ed quotation is captured by local-scope and
-\ imported; a public word defined afterward resolves it at runtime.
-[
+\ A helper defined inside private{ is captured into the consumer's deps and
+\ resolves at runtime through a public word.
+private{
   (h): [ 42 ] ;
-  local-scope
-] call import
+}
 use-helper: ( -- fixnum ) [ (h) ] ;
 use-helper 42 "captured helper resolves at runtime" assert=
 
 \ The imported helper is locally-defined? in the import frame.
 "(h)" native.locally-defined? t "captured helper is imported into scope" assert=
 
-"empty frame yields empty module" test-section
+"empty block is a no-op" test-section
 
-[ local-scope ] call @keys #len 0 "empty transient frame captures nothing" assert=
+\ A sentinel defined before an empty private{} still resolves afterward.
+sentinel: [ 1 ] ;
+private{ }
+sentinel 1 "sentinel survives an empty private{ } block" assert=
 
 "direct load view" test-section
 
-m: "local_scope_lib.1z" load ;
+m: "private_lib.1z" load ;
 m public: @has? t "loaded module exposes public word" assert=
 m (helper): @has? f "helper is not in the module's public words" assert=
 m @keys #len 1 "module exports only its public word" assert=
 
 "load import view" test-section
 
-"local_scope_lib.1z" load import
+"private_lib.1z" load import
 public "cleaned" "load import brings in the public word" assert=
 [ (helper) ] "load import does not bring in the helper" assert-error
 
 "use consumer view" test-section
 
-use "local_scope_lib.1z" shadow-ok ;
+use "private_lib.1z" shadow-ok ;
 public "cleaned" "use brings in the public word" assert=
 [ (helper) ] "use does not bring in the helper" assert-error
 
 "quotation isolation" test-section
 
 \ A definition made in a separate call'ed quotation, not captured by
-\ local-scope, is discarded when that frame pops.
+\ private{, is discarded when that frame pops.
 [ (gone): [ 1 ] ;
 ] call
 [ (gone) ] "uncaptured definition is discarded" assert-error
 
 "use versus load inside the captured quotation" test-section
 
-\ A `use` inside the quotation escapes to the import frame (parse-time import),
-\ so the captured module holds only the runtime definition, not the use'd words.
+\ A `use` inside the captured quotation escapes to the import frame; the
+\ captured module holds only the runtime definition. private{ expands to
+\ `[ ... local-scope ] call import`, so we use the lower-level form here
+\ purely to inspect the captured module value directly.
 captured: [ (only-me): [ 1 ] ;
   use "testing" shadow-ok ;
   local-scope
@@ -56,9 +60,13 @@ captured: [ (only-me): [ 1 ] ;
 captured @keys #len 1 "use'd words escape the capture" assert=
 captured (only-me): @has? t "captured module holds the lone helper" assert=
 
-"top-level guard" test-section
+"top-level safety" test-section
 
-\ At a definition scope the topmost frame is the import frame, so local-scope
-\ throws rather than capturing the whole scope. local_scope_guard.1z calls it
-\ at its top level; loading the file surfaces the guard error.
-[ "local_scope_guard.1z" load ] "local-scope at a definition scope throws" assert-error
+\ private{ at a file's top level: `call` always pushes a fresh frame above
+\ the import frame, so local-scope's import-frame guard cannot fire. Compare
+\ with local_scope_guard.1z, which exercises the bare-local-scope footgun.
+private{
+  (top-helper): [ 7 ] ;
+}
+"(top-helper)" native.locally-defined? t "private{ at top level captures cleanly" assert=
+(top-helper) 7 "top-level captured helper resolves" assert=
