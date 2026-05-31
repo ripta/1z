@@ -349,6 +349,7 @@ pub fn loadIntoContext(
         return LoaderError.UnsupportedFormat;
     }
 
+    ctx.runtime_image_loaded = true;
     try populateModulesAndWords(ctx, header);
     try populateTypeValueSlots(ctx, header, slots.typevalues, slots.struct_types);
     try populateMarkerSlots(ctx, header, slots.markers);

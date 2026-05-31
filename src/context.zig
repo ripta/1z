@@ -400,6 +400,15 @@ pub const Context = struct {
     image_parameter_slot_count: u32 = 0,
     image_tagged_slot_count: u32 = 0,
     image_mutable_map_slot_count: u32 = 0,
+    /// Set true when `aot_image_loader.loadIntoContext` has populated
+    /// this context from an AOT runtime image. Gates the module-cache
+    /// fallback in `lookupWordForExecution` so the fallback only fires
+    /// for runtime-image-loaded modules, where the loader places every
+    /// word -- public and module-private -- into `module.words`.
+    /// Normal interpreter sessions and `load`-based module loading
+    /// leave this false, so the fallback stays inert and module
+    /// privacy holds.
+    runtime_image_loaded: bool = false,
     /// Pending error from a JIT error-handling callback (recover/cleanup).
     /// Set by the callback when it returns error_propagate status, consumed
     /// by the interpreter dispatch loop.
@@ -1580,6 +1589,7 @@ pub const Context = struct {
     }
 
     /// Look up a word by name by searching in the following order:
+    ///
     /// 1. local frames from innermost (topmost) to outermost (bottommost);
     /// 2. the global dictionary of the current context;
     /// 3. the parent dictionary if this is a task context that inherits from a parent.
@@ -1587,6 +1597,26 @@ pub const Context = struct {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         return self.lookupWordLocked(name);
+    }
+
+    /// Like `lookupWord`, but falls through to the AOT runtime-image module cache when the
+    /// in-context lookup misses and an image is loaded. Use this at interpreter call sites
+    /// that have to resolve module-private names living only inside a loaded runtime image,
+    /// e.g. a parameter's default quotation that calls a module-private helper.
+    ///
+    /// The fallback is gated on `runtime_image_loaded` so normal `load`-based module sessions
+    /// keep their privacy boundary. The AOT loader places every word -- public and module-
+    /// private -- into `module.words`, but a source-level `load` keeps private helpers in
+    /// `module.deps`. Only the AOT case wants the `words`-only sweep to reach in.
+    ///
+    /// Definition- and parse-time callers must stick to `lookupWord` so they never see
+    /// sibling modules' words.
+    pub fn lookupWordForExecution(self: *const Context, name: []const u8) ?WordDefinition {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        if (self.lookupWordLocked(name)) |def| return def;
+        if (!self.runtime_image_loaded) return null;
+        return self.lookupModuleCacheWordLocked(name);
     }
 
     fn lookupWordLocked(self: *const Context, name: []const u8) ?WordDefinition {
@@ -1611,11 +1641,17 @@ pub const Context = struct {
             ancestor = ctx.parent_context;
         }
 
-        if (self.lookupModuleCacheWordLocked(name)) |def| return def;
-
         return null;
     }
 
+    /// Scan every cached module's public `words` table for `name`.
+    /// Module `deps` are deliberately skipped: deps hold a module's
+    /// private imports, and `load`-ing a 1z module surfaces public
+    /// API through `words` only. Checking deps would leak names out
+    /// of their owning module's privacy boundary (see the
+    /// `local_scope` integration test). The AOT runtime-image
+    /// loader places every word -- public or module-private -- into
+    /// `words`, so the words-only sweep is enough for both cases.
     fn lookupModuleCacheWordLocked(self: *const Context, name: []const u8) ?WordDefinition {
         var iter = self.module_cache_value.map.iterator();
         while (iter.next()) |entry| {
@@ -1623,9 +1659,6 @@ pub const Context = struct {
             const module = entry.value_ptr.*.module;
             if (module.words.get(name)) |mod_word| {
                 return wordDefFromModuleWord(name, mod_word, module);
-            }
-            if (module.deps.get(name)) |mod_word| {
-                return wordDefFromModuleWord(name, mod_word, mod_word.source_module orelse module);
             }
         }
         return null;
@@ -4311,7 +4344,7 @@ pub const Context = struct {
                     }
                     if (self.profile) |p| p.recordWordStart(self.allocator);
 
-                    if (self.lookupWord(name)) |word| {
+                    if (self.lookupWordForExecution(name)) |word| {
                         switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
                             .proceed => {},
                             .tail_call_set => return,
@@ -5219,7 +5252,7 @@ test "preResolveCallTarget: returns null when a loaded module carries the name a
     try std.testing.expectEqual(@as(?*dict_mod.WordSlot, null), ctx.preResolveCallTarget("dep-claimed"));
 }
 
-test "lookupWord: falls through to loaded module words on dictionary miss" {
+test "lookupWordForExecution: finds a module-cache words entry on dictionary miss when an image is loaded" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -5244,7 +5277,14 @@ test "lookupWord: falls through to loaded module words on dictionary miss" {
         .{ .module = module },
     );
 
-    const found = ctx.lookupWord("(private-default)") orelse return error.TestExpectedLookup;
+    // Stand in for `aot_image_loader.loadIntoContext`.
+    ctx.runtime_image_loaded = true;
+
+    // The strict in-context lookup must not see the cached module.
+    try std.testing.expectEqual(@as(?WordDefinition, null), ctx.lookupWord("(private-default)"));
+
+    // The execution-time lookup falls through to the module cache.
+    const found = ctx.lookupWordForExecution("(private-default)") orelse return error.TestExpectedLookup;
     try std.testing.expectEqual(module, found.source_module.?);
 
     const instrs = try arena_alloc.alloc(Instruction, 1);
@@ -5255,7 +5295,35 @@ test "lookupWord: falls through to loaded module words on dictionary miss" {
     try std.testing.expectEqual(@as(i64, 77), value.fixnum);
 }
 
-test "lookupWord: falls through to loaded module deps on dictionary miss" {
+test "lookupWordForExecution: stays inert without a loaded runtime image" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const arena_alloc = ctx.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "load-time-module", .words = .{} };
+    try module.words.put(arena_alloc, "exported-only", .{
+        .source_module = module,
+        .action = .{ .native = noop },
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "load-time-module"),
+        .{ .module = module },
+    );
+
+    // No image has been loaded, so the fallback must not reach into another module's
+    // words. Otherwise normal `load`/`use` sessions lose their privacy boundary.
+    try std.testing.expectEqual(@as(?WordDefinition, null), ctx.lookupWordForExecution("exported-only"));
+}
+
+test "lookupWordForExecution: does not leak module deps across modules" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
@@ -5281,6 +5349,8 @@ test "lookupWord: falls through to loaded module deps on dictionary miss" {
         .{ .module = module },
     );
 
-    const found = ctx.lookupWord("dep-only") orelse return error.TestExpectedLookup;
-    try std.testing.expectEqual(dep_module, found.source_module.?);
+    // Even with an image-loaded gate flipped on, a name living only in another
+    // module's `deps` is private to that module and must not be visible.
+    ctx.runtime_image_loaded = true;
+    try std.testing.expectEqual(@as(?WordDefinition, null), ctx.lookupWordForExecution("dep-only"));
 }
