@@ -155,3 +155,97 @@ PASS: %G1 (first non-hex, string) throws
 Stack: [ ]
 PASS: %1G (second non-hex, string) throws
 Stack: [ ]
+=== encode(form): space-as-+ ===
+Stack: [ ]
+PASS: empty string round-trips
+Stack: [ ]
+PASS: unreserved ASCII passes through
+Stack: [ ]
+Stack: [ "abcXYZ-._~0123" "abcXYZ-._~0123" ]
+PASS: full unreserved set passes through
+Stack: [ ]
+PASS: single space encodes to +
+Stack: [ ]
+PASS: multiple spaces each encode to +
+Stack: [ ]
+PASS: lone space encodes to lone +
+Stack: [ ]
+PASS: run of spaces encodes to run of +
+Stack: [ ]
+=== encode(form): literal + and other reserved encode to %HH ===
+Stack: [ ]
+PASS: literal + encodes to %2B
+Stack: [ ]
+PASS: literal ++ encodes to %2B%2B
+Stack: [ ]
+Stack: [ "a+%2Bb" "a+%2Bb" ]
+PASS: space then literal + encodes as + then %2B
+Stack: [ ]
+Stack: [ "a%2F%3D%26" "a%2F%3D%26" ]
+PASS: non-space reserved bytes still percent-encode
+Stack: [ ]
+PASS: literal % still encodes to %25
+Stack: [ ]
+PASS: multibyte UTF-8 encodes pairwise
+Stack: [ ]
+=== decode(form): + decodes to space ===
+Stack: [ ]
+PASS: empty string round-trips
+Stack: [ ]
+PASS: unreserved ASCII passes through
+Stack: [ ]
+PASS: + decodes to space
+Stack: [ ]
+PASS: multiple + each decode to space
+Stack: [ ]
+PASS: lone + decodes to lone space
+Stack: [ ]
+=== decode(form): %2B decodes to literal + ===
+Stack: [ ]
+PASS: %2B decodes to literal +
+Stack: [ ]
+Stack: [ "a b+c" "a b+c" ]
+PASS: + becomes space, %2B becomes literal + in same input
+Stack: [ ]
+PASS: %2B%2B decodes to ++
+Stack: [ ]
+=== encode(form)/decode(form): round-trip ===
+Stack: [ ]
+Stack: [ "a b+c" "a b+c" ]
+PASS: space and literal + round-trip
+Stack: [ ]
+Stack: [ "a b/c?d=e&f+g%h" "a b/c?d=e&f+g%h" ]
+PASS: mixed reserved characters round-trip
+Stack: [ ]
+PASS: café round-trips
+Stack: [ ]
+Stack: [ "a b+café/中" "a b+café/中" ]
+PASS: mixed ASCII, +, multibyte UTF-8 round-trip
+Stack: [ ]
+=== decode-bytes(form): byte-level form decode ===
+Stack: [ ]
+PASS: + byte decodes to space byte
+Stack: [ ]
+Stack: [ B{ 0x2B } B{ 0x2B } ]
+PASS: %2B triple decodes to literal + byte
+Stack: [ ]
+Stack: [ B{ 0x20 0x2B 0x20 } B{ 0x20 0x2B 0x20 } ]
+PASS: mixed + and %2B in bytes decode independently
+Stack: [ ]
+PASS: empty byte-array round-trips
+Stack: [ ]
+Stack: [ B{ 0xFF } B{ 0xFF } ]
+PASS: %FF still decodes as in non-form mode
+Stack: [ ]
+=== decode-bytes(form): malformed input still throws ===
+Stack: [ ]
+PASS: trailing % alone throws
+Stack: [ ]
+Stack: [ [ [ 37 ] make-byte-array decode-bytes(form) ] invalid-argument: ]
+PASS: trailing % alone is EInvalidArgument
+Stack: [ ]
+PASS: %GA (non-hex) throws
+Stack: [ ]
+Stack: [ [ [ 43 37 ] make-byte-array decode-bytes(form) ] ]
+PASS: + then trailing % still throws
+Stack: [ ]

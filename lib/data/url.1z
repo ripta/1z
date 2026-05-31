@@ -130,3 +130,40 @@ encode: ( string -- string ) [ >bytes encode-bytes bytes> ] ;
 \\ string. Throws `EInvalidArgument` on malformed `%HH` sequences, matching
 \\ the byte-level decoder.
 decode: ( string -- string ) [ >bytes decode-bytes bytes> ] ;
+
+(encode-byte-into-form): ( acc byte -- acc' ) [
+  dup 0x20 =
+  [ drop 0x2B #push ]
+  [ (encode-byte-into) ]
+  if
+] ;
+
+(encode-bytes-form): ( bytes -- bytes ) [
+  B{ } [ (encode-byte-into-form) ] #reduce
+] ;
+
+\\ application/x-www-form-urlencoded encode. Identical to `encode` except
+\\ that space (0x20) becomes `+` rather than `%20`; the literal byte `+`
+\\ (0x2B) is percent-encoded as `%2B`.
+encode(form): ( string -- string ) [ >bytes (encode-bytes-form) bytes> ] ;
+
+(dec-step-form): ( state -- state ) [
+  dup 0 (dec-src-at) 0x2B =
+  [ 0x20 (dec-append) 1 (dec-advance) ]
+  [ (dec-step) ]
+  if
+] ;
+
+\\ application/x-www-form-urlencoded byte-level decode. `+` decodes to space;
+\\ `%HH` triples decode as in `decode-bytes` (so `%2B` decodes to a literal
+\\ `+`). Throws `EInvalidArgument` on malformed `%` sequences.
+decode-bytes(form): ( bytes -- bytes ) [
+  0 B{ } make-url-decode-state
+  [ dup (dec-remaining) 0 > ] [ (dec-step-form) ] while
+  out>>
+] ;
+
+\\ application/x-www-form-urlencoded string-level decode. Wraps
+\\ `decode-bytes(form)`. Throws `EInvalidArgument` on malformed `%HH`
+\\ sequences.
+decode(form): ( string -- string ) [ >bytes decode-bytes(form) bytes> ] ;

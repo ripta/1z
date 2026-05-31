@@ -152,3 +152,95 @@ B{ 0x2F 0x3F 0x3D } B{ 0x2F 0x3F 0x3D } decode-bytes
 
 [ "%G1" decode ] "%G1 (first non-hex, string) throws" assert-error
 [ "%1G" decode ] "%1G (second non-hex, string) throws" assert-error
+
+"encode(form): space-as-+" test-section
+
+"" "" encode(form) "empty string round-trips" assert=
+
+"hello" "hello" encode(form) "unreserved ASCII passes through" assert=
+
+"abcXYZ-._~0123" "abcXYZ-._~0123" encode(form)
+"full unreserved set passes through" assert=
+
+"a+b" "a b" encode(form) "single space encodes to +" assert=
+
+"a+b+c" "a b c" encode(form) "multiple spaces each encode to +" assert=
+
+"+" " " encode(form) "lone space encodes to lone +" assert=
+
+"+++" "   " encode(form) "run of spaces encodes to run of +" assert=
+
+"encode(form): literal + and other reserved encode to %HH" test-section
+
+"a%2Bb" "a+b" encode(form) "literal + encodes to %2B" assert=
+
+"%2B%2B" "++" encode(form) "literal ++ encodes to %2B%2B" assert=
+
+"a+%2Bb" "a +b" encode(form)
+"space then literal + encodes as + then %2B" assert=
+
+"a%2F%3D%26" "a/=&" encode(form)
+"non-space reserved bytes still percent-encode" assert=
+
+"%25" "%" encode(form) "literal % still encodes to %25" assert=
+
+"caf%C3%A9" "café" encode(form) "multibyte UTF-8 encodes pairwise" assert=
+
+"decode(form): + decodes to space" test-section
+
+"" "" decode(form) "empty string round-trips" assert=
+
+"hello" "hello" decode(form) "unreserved ASCII passes through" assert=
+
+"a b" "a+b" decode(form) "+ decodes to space" assert=
+
+"a b c" "a+b+c" decode(form) "multiple + each decode to space" assert=
+
+" " "+" decode(form) "lone + decodes to lone space" assert=
+
+"decode(form): %2B decodes to literal +" test-section
+
+"a+b" "a%2Bb" decode(form) "%2B decodes to literal +" assert=
+
+"a b+c" "a+b%2Bc" decode(form)
+"+ becomes space, %2B becomes literal + in same input" assert=
+
+"++" "%2B%2B" decode(form) "%2B%2B decodes to ++" assert=
+
+"encode(form)/decode(form): round-trip" test-section
+
+"a b+c" dup encode(form) decode(form)
+"space and literal + round-trip" assert=
+
+"a b/c?d=e&f+g%h" dup encode(form) decode(form)
+"mixed reserved characters round-trip" assert=
+
+"café" dup encode(form) decode(form) "café round-trips" assert=
+
+"a b+café/中" dup encode(form) decode(form)
+"mixed ASCII, +, multibyte UTF-8 round-trip" assert=
+
+"decode-bytes(form): byte-level form decode" test-section
+
+B{ 0x20 } B{ 0x2B } decode-bytes(form) "+ byte decodes to space byte" assert=
+
+B{ 0x2B } B{ 0x25 0x32 0x42 } decode-bytes(form)
+"%2B triple decodes to literal + byte" assert=
+
+B{ 0x20 0x2B 0x20 } B{ 0x2B 0x25 0x32 0x42 0x2B } decode-bytes(form)
+"mixed + and %2B in bytes decode independently" assert=
+
+B{ } B{ } decode-bytes(form) "empty byte-array round-trips" assert=
+
+B{ 0xFF } B{ 0x25 0x46 0x46 } decode-bytes(form)
+"%FF still decodes as in non-form mode" assert=
+
+"decode-bytes(form): malformed input still throws" test-section
+
+[ B{ 0x25 } decode-bytes(form) ] "trailing % alone throws" assert-error
+[ B{ 0x25 } decode-bytes(form) ] EInvalidArgument
+"trailing % alone is EInvalidArgument" assert-error-type
+
+[ B{ 0x25 0x47 0x41 } decode-bytes(form) ] "%GA (non-hex) throws" assert-error
+[ B{ 0x2B 0x25 } decode-bytes(form) ]
+"+ then trailing % still throws" assert-error
