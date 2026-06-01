@@ -1,0 +1,13 @@
+--- a/ir_emit_c.c
++++ b/ir_emit_c.c
+@@ -548,8 +548,8 @@
+ 	IR_ASSERT(overflow != IR_UNUSED);
+ 
+ 	if (ir_type_size[type] == 4 || ir_type_size[type] == 8) {
+-		fprintf(f, "\tint overflow_%d;\n", overflow);
+-		ir_emit_def_ref(ctx, f, def);
++		fprintf(f, "\t%s overflow_%d;\n", ir_type_cname[type], overflow);
++		ir_emit_def_ref(ctx, f, overflow);
+ 		fprintf(f, "__builtin_%s%s%s_overflow(",
+ 			IR_IS_TYPE_SIGNED(type) ? "s" : "u",
+ 			func,

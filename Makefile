@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -166,6 +166,15 @@ bail-stats: ## Build with bail instrumentation and AOT-run a file (FILE=)
 	timeout $(AOT_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z build $(FILE) -o $(_aot_tmp) && \
 	chmod +x $(_aot_tmp) && \
 	timeout $(AOT_TIMEOUT) $(_aot_tmp)
+
+ir-check: ## Verify ext/ir/ matches pinned upstream plus patches/
+	./ext/ir/check-local-patches.sh
+
+ir-check-upstream: ## Also report whether ext/ir/ patches still apply at upstream HEAD
+	CHECK_UPSTREAM_HEAD=1 ./ext/ir/check-local-patches.sh
+
+ir-vendor: ## Re-vendor ext/ir/ (set IR_COMMIT=<sha> to bump the pin)
+	IR_COMMIT=$(IR_COMMIT) ./ext/ir/vendor.sh
 
 lsp-test: ## Run LSP server tests
 	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)

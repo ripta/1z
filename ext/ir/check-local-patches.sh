@@ -1,20 +1,27 @@
 #!/bin/sh
 #
-# Diff the vendored ext/ir/ tree against the upstream commit recorded in
-# README.md and print a report of local modifications. Used to verify that
-# the "Local modifications" section in README.md is still accurate.
+# Verify the vendored ext/ir/ tree matches "pinned upstream + patches/".
 #
-# Exit 0 if the recorded inventory matches the diff exactly.
-# Exit 1 if a vendored file diverges from upstream in a way that is not
-# documented, or if a documented file is no longer divergent.
+# Exits 0 when each tracked vendored file matches "pin + patches" exactly
+# and every patch under patches/ applies cleanly against the pin.
+#
+# Exits 1 when:
+#   - a vendored file diverges from "pin + patches/" without a patch to
+#     account for it (someone hand-edited ext/ir/ outside the patch flow),
+#   - a patch under patches/ no longer applies cleanly against the pin
+#     (patch drift),
+#   - a file listed in the manifest is missing from the pinned upstream.
+#
+# Pass CHECK_UPSTREAM_HEAD=1 to additionally report whether the patches
+# still apply against upstream HEAD, as an informational signal for
+# upgrade planning.
 
 set -eu
 
 DEST="$(cd "$(dirname "$0")" && pwd)"
 REPO="https://github.com/dstogov/ir.git"
 
-# Extract the vendored commit from README.md.
-PIN=$(awk '/Vendored commit:/ { print $4 }' "$DEST/README.md")
+PIN=$(awk '/^- Vendored commit:/ { print $4; exit }' "$DEST/README.md")
 if [ -z "$PIN" ]; then
   echo "ERROR: could not parse 'Vendored commit:' line from README.md" >&2
   exit 1
@@ -71,19 +78,62 @@ VENDORED_FILES="
   dynasm/dasm_x86.lua
 "
 
-modified=""
+# Build a working copy of the pinned upstream so we can apply patches/
+# against it and diff the result.
+WORK="$TMPROOT/ir-pinned-check-$$"
+trap 'rm -rf "$WORK"' EXIT
+mkdir -p "$WORK"
+for f in $VENDORED_FILES; do
+  src="$UPSTREAM/$f"
+  if [ ! -f "$src" ]; then
+    continue
+  fi
+  mkdir -p "$WORK/$(dirname "$f")"
+  cp "$src" "$WORK/$f"
+done
+
 missing=""
 for f in $VENDORED_FILES; do
   if [ ! -f "$UPSTREAM/$f" ]; then
     missing="$missing $f"
-    continue
-  fi
-  if ! diff -q "$UPSTREAM/$f" "$DEST/$f" >/dev/null 2>&1; then
-    modified="$modified $f"
   fi
 done
 
-# Files in ext/ir/ that are not in the vendored manifest are local additions.
+status=0
+
+# Apply patches against the working copy with --check first, then for
+# real. Track per-patch apply success so the report can attribute
+# divergence below to either patch drift or undocumented hand-edits.
+patches=""
+if [ -d "$DEST/patches" ]; then
+  patches=$(find "$DEST/patches" -maxdepth 1 -name '*.patch' -print | sort)
+fi
+
+apply_failures=""
+for p in $patches; do
+  name=$(basename "$p")
+  if ! patch -d "$WORK" -p1 --dry-run --silent -i "$p" >/dev/null 2>&1; then
+    apply_failures="$apply_failures $name"
+    continue
+  fi
+  patch -d "$WORK" -p1 --silent -i "$p" >/dev/null
+done
+
+# Compare the patched working copy against the live tree.
+undocumented=""
+for f in $VENDORED_FILES; do
+  if [ ! -f "$DEST/$f" ]; then
+    continue
+  fi
+  if [ ! -f "$WORK/$f" ]; then
+    continue
+  fi
+  if ! diff -q "$WORK/$f" "$DEST/$f" >/dev/null 2>&1; then
+    undocumented="$undocumented $f"
+  fi
+done
+
+# Local-only files in ext/ir/ (preserved across upgrade).
 local_additions=""
 for path in README.md vendor.sh ir_disasm_stub.c check-local-patches.sh; do
   if [ -f "$DEST/$path" ]; then
@@ -91,13 +141,32 @@ for path in README.md vendor.sh ir_disasm_stub.c check-local-patches.sh; do
   fi
 done
 
-echo "=== Modified vendored files (require transplant on upgrade) ==="
-if [ -z "$modified" ]; then
+echo "=== Patches applied against pin ==="
+if [ -z "$patches" ]; then
   echo "  (none)"
 else
-  for f in $modified; do
-    echo "  $f"
+  for p in $patches; do
+    name=$(basename "$p")
+    case " $apply_failures " in
+      *" $name "*) echo "  FAIL: $name does not apply cleanly against $PIN" ;;
+      *)           echo "  ok:   $name" ;;
+    esac
   done
+fi
+
+if [ -n "$apply_failures" ]; then
+  status=1
+fi
+
+echo ""
+echo "=== Undocumented divergence (live ext/ir/ vs. pin + patches) ==="
+if [ -z "$undocumented" ]; then
+  echo "  (none)"
+else
+  for f in $undocumented; do
+    echo "  FAIL: $f differs without a patch to account for it"
+  done
+  status=1
 fi
 
 echo ""
@@ -112,28 +181,37 @@ if [ -n "$missing" ]; then
   for f in $missing; do
     echo "  $f"
   done
+  status=1
 fi
 
-# Optional: report whether the modified files have been absorbed upstream
-# since the pinned commit. Compares against the upstream HEAD ref.
-# Also dumps the upstream-HEAD copy of each modified file to
-# $TMPDIR/ir-head-<sha>/<file> for manual inspection.
-if [ "${CHECK_UPSTREAM_HEAD:-0}" = "1" ] && [ -n "$modified" ]; then
+# Optional: report whether the local patches still apply against upstream
+# HEAD. Informational only; does not affect exit status.
+if [ "${CHECK_UPSTREAM_HEAD:-0}" = "1" ] && [ -n "$patches" ]; then
   echo ""
-  echo "=== Upstream HEAD absorption check ==="
+  echo "=== Upstream HEAD apply check ==="
   HEAD_SHA=$(git -C "$UPSTREAM" rev-parse origin/HEAD)
-  HEAD_DUMP="$TMPROOT/ir-head-$HEAD_SHA"
+  HEAD_WORK="$TMPROOT/ir-head-check-$$"
+  mkdir -p "$HEAD_WORK"
   git -C "$UPSTREAM" -c advice.detachedHead=false checkout "$HEAD_SHA" >/dev/null 2>&1
-  mkdir -p "$HEAD_DUMP"
-  for f in $modified; do
-    cp "$UPSTREAM/$f" "$HEAD_DUMP/$(basename "$f")"
-    if diff -q "$UPSTREAM/$f" "$DEST/$f" >/dev/null 2>&1; then
-      echo "  $f -- ABSORBED upstream (drop patch on upgrade)"
+  for f in $VENDORED_FILES; do
+    src="$UPSTREAM/$f"
+    if [ ! -f "$src" ]; then
+      continue
+    fi
+    mkdir -p "$HEAD_WORK/$(dirname "$f")"
+    cp "$src" "$HEAD_WORK/$f"
+  done
+  for p in $patches; do
+    name=$(basename "$p")
+    if patch -d "$HEAD_WORK" -p1 --dry-run --silent -i "$p" >/dev/null 2>&1; then
+      patch -d "$HEAD_WORK" -p1 --silent -i "$p" >/dev/null 2>&1 || true
+      echo "  $name -- applies against HEAD ($HEAD_SHA)"
     else
-      patch=$(diff -u "$UPSTREAM/$f" "$DEST/$f" 2>/dev/null || true)
-      hunks=$(printf "%s\n" "$patch" | grep -c '^@@ ' || true)
-      echo "  $f -- divergent at HEAD ($HEAD_SHA), $hunks hunk(s); HEAD copy at $HEAD_DUMP/$(basename "$f")"
+      echo "  $name -- DOES NOT apply against HEAD ($HEAD_SHA); transplant required"
     fi
   done
+  rm -rf "$HEAD_WORK"
   git -C "$UPSTREAM" -c advice.detachedHead=false checkout "$PIN" >/dev/null 2>&1
 fi
+
+exit $status
