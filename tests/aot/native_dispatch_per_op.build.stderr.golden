@@ -3,9 +3,9 @@ AOT interpreter fallbacks: 3 total
   native: 2
   per-op-native: 1
   sites:
-    native: cmp-lt -> < (line 1)
-    native: cmp-eq -> = (line 1)
-    per-op-native: add -> + (line 1)
+    native: cmp-lt -> < (line 22)
+    native: cmp-eq -> = (line 21)
+    per-op-native: add -> + (line 20)
   static-check: jitInterpretedCall=0/0 jitNativeWordCall=3/3 jitCallQuotation=0/0 (matches build-time inventory)
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)

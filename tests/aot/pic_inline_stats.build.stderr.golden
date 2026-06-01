@@ -7,8 +7,8 @@ AOT interpreter fallbacks: 5 total
     native: . -> inspect (line 605)
     native: flush -> stream-flush (line 599)
     native: stream-write-string -> stream-write (line 495)
-    native: nth-elem -> #nth (line 1)
-    native: nth-elem -> #nth (line 1)
+    native: nth-elem -> #nth (line 5)
+    native: nth-elem -> #nth (line 5)
   static-check: jitInterpretedCall=0/0 jitNativeWordCall=5/5 jitCallQuotation=0/0 (matches build-time inventory)
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)

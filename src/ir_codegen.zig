@@ -500,6 +500,13 @@ pub const AotWordDesc = struct {
     /// Captured during freeze so the AOT compiler can emit inline type
     /// checks preseeded from interpreter profiling.
     pic_snapshot: ?*pic_mod.PicTable = null,
+    /// Source file containing this word's definition, or null when
+    /// unknown. Used by AOT C emission to attach a `#line` directive
+    /// at the word's emitted C function entry.
+    source_file: ?[]const u8 = null,
+    /// 1-based line of this word's definition in `source_file`. Zero
+    /// when unknown.
+    source_line: usize = 0,
 };
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
@@ -6550,6 +6557,35 @@ fn emitWordCAotPass(
     return .{ .body = body, .peak_stack_depth = state.peak_sp };
 }
 
+/// Append a `#line N "path"` directive to `out`. Toolchain-hostile bytes
+/// (`"`, `\`, NUL, ASCII controls) in the path are escaped or stripped
+/// so the directive parses cleanly under cc; legal filesystem paths
+/// pass through unchanged. Callers should skip emission entirely when
+/// `line == 0` or `file` is empty, since both signal absent metadata.
+fn appendLineDirective(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    file: []const u8,
+    line: usize,
+) Allocator.Error!void {
+    try out.appendSlice(allocator, "#line ");
+    var num_buf: [20]u8 = undefined;
+    const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{line}) catch unreachable;
+    try out.appendSlice(allocator, num_str);
+    try out.appendSlice(allocator, " \"");
+    for (file) |b| {
+        if (b == 0 or b < 0x20) continue;
+        switch (b) {
+            '"', '\\' => {
+                try out.append(allocator, '\\');
+                try out.append(allocator, b);
+            },
+            else => try out.append(allocator, b),
+        }
+    }
+    try out.appendSlice(allocator, "\"\n");
+}
+
 /// Work around ir_emit_c vreg 0 bug: if the emitted C body uses `d_0` but
 /// does not declare it, insert `\tuintptr_t d_0;\n` after the opening brace.
 fn patchMissingD0(body: []u8, allocator: Allocator) Allocator.Error![]u8 {
@@ -7319,11 +7355,27 @@ pub fn emitProgramC(
 
     // 4b. Emit compiled function bodies
     for (compiled_bodies.items) |item| {
+        for (words) |w| {
+            if (w.word_id != item.word_id) continue;
+            if (w.source_line == 0) break;
+            const sf = w.source_file orelse break;
+            if (sf.len == 0) break;
+            try appendLineDirective(&out, allocator, sf, w.source_line);
+            break;
+        }
         try out.appendSlice(allocator, item.body);
         try out.appendSlice(allocator, "\n");
     }
-    // 4c. Emit compiled quotation function bod ies
+    // 4c. Emit compiled quotation function bodies
     for (compiled_quotation_bodies.items) |item| {
+        for (quotations) |q| {
+            if (q.quotation_id != item.id) continue;
+            if (q.source_line == 0) break;
+            const sf = q.source_file orelse break;
+            if (sf.len == 0) break;
+            try appendLineDirective(&out, allocator, sf, q.source_line);
+            break;
+        }
         try out.appendSlice(allocator, item.body);
         try out.appendSlice(allocator, "\n");
     }
@@ -9654,6 +9706,30 @@ fn callCompiledValues(func: CompiledFn, values: []Value, sp: *usize) i32 {
     const status = func(&jit_ctx);
     @memcpy(values, buf[0..values.len]);
     return status;
+}
+
+test "appendLineDirective: basic format" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendLineDirective(&out, allocator, "tests/aot/example.1z", 42);
+    try testing.expectEqualStrings("#line 42 \"tests/aot/example.1z\"\n", out.items);
+}
+
+test "appendLineDirective: 1z identifier characters pass through verbatim" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendLineDirective(&out, allocator, "src/x-y?z!.1z", 1);
+    try testing.expectEqualStrings("#line 1 \"src/x-y?z!.1z\"\n", out.items);
+}
+
+test "appendLineDirective: escapes quotes and backslashes, strips controls" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendLineDirective(&out, allocator, "weird\"path\\with\nnewline\x00nul.1z", 7);
+    try testing.expectEqualStrings("#line 7 \"weird\\\"path\\\\withnewlinenul.1z\"\n", out.items);
 }
 
 test "compile double: 2 *" {

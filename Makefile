@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check bail-stats update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -91,8 +91,33 @@ aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
 	chmod +x $(_aot_tmp) && \
 	timeout $(AOT_TIMEOUT) $(_aot_tmp)
 
-aot-test: aot-interpreter-strip-check ## Run AOT build integration tests
+aot-test: aot-interpreter-strip-check aot-line-directives-check ## Run AOT build integration tests
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+
+aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directives at word and quotation function entries
+	$(eval _bin := $(shell mktemp /tmp/1z-line-directives-XXXXXX))
+	$(eval _stderr := $(shell mktemp /tmp/1z-line-directives-stderr-XXXXXX))
+	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
+	./$(ZIG_PREFIX)/bin/1z build --save-temps -o $(_bin) tests/aot/aot_line_directives.1z 2>$(_stderr); \
+	saved=$$(grep -m1 '^Saved: ' $(_stderr) | sed 's/^Saved: //'); \
+	if [ -z "$$saved" ]; then \
+		echo "FAIL: build did not report a saved C file (missing --save-temps output)"; \
+		cat $(_stderr); exit 1; \
+	fi; \
+	trap "rm -f $(_bin) $(_stderr) $$saved" EXIT; \
+	if ! grep -qE '^#line 6 "tests/aot/aot_line_directives.1z"' "$$saved"; then \
+		echo "FAIL: missing #line for user-defined word 'double' (expected line 6)"; \
+		grep '^#line.*aot_line_directives' "$$saved" || true; exit 1; \
+	fi; \
+	if ! grep -qE '^#line 9 "tests/aot/aot_line_directives.1z"' "$$saved"; then \
+		echo "FAIL: missing #line for inline quotation (expected line 9)"; \
+		grep '^#line.*aot_line_directives' "$$saved" || true; exit 1; \
+	fi; \
+	if ! grep -qE '^#line [0-9]+ "src/prelude.1z"' "$$saved"; then \
+		echo "FAIL: missing #line for a prelude word (expected src/prelude.1z path)"; \
+		grep '^#line.*prelude' "$$saved" | head -5 || true; exit 1; \
+	fi; \
+	echo "PASS: AOT-emitted C carries #line directives for user words, quotations, and prelude"
 
 aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader from interpreter-free AOT binaries
 	$(eval _free_bin := $(shell mktemp /tmp/1z-strip-check-free-XXXXXX))

@@ -24,6 +24,15 @@ pub const AotQuotationDesc = struct {
     c_name: []const u8,
     inferred_effect: ?ir_codegen.InferredEffect = null,
     compiled: bool = false,
+    /// Source file containing the defining word of this quotation,
+    /// or null when unknown. Used by AOT C emission to attach a
+    /// `#line` directive at the quotation's emitted C function
+    /// entry.
+    source_file: ?[]const u8 = null,
+    /// 1-based line of the quotation's first instruction in
+    /// `source_file`. In practice this is the line of the opening
+    /// `[`. Zero when unknown.
+    source_line: usize = 0,
 };
 
 pub const FreezeResult = struct {
@@ -448,7 +457,7 @@ pub fn freezeModuleGraphOpts(
     ctx.popLocalFrame();
 
     // Phase 3: Build AotWordDesc array
-    var result = try buildAotDescs(entry_instrs, &discovered, discovered.pending_call_targets.items, &prelude_words, ctx, allocator);
+    var result = try buildAotDescs(entry_instrs, entry_file, &discovered, discovered.pending_call_targets.items, &prelude_words, ctx, allocator);
     if (result.skipped_words.len > 0) {
         diagnostics.missing_stack_effects = result.skipped_words;
         result.skipped_words = &.{};
@@ -515,6 +524,13 @@ fn executeAndCollectEntry(
     defer processor.deinit();
     const temp_allocator = ctx.quotationAllocator();
 
+    // Track the current file line so that parse-time word definitions
+    // see file-relative line numbers via `parse_line_offset`. Without
+    // this, every statement in the entry file looks like it starts at
+    // line 1, and downstream consumers (error reporting, `#line`
+    // directives in AOT C emission) lose file accuracy.
+    var file_line: usize = 0;
+
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
@@ -536,6 +552,12 @@ fn executeAndCollectEntry(
             },
             else => return error.FileReadFailed,
         };
+
+        file_line += 1;
+        processor.trackLine(file_line);
+        if (processor.start_line > 0) {
+            ctx.parse_line_offset = processor.start_line - 1;
+        }
 
         switch (processor.feedLine(ctx.quotationAllocator(), line, ctx)) {
             .needs_more_input => continue,
@@ -1358,11 +1380,40 @@ fn devirtualizeSingleMethod(
     };
 }
 
+/// Walk `instrs` and record every nested quotation literal under the
+/// given `source_file` in `map`. The discovery BFS only recurses into
+/// `.quotation` literals (see `collectCallWords`); this map follows
+/// the same shape so every reachable quotation body that ends up in
+/// `discovered.quotation_bodies` finds a corresponding entry.
+fn mapQuotationSources(
+    instrs: []const Instruction,
+    source_file: []const u8,
+    map: *std.AutoHashMapUnmanaged(usize, []const u8),
+    allocator: Allocator,
+) Allocator.Error!void {
+    for (instrs) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| switch (val) {
+                .quotation => |q| {
+                    const gop = try map.getOrPut(allocator, @intFromPtr(q.instructions.ptr));
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = source_file;
+                    }
+                    try mapQuotationSources(q.instructions, source_file, map, allocator);
+                },
+                else => {},
+            },
+            .call_word, .call_word_direct => {},
+        }
+    }
+}
+
 /// Assign word IDs and build the AotWordDesc array. When `ctx` is
 /// provided, PIC snapshots are captured from the interpreter's cache
 /// and stored on each compound word descriptor.
 fn buildAotDescs(
     entry_instrs: []const Instruction,
+    entry_file: []const u8,
     discovered: *const DiscoveredWords,
     pending_call_targets: []const PendingCallTarget,
     prelude_words: *const std.StringHashMapUnmanaged(void),
@@ -1373,6 +1424,9 @@ fn buildAotDescs(
     var skipped = std.ArrayListUnmanaged([]const u8){};
     var next_id: u32 = 0;
 
+    const entry_source_file: ?[]const u8 = if (entry_file.len > 0) entry_file else null;
+    const entry_source_line: usize = if (entry_instrs.len > 0) entry_instrs[0].line else 1;
+
     // Entry word gets ID 0
     const entry_word_id = next_id;
     next_id += 1;
@@ -1382,6 +1436,8 @@ fn buildAotDescs(
         .input_count = 0,
         .output_count = 0,
         .word_id = entry_word_id,
+        .source_file = entry_source_file,
+        .source_line = entry_source_line,
     });
 
     // Assign IDs to discovered words
@@ -1416,6 +1472,8 @@ fn buildAotDescs(
                     .is_prelude = prelude_words.contains(name),
                     .stack_effect = effect,
                     .never_returns = hasNeverReturnsMarker(def),
+                    .source_file = def.source_file,
+                    .source_line = def.source_line,
                 });
                 continue;
             }
@@ -1429,6 +1487,8 @@ fn buildAotDescs(
                 .is_native = true,
                 .stack_effect = effect,
                 .never_returns = hasNeverReturnsMarker(def),
+                .source_file = def.source_file,
+                .source_line = def.source_line,
             });
             continue;
         }
@@ -1454,6 +1514,8 @@ fn buildAotDescs(
             .stack_effect = effect,
             .never_returns = hasNeverReturnsMarker(def),
             .pic_snapshot = pic_snapshot,
+            .source_file = def.source_file,
+            .source_line = def.source_line,
         });
     }
 
@@ -1477,6 +1539,8 @@ fn buildAotDescs(
                 .is_prelude = true,
                 .is_native = true,
                 .never_returns = hasNeverReturnsMarker(def),
+                .source_file = def.source_file,
+                .source_line = def.source_line,
             });
             continue;
         };
@@ -1499,6 +1563,8 @@ fn buildAotDescs(
             },
             .stack_effect = effect,
             .never_returns = hasNeverReturnsMarker(def),
+            .source_file = def.source_file,
+            .source_line = def.source_line,
         });
     }
 
@@ -1589,6 +1655,23 @@ fn buildAotDescs(
         .dispatch_table_ptr = undefined,
     };
 
+    // Build a map from quotation-body pointer to the source file of the
+    // word whose body contains the quotation (transitively for nested
+    // quotations). Used to attach `#line` directives to emitted
+    // quotation C functions in AOT mode. Walking entry instructions and
+    // every discovered compound body once covers every reachable
+    // quotation literal, mirroring the BFS discovery walk.
+    var quotation_source_map = std.AutoHashMapUnmanaged(usize, []const u8){};
+    defer quotation_source_map.deinit(allocator);
+    if (entry_source_file) |sf| {
+        try mapQuotationSources(entry_instrs, sf, &quotation_source_map, allocator);
+    }
+    for (discovered.defs.items) |def| {
+        if (def.action != .compound) continue;
+        const sf = def.source_file orelse continue;
+        try mapQuotationSources(def.action.compound, sf, &quotation_source_map, allocator);
+    }
+
     // Sequential ID for quot descriptors
     var quotations = std.ArrayListUnmanaged(AotQuotationDesc){};
     var next_q_id: u32 = 0;
@@ -1596,11 +1679,15 @@ fn buildAotDescs(
         const id = next_q_id;
         next_q_id += 1;
         const c_name = try std.fmt.allocPrint(allocator, "onez_q_{d}", .{id});
+        const q_source_file = quotation_source_map.get(@intFromPtr(body.ptr));
+        const q_source_line: usize = if (body.len > 0) body[0].line else 0;
         try quotations.append(allocator, .{
             .quotation_id = id,
             .instructions = body,
             .c_name = c_name,
             .inferred_effect = ir_codegen.inferQuotationEffect(body, resolver) catch null,
+            .source_file = q_source_file,
+            .source_line = q_source_line,
         });
     }
     const max_quotation_id = if (next_q_id > 0) next_q_id - 1 else 0;
@@ -1689,7 +1776,7 @@ test "buildAotDescs assigns sequential IDs and skips effectless words" {
     });
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     // Entry word (id 0) + foo (id 1) = 2 words; bar skipped
@@ -1757,7 +1844,7 @@ test "freezeModuleGraphOpts cleanup releases pic snapshots when stack effects ar
     });
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, &ctx, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &.{}, &prelude_words, &ctx, allocator);
 
     // Sanity: foo got a pic snapshot, bar was skipped.
     try testing.expect(result.words[1].pic_snapshot != null);
@@ -1813,7 +1900,7 @@ test "buildAotDescs includes native words with is_prelude and empty instructions
     });
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     // Entry (id 0) + foo (id 1) + type-of (id 2) = 3 words
@@ -2240,7 +2327,7 @@ test "buildAotDescs assigns sequential quotation IDs" {
     try discovered.quotation_bodies.append(allocator, q_body_2);
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), result.quotations.len);
@@ -2307,7 +2394,7 @@ test "buildAotDescs infers effect for quotation calling discovered word" {
     try discovered.quotation_bodies.append(allocator, q_body);
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     // Quotation pushes 1, then calls double (1 in, 1 out) => net (0, 1)
@@ -2340,7 +2427,7 @@ test "buildAotDescs returns null effect for unresolvable quotation" {
     try discovered.quotation_bodies.append(allocator, q_body);
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), result.quotations.len);
@@ -2372,7 +2459,7 @@ test "buildAotDescs infers effect for push-only quotation" {
     try discovered.quotation_bodies.append(allocator, q_body);
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &.{}, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &.{}, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     const eff = result.quotations[0].inferred_effect.?;
@@ -2940,7 +3027,7 @@ test "buildAotDescs remaps caller name to caller_word_id and resolves callees" {
     };
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &pending, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), result.call_targets.len);
@@ -2973,7 +3060,7 @@ test "buildAotDescs preserves unresolved variant from pending entries" {
     };
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &pending, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), result.call_targets.len);
@@ -3014,7 +3101,7 @@ test "buildAotDescs preserves quotation_path through dupe" {
     };
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &pending, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), result.call_targets.len);
@@ -3106,7 +3193,7 @@ test "buildAotDescs throughput ceiling on synthetic graph" {
     var prelude_words = std.StringHashMapUnmanaged(void){};
 
     var timer = try std.time.Timer.start();
-    var result = try buildAotDescs(entry_instrs, &discovered, pending.items, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, pending.items, &prelude_words, null, allocator);
     const elapsed_ns = timer.read();
     defer result.deinit(allocator);
 
@@ -3179,7 +3266,7 @@ test "struct accessor body resolves through buildAotDescs as a compound call" {
     };
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &pending, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), result.call_targets.len);
@@ -3247,7 +3334,7 @@ test "virtual constructor body resolves through buildAotDescs as a compound call
     };
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &pending, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 2), result.call_targets.len);
@@ -3302,7 +3389,7 @@ test "method dispatcher resolves through buildAotDescs as a compound call" {
     };
 
     var prelude_words = std.StringHashMapUnmanaged(void){};
-    var result = try buildAotDescs(entry_instrs, &discovered, &pending, &prelude_words, null, allocator);
+    var result = try buildAotDescs(entry_instrs, "", &discovered, &pending, &prelude_words, null, allocator);
     defer result.deinit(allocator);
 
     try testing.expectEqual(@as(usize, 1), result.call_targets.len);

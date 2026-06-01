@@ -1,0 +1,9 @@
+\ Fixture exercised by `make aot-line-directives-check` to verify that
+\ AOT-emitted C carries `#line` directives at word and quotation
+\ function entries. The user word and inline quotation below are the
+\ minimum surface needed for the assertion script.
+
+double: ( n -- n ) [ 2 * ] ;
+
+5 double .
+3 [ "tick" print-line ] times
