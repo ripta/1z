@@ -117,7 +117,21 @@ aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directi
 		echo "FAIL: missing #line for a prelude word (expected src/prelude.1z path)"; \
 		grep '^#line.*prelude' "$$saved" | head -5 || true; exit 1; \
 	fi; \
-	echo "PASS: AOT-emitted C carries #line directives for user words, quotations, and prelude"
+	abs_body=$$(awk '/^int32_t onez_w_abs\(uintptr_t jit_ctx\)$$/,/^\}/' "$$saved"); \
+	if ! echo "$$abs_body" | grep -qE '^#line 16 "tests/aot/aot_line_directives.1z"'; then \
+		echo "FAIL: missing #line 16 inside onez_w_abs (if-true arm body)"; \
+		echo "$$abs_body" | grep '^#line' || true; exit 1; \
+	fi; \
+	if ! echo "$$abs_body" | grep -qE '^#line 17 "tests/aot/aot_line_directives.1z"'; then \
+		echo "FAIL: missing #line 17 inside onez_w_abs (if-false arm body)"; \
+		echo "$$abs_body" | grep '^#line' || true; exit 1; \
+	fi; \
+	entry_body=$$(awk '/^int32_t onez_w___entry__\(uintptr_t jit_ctx\)$$/,/^\}/' "$$saved"); \
+	if ! echo "$$entry_body" | grep -qE '^#line 26 "tests/aot/aot_line_directives.1z"'; then \
+		echo "FAIL: missing #line 26 inside onez_w___entry__ (multi-line loop body)"; \
+		echo "$$entry_body" | grep '^#line' || true; exit 1; \
+	fi; \
+	echo "PASS: AOT-emitted C carries #line directives for user words, quotations, prelude, if arms, and loop bodies"
 
 aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader from interpreter-free AOT binaries
 	$(eval _free_bin := $(shell mktemp /tmp/1z-strip-check-free-XXXXXX))

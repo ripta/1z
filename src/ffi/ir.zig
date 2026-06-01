@@ -23,7 +23,19 @@ pub const JitBuffer = struct {
 
 /// Run the minimum IR optimization passes needed for C emission and emit
 /// the IR context as a C function. Returns the C source as an owned slice.
-pub fn emitC(ctx: *c.ir_ctx, name: [*:0]const u8, allocator: std.mem.Allocator) (IrError || std.mem.Allocator.Error)![]u8 {
+///
+/// `source_lines` is an optional opaque pointer to an `IrCSourceLines`
+/// (defined in ir_codegen.zig). When non-null it is installed on
+/// `ctx.data` immediately before the C emission call so the patched
+/// `ir_emit_c.c` can emit `#line` directives at control-flow
+/// boundaries. The magic-tag check inside the patch keeps the call
+/// safe for callers that pass null.
+pub fn emitC(
+    ctx: *c.ir_ctx,
+    name: [*:0]const u8,
+    allocator: std.mem.Allocator,
+    source_lines: ?*const anyopaque,
+) (IrError || std.mem.Allocator.Error)![]u8 {
     // XXX(ripta): Run minimum passes: def-use lists, CFG, virtual register assignment.
     //             ir_match NOT needed?
     //             ir_assign_virtual_registers falls back to the slow path when ctx->rules is null
@@ -31,6 +43,10 @@ pub fn emitC(ctx: *c.ir_ctx, name: [*:0]const u8, allocator: std.mem.Allocator) 
     if (c.ir_build_cfg(ctx) == 0) return IrError.EmitFailed;
     if (c.ir_assign_virtual_registers(ctx) == 0) return IrError.EmitFailed;
     if (c.ir_compute_dessa_moves(ctx) == 0) return IrError.EmitFailed;
+
+    if (source_lines) |sl| {
+        ctx.unnamed_0.data = @constCast(sl);
+    }
 
     const file: *c.FILE = c.tmpfile() orelse return IrError.EmitFailed;
     defer _ = c.fclose(file);
@@ -155,7 +171,7 @@ test "emit C for trivial add function" {
     const sum = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_I64), a, b);
     c._ir_RETURN(&ctx, sum);
 
-    const source = try emitC(&ctx, "test_add", std.testing.allocator);
+    const source = try emitC(&ctx, "test_add", std.testing.allocator, null);
     defer std.testing.allocator.free(source);
 
     // Verify the output contains expected C constructs
@@ -181,7 +197,7 @@ test "emit C for terminal callback diamond" {
     c._ir_IF_FALSE(&ctx, if_bail);
     c._ir_RETURN(&ctx, propagate);
 
-    const source = try emitC(&ctx, "test_terminal_callback", std.testing.allocator);
+    const source = try emitC(&ctx, "test_terminal_callback", std.testing.allocator, null);
     defer std.testing.allocator.free(source);
 
     try std.testing.expect(std.mem.indexOf(u8, source, "test_terminal_callback") != null);

@@ -1614,6 +1614,35 @@ fn countTotalInstructions(instructions: []const Instruction) usize {
 /// branch merge and loop back-edge checks.
 const RowId = u32;
 
+/// A single `(block-start ir_ref, source line)` pair. Aggregated on
+/// `CompileState.source_line_entries` and handed to the patched
+/// `ir_emit_c.c` via the `IrCSourceLines` side table so the C
+/// emitter can write `#line N "file"` directives at control-flow
+/// boundaries inside a word body. Layout must match the C-side
+/// `ir_c_line_entry` struct in `ext/ir/ir_emit_c.c` exactly.
+pub const LineEntry = extern struct {
+    ref: u32,
+    line: u32,
+};
+
+/// Magic tag that marks a `ctx.data` pointer as the source-line side
+/// table the patched `ir_emit_c.c` knows how to consume. Other callers
+/// leave `ctx.data` null; the patched code falls back to its
+/// no-source-info behavior when the tag does not match.
+pub const ir_c_source_lines_magic: u32 = 0x315A4C53; // "1ZLS"
+
+/// Side table installed on `ir_ctx.data` before calling `ir_emit_c`.
+/// Layout must match the C-side `ir_c_source_lines` struct in
+/// `ext/ir/ir_emit_c.c` exactly. The patched emitter binary-searches
+/// `entries` (sorted by `ref` ascending) and emits a `#line` directive
+/// before each control-flow boundary block whose start ref matches.
+pub const IrCSourceLines = extern struct {
+    magic: u32,
+    file: [*:0]const u8,
+    entries: [*]const LineEntry,
+    entries_count: u32,
+};
+
 /// Symbolic stack entry: tracks the IR representation of each value on the abstract compilation stack.
 const StackEntry = union(enum) {
     /// Unboxed fixnum payload, usable directly in arithmetic and comparisons.
@@ -1907,12 +1936,57 @@ const CompileState = struct {
     inline_trace_frame_count: usize = 0,
     /// Monotonic counter for allocating unique RowId values.
     next_row_id: RowId = 0,
+    /// Source file containing the word or quotation being compiled.
+    /// Threaded onto the source-lines side table so the patched
+    /// `ir_emit_c.c` knows which file the `#line` directives point
+    /// at. Null when unknown; codegen then skips installing the side
+    /// table and the patched emitter falls back to its no-source-info
+    /// behavior.
+    source_file: ?[]const u8 = null,
+    /// Accumulator for `(block-start ir_ref, source line)` pairs at
+    /// user-visible control-flow boundaries (if/case arms, loop body
+    /// entries, post-if merges). Installed via `ctx.data` before
+    /// `ir_mod.emitC` so the patched `ir_emit_c.c` emits `#line`
+    /// directives between blocks. Populated by `recordBlockStart`;
+    /// flushed by `flushPendingLine` at the next instruction.
+    source_line_entries: std.ArrayListUnmanaged(LineEntry) = .{},
+    /// Most recent block-start ir_ref whose source-line attribution is
+    /// still unknown. `flushPendingLine` consumes this on the next
+    /// `compileInstructions` iteration with a non-zero `instr.line`,
+    /// pairing the ref with the line of the first source instruction
+    /// that emits code into the new block. `c.IR_UNUSED` when nothing
+    /// is pending.
+    pending_line_ref: c.ir_ref = c.IR_UNUSED,
 
     /// Allocate a fresh RowId, unique within this compilation.
     fn nextRowId(state: *CompileState) RowId {
         const id = state.next_row_id;
         state.next_row_id += 1;
         return id;
+    }
+
+    /// Record that the most recently emitted IR instruction starts a
+    /// new basic block at a user-visible control-flow boundary. The
+    /// source-line attribution for this ref is deferred until the next
+    /// `compileInstructions` iteration carrying a non-zero source
+    /// line, so the recorded line is the first source line of code
+    /// that actually emits into the new block.
+    fn recordBlockStart(state: *CompileState, ref: c.ir_ref) void {
+        if (ref == c.IR_UNUSED or ref == 0) return;
+        state.pending_line_ref = ref;
+    }
+
+    /// Pair the pending block-start ref (if any) with `line` and
+    /// append to the source-line entry list. Called at the top of
+    /// each `compileInstructions` iteration when `instr.line != 0`.
+    fn flushPendingLine(state: *CompileState, line: u32) Allocator.Error!void {
+        if (state.pending_line_ref == c.IR_UNUSED) return;
+        if (line == 0) return;
+        try state.source_line_entries.append(state.allocator, .{
+            .ref = @intCast(state.pending_line_ref),
+            .line = line,
+        });
+        state.pending_line_ref = c.IR_UNUSED;
     }
 
     /// Record an AOT-mode CALL through interpreted_call_fn or
@@ -3392,6 +3466,7 @@ fn compilePredBodyLoop(
 
     const entry_end = c._ir_END(ctx);
     const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+    state.recordBlockStart(loop_ref);
     // AOT loop back-edges can arrive after callbacks moved ctx.stack.items.
     // Refresh at the header so predicate/body slot accesses use the live base.
     if (state.aot_mode and state.refresh_stack_fn != c.IR_UNUSED) {
@@ -3940,6 +4015,10 @@ fn compileInstructions(
             return IrCodegenError.NotCompilable;
         }
 
+        if (instr.line != 0) {
+            try state.flushPendingLine(@intCast(instr.line));
+        }
+
         switch (instr.op) {
             .push_literal => |val| {
                 if (val == .fixnum) {
@@ -4362,6 +4441,7 @@ fn compileInstructions(
                     // Emit true branch
                     const if_ref = c._ir_IF(ctx, cond_ref);
                     c._ir_IF_TRUE(ctx, if_ref);
+                    state.recordBlockStart(ctx.unnamed_0.control);
                     state.exit_kind = .falls_through;
                     const saved_inline_trace_frame_count = state.inline_trace_frame_count;
                     if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
@@ -4399,6 +4479,7 @@ fn compileInstructions(
 
                     // Emit false branch
                     c._ir_IF_FALSE(ctx, if_ref);
+                    state.recordBlockStart(ctx.unnamed_0.control);
                     var false_sp = saved_sp;
                     state.exit_kind = .falls_through;
                     if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
@@ -4452,6 +4533,7 @@ fn compileInstructions(
                         flushToPhysicalStack(state, saved_stack, false_sp);
                         const end_false = c._ir_END(ctx);
                         c._ir_MERGE_2(ctx, end_true, end_false);
+                        state.recordBlockStart(ctx.unnamed_0.control);
                         if (!symbolicShapeMatches(stack, sp.*, saved_stack, false_sp)) return IrCodegenError.StackShapeMismatch;
                         if (state.refresh_stack_fn != c.IR_UNUSED) {
                             refreshCachedStackPointer(state);
@@ -4592,6 +4674,7 @@ fn compileInstructions(
                     const entry_end = c._ir_END(ctx);
 
                     const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+                    state.recordBlockStart(loop_ref);
                     const counter_phi = c._ir_PHI_2(ctx, c.IR_I64, initial_n, c.IR_UNUSED);
 
                     switch (quot_entry) {
@@ -4658,6 +4741,7 @@ fn compileInstructions(
 
                     const entry_end = c._ir_END(ctx);
                     const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+                    state.recordBlockStart(loop_ref);
                     // AOT loop back-edges can arrive after callbacks moved ctx.stack.items.
                     // Refresh at the header so predicate slot accesses use the live base.
                     if (state.aot_mode and state.refresh_stack_fn != c.IR_UNUSED) {
@@ -6109,8 +6193,11 @@ pub fn emitWordC(
         try emitEpilogue(&state, stack, sp, input_count, output_count);
     }
 
-    // emit as C source with stdint.h preamble
-    const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator);
+    // emit as C source with stdint.h preamble. The JIT path does
+    // not need #line directives, so no source-lines table is
+    // installed; the patched ir_emit_c.c falls back to its
+    // no-source-info behavior.
+    const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator, null);
     errdefer allocator.free(body);
 
     const preamble =
@@ -6157,8 +6244,9 @@ pub fn emitWordCAot(
     aot_fallback_report_out: ?*AotFallbackReportBuilder,
     slot_maps: ?*const AotImageSlotMaps,
     emit_slot_table_literals: bool,
+    source_file: ?[]const u8,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -6187,15 +6275,16 @@ fn emitWordCAotWithCName(
     aot_fallback_report_out: ?*AotFallbackReportBuilder,
     slot_maps: ?*const AotImageSlotMaps,
     emit_slot_table_literals: bool,
+    source_file: ?[]const u8,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -6231,6 +6320,7 @@ fn emitWordCAotPass(
     aot_fallback_report_out: ?*AotFallbackReportBuilder,
     slot_maps: ?*const AotImageSlotMaps,
     emit_slot_table_literals: bool,
+    source_file: ?[]const u8,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
@@ -6493,11 +6583,13 @@ fn emitWordCAotPass(
         .aot_emit_slot_table_literals = emit_slot_table_literals,
         .peak_sp = @intCast(input_count),
         .stack_effect = stack_effect,
+        .source_file = source_file,
         .quotation_slots = buildQuotationSlotMap(stack_effect) orelse {
             if (nc_reason_out) |ro| ro.* = .quotation_slot_overflow;
             return IrCodegenError.NotCompilable;
         },
     };
+    defer state.source_line_entries.deinit(allocator);
 
     // Self-tail-call detection for AOT
     if (self_name) |sn| {
@@ -6553,7 +6645,36 @@ fn emitWordCAotPass(
         return .{ .body = null, .peak_stack_depth = state.peak_sp };
     }
 
-    const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator);
+    // Build the source-lines side table for the patched `ir_emit_c.c` so
+    // it can emit `#line` directives at control-flow boundaries. The
+    // entries list is sorted by ref ascending; the C side does a binary
+    // search. Skipped when no entries were recorded or the source file
+    // is unknown -- the magic-tag check in the patched emitter then
+    // leaves the no-source-info behavior unchanged.
+    var source_file_zbuf: ?[:0]u8 = null;
+    defer if (source_file_zbuf) |zb| allocator.free(zb);
+    var source_lines_value: IrCSourceLines = undefined;
+    var source_lines_ptr: ?*const anyopaque = null;
+    if (source_file) |sf| {
+        if (state.source_line_entries.items.len > 0) {
+            std.mem.sort(LineEntry, state.source_line_entries.items, {}, struct {
+                fn lessThan(_: void, a: LineEntry, b: LineEntry) bool {
+                    return a.ref < b.ref;
+                }
+            }.lessThan);
+            const zbuf = try allocator.dupeZ(u8, sf);
+            source_file_zbuf = zbuf;
+            source_lines_value = .{
+                .magic = ir_c_source_lines_magic,
+                .file = zbuf.ptr,
+                .entries = state.source_line_entries.items.ptr,
+                .entries_count = @intCast(state.source_line_entries.items.len),
+            };
+            source_lines_ptr = @ptrCast(&source_lines_value);
+        }
+    }
+
+    const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator, source_lines_ptr);
     return .{ .body = body, .peak_stack_depth = state.peak_sp };
 }
 
@@ -6918,6 +7039,7 @@ pub fn emitProgramC(
             null,
             slot_maps_ptr,
             emit_slot_table_literals,
+            w.source_file,
         ) catch |err| {
             if (reason) |r| {
                 try failure_reasons.put(allocator, w.name, r);
@@ -6958,6 +7080,7 @@ pub fn emitProgramC(
             null,
             slot_maps_ptr,
             emit_slot_table_literals,
+            q.source_file,
         ) catch continue;
         allocator.free(trial);
         try compilable_quotation_ids.put(allocator, q.quotation_id, {});
@@ -7022,6 +7145,7 @@ pub fn emitProgramC(
             &aot_fallback_builder,
             slot_maps_ptr,
             emit_slot_table_literals,
+            w.source_file,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -7064,6 +7188,7 @@ pub fn emitProgramC(
             &aot_fallback_builder,
             slot_maps_ptr,
             emit_slot_table_literals,
+            q.source_file,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -11472,6 +11597,7 @@ test "emitWordCAot emits named callback for safepoint" {
         null,
         null,
         false,
+        null,
     ) catch |err| {
         // times requires a quotation on stack which we don't have in this
         // minimal test -- NotCompilable is expected. Skip this test case
@@ -11514,6 +11640,7 @@ test "emitWordCAot basic arithmetic" {
         null,
         null,
         false,
+        null,
     );
     defer testing.allocator.free(source);
 
@@ -11553,6 +11680,7 @@ test "emitWordCAot quotation call emits code_ptr dispatch" {
         null,
         null,
         false,
+        null,
     ) catch |err| {
         if (err == error.NotCompilable) return;
         return err;

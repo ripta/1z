@@ -1,9 +1,28 @@
 \ Fixture exercised by `make aot-line-directives-check` to verify that
 \ AOT-emitted C carries `#line` directives at word and quotation
-\ function entries. The user word and inline quotation below are the
-\ minimum surface needed for the assertion script.
+\ function entries plus refinements at control-flow boundaries inside
+\ word bodies (`if` arms, loop bodies).
 
 double: ( n -- n ) [ 2 * ] ;
 
 5 double .
 3 [ "tick" print-line ] times
+
+\ Multi-line `if` to exercise control-flow boundary directives. Each arm
+\ is on its own source line so `#line` directives at IF_TRUE / IF_FALSE
+\ block starts are visibly distinct from the per-function entry directive.
+abs: ( n -- n ) [
+  dup 0 <
+  [ -1 * ]
+  [ 0 + ]
+  if
+] ;
+
+7 abs .
+
+\ Multi-line loop body so the loop-body `#line` directive points at the
+\ first body instruction (`"loop-a" print-line`), not at the `[` opener.
+2 [
+  "loop-a" print-line
+  "loop-b" print-line
+] times

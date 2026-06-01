@@ -15,10 +15,51 @@ static const char *ir_type_tname[IR_LAST_TYPE] = {
 	IR_TYPES(IR_TYPE_TNAME)
 };
 
+/* Optional side table installed via ctx->data before ir_emit_c() is
+ * called. Maps block-start ir_ref values to source-file line numbers
+ * so #line directives can be emitted at control-flow boundaries
+ * inside word bodies. The magic tag is checked at use time so that
+ * other callers leaving ctx->data null or carrying unrelated pointers
+ * are unaffected.
+ */
+#define IR_C_SOURCE_LINES_MAGIC 0x315A4C53u /* "1ZLS" */
+
+typedef struct _ir_c_line_entry {
+	uint32_t ref;
+	uint32_t line;
+} ir_c_line_entry;
+
+typedef struct _ir_c_source_lines {
+	uint32_t                 magic;
+	const char              *file;
+	const ir_c_line_entry   *entries;
+	uint32_t                 entries_count;
+} ir_c_source_lines;
+
 typedef struct _ir_c_backend_data {
-	const char        *func_name;
-	bool               resolved_label_syms;
+	const char              *func_name;
+	bool                     resolved_label_syms;
+	const ir_c_source_lines *source_lines;
 } ir_c_backend_data;
+
+/* Binary-search the sorted entries table for a block-start ir_ref. */
+static const ir_c_line_entry *ir_c_lookup_source_line(const ir_c_source_lines *src, uint32_t ref)
+{
+	uint32_t lo = 0;
+	uint32_t hi = src->entries_count;
+	while (lo < hi) {
+		uint32_t mid = lo + (hi - lo) / 2;
+		uint32_t entry_ref = src->entries[mid].ref;
+		if (entry_ref == ref) {
+			return &src->entries[mid];
+		} else if (entry_ref < ref) {
+			lo = mid + 1;
+		} else {
+			hi = mid;
+		}
+	}
+	return NULL;
+}
 
 static int ir_add_tmp_type(ir_ctx *ctx, uint8_t type, ir_ref from, ir_ref to, void *data)
 {
@@ -821,9 +862,14 @@ static int ir_emit_func(ir_ctx *ctx, const char *name, FILE *f)
 	uint32_t _b, b, target, prev = 0;
 	ir_block *bb;
 	ir_c_backend_data data;
+	const ir_c_source_lines *incoming_source_lines = (const ir_c_source_lines *)ctx->data;
 
 	data.func_name = name;
 	data.resolved_label_syms = 0;
+	data.source_lines = (incoming_source_lines
+	                    && incoming_source_lines->magic == IR_C_SOURCE_LINES_MAGIC)
+	                  ? incoming_source_lines
+	                  : NULL;
 	ctx->data = &data;
 
 	/* Emit function prototype */
@@ -930,6 +976,27 @@ static int ir_emit_func(ir_ctx *ctx, const char *name, FILE *f)
 		IR_ASSERT(!(bb->flags & IR_BB_UNREACHABLE));
 		if ((bb->flags & (IR_BB_START|IR_BB_ENTRY|IR_BB_EMPTY)) == IR_BB_EMPTY) {
 			continue;
+		}
+		/* Emit #line directives at control-flow boundaries. The
+		 * source-lines side table is installed via ctx->data by
+		 * 1z's AOT codegen; other callers leave it null and skip
+		 * this path.
+		 */
+		if (data.source_lines) {
+			uint8_t start_op = ctx->ir_base[bb->start].op;
+			if (start_op == IR_IF_TRUE
+			 || start_op == IR_IF_FALSE
+			 || start_op == IR_CASE_VAL
+			 || start_op == IR_CASE_RANGE
+			 || start_op == IR_CASE_DEFAULT
+			 || start_op == IR_LOOP_BEGIN
+			 || start_op == IR_MERGE
+			 || (start_op == IR_BEGIN && ctx->ir_base[bb->start].op2)) {
+				const ir_c_line_entry *e = ir_c_lookup_source_line(data.source_lines, (uint32_t)bb->start);
+				if (e != NULL) {
+					fprintf(f, "#line %u \"%s\"\n", e->line, data.source_lines->file);
+				}
+			}
 		}
 		if (bb->predecessors_count > 1
 		 || (bb->predecessors_count == 1 && ctx->cfg_edges[bb->predecessors] != prev)
