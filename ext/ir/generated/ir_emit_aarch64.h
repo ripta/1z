@@ -3454,6 +3454,7 @@ int ir_get_target_constraints(ir_ctx *ctx, ir_ref ref, ir_target_constraints *co
 	int flags = IR_USE_MUST_BE_IN_REG | IR_OP1_MUST_BE_IN_REG | IR_OP2_MUST_BE_IN_REG | IR_OP3_MUST_BE_IN_REG;
 	const ir_proto_t *proto;
 	const ir_call_conv_dsc *cc;
+	ir_ref next;
 
 	constraints->def_reg = IR_REG_NONE;
 	constraints->hints_count = 0;
@@ -3614,11 +3615,13 @@ int ir_get_target_constraints(ir_ctx *ctx, ir_ref ref, ir_target_constraints *co
 				constraints->tmp_regs[0] = IR_TMP_REG(1, IR_ADDR, IR_LOAD_SUB_REF, IR_DEF_SUB_REF);
 				n = 1;
 			}
-			if (IR_IS_CONST_REF(insn->op2) && insn->op1 != insn->op2) {
-				insn = &ctx->ir_base[insn->op2];
-				if (IR_IS_SYM_CONST(insn->op) || !aarch64_may_encode_imm12(insn->val.u64)) {
-					constraints->tmp_regs[n] = IR_TMP_REG(2, insn->type, IR_LOAD_SUB_REF, IR_DEF_SUB_REF);
-					n++;
+			if (IR_IS_CONST_REF(insn->op2)) {
+				if (insn->op1 != insn->op2) {
+					insn = &ctx->ir_base[insn->op2];
+					if (IR_IS_SYM_CONST(insn->op) || !aarch64_may_encode_imm12(insn->val.u64)) {
+						constraints->tmp_regs[n] = IR_TMP_REG(2, insn->type, IR_LOAD_SUB_REF, IR_DEF_SUB_REF);
+						n++;
+					}
 				}
 			} else if (ir_rule(ctx, insn->op2) == IR_STATIC_ALLOCA) {
 				constraints->tmp_regs[n] = IR_TMP_REG(2, IR_ADDR, IR_LOAD_SUB_REF, IR_DEF_SUB_REF);
@@ -3730,19 +3733,6 @@ get_arg_hints:
 			}
 			flags = IR_USE_SHOULD_BE_IN_REG | IR_OP2_MUST_BE_IN_REG | IR_OP3_SHOULD_BE_IN_REG;
 			break;
-		case IR_IGOTO:
-			insn = &ctx->ir_base[ref];
-			if (ctx->ir_base[insn->op1].op == IR_MERGE || ctx->ir_base[insn->op1].op == IR_LOOP_BEGIN) {
-				ir_insn *merge = &ctx->ir_base[insn->op1];
-				ir_ref *p, n = merge->inputs_count;
-
-				for (p = merge->ops + 1; n > 0; p++, n--) {
-					ir_ref input = *p;
-					IR_ASSERT(ctx->ir_base[input].op == IR_END || ctx->ir_base[input].op == IR_LOOP_END);
-					ctx->rules[input] = IR_IGOTO_DUP;
-				}
-			}
-			return insn->op;
 		case IR_COND:
 			insn = &ctx->ir_base[ref];
 			n = 0;
@@ -3772,7 +3762,7 @@ get_arg_hints:
 			break;
 		case IR_PARAM:
 			constraints->def_reg = ir_get_param_reg(ctx, ref);
-			flags = 0;
+			flags = (constraints->def_reg != IR_REG_NONE) ? IR_USE_SHOULD_BE_IN_REG : 0;
 			break;
 		case IR_PI:
 		case IR_PHI:
@@ -3803,6 +3793,10 @@ get_arg_hints:
 			break;
 		case IR_SNAPSHOT:
 			flags = 0;
+			next = ir_next_control(ctx, ref);
+			if (ctx->ir_base[next].op == IR_GUARD || ctx->ir_base[next].op == IR_GUARD_NOT) {
+				flags = IR_EXTEND_INPUTS_TO_NEXT;
+			}
 			break;
 		case IR_VA_START:
 			flags = IR_OP2_MUST_BE_IN_REG;
@@ -4139,6 +4133,19 @@ binop_fp:
 			}
 			ctx->flags2 |= IR_HAS_CALLS;
 			return IR_CALL;
+		case IR_IGOTO:
+			insn = &ctx->ir_base[ref];
+			if (ctx->ir_base[insn->op1].op == IR_MERGE || ctx->ir_base[insn->op1].op == IR_LOOP_BEGIN) {
+				ir_insn *merge = &ctx->ir_base[insn->op1];
+				ir_ref *p, n = merge->inputs_count;
+
+				for (p = merge->ops + 1; n > 0; p++, n--) {
+					ir_ref input = *p;
+					IR_ASSERT(ctx->ir_base[input].op == IR_END || ctx->ir_base[input].op == IR_LOOP_END);
+					ctx->rules[input] = IR_IGOTO_DUP;
+				}
+			}
+			return insn->op;
 		case IR_VAR:
 			return IR_STATIC_ALLOCA;
 		case IR_PARAM:
@@ -4251,10 +4258,6 @@ binop_fp:
 			if (!IR_IS_CONST_REF(insn->op2) && (ctx->use_lists[insn->op2].count == 1 || all_usages_are_fusable(ctx, insn->op2))) {
 				op2_insn = &ctx->ir_base[insn->op2];
 				if (op2_insn->op >= IR_EQ && op2_insn->op <= IR_UNORDERED) {
-					// TODO: register allocator may clobber operands of CMP before they are used in the GUARD_CMP
-//???				 && (insn->op2 == ref - 1 ||
-//???				     (insn->op2 == ctx->prev_ref[ref] - 1
-//???				   && ctx->ir_base[ctx->prev_ref[ref]].op == IR_SNAPSHOT))) {
 					if (IR_IS_TYPE_INT(ctx->ir_base[op2_insn->op1].type)) {
 						ctx->rules[insn->op2] = IR_FUSED | IR_CMP_INT;
 						return IR_GUARD_CMP_INT;
@@ -4316,6 +4319,12 @@ binop_fp:
 		case IR_ARGVAL:
 			return IR_FUSED | IR_ARGVAL;
 		case IR_NOP:
+			return IR_SKIPPED | IR_NOP;
+		case IR_ASM:
+		case IR_ASM_OUT:
+		case IR_ASM_GOTO:
+			fprintf(stderr, "ERROR: IR_ASM is not implemented yet\n");
+			exit(1);
 			return IR_SKIPPED | IR_NOP;
 		default:
 			break;
@@ -4412,91 +4421,91 @@ static void ir_emit_load_imm_int(ir_ctx *ctx, ir_type type, ir_reg reg, int64_t 
 			if (reg != IR_REG_ZR) {
 				//|	mov Rx(reg), xzr
 				dasm_put(Dst, 0, (reg));
-#line 1362 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1371 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else if (((uint64_t)(val)) <= 0xffff) {
 			//|	movz Rx(reg), #((uint64_t)(val))
 			dasm_put(Dst, 3, (reg), ((uint64_t)(val)));
-#line 1365 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1374 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (~((uint64_t)(val)) <= 0xffff) {
 			//|	movn Rx(reg), #(~((uint64_t)(val)))
 			dasm_put(Dst, 7, (reg), (~((uint64_t)(val))));
-#line 1367 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1376 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if ((uint64_t)(val) & 0xffff) {
 			//|	movz Rx(reg), #((uint64_t)(val) & 0xffff)
 			dasm_put(Dst, 11, (reg), ((uint64_t)(val) & 0xffff));
-#line 1369 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1378 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			if (((uint64_t)(val) >> 16) & 0xffff) {
 				//|	movk Rx(reg), #(((uint64_t)(val) >> 16) & 0xffff), lsl #16
 				dasm_put(Dst, 15, (reg), (((uint64_t)(val) >> 16) & 0xffff));
-#line 1371 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1380 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			if (((uint64_t)(val) >> 32) & 0xffff) {
 				//|	movk Rx(reg), #(((uint64_t)(val) >> 32) & 0xffff), lsl #32
 				dasm_put(Dst, 19, (reg), (((uint64_t)(val) >> 32) & 0xffff));
-#line 1374 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1383 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			if ((((uint64_t)(val) >> 48) & 0xffff)) {
 				//|	movk Rx(reg), #(((uint64_t)(val) >> 48) & 0xffff), lsl #48
 				dasm_put(Dst, 23, (reg), (((uint64_t)(val) >> 48) & 0xffff));
-#line 1377 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1386 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else if (((uint64_t)(val) >> 16) & 0xffff) {
 			//|	movz Rx(reg), #(((uint64_t)(val) >> 16) & 0xffff), lsl #16
 			dasm_put(Dst, 27, (reg), (((uint64_t)(val) >> 16) & 0xffff));
-#line 1380 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1389 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			if (((uint64_t)(val) >> 32) & 0xffff) {
 				//|	movk Rx(reg), #(((uint64_t)(val) >> 32) & 0xffff), lsl #32
 				dasm_put(Dst, 31, (reg), (((uint64_t)(val) >> 32) & 0xffff));
-#line 1382 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1391 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			if ((((uint64_t)(val) >> 48) & 0xffff)) {
 				//|	movk Rx(reg), #(((uint64_t)(val) >> 48) & 0xffff), lsl #48
 				dasm_put(Dst, 35, (reg), (((uint64_t)(val) >> 48) & 0xffff));
-#line 1385 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1394 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else if (((uint64_t)(val) >> 32) & 0xffff) {
 				//|	movz Rx(reg), #(((uint64_t)(val) >> 32) & 0xffff), lsl #32
 				dasm_put(Dst, 39, (reg), (((uint64_t)(val) >> 32) & 0xffff));
-#line 1388 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1397 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			if ((((uint64_t)(val) >> 48) & 0xffff)) {
 				//|	movk Rx(reg), #(((uint64_t)(val) >> 48) & 0xffff), lsl #48
 				dasm_put(Dst, 43, (reg), (((uint64_t)(val) >> 48) & 0xffff));
-#line 1390 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1399 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			//|	movz Rx(reg), #(((uint64_t)(val) >> 48) & 0xffff), lsl #48
 			dasm_put(Dst, 47, (reg), (((uint64_t)(val) >> 48) & 0xffff));
-#line 1393 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1402 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else {
 		if (val == 0) {
 			if (reg != IR_REG_ZR) {
 				//|	mov Rw(reg), wzr
 				dasm_put(Dst, 51, (reg));
-#line 1398 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1407 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else if (((uint64_t)(val)) <= 0xffff) {
 			//|	movz Rw(reg), #((uint64_t)(val))
 			dasm_put(Dst, 54, (reg), ((uint64_t)(val)));
-#line 1401 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1410 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (~((uint64_t)(val)) <= 0xffff) {
 			//|	movn Rw(reg), #(~((uint64_t)(val)))
 			dasm_put(Dst, 58, (reg), (~((uint64_t)(val))));
-#line 1403 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1412 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if ((uint64_t)(val) & 0xffff) {
 			//|	movz Rw(reg), #((uint64_t)(val) & 0xffff)
 			dasm_put(Dst, 62, (reg), ((uint64_t)(val) & 0xffff));
-#line 1405 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1414 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			if (((uint64_t)(val) >> 16) & 0xffff) {
 				//|	movk Rw(reg), #(((uint64_t)(val) >> 16) & 0xffff), lsl #16
 				dasm_put(Dst, 66, (reg), (((uint64_t)(val) >> 16) & 0xffff));
-#line 1407 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1416 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else if (((uint64_t)(val) >> 16) & 0xffff) {
 			//|	movz Rw(reg), #(((uint64_t)(val) >> 16) & 0xffff), lsl #16
 			dasm_put(Dst, 70, (reg), (((uint64_t)(val) >> 16) & 0xffff));
-#line 1410 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1419 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 }
@@ -4517,33 +4526,33 @@ static void ir_emit_load_mem_int(ir_ctx *ctx, ir_type type, ir_reg reg, ir_mem m
 				case 8:
 					//|	ldr Rx(reg), [Rx(base_reg), #offset]
 					dasm_put(Dst, 74, (reg), (base_reg), offset);
-#line 1429 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1438 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					break;
 				case 4:
 					//|	ldr Rw(reg), [Rx(base_reg), #offset]
 					dasm_put(Dst, 79, (reg), (base_reg), offset);
-#line 1432 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1441 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					break;
 				case 2:
 					if (IR_IS_TYPE_SIGNED(type)) {
 						//|	ldrsh Rw(reg), [Rx(base_reg), #offset]
 						dasm_put(Dst, 84, (reg), (base_reg), offset);
-#line 1436 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1445 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					} else {
 						//|	ldrh Rw(reg), [Rx(base_reg), #offset]
 						dasm_put(Dst, 89, (reg), (base_reg), offset);
-#line 1438 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1447 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					}
 					break;
 				case 1:
 					if (IR_IS_TYPE_SIGNED(type)) {
 						//|	ldrsb Rw(reg), [Rx(base_reg), #offset]
 						dasm_put(Dst, 94, (reg), (base_reg), offset);
-#line 1443 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1452 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					} else {
 						//|	ldrb Rw(reg), [Rx(base_reg), #offset]
 						dasm_put(Dst, 99, (reg), (base_reg), offset);
-#line 1445 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1454 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					}
 					break;
 			}
@@ -4563,33 +4572,33 @@ static void ir_emit_load_mem_int(ir_ctx *ctx, ir_type type, ir_reg reg, ir_mem m
 		case 8:
 			//|	ldr Rx(reg), [Rx(base_reg), Rx(index_reg)]
 			dasm_put(Dst, 104, (reg), (base_reg), (index_reg));
-#line 1463 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1472 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case 4:
 			//|	ldr Rw(reg), [Rx(base_reg), Rx(index_reg)]
 			dasm_put(Dst, 109, (reg), (base_reg), (index_reg));
-#line 1466 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1475 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case 2:
 			if (IR_IS_TYPE_SIGNED(type)) {
 				//|	ldrsh Rw(reg), [Rx(base_reg), Rx(index_reg)]
 				dasm_put(Dst, 114, (reg), (base_reg), (index_reg));
-#line 1470 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1479 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	ldrh Rw(reg), [Rx(base_reg), Rx(index_reg)]
 				dasm_put(Dst, 119, (reg), (base_reg), (index_reg));
-#line 1472 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1481 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 		case 1:
 			if (IR_IS_TYPE_SIGNED(type)) {
 				//|	ldrsb Rw(reg), [Rx(base_reg), Rx(index_reg)]
 				dasm_put(Dst, 124, (reg), (base_reg), (index_reg));
-#line 1477 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1486 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	ldrb Rw(reg), [Rx(base_reg), Rx(index_reg)]
 				dasm_put(Dst, 129, (reg), (base_reg), (index_reg));
-#line 1479 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1488 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 	}
@@ -4605,22 +4614,22 @@ static void ir_emit_load_imm_fp(ir_ctx *ctx, ir_type type, ir_reg reg, ir_ref sr
 	if (type == IR_FLOAT && insn->val.u32 == 0) {
 		//|	fmov Rs(reg-IR_REG_FP_FIRST), wzr
 		dasm_put(Dst, 134, (reg-IR_REG_FP_FIRST));
-#line 1493 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1502 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else if (type == IR_DOUBLE && insn->val.u64 == 0) {
 		//|	fmov Rd(reg-IR_REG_FP_FIRST), xzr
 		dasm_put(Dst, 137, (reg-IR_REG_FP_FIRST));
-#line 1495 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1504 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		label = ir_get_const_label(ctx, src);
 		if (type == IR_DOUBLE) {
 			//|	ldr Rd(reg-IR_REG_FP_FIRST), =>label
 			dasm_put(Dst, 140, (reg-IR_REG_FP_FIRST), label);
-#line 1499 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1508 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			IR_ASSERT(type == IR_FLOAT);
 			//|	ldr Rs(reg-IR_REG_FP_FIRST), =>label
 			dasm_put(Dst, 144, (reg-IR_REG_FP_FIRST), label);
-#line 1502 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1511 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 }
@@ -4638,12 +4647,12 @@ static void ir_emit_load_mem_fp(ir_ctx *ctx, ir_type type, ir_reg reg, ir_mem me
 			if (type == IR_DOUBLE) {
 				//|	ldr Rd(reg-IR_REG_FP_FIRST), [Rx(base_reg), #offset]
 				dasm_put(Dst, 148, (reg-IR_REG_FP_FIRST), (base_reg), offset);
-#line 1518 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1527 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(type == IR_FLOAT);
 				//|	ldr Rs(reg-IR_REG_FP_FIRST), [Rx(base_reg), #offset]
 				dasm_put(Dst, 153, (reg-IR_REG_FP_FIRST), (base_reg), offset);
-#line 1521 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1530 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			index_reg = IR_REG_INT_TMP; /* reserved temporary register */
@@ -4658,12 +4667,12 @@ static void ir_emit_load_mem_fp(ir_ctx *ctx, ir_type type, ir_reg reg, ir_mem me
 	if (type == IR_DOUBLE) {
 		//|	ldr Rd(reg-IR_REG_FP_FIRST), [Rx(base_reg), Rx(index_reg)]
 		dasm_put(Dst, 158, (reg-IR_REG_FP_FIRST), (base_reg), (index_reg));
-#line 1534 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1543 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		IR_ASSERT(type == IR_FLOAT);
 		//|	ldr Rs(reg-IR_REG_FP_FIRST), [Rx(base_reg), Rx(index_reg)]
 		dasm_put(Dst, 163, (reg-IR_REG_FP_FIRST), (base_reg), (index_reg));
-#line 1537 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1546 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -4699,12 +4708,12 @@ static void ir_load_local_addr(ir_ctx *ctx, ir_reg reg, ir_ref src)
 	if (aarch64_may_encode_imm12(offset)) {
 		//|	add Rx(reg), Rx(base), #offset
 		dasm_put(Dst, 168, (reg), (base), offset);
-#line 1571 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1580 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 		//|	add Rx(reg), Rx(base), Rx(IR_REG_INT_TMP)
 		dasm_put(Dst, 173, (reg), (base), (IR_REG_INT_TMP));
-#line 1574 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1583 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -4739,7 +4748,7 @@ static void ir_emit_load_label_addr(ir_ctx *ctx, ir_reg reg, ir_insn *label)
 	b = ir_skip_empty_target_blocks(ctx, b);
 	//|	adr Rx(reg), =>b
 	dasm_put(Dst, 178, (reg), b);
-#line 1607 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1616 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 }
 
 static void ir_emit_load(ir_ctx *ctx, ir_type type, ir_reg reg, ir_ref src)
@@ -4759,7 +4768,7 @@ static void ir_emit_load(ir_ctx *ctx, ir_type type, ir_reg reg, ir_ref src)
 
 				//|	adr Rx(reg), =>label
 				dasm_put(Dst, 182, (reg), label);
-#line 1625 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1634 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (insn->op == IR_LABEL) {
 				ir_emit_load_label_addr(ctx, reg, insn);
 			} else {
@@ -4792,22 +4801,22 @@ static void ir_emit_store_mem_int(ir_ctx *ctx, ir_type type, ir_mem mem, ir_reg 
 				case 8:
 					//|	str Rx(reg), [Rx(base_reg), #offset]
 					dasm_put(Dst, 186, (reg), (base_reg), offset);
-#line 1656 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1665 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					break;
 				case 4:
 					//|	str Rw(reg), [Rx(base_reg), #offset]
 					dasm_put(Dst, 191, (reg), (base_reg), offset);
-#line 1659 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1668 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					break;
 				case 2:
 					//|	strh Rw(reg), [Rx(base_reg), #offset]
 					dasm_put(Dst, 196, (reg), (base_reg), offset);
-#line 1662 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1671 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					break;
 				case 1:
 					//|	strb Rw(reg), [Rx(base_reg), #offset]
 					dasm_put(Dst, 201, (reg), (base_reg), offset);
-#line 1665 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1674 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					break;
 			}
 			return;
@@ -4826,22 +4835,22 @@ static void ir_emit_store_mem_int(ir_ctx *ctx, ir_type type, ir_mem mem, ir_reg 
 		case 8:
 			//|	str Rx(reg), [Rx(base_reg), Rx(index_reg)]
 			dasm_put(Dst, 206, (reg), (base_reg), (index_reg));
-#line 1682 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1691 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case 4:
 			//|	str Rw(reg), [Rx(base_reg), Rx(index_reg)]
 			dasm_put(Dst, 211, (reg), (base_reg), (index_reg));
-#line 1685 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1694 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case 2:
 			//|	strh Rw(reg), [Rx(base_reg), Rx(index_reg)]
 			dasm_put(Dst, 216, (reg), (base_reg), (index_reg));
-#line 1688 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1697 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case 1:
 			//|	strb Rw(reg), [Rx(base_reg), Rx(index_reg)]
 			dasm_put(Dst, 221, (reg), (base_reg), (index_reg));
-#line 1691 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1700 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 	}
 }
@@ -4859,12 +4868,12 @@ static void ir_emit_store_mem_fp(ir_ctx *ctx, ir_type type, ir_mem mem, ir_reg r
 			if (type == IR_DOUBLE) {
 				//|	str Rd(reg-IR_REG_FP_FIRST), [Rx(base_reg), #offset]
 				dasm_put(Dst, 226, (reg-IR_REG_FP_FIRST), (base_reg), offset);
-#line 1707 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1716 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(type == IR_FLOAT);
 				//|	str Rs(reg-IR_REG_FP_FIRST), [Rx(base_reg), #offset]
 				dasm_put(Dst, 231, (reg-IR_REG_FP_FIRST), (base_reg), offset);
-#line 1710 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1719 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			index_reg = IR_REG_INT_TMP; /* reserved temporary register */
@@ -4879,12 +4888,12 @@ static void ir_emit_store_mem_fp(ir_ctx *ctx, ir_type type, ir_mem mem, ir_reg r
 	if (type == IR_DOUBLE) {
 		//|	str Rd(reg-IR_REG_FP_FIRST), [Rx(base_reg), Rx(index_reg)]
 		dasm_put(Dst, 236, (reg-IR_REG_FP_FIRST), (base_reg), (index_reg));
-#line 1723 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1732 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		IR_ASSERT(type == IR_FLOAT);
 		//|	str Rs(reg-IR_REG_FP_FIRST), [Rx(base_reg), Rx(index_reg)]
 		dasm_put(Dst, 241, (reg-IR_REG_FP_FIRST), (base_reg), (index_reg));
-#line 1726 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1735 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -4912,20 +4921,20 @@ static void ir_emit_mov(ir_ctx *ctx, ir_type type, ir_reg dst, ir_reg src)
 		if (dst == IR_REG_STACK_POINTER) {
 			//|	mov sp, Rx(src)
 			dasm_put(Dst, 246, (src));
-#line 1752 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1761 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (src == IR_REG_STACK_POINTER) {
 			//|	mov Rx(dst), sp
 			dasm_put(Dst, 249, (dst));
-#line 1754 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1763 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	mov Rx(dst), Rx(src)
 			dasm_put(Dst, 252, (dst), (src));
-#line 1756 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1765 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else {
 		//|	mov Rw(dst), Rw(src)
 		dasm_put(Dst, 256, (dst), (src));
-#line 1759 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1768 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -4937,11 +4946,11 @@ static void ir_emit_mov_ext(ir_ctx *ctx, ir_type type, ir_reg dst, ir_reg src)
 	if (ir_type_size[type] == 8) {
 		//|	mov Rx(dst), Rx(src)
 		dasm_put(Dst, 260, (dst), (src));
-#line 1769 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1778 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		//|	mov Rw(dst), Rw(src)
 		dasm_put(Dst, 264, (dst), (src));
-#line 1771 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1780 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 static void ir_emit_fp_mov(ir_ctx *ctx, ir_type type, ir_reg dst, ir_reg src)
@@ -4952,11 +4961,11 @@ static void ir_emit_fp_mov(ir_ctx *ctx, ir_type type, ir_reg dst, ir_reg src)
 	if (ir_type_size[type] == 8) {
 		//|	fmov Rd(dst-IR_REG_FP_FIRST), Rd(src-IR_REG_FP_FIRST)
 		dasm_put(Dst, 268, (dst-IR_REG_FP_FIRST), (src-IR_REG_FP_FIRST));
-#line 1780 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1789 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		//|	fmov Rs(dst-IR_REG_FP_FIRST), Rs(src-IR_REG_FP_FIRST)
 		dasm_put(Dst, 272, (dst-IR_REG_FP_FIRST), (src-IR_REG_FP_FIRST));
-#line 1782 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1791 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -4971,32 +4980,32 @@ static void ir_emit_prologue(ir_ctx *ctx)
 		if (aarch64_may_encode_imm7_addr_offset(offset, 8)) {
 			//|	stp x29, x30, [sp, #offset]!
 			dasm_put(Dst, 276, offset);
-#line 1795 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1804 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (aarch64_may_encode_imm12(ctx->stack_frame_size+16)) {
 			//|	sub sp, sp, #(ctx->stack_frame_size+16)
 			//|	stp x29, x30, [sp]
 			dasm_put(Dst, 279, (ctx->stack_frame_size+16));
-#line 1798 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1807 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, ctx->stack_frame_size+16);
 			//|	sub sp, sp, Rx(IR_REG_INT_TMP)
 			//|	stp x29, x30, [sp]
 			dasm_put(Dst, 283, (IR_REG_INT_TMP));
-#line 1802 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1811 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		//|	mov x29, sp
 		dasm_put(Dst, 287);
-#line 1804 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1813 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if (ctx->call_stack_size) {
 			if (aarch64_may_encode_imm12(ctx->call_stack_size)) {
 				//|	sub sp, sp, #(ctx->call_stack_size)
 				dasm_put(Dst, 289, (ctx->call_stack_size));
-#line 1807 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1816 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, ctx->call_stack_size);
 				//|	sub sp, sp, Rx(IR_REG_INT_TMP)
 				dasm_put(Dst, 292, (IR_REG_INT_TMP));
-#line 1810 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1819 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	} else if (ctx->stack_frame_size + ctx->call_stack_size) {
@@ -5005,12 +5014,12 @@ static void ir_emit_prologue(ir_ctx *ctx)
 		} else if (aarch64_may_encode_imm12(ctx->stack_frame_size + ctx->call_stack_size)) {
 			//|	sub sp, sp, #(ctx->stack_frame_size + ctx->call_stack_size)
 			dasm_put(Dst, 295, (ctx->stack_frame_size + ctx->call_stack_size));
-#line 1817 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1826 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, ctx->stack_frame_size + ctx->call_stack_size);
 			//|	sub sp, sp, Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 298, (IR_REG_INT_TMP));
-#line 1820 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1829 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 	if (ctx->used_preserved_regs) {
@@ -5035,19 +5044,19 @@ static void ir_emit_prologue(ir_ctx *ctx)
 					if (aarch64_may_encode_imm7_addr_offset(offset, 8)) {
 						//|	stp Rx(prev), Rx(i), [Rx(fp), #offset]
 						dasm_put(Dst, 301, (prev), (i), (fp), offset);
-#line 1843 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1852 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					} else if (aarch64_may_encode_addr_offset(offset + 8, 8)) {
 						//|	str Rx(prev), [Rx(fp), #offset]
 						//|	str Rx(i), [Rx(fp), #(offset+8)]
 						dasm_put(Dst, 307, (prev), (fp), offset, (i), (fp), (offset+8));
-#line 1846 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1855 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					} else {
 						ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 						//|	str Rx(prev), [Rx(fp), Rx(IR_REG_INT_TMP)]
 						//|	add Rx(IR_REG_INT_TMP), Rx(IR_REG_INT_TMP), #8
 						//|	str Rx(i), [Rx(fp), Rx(IR_REG_INT_TMP)]
 						dasm_put(Dst, 316, (prev), (fp), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (i), (fp), (IR_REG_INT_TMP));
-#line 1851 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1860 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					}
 					prev = IR_REG_NONE;
 				} else {
@@ -5056,11 +5065,11 @@ static void ir_emit_prologue(ir_ctx *ctx)
 						if (aarch64_may_encode_addr_offset(offset, 8)) {
 							//|	str Rx(prev), [Rx(fp), #offset]
 							dasm_put(Dst, 328, (prev), (fp), offset);
-#line 1858 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1867 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 							offset -= sizeof(void*);
 							//|	str Rd(i-IR_REG_FP_FIRST), [Rx(fp), #offset]
 							dasm_put(Dst, 333, (i-IR_REG_FP_FIRST), (fp), offset);
-#line 1860 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1869 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						} else {
 							ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 							offset -= sizeof(void*);
@@ -5068,26 +5077,26 @@ static void ir_emit_prologue(ir_ctx *ctx)
 							//|	sub Rx(IR_REG_INT_TMP), Rx(IR_REG_INT_TMP), #8
 							//|	str Rd(i-IR_REG_FP_FIRST), [Rx(fp), Rx(IR_REG_INT_TMP)]
 							dasm_put(Dst, 338, (prev), (fp), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (i-IR_REG_FP_FIRST), (fp), (IR_REG_INT_TMP));
-#line 1866 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1875 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						}
 					} else {
 						offset -= sizeof(void*) * 2;
 						if (aarch64_may_encode_imm7_addr_offset(offset, 8)) {
 							//|	stp Rd(prev-IR_REG_FP_FIRST), Rd(i-IR_REG_FP_FIRST), [Rx(fp), #offset]
 							dasm_put(Dst, 350, (prev-IR_REG_FP_FIRST), (i-IR_REG_FP_FIRST), (fp), offset);
-#line 1871 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1880 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						} else if (aarch64_may_encode_addr_offset(offset + 8, 8)) {
 							//|	str Rd(prev-IR_REG_FP_FIRST), [Rx(fp), #offset]
 							//|	str Rd(i-IR_REG_FP_FIRST), [Rx(fp), #(offset+8)]
 							dasm_put(Dst, 356, (prev-IR_REG_FP_FIRST), (fp), offset, (i-IR_REG_FP_FIRST), (fp), (offset+8));
-#line 1874 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1883 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						} else {
 							ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 							//|	str Rd(prev-IR_REG_FP_FIRST), [Rx(fp), Rx(IR_REG_INT_TMP)]
 							//|	add Rx(IR_REG_INT_TMP), Rx(IR_REG_INT_TMP), #8
 							//|	str Rd(i-IR_REG_FP_FIRST), [Rx(fp), Rx(IR_REG_INT_TMP)]
 							dasm_put(Dst, 365, (prev-IR_REG_FP_FIRST), (fp), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (i-IR_REG_FP_FIRST), (fp), (IR_REG_INT_TMP));
-#line 1879 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1888 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						}
 					}
 					prev = IR_REG_NONE;
@@ -5100,24 +5109,24 @@ static void ir_emit_prologue(ir_ctx *ctx)
 				if (aarch64_may_encode_addr_offset(offset, 8)) {
 					//|	str Rx(prev), [Rx(fp), #offset]
 					dasm_put(Dst, 377, (prev), (fp), offset);
-#line 1890 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1899 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 					//|	str Rx(prev), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 382, (prev), (fp), (IR_REG_INT_TMP));
-#line 1893 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1902 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			} else {
 				offset -= sizeof(void*);
 				if (aarch64_may_encode_addr_offset(offset, 8)) {
 					//|	str Rd(prev-IR_REG_FP_FIRST), [Rx(fp), #offset]
 					dasm_put(Dst, 387, (prev-IR_REG_FP_FIRST), (fp), offset);
-#line 1898 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1907 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 					//|	str Rd(prev-IR_REG_FP_FIRST), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 392, (prev-IR_REG_FP_FIRST), (fp), (IR_REG_INT_TMP));
-#line 1901 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1910 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			}
 		}
@@ -5150,19 +5159,19 @@ static void ir_emit_prologue(ir_ctx *ctx)
 						if (aarch64_may_encode_imm7_addr_offset(offset, 8)) {
 							//|	stp Rx(prev), Rx(cc->int_param_regs[i]), [Rx(fp), #offset]
 							dasm_put(Dst, 397, (prev), (cc->int_param_regs[i]), (fp), offset);
-#line 1932 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1941 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						} else if (aarch64_may_encode_addr_offset(offset + 8, 8)) {
 							//|	str Rx(prev), [Rx(fp), #offset]
 							//|	str Rx(cc->int_param_regs[i]), [Rx(fp), #(offset+8)]
 							dasm_put(Dst, 403, (prev), (fp), offset, (cc->int_param_regs[i]), (fp), (offset+8));
-#line 1935 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1944 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						} else {
 							ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 							//|	str Rx(prev), [Rx(fp), Rx(IR_REG_INT_TMP)]
 							//|	add Rx(IR_REG_INT_TMP), Rx(IR_REG_INT_TMP), #8
 							//|	str Rx(cc->int_param_regs[i]), [Rx(fp), Rx(IR_REG_INT_TMP)]
 							dasm_put(Dst, 412, (prev), (fp), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (cc->int_param_regs[i]), (fp), (IR_REG_INT_TMP));
-#line 1940 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1949 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						}
 						prev = IR_REG_NONE;
 						offset += sizeof(void*) * 2;
@@ -5174,12 +5183,12 @@ static void ir_emit_prologue(ir_ctx *ctx)
 					if (aarch64_may_encode_addr_offset(offset + 8, 8)) {
 						//|	str Rx(prev), [Rx(fp), #offset]
 						dasm_put(Dst, 424, (prev), (fp), offset);
-#line 1950 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1959 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					} else {
 						ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 						//|	str Rx(prev), [Rx(fp), Rx(IR_REG_INT_TMP)]
 						dasm_put(Dst, 429, (prev), (fp), (IR_REG_INT_TMP));
-#line 1953 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1962 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					}
 					offset += sizeof(void*);
 				}
@@ -5192,12 +5201,12 @@ static void ir_emit_prologue(ir_ctx *ctx)
 					if (aarch64_may_encode_addr_offset(offset, 8)) {
 						//|	str Rd(cc->fp_param_regs[i]-IR_REG_FP_FIRST), [Rx(fp), #offset]
 						dasm_put(Dst, 434, (cc->fp_param_regs[i]-IR_REG_FP_FIRST), (fp), offset);
-#line 1964 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1973 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					} else {
 						ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 						//|	str Rd(cc->fp_param_regs[i]-IR_REG_FP_FIRST), [Rx(fp), Rx(IR_REG_INT_TMP)]
 						dasm_put(Dst, 439, (cc->fp_param_regs[i]-IR_REG_FP_FIRST), (fp), (IR_REG_INT_TMP));
-#line 1967 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 1976 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					}
 					offset += 16;
 				}
@@ -5232,19 +5241,19 @@ static void ir_emit_epilogue(ir_ctx *ctx)
 					if (aarch64_may_encode_imm7_addr_offset(offset, 8)) {
 						//|	ldp Rx(prev), Rx(i), [Rx(fp), #offset]
 						dasm_put(Dst, 444, (prev), (i), (fp), offset);
-#line 2000 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2009 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					} else if (aarch64_may_encode_addr_offset(offset + 8, 8)) {
 						//|	ldr Rx(prev), [Rx(fp), #offset]
 						//|	ldr Rx(i), [Rx(fp), #(offset+8)]
 						dasm_put(Dst, 450, (prev), (fp), offset, (i), (fp), (offset+8));
-#line 2003 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2012 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					} else {
 						ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 						//|	ldr Rx(prev), [Rx(fp), Rx(IR_REG_INT_TMP)]
 						//|	add Rx(IR_REG_INT_TMP), Rx(IR_REG_INT_TMP), #8
 						//|	ldr Rx(i), [Rx(fp), Rx(IR_REG_INT_TMP)]
 						dasm_put(Dst, 459, (prev), (fp), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (i), (fp), (IR_REG_INT_TMP));
-#line 2008 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2017 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					}
 					prev = IR_REG_NONE;
 				} else {
@@ -5253,42 +5262,42 @@ static void ir_emit_epilogue(ir_ctx *ctx)
 						if (aarch64_may_encode_addr_offset(offset, 8)) {
 							//|	ldr Rx(prev), [Rx(fp), #offset]
 							dasm_put(Dst, 471, (prev), (fp), offset);
-#line 2015 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2024 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						} else {
 							ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 							//|	ldr Rx(prev), [Rx(fp), Rx(IR_REG_INT_TMP)]
 							dasm_put(Dst, 476, (prev), (fp), (IR_REG_INT_TMP));
-#line 2018 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2027 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						}
 						offset -= sizeof(void*);
 						if (aarch64_may_encode_addr_offset(offset, 8)) {
 							//|	ldr Rd(i-IR_REG_FP_FIRST), [Rx(fp), #offset]
 							dasm_put(Dst, 481, (i-IR_REG_FP_FIRST), (fp), offset);
-#line 2022 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2031 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						} else {
 							ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 							//|	ldr Rd(i-IR_REG_FP_FIRST), [Rx(fp), Rx(IR_REG_INT_TMP)]
 							dasm_put(Dst, 486, (i-IR_REG_FP_FIRST), (fp), (IR_REG_INT_TMP));
-#line 2025 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2034 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						}
 					} else {
 						offset -= sizeof(void*) * 2;
 						if (aarch64_may_encode_imm7_addr_offset(offset, 8)) {
 							//|	ldp Rd(prev-IR_REG_FP_FIRST), Rd(i-IR_REG_FP_FIRST), [Rx(fp), #offset]
 							dasm_put(Dst, 491, (prev-IR_REG_FP_FIRST), (i-IR_REG_FP_FIRST), (fp), offset);
-#line 2030 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2039 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						} else if (aarch64_may_encode_addr_offset(offset + 8, 8)) {
 							//|	ldr Rd(prev-IR_REG_FP_FIRST), [Rx(fp), #offset]
 							//|	ldr Rd(i-IR_REG_FP_FIRST), [Rx(fp), #(offset+8)]
 							dasm_put(Dst, 497, (prev-IR_REG_FP_FIRST), (fp), offset, (i-IR_REG_FP_FIRST), (fp), (offset+8));
-#line 2033 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2042 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						} else {
 							ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 							//|	ldr Rx(prev-IR_REG_FP_FIRST), [Rx(fp), Rx(IR_REG_INT_TMP)]
 							//|	add Rx(IR_REG_INT_TMP), Rx(IR_REG_INT_TMP), #8
 							//|	ldr Rx(i-IR_REG_FP_FIRST), [Rx(fp), Rx(IR_REG_INT_TMP)]
 							dasm_put(Dst, 506, (prev-IR_REG_FP_FIRST), (fp), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (i-IR_REG_FP_FIRST), (fp), (IR_REG_INT_TMP));
-#line 2038 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2047 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						}
 					}
 					prev = IR_REG_NONE;
@@ -5301,24 +5310,24 @@ static void ir_emit_epilogue(ir_ctx *ctx)
 				if (aarch64_may_encode_addr_offset(offset, 8)) {
 					//|	ldr Rx(prev), [Rx(fp), #offset]
 					dasm_put(Dst, 518, (prev), (fp), offset);
-#line 2049 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2058 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 					//|	ldr Rx(prev), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 523, (prev), (fp), (IR_REG_INT_TMP));
-#line 2052 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2061 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			} else {
 				offset -= sizeof(void*);
 				if (aarch64_may_encode_addr_offset(offset, 8)) {
 					//|	ldr Rd(prev-IR_REG_FP_FIRST), [Rx(fp), #offset]
 					dasm_put(Dst, 528, (prev-IR_REG_FP_FIRST), (fp), offset);
-#line 2057 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2066 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 					//|	ldr Rd(prev-IR_REG_FP_FIRST), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 533, (prev-IR_REG_FP_FIRST), (fp), (IR_REG_INT_TMP));
-#line 2060 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2069 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			}
 		}
@@ -5328,23 +5337,23 @@ static void ir_emit_epilogue(ir_ctx *ctx)
 		if (ctx->call_stack_size || (ctx->flags2 & IR_HAS_ALLOCA)) {
 			//| mov sp, x29
 			dasm_put(Dst, 538);
-#line 2068 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2077 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		if (aarch64_may_encode_imm7_addr_offset(ctx->stack_frame_size+16, 8)) {
 			//|	ldp x29, x30, [sp], #(ctx->stack_frame_size+16)
 			dasm_put(Dst, 540, (ctx->stack_frame_size+16));
-#line 2071 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2080 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (aarch64_may_encode_imm12(ctx->stack_frame_size+16)) {
 			//|	ldp x29, x30, [sp]
 			//|	add sp, sp, #(ctx->stack_frame_size+16)
 			dasm_put(Dst, 543, (ctx->stack_frame_size+16));
-#line 2074 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2083 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, ctx->stack_frame_size+16);
 			//|	ldp x29, x30, [sp]
 			//|	add sp, sp, Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 547, (IR_REG_INT_TMP));
-#line 2078 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2087 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else if (ctx->stack_frame_size + ctx->call_stack_size) {
 		if (ctx->fixed_stack_red_zone) {
@@ -5352,12 +5361,12 @@ static void ir_emit_epilogue(ir_ctx *ctx)
 		} else if (aarch64_may_encode_imm12(ctx->stack_frame_size + ctx->call_stack_size)) {
 			//| add sp, sp, #(ctx->stack_frame_size + ctx->call_stack_size)
 			dasm_put(Dst, 551, (ctx->stack_frame_size + ctx->call_stack_size));
-#line 2084 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2093 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, ctx->stack_frame_size + ctx->call_stack_size);
 			//| add sp, sp, Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 554, (IR_REG_INT_TMP));
-#line 2087 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2096 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 }
@@ -5404,7 +5413,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 562, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2124 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2133 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ADD_OV:
 				//|	ASM_REG_REG_REG_OP adds, type, def_reg, op1_reg, op2_reg
@@ -5417,7 +5426,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 572, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2127 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2136 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_SUB:
 				//|	ASM_REG_REG_REG_OP sub, type, def_reg, op1_reg, op2_reg
@@ -5430,7 +5439,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 582, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2130 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2139 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_SUB_OV:
 				//|	ASM_REG_REG_REG_OP subs, type, def_reg, op1_reg, op2_reg
@@ -5443,7 +5452,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 592, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2133 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2142 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_MUL:
 				//|	ASM_REG_REG_REG_OP mul, type, def_reg, op1_reg, op2_reg
@@ -5456,7 +5465,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 602, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2136 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2145 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_MUL_OV:
 				if (ir_type_size[type] == 8) {
@@ -5467,7 +5476,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 						//|	mul Rx(def_reg), Rx(op1_reg), Rx(op2_reg)
 						//|	cmp Rx(tmp_reg), Rx(def_reg), asr #63
 						dasm_put(Dst, 607, (tmp_reg), (op1_reg), (op2_reg), (def_reg), (op1_reg), (op2_reg), (tmp_reg), (def_reg));
-#line 2145 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2154 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					} else {
 						tmp_reg = ctx->regs[def][3];
 						IR_ASSERT(tmp_reg != IR_REG_NONE);
@@ -5475,7 +5484,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 						//|	mul Rx(def_reg), Rx(op1_reg), Rx(op2_reg)
 						//|	cmp Rx(tmp_reg), xzr
 						dasm_put(Dst, 619, (tmp_reg), (op1_reg), (op2_reg), (def_reg), (op1_reg), (op2_reg), (tmp_reg));
-#line 2151 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2160 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					}
 				} else {
 					if (IR_IS_TYPE_SIGNED(type)) {
@@ -5485,12 +5494,12 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 						//|	asr Rx(tmp_reg), Rx(def_reg), #32
 						//|	cmp Rx(tmp_reg), Rx(def_reg), asr #31
 						dasm_put(Dst, 630, (def_reg), (op1_reg), (op2_reg), (tmp_reg), (def_reg), (tmp_reg), (def_reg));
-#line 2159 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2168 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					} else {
 						//|	umull Rx(def_reg), Rw(op1_reg), Rw(op2_reg)
 						//|	cmp xzr, Rx(def_reg), lsr #32
 						dasm_put(Dst, 641, (def_reg), (op1_reg), (op2_reg), (def_reg));
-#line 2162 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2171 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					}
 				}
 				break;
@@ -5506,7 +5515,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 653, (def_reg), (op1_reg), (op2_reg));
 						}
 					//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2168 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2177 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					//|	ASM_REG_REG_REG_OP udiv, type, def_reg, op1_reg, op2_reg
 					//|{ MACRO ASM_REG_REG_REG_OP (5)
@@ -5518,7 +5527,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 663, (def_reg), (op1_reg), (op2_reg));
 						}
 					//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2170 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2179 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 				break;
 			case IR_MOD:
@@ -5535,7 +5544,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 673, (tmp_reg), (op1_reg), (op2_reg));
 						}
 					//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2177 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2186 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					//|	ASM_REG_REG_REG_REG_OP msub, type, def_reg, tmp_reg, op2_reg, op1_reg
 					//|{ MACRO ASM_REG_REG_REG_REG_OP (6)
 						if (ir_type_size[type] == 8) {
@@ -5546,7 +5555,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 684, (def_reg), (tmp_reg), (op2_reg), (op1_reg));
 						}
 					//|} MACRO ASM_REG_REG_REG_REG_OP (6)
-#line 2178 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2187 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					//|	ASM_REG_REG_REG_OP udiv, type, tmp_reg, op1_reg, op2_reg
 					//|{ MACRO ASM_REG_REG_REG_OP (5)
@@ -5558,7 +5567,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 695, (tmp_reg), (op1_reg), (op2_reg));
 						}
 					//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2180 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2189 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					//|	ASM_REG_REG_REG_REG_OP msub, type, def_reg, tmp_reg, op2_reg, op1_reg
 					//|{ MACRO ASM_REG_REG_REG_REG_OP (6)
 						if (ir_type_size[type] == 8) {
@@ -5569,7 +5578,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 706, (def_reg), (tmp_reg), (op2_reg), (op1_reg));
 						}
 					//|} MACRO ASM_REG_REG_REG_REG_OP (6)
-#line 2181 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2190 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 				break;
 			case IR_OR:
@@ -5583,7 +5592,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 717, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2185 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2194 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_AND:
 				//|	ASM_REG_REG_REG_OP and, type, def_reg, op1_reg, op2_reg
@@ -5596,7 +5605,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 727, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2188 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2197 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_XOR:
 				//|	ASM_REG_REG_REG_OP eor, type, def_reg, op1_reg, op2_reg
@@ -5609,7 +5618,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 737, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2191 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2200 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 		}
 	} else {
@@ -5630,7 +5639,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 747, (def_reg), (op1_reg), val);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2202 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2211 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ADD_OV:
 				//|	ASM_REG_REG_IMM_OP adds, type, def_reg, op1_reg, val
@@ -5643,7 +5652,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 757, (def_reg), (op1_reg), val);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2205 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2214 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_SUB:
 				//|	ASM_REG_REG_IMM_OP sub, type, def_reg, op1_reg, val
@@ -5656,7 +5665,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 767, (def_reg), (op1_reg), val);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2208 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2217 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_SUB_OV:
 				//|	ASM_REG_REG_IMM_OP subs, type, def_reg, op1_reg, val
@@ -5669,7 +5678,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 777, (def_reg), (op1_reg), val);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2211 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2220 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_OR:
 				if (ir_type_size[type] == 8) {
@@ -5684,7 +5693,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 787, (def_reg), (op1_reg), val);
 						}
 					//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2216 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2225 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					//|	ASM_REG_REG_IMM_OP orr, type, def_reg, op1_reg, val
 					//|{ MACRO ASM_REG_REG_IMM_OP (5)
@@ -5696,7 +5705,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 797, (def_reg), (op1_reg), val);
 						}
 					//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2218 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2227 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 				break;
 			case IR_AND:
@@ -5712,7 +5721,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 807, (def_reg), (op1_reg), val);
 						}
 					//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2224 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2233 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					//|	ASM_REG_REG_IMM_OP and, type, def_reg, op1_reg, val
 					//|{ MACRO ASM_REG_REG_IMM_OP (5)
@@ -5724,7 +5733,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 817, (def_reg), (op1_reg), val);
 						}
 					//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2226 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2235 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 				break;
 			case IR_XOR:
@@ -5740,7 +5749,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 827, (def_reg), (op1_reg), val);
 						}
 					//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2232 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2241 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					//|	ASM_REG_REG_IMM_OP eor, type, def_reg, op1_reg, val
 					//|{ MACRO ASM_REG_REG_IMM_OP (5)
@@ -5752,7 +5761,7 @@ static void ir_emit_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 837, (def_reg), (op1_reg), val);
 						}
 					//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2234 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2243 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 				break;
 		}
@@ -5791,53 +5800,53 @@ static void ir_emit_min_max_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	if (ir_type_size[type] == 8) {
 		//|	cmp Rx(op1_reg), Rx(op2_reg)
 		dasm_put(Dst, 842, (op1_reg), (op2_reg));
-#line 2271 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2280 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if (insn->op == IR_MIN) {
 			if (IR_IS_TYPE_SIGNED(type)) {
 				//|	csel Rx(def_reg), Rx(op1_reg), Rx(op2_reg), le
 				dasm_put(Dst, 846, (def_reg), (op1_reg), (op2_reg));
-#line 2274 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2283 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	csel Rx(def_reg), Rx(op1_reg), Rx(op2_reg), ls
 				dasm_put(Dst, 851, (def_reg), (op1_reg), (op2_reg));
-#line 2276 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2285 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			IR_ASSERT(insn->op == IR_MAX);
 			if (IR_IS_TYPE_SIGNED(type)) {
 				//|	csel Rx(def_reg), Rx(op1_reg), Rx(op2_reg), ge
 				dasm_put(Dst, 856, (def_reg), (op1_reg), (op2_reg));
-#line 2281 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2290 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	csel Rx(def_reg), Rx(op1_reg), Rx(op2_reg), hs
 				dasm_put(Dst, 861, (def_reg), (op1_reg), (op2_reg));
-#line 2283 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2292 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	} else {
 		//|	cmp Rw(op1_reg), Rw(op2_reg)
 		dasm_put(Dst, 866, (op1_reg), (op2_reg));
-#line 2287 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2296 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if (insn->op == IR_MIN) {
 			if (IR_IS_TYPE_SIGNED(type)) {
 				//|	csel Rw(def_reg), Rw(op1_reg), Rw(op2_reg), le
 				dasm_put(Dst, 870, (def_reg), (op1_reg), (op2_reg));
-#line 2290 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2299 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	csel Rw(def_reg), Rw(op1_reg), Rw(op2_reg), ls
 				dasm_put(Dst, 875, (def_reg), (op1_reg), (op2_reg));
-#line 2292 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2301 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			IR_ASSERT(insn->op == IR_MAX);
 			if (IR_IS_TYPE_SIGNED(type)) {
 				//|	csel Rw(def_reg), Rw(op1_reg), Rw(op2_reg), ge
 				dasm_put(Dst, 880, (def_reg), (op1_reg), (op2_reg));
-#line 2297 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2306 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	csel Rw(def_reg), Rw(op1_reg), Rw(op2_reg), hs
 				dasm_put(Dst, 885, (def_reg), (op1_reg), (op2_reg));
-#line 2299 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2308 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	}
@@ -5860,15 +5869,15 @@ static void ir_emit_overflow(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	if (math_insn->op == IR_MUL_OV) {
 		//|	cset Rw(def_reg), ne
 		dasm_put(Dst, 890, (def_reg));
-#line 2320 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2329 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else if (IR_IS_TYPE_SIGNED(type)) {
 		//|	cset Rw(def_reg), vs
 		dasm_put(Dst, 893, (def_reg));
-#line 2322 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2331 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		//|	cset Rw(def_reg), cs
 		dasm_put(Dst, 896, (def_reg));
-#line 2324 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2333 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
 		ir_emit_store(ctx, insn->type, def, def_reg);
@@ -5898,37 +5907,37 @@ static void ir_emit_overflow_and_branch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_
 		if (reverse) {
 			//|	beq =>true_block
 			dasm_put(Dst, 899, true_block);
-#line 2352 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2361 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	bne =>true_block
 			dasm_put(Dst, 902, true_block);
-#line 2354 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2363 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else if (IR_IS_TYPE_SIGNED(type)) {
 		if (reverse) {
 			//|	bvc =>true_block
 			dasm_put(Dst, 905, true_block);
-#line 2358 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2367 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	bvs =>true_block
 			dasm_put(Dst, 908, true_block);
-#line 2360 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2369 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else {
 		if (reverse) {
 			//|	bcc =>true_block
 			dasm_put(Dst, 911, true_block);
-#line 2364 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2373 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	bcs =>true_block
 			dasm_put(Dst, 914, true_block);
-#line 2366 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2375 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 	if (false_block) {
 		//|	b =>false_block
 		dasm_put(Dst, 917, false_block);
-#line 2370 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2379 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -5964,7 +5973,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 925, (reg), (reg), val->i32);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2396 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2405 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_SUB:
 				//|	ASM_REG_REG_IMM_OP sub, type, reg, reg, val->i32
@@ -5977,7 +5986,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 935, (reg), (reg), val->i32);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2399 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2408 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_OR:
 				//|	ASM_REG_REG_IMM_OP orr, type, reg, reg, val->i32
@@ -5990,7 +5999,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 945, (reg), (reg), val->i32);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2402 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2411 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_AND:
 				//|	ASM_REG_REG_IMM_OP and, type, reg, reg, val->i32
@@ -6003,7 +6012,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 955, (reg), (reg), val->i32);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2405 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2414 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_XOR:
 				//|	ASM_REG_REG_IMM_OP eor, type, reg, reg, val->i32
@@ -6016,7 +6025,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 965, (reg), (reg), val->i32);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2408 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2417 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 		}
 	} else {
@@ -6038,7 +6047,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 975, (reg), (reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2420 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2429 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_SUB:
 				//|	ASM_REG_REG_REG_OP sub, type, reg, reg, op2_reg
@@ -6051,7 +6060,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 985, (reg), (reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2423 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2432 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_MUL:
 				//|	ASM_REG_REG_REG_OP mul, type, reg, reg, op2_reg
@@ -6064,7 +6073,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 995, (reg), (reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2426 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2435 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_OR:
 				//|	ASM_REG_REG_REG_OP orr, type, reg, reg, op2_reg
@@ -6077,7 +6086,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1005, (reg), (reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2429 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2438 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_AND:
 				//|	ASM_REG_REG_REG_OP and, type, reg, reg, op2_reg
@@ -6090,7 +6099,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1015, (reg), (reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2432 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2441 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_XOR:
 				//|	ASM_REG_REG_REG_OP eor, type, reg, reg, op2_reg
@@ -6103,7 +6112,7 @@ static void ir_emit_reg_binop_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1025, (reg), (reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2435 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2444 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 		}
 	}
@@ -6139,7 +6148,7 @@ static void ir_emit_mul_div_mod_pwr2(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1035, (def_reg), (op1_reg), (op1_reg));
 				}
 			//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2461 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2470 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	ASM_REG_REG_IMM_OP lsl, type, def_reg, op1_reg, shift
 			//|{ MACRO ASM_REG_REG_IMM_OP (5)
@@ -6151,7 +6160,7 @@ static void ir_emit_mul_div_mod_pwr2(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1046, (def_reg), (op1_reg), (32-(shift))%32, 31-(shift));
 				}
 			//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2463 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2472 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else if (insn->op == IR_DIV) {
 		uint32_t shift = IR_LOG2(ctx->ir_base[insn->op2].val.u64);
@@ -6165,7 +6174,7 @@ static void ir_emit_mul_div_mod_pwr2(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		dasm_put(Dst, 1057, (def_reg), (op1_reg), shift);
 			}
 		//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2467 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2476 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		IR_ASSERT(insn->op == IR_MOD);
 		uint64_t mask = ctx->ir_base[insn->op2].val.u64 - 1;
@@ -6179,7 +6188,7 @@ static void ir_emit_mul_div_mod_pwr2(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		dasm_put(Dst, 1067, (def_reg), (op1_reg), mask);
 			}
 		//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2471 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2480 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
 		ir_emit_store(ctx, type, def, def_reg);
@@ -6216,49 +6225,49 @@ static void ir_emit_sdiv_pwr2(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	if (ir_type_size[type] == 8) {
 		//|	cmp Rx(op1_reg), #0
 		dasm_put(Dst, 1072, (op1_reg));
-#line 2506 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2515 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if (op2_reg != IR_REG_NONE) {
 			//|	add Rx(def_reg), Rx(op1_reg), Rx(op2_reg)
 			dasm_put(Dst, 1075, (def_reg), (op1_reg), (op2_reg));
-#line 2508 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2517 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	add Rx(def_reg), Rx(op1_reg), #offset
 			dasm_put(Dst, 1080, (def_reg), (op1_reg), offset);
-#line 2510 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2519 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		//|	csel Rx(def_reg), Rx(def_reg), Rx(op1_reg), lt
 		//|	asr Rx(def_reg), Rx(def_reg), #shift
 		dasm_put(Dst, 1085, (def_reg), (def_reg), (op1_reg), (def_reg), (def_reg), shift);
-#line 2513 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2522 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		//|	cmp Rw(op1_reg), #0
 		dasm_put(Dst, 1094, (op1_reg));
-#line 2515 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2524 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if (op2_reg != IR_REG_NONE) {
 			//|	add Rw(def_reg), Rw(op1_reg), Rw(op2_reg)
 			dasm_put(Dst, 1097, (def_reg), (op1_reg), (op2_reg));
-#line 2517 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2526 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	add Rw(def_reg), Rw(op1_reg), #offset
 			dasm_put(Dst, 1102, (def_reg), (op1_reg), offset);
-#line 2519 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2528 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		//|	csel Rw(def_reg), Rw(def_reg), Rw(op1_reg), lt
 		dasm_put(Dst, 1107, (def_reg), (def_reg), (op1_reg));
-#line 2521 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2530 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if (ir_type_size[type] == 4) {
 			//|	asr Rw(def_reg), Rw(def_reg), #shift
 			dasm_put(Dst, 1112, (def_reg), (def_reg), shift);
-#line 2523 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2532 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (ir_type_size[type] == 2) {
 			//|	ubfx Rw(def_reg), Rw(def_reg), #shift, #16
 			dasm_put(Dst, 1117, (def_reg), (def_reg), shift, (shift)+(16)-1);
-#line 2525 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2534 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			IR_ASSERT(ir_type_size[type] == 1);
 			//|	ubfx Rw(def_reg), Rw(def_reg), #shift, #8
 			dasm_put(Dst, 1123, (def_reg), (def_reg), shift, (shift)+(8)-1);
-#line 2528 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2537 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
@@ -6311,7 +6320,7 @@ static void ir_emit_smod_pwr2(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	dasm_put(Dst, 1133, (tmp_reg), (def_reg));
 		}
 	//|} MACRO ASM_REG_REG_OP (4)
-#line 2571 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2580 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	//|	ASM_REG_REG_IMM_OP and, type, def_reg, def_reg, mask
 	//|{ MACRO ASM_REG_REG_IMM_OP (5)
 		if (ir_type_size[type] == 8) {
@@ -6322,7 +6331,7 @@ static void ir_emit_smod_pwr2(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	dasm_put(Dst, 1142, (def_reg), (def_reg), mask);
 		}
 	//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2572 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2581 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	//|	ASM_REG_REG_IMM_OP and, type, tmp_reg, tmp_reg, mask
 	//|{ MACRO ASM_REG_REG_IMM_OP (5)
 		if (ir_type_size[type] == 8) {
@@ -6333,7 +6342,7 @@ static void ir_emit_smod_pwr2(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	dasm_put(Dst, 1152, (tmp_reg), (tmp_reg), mask);
 		}
 	//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2573 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2582 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	//|	ASM_REG_REG_REG_TXT_OP csneg, type, def_reg, def_reg, tmp_reg, mi
 	//|{ MACRO ASM_REG_REG_REG_TXT_OP (6)
 		if (ir_type_size[type] == 8) {
@@ -6344,7 +6353,7 @@ static void ir_emit_smod_pwr2(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	dasm_put(Dst, 1162, (def_reg), (def_reg), (tmp_reg));
 		}
 	//|} MACRO ASM_REG_REG_REG_TXT_OP (6)
-#line 2574 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2583 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
 		ir_emit_store(ctx, type, def, def_reg);
@@ -6378,12 +6387,12 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				//|	and Rw(def_reg), Rw(op1_reg), #0xff
 				//|	lsl Rw(def_reg), Rw(def_reg), Rw(op2_reg)
 				dasm_put(Dst, 1167, (def_reg), (op1_reg), (def_reg), (def_reg), (op2_reg));
-#line 2606 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2615 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 2) {
 				//|	and Rw(def_reg), Rw(op1_reg), #0xffff
 				//|	lsl Rw(def_reg), Rw(def_reg), Rw(op2_reg)
 				dasm_put(Dst, 1175, (def_reg), (op1_reg), (def_reg), (def_reg), (op2_reg));
-#line 2609 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2618 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	ASM_REG_REG_REG_OP lsl, type, def_reg, op1_reg, op2_reg
 				//|{ MACRO ASM_REG_REG_REG_OP (5)
@@ -6395,7 +6404,7 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1188, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2611 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2620 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 		case IR_SHR:
@@ -6403,12 +6412,12 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				//|	and Rw(def_reg), Rw(op1_reg), #0xff
 				//|	lsr Rw(def_reg), Rw(def_reg), Rw(op2_reg)
 				dasm_put(Dst, 1193, (def_reg), (op1_reg), (def_reg), (def_reg), (op2_reg));
-#line 2617 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2626 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 2) {
 				//|	and Rw(def_reg), Rw(op1_reg), #0xffff
 				//|	lsr Rw(def_reg), Rw(def_reg), Rw(op2_reg)
 				dasm_put(Dst, 1201, (def_reg), (op1_reg), (def_reg), (def_reg), (op2_reg));
-#line 2620 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2629 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	ASM_REG_REG_REG_OP lsr, type, def_reg, op1_reg, op2_reg
 				//|{ MACRO ASM_REG_REG_REG_OP (5)
@@ -6420,7 +6429,7 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1214, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2622 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2631 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 		case IR_SAR:
@@ -6428,12 +6437,12 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				//|	sxtb Rw(def_reg), Rw(op1_reg)
 				//|	asr Rw(def_reg), Rw(def_reg), Rw(op2_reg)
 				dasm_put(Dst, 1219, (def_reg), (op1_reg), (def_reg), (def_reg), (op2_reg));
-#line 2628 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2637 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 2) {
 				//|	sxth Rw(def_reg), Rw(op1_reg)
 				//|	asr Rw(def_reg), Rw(def_reg), Rw(op2_reg)
 				dasm_put(Dst, 1227, (def_reg), (op1_reg), (def_reg), (def_reg), (op2_reg));
-#line 2631 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2640 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	ASM_REG_REG_REG_OP asr, type, def_reg, op1_reg, op2_reg
 				//|{ MACRO ASM_REG_REG_REG_OP (5)
@@ -6445,7 +6454,7 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1240, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2633 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2642 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 		case IR_ROL:
@@ -6459,7 +6468,7 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				//|	ror Rw(def_reg), Rw(def_reg), Rw(tmp_reg)
 				//|	and Rw(def_reg), Rw(def_reg), #0xff
 				dasm_put(Dst, 1245, (def_reg), (op1_reg), (def_reg), (def_reg), (def_reg), (def_reg), (def_reg), (def_reg), (tmp_reg), (op2_reg), (def_reg), (def_reg), (tmp_reg), (def_reg), (def_reg));
-#line 2645 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2654 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 2) {
 				//|	and Rw(def_reg), Rw(op1_reg), #0xffff
 				//|	add Rw(def_reg), Rw(def_reg), Rw(def_reg), lsl #16
@@ -6467,17 +6476,17 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				//|	ror Rw(def_reg), Rw(def_reg), Rw(tmp_reg)
 				//|	and Rw(def_reg), Rw(def_reg), #0xffff
 				dasm_put(Dst, 1267, (def_reg), (op1_reg), (def_reg), (def_reg), (def_reg), (tmp_reg), (op2_reg), (def_reg), (def_reg), (tmp_reg), (def_reg), (def_reg));
-#line 2651 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2660 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 8) {
 				//|	neg Rx(tmp_reg), Rx(op2_reg)
 				//|	ror Rx(def_reg), Rx(op1_reg), Rx(tmp_reg)
 				dasm_put(Dst, 1285, (tmp_reg), (op2_reg), (def_reg), (op1_reg), (tmp_reg));
-#line 2654 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2663 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	neg Rw(tmp_reg), Rw(op2_reg)
 				//|	ror Rw(def_reg), Rw(op1_reg), Rw(tmp_reg)
 				dasm_put(Dst, 1293, (tmp_reg), (op2_reg), (def_reg), (op1_reg), (tmp_reg));
-#line 2657 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2666 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 		case IR_ROR:
@@ -6490,7 +6499,7 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				//|	ror Rw(def_reg), Rw(tmp_reg), Rw(op2_reg)
 				//|	and Rw(def_reg), Rw(def_reg), #0xff
 				dasm_put(Dst, 1301, (tmp_reg), (op1_reg), (tmp_reg), (tmp_reg), (tmp_reg), (tmp_reg), (tmp_reg), (tmp_reg), (def_reg), (tmp_reg), (op2_reg), (def_reg), (def_reg));
-#line 2668 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2677 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 2) {
 				tmp_reg = ctx->regs[def][3];
 				IR_ASSERT(tmp_reg != IR_REG_NONE);
@@ -6499,7 +6508,7 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				//|	ror Rw(def_reg), Rw(tmp_reg), Rw(op2_reg)
 				//|	and Rw(def_reg), Rw(def_reg), #0xffff
 				dasm_put(Dst, 1320, (tmp_reg), (op1_reg), (tmp_reg), (tmp_reg), (tmp_reg), (def_reg), (tmp_reg), (op2_reg), (def_reg), (def_reg));
-#line 2675 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2684 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	ASM_REG_REG_REG_OP ror, type, def_reg, op1_reg, op2_reg
 				//|{ MACRO ASM_REG_REG_REG_OP (5)
@@ -6511,7 +6520,7 @@ static void ir_emit_shift(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1340, (def_reg), (op1_reg), (op2_reg));
 					}
 				//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 2677 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2686 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 	}
@@ -6546,11 +6555,11 @@ static void ir_emit_shift_const(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (ir_type_size[type] == 1) {
 				//|	ubfiz Rw(def_reg), Rw(op1_reg), #shift, #(8-shift)
 				dasm_put(Dst, 1345, (def_reg), (op1_reg), (32-(shift))%32, ((8-shift))-1);
-#line 2710 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2719 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 2) {
 				//|	ubfiz Rw(def_reg), Rw(op1_reg), #shift, #(16-shift)
 				dasm_put(Dst, 1351, (def_reg), (op1_reg), (32-(shift))%32, ((16-shift))-1);
-#line 2712 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2721 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	ASM_REG_REG_IMM_OP lsl, type, def_reg, op1_reg, shift
 				//|{ MACRO ASM_REG_REG_IMM_OP (5)
@@ -6562,18 +6571,18 @@ static void ir_emit_shift_const(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1363, (def_reg), (op1_reg), (32-(shift))%32, 31-(shift));
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2714 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2723 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 		case IR_SHR:
 			if (ir_type_size[type] == 1) {
 				//|	ubfx Rw(def_reg), Rw(op1_reg), #shift, #(8-shift)
 				dasm_put(Dst, 1369, (def_reg), (op1_reg), shift, (shift)+((8-shift))-1);
-#line 2719 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2728 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 2) {
 				//|	ubfx Rw(def_reg), Rw(op1_reg), #shift, #(16-shift)
 				dasm_put(Dst, 1375, (def_reg), (op1_reg), shift, (shift)+((16-shift))-1);
-#line 2721 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2730 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	ASM_REG_REG_IMM_OP lsr, type, def_reg, op1_reg, shift
 				//|{ MACRO ASM_REG_REG_IMM_OP (5)
@@ -6585,18 +6594,18 @@ static void ir_emit_shift_const(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1386, (def_reg), (op1_reg), shift);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2723 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2732 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 		case IR_SAR:
 			if (ir_type_size[type] == 1) {
 				//|	sbfx Rw(def_reg), Rw(op1_reg), #shift, #(8-shift)
 				dasm_put(Dst, 1391, (def_reg), (op1_reg), shift, (shift)+((8-shift))-1);
-#line 2728 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2737 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 2) {
 				//|	sbfx Rw(def_reg), Rw(op1_reg), #shift, #(16-shift)
 				dasm_put(Dst, 1397, (def_reg), (op1_reg), shift, (shift)+((16-shift))-1);
-#line 2730 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2739 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	ASM_REG_REG_IMM_OP asr, type, def_reg, op1_reg, shift
 				//|{ MACRO ASM_REG_REG_IMM_OP (5)
@@ -6608,7 +6617,7 @@ static void ir_emit_shift_const(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1408, (def_reg), (op1_reg), shift);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2732 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2741 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 		case IR_ROL:
@@ -6617,23 +6626,23 @@ static void ir_emit_shift_const(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				//|	ubfx Rw(tmp_reg), Rw(op1_reg), #(8-shift), #shift
 				//|	orr Rw(def_reg), Rw(tmp_reg), Rw(op1_reg), lsl #shift
 				dasm_put(Dst, 1413, (tmp_reg), (op1_reg), (8-shift), ((8-shift))+(shift)-1, (def_reg), (tmp_reg), (op1_reg), shift);
-#line 2739 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2748 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 2) {
 				tmp_reg = ctx->regs[def][3];
 				//|	ubfx Rw(tmp_reg), Rw(op1_reg), #(16-shift), #shift
 				//|	orr Rw(def_reg), Rw(tmp_reg), Rw(op1_reg), lsl #shift
 				dasm_put(Dst, 1424, (tmp_reg), (op1_reg), (16-shift), ((16-shift))+(shift)-1, (def_reg), (tmp_reg), (op1_reg), shift);
-#line 2743 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2752 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 8) {
 				shift = (64 - shift) % 64;
 				//|	ror Rx(def_reg), Rx(op1_reg), #shift
 				dasm_put(Dst, 1435, (def_reg), (op1_reg), (op1_reg), shift);
-#line 2746 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2755 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				shift = (32 - shift) % 32;
 				//|	ror Rw(def_reg), Rw(op1_reg), #shift
 				dasm_put(Dst, 1441, (def_reg), (op1_reg), (op1_reg), shift);
-#line 2749 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2758 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 		case IR_ROR:
@@ -6642,13 +6651,13 @@ static void ir_emit_shift_const(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				//|	ubfx Rw(tmp_reg), Rw(op1_reg), #shift, #(8-shift)
 				//|	orr Rw(def_reg), Rw(tmp_reg), Rw(op1_reg), lsl #(8-shift)
 				dasm_put(Dst, 1447, (tmp_reg), (op1_reg), shift, (shift)+((8-shift))-1, (def_reg), (tmp_reg), (op1_reg), (8-shift));
-#line 2756 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2765 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[type] == 2) {
 				tmp_reg = ctx->regs[def][3];
 				//|	ubfx Rw(tmp_reg), Rw(op1_reg), #shift, #(16-shift)
 				//|	orr Rw(def_reg), Rw(tmp_reg), Rw(op1_reg), lsl #(16-shift)
 				dasm_put(Dst, 1458, (tmp_reg), (op1_reg), shift, (shift)+((16-shift))-1, (def_reg), (tmp_reg), (op1_reg), (16-shift));
-#line 2760 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2769 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	ASM_REG_REG_IMM_OP ror, type, def_reg, op1_reg, shift
 				//|{ MACRO ASM_REG_REG_IMM_OP (5)
@@ -6660,7 +6669,7 @@ static void ir_emit_shift_const(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 1475, (def_reg), (op1_reg), (op1_reg), shift);
 					}
 				//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 2762 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2771 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			break;
 	}
@@ -6696,10 +6705,10 @@ static void ir_emit_op_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1484, (op1_reg));
 				}
 			//|} MACRO ASM_REG_IMM_OP (4)
-#line 2788 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2797 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			//|	cset Rw(def_reg), eq
 			dasm_put(Dst, 1487, (def_reg));
-#line 2789 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2798 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	ASM_REG_REG_OP mvn, insn->type, def_reg, op1_reg
 			//|{ MACRO ASM_REG_REG_OP (4)
@@ -6711,7 +6720,7 @@ static void ir_emit_op_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1494, (def_reg), (op1_reg));
 				}
 			//|} MACRO ASM_REG_REG_OP (4)
-#line 2791 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2800 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else if (insn->op == IR_NEG) {
 		//|	ASM_REG_REG_OP neg, insn->type, def_reg, op1_reg
@@ -6724,18 +6733,18 @@ static void ir_emit_op_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		dasm_put(Dst, 1502, (def_reg), (op1_reg));
 			}
 		//|} MACRO ASM_REG_REG_OP (4)
-#line 2794 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2803 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else if (insn->op == IR_ABS) {
 		if (ir_type_size[type] == 8) {
 			//|	cmp Rx(op1_reg), #0
 			//|	cneg Rx(def_reg), Rx(op1_reg), lt
 			dasm_put(Dst, 1506, (op1_reg), (def_reg), (op1_reg), (op1_reg));
-#line 2798 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2807 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	cmp Rw(op1_reg), #0
 			//|	cneg Rw(def_reg), Rw(op1_reg), lt
 			dasm_put(Dst, 1513, (op1_reg), (def_reg), (op1_reg), (op1_reg));
-#line 2801 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2810 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else if (insn->op == IR_CTLZ) {
 		if (ir_type_size[type] == 1) {
@@ -6743,13 +6752,13 @@ static void ir_emit_op_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			//|	clz Rw(def_reg), Rw(def_reg)
 			//|	sub Rw(def_reg), Rw(def_reg), #24
 			dasm_put(Dst, 1520, (def_reg), (op1_reg), (def_reg), (def_reg), (def_reg), (def_reg));
-#line 2807 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2816 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (ir_type_size[type] == 2) {
 			//|	and	Rw(def_reg), Rw(op1_reg), #0xffff
 			//|	clz Rw(def_reg), Rw(def_reg)
 			//|	sub Rw(def_reg), Rw(def_reg), #16
 			dasm_put(Dst, 1530, (def_reg), (op1_reg), (def_reg), (def_reg), (def_reg), (def_reg));
-#line 2811 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2820 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	ASM_REG_REG_OP clz, type, def_reg, op1_reg
 			//|{ MACRO ASM_REG_REG_OP (4)
@@ -6761,7 +6770,7 @@ static void ir_emit_op_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1544, (def_reg), (op1_reg));
 				}
 			//|} MACRO ASM_REG_REG_OP (4)
-#line 2813 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2822 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else if (insn->op == IR_CTTZ) {
 		//|	ASM_REG_REG_OP rbit, insn->type, def_reg, op1_reg
@@ -6774,7 +6783,7 @@ static void ir_emit_op_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		dasm_put(Dst, 1552, (def_reg), (op1_reg));
 			}
 		//|} MACRO ASM_REG_REG_OP (4)
-#line 2816 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2825 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		//|	ASM_REG_REG_OP clz, insn->type, def_reg, def_reg
 		//|{ MACRO ASM_REG_REG_OP (4)
 			if (ir_type_size[insn->type] == 8) {
@@ -6785,7 +6794,7 @@ static void ir_emit_op_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		dasm_put(Dst, 1560, (def_reg), (def_reg));
 			}
 		//|} MACRO ASM_REG_REG_OP (4)
-#line 2817 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2826 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		IR_ASSERT(insn->op == IR_BSWAP);
 		//|	ASM_REG_REG_OP rev, insn->type, def_reg, op1_reg
@@ -6798,7 +6807,7 @@ static void ir_emit_op_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		dasm_put(Dst, 1568, (def_reg), (op1_reg));
 			}
 		//|} MACRO ASM_REG_REG_OP (4)
-#line 2820 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2829 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
 		ir_emit_store(ctx, type, def, def_reg);
@@ -6833,7 +6842,7 @@ static void ir_emit_ctpop(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			//|	.long code2 // addv b0, v0.8b
 			//|	fmov Rw(def_reg), Rs(tmp_reg-IR_REG_FP_FIRST)
 			dasm_put(Dst, 1572, (def_reg), (op1_reg), (tmp_reg-IR_REG_FP_FIRST), (def_reg), code1, code2, (def_reg), (tmp_reg-IR_REG_FP_FIRST));
-#line 2853 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2862 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case 2:
 			//|	and	Rw(def_reg), Rw(op1_reg), #0xffff
@@ -6842,7 +6851,7 @@ static void ir_emit_ctpop(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			//|	.long code2 // addv b0, v0.8b
 			//|	fmov Rw(def_reg), Rs(tmp_reg-IR_REG_FP_FIRST)
 			dasm_put(Dst, 1584, (def_reg), (op1_reg), (tmp_reg-IR_REG_FP_FIRST), (def_reg), code1, code2, (def_reg), (tmp_reg-IR_REG_FP_FIRST));
-#line 2860 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2869 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case 4:
 			//|	fmov Rs(tmp_reg-IR_REG_FP_FIRST), Rw(op1_reg)
@@ -6850,7 +6859,7 @@ static void ir_emit_ctpop(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			//|	.long code2 // addv b0, v0.8b
 			//|	fmov Rw(def_reg), Rs(tmp_reg-IR_REG_FP_FIRST)
 			dasm_put(Dst, 1596, (tmp_reg-IR_REG_FP_FIRST), (op1_reg), code1, code2, (def_reg), (tmp_reg-IR_REG_FP_FIRST));
-#line 2866 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2875 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case 8:
 			//|	fmov Rd(tmp_reg-IR_REG_FP_FIRST), Rx(op1_reg)
@@ -6858,7 +6867,7 @@ static void ir_emit_ctpop(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			//|	.long code2 // addv b0, v0.8b
 			//|	fmov Rx(def_reg), Rd(tmp_reg-IR_REG_FP_FIRST)
 			dasm_put(Dst, 1605, (tmp_reg-IR_REG_FP_FIRST), (op1_reg), code1, code2, (def_reg), (tmp_reg-IR_REG_FP_FIRST));
-#line 2872 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2881 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
@@ -6885,24 +6894,24 @@ static void ir_emit_op_fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		if (type == IR_DOUBLE) {
 			//|	fneg Rd(def_reg-IR_REG_FP_FIRST), Rd(op1_reg-IR_REG_FP_FIRST)
 			dasm_put(Dst, 1614, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST));
-#line 2897 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2906 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			IR_ASSERT(type == IR_FLOAT);
 			//|	fneg Rs(def_reg-IR_REG_FP_FIRST), Rs(op1_reg-IR_REG_FP_FIRST)
 			dasm_put(Dst, 1618, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST));
-#line 2900 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2909 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else {
 		IR_ASSERT(insn->op == IR_ABS);
 		if (type == IR_DOUBLE) {
 			//|	fabs Rd(def_reg-IR_REG_FP_FIRST), Rd(op1_reg-IR_REG_FP_FIRST)
 			dasm_put(Dst, 1622, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST));
-#line 2905 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2914 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			IR_ASSERT(type == IR_FLOAT);
 			//|	fabs Rs(def_reg-IR_REG_FP_FIRST), Rs(op1_reg-IR_REG_FP_FIRST)
 			dasm_put(Dst, 1626, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST));
-#line 2908 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2917 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
@@ -6947,7 +6956,7 @@ static void ir_emit_binop_fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1635, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST), (op2_reg-IR_REG_FP_FIRST));
 				}
 			//|} MACRO ASM_FP_REG_REG_REG_OP (5)
-#line 2942 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2951 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_SUB:
 			//|	ASM_FP_REG_REG_REG_OP fsub, type, def_reg, op1_reg, op2_reg
@@ -6961,7 +6970,7 @@ static void ir_emit_binop_fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1645, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST), (op2_reg-IR_REG_FP_FIRST));
 				}
 			//|} MACRO ASM_FP_REG_REG_REG_OP (5)
-#line 2945 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2954 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_MUL:
 			//|	ASM_FP_REG_REG_REG_OP fmul, type, def_reg, op1_reg, op2_reg
@@ -6975,7 +6984,7 @@ static void ir_emit_binop_fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1655, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST), (op2_reg-IR_REG_FP_FIRST));
 				}
 			//|} MACRO ASM_FP_REG_REG_REG_OP (5)
-#line 2948 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2957 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_DIV:
 			//|	ASM_FP_REG_REG_REG_OP fdiv, type, def_reg, op1_reg, op2_reg
@@ -6989,7 +6998,7 @@ static void ir_emit_binop_fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1665, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST), (op2_reg-IR_REG_FP_FIRST));
 				}
 			//|} MACRO ASM_FP_REG_REG_REG_OP (5)
-#line 2951 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2960 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_MIN:
 			//|	ASM_FP_REG_REG_REG_OP fmin, type, def_reg, op1_reg, op2_reg
@@ -7003,7 +7012,7 @@ static void ir_emit_binop_fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1675, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST), (op2_reg-IR_REG_FP_FIRST));
 				}
 			//|} MACRO ASM_FP_REG_REG_REG_OP (5)
-#line 2954 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2963 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_MAX:
 			//|	ASM_FP_REG_REG_REG_OP fmax, type, def_reg, op1_reg, op2_reg
@@ -7017,7 +7026,7 @@ static void ir_emit_binop_fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 1685, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST), (op2_reg-IR_REG_FP_FIRST));
 				}
 			//|} MACRO ASM_FP_REG_REG_REG_OP (5)
-#line 2957 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2966 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
@@ -7035,21 +7044,21 @@ static void ir_emit_fix_type(ir_ctx *ctx, ir_type type, ir_reg op1_reg)
 		if (IR_IS_TYPE_SIGNED(type)) {
 			//|	sxth Rw(op1_reg), Rw(op1_reg)
 			dasm_put(Dst, 1690, (op1_reg), (op1_reg));
-#line 2973 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2982 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	uxth Rw(op1_reg), Rw(op1_reg)
 			dasm_put(Dst, 1694, (op1_reg), (op1_reg));
-#line 2975 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2984 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else if (ir_type_size[type] == 1) {
 		if (IR_IS_TYPE_SIGNED(type)) {
 			//|	sxtb Rw(op1_reg), Rw(op1_reg)
 			dasm_put(Dst, 1698, (op1_reg), (op1_reg));
-#line 2979 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2988 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	uxtb Rw(op1_reg), Rw(op1_reg)
 			dasm_put(Dst, 1702, (op1_reg), (op1_reg));
-#line 2981 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 2990 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 }
@@ -7067,30 +7076,30 @@ static void ir_emit_cmp_int_common(ir_ctx *ctx, ir_type type, ir_reg op1_reg, ir
 		if (ir_type_size[type] == 8) {
 			//|	cmp Rx(op1_reg), Rx(op2_reg)
 			dasm_put(Dst, 1706, (op1_reg), (op2_reg));
-#line 2997 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3006 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (ir_type_size[type] == 4) {
 			//|	cmp Rw(op1_reg), Rw(op2_reg)
 			dasm_put(Dst, 1710, (op1_reg), (op2_reg));
-#line 2999 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3008 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (ir_type_size[type] == 2) {
 			if (IR_IS_TYPE_SIGNED(type)) {
 				//|	cmp Rw(op1_reg), Rw(op2_reg), sxth
 				dasm_put(Dst, 1714, (op1_reg), (op2_reg));
-#line 3002 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3011 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	cmp Rw(op1_reg), Rw(op2_reg), uxth
 				dasm_put(Dst, 1718, (op1_reg), (op2_reg));
-#line 3004 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3013 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else if (ir_type_size[type] == 1) {
 			if (IR_IS_TYPE_SIGNED(type)) {
 				//|	cmp Rw(op1_reg), Rw(op2_reg), sxtb
 				dasm_put(Dst, 1722, (op1_reg), (op2_reg));
-#line 3008 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3017 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	cmp Rw(op1_reg), Rw(op2_reg), uxtb
 				dasm_put(Dst, 1726, (op1_reg), (op2_reg));
-#line 3010 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3019 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			IR_ASSERT(0);
@@ -7103,11 +7112,11 @@ static void ir_emit_cmp_int_common(ir_ctx *ctx, ir_type type, ir_reg op1_reg, ir
 		if (ir_type_size[type] == 8) {
 			//|	cmp Rx(op1_reg), #val
 			dasm_put(Dst, 1730, (op1_reg), val);
-#line 3021 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3030 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	cmp Rw(op1_reg), #val
 			dasm_put(Dst, 1734, (op1_reg), val);
-#line 3023 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3032 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 }
@@ -7167,52 +7176,52 @@ static void ir_emit_cmp_int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		case IR_EQ:
 			//|	cset Rw(def_reg), eq
 			dasm_put(Dst, 1738, (def_reg));
-#line 3081 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3090 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_NE:
 			//|	cset Rw(def_reg), ne
 			dasm_put(Dst, 1741, (def_reg));
-#line 3084 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3093 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_LT:
 			//|	cset Rw(def_reg), lt
 			dasm_put(Dst, 1744, (def_reg));
-#line 3087 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3096 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_GE:
 			//|	cset Rw(def_reg), ge
 			dasm_put(Dst, 1747, (def_reg));
-#line 3090 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3099 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_LE:
 			//|	cset Rw(def_reg), le
 			dasm_put(Dst, 1750, (def_reg));
-#line 3093 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3102 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_GT:
 			//|	cset Rw(def_reg), gt
 			dasm_put(Dst, 1753, (def_reg));
-#line 3096 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3105 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_ULT:
 			//|	cset Rw(def_reg), lo
 			dasm_put(Dst, 1756, (def_reg));
-#line 3099 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3108 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_UGE:
 			//|	cset Rw(def_reg), hs
 			dasm_put(Dst, 1759, (def_reg));
-#line 3102 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3111 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_ULE:
 			//|	cset Rw(def_reg), ls
 			dasm_put(Dst, 1762, (def_reg));
-#line 3105 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3114 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_UGT:
 			//|	cset Rw(def_reg), hi
 			dasm_put(Dst, 1765, (def_reg));
-#line 3108 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3117 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
@@ -7253,12 +7262,12 @@ static ir_op ir_emit_cmp_fp_common(ir_ctx *ctx, ir_ref root, ir_ref cmp_ref, ir_
 	if (type == IR_DOUBLE) {
 		//|	fcmp Rd(op1_reg-IR_REG_FP_FIRST), Rd(op2_reg-IR_REG_FP_FIRST)
 		dasm_put(Dst, 1768, (op1_reg-IR_REG_FP_FIRST), (op2_reg-IR_REG_FP_FIRST));
-#line 3147 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3156 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		IR_ASSERT(type == IR_FLOAT);
 		//|	fcmp Rs(op1_reg-IR_REG_FP_FIRST), Rs(op2_reg-IR_REG_FP_FIRST)
 		dasm_put(Dst, 1772, (op1_reg-IR_REG_FP_FIRST), (op2_reg-IR_REG_FP_FIRST));
-#line 3150 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3159 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	return op;
 }
@@ -7278,62 +7287,62 @@ static void ir_emit_cmp_fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		case IR_EQ:
 			//|	cset Rw(def_reg), eq
 			dasm_put(Dst, 1776, (def_reg));
-#line 3168 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3177 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_NE:
 			//|	cset Rw(def_reg), ne
 			dasm_put(Dst, 1779, (def_reg));
-#line 3171 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3180 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_LT:
 			//|	cset Rw(def_reg), mi
 			dasm_put(Dst, 1782, (def_reg));
-#line 3174 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3183 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_GE:
 			//|	cset Rw(def_reg), ge
 			dasm_put(Dst, 1785, (def_reg));
-#line 3177 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3186 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_LE:
 			//|	cset Rw(def_reg), ls
 			dasm_put(Dst, 1788, (def_reg));
-#line 3180 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3189 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_GT:
 			//|	cset Rw(def_reg), gt
 			dasm_put(Dst, 1791, (def_reg));
-#line 3183 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3192 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_ULT:
 			//|	cset Rw(def_reg), lt
 			dasm_put(Dst, 1794, (def_reg));
-#line 3186 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3195 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_UGE:
 			//|	cset Rw(def_reg), hs
 			dasm_put(Dst, 1797, (def_reg));
-#line 3189 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3198 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_ULE:
 			//|	cset Rw(def_reg), le
 			dasm_put(Dst, 1800, (def_reg));
-#line 3192 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3201 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_UGT:
 			//|	cset Rw(def_reg), hi
 			dasm_put(Dst, 1803, (def_reg));
-#line 3195 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3204 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_ORDERED:
 			//|	cset Rw(def_reg), vc
 			dasm_put(Dst, 1806, (def_reg));
-#line 3198 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3207 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 		case IR_UNORDERED:
 			//|	cset Rw(def_reg), vs
 			dasm_put(Dst, 1809, (def_reg));
-#line 3201 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3210 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			break;
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
@@ -7351,7 +7360,7 @@ static void ir_emit_jmp_true(ir_ctx *ctx, uint32_t b, ir_ref def, uint32_t next_
 	if (true_block != next_block) {
 		//|	b =>true_block
 		dasm_put(Dst, 1812, true_block);
-#line 3217 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3226 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -7365,7 +7374,7 @@ static void ir_emit_jmp_false(ir_ctx *ctx, uint32_t b, ir_ref def, uint32_t next
 	if (false_block != next_block) {
 		//|	b =>false_block
 		dasm_put(Dst, 1815, false_block);
-#line 3229 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3238 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -7389,28 +7398,28 @@ static void ir_emit_jz(ir_ctx *ctx, uint32_t b, uint32_t next_block, uint8_t op,
 		if (ir_type_size[type] == 8) {
 			//|	cbz Rx(reg), =>true_block
 			dasm_put(Dst, 1818, (reg), true_block);
-#line 3251 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3260 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	cbz Rw(reg), =>true_block
 			dasm_put(Dst, 1822, (reg), true_block);
-#line 3253 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3262 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else {
 		IR_ASSERT(op == IR_NE);
 		if (ir_type_size[type] == 8) {
 			//|	cbnz Rx(reg), =>true_block
 			dasm_put(Dst, 1826, (reg), true_block);
-#line 3258 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3267 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	cbnz Rw(reg), =>true_block
 			dasm_put(Dst, 1830, (reg), true_block);
-#line 3260 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3269 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 	if (false_block) {
 		//|	b =>false_block
 		dasm_put(Dst, 1834, false_block);
-#line 3264 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3273 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -7441,52 +7450,52 @@ static void ir_emit_jcc(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn, uint
 			case IR_EQ:
 				//|	beq =>true_block
 				dasm_put(Dst, 1837, true_block);
-#line 3293 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3302 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_NE:
 				//|	bne =>true_block
 				dasm_put(Dst, 1840, true_block);
-#line 3296 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3305 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_LT:
 				//|	blt =>true_block
 				dasm_put(Dst, 1843, true_block);
-#line 3299 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3308 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_GE:
 				//|	bge =>true_block
 				dasm_put(Dst, 1846, true_block);
-#line 3302 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3311 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_LE:
 				//|	ble =>true_block
 				dasm_put(Dst, 1849, true_block);
-#line 3305 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3314 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_GT:
 				//|	bgt =>true_block
 				dasm_put(Dst, 1852, true_block);
-#line 3308 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3317 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ULT:
 				//|	blo =>true_block
 				dasm_put(Dst, 1855, true_block);
-#line 3311 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3320 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_UGE:
 				//|	bhs =>true_block
 				dasm_put(Dst, 1858, true_block);
-#line 3314 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3323 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ULE:
 				//|	bls =>true_block
 				dasm_put(Dst, 1861, true_block);
-#line 3317 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3326 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_UGT:
 				//|	bhi =>true_block
 				dasm_put(Dst, 1864, true_block);
-#line 3320 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3329 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 		}
 	} else {
@@ -7496,68 +7505,68 @@ static void ir_emit_jcc(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn, uint
 			case IR_EQ:
 				//|	beq =>true_block
 				dasm_put(Dst, 1867, true_block);
-#line 3328 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3337 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_NE:
 				//|	bne =>true_block
 				dasm_put(Dst, 1870, true_block);
-#line 3331 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3340 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_LT:
 				//|	bmi =>true_block
 				dasm_put(Dst, 1873, true_block);
-#line 3334 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3343 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_GE:
 				//|	bge =>true_block
 				dasm_put(Dst, 1876, true_block);
-#line 3337 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3346 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_LE:
 				//|	bls =>true_block
 				dasm_put(Dst, 1879, true_block);
-#line 3340 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3349 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_GT:
 				//|	bgt =>true_block
 				dasm_put(Dst, 1882, true_block);
-#line 3343 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3352 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ULT:
 				//|	blt =>true_block
 				dasm_put(Dst, 1885, true_block);
-#line 3346 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3355 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_UGE:
 				//|	bhs =>true_block
 				dasm_put(Dst, 1888, true_block);
-#line 3349 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3358 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ULE:
 				//|	ble =>true_block
 				dasm_put(Dst, 1891, true_block);
-#line 3352 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3361 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_UGT:
 				//|	bhi =>true_block
 				dasm_put(Dst, 1894, true_block);
-#line 3355 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3364 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ORDERED:
 				//|	bvc =>true_block
 				dasm_put(Dst, 1897, true_block);
-#line 3358 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3367 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_UNORDERED:
 				//|	bvs =>true_block
 				dasm_put(Dst, 1900, true_block);
-#line 3361 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3370 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 	if (false_block) {
 		//|	b =>false_block
 		dasm_put(Dst, 1903, false_block);
-#line 3365 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3374 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -7636,13 +7645,13 @@ static void ir_emit_if_int(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn, u
 			if (true_block != next_block) {
 				//|	b =>true_block
 				dasm_put(Dst, 1906, true_block);
-#line 3442 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3451 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			if (false_block != next_block) {
 				//|	b =>false_block
 				dasm_put(Dst, 1909, false_block);
-#line 3446 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3455 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 		return;
@@ -7653,7 +7662,7 @@ static void ir_emit_if_int(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn, u
 		if (true_block != next_block) {
 			//|	b =>true_block
 			dasm_put(Dst, 1912, true_block);
-#line 3455 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3464 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		return;
 	}
@@ -7672,7 +7681,7 @@ static void ir_emit_if_int(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn, u
 	dasm_put(Dst, 1918, (op2_reg));
 		}
 	//|} MACRO ASM_REG_IMM_OP (4)
-#line 3464 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3473 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	ir_emit_jcc(ctx, b, def, insn, next_block, IR_NE, 1);
 }
 
@@ -7725,7 +7734,7 @@ static void ir_emit_cond(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		dasm_put(Dst, 1924, (op1_reg));
 			}
 		//|} MACRO ASM_REG_IMM_OP (4)
-#line 3507 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3516 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else{
 		//|	ASM_FP_REG_IMM_OP fcmp, op1_type, op1_reg, 0.0
 		//|{ MACRO ASM_FP_REG_IMM_OP (4)
@@ -7738,28 +7747,28 @@ static void ir_emit_cond(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		dasm_put(Dst, 1930, (op1_reg-IR_REG_FP_FIRST));
 			}
 		//|} MACRO ASM_FP_REG_IMM_OP (4)
-#line 3509 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3518 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 
 	if (IR_IS_TYPE_INT(type)) {
 		if (ir_type_size[type] == 8) {
 			//|	csel Rx(def_reg), Rx(op2_reg), Rx(op3_reg), ne
 			dasm_put(Dst, 1933, (def_reg), (op2_reg), (op3_reg));
-#line 3514 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3523 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	csel Rw(def_reg), Rw(op2_reg), Rw(op3_reg), ne
 			dasm_put(Dst, 1938, (def_reg), (op2_reg), (op3_reg));
-#line 3516 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3525 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else{
 		if (type == IR_DOUBLE) {
 			//|	fcsel Rd(def_reg-IR_REG_FP_FIRST), Rd(op2_reg-IR_REG_FP_FIRST), Rd(op3_reg-IR_REG_FP_FIRST), ne
 			dasm_put(Dst, 1943, (def_reg-IR_REG_FP_FIRST), (op2_reg-IR_REG_FP_FIRST), (op3_reg-IR_REG_FP_FIRST));
-#line 3520 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3529 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	fcsel Rs(def_reg-IR_REG_FP_FIRST), Rs(op2_reg-IR_REG_FP_FIRST), Rs(op3_reg-IR_REG_FP_FIRST), ne
 			dasm_put(Dst, 1948, (def_reg-IR_REG_FP_FIRST), (op2_reg-IR_REG_FP_FIRST), (op3_reg-IR_REG_FP_FIRST));
-#line 3522 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3531 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 
@@ -7776,7 +7785,7 @@ static void ir_emit_return_void(ir_ctx *ctx)
 	ir_emit_epilogue(ctx);
 	//|	ret
 	dasm_put(Dst, 1953);
-#line 3537 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3546 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 }
 
 static void ir_emit_return_int(ir_ctx *ctx, ir_ref ref, ir_insn *insn)
@@ -7837,34 +7846,34 @@ static void ir_emit_sext(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (ir_type_size[dst_type] == 2) {
 				//|	sxtb Rw(def_reg), Rw(op1_reg)
 				dasm_put(Dst, 1955, (def_reg), (op1_reg));
-#line 3596 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3605 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[dst_type] == 4) {
 				//|	sxtb Rw(def_reg), Rw(op1_reg)
 				dasm_put(Dst, 1959, (def_reg), (op1_reg));
-#line 3598 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3607 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(ir_type_size[dst_type] == 8);
 				//|	sxtb Rx(def_reg), Rx(op1_reg)
 				dasm_put(Dst, 1963, (def_reg), (op1_reg));
-#line 3601 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3610 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else if (ir_type_size[src_type] == 2) {
 			if (ir_type_size[dst_type] == 4) {
 				//|	sxth Rw(def_reg), Rw(op1_reg)
 				dasm_put(Dst, 1967, (def_reg), (op1_reg));
-#line 3605 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3614 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(ir_type_size[dst_type] == 8);
 				//|	sxth Rx(def_reg), Rx(op1_reg)
 				dasm_put(Dst, 1971, (def_reg), (op1_reg));
-#line 3608 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3617 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			IR_ASSERT(ir_type_size[src_type] == 4);
 			IR_ASSERT(ir_type_size[dst_type] == 8);
 			//|	sxtw Rx(def_reg), Rw(op1_reg)
 			dasm_put(Dst, 1975, (def_reg), (op1_reg));
-#line 3613 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3622 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else if (IR_IS_CONST_REF(insn->op1)) {
 		IR_ASSERT(0);
@@ -7877,32 +7886,32 @@ static void ir_emit_sext(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				if (ir_type_size[dst_type] == 2) {
 					//|	ldrsb Rw(def_reg), [Rx(fp), #offset]
 					dasm_put(Dst, 1979, (def_reg), (fp), offset);
-#line 3624 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3633 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else if (ir_type_size[dst_type] == 4) {
 					//|	ldrsb Rw(def_reg), [Rx(fp), #offset]
 					dasm_put(Dst, 1984, (def_reg), (fp), offset);
-#line 3626 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3635 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					IR_ASSERT(ir_type_size[dst_type] == 8);
 					//|	ldrsb Rx(def_reg), [Rx(fp), #offset]
 					dasm_put(Dst, 1989, (def_reg), (fp), offset);
-#line 3629 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3638 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			} else {
 				ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 				if (ir_type_size[dst_type] == 2) {
 					//|	ldrsb Rw(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 1994, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3634 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3643 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else if (ir_type_size[dst_type] == 4) {
 					//|	ldrsb Rw(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 1999, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3636 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3645 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					IR_ASSERT(ir_type_size[dst_type] == 8);
 					//|	ldrsb Rx(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 2004, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3639 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3648 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			}
 		} else if (ir_type_size[src_type] == 2) {
@@ -7910,24 +7919,24 @@ static void ir_emit_sext(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				if (ir_type_size[dst_type] == 4) {
 					//|	ldrsh Rw(def_reg), [Rx(fp), #offset]
 					dasm_put(Dst, 2009, (def_reg), (fp), offset);
-#line 3645 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3654 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					IR_ASSERT(ir_type_size[dst_type] == 8);
 					//|	ldrsh Rx(def_reg), [Rx(fp), #offset]
 					dasm_put(Dst, 2014, (def_reg), (fp), offset);
-#line 3648 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3657 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			} else {
 				ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 				if (ir_type_size[dst_type] == 4) {
 					//|	ldrsh Rw(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 2019, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3653 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3662 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					IR_ASSERT(ir_type_size[dst_type] == 8);
 					//|	ldrsh Rx(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 2024, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3656 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3665 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			}
 		} else {
@@ -7936,12 +7945,12 @@ static void ir_emit_sext(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (aarch64_may_encode_addr_offset(offset, ir_type_size[src_type])) {
 				//|	ldrsw Rx(def_reg), [Rx(fp), #offset]
 				dasm_put(Dst, 2029, (def_reg), (fp), offset);
-#line 3663 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3672 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 				//|	ldrsw Rx(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 				dasm_put(Dst, 2034, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3666 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3675 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	}
@@ -7972,15 +7981,15 @@ static void ir_emit_zext(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		if (ir_type_size[src_type] == 1) {
 			//|	uxtb Rw(def_reg), Rw(op1_reg)
 			dasm_put(Dst, 2039, (def_reg), (op1_reg));
-#line 3695 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3704 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (ir_type_size[src_type] == 2) {
 			//|	uxth Rw(def_reg), Rw(op1_reg)
 			dasm_put(Dst, 2043, (def_reg), (op1_reg));
-#line 3697 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3706 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	mov Rw(def_reg), Rw(op1_reg)
 			dasm_put(Dst, 2047, (def_reg), (op1_reg));
-#line 3699 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3708 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else if (IR_IS_CONST_REF(insn->op1)) {
 		IR_ASSERT(0);
@@ -7992,34 +8001,34 @@ static void ir_emit_zext(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (ir_type_size[src_type] == 1) {
 				//|	ldrb Rw(def_reg), [Rx(fp), #offset]
 				dasm_put(Dst, 2051, (def_reg), (fp), offset);
-#line 3709 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3718 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[src_type] == 2) {
 				//|	ldrh Rw(def_reg), [Rx(fp), #offset]
 				dasm_put(Dst, 2056, (def_reg), (fp), offset);
-#line 3711 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3720 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(ir_type_size[src_type] == 4);
 				IR_ASSERT(ir_type_size[dst_type] == 8);
 				//|	ldr Rw(def_reg), [Rx(fp), #offset]
 				dasm_put(Dst, 2061, (def_reg), (fp), offset);
-#line 3715 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3724 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 			if (ir_type_size[src_type] == 1) {
 				//|	ldrb Rw(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 				dasm_put(Dst, 2066, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3720 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3729 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (ir_type_size[src_type] == 2) {
 				//|	ldrh Rw(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 				dasm_put(Dst, 2071, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3722 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3731 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(ir_type_size[src_type] == 4);
 				IR_ASSERT(ir_type_size[dst_type] == 8);
 				//|	ldr Rw(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 				dasm_put(Dst, 2076, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3726 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3735 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	}
@@ -8049,11 +8058,11 @@ static void ir_emit_trunc(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		if (ir_type_size[dst_type] == 1) {
 			//|	and Rw(def_reg), Rw(op1_reg), #0xff
 			dasm_put(Dst, 2081, (def_reg), (op1_reg));
-#line 3754 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3763 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (ir_type_size[dst_type] == 2) {
 			//|	and Rw(def_reg), Rw(op1_reg), #0xffff
 			dasm_put(Dst, 2085, (def_reg), (op1_reg));
-#line 3756 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3765 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else if (op1_reg != def_reg) {
 			ir_emit_mov(ctx, dst_type, def_reg, op1_reg);
 		}
@@ -8114,12 +8123,12 @@ static void ir_emit_bitcast(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (src_type == IR_DOUBLE) {
 				//|	fmov Rx(def_reg), Rd(op1_reg-IR_REG_FP_FIRST)
 				dasm_put(Dst, 2089, (def_reg), (op1_reg-IR_REG_FP_FIRST));
-#line 3815 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3824 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(src_type == IR_FLOAT);
 				//|	fmov Rw(def_reg), Rs(op1_reg-IR_REG_FP_FIRST)
 				dasm_put(Dst, 2093, (def_reg), (op1_reg-IR_REG_FP_FIRST));
-#line 3818 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3827 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else if (IR_IS_CONST_REF(insn->op1)) {
 			IR_ASSERT(0); //???
@@ -8131,24 +8140,24 @@ static void ir_emit_bitcast(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				if (src_type == IR_DOUBLE) {
 					//|	ldr Rx(def_reg), [Rx(fp), #offset]
 					dasm_put(Dst, 2097, (def_reg), (fp), offset);
-#line 3828 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3837 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					IR_ASSERT(src_type == IR_FLOAT);
 					//|	ldr Rw(def_reg), [Rx(fp), #offset]
 					dasm_put(Dst, 2102, (def_reg), (fp), offset);
-#line 3831 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3840 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			} else {
 				ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 				if (src_type == IR_DOUBLE) {
 					//|	ldr Rx(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 2107, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3836 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3845 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					IR_ASSERT(src_type == IR_FLOAT);
 					//|	ldr Rw(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 2112, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3839 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3848 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			}
 		}
@@ -8162,12 +8171,12 @@ static void ir_emit_bitcast(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (dst_type == IR_DOUBLE) {
 				//|	fmov Rd(def_reg-IR_REG_FP_FIRST), Rx(op1_reg)
 				dasm_put(Dst, 2117, (def_reg-IR_REG_FP_FIRST), (op1_reg));
-#line 3851 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3860 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(dst_type == IR_FLOAT);
 				//|	fmov Rs(def_reg-IR_REG_FP_FIRST), Rw(op1_reg)
 				dasm_put(Dst, 2121, (def_reg-IR_REG_FP_FIRST), (op1_reg));
-#line 3854 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3863 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else if (IR_IS_CONST_REF(insn->op1)) {
 			IR_ASSERT(0); //???
@@ -8179,24 +8188,24 @@ static void ir_emit_bitcast(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				if (dst_type == IR_DOUBLE) {
 					//|	ldr Rd(def_reg), [Rx(fp), #offset]
 					dasm_put(Dst, 2125, (def_reg), (fp), offset);
-#line 3864 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3873 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					IR_ASSERT(dst_type == IR_FLOAT);
 					//|	ldr Rs(def_reg), [Rx(fp), #offset]
 					dasm_put(Dst, 2130, (def_reg), (fp), offset);
-#line 3867 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3876 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			 } else {
 				ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 				if (dst_type == IR_DOUBLE) {
 					//|	ldr Rd(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 2135, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3872 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3881 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					IR_ASSERT(dst_type == IR_FLOAT);
 					//|	ldr Rs(def_reg), [Rx(fp), Rx(IR_REG_INT_TMP)]
 					dasm_put(Dst, 2140, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 3875 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3884 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			 }
 		}
@@ -8228,23 +8237,23 @@ static void ir_emit_int2fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (dst_type == IR_DOUBLE) {
 				//|	scvtf Rd(def_reg-IR_REG_FP_FIRST), Rx(op1_reg)
 				dasm_put(Dst, 2145, (def_reg-IR_REG_FP_FIRST), (op1_reg));
-#line 3905 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3914 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(dst_type == IR_FLOAT);
 				//|	scvtf Rs(def_reg-IR_REG_FP_FIRST), Rx(op1_reg)
 				dasm_put(Dst, 2149, (def_reg-IR_REG_FP_FIRST), (op1_reg));
-#line 3908 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3917 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			if (dst_type == IR_DOUBLE) {
 				//|	ucvtf Rd(def_reg-IR_REG_FP_FIRST), Rx(op1_reg)
 				dasm_put(Dst, 2153, (def_reg-IR_REG_FP_FIRST), (op1_reg));
-#line 3912 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3921 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(dst_type == IR_FLOAT);
 				//|	ucvtf Rs(def_reg-IR_REG_FP_FIRST), Rx(op1_reg)
 				dasm_put(Dst, 2157, (def_reg-IR_REG_FP_FIRST), (op1_reg));
-#line 3915 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3924 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	} else {
@@ -8257,12 +8266,12 @@ static void ir_emit_int2fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (dst_type == IR_DOUBLE) {
 				//|	scvtf Rd(def_reg-IR_REG_FP_FIRST), Rw(op1_reg)
 				dasm_put(Dst, 2161, (def_reg-IR_REG_FP_FIRST), (op1_reg));
-#line 3926 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3935 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(dst_type == IR_FLOAT);
 				//|	scvtf Rs(def_reg-IR_REG_FP_FIRST), Rw(op1_reg)
 				dasm_put(Dst, 2165, (def_reg-IR_REG_FP_FIRST), (op1_reg));
-#line 3929 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3938 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			if (ir_type_size[src_type] == 2) {
@@ -8273,12 +8282,12 @@ static void ir_emit_int2fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (dst_type == IR_DOUBLE) {
 				//|	ucvtf Rd(def_reg-IR_REG_FP_FIRST), Rw(op1_reg)
 				dasm_put(Dst, 2169, (def_reg-IR_REG_FP_FIRST), (op1_reg));
-#line 3938 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3947 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(dst_type == IR_FLOAT);
 				//|	ucvtf Rs(def_reg-IR_REG_FP_FIRST), Rw(op1_reg)
 				dasm_put(Dst, 2173, (def_reg-IR_REG_FP_FIRST), (op1_reg));
-#line 3941 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3950 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	}
@@ -8308,23 +8317,23 @@ static void ir_emit_fp2int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (src_type == IR_DOUBLE) {
 				//|	fcvtzs Rx(def_reg), Rd(op1_reg-IR_REG_FP_FIRST)
 				dasm_put(Dst, 2177, (def_reg), (op1_reg-IR_REG_FP_FIRST));
-#line 3969 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3978 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(src_type == IR_FLOAT);
 				//|	fcvtzs Rx(def_reg), Rs(op1_reg-IR_REG_FP_FIRST)
 				dasm_put(Dst, 2181, (def_reg), (op1_reg-IR_REG_FP_FIRST));
-#line 3972 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3981 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			if (src_type == IR_DOUBLE) {
 				//|	fcvtzu Rx(def_reg), Rd(op1_reg-IR_REG_FP_FIRST)
 				dasm_put(Dst, 2185, (def_reg), (op1_reg-IR_REG_FP_FIRST));
-#line 3976 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3985 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(src_type == IR_FLOAT);
 				//|	fcvtzu Rx(def_reg), Rs(op1_reg-IR_REG_FP_FIRST)
 				dasm_put(Dst, 2189, (def_reg), (op1_reg-IR_REG_FP_FIRST));
-#line 3979 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3988 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	} else {
@@ -8332,23 +8341,23 @@ static void ir_emit_fp2int(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (src_type == IR_DOUBLE) {
 				//|	fcvtzs Rw(def_reg), Rd(op1_reg-IR_REG_FP_FIRST)
 				dasm_put(Dst, 2193, (def_reg), (op1_reg-IR_REG_FP_FIRST));
-#line 3985 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3994 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(src_type == IR_FLOAT);
 				//|	fcvtzs Rw(def_reg), Rs(op1_reg-IR_REG_FP_FIRST)
 				dasm_put(Dst, 2197, (def_reg), (op1_reg-IR_REG_FP_FIRST));
-#line 3988 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 3997 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			if (src_type == IR_DOUBLE) {
 				//|	fcvtzu Rw(def_reg), Rd(op1_reg-IR_REG_FP_FIRST)
 				dasm_put(Dst, 2201, (def_reg), (op1_reg-IR_REG_FP_FIRST));
-#line 3992 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4001 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(src_type == IR_FLOAT);
 				//|	fcvtzu Rw(def_reg), Rs(op1_reg-IR_REG_FP_FIRST)
 				dasm_put(Dst, 2205, (def_reg), (op1_reg-IR_REG_FP_FIRST));
-#line 3995 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4004 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	}
@@ -8380,12 +8389,12 @@ static void ir_emit_fp2fp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	} else if (src_type == IR_DOUBLE) {
 		//|	fcvt Rs(def_reg-IR_REG_FP_FIRST), Rd(op1_reg-IR_REG_FP_FIRST)
 		dasm_put(Dst, 2209, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST));
-#line 4025 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4034 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		IR_ASSERT(src_type == IR_FLOAT);
 		//|	fcvt Rd(def_reg-IR_REG_FP_FIRST), Rs(op1_reg-IR_REG_FP_FIRST)
 		dasm_put(Dst, 2213, (def_reg-IR_REG_FP_FIRST), (op1_reg-IR_REG_FP_FIRST));
-#line 4028 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4037 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
 		ir_emit_store(ctx, dst_type, def, def_reg);
@@ -8460,12 +8469,12 @@ static void ir_emit_vaddr(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	if (aarch64_may_encode_imm12(offset)) {
 		//|	add Rx(def_reg), Rx(fp), #offset
 		dasm_put(Dst, 2217, (def_reg), (fp), offset);
-#line 4101 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4110 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, offset);
 		//|	add Rx(def_reg), Rx(fp), Rx(IR_REG_INT_TMP)
 		dasm_put(Dst, 2222, (def_reg), (fp), (IR_REG_INT_TMP));
-#line 4104 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4113 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
 		ir_emit_store(ctx, type, def, def_reg);
@@ -8807,12 +8816,12 @@ static void ir_emit_alloca(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		if (aarch64_may_encode_imm12(size)) {
 			//|	sub sp, sp, #size
 			dasm_put(Dst, 2227, size);
-#line 4444 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4453 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, size);
 			//|	sub sp, sp, Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 2230, (IR_REG_INT_TMP));
-#line 4447 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4456 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		if (!(ctx->flags & IR_USE_FRAME_POINTER)) {
 			ctx->call_stack_size += size;
@@ -8833,12 +8842,12 @@ static void ir_emit_alloca(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		//|	and Rx(def_reg), Rx(def_reg), #(~(alignment-1))
 		//|	sub sp, sp, Rx(def_reg);
 		dasm_put(Dst, 2233, (def_reg), (op2_reg), (alignment-1), (def_reg), (def_reg), (unsigned int)((~(alignment-1))), (unsigned int)((unsigned long long)((~(alignment-1)))>>32), (def_reg));
-#line 4466 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4475 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	if (def_reg != IR_REG_NONE) {
 		//|	mov Rx(def_reg), sp
 		dasm_put(Dst, 2244, (def_reg));
-#line 4469 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4478 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if (IR_REG_SPILLED(ctx->regs[def][0])) {
 			ir_emit_store(ctx, insn->type, def, def_reg);
 		}
@@ -8865,12 +8874,12 @@ static void ir_emit_afree(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		if (aarch64_may_encode_imm12(size)) {
 			//|	add sp, sp, #size
 			dasm_put(Dst, 2247, size);
-#line 4494 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4503 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, size);
 			//|	add sp, sp, Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 2250, (IR_REG_INT_TMP));
-#line 4497 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4506 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		if (!(ctx->flags & IR_USE_FRAME_POINTER)) {
 			ctx->call_stack_size -= size;
@@ -8891,7 +8900,7 @@ static void ir_emit_afree(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 
 		//|	add sp, sp, Rx(op2_reg);
 		dasm_put(Dst, 2253, (op2_reg));
-#line 4516 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4525 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -8907,7 +8916,7 @@ static void ir_emit_block_begin(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	}
 	//|	mov Rx(def_reg), sp
 	dasm_put(Dst, 2256, (def_reg));
-#line 4530 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4539 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
 		ir_emit_store(ctx, IR_ADDR, def, def_reg);
@@ -8928,7 +8937,7 @@ static void ir_emit_block_end(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 
 	//|	mov sp, Rx(op2_reg)
 	dasm_put(Dst, 2259, (op2_reg));
-#line 4549 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4558 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 }
 
 static void ir_emit_frame_addr(ir_ctx *ctx, ir_ref def)
@@ -8940,16 +8949,16 @@ static void ir_emit_frame_addr(ir_ctx *ctx, ir_ref def)
 	if (ctx->flags & IR_USE_FRAME_POINTER) {
 		//|	mov Rx(def_reg), Rx(IR_REG_X29)
 		dasm_put(Dst, 2262, (def_reg), (IR_REG_X29));
-#line 4559 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4568 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else if (aarch64_may_encode_imm12(ctx->stack_frame_size + ctx->call_stack_size)) {
 		//|	add Rx(def_reg), Rx(IR_REG_X31), #(ctx->stack_frame_size + ctx->call_stack_size)
 		dasm_put(Dst, 2266, (def_reg), (IR_REG_X31), (ctx->stack_frame_size + ctx->call_stack_size));
-#line 4561 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4570 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, ctx->stack_frame_size + ctx->call_stack_size);
 		//|	add Rx(def_reg), Rx(IR_REG_X31), Rx(IR_REG_INT_TMP)
 		dasm_put(Dst, 2271, (def_reg), (IR_REG_X31), (IR_REG_INT_TMP));
-#line 4564 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4573 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
 		ir_emit_store(ctx, IR_ADDR, def, def_reg);
@@ -8992,7 +9001,7 @@ static void ir_emit_va_start(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		//|	add Rx(tmp_reg), Rx(fp), #arg_area_offset
 		//|	str Rx(tmp_reg), [Rx(op2_reg), #offset]
 		dasm_put(Dst, 2276, (tmp_reg), (fp), arg_area_offset, (tmp_reg), (op2_reg), offset);
-#line 4605 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4614 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		ir_reg fp;
 		int reg_save_area_offset;
@@ -9028,28 +9037,28 @@ static void ir_emit_va_start(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		//|	add Rx(tmp_reg), Rx(fp), #overflow_arg_area_offset
 		//|	str Rx(tmp_reg), [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, stack))]
 		dasm_put(Dst, 2285, (tmp_reg), (fp), overflow_arg_area_offset, (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, stack)));
-#line 4639 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4648 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if ((ctx->flags2 & (IR_HAS_VA_ARG_GP|IR_HAS_VA_COPY)) && ctx->gp_reg_params < cc->int_param_regs_count) {
 			reg_save_area_offset += sizeof(void*) * cc->int_param_regs_count;
 			/* Set va_list.gr_top */
 			if (overflow_arg_area_offset != reg_save_area_offset) {
 				//|	add Rx(tmp_reg), Rx(fp), #reg_save_area_offset
 				dasm_put(Dst, 2294, (tmp_reg), (fp), reg_save_area_offset);
-#line 4644 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4653 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			//|	str Rx(tmp_reg), [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, gr_top))]
 			dasm_put(Dst, 2299, (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, gr_top)));
-#line 4646 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4655 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			/* Set va_list.gr_offset */
 			//|	movn Rw(tmp_reg), #~(0 - (sizeof(void*) * (cc->int_param_regs_count - ctx->gp_reg_params)))
 			//|	str Rw(tmp_reg),  [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, gr_offset))]
 			dasm_put(Dst, 2304, (tmp_reg), ~(0 - (sizeof(void*) * (cc->int_param_regs_count - ctx->gp_reg_params))), (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, gr_offset)));
-#line 4649 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4658 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			/* Set va_list.gr_offset */
 			//|	str wzr,  [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, gr_offset))]
 			dasm_put(Dst, 2312, (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, gr_offset)));
-#line 4652 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4661 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		if ((ctx->flags2 & (IR_HAS_VA_ARG_FP|IR_HAS_VA_COPY)) && ctx->fp_reg_params < cc->fp_param_regs_count) {
 			reg_save_area_offset += 16 * cc->fp_param_regs_count;
@@ -9057,21 +9066,21 @@ static void ir_emit_va_start(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (overflow_arg_area_offset != reg_save_area_offset || ctx->gp_reg_params < cc->int_param_regs_count) {
 				//|	add Rx(tmp_reg), Rx(fp), #reg_save_area_offset
 				dasm_put(Dst, 2316, (tmp_reg), (fp), reg_save_area_offset);
-#line 4658 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4667 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			//|	str Rx(tmp_reg), [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, vr_top))]
 			dasm_put(Dst, 2321, (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, vr_top)));
-#line 4660 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4669 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			/* Set va_list.vr_offset */
 			//|	movn Rw(tmp_reg), #~(0 - (16 * (cc->fp_param_regs_count - ctx->fp_reg_params)))
 			//|	str Rw(tmp_reg),  [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, vr_offset))]
 			dasm_put(Dst, 2326, (tmp_reg), ~(0 - (16 * (cc->fp_param_regs_count - ctx->fp_reg_params))), (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, vr_offset)));
-#line 4663 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4672 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			/* Set va_list.vr_offset */
 			//|	str wzr,  [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, vr_offset))]
 			dasm_put(Dst, 2334, (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, vr_offset)));
-#line 4666 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4675 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 }
@@ -9114,7 +9123,7 @@ static void ir_emit_va_copy(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		//|	ldr Rx(tmp_reg), [Rx(op3_reg), #op3_offset]
 		//|	str Rx(tmp_reg), [Rx(op2_reg), #op2_offset]
 		dasm_put(Dst, 2338, (tmp_reg), (op3_reg), op3_offset, (tmp_reg), (op2_reg), op2_offset);
-#line 4707 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4716 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else {
 		ir_reg tmp_reg = ctx->regs[def][1];
 		ir_reg op2_reg = ctx->regs[def][2];
@@ -9154,7 +9163,7 @@ static void ir_emit_va_copy(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		//|	str Rx(tmp_reg), [Rx(op2_reg), #(op2_offset+24)]
 		dasm_put(Dst, 2347, (tmp_reg), (op3_reg), op3_offset, (tmp_reg), (op2_reg), op2_offset, (tmp_reg), (op3_reg), (op3_offset+8), (tmp_reg), (op2_reg), (op2_offset+8), (tmp_reg), (op3_reg), (op3_offset+16), (tmp_reg), (op2_reg), (op2_offset+16), (tmp_reg), (op3_reg), (op3_offset+24));
 		dasm_put(Dst, 2376, (tmp_reg), (op2_reg), (op2_offset+24));
-#line 4744 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4753 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 }
 
@@ -9185,14 +9194,14 @@ static void ir_emit_va_arg(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		}
 		//|	ldr Rx(tmp_reg), [Rx(op2_reg), #offset]
 		dasm_put(Dst, 2381, (tmp_reg), (op2_reg), offset);
-#line 4773 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4782 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if (def_reg  != IR_REG_NONE) {
 			ir_emit_load_mem(ctx, type, def_reg, IR_MEM_BO(tmp_reg, 0));
 		}
 		//|	add Rx(tmp_reg), Rx(tmp_reg), #IR_MAX(ir_type_size[type], sizeof(void*))
 		//|	str Rx(tmp_reg), [Rx(op2_reg), #offset]
 		dasm_put(Dst, 2386, (tmp_reg), (tmp_reg), IR_MAX(ir_type_size[type], sizeof(void*)), (tmp_reg), (op2_reg), offset);
-#line 4778 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4787 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if (def_reg != IR_REG_NONE && IR_REG_SPILLED(ctx->regs[def][0])) {
 			ir_emit_store(ctx, type, def, def_reg);
 		}
@@ -9223,11 +9232,11 @@ static void ir_emit_va_arg(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			//|	sxtw Rx(tmp_reg), Rw(tmp_reg)
 			//|	add Rx(IR_REG_INT_TMP), Rx(tmp_reg), Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 2395, (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, gr_offset)), (tmp_reg), (IR_REG_INT_TMP), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, gr_top)), (tmp_reg), (tmp_reg), (IR_REG_INT_TMP), (tmp_reg), (IR_REG_INT_TMP));
-#line 4807 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4816 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			if (def_reg  != IR_REG_NONE) {
 				//|	ldr Rx(def_reg), [Rx(IR_REG_INT_TMP)]
 				dasm_put(Dst, 2415, (def_reg), (IR_REG_INT_TMP));
-#line 4809 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4818 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			//|	add Rw(tmp_reg), Rw(tmp_reg), #sizeof(void*)
 			//|	str Rw(tmp_reg), [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, gr_offset))]
@@ -9235,17 +9244,17 @@ static void ir_emit_va_arg(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			//|1:
 			//|	ldr Rx(tmp_reg), [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, stack))]
 			dasm_put(Dst, 2419, (tmp_reg), (tmp_reg), sizeof(void*), (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, gr_offset)), (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, stack)));
-#line 4815 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4824 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			if (def_reg  != IR_REG_NONE) {
 				//|	ldr Rx(def_reg), [Rx(tmp_reg)]
 				dasm_put(Dst, 2435, (def_reg), (tmp_reg));
-#line 4817 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4826 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			//|	add Rx(tmp_reg), Rx(tmp_reg), #sizeof(void*)
 			//|	str Rx(tmp_reg), [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, stack))]
 			//|2:
 			dasm_put(Dst, 2439, (tmp_reg), (tmp_reg), sizeof(void*), (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, stack)));
-#line 4821 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4830 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	ldr Rw(tmp_reg), [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, vr_offset))]
 			//|	cmp Rw(tmp_reg), wzr
@@ -9254,11 +9263,11 @@ static void ir_emit_va_arg(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			//|	sxtw Rx(tmp_reg), Rw(tmp_reg)
 			//|	add Rx(IR_REG_INT_TMP), Rx(tmp_reg), Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 2449, (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, vr_offset)), (tmp_reg), (IR_REG_INT_TMP), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, vr_top)), (tmp_reg), (tmp_reg), (IR_REG_INT_TMP), (tmp_reg), (IR_REG_INT_TMP));
-#line 4828 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4837 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			if (def_reg  != IR_REG_NONE) {
 				//|	ldr Rd(def_reg-IR_REG_FP_FIRST), [Rx(IR_REG_INT_TMP)]
 				dasm_put(Dst, 2469, (def_reg-IR_REG_FP_FIRST), (IR_REG_INT_TMP));
-#line 4830 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4839 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			//|	add Rw(tmp_reg), Rw(tmp_reg), #16
 			//|	str Rw(tmp_reg), [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, vr_offset))]
@@ -9266,17 +9275,17 @@ static void ir_emit_va_arg(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			//|1:
 			//|	ldr Rx(tmp_reg), [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, stack))]
 			dasm_put(Dst, 2473, (tmp_reg), (tmp_reg), (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, vr_offset)), (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, stack)));
-#line 4836 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4845 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			if (def_reg  != IR_REG_NONE) {
 				//|	ldr Rd(def_reg-IR_REG_FP_FIRST), [Rx(tmp_reg)]
 				dasm_put(Dst, 2488, (def_reg-IR_REG_FP_FIRST), (tmp_reg));
-#line 4838 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4847 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			//|	add Rx(tmp_reg), Rx(tmp_reg), #sizeof(void*)
 			//|	str Rx(tmp_reg), [Rx(op2_reg), #(offset+offsetof(ir_aarch64_sysv_va_list, stack))]
 			//|2:
 			dasm_put(Dst, 2492, (tmp_reg), (tmp_reg), sizeof(void*), (tmp_reg), (op2_reg), (offset+offsetof(ir_aarch64_sysv_va_list, stack)));
-#line 4842 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4851 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		if (def_reg != IR_REG_NONE && IR_REG_SPILLED(ctx->regs[def][0])) {
 			ir_emit_store(ctx, type, def, def_reg);
@@ -9389,7 +9398,7 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 2506, (op2_reg), max.i64);
 					}
 				//|} MACRO ASM_REG_IMM_OP (4)
-#line 4945 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4954 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				ir_emit_load_imm_int(ctx, type, tmp_reg, max.i64);
 				//|	ASM_REG_REG_OP cmp, type, op2_reg, tmp_reg
@@ -9402,16 +9411,16 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 				dasm_put(Dst, 2514, (op2_reg), (tmp_reg));
 					}
 				//|} MACRO ASM_REG_REG_OP (4)
-#line 4948 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4957 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			if (IR_IS_TYPE_SIGNED(type)) {
 				//|	bgt =>default_label
 				dasm_put(Dst, 2518, default_label);
-#line 4951 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4960 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	bhi =>default_label
 				dasm_put(Dst, 2521, default_label);
-#line 4953 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4962 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 
@@ -9429,7 +9438,7 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 2529, (op1_reg), (op2_reg), min.i64);
 				}
 			//|} MACRO ASM_REG_REG_IMM_OP (5)
-#line 4961 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4970 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, type, tmp_reg, min.i64);
 			//|	ASM_REG_REG_REG_OP subs, type, op1_reg, op2_reg, tmp_reg
@@ -9442,18 +9451,18 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 2539, (op1_reg), (op2_reg), (tmp_reg));
 				}
 			//|} MACRO ASM_REG_REG_REG_OP (5)
-#line 4964 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4973 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 
 		if (default_label) {
 			if (IR_IS_TYPE_SIGNED(type)) {
 				//|	blt =>default_label
 				dasm_put(Dst, 2544, default_label);
-#line 4969 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4978 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	blo =>default_label
 				dasm_put(Dst, 2547, default_label);
-#line 4971 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4980 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 
@@ -9462,17 +9471,17 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 		//|	br Rx(tmp_reg)
 		//|.jmp_table
 		dasm_put(Dst, 2550, (tmp_reg), (tmp_reg), (tmp_reg), (op1_reg), (tmp_reg));
-#line 4978 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4987 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		if (!data->jmp_table_label) {
 			data->jmp_table_label = ctx->cfg_blocks_count + ctx->consts_count + 3;
 			//|=>data->jmp_table_label:
 			dasm_put(Dst, 2560, data->jmp_table_label);
-#line 4981 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4990 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		//|.align 8
 		//|1:
 		dasm_put(Dst, 2562);
-#line 4984 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 4993 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		for (i = 0; i <= (max.i64 - min.i64); i++) {
 			int b = labels[i];
 			if (b) {
@@ -9489,8 +9498,9 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 
 						//|	.addr &addr
 						dasm_put(Dst, 2565, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)((unsigned long long)((ptrdiff_t)(addr))>>32));
-#line 4999 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
-						if (ctx->ir_base[bb->start].op != IR_CASE_DEFAULT) {
+#line 5008 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+						if (ctx->ir_base[bb->start].op1 == def
+						 && ctx->ir_base[bb->start].op != IR_CASE_DEFAULT) {
 							bb->flags |= IR_BB_EMPTY;
 						}
 						continue;
@@ -9498,16 +9508,16 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 				}
 				//|	.addr =>b
 				dasm_put(Dst, 2568, b);
-#line 5006 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5016 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	.addr 0
 				dasm_put(Dst, 2570);
-#line 5008 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5018 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 		//|.code
 		dasm_put(Dst, 2575);
-#line 5011 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5021 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		ir_mem_free(labels);
 	} else {
 		p = &ctx->cfg_edges[bb->successors];
@@ -9529,7 +9539,7 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 2580, (op2_reg), val->val.i64);
 						}
 					//|} MACRO ASM_REG_IMM_OP (4)
-#line 5023 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5033 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					ir_emit_load_imm_int(ctx, type, tmp_reg, val->val.i64);
 					//|	ASM_REG_REG_OP cmp, type, op2_reg, tmp_reg
@@ -9542,12 +9552,12 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 2588, (op2_reg), (tmp_reg));
 						}
 					//|} MACRO ASM_REG_REG_OP (4)
-#line 5026 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5036 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 				}
 				//|	beq =>label
 				dasm_put(Dst, 2592, label);
-#line 5029 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5039 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else if (use_insn->op == IR_CASE_RANGE) {
 				val = &ctx->ir_base[use_insn->op2];
 				IR_ASSERT(!IR_IS_SYM_CONST(val->op));
@@ -9563,7 +9573,7 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 2599, (op2_reg), val->val.i64);
 						}
 					//|} MACRO ASM_REG_IMM_OP (4)
-#line 5035 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5045 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					ir_emit_load_imm_int(ctx, type, tmp_reg, val->val.i64);
 					//|	ASM_REG_REG_OP cmp, type, op2_reg, tmp_reg
@@ -9576,17 +9586,17 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 2607, (op2_reg), (tmp_reg));
 						}
 					//|} MACRO ASM_REG_REG_OP (4)
-#line 5038 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5048 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 				}
 				if (IR_IS_TYPE_SIGNED(type)) {
 					//|	blt >1
 					dasm_put(Dst, 2611);
-#line 5042 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5052 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					//|	blo >1
 					dasm_put(Dst, 2614);
-#line 5044 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5054 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 				val = &ctx->ir_base[use_insn->op3];
 				IR_ASSERT(!IR_IS_SYM_CONST(val->op));
@@ -9602,7 +9612,7 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 2621, (op2_reg), val->val.i64);
 						}
 					//|} MACRO ASM_REG_IMM_OP (4)
-#line 5050 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5060 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					ir_emit_load_imm_int(ctx, type, tmp_reg, val->val.i64);
 					//|	ASM_REG_REG_OP cmp, type, op2_reg, tmp_reg
@@ -9615,27 +9625,27 @@ static void ir_emit_switch(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *insn)
 					dasm_put(Dst, 2629, (op2_reg), (tmp_reg));
 						}
 					//|} MACRO ASM_REG_REG_OP (4)
-#line 5053 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5063 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 				}
 				if (IR_IS_TYPE_SIGNED(type)) {
 					//|	ble =>label
 					dasm_put(Dst, 2633, label);
-#line 5057 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5067 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					//|	bls =>label
 					dasm_put(Dst, 2636, label);
-#line 5059 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5069 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 				//|1:
 				dasm_put(Dst, 2639);
-#line 5061 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5071 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 		if (default_label) {
 			//|	b =>default_label
 			dasm_put(Dst, 2641, default_label);
-#line 5065 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5075 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 }
@@ -9735,11 +9745,11 @@ static int32_t ir_emit_arguments(ir_ctx *ctx, ir_ref def, ir_insn *insn, const i
 					//|	stp x29, x30, [sp, # (-(ctx->stack_frame_size+16))]!
 					//|	mov x29, sp
 					dasm_put(Dst, 2644,  (-(ctx->stack_frame_size+16)));
-#line 5163 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5173 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 				//|	sub sp, sp, #used_stack
 				dasm_put(Dst, 2648, used_stack);
-#line 5165 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5175 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	}
@@ -9775,7 +9785,7 @@ static int32_t ir_emit_arguments(ir_ctx *ctx, ir_ref def, ir_insn *insn, const i
 
 				//|	add Rx(ir_call_conv_default.int_param_regs[0]), sp, #(used_stack - copy_stack_offset)
 				dasm_put(Dst, 2651, (ir_call_conv_default.int_param_regs[0]), (used_stack - copy_stack_offset));
-#line 5199 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5209 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				if (src_reg != IR_REG_NONE) {
 					if (IR_REG_SPILLED(src_reg)) {
 						src_reg = IR_REG_NUM(src_reg);
@@ -9783,7 +9793,7 @@ static int32_t ir_emit_arguments(ir_ctx *ctx, ir_ref def, ir_insn *insn, const i
 					}
 					//|	mov Rx(ir_call_conv_default.int_param_regs[1]), Rx(src_reg)
 					dasm_put(Dst, 2655, (ir_call_conv_default.int_param_regs[1]), (src_reg));
-#line 5205 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5215 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					ir_emit_load(ctx, IR_ADDR, ir_call_conv_default.int_param_regs[1], arg_insn->op1);
 				}
@@ -9792,12 +9802,12 @@ static int32_t ir_emit_arguments(ir_ctx *ctx, ir_ref def, ir_insn *insn, const i
 				if (aarch64_may_use_b(ctx->code_buffer, addr)) {
 					//|	bl &addr
 					dasm_put(Dst, 2659, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5212 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5222 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, (intptr_t)addr);
 					//|	blr Rx(IR_REG_INT_TMP)
 					dasm_put(Dst, 2662, (IR_REG_INT_TMP));
-#line 5215 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5225 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			}
 		}
@@ -9897,17 +9907,17 @@ static int32_t ir_emit_arguments(ir_ctx *ctx, ir_ref def, ir_insn *insn, const i
 				if (j > last_named_input) {
 					//|	add Rx(tmp_reg), sp, #(used_stack - copy_stack_offset)
 					dasm_put(Dst, 2665, (tmp_reg), (used_stack - copy_stack_offset));
-#line 5313 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5323 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					ir_emit_store_mem_int(ctx, IR_ADDR, IR_MEM_BO(IR_REG_STACK_POINTER, stack_offset), tmp_reg);
 				} else if (int_param < cc->int_param_regs_count) {
 					dst_reg = cc->int_param_regs[int_param];
 					//|	add Rx(dst_reg), sp, #(used_stack - copy_stack_offset)
 					dasm_put(Dst, 2669, (dst_reg), (used_stack - copy_stack_offset));
-#line 5317 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5327 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					//|	add Rx(tmp_reg), sp, #(used_stack - copy_stack_offset)
 					dasm_put(Dst, 2673, (tmp_reg), (used_stack - copy_stack_offset));
-#line 5319 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5329 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					ir_emit_store_mem_int(ctx, IR_ADDR, IR_MEM_BO(IR_REG_STACK_POINTER, stack_offset), tmp_reg);
 					stack_offset += sizeof(void*);
 				}
@@ -9987,12 +9997,12 @@ static void ir_emit_call_ex(ir_ctx *ctx, ir_ref def, ir_insn *insn, const ir_cal
 		if (aarch64_may_use_b(ctx->code_buffer, addr)) {
 			//|	bl &addr
 			dasm_put(Dst, 2677, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5397 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5407 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, (intptr_t)addr);
 			//|	blr Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 2680, (IR_REG_INT_TMP));
-#line 5400 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5410 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
     } else {
 		ir_reg op2_reg = ctx->regs[def][2];
@@ -10004,13 +10014,13 @@ static void ir_emit_call_ex(ir_ctx *ctx, ir_ref def, ir_insn *insn, const ir_cal
 		}
 		//|	blr Rx(op2_reg)
 		dasm_put(Dst, 2683, (op2_reg));
-#line 5410 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5420 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
     }
 
 	if (used_stack) {
 		//|	add sp, sp, #used_stack
 		dasm_put(Dst, 2686, used_stack);
-#line 5414 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5424 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		ctx->call_stack_size -= used_stack;
 	}
 
@@ -10092,7 +10102,7 @@ static void ir_emit_tailcall(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			dasm_put(Dst, 2693, (op2_reg), (IR_REG_NUM(orig_op2_reg)));
 				}
 			//|} MACRO ASM_REG_REG_OP (4)
-#line 5486 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5496 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			op2_reg = IR_REG_NUM(op2_reg);
 		}
@@ -10106,19 +10116,19 @@ static void ir_emit_tailcall(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		if (aarch64_may_use_b(ctx->code_buffer, addr)) {
 			//|	b &addr
 			dasm_put(Dst, 2697, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5498 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5508 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, (intptr_t)addr);
 			//|	br Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 2700, (IR_REG_INT_TMP));
-#line 5501 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5511 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
     } else {
 		IR_ASSERT(op2_reg != IR_REG_NONE);
 		IR_ASSERT(!IR_REGSET_IN((ir_regset)ctx->used_preserved_regs, op2_reg));
 		//|	br Rx(op2_reg)
 		dasm_put(Dst, 2703, (op2_reg));
-#line 5506 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5516 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
     }
 }
 
@@ -10135,7 +10145,7 @@ static void ir_emit_ijmp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		}
 		//|	br Rx(op2_reg)
 		dasm_put(Dst, 2706, (op2_reg));
-#line 5521 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5531 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	} else if (IR_IS_CONST_REF(insn->op2)) {
 		if (ctx->ir_base[insn->op2].op == IR_LABEL) {
 			if (!data->resolved_label_syms) {
@@ -10148,7 +10158,7 @@ static void ir_emit_ijmp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 
 			//|	b =>target
 			dasm_put(Dst, 2709, target);
-#line 5532 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5542 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			return;
 		}
 
@@ -10157,12 +10167,12 @@ static void ir_emit_ijmp(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		if (aarch64_may_use_b(ctx->code_buffer, addr)) {
 			//|	b &addr
 			dasm_put(Dst, 2712, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5539 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5549 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, (intptr_t)addr);
 			//|	br Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 2715, (IR_REG_INT_TMP));
-#line 5542 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5552 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else {
 		IR_ASSERT(0);
@@ -10187,12 +10197,12 @@ static void ir_emit_guard(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 				if (aarch64_may_use_b(ctx->code_buffer, addr)) {
 					//|	b &addr
 					dasm_put(Dst, 2718, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5565 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5575 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				} else {
 					ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, (intptr_t)addr);
 					//|	br Rx(IR_REG_INT_TMP)
 					dasm_put(Dst, 2721, (IR_REG_INT_TMP));
-#line 5568 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5578 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				}
 			} else {
 				IR_ASSERT(0);
@@ -10214,21 +10224,21 @@ static void ir_emit_guard(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 			if (ir_type_size[type] == 8) {
 				//|	cbz Rx(op2_reg), &addr
 				dasm_put(Dst, 2724, (op2_reg), (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5588 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5598 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	cbz Rw(op2_reg), &addr
 				dasm_put(Dst, 2728, (op2_reg), (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5590 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5600 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else {
 			if (ir_type_size[type] == 8) {
 				//|	cbnz Rx(op2_reg), &addr
 				dasm_put(Dst, 2732, (op2_reg), (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5594 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5604 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				//|	cbnz Rw(op2_reg), &addr
 				dasm_put(Dst, 2736, (op2_reg), (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5596 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5606 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		}
 	} else {
@@ -10245,22 +10255,22 @@ static void ir_emit_guard_jz(ir_ctx *ctx, uint8_t op, void *addr, ir_type type, 
 		if (ir_type_size[type] == 8) {
 			//|	cbnz Rx(reg), &addr
 			dasm_put(Dst, 2740, (reg), (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5611 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5621 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	cbnz Rw(reg), &addr
 			dasm_put(Dst, 2744, (reg), (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5613 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5623 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else {
 		IR_ASSERT(op == IR_NE);
 		if (ir_type_size[type] == 8) {
 			//|	cbz Rx(reg), &addr
 			dasm_put(Dst, 2748, (reg), (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5618 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5628 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	cbz Rw(reg), &addr
 			dasm_put(Dst, 2752, (reg), (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5620 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5630 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 }
@@ -10277,52 +10287,52 @@ static void ir_emit_guard_jcc(ir_ctx *ctx, uint8_t op, void *addr, bool int_cmp)
 			case IR_EQ:
 				//|	beq &addr
 				dasm_put(Dst, 2756, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5635 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5645 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_NE:
 				//|	bne &addr
 				dasm_put(Dst, 2759, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5638 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5648 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_LT:
 				//|	blt &addr
 				dasm_put(Dst, 2762, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5641 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5651 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_GE:
 				//|	bge &addr
 				dasm_put(Dst, 2765, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5644 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5654 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_LE:
 				//|	ble &addr
 				dasm_put(Dst, 2768, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5647 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5657 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_GT:
 				//|	bgt &addr
 				dasm_put(Dst, 2771, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5650 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5660 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ULT:
 				//|	blo &addr
 				dasm_put(Dst, 2774, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5653 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5663 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_UGE:
 				//|	bhs &addr
 				dasm_put(Dst, 2777, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5656 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5666 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ULE:
 				//|	bls &addr
 				dasm_put(Dst, 2780, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5659 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5669 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_UGT:
 				//|	bhi &addr
 				dasm_put(Dst, 2783, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5662 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5672 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 		}
 	} else {
@@ -10332,62 +10342,62 @@ static void ir_emit_guard_jcc(ir_ctx *ctx, uint8_t op, void *addr, bool int_cmp)
 			case IR_EQ:
 				//|	beq &addr
 				dasm_put(Dst, 2786, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5670 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5680 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_NE:
 				//|	bne &addr
 				dasm_put(Dst, 2789, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5673 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5683 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_LT:
 				//|	bmi &addr
 				dasm_put(Dst, 2792, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5676 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5686 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_GE:
 				//|	bge &addr
 				dasm_put(Dst, 2795, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5679 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5689 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_LE:
 				//|	bls &addr
 				dasm_put(Dst, 2798, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5682 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5692 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_GT:
 				//|	bgt &addr
 				dasm_put(Dst, 2801, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5685 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5695 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ULT:
 				//|	blt &addr
 				dasm_put(Dst, 2804, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5688 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5698 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_UGE:
 				//|	bhs &addr
 				dasm_put(Dst, 2807, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5691 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5701 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ULE:
 				//|	ble &addr
 				dasm_put(Dst, 2810, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5694 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5704 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_UGT:
 				//|	bhi &addr
 				dasm_put(Dst, 2813, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5697 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5707 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_ORDERED:
 				//|	bvc &addr
 				dasm_put(Dst, 2816, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5700 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5710 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				break;
 			case IR_UNORDERED:
 				//|	bvs &addr
 				dasm_put(Dst, 2819, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5703 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5713 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 }
@@ -10433,12 +10443,12 @@ static void ir_emit_guard_cmp_int(ir_ctx *ctx, uint32_t b, ir_ref def, ir_insn *
 			if (aarch64_may_use_b(ctx->code_buffer, addr)) {
 				//|	b &addr
 				dasm_put(Dst, 2822, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5747 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5757 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, (intptr_t)addr);
 				//|	br Rx(IR_REG_INT_TMP)
 				dasm_put(Dst, 2825, (IR_REG_INT_TMP));
-#line 5750 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5760 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			return;
 		} else if (op == IR_UGE) {
@@ -10495,31 +10505,31 @@ static void ir_emit_guard_overflow(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		if (insn->op == IR_GUARD) {
 			//|	beq &addr
 			dasm_put(Dst, 2828, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5805 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5815 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	bne &addr
 			dasm_put(Dst, 2831, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5807 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5817 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else if (IR_IS_TYPE_SIGNED(type)) {
 		if (insn->op == IR_GUARD) {
 			//|	bvc &addr
 			dasm_put(Dst, 2834, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5811 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5821 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	bvs &addr
 			dasm_put(Dst, 2837, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5813 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5823 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else {
 		if (insn->op == IR_GUARD) {
 			//|	bcc &addr
 			dasm_put(Dst, 2840, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5817 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5827 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			//|	bcs &addr
 			dasm_put(Dst, 2843, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5819 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5829 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 }
@@ -10544,41 +10554,41 @@ static void ir_emit_tls(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 //|//???	MEM_ACCESS_64_WITH_UOFFSET_64 ldr, Rx(reg), Rx(reg), #insn->op3, TMP1
 dasm_put(Dst, 2846, code, (reg), (reg), (unsigned int)(0xfffffffffffffff8), (unsigned int)((unsigned long long)(0xfffffffffffffff8)>>32));
 #else
-#line 5842 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5852 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	code = 0xd53bd040 | reg; // TODO: hard-coded: mrs reg, tpidr_el0
 //|	.long code
 dasm_put(Dst, 2852, code);
 # ifdef __FreeBSD__
-#line 5845 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5855 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	if (insn->op3 == IR_NULL) {
 //|		ldr Rx(reg), [Rx(reg), #insn->op2]
 dasm_put(Dst, 2854, (reg), (reg), insn->op2);
 	} else {
-#line 5848 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5858 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 //|		ldr Rx(reg), [Rx(reg), #0]
 //|		ldr Rx(reg), [Rx(reg), #insn->op2]
 //|		ldr Rx(reg), [Rx(reg), #insn->op3]
 dasm_put(Dst, 2859, (reg), (reg), (reg), (reg), insn->op2, (reg), (reg), insn->op3);
 	}
-#line 5852 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5862 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 # elif defined(__MUSL__)
 	if (insn->op3 == IR_NULL) {
 //|		ldr Rx(reg), [Rx(reg), #insn->op2]
 dasm_put(Dst, 2871, (reg), (reg), insn->op2);
 	} else {
-#line 5856 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5866 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 //|		ldr Rx(reg), [Rx(reg), #-8]
 //|		ldr Rx(reg), [Rx(reg), #insn->op2]
 //|		ldr Rx(reg), [Rx(reg), #insn->op3]
 dasm_put(Dst, 2876, (reg), (reg), (reg), (reg), insn->op2, (reg), (reg), insn->op3);
 	}
-#line 5860 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5870 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 # else
 //|//???	IR_ASSERT(insn->op2 <= LDR_STR_PIMM64);
 //|	ldr Rx(reg), [Rx(reg), #insn->op2]
 dasm_put(Dst, 2888, (reg), (reg), insn->op2);
 # endif
-#line 5864 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5874 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 #endif
 	if (IR_REG_SPILLED(ctx->regs[def][0])) {
 		ir_emit_store(ctx, IR_ADDR, def, reg);
@@ -10611,7 +10621,7 @@ static void ir_emit_exitcall(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	//|	stp d2, d3, [sp, #-16]!
 	//|	stp d0, d1, [sp, #-16]!
 	dasm_put(Dst, 2893);
-#line 5895 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5905 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 	//|	str x30, [sp, #-16]!
 	//|	stp x28, x29, [sp, #-16]!
@@ -10630,14 +10640,14 @@ static void ir_emit_exitcall(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 	//|	stp x2, x3, [sp, #-16]!
 	//|	stp x0, x1, [sp, #-16]!
 	dasm_put(Dst, 2910);
-#line 5912 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5922 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 	//|	mov Rx(cc->int_param_regs[1]), sp
 	//|	add Rx(cc->int_param_regs[0]), Rx(cc->int_param_regs[1]), #(32*8+32*8)
 	//|	str Rx(cc->int_param_regs[0]), [sp, #(31*8)]
 	//|	mov Rx(cc->int_param_regs[0]), Rx(IR_REG_INT_TMP)
 	dasm_put(Dst, 2927, (cc->int_param_regs[1]), (cc->int_param_regs[0]), (cc->int_param_regs[1]), (cc->int_param_regs[0]), (cc->int_param_regs[0]), (IR_REG_INT_TMP));
-#line 5917 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5927 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 	if (IR_IS_CONST_REF(insn->op2)) {
 		void *addr = ir_call_addr(ctx, insn, &ctx->ir_base[insn->op2]);
@@ -10645,12 +10655,12 @@ static void ir_emit_exitcall(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 		if (aarch64_may_use_b(ctx->code_buffer, addr)) {
 			//|	bl &addr
 			dasm_put(Dst, 2938, (unsigned int)((ptrdiff_t)(addr)), (unsigned int)(((ptrdiff_t)(addr))>>32));
-#line 5923 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5933 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		} else {
 			ir_emit_load_imm_int(ctx, IR_ADDR, IR_REG_INT_TMP, (intptr_t)addr);
 			//|	blr Rx(IR_REG_INT_TMP)
 			dasm_put(Dst, 2941, (IR_REG_INT_TMP));
-#line 5926 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5936 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	} else {
 		IR_ASSERT(0);
@@ -10658,7 +10668,7 @@ static void ir_emit_exitcall(ir_ctx *ctx, ir_ref def, ir_insn *insn)
 
 	//|	add sp, sp, #(32*8+32*8)
 	dasm_put(Dst, 2944);
-#line 5932 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 5942 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 	if (def_reg != cc->int_ret_reg) {
 		ir_emit_mov(ctx, insn->type, def_reg, cc->int_ret_reg);
@@ -11243,11 +11253,11 @@ void *ir_emit_code(ir_ctx *ctx, size_t *size_ptr)
 		if (bb->flags & IR_BB_ALIGN_LOOP) {
 			//|	.align IR_LOOP_ALIGNMENT
 			dasm_put(Dst, 2946);
-#line 6515 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6525 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 		//|=>b:
 		dasm_put(Dst, 2948, b);
-#line 6517 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6527 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 		i = bb->start;
 		insn = ctx->ir_base + i;
@@ -11256,7 +11266,7 @@ void *ir_emit_code(ir_ctx *ctx, size_t *size_ptr)
 
 			//|=>label:
 			dasm_put(Dst, 2950, label);
-#line 6524 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6534 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			ir_emit_prologue(ctx);
 			ctx->entries[insn->op3] = i;
 		}
@@ -11397,7 +11407,7 @@ void *ir_emit_code(ir_ctx *ctx, size_t *size_ptr)
 						if (target != _ir_next_block(ctx, _b)) {
 							//|	b =>target
 							dasm_put(Dst, 2952, target);
-#line 6663 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6673 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 						}
 					} while (0);
 					break;
@@ -11520,7 +11530,7 @@ void *ir_emit_code(ir_ctx *ctx, size_t *size_ptr)
 				case IR_TRAP:
 					//|	brk
 					dasm_put(Dst, 2955);
-#line 6784 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6794 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 					break;
 				default:
 					IR_ASSERT(0 && "NIY rule/instruction");
@@ -11542,7 +11552,7 @@ void *ir_emit_code(ir_ctx *ctx, size_t *size_ptr)
 
 		//|=>exit_table_label:
 		dasm_put(Dst, 2957, exit_table_label);
-#line 6804 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6814 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		for (i = 0; i < ctx->deoptimization_exits; i++) {
 			const void *exit_addr = ctx->get_exit_addr(i);
 
@@ -11552,14 +11562,14 @@ void *ir_emit_code(ir_ctx *ctx, size_t *size_ptr)
 			}
 			//|	b &exit_addr
 			dasm_put(Dst, 2959, (unsigned int)((ptrdiff_t)(exit_addr)), (unsigned int)(((ptrdiff_t)(exit_addr))>>32));
-#line 6812 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6822 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 		}
 	}
 
 	if (data.rodata_label) {
 		//|.rodata
 		dasm_put(Dst, 2962);
-#line 6817 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6827 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	IR_BITSET_FOREACH(data.emit_constants, ir_bitset_len(ctx->consts_count), i) {
 		insn = &ctx->ir_base[-i];
@@ -11571,24 +11581,24 @@ void *ir_emit_code(ir_ctx *ctx, size_t *size_ptr)
 
 				//|.rodata
 				dasm_put(Dst, 2963);
-#line 6827 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6837 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				//|=>data.rodata_label:
 				dasm_put(Dst, 2964, data.rodata_label);
-#line 6828 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6838 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			if (insn->type == IR_DOUBLE) {
 				//|.align 8
 				//|=>label:
 				//|.long insn->val.u32, insn->val.u32_hi
 				dasm_put(Dst, 2966, label, insn->val.u32, insn->val.u32_hi);
-#line 6833 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6843 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			} else {
 				IR_ASSERT(insn->type == IR_FLOAT);
 				//|.align 4
 				//|=>label:
 				//|.long insn->val.u32
 				dasm_put(Dst, 2971, label, insn->val.u32);
-#line 6838 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6848 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 		} else if (insn->op == IR_STR) {
 			int label = ctx->cfg_blocks_count + i;
@@ -11600,15 +11610,15 @@ void *ir_emit_code(ir_ctx *ctx, size_t *size_ptr)
 
 				//|.rodata
 				dasm_put(Dst, 2975);
-#line 6848 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6858 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				//|=>data.rodata_label:
 				dasm_put(Dst, 2976, data.rodata_label);
-#line 6849 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6859 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			}
 			//|.align 8
 			//|=>label:
 			dasm_put(Dst, 2978, label);
-#line 6852 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6862 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 			while (1) {
 				char c;
 				uint32_t w = 0;
@@ -11624,7 +11634,7 @@ void *ir_emit_code(ir_ctx *ctx, size_t *size_ptr)
 				}
 				//|	.long w
 				dasm_put(Dst, 2981, w);
-#line 6866 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6876 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 				if (!c) {
 					break;
 				}
@@ -11637,7 +11647,7 @@ void *ir_emit_code(ir_ctx *ctx, size_t *size_ptr)
 	if (data.rodata_label) {
 		//|.code
 		dasm_put(Dst, 2983);
-#line 6877 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 6887 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	ir_mem_free(data.emit_constants);
 
@@ -11790,26 +11800,26 @@ const void *ir_emit_exitgroup(uint32_t first_exit_point, uint32_t exit_points_pe
 	//|	bl >2
 	//|1:
 	dasm_put(Dst, 2984);
-#line 7028 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 7038 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	for (i = 1; i < exit_points_per_group; i++) {
 		//|	bl >2
 		dasm_put(Dst, 2988);
-#line 7030 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 7040 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	//|2:
 	//|	adr Rx(IR_REG_INT_TMP), <1
 	//|	sub Rx(IR_REG_INT_TMP), lr, Rx(IR_REG_INT_TMP)
 	//|	lsr Rx(IR_REG_INT_TMP), Rx(IR_REG_INT_TMP), #2
 	dasm_put(Dst, 2991, (IR_REG_INT_TMP), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (IR_REG_INT_TMP), (IR_REG_INT_TMP));
-#line 7035 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 7045 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	if (first_exit_point) {
 		//|	add Rx(IR_REG_INT_TMP), Rx(IR_REG_INT_TMP), #first_exit_point
 		dasm_put(Dst, 3002, (IR_REG_INT_TMP), (IR_REG_INT_TMP), first_exit_point);
-#line 7037 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 7047 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	}
 	//|	b &exit_addr
 	dasm_put(Dst, 3007, (unsigned int)((ptrdiff_t)(exit_addr)), (unsigned int)(((ptrdiff_t)(exit_addr))>>32));
-#line 7039 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 7049 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 	ret = dasm_link(&dasm_state, &size);
 	if (ret != DASM_S_OK) {
@@ -11975,14 +11985,14 @@ void *ir_emit_thunk(ir_code_buffer *code_buffer, void *addr, size_t *size_ptr)
 
 	//|.code
 	dasm_put(Dst, 3010);
-#line 7203 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 7213 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 	//|	movz Rx(IR_REG_INT_TMP), #((uint64_t)(addr) & 0xffff)
 	//|	movk Rx(IR_REG_INT_TMP), #(((uint64_t)(addr) >> 16) & 0xffff), lsl #16
 	//|	movk Rx(IR_REG_INT_TMP), #(((uint64_t)(addr) >> 32) & 0xffff), lsl #32
 	//|	movk Rx(IR_REG_INT_TMP), #(((uint64_t)(addr) >> 48) & 0xffff), lsl #48
 	//|	br Rx(IR_REG_INT_TMP)
 	dasm_put(Dst, 3011, (IR_REG_INT_TMP), ((uint64_t)(addr) & 0xffff), (IR_REG_INT_TMP), (((uint64_t)(addr) >> 16) & 0xffff), (IR_REG_INT_TMP), (((uint64_t)(addr) >> 32) & 0xffff), (IR_REG_INT_TMP), (((uint64_t)(addr) >> 48) & 0xffff), (IR_REG_INT_TMP));
-#line 7208 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
+#line 7218 "/Users/ripta/projects/1z/ext/ir/ir_aarch64.dasc"
 
 	ret = dasm_link(&dasm_state, &size);
 	if (ret != DASM_S_OK) {

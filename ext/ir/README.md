@@ -3,7 +3,7 @@
 JIT compilation framework by Dmitry Stogov.
 
 - Upstream: https://github.com/dstogov/ir
-- Vendored commit: 7fed7999743ba6a5ffc5535e786725d5577f6f34
+- Vendored commit: 984a435f70753db8f1e0ef0b6912002c336e4dcb
 
 ## Excluded files
 
@@ -24,7 +24,7 @@ Current set:
   management. Wraps `ir_mem_mmap`, `ir_mem_protect`, and
   `ir_mem_unprotect` with `__APPLE__ && __aarch64__` paths that use
   `MAP_JIT` and `pthread_jit_write_protect_np`. Not absorbed upstream
-  as of HEAD `984a435f`.
+  as of the pinned commit.
 - `patches/0002-emit-c-overflow-type.patch` -- two fixes in
   `ir_emit_overflow_math`: widens the declared type of the
   `overflow_N` local from `int` to `ir_type_cname[type]` so the
@@ -32,7 +32,7 @@ Current set:
   pointer, and routes the intrinsic's overflow-boolean assignment to
   the `overflow` IR ref instead of `def` so the subsequent `def =
   overflow_N` line carries the computed result. Not absorbed upstream
-  as of HEAD `984a435f`.
+  as of the pinned commit.
 
 ### Local-only files (preserve across upgrade)
 

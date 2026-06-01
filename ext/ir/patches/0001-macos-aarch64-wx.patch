@@ -1,7 +1,7 @@
 --- a/ir.c
 +++ b/ir.c
-@@ -1864,6 +1864,10 @@
- 	return 1;
+@@ -1849,6 +1849,10 @@
+ 	return FlushInstructionCache(GetCurrentProcess(), ptr, size) == TRUE ? 1 : 0;
  }
  #else
 +
@@ -11,7 +11,7 @@
  
  #if defined(__linux__) && defined(__x86_64__) && defined(PKEY_DISABLE_WRITE)
  # define HAVE_PKEY_MPROTECT 1
-@@ -1885,6 +1889,14 @@
+@@ -1870,6 +1874,14 @@
  
  void *ir_mem_mmap(size_t size)
  {
@@ -26,7 +26,7 @@
  #ifdef HAVE_PKEY_MPROTECT
  	if (!ir_pkey && pkey_mprotect) {
  		int key = pkey_alloc(0, PKEY_DISABLE_WRITE);
-@@ -1916,6 +1928,7 @@
+@@ -1901,6 +1913,7 @@
  		ret = NULL;
  	}
  	return ret;
@@ -34,7 +34,7 @@
  }
  
  int ir_mem_unmap(void *ptr, size_t size)
-@@ -1932,6 +1945,10 @@
+@@ -1917,6 +1930,10 @@
  
  int ir_mem_protect(void *ptr, size_t size)
  {
@@ -45,7 +45,7 @@
  #ifdef HAVE_PKEY_MPROTECT
  	if (ir_pkey > 0) {
  		if (pkey_set(ir_pkey, PKEY_DISABLE_WRITE)) {
-@@ -1950,10 +1967,15 @@
+@@ -1935,10 +1952,15 @@
  		return 0;
  	}
  	return 1;
@@ -61,7 +61,7 @@
  #ifdef HAVE_PKEY_MPROTECT
  	if (ir_pkey > 0) {
  		if (pkey_set(ir_pkey, PKEY_DISABLE_EXECUTE)) {
-@@ -1972,6 +1994,7 @@
+@@ -1957,6 +1979,7 @@
  		return 0;
  	}
  	return 1;

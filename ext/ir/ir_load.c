@@ -21,9 +21,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <setjmp.h>
 #ifndef _WIN32
 # include <unistd.h>
 #endif
+
+#define IR_MAX_OPERANDS 512
 
 const unsigned char *yy_buf;
 const unsigned char *yy_end;
@@ -31,14 +34,18 @@ const unsigned char *yy_pos;
 const unsigned char *yy_text;
 uint32_t yy_line;
 
+static jmp_buf yy_jmp_buf;
+
 typedef struct _ir_parser_ctx {
 	ir_ctx    *ctx;
 	uint32_t   undef_count;
+	bool       bad_insns; /* some insns that might affect folding had undefined operands */
 	uint32_t   value_params_count;
 	ir_ref     curr_ref;
 	ir_strtab  var_tab;
 } ir_parser_ctx;
 
+static ir_parser_ctx *yy_ctx = NULL; /* we keep this global only to cleanum memory on syntax errors */
 static ir_strtab op_tab;
 
 #define IR_UNRESOLVED_MASK            0xc0000000
@@ -91,7 +98,10 @@ static void ir_define_var(ir_parser_ctx *p, const char *str, size_t len, ir_ref 
 			ir_strtab_update(&p->var_tab, str, len32, ref);
 		} else {
 			fprintf(stderr, "ERROR: Redefined variable `%.*s` on line %d\n", (int)len32, str, yy_line);
-			exit(2);
+			ir_strtab_free(&p->var_tab);
+			ir_free(p->ctx);
+			yy_ctx = NULL;
+			longjmp(yy_jmp_buf, 2);
 		}
 	}
 }
@@ -106,7 +116,10 @@ static void report_undefined_var(const char *str, uint32_t len, ir_ref val)
 static void ir_check_indefined_vars(ir_parser_ctx *p)
 {
 	ir_strtab_apply(&p->var_tab, report_undefined_var);
-	exit(2);
+	ir_strtab_free(&p->var_tab);
+	ir_free(p->ctx);
+	yy_ctx = NULL;
+	longjmp(yy_jmp_buf, 2);
 }
 
 /* forward declarations */
@@ -114,58 +127,71 @@ static void yy_error(const char *msg);
 static void yy_error_sym(const char *msg, int sym);
 static void yy_error_str(const char *msg, const char *str);
 
-static size_t yy_unescape_str(char*buf, const char *str, size_t len)
+static char yy_unescape_char(const char *str, size_t *len)
+{
+	char ch;
+
+	switch (*str) {
+		case '\\': return '\\';
+		case '\'': return '\'';
+		case '"':  return '"';
+		case 'a':  return '\a';
+		case 'b':  return '\b';
+		case 'e':  return 27; /* '\e'; */
+		case 'f':  return '\f';
+		case 'n':  return '\n';
+		case 'r':  return '\r';
+		case 't':  return '\t';
+		case 'v':  return '\v';
+		case '?':  return 0x3f;
+		case '0':
+		case '1':
+		case '2':
+		case '3':
+		case '4':
+		case '5':
+		case '6':
+		case '7':
+			ch = *str - '0';
+			str++;
+			if (*str >= '0' && *str <= '7') {
+				ch = ch * 8 + (*str - '0');
+				str++;
+				(*len)++;
+				if (*str >= '0' && *str <= '7') {
+					ch = ch * 8 + (*str - '0');
+					str++;
+					(*len)++;
+				}
+			}
+			return ch;
+		default:
+			yy_error("unsupported escape sequence");
+			return 0;
+	}
+}
+
+static size_t yy_unescape_str(char *buf, const char *str, size_t len)
 {
 	char *p = buf;
-	char ch;
 
 	while (len > 0) {
 		if (*str != '\\') {
 			*p = *str;
 		} else {
+			size_t l;
+
 			str++;
 			len--;
-			IR_ASSERT(len != 0);
-			switch (*str) {
-				case '\\': *p = '\\'; break;
-				case '\'': *p = '\''; break;
-				case '"':  *p = '"';  break;
-				case 'a':  *p = '\a'; break;
-				case 'b':  *p = '\b'; break;
-				case 'e':  *p = 27;   break; /* '\e'; */
-				case 'f':  *p = '\f'; break;
-				case 'n':  *p = '\n'; break;
-				case 'r':  *p = '\r'; break;
-				case 't':  *p = '\t'; break;
-				case 'v':  *p = '\v'; break;
-				case '?':  *p = 0x3f; break;
-				case '0':
-				case '1':
-				case '2':
-				case '3':
-				case '4':
-				case '5':
-				case '6':
-				case '7':
-					ch = *str - '0';
-					str++;
-					len--;
-					if (*str >= '0' && *str <= '7') {
-						ch = ch * 8 + (*str - '0');
-						str++;
-						len--;
-						if (*str >= '0' && *str <= '7') {
-							ch = ch * 8 + (*str - '0');
-							str++;
-							len--;
-						}
-				   }
-				   *p = ch;
-				   p++;
-				   continue;
-				default:
-					yy_error("unsupported escape sequence");
+			if (len == 0) {
+				yy_error("bad escape sequence");
 			}
+			l = 1;
+			*p = yy_unescape_char(str, &l);
+			p++;
+			str += l;
+			len -= l;
+			continue;
 		}
 		str++;
 		p++;
@@ -1371,8 +1397,9 @@ _yy_state_13:
 						ctx.flags |= flags;
 						ctx.ret_type = ret_type;
 						sym = parse_ir_func(sym, &p);
-						if (!loader->func_process(loader, &ctx, name)) yy_error("process_func error");
+						bool ok = loader->func_process(loader, &ctx, name);
 						ir_free(&ctx);
+						if (!ok) yy_error("process_func error");
 					} else {
 						yy_error_sym("unexpected", sym);
 					}
@@ -1387,8 +1414,9 @@ _yy_state_13:
 		if (!loader->func_init(loader, &ctx, NULL)) yy_error("ini_func error");
 		ctx.ret_type = -1;
 		sym = parse_ir_func(sym, &p);
-		if (!loader->func_process(loader, &ctx, NULL)) yy_error("process_func error");
+		bool ok = loader->func_process(loader, &ctx, NULL);
 		ir_free(&ctx);
+		if (!ok) yy_error("process_func error");
 	} else {
 		yy_error_sym("unexpected", sym);
 	}
@@ -1504,7 +1532,9 @@ static int parse_ir_sym_data(int sym, ir_loader *loader) {
 
 static int parse_ir_func(int sym, ir_parser_ctx *p) {
 	p->undef_count = 0;
+	p->bad_insns = 0;
 	ir_strtab_init(&p->var_tab, 256, 4096);
+	yy_ctx = p;
 	if (sym != YY__LBRACE) {
 		yy_error_sym("'{' expected, got", sym);
 	}
@@ -1528,6 +1558,8 @@ static int parse_ir_func(int sym, ir_parser_ctx *p) {
 	}
 	sym = get_sym();
 	if (p->undef_count) ir_check_indefined_vars(p);
+	if (p->bad_insns) p->ctx->flags |= IR_OPT_FOLDING;
+	yy_ctx = NULL;
 	ir_strtab_free(&p->var_tab);
 	if (p->ctx->value_params) {
 		uint32_t param_num = 1;
@@ -1680,7 +1712,7 @@ static int parse_ir_insn(int sym, ir_parser_ctx *p) {
 	uint8_t ret_type;
 	uint32_t flags;
 	uint32_t params_count;
-	uint8_t param_types[256];
+	uint8_t param_types[IR_MAX_OPERANDS + 1];
 	if (YY_IN_SET(sym, (YY_BOOL,YY_UINT8_T,YY_UINT16_T,YY_UINT32_T,YY_UINT64_T,YY_UINTPTR_T,YY_CHAR,YY_INT8_T,YY_INT16_T,YY_INT32_T,YY_INT64_T,YY_DOUBLE,YY_FLOAT), "\000\000\000\300\377\007\000\000")) {
 		sym = parse_type(sym, &t);
 		sym = parse_ID(sym, &str, &len);
@@ -1770,8 +1802,9 @@ static int parse_ir_insn(int sym, ir_parser_ctx *p) {
 				sym = get_sym();
 				sym = parse_DECNUMBER(sym, IR_I32, &count);
 				if (op == IR_PHI || op == IR_SNAPSHOT) count.i32++;
-				if (op == IR_CALL || op == IR_TAILCALL) count.i32+=2;
-				if (count.i32 < 0 || count.i32 > 255) yy_error("bad number of operands");
+				if (op == IR_CALL || op == IR_TAILCALL || op == IR_ASM) count.i32+=2;
+				if (count.i32 < 0) yy_error("negative number of operands");
+				if (count.i32 > IR_MAX_OPERANDS) yy_error("too many operands");
 				ref = ref2 = ir_emit_N(p->ctx, IR_OPT(op, t), count.i32);
 				if (sym == YY__LPAREN) {
 					sym = get_sym();
@@ -1780,12 +1813,27 @@ static int parse_ir_insn(int sym, ir_parser_ctx *p) {
 						sym = parse_val(sym, p, op, 1, &op1);
 						n = 1;
 						if (n > count.i32) yy_error("too many operands");
+						if (op == IR_CALL
+						 && IR_IS_UNRESOLVED(op1)
+						 && (p->ctx->flags & IR_OPT_FOLDING)) {
+							/* TODO: Disabling folding completely is too agressive. Try to find another solution. */
+							p->ctx->flags &= ~IR_OPT_FOLDING;
+							p->bad_insns = 1;
+						}
 						ir_set_op(p->ctx, ref, n, op1);
 						while (sym == YY__COMMA) {
 							sym = get_sym();
 							sym = parse_val(sym, p, op, n + 1, &op1);
 							n++;
 							if (n > count.i32) yy_error("too many operands");
+							if (op == IR_CALL
+							 && n == 2
+							 && IR_IS_UNRESOLVED(op1)
+							 && (p->ctx->flags & IR_OPT_FOLDING)) {
+								/* TODO: Disabling folding completely is too agressive. Try to find another solution. */
+								p->ctx->flags &= ~IR_OPT_FOLDING;
+								p->bad_insns = 1;
+							}
 							ir_set_op(p->ctx, ref, n, op1);
 						}
 					}
@@ -1818,75 +1866,103 @@ static int parse_ir_insn(int sym, ir_parser_ctx *p) {
 					}
 					sym = get_sym();
 				}
-				if (IR_IS_FOLDABLE_OP(op)
-				 && !IR_IS_UNRESOLVED(op1)
-				 && !IR_IS_UNRESOLVED(op2)
-				 && !IR_IS_UNRESOLVED(op3)) {
+				if (IR_IS_FOLDABLE_OP(op)) {
+					if (IR_IS_UNRESOLVED(op1) || IR_IS_UNRESOLVED(op2) || IR_IS_UNRESOLVED(op3)) {
+						if (op == IR_PHI) {
+							goto emit;
+						} else {
+							goto fallback;
+						}
+					}
 					ref = ir_fold(p->ctx, IR_OPT(op, t), op1, op2, op3);
 				/* Folding for control and memory instructions */
 #if 0
-				} else if (op == IR_BEGIN
-				 && !IR_IS_UNRESOLVED(op1)) {
+				} else if (op == IR_BEGIN) {
+					if (IR_IS_UNRESOLVED(op1)) {
+						goto fallback;
+					}
 					p->ctx->control = IR_UNUSED;
 					_ir_BEGIN(p->ctx, op1);
 					ref = p->ctx->control;
 					p->ctx->control = IR_UNUSED;
 #endif
-				} else if (op == IR_IF
-				 && !IR_IS_UNRESOLVED(op1)
-				 && !IR_IS_UNRESOLVED(op2)) {
+				} else if (op == IR_IF) {
+					if (IR_IS_UNRESOLVED(op1) || IR_IS_UNRESOLVED(op2)) {
+						goto fallback;
+					}
 					p->ctx->control = op1;
 					ref = _ir_IF(p->ctx, op2);
 					p->ctx->control = IR_UNUSED;
-				} else if (op == IR_GUARD
-				 && !IR_IS_UNRESOLVED(op1)
-				 && !IR_IS_UNRESOLVED(op2)
-				 && !IR_IS_UNRESOLVED(op3)) {
+				} else if (op == IR_GUARD) {
+					if (IR_IS_UNRESOLVED(op1) || IR_IS_UNRESOLVED(op2) || IR_IS_UNRESOLVED(op3)) {
+						goto fallback;
+					}
 					p->ctx->control = op1;
 					_ir_GUARD(p->ctx, op2, op3);
 					ref = p->ctx->control;
 					p->ctx->control = IR_UNUSED;
-				} else if (op == IR_GUARD_NOT
-				 && !IR_IS_UNRESOLVED(op1)
-				 && !IR_IS_UNRESOLVED(op2)
-				 && !IR_IS_UNRESOLVED(op3)) {
+				} else if (op == IR_GUARD_NOT) {
+					if (IR_IS_UNRESOLVED(op1) || IR_IS_UNRESOLVED(op2) || IR_IS_UNRESOLVED(op3)) {
+						goto fallback;
+					}
 					p->ctx->control = op1;
 					_ir_GUARD_NOT(p->ctx, op2, op3);
 					ref = p->ctx->control;
 					p->ctx->control = IR_UNUSED;
-				} else if (op == IR_VLOAD
-				 && !IR_IS_UNRESOLVED(op1)
-				 && !IR_IS_UNRESOLVED(op2)) {
+				} else if (op == IR_VLOAD) {
+					if (IR_IS_UNRESOLVED(op1) || IR_IS_UNRESOLVED(op2)) {
+						goto fallback;
+					}
 					p->ctx->control = op1;
 					ref = _ir_VLOAD(p->ctx, t, op2);
 					ref2 = p->ctx->control;
 					p->ctx->control = IR_UNUSED;
-				} else if (op == IR_VSTORE
-				 && !IR_IS_UNRESOLVED(op1)
-				 && !IR_IS_UNRESOLVED(op2)
-				 && !IR_IS_UNRESOLVED(op3)) {
+				} else if (op == IR_VSTORE) {
+					if (IR_IS_UNRESOLVED(op1) || IR_IS_UNRESOLVED(op2) || IR_IS_UNRESOLVED(op3)) {
+						goto fallback;
+					}
 					p->ctx->control = op1;
 					_ir_VSTORE(p->ctx, op2, op3);
 					ref = p->ctx->control;
 					p->ctx->control = IR_UNUSED;
-				} else if (op == IR_LOAD
-				 && !IR_IS_UNRESOLVED(op1)
-				 && !IR_IS_UNRESOLVED(op2)) {
+				} else if (op == IR_LOAD) {
+					if (IR_IS_UNRESOLVED(op1) || IR_IS_UNRESOLVED(op2)) {
+						goto fallback;
+					}
 					p->ctx->control = op1;
 					ref = _ir_LOAD(p->ctx, t, op2);
 					ref2 = p->ctx->control;
 					p->ctx->control = IR_UNUSED;
-				} else if (op == IR_STORE
-				 && !IR_IS_UNRESOLVED(op1)
-				 && !IR_IS_UNRESOLVED(op2)
-				 && !IR_IS_UNRESOLVED(op3)) {
+				} else if (op == IR_STORE) {
+					if (IR_IS_UNRESOLVED(op1) || IR_IS_UNRESOLVED(op2) || IR_IS_UNRESOLVED(op3)) {
+						goto fallback;
+					}
 					p->ctx->control = op1;
 					_ir_STORE(p->ctx, op2, op3);
 					ref = p->ctx->control;
 					p->ctx->control = IR_UNUSED;
+				} else if (op == IR_CALL) {
+					if (IR_IS_UNRESOLVED(op1) || IR_IS_UNRESOLVED(op2)) {
+						goto fallback;
+					}
+					goto emit;
+				} else if (ir_op_flags[op] & IR_OP_FLAG_CONTROL) {
+					if (op != IR_LOOP_BEGIN && op != IR_MERGE && op != IR_START && IR_IS_UNRESOLVED(op1)) {
+						goto fallback;
+					}
+					goto emit;
 				} else {
 					uint32_t opt;
 
+					if (0) {
+fallback:
+						if (p->ctx->flags & IR_OPT_FOLDING) {
+							/* TODO: Disabling folding completely is too agressive. Try to find another solution. */
+							p->ctx->flags &= ~IR_OPT_FOLDING;
+							p->bad_insns = 1;
+						}
+					}
+emit:
 					if (!IR_OP_HAS_VAR_INPUTS(ir_op_flags[op])) {
 						opt = IR_OPT(op, t);
 					} else {
@@ -2148,18 +2224,9 @@ static int parse_CHARACTER(int sym, uint32_t t, ir_val *val) {
 	if (!IR_IS_TYPE_INT(t)) yy_error("Unexpected <CHARACTER>");
 	if ((char)yy_text[1] != '\\') {
 		val->i64 = (signed char)yy_text[1];
-	} else if ((char)yy_text[2] == '\\') {
-		val->i64 = '\\';
-	} else if ((char)yy_text[2] == 'r') {
-		val->i64 = '\r';
-	} else if ((char)yy_text[2] == 'n') {
-		val->i64 = '\n';
-	} else if ((char)yy_text[2] == 't') {
-		val->i64 = '\t';
-	} else if ((char)yy_text[2] == '0') {
-		val->i64 = '\0';
 	} else {
-		IR_ASSERT(0);
+		size_t l = 1;
+		val->i64 = (signed char)yy_unescape_char((const char*)yy_text + 2, &l);
 	}
 	sym = get_sym();
 	return sym;
@@ -2187,21 +2254,37 @@ static void parse(ir_loader *loader) {
 
 static void yy_error(const char *msg) {
 	fprintf(stderr, "ERROR: %s at line %d\n", msg, yy_line);
-	exit(2);
+	if (yy_ctx) {
+		ir_strtab_free(&yy_ctx->var_tab);
+		ir_free(yy_ctx->ctx);
+		yy_ctx = NULL;
+	}
+	longjmp(yy_jmp_buf, 2);
 }
 
 static void yy_error_sym(const char *msg, int sym) {
 	fprintf(stderr, "ERROR: %s '%s' at line %d\n", msg, sym_name[sym], yy_line);
-	exit(2);
+	if (yy_ctx) {
+		ir_strtab_free(&yy_ctx->var_tab);
+		ir_free(yy_ctx->ctx);
+		yy_ctx = NULL;
+	}
+	longjmp(yy_jmp_buf, 2);
 }
 
 static void yy_error_str(const char *msg, const char *str) {
 	fprintf(stderr, "ERROR: %s '%s' at line %d\n", msg, str, yy_line);
-	exit(2);
+	if (yy_ctx) {
+		ir_strtab_free(&yy_ctx->var_tab);
+		ir_free(yy_ctx->ctx);
+		yy_ctx = NULL;
+	}
+	longjmp(yy_jmp_buf, 2);
 }
 
 int ir_load(ir_loader *loader, FILE *f) {
 	long pos, end;
+	int ret;
 
 	pos = ftell(f);
 	fseek(f, 0, SEEK_END);
@@ -2209,16 +2292,24 @@ int ir_load(ir_loader *loader, FILE *f) {
 	fseek(f, pos, SEEK_SET);
 	yy_buf = ir_mem_malloc(end - pos + 1);
 	if (!yy_buf) {
+		fprintf(stderr, "ERROR: Cannot load IR file. Insufficient memory.\n");
 		return 0;
 	}
 	yy_end = yy_buf + (end - pos);
 	fread((void*)yy_buf, (end - pos), 1, f);
 	*(unsigned char*)yy_end = 0;
 
-	parse(loader);
+	if (setjmp(yy_jmp_buf) == 0) {
+		yy_ctx = NULL;
+		parse(loader);
+		ret = 1;
+	} else {
+		ret = 0;
+	}
+
 	ir_mem_free((void*)yy_buf);
 
-	return 1;
+	return ret;
 }
 
 void ir_loader_init(void)
