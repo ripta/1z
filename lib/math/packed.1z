@@ -305,13 +305,15 @@ packed-dot: method{ packed-f64 packed-f64 } [ native.packed-dot-impl ] ;
 
 \ Display support
 
-(packed-inspect-helper): ( packed-T type-name -- string ) [
-  "packed-" swap #append "{ " #append
-  swap packed>array
-  dup #len 0 = [ drop "}" #append ] [
-    >iterator [ inspect ] #map #collect " " #join #append " }" #append
-  ] if
-] ;
+private{
+  (packed-inspect-helper): ( packed-T type-name -- string ) [
+    "packed-" swap #append "{ " #append
+    swap packed>array
+    dup #len 0 = [ drop "}" #append ] [
+      >iterator [ inspect ] #map #collect " " #join #append " }" #append
+    ] if
+  ] ;
+}
 
 inspect: method{ packed-i8 } [ "i8" (packed-inspect-helper) ] ;
 inspect: method{ packed-i16 } [ "i16" (packed-inspect-helper) ] ;
