@@ -507,13 +507,14 @@ pub const AotWordDesc = struct {
     /// 1-based line of this word's definition in `source_file`. Zero
     /// when unknown.
     source_line: usize = 0,
-    /// True when the word was synthesized by the runtime (struct
-    /// accessors, generated conversion words, etc.) and therefore
-    /// carries provenance. AOT codegen suppresses the verbatim
-    /// asm-name override for these so they keep their mangled C
-    /// identifier; the qualified `<parent>/<synthesized-name>` form
-    /// is attached separately.
+    /// True when the word was synthesized by the runtime (struct accessors, generated conversion
+    /// words, etc.) and therefore carries provenance. AOT codegen routes these through the qualified
+    /// asm-name form rather than the verbatim-name path used for hand-written words.
     is_generated: bool = false,
+    /// Provenance parent for generated words, or null when the word has no meaningful parent.
+    /// AOT codegen uses this to format the qualified asm-name override as `<parent>/<name>`;
+    /// a null or empty parent falls back to a bare-name asm-name.
+    parent: ?[]const u8 = null,
 };
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
@@ -6704,6 +6705,29 @@ fn appendAsmNameClause(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, n
     try out.appendSlice(allocator, "\")");
 }
 
+/// Append an asm-name clause for a generated word, formatted as `<parent>/<name>`, when `parent` is
+/// non-empty and as the bare `name` otherwise.
+///
+/// Profile samples landing in struct accessors, enum predicates, and other type-attached generated
+/// words are attributed to a symbol that names both the originating type and the synthesized word,
+/// so accessors named the same across structs (e.g., `name>>` on `Person` vs `Account`) no longer
+/// collide in profiler output.
+///
+/// The byte-level toolchain-hostile-character check is delegated to `appendAsmNameClause`, so a
+/// hostile byte anywhere in either component drops the asm-name and leaves the forward declaration
+/// on its mangled C identifier.
+fn appendGeneratedWordAsmNameClause(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, name: []const u8, parent: ?[]const u8) Allocator.Error!void {
+    if (parent) |p| {
+        if (p.len > 0) {
+            const formatted = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ p, name });
+            defer allocator.free(formatted);
+            try appendAsmNameClause(out, allocator, formatted);
+            return;
+        }
+    }
+    try appendAsmNameClause(out, allocator, name);
+}
+
 /// Append an asm-name clause for a compiled quotation, formatted as
 /// `<defining-word>/quot@<line>:<col>`. Profile samples landing in the
 /// quotation are attributed to a symbol that names both the enclosing
@@ -7511,8 +7535,12 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, "int32_t ");
         try out.appendSlice(allocator, mangled);
         try out.appendSlice(allocator, "(uintptr_t jit_ctx)");
-        if (!w.is_generated and !w.is_native) {
-            try appendAsmNameClause(&out, allocator, w.name);
+        if (!w.is_native) {
+            if (w.is_generated) {
+                try appendGeneratedWordAsmNameClause(&out, allocator, w.name, w.parent);
+            } else {
+                try appendAsmNameClause(&out, allocator, w.name);
+            }
         }
         try out.appendSlice(allocator, ";\n");
     }
@@ -10074,6 +10102,100 @@ test "appendQuotationAsmNameClause: toolchain-hostile defining word triggers fal
     };
     try appendQuotationAsmNameClause(&out, allocator, q);
     try testing.expectEqualStrings("", out.items);
+}
+
+test "appendGeneratedWordAsmNameClause: formats <parent>/<name>" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendGeneratedWordAsmNameClause(&out, allocator, "name>>", "Person");
+    try testing.expectEqualStrings(" asm(\"Person/name>>\")", out.items);
+}
+
+test "appendGeneratedWordAsmNameClause: same accessor name on different parents stays distinct" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendGeneratedWordAsmNameClause(&out, allocator, "name>>", "Person");
+    try appendGeneratedWordAsmNameClause(&out, allocator, "name>>", "Account");
+    try testing.expectEqualStrings(" asm(\"Person/name>>\") asm(\"Account/name>>\")", out.items);
+}
+
+test "appendGeneratedWordAsmNameClause: null parent falls back to bare name" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendGeneratedWordAsmNameClause(&out, allocator, "active?", null);
+    try testing.expectEqualStrings(" asm(\"active?\")", out.items);
+}
+
+test "appendGeneratedWordAsmNameClause: empty parent falls back to bare name" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendGeneratedWordAsmNameClause(&out, allocator, "active?", "");
+    try testing.expectEqualStrings(" asm(\"active?\")", out.items);
+}
+
+test "appendGeneratedWordAsmNameClause: toolchain-hostile parent triggers fallback" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendGeneratedWordAsmNameClause(&out, allocator, "name>>", "bad\"parent");
+    try testing.expectEqualStrings("", out.items);
+}
+
+test "appendGeneratedWordAsmNameClause: toolchain-hostile name triggers fallback" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendGeneratedWordAsmNameClause(&out, allocator, "bad\"name", "Person");
+    try testing.expectEqualStrings("", out.items);
+}
+
+test "emitProgramC: generated word forward declaration carries qualified asm-name" {
+    const body_instrs = makeInstructions(.{@as(i64, 1)});
+
+    const words = [_]AotWordDesc{
+        .{
+            .name = "name>>",
+            .instructions = &body_instrs,
+            .input_count = 0,
+            .output_count = 1,
+            .word_id = 0,
+            .is_generated = true,
+            .parent = "Person",
+        },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "asm(\"Person/name>>\")") != null);
+}
+
+test "emitProgramC: generated word with null parent falls back to bare asm-name" {
+    const body_instrs = makeInstructions(.{@as(i64, 1)});
+
+    const words = [_]AotWordDesc{
+        .{
+            .name = "lonely?",
+            .instructions = &body_instrs,
+            .input_count = 0,
+            .output_count = 1,
+            .word_id = 0,
+            .is_generated = true,
+            .parent = null,
+        },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "asm(\"lonely?\")") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "/lonely?") == null);
 }
 
 test "emitProgramC: compiled quotation forward declaration carries asm-name" {

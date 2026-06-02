@@ -406,8 +406,8 @@ pub fn freezeModuleGraphOpts(
             // the resolver's discovered set even when the word arrived htrough `--compile-all-prelude`,
             // and never went through the BFS, which would have called `walkSingleMethodDispatch`.
             const instrs_list: [2][]const Instruction = blk: {
-                if (try devirtualizeSingleMethod(ctx, def, temp_allocator)) |devirt_body| {
-                    break :blk .{ compound_instrs, devirt_body };
+                if (try devirtualizeSingleMethod(ctx, def, temp_allocator)) |devirt| {
+                    break :blk .{ compound_instrs, devirt.body };
                 }
                 break :blk .{ compound_instrs, &.{} };
             };
@@ -1373,20 +1373,58 @@ fn isDispatchOnlyGeneric(def: WordDefinition) bool {
 /// - The PIC interpreter path remains the source of truth in non-AOT modes. JIT-compiled callers still cache
 ///   method bodies in the PIC table and bail to the dispatch callback on a type-tag miss; this helper only
 ///   affects what AOT chooses to emit when freezing.
+///
+/// Devirtualized single-method body together with the originating dispatch entry's provenance, when present.
+/// The provenance parent is what AOT codegen needs to format the qualified asm-name override (`<parent>/<name>`)
+/// on the devirtualized forward declaration.
+const DevirtualizedMethod = struct {
+    body: []const Instruction,
+    provenance: ?dispatch_mod.DispatchProvenance = null,
+};
+
 fn devirtualizeSingleMethod(
     ctx: ?*Context,
     def: WordDefinition,
     allocator: Allocator,
-) Allocator.Error!?[]const Instruction {
+) Allocator.Error!?DevirtualizedMethod {
     if (!isDispatchOnlyGeneric(def)) return null;
     const ictx = ctx orelse return null;
     const pairs = try ictx.dispatchEntriesForId(def.dispatch_id, allocator);
     defer allocator.free(pairs);
     if (pairs.len != 1) return null;
     return switch (pairs[0].entry.body) {
-        .quotation => |q| q,
+        .quotation => |q| .{ .body = q, .provenance = pairs[0].entry.provenance },
         .native_fn, .host_callback => null,
     };
+}
+
+/// Returns the dispatch-entry-level provenance for a dispatch-only generic when all registered methods
+/// agree on parent and at least one entry actually carries provenance. Used by AOT freeze for the non-
+/// devirtualized branch, where multiple methods are registered but the word still routes through
+/// compiled output and benefits from a qualified asm-name when the parent is unambiguous.
+///
+/// Returns null when parents disagree, when no entry carries provenance, when ctx is absent, or when
+/// the word is not dispatch-only.
+fn unanimousDispatchProvenanceParent(
+    ctx: ?*Context,
+    def: WordDefinition,
+    allocator: Allocator,
+) Allocator.Error!?[]const u8 {
+    if (!isDispatchOnlyGeneric(def)) return null;
+    const ictx = ctx orelse return null;
+    const pairs = try ictx.dispatchEntriesForId(def.dispatch_id, allocator);
+    defer allocator.free(pairs);
+    var chosen: ?[]const u8 = null;
+    for (pairs) |pair| {
+        const prov = pair.entry.provenance orelse continue;
+        if (prov.parent.len == 0) continue;
+        if (chosen) |c| {
+            if (!std.mem.eql(u8, c, prov.parent)) return null;
+        } else {
+            chosen = prov.parent;
+        }
+    }
+    return chosen;
 }
 
 /// Provenance attached to each reachable quotation literal: the source
@@ -1493,10 +1531,15 @@ fn buildAotDescs(
         // a runtime dictionary entry to look up at call time, so the dispatch callback would fail with
         // a bare "unknown runtime error" the first time the word ran.
         if (isDispatchOnlyGeneric(def)) {
-            if (try devirtualizeSingleMethod(ctx, def, allocator)) |devirt_body| {
+            if (try devirtualizeSingleMethod(ctx, def, allocator)) |devirt| {
+                const parent: ?[]const u8 = blk: {
+                    if (def.provenance) |p| if (p.parent.len > 0) break :blk p.parent;
+                    if (devirt.provenance) |p| if (p.parent.len > 0) break :blk p.parent;
+                    break :blk null;
+                };
                 try words.append(allocator, .{
                     .name = name,
-                    .instructions = devirt_body,
+                    .instructions = devirt.body,
                     .input_count = @intCast(effect.concreteInputCount()),
                     .output_count = @intCast(effect.concreteOutputCount()),
                     .word_id = id,
@@ -1505,10 +1548,19 @@ fn buildAotDescs(
                     .never_returns = hasNeverReturnsMarker(def),
                     .source_file = def.source_file,
                     .source_line = def.source_line,
-                    .is_generated = def.provenance != null,
+                    .is_generated = def.provenance != null or devirt.provenance != null,
+                    .parent = parent,
                 });
                 continue;
             }
+            const word_provenance_parent: ?[]const u8 = blk: {
+                if (def.provenance) |p| if (p.parent.len > 0) break :blk p.parent;
+                break :blk null;
+            };
+            const dispatch_parent = if (word_provenance_parent == null)
+                try unanimousDispatchProvenanceParent(ctx, def, allocator)
+            else
+                null;
             try words.append(allocator, .{
                 .name = name,
                 .instructions = &.{},
@@ -1521,7 +1573,8 @@ fn buildAotDescs(
                 .never_returns = hasNeverReturnsMarker(def),
                 .source_file = def.source_file,
                 .source_line = def.source_line,
-                .is_generated = def.provenance != null,
+                .is_generated = def.provenance != null or dispatch_parent != null,
+                .parent = word_provenance_parent orelse dispatch_parent,
             });
             continue;
         }
@@ -1537,6 +1590,10 @@ fn buildAotDescs(
             };
             break :blk cloned;
         };
+        const compound_parent: ?[]const u8 = blk: {
+            if (def.provenance) |p| if (p.parent.len > 0) break :blk p.parent;
+            break :blk null;
+        };
         try words.append(allocator, .{
             .name = name,
             .instructions = def.action.compound,
@@ -1550,6 +1607,7 @@ fn buildAotDescs(
             .source_file = def.source_file,
             .source_line = def.source_line,
             .is_generated = def.provenance != null,
+            .parent = compound_parent,
         });
     }
 

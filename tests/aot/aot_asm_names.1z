@@ -1,6 +1,7 @@
 \ Fixture exercised by `make aot-asm-name-check` to verify that AOT-emitted C carries `asm("...")`
-\ declaration attributes on the forward declarations of user-defined words, prelude words, and
-\ compiled quotation bodies, and that the resulting linker symbols carry the same names.
+\ declaration attributes on the forward declarations of user-defined words, prelude words,
+\ compiled quotation bodies, and generated words, and that the resulting linker symbols carry the
+\ same names.
 \
 \ Word names below intentionally include `?`, `-`, and `>` so the verbatim-preservation policy
 \ is observable in both the saved C source and the binary's symbol table.
@@ -24,9 +25,23 @@ pick-quot: ( ? -- ) [
 \ disambiguation.
 flip: ( ? -- ) [ [ "lo" print-line ] [ "hi" print-line ] if ] ;
 
+\ A struct with a uniquely-named field exercises the devirtualized field-accessor path: the dispatch
+\ table holds a single method for `id>>`, so AOT compiles the accessor body into its own C function
+\ whose symbol is qualified with the struct name (`person/id>>`).
+person: struct{ id } ;
+
+\ An enum exercises the word-level provenance path: the aggregate predicate `status?` is emitted as
+\ `status/status?` so it does not collide with other aggregate predicates spelled `status?`.
+status: enum{
+  active: unit
+  inactive: unit
+} ;
+
 parse-json?
 >foo
 t pick-quot
 f pick-quot
 t flip
 f flip
+42 make-person id>> .
+status:active status? .

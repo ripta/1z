@@ -156,21 +156,29 @@ aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides
 		echo "FAIL: missing asm-name clause for prelude word 'print-line'"; \
 		grep -E '^int32_t onez_w_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
-	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("pick-quot/quot@16:1"\);' "$$saved"; then \
-		echo "FAIL: missing asm-name for compiled quotation pick-quot/quot@16:1"; \
-		grep -E '^int32_t onez_q_.* asm\(' "$$saved" || true; exit 1; \
-	fi; \
 	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("pick-quot/quot@17:1"\);' "$$saved"; then \
 		echo "FAIL: missing asm-name for compiled quotation pick-quot/quot@17:1"; \
 		grep -E '^int32_t onez_q_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
-	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("flip/quot@25:18"\);' "$$saved"; then \
-		echo "FAIL: missing asm-name for compiled quotation flip/quot@25:18 (same-line sibling)"; \
+	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("pick-quot/quot@18:1"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name for compiled quotation pick-quot/quot@18:1"; \
 		grep -E '^int32_t onez_q_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
-	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("flip/quot@25:38"\);' "$$saved"; then \
-		echo "FAIL: missing asm-name for compiled quotation flip/quot@25:38 (same-line sibling)"; \
+	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("flip/quot@26:18"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name for compiled quotation flip/quot@26:18 (same-line sibling)"; \
 		grep -E '^int32_t onez_q_.* asm\(' "$$saved" || true; exit 1; \
+	fi; \
+	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("flip/quot@26:38"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name for compiled quotation flip/quot@26:38 (same-line sibling)"; \
+		grep -E '^int32_t onez_q_.* asm\(' "$$saved" || true; exit 1; \
+	fi; \
+	if ! grep -qE 'int32_t onez_w_id_G_G\(uintptr_t jit_ctx\) asm\("person/id>>"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name clause for struct field accessor 'person/id>>'"; \
+		grep -E '^int32_t onez_w_.* asm\(' "$$saved" || true; exit 1; \
+	fi; \
+	if ! grep -qE 'int32_t onez_w_status_Q\(uintptr_t jit_ctx\) asm\("status/status\?"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name clause for enum aggregate predicate 'status/status?'"; \
+		grep -E '^int32_t onez_w_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
 	if ! nm $(_bin) | grep -qE ' T parse-json\?$$'; then \
 		echo "FAIL: nm did not report 'parse-json?' as a linker symbol"; \
@@ -184,15 +192,23 @@ aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides
 		echo "FAIL: nm did not report 'print-line' as a linker symbol (prelude)"; \
 		nm $(_bin) | grep -E ' T (parse-json|>foo|print-line)' || true; exit 1; \
 	fi; \
-	if ! nm $(_bin) | grep -qE ' T pick-quot/quot@16:1$$'; then \
-		echo "FAIL: nm did not report 'pick-quot/quot@16:1' as a linker symbol"; \
+	if ! nm $(_bin) | grep -qE ' T pick-quot/quot@17:1$$'; then \
+		echo "FAIL: nm did not report 'pick-quot/quot@17:1' as a linker symbol"; \
 		nm $(_bin) | grep -E ' T (pick-quot|flip)/quot@' || true; exit 1; \
 	fi; \
-	if ! nm $(_bin) | grep -qE ' T flip/quot@25:38$$'; then \
-		echo "FAIL: nm did not report 'flip/quot@25:38' as a linker symbol"; \
+	if ! nm $(_bin) | grep -qE ' T flip/quot@26:38$$'; then \
+		echo "FAIL: nm did not report 'flip/quot@26:38' as a linker symbol"; \
 		nm $(_bin) | grep -E ' T (pick-quot|flip)/quot@' || true; exit 1; \
 	fi; \
-	echo "PASS: AOT-emitted C carries asm-name overrides for user words, prelude words, and compiled quotations; nm shows verbatim symbols"
+	if ! nm $(_bin) | grep -qE ' T person/id>>$$'; then \
+		echo "FAIL: nm did not report 'person/id>>' as a linker symbol (struct field accessor)"; \
+		nm $(_bin) | grep -E ' T (person|status)/' || true; exit 1; \
+	fi; \
+	if ! nm $(_bin) | grep -qE ' T status/status\?$$'; then \
+		echo "FAIL: nm did not report 'status/status?' as a linker symbol (enum aggregate predicate)"; \
+		nm $(_bin) | grep -E ' T (person|status)/' || true; exit 1; \
+	fi; \
+	echo "PASS: AOT-emitted C carries asm-name overrides for user words, prelude words, compiled quotations, and generated words; nm shows verbatim symbols"
 
 aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader from interpreter-free AOT binaries
 	$(eval _free_bin := $(shell mktemp /tmp/1z-strip-check-free-XXXXXX))
