@@ -1474,6 +1474,7 @@ fn buildAotDescs(
                     .never_returns = hasNeverReturnsMarker(def),
                     .source_file = def.source_file,
                     .source_line = def.source_line,
+                    .is_generated = def.provenance != null,
                 });
                 continue;
             }
@@ -1489,6 +1490,7 @@ fn buildAotDescs(
                 .never_returns = hasNeverReturnsMarker(def),
                 .source_file = def.source_file,
                 .source_line = def.source_line,
+                .is_generated = def.provenance != null,
             });
             continue;
         }
@@ -1516,6 +1518,7 @@ fn buildAotDescs(
             .pic_snapshot = pic_snapshot,
             .source_file = def.source_file,
             .source_line = def.source_line,
+            .is_generated = def.provenance != null,
         });
     }
 

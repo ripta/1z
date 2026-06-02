@@ -1,0 +1,12 @@
+\ Fixture exercised by `make aot-asm-name-check` to verify that AOT-emitted C carries `asm("...")`
+\ declaration attributes on the forward declarations of user-defined and prelude words, and that
+\ the resulting linker symbols are the verbatim 1z names.
+\
+\ Word names below intentionally include `?`, `-`, and `>` so the verbatim-preservation policy
+\ is observable in both the saved C source and the binary's symbol table.
+
+parse-json?: ( -- ) [ "ok" print-line ] ;
+>foo: ( -- ) [ "in" print-line ] ;
+
+parse-json?
+>foo

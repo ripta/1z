@@ -507,6 +507,13 @@ pub const AotWordDesc = struct {
     /// 1-based line of this word's definition in `source_file`. Zero
     /// when unknown.
     source_line: usize = 0,
+    /// True when the word was synthesized by the runtime (struct
+    /// accessors, generated conversion words, etc.) and therefore
+    /// carries provenance. AOT codegen suppresses the verbatim
+    /// asm-name override for these so they keep their mangled C
+    /// identifier; the qualified `<parent>/<synthesized-name>` form
+    /// is attached separately.
+    is_generated: bool = false,
 };
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
@@ -6678,6 +6685,25 @@ fn emitWordCAotPass(
     return .{ .body = body, .peak_stack_depth = state.peak_sp };
 }
 
+/// Append an `asm("name")` declaration attribute to `out` so the C compiler renames the linker symbol
+/// to the verbatim 1z word name. `asm("...")` affects `DW_AT_linkage_name` and the ELFl / Mach-O linker
+/// symbol. Tools that read those (e.g., `perf`, `samply`, `nm`) display the 1z name instead of the
+/// mangled C identifier.
+///
+/// The 1z name is preserved byte-for-byte. The only safeguard is a hard-reject for bytes that would
+/// break the C string literal, the assembler, or the linker: NUL, embedded `"`, `\`, and ASCII control
+/// characters including DEL. On any hostile byte, this writes nothing, so the forward declaration falls
+/// back to its mangled C identifier.
+fn appendAsmNameClause(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, name: []const u8) Allocator.Error!void {
+    for (name) |b| {
+        if (b == 0 or b < 0x20 or b == 0x7F) return;
+        if (b == '"' or b == '\\') return;
+    }
+    try out.appendSlice(allocator, " asm(\"");
+    try out.appendSlice(allocator, name);
+    try out.appendSlice(allocator, "\")");
+}
+
 /// Append a `#line N "path"` directive to `out`. Toolchain-hostile bytes
 /// (`"`, `\`, NUL, ASCII controls) in the path are escaped or stripped
 /// so the directive parses cleanly under cc; legal filesystem paths
@@ -7463,7 +7489,11 @@ pub fn emitProgramC(
         defer allocator.free(mangled);
         try out.appendSlice(allocator, "int32_t ");
         try out.appendSlice(allocator, mangled);
-        try out.appendSlice(allocator, "(uintptr_t jit_ctx);\n");
+        try out.appendSlice(allocator, "(uintptr_t jit_ctx)");
+        if (!w.is_generated and !w.is_native) {
+            try appendAsmNameClause(&out, allocator, w.name);
+        }
+        try out.appendSlice(allocator, ";\n");
     }
     // Forward declarations for compiled quotation bodies
     for (compiled_quotation_bodies.items) |item| {
@@ -9857,6 +9887,74 @@ test "appendLineDirective: escapes quotes and backslashes, strips controls" {
     try testing.expectEqualStrings("#line 7 \"weird\\\"path\\\\withnewlinenul.1z\"\n", out.items);
 }
 
+test "appendAsmNameClause: ASCII identifier emits verbatim" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendAsmNameClause(&out, allocator, "double");
+    try testing.expectEqualStrings(" asm(\"double\")", out.items);
+}
+
+test "appendAsmNameClause: 1z special characters pass through verbatim" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendAsmNameClause(&out, allocator, "parse-json?");
+    try testing.expectEqualStrings(" asm(\"parse-json?\")", out.items);
+
+    out.clearRetainingCapacity();
+    try appendAsmNameClause(&out, allocator, ">foo");
+    try testing.expectEqualStrings(" asm(\">foo\")", out.items);
+
+    out.clearRetainingCapacity();
+    try appendAsmNameClause(&out, allocator, "@get!");
+    try testing.expectEqualStrings(" asm(\"@get!\")", out.items);
+}
+
+test "appendAsmNameClause: UTF-8 multi-byte names pass through" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendAsmNameClause(&out, allocator, "café");
+    try testing.expectEqualStrings(" asm(\"café\")", out.items);
+}
+
+test "appendAsmNameClause: NUL byte triggers fallback" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendAsmNameClause(&out, allocator, "bad\x00name");
+    try testing.expectEqualStrings("", out.items);
+}
+
+test "appendAsmNameClause: embedded quote triggers fallback" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendAsmNameClause(&out, allocator, "say\"hi");
+    try testing.expectEqualStrings("", out.items);
+}
+
+test "appendAsmNameClause: backslash triggers fallback" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendAsmNameClause(&out, allocator, "back\\slash");
+    try testing.expectEqualStrings("", out.items);
+}
+
+test "appendAsmNameClause: ASCII control character triggers fallback" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendAsmNameClause(&out, allocator, "tab\there");
+    try testing.expectEqualStrings("", out.items);
+
+    out.clearRetainingCapacity();
+    try appendAsmNameClause(&out, allocator, "del\x7fhere");
+    try testing.expectEqualStrings("", out.items);
+}
+
 test "compile double: 2 *" {
     const instrs = makeInstructions(.{ @as(i64, 2), "*" });
     const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
@@ -11717,9 +11815,10 @@ test "emitProgramC generates complete C source" {
     try testing.expect(std.mem.indexOf(u8, source, "onez_print_error") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_deinit") != null);
 
-    // Forward declarations
-    try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_w_double(uintptr_t jit_ctx);") != null);
-    try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_w_add3(uintptr_t jit_ctx);") != null);
+    // Forward declarations now carry an asm-name clause so the linker symbol is the verbatim 1z word name.
+    // The C identifier remains the mangled form.
+    try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_w_double(uintptr_t jit_ctx) asm(\"double\");") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_w_add3(uintptr_t jit_ctx) asm(\"add3\");") != null);
 
     // Word bodies
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_double") != null);

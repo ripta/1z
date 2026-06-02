@@ -91,7 +91,7 @@ aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
 	chmod +x $(_aot_tmp) && \
 	timeout $(AOT_TIMEOUT) $(_aot_tmp)
 
-aot-test: aot-interpreter-strip-check aot-line-directives-check ## Run AOT build integration tests
+aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check ## Run AOT build integration tests
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directives at word and quotation function entries
@@ -132,6 +132,43 @@ aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directi
 		echo "$$entry_body" | grep '^#line' || true; exit 1; \
 	fi; \
 	echo "PASS: AOT-emitted C carries #line directives for user words, quotations, prelude, if arms, and loop bodies"
+
+aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides so linker symbols show verbatim 1z names
+	$(eval _bin := $(shell mktemp /tmp/1z-asm-name-XXXXXX))
+	$(eval _stderr := $(shell mktemp /tmp/1z-asm-name-stderr-XXXXXX))
+	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
+	./$(ZIG_PREFIX)/bin/1z build --save-temps -o $(_bin) tests/aot/aot_asm_names.1z 2>$(_stderr); \
+	saved=$$(grep -m1 '^Saved: ' $(_stderr) | sed 's/^Saved: //'); \
+	if [ -z "$$saved" ]; then \
+		echo "FAIL: build did not report a saved C file (missing --save-temps output)"; \
+		cat $(_stderr); exit 1; \
+	fi; \
+	trap "rm -f $(_bin) $(_stderr) $$saved" EXIT; \
+	if ! grep -qE 'int32_t onez_w_parse_json_Q\(uintptr_t jit_ctx\) asm\("parse-json\?"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name clause for user-defined word 'parse-json?'"; \
+		grep -E '^int32_t onez_w_.* asm\(' "$$saved" || true; exit 1; \
+	fi; \
+	if ! grep -qE 'int32_t onez_w__Gfoo\(uintptr_t jit_ctx\) asm\(">foo"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name clause for user-defined word '>foo'"; \
+		grep -E '^int32_t onez_w_.* asm\(' "$$saved" || true; exit 1; \
+	fi; \
+	if ! grep -qE 'int32_t onez_w_print_line\(uintptr_t jit_ctx\) asm\("print-line"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name clause for prelude word 'print-line'"; \
+		grep -E '^int32_t onez_w_.* asm\(' "$$saved" || true; exit 1; \
+	fi; \
+	if ! nm $(_bin) | grep -qE ' T parse-json\?$$'; then \
+		echo "FAIL: nm did not report 'parse-json?' as a linker symbol"; \
+		nm $(_bin) | grep -E ' T (parse-json|>foo|print-line)' || true; exit 1; \
+	fi; \
+	if ! nm $(_bin) | grep -qE ' T >foo$$'; then \
+		echo "FAIL: nm did not report '>foo' as a linker symbol"; \
+		nm $(_bin) | grep -E ' T (parse-json|>foo|print-line)' || true; exit 1; \
+	fi; \
+	if ! nm $(_bin) | grep -qE ' T print-line$$'; then \
+		echo "FAIL: nm did not report 'print-line' as a linker symbol (prelude)"; \
+		nm $(_bin) | grep -E ' T (parse-json|>foo|print-line)' || true; exit 1; \
+	fi; \
+	echo "PASS: AOT-emitted C carries asm-name overrides for user and prelude words; nm shows verbatim 1z names"
 
 aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader from interpreter-free AOT binaries
 	$(eval _free_bin := $(shell mktemp /tmp/1z-strip-check-free-XXXXXX))
