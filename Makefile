@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -209,6 +209,85 @@ aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides
 		nm $(_bin) | grep -E ' T (person|status)/' || true; exit 1; \
 	fi; \
 	echo "PASS: AOT-emitted C carries asm-name overrides for user words, prelude words, compiled quotations, and generated words; nm shows verbatim symbols"
+
+aot-symbol-verify: build ## Verify nm + samply + perf consume verbatim 1z names from AOT binaries
+	$(eval _bin := $(shell mktemp /tmp/1z-symbol-verify-XXXXXX))
+	$(eval _samply_profile := $(shell mktemp /tmp/1z-symbol-verify-samply-XXXXXX).json.gz)
+	$(eval _samply_log := $(shell mktemp /tmp/1z-symbol-verify-samply-log-XXXXXX))
+	$(eval _perf_data := $(shell mktemp /tmp/1z-symbol-verify-perf-XXXXXX))
+	$(eval _perf_report := $(shell mktemp /tmp/1z-symbol-verify-perf-report-XXXXXX))
+	@trap 'rm -f $(_bin) $(_samply_profile) $(_samply_profile).syms.json $(_samply_log) $(_perf_data) $(_perf_report)' EXIT; \
+	./$(ZIG_PREFIX)/bin/1z build -o $(_bin) tests/aot/aot_symbol_verify_workload.1z > /dev/null 2>&1; \
+	echo "--- nm ---"; \
+	for name in 'parse-json?' '>foo' 'pick-quot'; do \
+		if nm $(_bin) | awk -v n="$$name" '$$2=="T" && $$3==n {found=1} END {exit !found}'; then \
+			echo "PASS nm: $$name present"; \
+		else \
+			echo "FAIL nm: $$name missing from symbol table"; exit 1; \
+		fi; \
+	done; \
+	if nm $(_bin) | awk '$$2=="T" && $$3 ~ /\/quot@[0-9]+:[0-9]+$$/ {found=1} END {exit !found}'; then \
+		echo "PASS nm: compiled-quotation /quot@<line>:<col> symbols preserved (Mach-O)"; \
+	elif nm $(_bin) | awk '$$2=="T" && $$3 ~ /\/quot$$/ {found=1} END {exit !found}'; then \
+		echo "NOTE nm: compiled-quotation symbols collapsed to bare /quot (ELF strips @<line>:<col> as version syntax)"; \
+	else \
+		echo "FAIL nm: no compiled-quotation symbols visible at all"; exit 1; \
+	fi; \
+	echo "--- samply ---"; \
+	if command -v samply > /dev/null 2>&1; then \
+		if samply record --unstable-presymbolicate --save-only --no-open -o $(_samply_profile) -- $(_bin) > $(_samply_log) 2>&1; then \
+			syms="$(_samply_profile).syms.json"; \
+			if [ ! -f "$$syms" ]; then \
+				echo "FAIL samply: --unstable-presymbolicate did not emit $$syms"; \
+				ls -lh $(_samply_profile)* || true; exit 1; \
+			fi; \
+			for name in 'parse-json?' '>foo' 'pick-quot'; do \
+				if grep -qF "\"$$name\"" "$$syms"; then \
+					echo "PASS samply: $$name present in syms sidecar"; \
+				else \
+					echo "FAIL samply: $$name missing from syms sidecar"; \
+					grep -oE '"[A-Za-z>?_/<@:.0-9-]{4,40}"' "$$syms" | sort -u | head -20; \
+					exit 1; \
+				fi; \
+			done; \
+		else \
+			rc=$$?; \
+			echo "SKIP samply: record exited $$rc (likely missing entitlement on macOS or perf_event_paranoid on Linux)"; \
+			tail -20 $(_samply_log) | sed 's/^/  /'; \
+		fi; \
+	else \
+		echo "SKIP samply: not installed"; \
+	fi; \
+	echo "--- perf ---"; \
+	if command -v perf > /dev/null 2>&1; then \
+		if perf record -F 99 -g -o $(_perf_data) -- $(_bin) > /dev/null 2>&1; then \
+			perf report --stdio --no-children -i $(_perf_data) > $(_perf_report) 2>&1; \
+			for name in 'parse-json?' '>foo'; do \
+				if grep -qF "$$name" $(_perf_report); then \
+					echo "PASS perf: $$name present in report"; \
+				else \
+					echo "FAIL perf: $$name missing from report"; \
+					head -50 $(_perf_report) | sed 's/^/  /'; exit 1; \
+				fi; \
+			done; \
+		else \
+			echo "SKIP perf: record failed (likely perf_event_paranoid restricts perf_event_open under Docker)"; \
+		fi; \
+	else \
+		echo "SKIP perf: not installed (Linux-only)"; \
+	fi; \
+	echo "PASS: aot-symbol-verify"
+
+aot-symbol-verify-linux: ## Run aot-symbol-verify inside the project's Debian Docker image
+	docker build --build-arg BASE_IMAGE=gcr.io/$(GCP_PROJECT_ID)/zag:v0.15.2.1 --tag 1z-build:local .
+	docker run --rm \
+	    --security-opt seccomp=unconfined \
+	    --cap-add SYS_ADMIN \
+	    --volume $(CURDIR):/workspace \
+	    --workdir /workspace \
+	    --user 0:0 \
+	    1z-build:local \
+	    bash -c 'echo 1 > /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true; make build && make aot-symbol-verify'
 
 aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader from interpreter-free AOT binaries
 	$(eval _free_bin := $(shell mktemp /tmp/1z-strip-check-free-XXXXXX))

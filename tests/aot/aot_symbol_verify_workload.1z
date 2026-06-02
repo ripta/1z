@@ -1,0 +1,27 @@
+\ Workload fixture for `make aot-symbol-verify`. Exercises AOT symbol-naming
+\ categories with enough CPU work that perf and samply produce samples on the
+\ named functions, so the verbatim-asm-name policy is observable in profiler
+\ output. The `aot-asm-name-check` target already verifies `nm` covers every
+\ category; this fixture's purpose is the profiler-level evidence.
+\
+\ Names below intentionally include `?`, `-`, and `>` to drive the
+\ verbatim-preservation policy through the profiler stacks.
+
+parse-json?: ( n -- result ) [
+  0 swap [ 1 + ] times
+] ;
+
+>foo: ( n -- result ) [
+  0 swap [ 2 + ] times
+] ;
+
+pick-quot: ( n ? -- result ) [
+  [ 0 swap [ 3 + ] times ]
+  [ 0 swap [ 4 + ] times ]
+  if
+] ;
+
+10000000 parse-json? .
+10000000 >foo .
+10000000 t pick-quot .
+10000000 f pick-quot .
