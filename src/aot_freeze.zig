@@ -29,10 +29,19 @@ pub const AotQuotationDesc = struct {
     /// `#line` directive at the quotation's emitted C function
     /// entry.
     source_file: ?[]const u8 = null,
-    /// 1-based line of the quotation's first instruction in
-    /// `source_file`. In practice this is the line of the opening
-    /// `[`. Zero when unknown.
+    /// 1-based line of the opening `[` in `source_file`. Zero when
+    /// unknown. Used by both the `#line` directive and the asm-name
+    /// override emitted on the quotation's forward declaration.
     source_line: usize = 0,
+    /// 1-based column of the opening `[` in `source_file`. Zero when
+    /// unknown. Used by the asm-name override; the `#line` directive
+    /// reports line only.
+    source_column: usize = 0,
+    /// Name of the enclosing user-defined word, or `__entry__` for a
+    /// quotation literal reached from the top-level entry program.
+    /// Null when unknown. Used by AOT C emission to format the
+    /// asm-name override as `<defining-word>/quot@<line>:<col>`.
+    defining_word: ?[]const u8 = null,
 };
 
 pub const FreezeResult = struct {
@@ -1380,15 +1389,32 @@ fn devirtualizeSingleMethod(
     };
 }
 
+/// Provenance attached to each reachable quotation literal: the source
+/// file of the defining word, the defining word's name (or
+/// `__entry__` for top-level literals), and the line / column of the
+/// opening `[` in source. The line / column come from the outer
+/// `push_literal` instruction that wraps the `.quotation` value;
+/// `src/parser.zig` writes that instruction with the `[` token's
+/// position, so this is the bracket's position, not the first body
+/// token's.
+pub const QuotationSourceEntry = struct {
+    source_file: []const u8,
+    defining_word: []const u8,
+    line: usize,
+    column: usize,
+};
+
 /// Walk `instrs` and record every nested quotation literal under the
-/// given `source_file` in `map`. The discovery BFS only recurses into
-/// `.quotation` literals (see `collectCallWords`); this map follows
-/// the same shape so every reachable quotation body that ends up in
-/// `discovered.quotation_bodies` finds a corresponding entry.
+/// given `source_file` and `defining_word` in `map`. The discovery BFS
+/// only recurses into `.quotation` literals (see `collectCallWords`);
+/// this map follows the same shape so every reachable quotation body
+/// that ends up in `discovered.quotation_bodies` finds a corresponding
+/// entry.
 fn mapQuotationSources(
     instrs: []const Instruction,
     source_file: []const u8,
-    map: *std.AutoHashMapUnmanaged(usize, []const u8),
+    defining_word: []const u8,
+    map: *std.AutoHashMapUnmanaged(usize, QuotationSourceEntry),
     allocator: Allocator,
 ) Allocator.Error!void {
     for (instrs) |instr| {
@@ -1397,9 +1423,14 @@ fn mapQuotationSources(
                 .quotation => |q| {
                     const gop = try map.getOrPut(allocator, @intFromPtr(q.instructions.ptr));
                     if (!gop.found_existing) {
-                        gop.value_ptr.* = source_file;
+                        gop.value_ptr.* = .{
+                            .source_file = source_file,
+                            .defining_word = defining_word,
+                            .line = instr.line,
+                            .column = instr.column,
+                        };
                     }
-                    try mapQuotationSources(q.instructions, source_file, map, allocator);
+                    try mapQuotationSources(q.instructions, source_file, defining_word, map, allocator);
                 },
                 else => {},
             },
@@ -1660,19 +1691,21 @@ fn buildAotDescs(
 
     // Build a map from quotation-body pointer to the source file of the
     // word whose body contains the quotation (transitively for nested
-    // quotations). Used to attach `#line` directives to emitted
-    // quotation C functions in AOT mode. Walking entry instructions and
-    // every discovered compound body once covers every reachable
-    // quotation literal, mirroring the BFS discovery walk.
-    var quotation_source_map = std.AutoHashMapUnmanaged(usize, []const u8){};
+    // quotations), plus the defining word's name and the opening `[`
+    // position. Used to attach `#line` directives and asm-name
+    // overrides to emitted quotation C functions in AOT mode. Walking
+    // entry instructions and every discovered compound body once
+    // covers every reachable quotation literal, mirroring the BFS
+    // discovery walk.
+    var quotation_source_map = std.AutoHashMapUnmanaged(usize, QuotationSourceEntry){};
     defer quotation_source_map.deinit(allocator);
     if (entry_source_file) |sf| {
-        try mapQuotationSources(entry_instrs, sf, &quotation_source_map, allocator);
+        try mapQuotationSources(entry_instrs, sf, "__entry__", &quotation_source_map, allocator);
     }
-    for (discovered.defs.items) |def| {
+    for (discovered.names.items, discovered.defs.items) |name, def| {
         if (def.action != .compound) continue;
         const sf = def.source_file orelse continue;
-        try mapQuotationSources(def.action.compound, sf, &quotation_source_map, allocator);
+        try mapQuotationSources(def.action.compound, sf, name, &quotation_source_map, allocator);
     }
 
     // Sequential ID for quot descriptors
@@ -1682,15 +1715,16 @@ fn buildAotDescs(
         const id = next_q_id;
         next_q_id += 1;
         const c_name = try std.fmt.allocPrint(allocator, "onez_q_{d}", .{id});
-        const q_source_file = quotation_source_map.get(@intFromPtr(body.ptr));
-        const q_source_line: usize = if (body.len > 0) body[0].line else 0;
+        const entry = quotation_source_map.get(@intFromPtr(body.ptr));
         try quotations.append(allocator, .{
             .quotation_id = id,
             .instructions = body,
             .c_name = c_name,
             .inferred_effect = ir_codegen.inferQuotationEffect(body, resolver) catch null,
-            .source_file = q_source_file,
-            .source_line = q_source_line,
+            .source_file = if (entry) |e| e.source_file else null,
+            .source_line = if (entry) |e| e.line else 0,
+            .source_column = if (entry) |e| e.column else 0,
+            .defining_word = if (entry) |e| e.defining_word else null,
         });
     }
     const max_quotation_id = if (next_q_id > 0) next_q_id - 1 else 0;

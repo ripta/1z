@@ -6704,6 +6704,27 @@ fn appendAsmNameClause(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, n
     try out.appendSlice(allocator, "\")");
 }
 
+/// Append an asm-name clause for a compiled quotation, formatted as
+/// `<defining-word>/quot@<line>:<col>`. Profile samples landing in the
+/// quotation are attributed to a symbol that names both the enclosing
+/// 1z word and the position of the opening `[`, so siblings within
+/// the same defining word disambiguate by source position.
+///
+/// Writes nothing when the defining word is null/empty or the
+/// opening-bracket position is missing -- both indicate that freeze
+/// failed to attach provenance to this quotation body, and emitting a
+/// malformed asm-name would be worse than leaving the symbol mangled.
+/// The byte-level toolchain-hostile-character check is delegated to
+/// `appendAsmNameClause`.
+fn appendQuotationAsmNameClause(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, q: AotQuotationDesc) Allocator.Error!void {
+    const defining = q.defining_word orelse return;
+    if (defining.len == 0) return;
+    if (q.source_line == 0 or q.source_column == 0) return;
+    const formatted = try std.fmt.allocPrint(allocator, "{s}/quot@{d}:{d}", .{ defining, q.source_line, q.source_column });
+    defer allocator.free(formatted);
+    try appendAsmNameClause(out, allocator, formatted);
+}
+
 /// Append a `#line N "path"` directive to `out`. Toolchain-hostile bytes
 /// (`"`, `\`, NUL, ASCII controls) in the path are escaped or stripped
 /// so the directive parses cleanly under cc; legal filesystem paths
@@ -7501,7 +7522,9 @@ pub fn emitProgramC(
             if (q.quotation_id == item.id) {
                 try out.appendSlice(allocator, "int32_t ");
                 try out.appendSlice(allocator, q.c_name);
-                try out.appendSlice(allocator, "(uintptr_t jit_ctx);\n");
+                try out.appendSlice(allocator, "(uintptr_t jit_ctx)");
+                try appendQuotationAsmNameClause(&out, allocator, q);
+                try out.appendSlice(allocator, ";\n");
                 break;
             }
         }
@@ -9953,6 +9976,130 @@ test "appendAsmNameClause: ASCII control character triggers fallback" {
     out.clearRetainingCapacity();
     try appendAsmNameClause(&out, allocator, "del\x7fhere");
     try testing.expectEqualStrings("", out.items);
+}
+
+test "appendQuotationAsmNameClause: formats <defining-word>/quot@<line>:<col>" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    const q = AotQuotationDesc{
+        .quotation_id = 0,
+        .instructions = &.{},
+        .c_name = "onez_q_0",
+        .defining_word = "parse-json",
+        .source_line = 17,
+        .source_column = 8,
+    };
+    try appendQuotationAsmNameClause(&out, allocator, q);
+    try testing.expectEqualStrings(" asm(\"parse-json/quot@17:8\")", out.items);
+}
+
+test "appendQuotationAsmNameClause: sibling quotations get distinct line:col" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    const a = AotQuotationDesc{
+        .quotation_id = 0,
+        .instructions = &.{},
+        .c_name = "onez_q_0",
+        .defining_word = "abs",
+        .source_line = 16,
+        .source_column = 3,
+    };
+    const b = AotQuotationDesc{
+        .quotation_id = 1,
+        .instructions = &.{},
+        .c_name = "onez_q_1",
+        .defining_word = "abs",
+        .source_line = 17,
+        .source_column = 3,
+    };
+    try appendQuotationAsmNameClause(&out, allocator, a);
+    try appendQuotationAsmNameClause(&out, allocator, b);
+    try testing.expectEqualStrings(" asm(\"abs/quot@16:3\") asm(\"abs/quot@17:3\")", out.items);
+}
+
+test "appendQuotationAsmNameClause: defining_word null suppresses asm-name" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    const q = AotQuotationDesc{
+        .quotation_id = 0,
+        .instructions = &.{},
+        .c_name = "onez_q_0",
+        .defining_word = null,
+        .source_line = 17,
+        .source_column = 8,
+    };
+    try appendQuotationAsmNameClause(&out, allocator, q);
+    try testing.expectEqualStrings("", out.items);
+}
+
+test "appendQuotationAsmNameClause: zero line/column suppresses asm-name" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    const no_line = AotQuotationDesc{
+        .quotation_id = 0,
+        .instructions = &.{},
+        .c_name = "onez_q_0",
+        .defining_word = "foo",
+        .source_line = 0,
+        .source_column = 8,
+    };
+    const no_col = AotQuotationDesc{
+        .quotation_id = 0,
+        .instructions = &.{},
+        .c_name = "onez_q_0",
+        .defining_word = "foo",
+        .source_line = 17,
+        .source_column = 0,
+    };
+    try appendQuotationAsmNameClause(&out, allocator, no_line);
+    try appendQuotationAsmNameClause(&out, allocator, no_col);
+    try testing.expectEqualStrings("", out.items);
+}
+
+test "appendQuotationAsmNameClause: toolchain-hostile defining word triggers fallback" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    const q = AotQuotationDesc{
+        .quotation_id = 0,
+        .instructions = &.{},
+        .c_name = "onez_q_0",
+        .defining_word = "bad\"name",
+        .source_line = 17,
+        .source_column = 8,
+    };
+    try appendQuotationAsmNameClause(&out, allocator, q);
+    try testing.expectEqualStrings("", out.items);
+}
+
+test "emitProgramC: compiled quotation forward declaration carries asm-name" {
+    const body_instrs = makeInstructions(.{@as(i64, 1)});
+
+    const words = [_]AotWordDesc{
+        .{ .name = "main", .instructions = &body_instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    var quotations = [_]AotQuotationDesc{
+        .{
+            .quotation_id = 0,
+            .instructions = &body_instrs,
+            .c_name = "onez_q_0",
+            .inferred_effect = .{ .input_count = 0, .output_count = 1 },
+            .defining_word = "main",
+            .source_line = 7,
+            .source_column = 11,
+        },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_q_0(uintptr_t jit_ctx) asm(\"main/quot@7:11\");") != null);
 }
 
 test "compile double: 2 *" {

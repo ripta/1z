@@ -1,6 +1,6 @@
 \ Fixture exercised by `make aot-asm-name-check` to verify that AOT-emitted C carries `asm("...")`
-\ declaration attributes on the forward declarations of user-defined and prelude words, and that
-\ the resulting linker symbols are the verbatim 1z names.
+\ declaration attributes on the forward declarations of user-defined words, prelude words, and
+\ compiled quotation bodies, and that the resulting linker symbols carry the same names.
 \
 \ Word names below intentionally include `?`, `-`, and `>` so the verbatim-preservation policy
 \ is observable in both the saved C source and the binary's symbol table.
@@ -8,5 +8,25 @@
 parse-json?: ( -- ) [ "ok" print-line ] ;
 >foo: ( -- ) [ "in" print-line ] ;
 
+\ The `if` arms below are compiled quotation literals. Each gets a separate emitted C function whose
+\ symbol is named `pick-quot/quot@<line>:<col>` -- the `<line>:<col>` is the position of the opening
+\ `[`. The two arms must produce distinct asm-names; they sit on separate source lines, so the line
+\ part distinguishes them.
+pick-quot: ( ? -- ) [
+  [ "yes" print-line ]
+  [ "no" print-line ]
+  if
+] ;
+
+\ Twin one-line siblings, distinguishable only by column within the same source line. Statement-line
+\ leading whitespace is stripped before tokenization, so columns are accurate within a line but not
+\ across multi-line statements; this single-line case is the one that exercises true column-based
+\ disambiguation.
+flip: ( ? -- ) [ [ "lo" print-line ] [ "hi" print-line ] if ] ;
+
 parse-json?
 >foo
+t pick-quot
+f pick-quot
+t flip
+f flip
