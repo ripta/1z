@@ -1,0 +1,40 @@
+=== escape: each special character in isolation ===
+Stack: [ ]
+PASS: ampersand escapes to &amp;
+Stack: [ ]
+PASS: less-than escapes to &lt;
+Stack: [ ]
+PASS: greater-than escapes to &gt;
+Stack: [ ]
+PASS: double-quote escapes to &quot;
+Stack: [ ]
+PASS: apostrophe escapes to &#39;
+Stack: [ ]
+=== escape: ampersand-first ordering prevents double-escape ===
+Stack: [ ]
+Stack: [ "&amp;lt;" "&amp;lt;" ]
+PASS: literal &lt; in input escapes the ampersand only once
+Stack: [ ]
+Stack: [ "&amp;amp;" "&amp;amp;" ]
+PASS: literal &amp; in input escapes the ampersand only once
+Stack: [ ]
+Stack: [ "&lt;&amp;&gt;" "&lt;&amp;&gt;" ]
+PASS: intermixed <&> stays in source order
+Stack: [ ]
+=== escape: edge inputs ===
+Stack: [ ]
+PASS: empty string round-trips
+Stack: [ ]
+Stack: [ "hello world" "hello world" ]
+PASS: string with no special characters passes through
+Stack: [ ]
+=== escape: all five characters intermixed ===
+Stack: [ ]
+Stack: [ "&lt;a href=&#39;x&#39;&gt;&amp;&quot;" "&lt;a href=&#39;x&#39;&gt;&amp;&quot;" ]
+PASS: intermixed special characters all escape
+Stack: [ ]
+=== escape: multi-byte UTF-8 passes through ===
+Stack: [ ]
+Stack: [ "café &amp; 中" "café &amp; 中" ]
+PASS: non-ASCII characters pass through unchanged
+Stack: [ ]

@@ -1,0 +1,31 @@
+\ lib/data/html.1z - HTML entity escaping
+
+use "strings" ;
+
+private{
+  (escapes): ( char -- string ) H{
+    "&" "&amp;"
+    "<" "&lt;"
+    ">" "&gt;"
+    "\"" "&quot;"
+    "'" "&#39;"
+  } ;
+
+  (escape-char): ( char -- string ) [
+    dup (escapes) -rot> @get-or
+  ] ;
+}
+
+\\ Escape HTML-significant chars into named or numeric entities:
+\\
+\\ - `&` becomes `&amp;`
+\\ - `<` becomes `&lt;`;
+\\ - `>` becomes `&gt;`;
+\\ - `"` becomes `&quot;`; and
+\\ - `'` becomes `&#39;`.
+\\
+\\ All other characters, including multibyte UTF-8 sequences, pass through unchanged. The result
+\\ is safe to embed in HTML text content and in single-quoted or double-quoted attribute values.
+escape: ( string -- string ) [
+  [ (escape-char) ] #map #collect "" #join
+] ;

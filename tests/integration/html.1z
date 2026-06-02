@@ -1,0 +1,44 @@
+\ Integration tests for lib/data/html.1z
+
+use "testing" ;
+use "data/html" ;
+
+"escape: each special character in isolation" test-section
+
+"&amp;" "&" escape "ampersand escapes to &amp;" assert=
+
+"&lt;" "<" escape "less-than escapes to &lt;" assert=
+
+"&gt;" ">" escape "greater-than escapes to &gt;" assert=
+
+"&quot;" "\"" escape "double-quote escapes to &quot;" assert=
+
+"&#39;" "'" escape "apostrophe escapes to &#39;" assert=
+
+"escape: ampersand-first ordering prevents double-escape" test-section
+
+"&amp;lt;" "&lt;" escape
+"literal &lt; in input escapes the ampersand only once" assert=
+
+"&amp;amp;" "&amp;" escape
+"literal &amp; in input escapes the ampersand only once" assert=
+
+"&lt;&amp;&gt;" "<&>" escape
+"intermixed <&> stays in source order" assert=
+
+"escape: edge inputs" test-section
+
+"" "" escape "empty string round-trips" assert=
+
+"hello world" "hello world" escape
+"string with no special characters passes through" assert=
+
+"escape: all five characters intermixed" test-section
+
+"&lt;a href=&#39;x&#39;&gt;&amp;&quot;" "<a href='x'>&\"" escape
+"intermixed special characters all escape" assert=
+
+"escape: multi-byte UTF-8 passes through" test-section
+
+"café &amp; 中" "café & 中" escape
+"non-ASCII characters pass through unchanged" assert=
