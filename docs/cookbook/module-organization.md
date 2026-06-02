@@ -63,4 +63,29 @@ use "strings" ;
 use "strings" shadow-ok ;   \ no warning
 ```
 
+## Private helpers
+
+Top-level definitions in a module are exported by default. Wrap helpers in a
+`private{ ... }` block to keep them out of the module's public surface:
+
+```
+\ data/html.1z
+use "strings" ;
+
+private{
+  (escape-char): ( char -- string ) [
+    \ map a char to its HTML entity, or pass through
+  ] ;
+}
+
+escape: ( string -- string ) [
+  [ (escape-char) ] #map #collect "" #join
+] ;
+```
+
+The public `escape` word can call `(escape-char)`, but a caller that does
+`use "data/html"` sees only `escape`. Wrapping helper names in parens is a
+stdlib convention that flags privacy at the call site; the language treats
+`(foo)` as an ordinary identifier.
+
 See also: [Modules guide](../guides/modules.md)

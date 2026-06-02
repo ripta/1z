@@ -129,6 +129,47 @@ use "module_lib.1z" shadow-ok ;  \ fine
 Use `shadow-ok` when you intentionally want to override an existing word --
 for instance, a module that extends or replaces a prelude word.
 
+## Private Helpers
+
+Top-level definitions in a module file are exported. If you want a helper
+that the module's own public words can call but importers cannot, wrap it in
+a `private{ ... }` block:
+
+```
+\ data/html.1z
+use "strings" ;
+
+private{
+  (escapes): H{
+    "&" "&amp;"
+    "<" "&lt;"
+    ">" "&gt;"
+    "\"" "&quot;"
+    "'" "&#39;"
+  } ;
+
+  (escape-char): ( char -- string ) [
+    dup (escapes) -rot> @get-or
+  ] ;
+}
+
+escape: ( string -- string ) [
+  [ (escape-char) ] #map #collect "" #join
+] ;
+```
+
+A caller that does `use "data/html"` gets `escape` in scope, but not
+`(escapes)` or `(escape-char)`. The parens around helper names are a
+convention used throughout the standard library to flag privacy visually at
+every call site; the language treats `(foo)` as an ordinary identifier.
+
+`private{` is sugar over the prelude word `import-locals`, which itself
+wraps `local-scope`. `local-scope` snapshots the topmost local frame as a
+module value; `import-locals` runs a quotation in a fresh frame and routes
+the snapshot into the enclosing module's private deps. Reach for those
+words directly when you need to build a private scope dynamically rather
+than through the block syntax.
+
 ## Module Introspection
 
 Modules respond to the standard collection accessors:
