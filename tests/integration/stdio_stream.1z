@@ -1,0 +1,30 @@
+\ Integration tests for <stdio-stream>.
+\ The stdin payload is supplied via stdio_stream.stdin so the read test is
+\ deterministic; bytes written through <stdio-stream> appear in the golden
+\ output interleaved with the testing library's PASS lines.
+\ Read comes first so the fixture data is intact at consumption.
+
+use "testing" ;
+use "streams" ;
+
+"Stdio stream reads from stdin" test-section
+<stdio-stream> dup 11 stream-read(exact) "hello world" >bytes "reads 11 bytes from stdin" assert=
+stream-close
+
+"Stdio stream is a stream" test-section
+<stdio-stream> dup stream? "<stdio-stream> returns a stream" assert-true
+stream-close
+
+"Stdio stream writes go to stdout" test-section
+<stdio-stream> dup "stdio-write-payload\n" stream-write
+20 "stream-write returns the byte count" assert=
+stream-close
+
+"Stdio stream survives close" test-section
+\ stream-close on a duplex stream over fds 0/1 goes through the stdin/stdout
+\ guard, so the underlying fds remain open and a new <stdio-stream> can be
+\ created and used.
+<stdio-stream> stream-close
+<stdio-stream> dup " (still works)\n" stream-write
+15 "second <stdio-stream> still writes" assert=
+stream-close

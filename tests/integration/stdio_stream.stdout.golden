@@ -1,0 +1,25 @@
+=== Stdio stream reads from stdin ===
+Stack: [ ]
+PASS: reads 11 bytes from stdin
+Stack: [ <stream duplex read-write> ]
+Stack: [ ]
+=== Stdio stream is a stream ===
+Stack: [ ]
+PASS: <stdio-stream> returns a stream
+Stack: [ <stream duplex read-write> ]
+Stack: [ ]
+=== Stdio stream writes go to stdout ===
+Stack: [ ]
+stdio-write-payload
+Stack: [ <stream duplex read-write> 20 ]
+PASS: stream-write returns the byte count
+Stack: [ <stream duplex read-write> ]
+Stack: [ ]
+=== Stdio stream survives close ===
+Stack: [ ]
+Stack: [ ]
+ (still works)
+Stack: [ <stream duplex read-write> 15 ]
+PASS: second <stdio-stream> still writes
+Stack: [ <stream duplex read-write> ]
+Stack: [ ]

@@ -1,0 +1,9 @@
+\ lib/streams.1z - Stream constructors layered on the native primitives.
+
+\\ Bidirectional stream over stdin (read) and stdout (write).
+\\ The stdin/stdout fd-close guard makes stream-close a no-op against the
+\\ standard descriptors, so the value can be constructed and closed freely
+\\ without affecting the process's stdio. Primary consumer is cgi.1z, where a
+\\ net/http-shaped handler ( stream R -- ) runs unchanged against the CGI
+\\ transport.
+<stdio-stream>: ( -- stream ) [ 0 1 <duplex-stream> ] ;
