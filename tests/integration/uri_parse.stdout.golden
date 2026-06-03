@@ -1,0 +1,196 @@
+=== parse(rfc3986): scheme + authority + path + query + fragment ===
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/a" uri-query: "b=1" uri-fragment: "c" }> ]
+PASS: scheme
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/a" uri-query: "b=1" uri-fragment: "c" }> ]
+PASS: authority
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/a" uri-query: "b=1" uri-fragment: "c" }> ]
+PASS: host
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/a" uri-query: "b=1" uri-fragment: "c" }> ]
+PASS: port
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/a" uri-query: "b=1" uri-fragment: "c" }> ]
+PASS: path
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/a" uri-query: "b=1" uri-fragment: "c" }> ]
+PASS: query
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/a" uri-query: "b=1" uri-fragment: "c" }> ]
+PASS: fragment
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/a" uri-query: "b=1" uri-fragment: "c" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "https" uri-authority: "user:pass@example.com:8443" uri-host: "example.com" uri-port: "8443" uri-path: "/p" uri-query: "" uri-fragment: "" }> ]
+PASS: https scheme
+Stack: [ <uri uri-data{ uri-scheme: "https" uri-authority: "user:pass@example.com:8443" uri-host: "example.com" uri-port: "8443" uri-path: "/p" uri-query: "" uri-fragment: "" }> ]
+PASS: https authority
+Stack: [ <uri uri-data{ uri-scheme: "https" uri-authority: "user:pass@example.com:8443" uri-host: "example.com" uri-port: "8443" uri-path: "/p" uri-query: "" uri-fragment: "" }> ]
+PASS: https host (no userinfo)
+Stack: [ <uri uri-data{ uri-scheme: "https" uri-authority: "user:pass@example.com:8443" uri-host: "example.com" uri-port: "8443" uri-path: "/p" uri-query: "" uri-fragment: "" }> ]
+PASS: https port
+Stack: [ <uri uri-data{ uri-scheme: "https" uri-authority: "user:pass@example.com:8443" uri-host: "example.com" uri-port: "8443" uri-path: "/p" uri-query: "" uri-fragment: "" }> ]
+PASS: https path
+Stack: [ <uri uri-data{ uri-scheme: "https" uri-authority: "user:pass@example.com:8443" uri-host: "example.com" uri-port: "8443" uri-path: "/p" uri-query: "" uri-fragment: "" }> ]
+PASS: https query empty
+Stack: [ <uri uri-data{ uri-scheme: "https" uri-authority: "user:pass@example.com:8443" uri-host: "example.com" uri-port: "8443" uri-path: "/p" uri-query: "" uri-fragment: "" }> ]
+PASS: https fragment empty
+Stack: [ <uri uri-data{ uri-scheme: "https" uri-authority: "user:pass@example.com:8443" uri-host: "example.com" uri-port: "8443" uri-path: "/p" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "mailto" uri-authority: "" uri-host: "" uri-port: "" uri-path: "user@example.com" uri-query: "" uri-fragment: "" }> ]
+PASS: mailto scheme
+Stack: [ <uri uri-data{ uri-scheme: "mailto" uri-authority: "" uri-host: "" uri-port: "" uri-path: "user@example.com" uri-query: "" uri-fragment: "" }> ]
+PASS: mailto authority empty
+Stack: [ <uri uri-data{ uri-scheme: "mailto" uri-authority: "" uri-host: "" uri-port: "" uri-path: "user@example.com" uri-query: "" uri-fragment: "" }> ]
+PASS: mailto host empty
+Stack: [ <uri uri-data{ uri-scheme: "mailto" uri-authority: "" uri-host: "" uri-port: "" uri-path: "user@example.com" uri-query: "" uri-fragment: "" }> ]
+PASS: mailto port empty
+Stack: [ <uri uri-data{ uri-scheme: "mailto" uri-authority: "" uri-host: "" uri-port: "" uri-path: "user@example.com" uri-query: "" uri-fragment: "" }> ]
+PASS: mailto path
+Stack: [ <uri uri-data{ uri-scheme: "mailto" uri-authority: "" uri-host: "" uri-port: "" uri-path: "user@example.com" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "urn" uri-authority: "" uri-host: "" uri-port: "" uri-path: "isbn:0451450523" uri-query: "" uri-fragment: "" }> ]
+PASS: urn scheme
+Stack: [ <uri uri-data{ uri-scheme: "urn" uri-authority: "" uri-host: "" uri-port: "" uri-path: "isbn:0451450523" uri-query: "" uri-fragment: "" }> ]
+PASS: urn authority empty
+Stack: [ <uri uri-data{ uri-scheme: "urn" uri-authority: "" uri-host: "" uri-port: "" uri-path: "isbn:0451450523" uri-query: "" uri-fragment: "" }> ]
+PASS: urn path
+Stack: [ <uri uri-data{ uri-scheme: "urn" uri-authority: "" uri-host: "" uri-port: "" uri-path: "isbn:0451450523" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "file" uri-authority: "" uri-host: "" uri-port: "" uri-path: "/etc/hosts" uri-query: "" uri-fragment: "" }> ]
+PASS: file scheme
+Stack: [ <uri uri-data{ uri-scheme: "file" uri-authority: "" uri-host: "" uri-port: "" uri-path: "/etc/hosts" uri-query: "" uri-fragment: "" }> ]
+PASS: file authority empty
+Stack: [ <uri uri-data{ uri-scheme: "file" uri-authority: "" uri-host: "" uri-port: "" uri-path: "/etc/hosts" uri-query: "" uri-fragment: "" }> ]
+PASS: file host empty
+Stack: [ <uri uri-data{ uri-scheme: "file" uri-authority: "" uri-host: "" uri-port: "" uri-path: "/etc/hosts" uri-query: "" uri-fragment: "" }> ]
+PASS: file path
+Stack: [ <uri uri-data{ uri-scheme: "file" uri-authority: "" uri-host: "" uri-port: "" uri-path: "/etc/hosts" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "[::1]:8080" uri-host: "[::1]" uri-port: "8080" uri-path: "/v6" uri-query: "" uri-fragment: "" }> ]
+PASS: ipv6 scheme
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "[::1]:8080" uri-host: "[::1]" uri-port: "8080" uri-path: "/v6" uri-query: "" uri-fragment: "" }> ]
+PASS: ipv6 authority
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "[::1]:8080" uri-host: "[::1]" uri-port: "8080" uri-path: "/v6" uri-query: "" uri-fragment: "" }> ]
+PASS: ipv6 host with brackets
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "[::1]:8080" uri-host: "[::1]" uri-port: "8080" uri-path: "/v6" uri-query: "" uri-fragment: "" }> ]
+PASS: ipv6 port
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "[::1]:8080" uri-host: "[::1]" uri-port: "8080" uri-path: "/v6" uri-query: "" uri-fragment: "" }> ]
+PASS: ipv6 path
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "[::1]:8080" uri-host: "[::1]" uri-port: "8080" uri-path: "/v6" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "[fe80::1]" uri-host: "[fe80::1]" uri-port: "" uri-path: "/v6-noport" uri-query: "" uri-fragment: "" }> ]
+PASS: ipv6 host without port
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "[fe80::1]" uri-host: "[fe80::1]" uri-port: "" uri-path: "/v6-noport" uri-query: "" uri-fragment: "" }> ]
+PASS: ipv6 no port
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "[fe80::1]" uri-host: "[fe80::1]" uri-port: "" uri-path: "/v6-noport" uri-query: "" uri-fragment: "" }> ]
+PASS: ipv6 noport path
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "[fe80::1]" uri-host: "[fe80::1]" uri-port: "" uri-path: "/v6-noport" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "" uri-query: "" uri-fragment: "" }> ]
+PASS: authority without path
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "" uri-query: "" uri-fragment: "" }> ]
+PASS: empty path
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/" uri-query: "just-query" uri-fragment: "" }> ]
+PASS: trailing slash path
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/" uri-query: "just-query" uri-fragment: "" }> ]
+PASS: lone query
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/" uri-query: "just-query" uri-fragment: "" }> ]
+PASS: fragment empty
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/" uri-query: "just-query" uri-fragment: "" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/" uri-query: "" uri-fragment: "just-fragment" }> ]
+PASS: query empty
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/" uri-query: "" uri-fragment: "just-fragment" }> ]
+PASS: lone fragment
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/" uri-query: "" uri-fragment: "just-fragment" }> ]
+Stack: [ ]
+=== parse: alias of parse(rfc3986) ===
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q" uri-fragment: "f" }> ]
+PASS: alias scheme
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q" uri-fragment: "f" }> ]
+PASS: alias authority
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q" uri-fragment: "f" }> ]
+PASS: alias path
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q" uri-fragment: "f" }> ]
+PASS: alias query
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q" uri-fragment: "f" }> ]
+PASS: alias fragment
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q" uri-fragment: "f" }> ]
+Stack: [ ]
+=== parse(rfc3986): invalid input throws EInvalidArgument ===
+Stack: [ ]
+PASS: empty input throws
+Stack: [ ]
+Stack: [ [ "" parse(rfc3986) ] invalid-argument: ]
+PASS: empty input is EInvalidArgument
+Stack: [ ]
+PASS: missing scheme separator throws
+Stack: [ ]
+Stack: [ [ "no-scheme-here" parse(rfc3986) ] invalid-argument: ]
+PASS: missing scheme is EInvalidArgument
+Stack: [ ]
+PASS: empty scheme throws
+Stack: [ ]
+Stack: [ [ ":authority-no-scheme" parse(rfc3986) ] invalid-argument: ]
+PASS: empty scheme is EInvalidArgument
+Stack: [ ]
+PASS: digit-first scheme throws strict
+Stack: [ ]
+Stack: [ [ "1http://x" parse(rfc3986) ] invalid-argument: ]
+PASS: digit-first scheme is EInvalidArgument
+Stack: [ ]
+PASS: invalid scheme byte throws strict
+Stack: [ ]
+=== parse(whatwg): permissive scheme bytes for special schemes ===
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "ht!tp" uri-authority: "" uri-host: "" uri-port: "" uri-path: "permissive" uri-query: "" uri-fragment: "" }> ]
+PASS: whatwg accepts ! in scheme
+Stack: [ <uri uri-data{ uri-scheme: "ht!tp" uri-authority: "" uri-host: "" uri-port: "" uri-path: "permissive" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "urn" uri-authority: "" uri-host: "" uri-port: "" uri-path: "isbn:9780451450524" uri-query: "" uri-fragment: "" }> ]
+PASS: whatwg urn scheme
+Stack: [ <uri uri-data{ uri-scheme: "urn" uri-authority: "" uri-host: "" uri-port: "" uri-path: "isbn:9780451450524" uri-query: "" uri-fragment: "" }> ]
+PASS: whatwg urn path
+Stack: [ <uri uri-data{ uri-scheme: "urn" uri-authority: "" uri-host: "" uri-port: "" uri-path: "isbn:9780451450524" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "host.example" uri-host: "host.example" uri-port: "" uri-path: "/" uri-query: "" uri-fragment: "" }> ]
+PASS: whatwg http scheme
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "host.example" uri-host: "host.example" uri-port: "" uri-path: "/" uri-query: "" uri-fragment: "" }> ]
+PASS: whatwg http authority
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "host.example" uri-host: "host.example" uri-port: "" uri-path: "/" uri-query: "" uri-fragment: "" }> ]
+PASS: whatwg http path
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "host.example" uri-host: "host.example" uri-port: "" uri-path: "/" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+PASS: whatwg still requires :
+Stack: [ ]
+=== <uri>: smart constructor ===
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q=1" uri-fragment: "frag" }> ]
+PASS: ctor scheme
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q=1" uri-fragment: "frag" }> ]
+PASS: ctor authority
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q=1" uri-fragment: "frag" }> ]
+PASS: ctor host
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q=1" uri-fragment: "frag" }> ]
+PASS: ctor port empty
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q=1" uri-fragment: "frag" }> ]
+PASS: ctor path
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q=1" uri-fragment: "frag" }> ]
+PASS: ctor query
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q=1" uri-fragment: "frag" }> ]
+PASS: ctor fragment
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-query: "q=1" uri-fragment: "frag" }> ]
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "x:80" uri-host: "x" uri-port: "80" uri-path: "" uri-query: "" uri-fragment: "" }> ]
+PASS: ctor numeric port
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-authority: "x:80" uri-host: "x" uri-port: "80" uri-path: "" uri-query: "" uri-fragment: "" }> ]
+Stack: [ ]
+PASS: <uri> rejects digit-leading scheme
+Stack: [ ]
+Stack: [ [ "1bad" "" "" "" "" "" "" <uri> ] invalid-argument: ]
+PASS: <uri> invalid scheme is EInvalidArgument
+Stack: [ ]
+PASS: <uri> rejects non-numeric port
+Stack: [ ]
+Stack: [ [ "http" "h:abc" "h" "abc" "" "" "" <uri> ] invalid-argument: ]
+PASS: <uri> invalid port is EInvalidArgument
+Stack: [ ]

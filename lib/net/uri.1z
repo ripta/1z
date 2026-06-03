@@ -1,0 +1,247 @@
+\ lib/net/uri.1z - URI parser and value type per RFC 3986 with a WHATWG overlay.
+
+use "strings" ;
+use "char" ;
+use "conversions" ;
+use "scanner" ;
+
+\ === Internal data shape ===
+\ The inner struct's auto-generated `>>` getters use field names prefixed
+\ with `uri-` so that the public `scheme>> .. fragment>>` accessors below
+\ do not collide with them when parsed.
+
+uri-data: struct{
+  uri-scheme uri-authority uri-host uri-port
+  uri-path uri-query uri-fragment
+} ;
+
+(uri-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
+
+\ === Public type and constructors ===
+
+\\ A parsed URI value. Components are stored raw exactly as they appeared
+\\ in the parser input. Construct via the parsers (`parse`, `parse(rfc3986)`,
+\\ `parse(whatwg)`) or the smart constructor `<uri>`.
+uri: virtual{ uri-data } ;
+
+\\ Bare positional URI constructor used internally by the parsers. Public
+\\ callers should prefer `<uri>`, which validates component shape.
+make-uri: ( scheme authority host port path query fragment -- uri ) [
+  make-uri-data >uri
+] ;
+
+\ === Public accessors ===
+
+\\ Scheme component (text before the first `:`).
+scheme>>: ( uri -- s ) [ unmake-uri uri-scheme>> ] ;
+
+\\ Authority component (text between `//` and the next `/`, `?`, or `#`),
+\\ including any `userinfo@` prefix and `:port` suffix.
+authority>>: ( uri -- s ) [ unmake-uri uri-authority>> ] ;
+
+\\ Host portion of the authority with `userinfo@` stripped and any port
+\\ removed. IPv6 hosts retain their `[` and `]` brackets.
+host>>: ( uri -- s ) [ unmake-uri uri-host>> ] ;
+
+\\ Port portion of the authority as a digit string, or `""` when absent.
+port>>: ( uri -- s ) [ unmake-uri uri-port>> ] ;
+
+\\ Path component, from end of authority (or directly after `scheme:`) up
+\\ to the next `?`, `#`, or end of input.
+path>>: ( uri -- s ) [ unmake-uri uri-path>> ] ;
+
+\\ Query component (without the leading `?`), or `""` when absent.
+query>>: ( uri -- s ) [ unmake-uri uri-query>> ] ;
+
+\\ Fragment component (without the leading `#`), or `""` when absent.
+fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
+
+\ === Scheme validation ===
+
+\ RFC 3986: scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ).
+(scheme-tail-char?): ( ch -- ? ) [
+  dup alpha?
+  over digit? or
+  over "+" = or
+  over "-" = or
+  swap "." = or
+] ;
+
+(valid-rfc3986-scheme?): ( s -- ? ) [
+  dup #len 0 = [ drop f ] [
+    dup 0 #nth alpha?
+    [ 1 over #len #slice [ (scheme-tail-char?) ] #all ]
+    [ drop f ]
+    if
+  ] if
+] ;
+
+(valid-port?): ( s -- ? ) [
+  dup #len 0 = [ drop t ] [
+    [ digit? ] #all
+  ] if
+] ;
+
+\ === Authority decomposition ===
+\ Authority shape: [ userinfo "@" ] host [ ":" port ]. Stored host preserves
+\ any IPv6 brackets; userinfo (if any) appears in the raw authority but not
+\ in host.
+
+(strip-userinfo): ( authority -- host-port ) [
+  dup "@" #index-of dup f =
+  [ drop ]
+  [ 1 + over #len #slice ]
+  if
+] ;
+
+(bracketed-host-port): ( host-port -- host port ) [
+  dup "]" #index-of dup f =
+  [ drop "" ]
+  [
+    \ host-port idx
+    2dup 1 + 0 swap #slice      \ host-port idx host
+    -rot> 1 + over #len #slice  \ host rest
+    dup #len 0 =
+    [ drop "" ]
+    [
+      dup 0 #nth ":" =
+      [ 1 over #len #slice ]
+      [ drop "" ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+(plain-host-port): ( host-port -- host port ) [
+  dup ":" #index-of dup f =
+  [ drop "" ]
+  [
+    2dup 0 swap #slice
+    -rot> 1 + over #len #slice
+  ]
+  if
+] ;
+
+(split-host-port-raw): ( host-port -- host port ) [
+  dup #len 0 =
+  [ "" ]
+  [
+    dup 0 #nth "[" =
+    [ (bracketed-host-port) ]
+    [ (plain-host-port) ]
+    if
+  ]
+  if
+] ;
+
+\ === Per-stage scanner readers ===
+\ Each takes a scanner on top, returns the consumed component underneath
+\ the scanner so the orchestrator can chain stages without juggling.
+
+(read-scheme): ( scanner strict? -- scheme scanner ) [
+  swap ":" take-until
+  \ strict? scanner consumed
+  dup f =
+  [ 3drop "missing scheme separator" (uri-error) ]
+  [
+    dup #len 0 = [ 3drop "empty scheme" (uri-error) ] when
+    \ strict? scanner consumed
+    2 pick-n
+    \ strict? scanner consumed strict?
+    [ dup (valid-rfc3986-scheme?) not [ "invalid scheme" (uri-error) ] when ] when
+    \ strict? scanner consumed
+    [ ":" expect ] dip
+    \ strict? scanner' consumed
+    [ drop ] 2dip swap
+  ]
+  if
+] ;
+
+\ Reads "//authority" if present, splits into authority/host/port. Returns
+\ four items below the scanner: authority, host, port, then the scanner.
+(read-authority-block): ( scanner -- authority host port scanner ) [
+  dup "//" skip-exact dup f =
+  [
+    drop "" "" "" 3 <rot-n
+  ]
+  [
+    nip
+    [ "/?#" swap #in? not ] take-while
+    \ scanner authority-raw
+    dup (strip-userinfo) (split-host-port-raw)
+    \ scanner authority host port
+    3 <rot-n
+  ]
+  if
+] ;
+
+(read-path): ( scanner -- path scanner ) [
+  [ "?#" swap #in? not ] take-while
+  swap
+] ;
+
+(read-query): ( scanner -- query scanner ) [
+  dup "?" skip-exact dup f =
+  [ drop "" swap ]
+  [
+    nip
+    [ "#" = not ] take-while
+    swap
+  ]
+  if
+] ;
+
+(read-fragment): ( scanner -- fragment scanner ) [
+  dup "#" skip-exact dup f =
+  [ drop "" swap ]
+  [
+    nip
+    dup rest swap
+  ]
+  if
+] ;
+
+(parse-uri-with-strictness): ( s strict? -- uri ) [
+  swap <scanner> swap
+  \ scanner strict?
+  (read-scheme)
+  \ scheme scanner
+  (read-authority-block)
+  \ scheme authority host port scanner
+  (read-path)
+  \ scheme authority host port path scanner
+  (read-query)
+  \ scheme authority host port path query scanner
+  (read-fragment)
+  \ scheme authority host port path query fragment scanner
+  drop
+  make-uri
+] ;
+
+\ === Parsers ===
+
+\\ Parse an absolute URI per RFC 3986. Throws `EInvalidArgument` on a
+\\ missing or invalid scheme, or any other structural malformation.
+parse(rfc3986): ( s -- uri ) [ t (parse-uri-with-strictness) ] ;
+
+\\ Parse an absolute URI with WHATWG-style permissiveness for the URL-shaped
+\\ special schemes (`http`, `https`, `ws`, `wss`, `ftp`, `file`). URNs and
+\\ other non-special schemes fall through to strict RFC 3986 parsing. The
+\\ permissive path relaxes scheme-byte validation.
+parse(whatwg): ( s -- uri ) [ f (parse-uri-with-strictness) ] ;
+
+\\ Default parser: strict RFC 3986. Equivalent to `parse(rfc3986)`.
+parse: ( s -- uri ) [ parse(rfc3986) ] ;
+
+\ === Smart constructor ===
+
+\\ Construct a `uri` value from raw components. Validates that the scheme
+\\ matches the RFC 3986 production and the port is empty or all digits.
+\\ Other components are accepted as raw bytes.
+<uri>: ( scheme authority host port path query fragment -- uri ) [
+  6 pick-n (valid-rfc3986-scheme?) not [ "invalid scheme" (uri-error) ] when
+  3 pick-n (valid-port?) not [ "invalid port" (uri-error) ] when
+  make-uri
+] ;

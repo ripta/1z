@@ -1,0 +1,165 @@
+use "testing" ;
+use "net/uri" ;
+
+\ -----------------------------------------------------------------------
+"parse(rfc3986): scheme + authority + path + query + fragment" test-section
+\ -----------------------------------------------------------------------
+
+"http://example.com/a?b=1#c" parse(rfc3986)
+dup scheme>> "http" "scheme" assert=
+dup authority>> "example.com" "authority" assert=
+dup host>> "example.com" "host" assert=
+dup port>> "" "port" assert=
+dup path>> "/a" "path" assert=
+dup query>> "b=1" "query" assert=
+dup fragment>> "c" "fragment" assert=
+drop
+
+"https://user:pass@example.com:8443/p" parse(rfc3986)
+dup scheme>> "https" "https scheme" assert=
+dup authority>> "user:pass@example.com:8443" "https authority" assert=
+dup host>> "example.com" "https host (no userinfo)" assert=
+dup port>> "8443" "https port" assert=
+dup path>> "/p" "https path" assert=
+dup query>> "" "https query empty" assert=
+dup fragment>> "" "https fragment empty" assert=
+drop
+
+"mailto:user@example.com" parse(rfc3986)
+dup scheme>> "mailto" "mailto scheme" assert=
+dup authority>> "" "mailto authority empty" assert=
+dup host>> "" "mailto host empty" assert=
+dup port>> "" "mailto port empty" assert=
+dup path>> "user@example.com" "mailto path" assert=
+drop
+
+"urn:isbn:0451450523" parse(rfc3986)
+dup scheme>> "urn" "urn scheme" assert=
+dup authority>> "" "urn authority empty" assert=
+dup path>> "isbn:0451450523" "urn path" assert=
+drop
+
+"file:///etc/hosts" parse(rfc3986)
+dup scheme>> "file" "file scheme" assert=
+dup authority>> "" "file authority empty" assert=
+dup host>> "" "file host empty" assert=
+dup path>> "/etc/hosts" "file path" assert=
+drop
+
+"http://[::1]:8080/v6" parse(rfc3986)
+dup scheme>> "http" "ipv6 scheme" assert=
+dup authority>> "[::1]:8080" "ipv6 authority" assert=
+dup host>> "[::1]" "ipv6 host with brackets" assert=
+dup port>> "8080" "ipv6 port" assert=
+dup path>> "/v6" "ipv6 path" assert=
+drop
+
+"http://[fe80::1]/v6-noport" parse(rfc3986)
+dup host>> "[fe80::1]" "ipv6 host without port" assert=
+dup port>> "" "ipv6 no port" assert=
+dup path>> "/v6-noport" "ipv6 noport path" assert=
+drop
+
+"http://example.com" parse(rfc3986)
+dup authority>> "example.com" "authority without path" assert=
+dup path>> "" "empty path" assert=
+drop
+
+"http://example.com/?just-query" parse(rfc3986)
+dup path>> "/" "trailing slash path" assert=
+dup query>> "just-query" "lone query" assert=
+dup fragment>> "" "fragment empty" assert=
+drop
+
+"http://example.com/#just-fragment" parse(rfc3986)
+dup query>> "" "query empty" assert=
+dup fragment>> "just-fragment" "lone fragment" assert=
+drop
+
+\ -----------------------------------------------------------------------
+"parse: alias of parse(rfc3986)" test-section
+\ -----------------------------------------------------------------------
+
+"http://example.com/p?q#f" parse
+dup scheme>> "http" "alias scheme" assert=
+dup authority>> "example.com" "alias authority" assert=
+dup path>> "/p" "alias path" assert=
+dup query>> "q" "alias query" assert=
+dup fragment>> "f" "alias fragment" assert=
+drop
+
+\ -----------------------------------------------------------------------
+"parse(rfc3986): invalid input throws EInvalidArgument" test-section
+\ -----------------------------------------------------------------------
+
+[ "" parse(rfc3986) ] "empty input throws" assert-error
+[ "" parse(rfc3986) ] EInvalidArgument
+"empty input is EInvalidArgument" assert-error-type
+
+[ "no-scheme-here" parse(rfc3986) ] "missing scheme separator throws" assert-error
+[ "no-scheme-here" parse(rfc3986) ] EInvalidArgument
+"missing scheme is EInvalidArgument" assert-error-type
+
+[ ":authority-no-scheme" parse(rfc3986) ] "empty scheme throws" assert-error
+[ ":authority-no-scheme" parse(rfc3986) ] EInvalidArgument
+"empty scheme is EInvalidArgument" assert-error-type
+
+[ "1http://x" parse(rfc3986) ] "digit-first scheme throws strict" assert-error
+[ "1http://x" parse(rfc3986) ] EInvalidArgument
+"digit-first scheme is EInvalidArgument" assert-error-type
+
+[ "ht!tp://x" parse(rfc3986) ] "invalid scheme byte throws strict" assert-error
+
+\ -----------------------------------------------------------------------
+"parse(whatwg): permissive scheme bytes for special schemes" test-section
+\ -----------------------------------------------------------------------
+
+\ Strict-invalid schemes that WHATWG accepts (relaxed scheme bytes).
+"ht!tp:permissive" parse(whatwg)
+dup scheme>> "ht!tp" "whatwg accepts ! in scheme" assert=
+drop
+
+\ URNs still parse identically under WHATWG.
+"urn:isbn:9780451450524" parse(whatwg)
+dup scheme>> "urn" "whatwg urn scheme" assert=
+dup path>> "isbn:9780451450524" "whatwg urn path" assert=
+drop
+
+\ Standard URL parses the same under both modes.
+"http://host.example/" parse(whatwg)
+dup scheme>> "http" "whatwg http scheme" assert=
+dup authority>> "host.example" "whatwg http authority" assert=
+dup path>> "/" "whatwg http path" assert=
+drop
+
+\ WHATWG still requires a scheme separator.
+[ "noscheme" parse(whatwg) ] "whatwg still requires :" assert-error
+
+\ -----------------------------------------------------------------------
+"<uri>: smart constructor" test-section
+\ -----------------------------------------------------------------------
+
+"http" "example.com" "example.com" "" "/p" "q=1" "frag" <uri>
+dup scheme>> "http" "ctor scheme" assert=
+dup authority>> "example.com" "ctor authority" assert=
+dup host>> "example.com" "ctor host" assert=
+dup port>> "" "ctor port empty" assert=
+dup path>> "/p" "ctor path" assert=
+dup query>> "q=1" "ctor query" assert=
+dup fragment>> "frag" "ctor fragment" assert=
+drop
+
+\ Port digit string is accepted.
+"http" "x:80" "x" "80" "" "" "" <uri>
+dup port>> "80" "ctor numeric port" assert=
+drop
+
+\ Invalid scheme rejected.
+[ "1bad" "" "" "" "" "" "" <uri> ] "<uri> rejects digit-leading scheme" assert-error
+[ "1bad" "" "" "" "" "" "" <uri> ] EInvalidArgument
+"<uri> invalid scheme is EInvalidArgument" assert-error-type
+
+\ Invalid port rejected.
+[ "http" "h:abc" "h" "abc" "" "" "" <uri> ] "<uri> rejects non-numeric port" assert-error
+[ "http" "h:abc" "h" "abc" "" "" "" <uri> ] EInvalidArgument
+"<uri> invalid port is EInvalidArgument" assert-error-type
