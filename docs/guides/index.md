@@ -14,12 +14,14 @@ definitions, and control flow.
    and pipelines
 4. [Concurrency](concurrency.md) -- green threads, structured scopes, channels
 5. [Async I/O](async-io.md) -- transparent non-blocking I/O inside task scopes
-6. [HTTP](http.md) -- request/response, handler shape, routing, static files
-7. [Foreign Function Interface](ffi.md) -- calling C libraries from 1z
-8. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
+6. [Streams](streams.md) -- the shared read / write surface over files,
+   pipes, in-memory buffers, and bidirectional fd pairs
+7. [HTTP](http.md) -- request/response, handler shape, routing, static files
+8. [Foreign Function Interface](ffi.md) -- calling C libraries from 1z
+9. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
    and `samply` see 1z words in AOT binaries
-9. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
-   comparison for experienced stack-language programmers
+10. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
+    comparison for experienced stack-language programmers
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with
 `./zig-out/bin/1z file.1z`.
