@@ -1,6 +1,8 @@
 \ lib/data/html.1z - HTML entity escaping
 
 use "strings" ;
+use "char" ;
+use "conversions" ;
 
 private{
   (escapes): ( char -- string ) H{
@@ -13,6 +15,188 @@ private{
 
   (escape-char): ( char -- string ) [
     dup (escapes) -rot> @get-or
+  ] ;
+
+  (html-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
+
+  (named-entities): ( -- hash ) H{
+    "amp" "&"
+    "lt" "<"
+    "gt" ">"
+    "quot" "\""
+    "apos" "'"
+  } ;
+
+  \ Fold decimal digits left-to-right. Empty body or any non-digit yields f.
+  \ The accumulator carries an f sentinel so that the reduce continues through
+  \ the rest of the input without throwing.
+  (parse-decimal?): ( body -- n/f ) [
+    dup #len 0 = [ drop f ] [
+      0 [
+        over f =
+        [ 2drop f ]
+        [
+          dup digit?
+          [ char>digit swap 10 * + ]
+          [ 2drop f ]
+          if
+        ]
+        if
+      ] #reduce
+    ] if
+  ] ;
+
+  \ Fold hex digits left-to-right. Same f-sentinel pattern as parse-decimal?.
+  (parse-hex?): ( body -- n/f ) [
+    dup #len 0 = [ drop f ] [
+      0 [
+        over f =
+        [ 2drop f ]
+        [
+          dup hex-digit?
+          [ hex>fixnum swap 16 * + ]
+          [ 2drop f ]
+          if
+        ]
+        if
+      ] #reduce
+    ] if
+  ] ;
+
+  \ Convert a parsed codepoint to a single-character string, or f if rejected.
+  \ Rejects 0 (NUL), out-of-range (>0x10FFFF), and surrogates (0xD800..0xDFFF).
+  (decode-codepoint?): ( n -- char/f ) [
+    dup 0 = [ drop f ] [
+      [ >char ] [ drop f ] recover
+    ] if
+  ] ;
+
+  \ Body starts with `#`. Branch on the second char to pick hex vs decimal.
+  (decode-numeric?): ( body -- char/f ) [
+    1 over #len #slice
+    dup #len 0 = [ drop f ] [
+      dup 0 #nth dup "x" = swap "X" = or
+      [ 1 over #len #slice (parse-hex?) ]
+      [ (parse-decimal?) ]
+      if
+      dup f = [ ] [ (decode-codepoint?) ] if
+    ] if
+  ] ;
+
+  \ Body is the substring between `&` and `;` (exclusive on both sides).
+  (decode-entity?): ( body -- char/f ) [
+    dup #len 0 = [ drop f ] [
+      dup 0 #nth "#" =
+      [ (decode-numeric?) ]
+      [
+        (named-entities) swap @get?
+        dup option:some?
+        [ option:some> ]
+        [ drop f ]
+        if
+      ]
+      if
+    ] if
+  ] ;
+
+  html-unescape-state: mutable struct{ src pos out } ;
+
+  (us-remaining): ( state -- n ) [ dup src>> #len swap pos>> - ] ;
+
+  (us-char-at): ( state offset -- ch ) [
+    over pos>> + over src>> swap #nth nip
+  ] ;
+
+  (us-append-char): ( state ch -- state ) [
+    over out>> swap #append >>out
+  ] ;
+
+  (us-append-slice): ( state start end -- state ) [
+    2 pick-n src>> -rot> #slice
+    over out>> swap #append >>out
+  ] ;
+
+  (us-advance): ( state n -- state ) [
+    over pos>> + >>pos
+  ] ;
+
+  \ Locate the `;` that closes an entity beginning at pos. Returns the absolute
+  \ index of the `;` on success or f if none is found before end-of-input.
+  (us-find-semi): ( state -- idx/f ) [
+    dup src>> ";" 2 pick-n pos>> 1 + #index-of-from nip
+  ] ;
+
+  \ Append src[pos..semi+1] verbatim and set pos to semi+1.
+  (us-pass-through): ( state semi-idx -- state ) [
+    1 +
+    dup
+    [
+      over pos>> swap
+      (us-append-slice)
+    ] dip
+    >>pos
+  ] ;
+
+  \ Strict step: throw EInvalidArgument on any malformed entity.
+  (us-step-strict): ( state -- state ) [
+    dup 0 (us-char-at) "&" =
+    [
+      dup (us-find-semi)
+      dup f =
+      [
+        drop "unterminated HTML entity" (html-error)
+      ]
+      [
+        over src>>
+        2 pick-n pos>> 1 + 2 pick-n
+        #slice
+        (decode-entity?)
+        dup f =
+        [
+          drop drop "invalid HTML entity" (html-error)
+        ]
+        [
+          swap
+          [ (us-append-char) ] dip
+          over pos>> - 1 + (us-advance)
+        ]
+        if
+      ]
+      if
+    ]
+    [ dup 0 (us-char-at) (us-append-char) 1 (us-advance) ]
+    if
+  ] ;
+
+  \ Permissive step: leave any unrecognized or malformed entity in place.
+  (us-step-permissive): ( state -- state ) [
+    dup 0 (us-char-at) "&" =
+    [
+      dup (us-find-semi)
+      dup f =
+      [
+        drop dup 0 (us-char-at) (us-append-char) 1 (us-advance)
+      ]
+      [
+        over src>>
+        2 pick-n pos>> 1 + 2 pick-n
+        #slice
+        (decode-entity?)
+        dup f =
+        [
+          drop (us-pass-through)
+        ]
+        [
+          swap
+          [ (us-append-char) ] dip
+          over pos>> - 1 + (us-advance)
+        ]
+        if
+      ]
+      if
+    ]
+    [ dup 0 (us-char-at) (us-append-char) 1 (us-advance) ]
+    if
   ] ;
 }
 
@@ -28,4 +212,29 @@ private{
 \\ is safe to embed in HTML text content and in single-quoted or double-quoted attribute values.
 escape: ( string -- string ) [
   [ (escape-char) ] #map #collect "" #join
+] ;
+
+\\ Decode HTML entities into their literal characters. Recognizes the five
+\\ named entities `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;` and numeric
+\\ character references `&#NN;` (decimal) and `&#xHH;` / `&#XHH;` (hex,
+\\ either case for the prefix and for the digits). Throws `EInvalidArgument`
+\\ on a bare `&`, an unterminated `&foo`, an unknown named entity, a non-digit
+\\ numeric body, a codepoint above `0x10FFFF`, a surrogate codepoint
+\\ (`0xD800..0xDFFF`), or `&#0;`. Use `unescape(permissive)` to leave
+\\ unrecognized entities in place instead.
+unescape: ( string -- string ) [
+  0 "" make-html-unescape-state
+  [ dup (us-remaining) 0 > ] [ (us-step-strict) ] while
+  out>>
+] ;
+
+\\ Decode HTML entities like `unescape`, but pass any unrecognized or malformed
+\\ entity through unchanged. A bare `&` at end of input, an unterminated `&foo`
+\\ with no closing `;`, an unknown name like `&unknown;`, and an out-of-range
+\\ numeric reference all appear verbatim in the output. Valid entities decode
+\\ identically to `unescape`.
+unescape(permissive): ( string -- string ) [
+  0 "" make-html-unescape-state
+  [ dup (us-remaining) 0 > ] [ (us-step-permissive) ] while
+  out>>
 ] ;

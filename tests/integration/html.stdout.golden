@@ -38,3 +38,141 @@ Stack: [ ]
 Stack: [ "café &amp; 中" "café &amp; 中" ]
 PASS: non-ASCII characters pass through unchanged
 Stack: [ ]
+=== unescape: each named entity ===
+Stack: [ ]
+PASS: &amp; decodes to &
+Stack: [ ]
+PASS: &lt; decodes to <
+Stack: [ ]
+PASS: &gt; decodes to >
+Stack: [ ]
+PASS: &quot; decodes to double-quote
+Stack: [ ]
+PASS: &apos; decodes to apostrophe
+Stack: [ ]
+PASS: &#39; (numeric) decodes to apostrophe
+Stack: [ ]
+=== unescape: decimal numeric entities ===
+Stack: [ ]
+PASS: &#65; decodes to A
+Stack: [ ]
+PASS: &#48; decodes to 0
+Stack: [ ]
+PASS: &#20013; decodes to multibyte 中
+Stack: [ ]
+=== unescape: hex numeric entities ===
+Stack: [ ]
+PASS: &#x41; (lowercase x) decodes to A
+Stack: [ ]
+PASS: &#X41; (uppercase X) decodes to A
+Stack: [ ]
+PASS: &#x4E2D; (uppercase hex) decodes to 中
+Stack: [ ]
+PASS: &#x4e2d; (lowercase hex) decodes to 中
+Stack: [ ]
+PASS: &#X4e2d; (mixed case) decodes to 中
+Stack: [ ]
+=== unescape: edge inputs ===
+Stack: [ ]
+PASS: empty string round-trips
+Stack: [ ]
+Stack: [ "hello world" "hello world" ]
+PASS: string with no entities passes through
+Stack: [ ]
+PASS: consecutive entities all decode
+Stack: [ ]
+=== unescape: round-trip with escape ===
+Stack: [ ]
+Stack: [ "<a href='x'>&"" ]
+Stack: [ "<a href='x'>&"" "<a href='x'>&"" ]
+PASS: escape then unescape round-trips intermixed input
+Stack: [ ]
+Stack: [ "café & 中" ]
+Stack: [ "café & 中" "café & 中" ]
+PASS: escape then unescape round-trips multibyte input
+Stack: [ ]
+=== unescape: malformed input throws EInvalidArgument ===
+Stack: [ ]
+PASS: bare & at end throws
+Stack: [ ]
+Stack: [ [ "&" unescape ] invalid-argument: ]
+PASS: bare & is EInvalidArgument
+Stack: [ ]
+PASS: unterminated &foo throws
+Stack: [ ]
+Stack: [ [ "&foo" unescape ] invalid-argument: ]
+PASS: unterminated entity is EInvalidArgument
+Stack: [ ]
+PASS: unknown named entity throws
+Stack: [ ]
+Stack: [ [ "&unknown;" unescape ] invalid-argument: ]
+PASS: unknown named entity is EInvalidArgument
+Stack: [ ]
+PASS: empty entity body throws
+Stack: [ ]
+PASS: empty decimal body throws
+Stack: [ ]
+PASS: empty hex body throws
+Stack: [ ]
+PASS: non-digit decimal body throws
+Stack: [ ]
+PASS: codepoint above 0x10FFFF throws
+Stack: [ ]
+PASS: surrogate codepoint throws
+Stack: [ ]
+PASS: NUL (&#0;) throws
+Stack: [ ]
+Stack: [ [ "&#0;" unescape ] invalid-argument: ]
+PASS: NUL is EInvalidArgument
+Stack: [ ]
+=== unescape(permissive): each named entity decodes identically ===
+Stack: [ ]
+PASS: &amp; decodes
+Stack: [ ]
+PASS: &lt; decodes
+Stack: [ ]
+PASS: &gt; decodes
+Stack: [ ]
+PASS: &quot; decodes
+Stack: [ ]
+PASS: &apos; decodes
+Stack: [ ]
+PASS: &#65; decodes
+Stack: [ ]
+PASS: hex numeric decodes
+Stack: [ ]
+=== unescape(permissive): passthrough on malformed ===
+Stack: [ ]
+PASS: bare & passes through
+Stack: [ ]
+Stack: [ "&foo" "&foo" ]
+PASS: unterminated &foo passes through
+Stack: [ ]
+Stack: [ "&unknown;" "&unknown;" ]
+PASS: unknown named entity passes through
+Stack: [ ]
+Stack: [ "&;" "&;" ]
+PASS: empty entity body passes through
+Stack: [ ]
+Stack: [ "&#;" "&#;" ]
+PASS: empty decimal body passes through
+Stack: [ ]
+Stack: [ "&#x;" "&#x;" ]
+PASS: empty hex body passes through
+Stack: [ ]
+Stack: [ "&#NaN;" "&#NaN;" ]
+PASS: non-digit decimal body passes through
+Stack: [ ]
+Stack: [ "&#x110000;" "&#x110000;" ]
+PASS: out-of-range numeric passes through
+Stack: [ ]
+Stack: [ "&#xD800;" "&#xD800;" ]
+PASS: surrogate codepoint passes through
+Stack: [ ]
+Stack: [ "&#0;" "&#0;" ]
+PASS: NUL numeric passes through
+Stack: [ ]
+Stack: [ "&&unknown;<" ]
+Stack: [ "&&unknown;<" "&&unknown;<" ]
+PASS: mixed valid and unknown decodes the valid parts
+Stack: [ ]

@@ -42,3 +42,137 @@ use "data/html" ;
 
 "café &amp; 中" "café & 中" escape
 "non-ASCII characters pass through unchanged" assert=
+
+"unescape: each named entity" test-section
+
+"&" "&amp;" unescape "&amp; decodes to &" assert=
+
+"<" "&lt;" unescape "&lt; decodes to <" assert=
+
+">" "&gt;" unescape "&gt; decodes to >" assert=
+
+"\"" "&quot;" unescape "&quot; decodes to double-quote" assert=
+
+"'" "&apos;" unescape "&apos; decodes to apostrophe" assert=
+
+"'" "&#39;" unescape "&#39; (numeric) decodes to apostrophe" assert=
+
+"unescape: decimal numeric entities" test-section
+
+"A" "&#65;" unescape "&#65; decodes to A" assert=
+
+"0" "&#48;" unescape "&#48; decodes to 0" assert=
+
+"中" "&#20013;" unescape "&#20013; decodes to multibyte 中" assert=
+
+"unescape: hex numeric entities" test-section
+
+"A" "&#x41;" unescape "&#x41; (lowercase x) decodes to A" assert=
+
+"A" "&#X41;" unescape "&#X41; (uppercase X) decodes to A" assert=
+
+"中" "&#x4E2D;" unescape "&#x4E2D; (uppercase hex) decodes to 中" assert=
+
+"中" "&#x4e2d;" unescape "&#x4e2d; (lowercase hex) decodes to 中" assert=
+
+"中" "&#X4e2d;" unescape "&#X4e2d; (mixed case) decodes to 中" assert=
+
+"unescape: edge inputs" test-section
+
+"" "" unescape "empty string round-trips" assert=
+
+"hello world" "hello world" unescape
+"string with no entities passes through" assert=
+
+"&<>" "&amp;&lt;&gt;" unescape "consecutive entities all decode" assert=
+
+"unescape: round-trip with escape" test-section
+
+"<a href='x'>&\""
+"<a href='x'>&\"" escape unescape
+"escape then unescape round-trips intermixed input" assert=
+
+"café & 中"
+"café & 中" escape unescape
+"escape then unescape round-trips multibyte input" assert=
+
+"unescape: malformed input throws EInvalidArgument" test-section
+
+[ "&" unescape ] "bare & at end throws" assert-error
+[ "&" unescape ] EInvalidArgument
+"bare & is EInvalidArgument" assert-error-type
+
+[ "&foo" unescape ] "unterminated &foo throws" assert-error
+[ "&foo" unescape ] EInvalidArgument
+"unterminated entity is EInvalidArgument" assert-error-type
+
+[ "&unknown;" unescape ] "unknown named entity throws" assert-error
+[ "&unknown;" unescape ] EInvalidArgument
+"unknown named entity is EInvalidArgument" assert-error-type
+
+[ "&;" unescape ] "empty entity body throws" assert-error
+
+[ "&#;" unescape ] "empty decimal body throws" assert-error
+
+[ "&#x;" unescape ] "empty hex body throws" assert-error
+
+[ "&#NaN;" unescape ] "non-digit decimal body throws" assert-error
+
+[ "&#x110000;" unescape ] "codepoint above 0x10FFFF throws" assert-error
+
+[ "&#xD800;" unescape ] "surrogate codepoint throws" assert-error
+
+[ "&#0;" unescape ] "NUL (&#0;) throws" assert-error
+[ "&#0;" unescape ] EInvalidArgument
+"NUL is EInvalidArgument" assert-error-type
+
+"unescape(permissive): each named entity decodes identically" test-section
+
+"&" "&amp;" unescape(permissive) "&amp; decodes" assert=
+
+"<" "&lt;" unescape(permissive) "&lt; decodes" assert=
+
+">" "&gt;" unescape(permissive) "&gt; decodes" assert=
+
+"\"" "&quot;" unescape(permissive) "&quot; decodes" assert=
+
+"'" "&apos;" unescape(permissive) "&apos; decodes" assert=
+
+"A" "&#65;" unescape(permissive) "&#65; decodes" assert=
+
+"中" "&#x4E2D;" unescape(permissive) "hex numeric decodes" assert=
+
+"unescape(permissive): passthrough on malformed" test-section
+
+"&" "&" unescape(permissive) "bare & passes through" assert=
+
+"&foo" "&foo" unescape(permissive)
+"unterminated &foo passes through" assert=
+
+"&unknown;" "&unknown;" unescape(permissive)
+"unknown named entity passes through" assert=
+
+"&;" "&;" unescape(permissive)
+"empty entity body passes through" assert=
+
+"&#;" "&#;" unescape(permissive)
+"empty decimal body passes through" assert=
+
+"&#x;" "&#x;" unescape(permissive)
+"empty hex body passes through" assert=
+
+"&#NaN;" "&#NaN;" unescape(permissive)
+"non-digit decimal body passes through" assert=
+
+"&#x110000;" "&#x110000;" unescape(permissive)
+"out-of-range numeric passes through" assert=
+
+"&#xD800;" "&#xD800;" unescape(permissive)
+"surrogate codepoint passes through" assert=
+
+"&#0;" "&#0;" unescape(permissive)
+"NUL numeric passes through" assert=
+
+"&&unknown;<"
+"&amp;&unknown;&lt;" unescape(permissive)
+"mixed valid and unknown decodes the valid parts" assert=
