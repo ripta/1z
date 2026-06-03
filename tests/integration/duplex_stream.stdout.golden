@@ -1,0 +1,26 @@
+Stack: [ ]
+=== Duplex over pipe round-trip ===
+Stack: [ ]
+Stack: [ <stream duplex read-write> ]
+PASS: write returns byte count
+Stack: [ <stream duplex read-write> ]
+PASS: read returns the same bytes
+Stack: [ <stream duplex read-write> ]
+Stack: [ ]
+=== Negative-fd validation ===
+Stack: [ ]
+PASS: negative read fd throws
+Stack: [ ]
+PASS: negative write fd throws
+Stack: [ ]
+=== Positioning words error ===
+Stack: [ ]
+Stack: [ ]
+PASS: stream-tell errors on duplex stream
+PASS: stream-seek errors on duplex stream
+PASS: stream-seek-end errors on duplex stream
+Stack: [ ]
+=== Closed stream errors ===
+Stack: [ ]
+PASS: write after close errors
+Stack: [ ]

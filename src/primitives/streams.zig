@@ -63,6 +63,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "fd>stream", .stack_effect = "fd -- stream", .doc = "Create stream from file descriptor (Unix only). Opens in read-write mode.", .func = nativeFdToStream, .capability = .io },
     .{ .name = "<pipe>", .stack_effect = "-- rd wr", .doc = "Create a Unix pipe, returning read-end and write-end streams.", .func = nativePipe, .capability = .io },
     .{ .name = "<string-stream>", .stack_effect = "n -- stream", .doc = "Create a write-only in-memory stream with initial capacity n.", .func = nativeStringStream, .capability = .io },
+    .{ .name = "<duplex-stream>", .stack_effect = "read-fd write-fd -- stream", .doc = "Create a bidirectional stream whose reads go to read-fd and writes go to write-fd. Both fds must be non-negative.", .func = nativeDuplexStream, .capability = .io },
     .{ .name = ">char", .stack_effect = "codepoint -- str", .doc = "Convert Unicode codepoint to single-character string.", .func = nativeChr },
     .{ .name = ">codepoint", .stack_effect = "str -- int", .doc = "Convert single-character string to Unicode codepoint.", .func = nativeToCodepoint },
 };
@@ -304,6 +305,155 @@ pub fn nativeStringStreamToString(ctx: *Context) anyerror!void {
     stream.vtable.close(stream);
     stream.closed = true;
     try ctx.stack.push(.{ .string = out });
+}
+
+// =============================================================================
+// Duplex (two-fd) stream vtable
+// =============================================================================
+
+/// Per-direction state for a bidirectional stream over two distinct fds.
+/// Stored in `Stream.impl`; `Stream.fd` is left at the `-1` sentinel so
+/// positioning words error cleanly through their existing fd < 0 guard.
+const DuplexState = struct {
+    read_fd: std.posix.fd_t,
+    write_fd: std.posix.fd_t,
+    read_nonblocking_set: bool = false,
+    write_nonblocking_set: bool = false,
+    allocator: std.mem.Allocator,
+};
+
+pub const duplex_vtable = StreamVTable{
+    .read = duplexRead,
+    .write = duplexWrite,
+    .close = duplexClose,
+    .flush = duplexFlush,
+};
+
+/// Read from the duplex stream's read fd, yielding to the scheduler on
+/// WouldBlock. Mirrors `fileRead` with per-direction non-blocking tracking.
+fn duplexRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
+    const state: *DuplexState = @ptrCast(@alignCast(stream.impl.?));
+    if (ctx.scheduler != null and !state.read_nonblocking_set) {
+        setNonBlockingFd(state.read_fd);
+        state.read_nonblocking_set = true;
+    }
+
+    const file = std.fs.File{ .handle = state.read_fd };
+    while (true) {
+        return file.read(buffer) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(state.read_fd, .read);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                if (state.read_nonblocking_set) {
+                    clearNonBlockingFd(state.read_fd);
+                    state.read_nonblocking_set = false;
+                }
+                continue;
+            }
+            return err;
+        };
+    }
+}
+
+/// Write to the duplex stream's write fd, yielding to the scheduler on
+/// WouldBlock. Mirrors `fileWrite` with per-direction non-blocking tracking.
+fn duplexWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
+    const state: *DuplexState = @ptrCast(@alignCast(stream.impl.?));
+    if (ctx.scheduler != null and !state.write_nonblocking_set) {
+        setNonBlockingFd(state.write_fd);
+        state.write_nonblocking_set = true;
+    }
+
+    const file = std.fs.File{ .handle = state.write_fd };
+    while (true) {
+        return file.write(bytes) catch |err| {
+            if (err == error.WouldBlock) {
+                if (ctx.scheduler) |sched| {
+                    sched.ioSuspendCurrentTask(state.write_fd, .write);
+                    try helpers.checkCancellation(ctx);
+                    continue;
+                }
+                if (state.write_nonblocking_set) {
+                    clearNonBlockingFd(state.write_fd);
+                    state.write_nonblocking_set = false;
+                }
+                continue;
+            }
+            return err;
+        };
+    }
+}
+
+/// Close both fds through the stdio guard so wrapping
+/// (STDIN_FILENO, STDOUT_FILENO) is safe, then free the per-stream state.
+fn duplexClose(stream: *Stream) void {
+    const state: *DuplexState = @ptrCast(@alignCast(stream.impl.?));
+    if (state.read_nonblocking_set) {
+        clearNonBlockingFd(state.read_fd);
+        state.read_nonblocking_set = false;
+    }
+    if (state.write_nonblocking_set) {
+        clearNonBlockingFd(state.write_fd);
+        state.write_nonblocking_set = false;
+    }
+    closeFdGuarded(state.read_fd);
+    closeFdGuarded(state.write_fd);
+    state.allocator.destroy(state);
+    stream.impl = null;
+}
+
+/// In practice the write fd is always stdio, a pipe, or a socket -- none of
+/// which support sync -- so this matches the fileFlush early-return path for
+/// those cases. A duplex stream over two regular file fds would not flush;
+/// revisit if a use case appears.
+fn duplexFlush(_: *Stream) anyerror!void {}
+
+/// Close `fd` unless it is one of the standard streams. The fd-based
+/// counterpart of `isStandardStream`; used by `duplexClose` since a duplex
+/// stream over stdio carries a different `Stream.name`.
+fn closeFdGuarded(fd: std.posix.fd_t) void {
+    if (fd == std.posix.STDIN_FILENO or
+        fd == std.posix.STDOUT_FILENO or
+        fd == std.posix.STDERR_FILENO) return;
+    const file = std.fs.File{ .handle = fd };
+    file.close();
+}
+
+/// <duplex-stream> ( read-fd write-fd -- stream ) - Construct a stream whose
+/// reads go to read-fd and writes go to write-fd. Both fds must be
+/// non-negative.
+pub fn nativeDuplexStream(ctx: *Context) anyerror!void {
+    const write_fd_val = try popFixnum(ctx);
+    const read_fd_val = try popFixnum(ctx);
+    if (read_fd_val < 0 or write_fd_val < 0) {
+        return error.InvalidArgument;
+    }
+
+    // State is GPA-backed so duplexClose can free it deterministically,
+    // matching the in-memory stream's MemBuffer ownership pattern.
+    const state = ctx.allocator.create(DuplexState) catch return error.OutOfMemory;
+    state.* = .{
+        .read_fd = @intCast(read_fd_val),
+        .write_fd = @intCast(write_fd_val),
+        .allocator = ctx.allocator,
+    };
+
+    const alloc = ctx.quotationAllocator();
+    const stream = alloc.create(Stream) catch {
+        ctx.allocator.destroy(state);
+        return error.OutOfMemory;
+    };
+    stream.* = Stream{
+        .vtable = &duplex_vtable,
+        .fd = -1,
+        .mode = .read_write,
+        .name = "duplex",
+        .impl = state,
+    };
+    try ctx.stack.push(.{ .stream = stream });
 }
 
 // =============================================================================

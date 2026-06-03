@@ -53,6 +53,7 @@ Stack: [ ]
 < ( a b -- ? )
 <buffered-channel> ( n -- ch )
 <channel> ( -- ch )
+<duplex-stream> ( read-fd write-fd -- stream )
 <pipe> ( -- rd wr )
 <rot-n ( n -- )
 <string-stream> ( n -- stream )

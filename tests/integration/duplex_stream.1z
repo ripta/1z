@@ -1,0 +1,30 @@
+\ Integration tests for the bidirectional (duplex) stream over two fds.
+
+use "testing" ;
+
+\ Turn a fresh <pipe> into a single duplex stream owning both fds.
+\ Defined as a helper so the intermediate fd numbers never appear in stack
+\ traces, which would make the golden file fd-dependent.
+pipe>duplex: ( -- duplex ) [ <pipe> stream>fd swap stream>fd swap <duplex-stream> ] ;
+
+"Duplex over pipe round-trip" test-section
+pipe>duplex
+dup "hello" stream-write 5 "write returns byte count" assert=
+dup 5 stream-read(exact) "hello" >bytes "read returns the same bytes" assert=
+stream-close
+
+"Negative-fd validation" test-section
+[ -1 1 <duplex-stream> ] invalid-argument: "negative read fd throws" assert-error-type
+[ 0 -1 <duplex-stream> ] invalid-argument: "negative write fd throws" assert-error-type
+
+"Positioning words error" test-section
+duplex: parameter{ [ f ] } ;
+pipe>duplex duplex [
+  [ duplex get stream-tell ] not-seekable: "stream-tell errors on duplex stream" assert-error-type
+  [ duplex get 0 stream-seek ] not-seekable: "stream-seek errors on duplex stream" assert-error-type
+  [ duplex get 0 stream-seek-end ] not-seekable: "stream-seek-end errors on duplex stream" assert-error-type
+  duplex get stream-close
+] with-parameter
+
+"Closed stream errors" test-section
+[ pipe>duplex dup stream-close "x" stream-write ] closed-stream: "write after close errors" assert-error-type
