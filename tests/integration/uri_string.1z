@@ -1,0 +1,94 @@
+\ Integration tests for >string identity round-trip and parse? variants.
+
+use "testing" ;
+use "net/uri" ;
+
+\ -----------------------------------------------------------------------
+">string round-trip on absolute URIs" test-section
+\ -----------------------------------------------------------------------
+
+"http://example.com/a?b=1#c"
+dup parse >string over "http://example.com/a?b=1#c round-trip" assert=
+drop
+
+"https://user:pass@example.com:8443/p"
+dup parse >string over "userinfo + port round-trip" assert=
+drop
+
+"mailto:user@example.com"
+dup parse >string over "mailto: no-// round-trip" assert=
+drop
+
+"urn:isbn:0451450523"
+dup parse >string over "urn: no-// round-trip" assert=
+drop
+
+\ The // is present but the authority body is empty; presence bit must
+\ preserve it through the round-trip.
+"file:///etc/hosts"
+dup parse >string over "file:/// empty-authority round-trip" assert=
+drop
+
+"http://[::1]:8080/v6"
+dup parse >string over "ipv6 with port round-trip" assert=
+drop
+
+"http://[fe80::1]/v6-noport"
+dup parse >string over "ipv6 no port round-trip" assert=
+drop
+
+"http://example.com"
+dup parse >string over "authority no path round-trip" assert=
+drop
+
+"http://example.com/?just-query"
+dup parse >string over "trailing-slash + query round-trip" assert=
+drop
+
+"http://example.com/#just-fragment"
+dup parse >string over "trailing-slash + fragment round-trip" assert=
+drop
+
+\ -----------------------------------------------------------------------
+"parse? returns some on valid input" test-section
+\ -----------------------------------------------------------------------
+
+"http://example.com/p?q#f" parse?
+dup option:some? "parse? returns some on valid" assert-true
+option:some> scheme>> "http" "parse? unwraps to a uri (scheme)" assert=
+
+"http://example.com/p?q#f" parse?(rfc3986)
+dup option:some? "parse?(rfc3986) returns some on valid" assert-true
+option:some> path>> "/p" "parse?(rfc3986) unwraps to a uri (path)" assert=
+
+"http://example.com/p?q#f" parse?(whatwg)
+dup option:some? "parse?(whatwg) returns some on valid" assert-true
+option:some> fragment>> "f" "parse?(whatwg) unwraps to a uri (fragment)" assert=
+
+\ Per-variant divergence: a WHATWG-permissive scheme returns some under
+\ parse?(whatwg) but none under parse?(rfc3986).
+"ht!tp:permissive" parse?(rfc3986)
+option:none? "parse?(rfc3986) rejects ! in scheme" assert-true
+
+"ht!tp:permissive" parse?(whatwg)
+dup option:some? "parse?(whatwg) accepts ! in scheme" assert-true
+option:some> scheme>> "ht!tp" "parse?(whatwg) preserves the scheme bytes" assert=
+
+\ -----------------------------------------------------------------------
+"parse? returns none on invalid input" test-section
+\ -----------------------------------------------------------------------
+
+"" parse? option:none? "parse? none on empty input" assert-true
+"" parse?(rfc3986) option:none? "parse?(rfc3986) none on empty input" assert-true
+
+"no-scheme-here" parse? option:none? "parse? none on missing separator" assert-true
+"no-scheme-here" parse?(rfc3986) option:none? "parse?(rfc3986) none on missing separator" assert-true
+
+":authority-no-scheme" parse? option:none? "parse? none on empty scheme" assert-true
+":authority-no-scheme" parse?(rfc3986) option:none? "parse?(rfc3986) none on empty scheme" assert-true
+
+"1http://x" parse? option:none? "parse? none on digit-first scheme" assert-true
+"1http://x" parse?(rfc3986) option:none? "parse?(rfc3986) none on digit-first scheme" assert-true
+
+"ht!tp://x" parse? option:none? "parse? none on bad scheme byte (strict)" assert-true
+"ht!tp://x" parse?(rfc3986) option:none? "parse?(rfc3986) none on bad scheme byte" assert-true

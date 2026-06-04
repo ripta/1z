@@ -8,11 +8,17 @@ use "scanner" ;
 \ === Internal data shape ===
 \ The inner struct's auto-generated `>>` getters use field names prefixed
 \ with `uri-` so that the public `scheme>> .. fragment>>` accessors below
-\ do not collide with them when parsed.
+\ do not collide with them when parsed. The `uri-has-*?` booleans record
+\ whether the corresponding delimiter (`//`, `?`, `#`) appeared in the
+\ parsed input, so `>string` reproduces the original byte sequence even
+\ when a delimiter body is empty.
 
 uri-data: struct{
-  uri-scheme uri-authority uri-host uri-port
-  uri-path uri-query uri-fragment
+  uri-scheme
+  uri-has-authority? uri-authority uri-host uri-port
+  uri-path
+  uri-has-query? uri-query
+  uri-has-fragment? uri-fragment
 } ;
 
 (uri-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
@@ -24,10 +30,25 @@ uri-data: struct{
 \\ `parse(whatwg)`) or the smart constructor `<uri>`.
 uri: virtual{ uri-data } ;
 
-\\ Bare positional URI constructor used internally by the parsers. Public
-\\ callers should prefer `<uri>`, which validates component shape.
-make-uri: ( scheme authority host port path query fragment -- uri ) [
+\ Internal ten-argument constructor used by the parser. Stores the three
+\ delimiter-presence bits as observed by the scanner stages.
+(make-uri-raw): ( scheme has-authority? authority host port path has-query? query has-fragment? fragment -- uri ) [
   make-uri-data >uri
+] ;
+
+\\ Bare positional URI constructor used internally by the smart constructor.
+\\ Derives the delimiter-presence bits from non-empty bodies: any non-empty
+\\ authority/host/port marks `//` present, a non-empty query marks `?`
+\\ present, a non-empty fragment marks `#` present. Public callers should
+\\ prefer `<uri>`, which validates component shape.
+make-uri: ( scheme authority host port path query fragment -- uri ) [
+  dup #empty? not swap
+  2 pick-n #empty? not 3 rot-n>
+  7 pick-n #empty? not
+  7 pick-n #empty? not or
+  6 pick-n #empty? not or
+  8 rot-n>
+  (make-uri-raw)
 ] ;
 
 \ === Public accessors ===
@@ -55,6 +76,12 @@ query>>: ( uri -- s ) [ unmake-uri uri-query>> ] ;
 
 \\ Fragment component (without the leading `#`), or `""` when absent.
 fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
+
+\ === Private presence accessors ===
+
+(has-authority?>>): ( uri -- ? ) [ unmake-uri uri-has-authority?>> ] ;
+(has-query?>>):     ( uri -- ? ) [ unmake-uri uri-has-query?>> ] ;
+(has-fragment?>>):  ( uri -- ? ) [ unmake-uri uri-has-fragment?>> ] ;
 
 \ === Scheme validation ===
 
@@ -160,11 +187,13 @@ fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
 ] ;
 
 \ Reads "//authority" if present, splits into authority/host/port. Returns
-\ four items below the scanner: authority, host, port, then the scanner.
-(read-authority-block): ( scanner -- authority host port scanner ) [
+\ five items below the scanner: has-authority? bit, authority, host, port,
+\ then the scanner. The has-authority? bit records whether `//` was
+\ consumed, even when the authority body is empty.
+(read-authority-block): ( scanner -- has-authority? authority host port scanner ) [
   dup "//" skip-exact dup f =
   [
-    drop "" "" "" 3 <rot-n
+    drop f "" "" "" 4 <rot-n
   ]
   [
     nip
@@ -173,6 +202,8 @@ fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
     dup (strip-userinfo) (split-host-port-raw)
     \ scanner authority host port
     3 <rot-n
+    \ authority host port scanner
+    t 4 rot-n>
   ]
   if
 ] ;
@@ -182,23 +213,25 @@ fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
   swap
 ] ;
 
-(read-query): ( scanner -- query scanner ) [
+(read-query): ( scanner -- has-query? query scanner ) [
   dup "?" skip-exact dup f =
-  [ drop "" swap ]
+  [ drop f "" 2 <rot-n ]
   [
     nip
     [ "#" = not ] take-while
     swap
+    t 2 rot-n>
   ]
   if
 ] ;
 
-(read-fragment): ( scanner -- fragment scanner ) [
+(read-fragment): ( scanner -- has-fragment? fragment scanner ) [
   dup "#" skip-exact dup f =
-  [ drop "" swap ]
+  [ drop f "" 2 <rot-n ]
   [
     nip
     dup rest swap
+    t 2 rot-n>
   ]
   if
 ] ;
@@ -209,15 +242,15 @@ fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
   (read-scheme)
   \ scheme scanner
   (read-authority-block)
-  \ scheme authority host port scanner
+  \ scheme has-authority? authority host port scanner
   (read-path)
-  \ scheme authority host port path scanner
+  \ scheme has-authority? authority host port path scanner
   (read-query)
-  \ scheme authority host port path query scanner
+  \ scheme has-authority? authority host port path has-query? query scanner
   (read-fragment)
-  \ scheme authority host port path query fragment scanner
+  \ scheme has-authority? authority host port path has-query? query has-fragment? fragment scanner
   drop
-  make-uri
+  (make-uri-raw)
 ] ;
 
 \ === Parsers ===
@@ -245,3 +278,67 @@ parse: ( s -- uri ) [ parse(rfc3986) ] ;
   3 pick-n (valid-port?) not [ "invalid port" (uri-error) ] when
   make-uri
 ] ;
+
+\ === Option-returning parsers ===
+
+\\ Option-returning `parse(rfc3986)`. Returns `option:some uri` on success
+\\ and `option:none` on any malformed input.
+parse?(rfc3986): ( s -- option ) [
+  [ parse(rfc3986) >option:some ]
+  [ drop option:none ]
+  recover
+] ;
+
+\\ Option-returning `parse(whatwg)`. Returns `option:some uri` on success
+\\ and `option:none` on any malformed input.
+parse?(whatwg): ( s -- option ) [
+  [ parse(whatwg) >option:some ]
+  [ drop option:none ]
+  recover
+] ;
+
+\\ Option-returning default parser. Equivalent to `parse?(rfc3986)`.
+parse?: ( s -- option ) [ parse?(rfc3986) ] ;
+
+\ === Serialization ===
+
+\ Write `str` to the builder stream beneath the uri, keeping `( uri stream )`
+\ on the stack so successive writes can chain.
+(write-component): ( uri stream str -- uri stream ) [
+  over swap stream-write-string drop
+] ;
+
+\ Body for `>string`: append every component to a fresh string-builder using
+\ the presence bits to suppress missing delimiters, then drain the builder.
+(render-uri): ( uri -- s ) [
+  [
+    \ Stack: stream uri  (curry pushed uri on top of stream)
+    swap
+    \ uri stream
+    over scheme>> (write-component)
+    ":" (write-component)
+    over (has-authority?>>)
+    [
+      "//" (write-component)
+      over authority>> (write-component)
+    ] when
+    over path>> (write-component)
+    over (has-query?>>)
+    [
+      "?" (write-component)
+      over query>> (write-component)
+    ] when
+    over (has-fragment?>>)
+    [
+      "#" (write-component)
+      over fragment>> (write-component)
+    ] when
+    drop drop
+  ] curry using-string-builder
+] ;
+
+\\ Reconstruct the URI as a string. Components are joined with the standard
+\\ delimiters (`scheme:`, `//`, `?`, `#`) following the presence bits the
+\\ parser observed, so a value built by any of the `parse` variants produces
+\\ a string byte-equal to the original input.
+>string: method{ uri } [ (render-uri) ] ;

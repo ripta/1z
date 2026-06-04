@@ -1,0 +1,89 @@
+=== >string round-trip on absolute URIs ===
+Stack: [ ]
+Stack: [ "http://example.com/a?b=1#c" ]
+PASS: http://example.com/a?b=1#c round-trip
+Stack: [ "http://example.com/a?b=1#c" ]
+Stack: [ ]
+Stack: [ "https://user:pass@example.com:8443/p" ]
+PASS: userinfo + port round-trip
+Stack: [ "https://user:pass@example.com:8443/p" ]
+Stack: [ ]
+Stack: [ "mailto:user@example.com" ]
+PASS: mailto: no-// round-trip
+Stack: [ "mailto:user@example.com" ]
+Stack: [ ]
+Stack: [ "urn:isbn:0451450523" ]
+PASS: urn: no-// round-trip
+Stack: [ "urn:isbn:0451450523" ]
+Stack: [ ]
+Stack: [ "file:///etc/hosts" ]
+PASS: file:/// empty-authority round-trip
+Stack: [ "file:///etc/hosts" ]
+Stack: [ ]
+Stack: [ "http://[::1]:8080/v6" ]
+PASS: ipv6 with port round-trip
+Stack: [ "http://[::1]:8080/v6" ]
+Stack: [ ]
+Stack: [ "http://[fe80::1]/v6-noport" ]
+PASS: ipv6 no port round-trip
+Stack: [ "http://[fe80::1]/v6-noport" ]
+Stack: [ ]
+Stack: [ "http://example.com" ]
+PASS: authority no path round-trip
+Stack: [ "http://example.com" ]
+Stack: [ ]
+Stack: [ "http://example.com/?just-query" ]
+PASS: trailing-slash + query round-trip
+Stack: [ "http://example.com/?just-query" ]
+Stack: [ ]
+Stack: [ "http://example.com/#just-fragment" ]
+PASS: trailing-slash + fragment round-trip
+Stack: [ "http://example.com/#just-fragment" ]
+Stack: [ ]
+=== parse? returns some on valid input ===
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-has-query?: t uri-query: "q" uri-has-fragment?: t uri-fragment: "f" }> }> ]
+PASS: parse? returns some on valid
+Stack: [ <option:some option-payload{ value: <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-has-query?: t uri-query: "q" uri-has-fragment?: t uri-fragment: "f" }> }> ]
+PASS: parse? unwraps to a uri (scheme)
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-has-query?: t uri-query: "q" uri-has-fragment?: t uri-fragment: "f" }> }> ]
+PASS: parse?(rfc3986) returns some on valid
+Stack: [ <option:some option-payload{ value: <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-has-query?: t uri-query: "q" uri-has-fragment?: t uri-fragment: "f" }> }> ]
+PASS: parse?(rfc3986) unwraps to a uri (path)
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-has-query?: t uri-query: "q" uri-has-fragment?: t uri-fragment: "f" }> }> ]
+PASS: parse?(whatwg) returns some on valid
+Stack: [ <option:some option-payload{ value: <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-has-query?: t uri-query: "q" uri-has-fragment?: t uri-fragment: "f" }> }> ]
+PASS: parse?(whatwg) unwraps to a uri (fragment)
+Stack: [ ]
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" <option:none none:> ]
+PASS: parse?(rfc3986) rejects ! in scheme
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" <option:some option-payload{ value: <uri uri-data{ uri-scheme: "ht!tp" uri-has-authority?: f uri-authority: "" uri-host: "" uri-port: "" uri-path: "permissive" uri-has-query?: f uri-query: "" uri-has-fragment?: f uri-fragment: "" }> }> ]
+PASS: parse?(whatwg) accepts ! in scheme
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" <option:some option-payload{ value: <uri uri-data{ uri-scheme: "ht!tp" uri-has-authority?: f uri-authority: "" uri-host: "" uri-port: "" uri-path: "permissive" uri-has-query?: f uri-query: "" uri-has-fragment?: f uri-fragment: "" }> }> ]
+PASS: parse?(whatwg) preserves the scheme bytes
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+=== parse? returns none on invalid input ===
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+PASS: parse? none on empty input
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+PASS: parse?(rfc3986) none on empty input
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+PASS: parse? none on missing separator
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+PASS: parse?(rfc3986) none on missing separator
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+PASS: parse? none on empty scheme
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+PASS: parse?(rfc3986) none on empty scheme
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+PASS: parse? none on digit-first scheme
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" ]
+PASS: parse?(rfc3986) none on digit-first scheme
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" ]
+PASS: parse? none on bad scheme byte (strict)
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" t scanner{ str: "ht!tp://x" start: 5 end: 9 } "ht!tp" ]
+PASS: parse?(rfc3986) none on bad scheme byte
+Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" t scanner{ str: "ht!tp://x" start: 5 end: 9 } "ht!tp" t scanner{ str: "ht!tp://x" start: 5 end: 9 } "ht!tp" ]
