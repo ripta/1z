@@ -1,62 +1,183 @@
-=== (canonicalize-http-env-key): single segment ===
+=== (cgi-request): empty env produces sentinel-defaulted request ===
 Stack: [ ]
-Stack: [ "host" "host" ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: method default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: path default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: query-string default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: version default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: headers default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: remote-addr default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: remote-port default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: server-name default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: server-port default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: is-tls? default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: tls-version default
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: tls-cipher default
+Stack: [ ]
+=== (cgi-request): wire-derived fields populate from CGI env vars ===
+Stack: [ ]
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&tag=lang" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: method from REQUEST_METHOD
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&tag=lang" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: path stitched from SCRIPT_NAME + PATH_INFO
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&tag=lang" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: query-string from QUERY_STRING
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&tag=lang" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: version from SERVER_PROTOCOL
+Stack: [ ]
+=== (cgi-request): HTTP_* env vars lift into canonical lowercased headers ===
+Stack: [ ]
+Stack: [ H{ accept-encoding: "gzip" user-agent: "Mozilla/5.0" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
 PASS: HTTP_HOST -> host
-Stack: [ ]
-Stack: [ "accept" "accept" ]
-PASS: HTTP_ACCEPT -> accept
-Stack: [ ]
-=== (canonicalize-http-env-key): underscore-bearing canonical key ===
-Stack: [ ]
-Stack: [ "user-agent" "user-agent" ]
+Stack: [ H{ accept-encoding: "gzip" user-agent: "Mozilla/5.0" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
 PASS: HTTP_USER_AGENT -> user-agent
-Stack: [ ]
-Stack: [ "x-forwarded-for" "x-forwarded-for" ]
-PASS: HTTP_X_FORWARDED_FOR -> x-forwarded-for
-Stack: [ ]
-Stack: [ "accept-encoding" "accept-encoding" ]
+Stack: [ H{ accept-encoding: "gzip" user-agent: "Mozilla/5.0" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
 PASS: HTTP_ACCEPT_ENCODING -> accept-encoding
+Stack: [ H{ accept-encoding: "gzip" user-agent: "Mozilla/5.0" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
+PASS: HTTP_X_FORWARDED_FOR -> x-forwarded-for
+Stack: [ H{ accept-encoding: "gzip" user-agent: "Mozilla/5.0" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
+PASS: all four HTTP_* keys lifted
 Stack: [ ]
-=== (cgi-headers): empty env yields empty headers ===
+=== (cgi-request): non-HTTP_ env vars do not leak into headers ===
 Stack: [ ]
-Stack: [ H{ } H{ } ]
-PASS: empty env -> empty headers
-Stack: [ ]
-=== (cgi-headers): env with no HTTP_* vars yields empty headers ===
-Stack: [ ]
-Stack: [ H{ } H{ REQUEST_METHOD: "GET" SCRIPT_NAME: "/cgi-bin/s" PATH: "/usr/bin" } ]
-Stack: [ H{ } H{ } ]
-PASS: non-HTTP_ env vars ignored
-Stack: [ ]
-=== (cgi-headers): single HTTP_ var with underscore-bearing canonical key ===
-Stack: [ ]
-Stack: [ H{ user-agent: "Mozilla/5.0" } ]
-Stack: [ H{ user-agent: "Mozilla/5.0" } H{ user-agent: "Mozilla/5.0" } ]
-PASS: single HTTP_USER_AGENT lifted to user-agent
-Stack: [ ]
-=== (cgi-headers): multiple HTTP_ vars produce lowercased hyphenated keys ===
-Stack: [ ]
-Stack: [ H{ accept-encoding: "gzip" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
-PASS: host present
-Stack: [ H{ accept-encoding: "gzip" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
-PASS: accept-encoding present
-Stack: [ H{ accept-encoding: "gzip" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
-PASS: x-forwarded-for present
-Stack: [ H{ accept-encoding: "gzip" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
-PASS: three entries lifted
-Stack: [ ]
-=== (cgi-headers): non-HTTP_ vars mixed in are filtered out ===
-Stack: [ ]
-Stack: [ H{ user-agent: "Mozilla/5.0" host: "example.com" } ]
+Stack: [ H{ host: "example.com" } ]
 PASS: HTTP_HOST lifted
-Stack: [ H{ user-agent: "Mozilla/5.0" host: "example.com" } ]
-PASS: HTTP_USER_AGENT lifted
-Stack: [ H{ user-agent: "Mozilla/5.0" host: "example.com" } ]
+Stack: [ H{ host: "example.com" } ]
 PASS: only HTTP_* keys lifted
 Stack: [ ]
-=== (cgi-headers): values pass through verbatim ===
+=== (cgi-request): header values pass through verbatim ===
 Stack: [ ]
 Stack: [ H{ x-custom: "  spaces around  " } ]
-Stack: [ "  spaces around  " "  spaces around  " ]
 PASS: value not trimmed by translator
+Stack: [ ]
+=== (cgi-request): SCRIPT_NAME alone populates path ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "/cgi-bin/blog" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: missing PATH_INFO defaults empty
+Stack: [ ]
+=== (cgi-request): PATH_INFO alone populates path ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "/posts/2026" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: missing SCRIPT_NAME defaults empty
+Stack: [ ]
+=== (cgi-request): trailing-slash SCRIPT_NAME plus leading-slash PATH_INFO yields literal // ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "/cgi-bin/blog//posts" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: no normalization across the seam
+Stack: [ ]
+=== (cgi-request): socket-derived fields populate from CGI env vars ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: remote-addr from REMOTE_ADDR
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: remote-port from REMOTE_PORT
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: server-name from SERVER_NAME
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: server-port from SERVER_PORT
+Stack: [ ]
+=== (cgi-request): missing REMOTE_PORT defaults to sentinel 0 ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "192.0.2.1" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: missing REMOTE_PORT
+Stack: [ ]
+=== (cgi-request): missing SERVER_PORT defaults to sentinel 0 ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "example.com" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: missing SERVER_PORT
+Stack: [ ]
+=== (cgi-request): TLS off by default ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: is-tls? false when HTTPS absent
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: tls-version empty when HTTPS absent
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: tls-cipher empty when HTTPS absent
+Stack: [ ]
+=== (cgi-request): HTTPS=on signals TLS ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: t tls-version: "" tls-cipher: "" } ]
+PASS: is-tls? true when HTTPS=on
+Stack: [ ]
+=== (cgi-request): HTTPS=ON signals TLS (case-insensitive) ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: t tls-version: "" tls-cipher: "" } ]
+PASS: is-tls? true when HTTPS=ON
+Stack: [ ]
+=== (cgi-request): HTTPS=off does not signal TLS ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: is-tls? false when HTTPS=off
+Stack: [ ]
+=== (cgi-request): empty HTTPS does not signal TLS ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: is-tls? false when HTTPS empty
+Stack: [ ]
+=== (cgi-request): SSL_PROTOCOL and SSL_CIPHER fill TLS fields when HTTPS=on ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: is-tls? true
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: tls-version from SSL_PROTOCOL
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: tls-cipher from SSL_CIPHER
+Stack: [ ]
+=== (cgi-request): SSL_* without HTTPS=on are not picked up ===
+Stack: [ ]
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: is-tls? false without HTTPS=on
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: tls-version empty without HTTPS=on
+Stack: [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+PASS: tls-cipher empty without HTTPS=on
+Stack: [ ]
+=== (cgi-request): fully-populated env produces a fully-populated request ===
+Stack: [ ]
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: method
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: path
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: query-string
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: version
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: host header
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: remote-addr
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: remote-port
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: server-name
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: server-port
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: is-tls?
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: tls-version
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "preview=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" host: "example.com" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 8443 is-tls?: t tls-version: "TLSv1.3" tls-cipher: "TLS_AES_128_GCM_SHA256" } ]
+PASS: tls-cipher
+Stack: [ ]
+=== (cgi-request): malformed SERVER_PORT throws ===
+Stack: [ ]
+Stack: [ [ H{ SERVER_PORT: "not-a-number" } (cgi-request) ] ]
+PASS: malformed SERVER_PORT throws
+Stack: [ ]
+=== (cgi-request): malformed REMOTE_PORT throws ===
+Stack: [ ]
+Stack: [ [ H{ REMOTE_PORT: "not-a-number" } (cgi-request) ] ]
+PASS: malformed REMOTE_PORT throws
 Stack: [ ]

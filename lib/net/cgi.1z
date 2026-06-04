@@ -1,43 +1,105 @@
 \ lib/net/cgi.1z - CGI deployment adapter for net/http handlers.
 \
 \ A handler written for net/http (signature `( stream request -- )`) runs
-\ unchanged under cgi-run. This file currently holds the env-var translator.
+\ unchanged under cgi-run. This file currently holds the env-var translator
+\ and the request populator.
 
 use "strings" ;
+use "conversions" ;
 use "net/http" ;
 
-\ Canonicalize a CGI HTTP_ env-var name into its HTTP header key. The caller
-\ must have already established that the env-var name starts with "HTTP_";
-\ the prefix is stripped unconditionally. After stripping, ASCII letters
-\ lowercase and underscores translate to hyphens, reversing RFC 3875's
-\ header-to-env-var mangling.
-(canonicalize-http-env-key): ( env-name -- header-name ) [
-  5 #drop lowercase >bytes
-  B{ } [ dup 0x5F = [ drop 0x2D ] when #push ] #reduce
-  bytes>
-] ;
+private{
+  \ Canonicalize a CGI HTTP_ env-var name into its HTTP header key. The caller
+  \ must have already established that the env-var name starts with "HTTP_";
+  \ the prefix is stripped unconditionally. After stripping, ASCII letters
+  \ lowercase and underscores translate to hyphens, reversing RFC 3875's
+  \ header-to-env-var mangling.
+  (canonicalize-http-env-key): ( env-name -- header-name ) [
+    5 #drop lowercase >bytes
+    B{ } [ dup 0x5F = [ drop 0x2D ] when #push ] #reduce
+    bytes>
+  ] ;
 
-\ Lift HTTP_* env vars from a CGI environment hash into an HTTP headers
-\ hash with canonical lowercased keys. Non-HTTP_ keys are ignored. Values
-\ pass through verbatim; the web server is the source of truth for the
-\ env-var value, mirroring net/http's "trim once at the wire boundary"
-\ posture.
-\ `@keys` returns symbols even when the underlying keys were inserted as
-\ strings, so the iteration variable is coerced through `>string` before
-\ the prefix test and the canonicalize call.
-(cgi-headers): ( env -- headers ) [
-  H{ } over @keys
-  [
-    dup >string
-    dup "HTTP_" #starts-with?
+  \ Lift HTTP_* env vars from a CGI environment hash into an HTTP headers
+  \ hash with canonical lowercased keys. Non-HTTP_ keys are ignored. Values
+  \ pass through verbatim; the web server is the source of truth for the
+  \ env-var value, mirroring net/http's "trim once at the wire boundary"
+  \ posture.
+  \ `@keys` returns symbols even when the underlying keys were inserted as
+  \ strings, so the iteration variable is coerced through `>string` before
+  \ the prefix test and the canonicalize call.
+  (cgi-headers): ( env -- headers ) [
+    H{ } over @keys
     [
-      (canonicalize-http-env-key)
-      swap
-      3 pick-n swap @get
-      @set
-    ]
-    [ 2drop ]
+      dup >string
+      dup "HTTP_" #starts-with?
+      [
+        (canonicalize-http-env-key)
+        swap
+        3 pick-n swap @get
+        @set
+      ]
+      [ 2drop ]
+      if
+    ] #each
+    nip
+  ] ;
+
+  \ Stitch SCRIPT_NAME and PATH_INFO into the request path. Literal byte
+  \ concatenation, with each missing env var defaulting to the empty string.
+  \ The web server is the source of truth for both pieces; this populator
+  \ does no normalization of any kind (no `//`-collapsing, no trailing-slash
+  \ trimming).
+  (cgi-path): ( env -- path ) [
+    dup "SCRIPT_NAME" "" @get-or
+    swap "PATH_INFO" "" @get-or
+    #append
+  ] ;
+
+  \ Parse a CGI port-style env var into a fixnum. Returns the sentinel 0
+  \ when the key is missing; throws parse-integer's error when the value is
+  \ present but malformed, so cgi-run can surface it as a CGI 500.
+  (cgi-port): ( env key -- port ) [
+    2dup @has?
+    [ @get parse-integer ]
+    [ 2drop 0 ]
     if
-  ] #each
-  nip
+  ] ;
+
+  \ Decode TLS state from CGI env vars. is-tls? is t exactly when HTTPS is
+  \ present and its value, lowercased, equals "on" -- the Apache mod_ssl
+  \ convention extended to be case-insensitive. When TLS is active,
+  \ SSL_PROTOCOL and SSL_CIPHER fill tls-version and tls-cipher (each
+  \ defaulting to "" when its own key is missing); otherwise both ride
+  \ empty-string sentinels.
+  (cgi-tls): ( env -- is-tls? tls-version tls-cipher ) [
+    dup "HTTPS" "" @get-or lowercase "on" =
+    [
+      dup "SSL_PROTOCOL" "" @get-or
+      swap "SSL_CIPHER" "" @get-or
+      t -rot>
+    ]
+    [ drop f "" "" ]
+    if
+  ] ;
+}
+
+\\ Populate the http.1z request struct from a CGI environment hash. Wire
+\\ fields default to empty strings when their env vars are missing; the
+\\ socket-derived ports default to 0; TLS state rides f and empty-string
+\\ sentinels. A present but malformed REMOTE_PORT or SERVER_PORT throws so
+\\ cgi-run can surface it as a CGI 500.
+(cgi-request): ( env -- request ) [
+  dup "REQUEST_METHOD" "" @get-or
+  over (cgi-path)
+  2 pick-n "QUERY_STRING" "" @get-or
+  3 pick-n "SERVER_PROTOCOL" "" @get-or
+  4 pick-n (cgi-headers)
+  5 pick-n "REMOTE_ADDR" "" @get-or
+  6 pick-n "REMOTE_PORT" (cgi-port)
+  7 pick-n "SERVER_NAME" "" @get-or
+  8 pick-n "SERVER_PORT" (cgi-port)
+  9 pick-n (cgi-tls)
+  12 drop-at
+  make-request
 ] ;
