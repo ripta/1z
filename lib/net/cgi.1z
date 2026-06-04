@@ -6,6 +6,7 @@
 
 use "strings" ;
 use "conversions" ;
+use "streams" ;
 use "net/http" ;
 
 private{
@@ -82,6 +83,32 @@ private{
     [ drop f "" "" ]
     if
   ] ;
+
+  \ Build the request from the live CGI environment and call the handler
+  \ with ( stream request -- ). The stream is restored on the stack so
+  \ cgi-run can close it after recover. Either env parsing or the handler
+  \ may throw; cgi-run wraps this call in recover.
+  (cgi-dispatch): ( stream handler -- stream ) [
+    swap
+    environ (cgi-request)
+    <rot-
+    2keep
+    drop
+  ] ;
+
+  \ recover-quot used when (cgi-dispatch) throws. cgi-run curries the
+  \ stream in so the error path always has a stream to send the 500
+  \ response on. Drops the error and leaves the stream on the stack so
+  \ cgi-run can close it after recover.
+  (cgi-500): ( error stream -- stream ) [
+    nip
+    dup
+    500 dup reason-for
+    "text/plain; charset=utf-8"
+    "500 Internal Server Error"
+    <response>
+    send-response
+  ] ;
 }
 
 \\ Populate the http.1z request struct from a CGI environment hash. Wire
@@ -102,4 +129,23 @@ private{
   9 pick-n (cgi-tls)
   12 drop-at
   make-request
+] ;
+
+\\ Run a net/http-shaped handler under CGI. Reads CGI env vars and stdin,
+\\ builds the request, constructs the bidirectional stdin/stdout stream,
+\\ calls the handler with ( stream request -- ), and closes the stream.
+\\ Binds response-status-line-prefix to "Status: " so a handler that calls
+\\ send-response produces the parsed-CGI wire format. Env parsing or a
+\\ handler that throws yields a CGI 500 response on stdout.
+cgi-run: ( handler: ( s: stream req: request -- ) -- ) [
+  <stdio-stream>
+  dup [ (cgi-500) ] curry
+  [
+    swap
+    [ (cgi-dispatch) ] curry curry
+  ] dip
+  "Status: " response-status-line-prefix [
+    recover
+  ] with-parameter
+  stream-close
 ] ;

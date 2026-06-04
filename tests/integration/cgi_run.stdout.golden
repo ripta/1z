@@ -1,0 +1,20 @@
+=== cgi-run: no-op handler runs to completion ===
+Stack: [ ]
+Stack: [ ]
+=== cgi-run: throwing handler produces a Status: 500 response ===
+Stack: [ ]
+Status: 500 Internal Server Error
+Connection: close
+Content-Length: 25
+content-type: text/plain; charset=utf-8
+
+500 Internal Server ErrorStack: [ ]
+=== cgi-run: handler calling send-response gets Status: prefix ===
+Stack: [ ]
+Status: 200 OK
+Connection: close
+Content-Length: 6
+content-type: text/plain; charset=utf-8
+
+hello
+Stack: [ ]

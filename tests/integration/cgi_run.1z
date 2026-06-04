@@ -1,0 +1,22 @@
+\ Integration tests for cgi-run in lib/net/cgi.1z.
+\ Each cgi-run invocation writes to stdout; bytes appear in the golden
+\ output interleaved with the testing library's section headers.
+
+use "testing" ;
+use "net/cgi" ;
+use "net/http" ;
+
+"cgi-run: no-op handler runs to completion" test-section
+[ 2drop ] cgi-run
+
+"cgi-run: throwing handler produces a Status: 500 response" test-section
+[ 2drop "boom" throw ] cgi-run
+
+"cgi-run: handler calling send-response gets Status: prefix" test-section
+[
+  drop
+  200 dup reason-for
+  "text/plain; charset=utf-8"
+  "hello\n"
+  <response> send-response
+] cgi-run
