@@ -103,6 +103,17 @@ fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
   ] if
 ] ;
 
+\ WHATWG-style scheme detection: alpha-start, no `/`, `?`, or `#` in the
+\ rest. Used by the reference parser when scheme-byte validation is relaxed.
+(valid-whatwg-scheme?): ( s -- ? ) [
+  dup #len 0 = [ drop f ] [
+    dup 0 #nth alpha?
+    [ [ "/?#" swap #in? not ] #all ]
+    [ drop f ]
+    if
+  ] if
+] ;
+
 (valid-port?): ( s -- ? ) [
   dup #len 0 = [ drop t ] [
     [ digit? ] #all
@@ -186,6 +197,37 @@ fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
   if
 ] ;
 
+\ Like (read-scheme) but returns "" + the original scanner when the input
+\ does not begin with a syntactically valid scheme followed by ":". Used by
+\ the reference parser to allow scheme-absent inputs like "../foo" or "?y".
+(read-scheme-or-not): ( scanner strict? -- scheme scanner ) [
+  over rest          \ scanner strict? rest
+  dup ":" #index-of  \ scanner strict? rest idx-or-f
+  dup f =
+  [
+    \ No `:`: no scheme.
+    drop drop drop "" swap
+  ] [
+    \ Slice the candidate prefix: rest[0..idx].
+    1 pick-n 0 2 pick-n #slice  \ scanner strict? rest idx prefix
+    nip nip                     \ scanner strict? prefix
+    over
+    \ scanner strict? prefix strict?
+    [ (valid-rfc3986-scheme?) ]
+    [ (valid-whatwg-scheme?) ]
+    if
+    \ scanner strict? valid?
+    [
+      \ Valid scheme prefix. Re-read in permissive mode to consume it
+      \ along with the trailing ":" using the shared scanner stage.
+      drop f (read-scheme)
+    ] [
+      \ Prefix is not a syntactically valid scheme. Treat as relative.
+      drop "" swap
+    ] if
+  ] if
+] ;
+
 \ Reads "//authority" if present, splits into authority/host/port. Returns
 \ five items below the scanner: has-authority? bit, authority, host, port,
 \ then the scanner. The has-authority? bit records whether `//` was
@@ -253,6 +295,20 @@ fragment>>: ( uri -- s ) [ unmake-uri uri-fragment>> ] ;
   (make-uri-raw)
 ] ;
 
+\ Parse a URI reference: either an absolute URI (with scheme) or a relative
+\ reference (no scheme). The strict? flag controls scheme-byte validation
+\ when a scheme is present. Used internally by the resolution words.
+(parse-reference): ( s strict? -- uri ) [
+  swap <scanner> swap
+  (read-scheme-or-not)
+  (read-authority-block)
+  (read-path)
+  (read-query)
+  (read-fragment)
+  drop
+  (make-uri-raw)
+] ;
+
 \ === Parsers ===
 
 \\ Parse an absolute URI per RFC 3986. Throws `EInvalidArgument` on a
@@ -299,6 +355,282 @@ parse?(whatwg): ( s -- option ) [
 
 \\ Option-returning default parser. Equivalent to `parse?(rfc3986)`.
 parse?: ( s -- option ) [ parse?(rfc3986) ] ;
+
+\ === Reference resolution per RFC 3986 §5 ===
+
+\ Drop the last segment (and its preceding "/" if any) from the output
+\ buffer. Used by case C of remove-dot-segments.
+(rds-pop-output): ( output -- output ) [
+  "/" split
+  dup #len 1 <=
+  [ drop "" ]
+  [ dup #len 1 - #take "/" #join ]
+  if
+] ;
+
+\ Move the first path segment from the input buffer to the end of the
+\ output buffer. A segment is the initial "/" (if any) plus subsequent
+\ characters up to but not including the next "/" or end of input.
+(rds-move): ( output input -- output input ) [
+  dup 0 #nth "/" =
+  [
+    dup 1 over #len #slice "/" #index-of
+    dup f =
+    [ drop dup #len ]
+    [ 1 + ]
+    if
+  ] [
+    dup "/" #index-of
+    dup f =
+    [ drop dup #len ]
+    [ ]
+    if
+  ] if
+  \ output input segment-end
+  2dup 0 swap #slice  \ output input segment-end segment
+  -rot>               \ output segment input segment-end
+  over #len #slice    \ output segment remaining
+  [ #append ] dip     \ output' remaining
+] ;
+
+\ Walk the input buffer applying the RFC 3986 §5.2.4 cases until empty,
+\ returning the accumulated output. Pre-dot-segment removal is required by
+\ the reference-transform algorithm before assembling the resolved path.
+(rds-loop): stack-recursive ( output input -- output ) [
+  dup #empty?
+  [ drop ]
+  [
+    dup "../" #starts-with?
+    [ 3 over #len #slice (rds-loop) ]
+    [
+      dup "./" #starts-with?
+      [ 2 over #len #slice (rds-loop) ]
+      [
+        dup "/./" #starts-with?
+        [ 2 over #len #slice (rds-loop) ]
+        [
+          dup "/." =
+          [ drop "/" (rds-loop) ]
+          [
+            dup "/../" #starts-with?
+            [
+              3 over #len #slice
+              swap (rds-pop-output) swap
+              (rds-loop)
+            ]
+            [
+              dup "/.." =
+              [
+                drop "/"
+                swap (rds-pop-output) swap
+                (rds-loop)
+              ]
+              [
+                dup "." =
+                [ drop "" (rds-loop) ]
+                [
+                  dup ".." =
+                  [ drop "" (rds-loop) ]
+                  [ (rds-move) (rds-loop) ]
+                  if
+                ]
+                if
+              ]
+              if
+            ]
+            if
+          ]
+          if
+        ]
+        if
+      ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+\\ Remove dot segments (".", "..", and the slash-prefixed forms) from a
+\\ path per RFC 3986 §5.2.4. Used as the path-normalization step in URI
+\\ reference resolution.
+(remove-dot-segments): ( path -- path ) [
+  "" swap (rds-loop)
+] ;
+
+\ Return the portion of a path up to and including its last "/", or "" if
+\ there is no "/" in the path. Used by (merge-paths).
+(path-up-to-last-slash): ( path -- prefix ) [
+  "/" split
+  dup #len 1 <=
+  [ drop "" ]
+  [
+    dup #len 1 - #take
+    "/" #join
+    "/" #append
+  ] if
+] ;
+
+\ Merge a base URI's path with a relative path per RFC 3986 §5.2.3.
+(merge-paths): ( base-uri rel-path -- merged-path ) [
+  over (has-authority?>>)
+  2 pick-n path>> #empty?
+  and
+  [
+    \ Base has authority and empty path: "/" + rel.
+    nip "/" swap #append
+  ] [
+    swap path>>
+    (path-up-to-last-slash)
+    swap #append
+  ] if
+] ;
+
+\ Case 1 builder: R has a scheme, so T uses every R component (with
+\ dot-segment removal applied to R.path).
+(build-case-1): ( R -- T ) [
+  dup scheme>>
+  1 pick-n (has-authority?>>)
+  2 pick-n authority>>
+  3 pick-n host>>
+  4 pick-n port>>
+  5 pick-n path>> (remove-dot-segments)
+  6 pick-n (has-query?>>)
+  7 pick-n query>>
+  8 pick-n (has-fragment?>>)
+  9 pick-n fragment>>
+  10 <rot-n drop
+  (make-uri-raw)
+] ;
+
+\ Case 2 builder: R has authority but no scheme. T.scheme inherits from B;
+\ authority quartet, path (dot-cleaned), query, and fragment come from R.
+(build-case-2): ( B R -- T ) [
+  over scheme>>
+  1 pick-n (has-authority?>>)
+  2 pick-n authority>>
+  3 pick-n host>>
+  4 pick-n port>>
+  5 pick-n path>> (remove-dot-segments)
+  6 pick-n (has-query?>>)
+  7 pick-n query>>
+  8 pick-n (has-fragment?>>)
+  9 pick-n fragment>>
+  10 <rot-n drop
+  10 <rot-n drop
+  (make-uri-raw)
+] ;
+
+\ Helper for case 3's conditional query inheritance: if R.has-query, T
+\ uses R's query pair, otherwise T uses B's. Identical fragment policy is
+\ not applied here -- T always uses R's fragment pair.
+(t-query-pair): ( B R -- has-query query ) [
+  dup (has-query?>>)
+  [
+    nip dup (has-query?>>) swap query>>
+  ] [
+    drop dup (has-query?>>) swap query>>
+  ] if
+] ;
+
+\ Case 3 builder: R has no scheme, no authority, empty path. T inherits
+\ scheme, authority quartet, and path from B. Query inheritance flips on
+\ whether R observed a "?".
+(build-case-3): ( B R -- T ) [
+  over scheme>>
+  2 pick-n (has-authority?>>)
+  3 pick-n authority>>
+  4 pick-n host>>
+  5 pick-n port>>
+  6 pick-n path>>
+  7 pick-n 7 pick-n (t-query-pair)
+  8 pick-n (has-fragment?>>)
+  9 pick-n fragment>>
+  10 <rot-n drop
+  10 <rot-n drop
+  (make-uri-raw)
+] ;
+
+\ Case 4 builder: R has no scheme, no authority, absolute path. T inherits
+\ scheme/authority from B; path is R.path dot-cleaned; query and fragment
+\ come from R.
+(build-case-4): ( B R -- T ) [
+  over scheme>>
+  2 pick-n (has-authority?>>)
+  3 pick-n authority>>
+  4 pick-n host>>
+  5 pick-n port>>
+  5 pick-n path>> (remove-dot-segments)
+  6 pick-n (has-query?>>)
+  7 pick-n query>>
+  8 pick-n (has-fragment?>>)
+  9 pick-n fragment>>
+  10 <rot-n drop
+  10 <rot-n drop
+  (make-uri-raw)
+] ;
+
+\ Case 5 builder: R has no scheme, no authority, relative path. T inherits
+\ scheme/authority from B; path is dot-cleaned after merging R.path against
+\ B's path; query and fragment come from R.
+(build-case-5): ( B R -- T ) [
+  over scheme>>
+  2 pick-n (has-authority?>>)
+  3 pick-n authority>>
+  4 pick-n host>>
+  5 pick-n port>>
+  6 pick-n 6 pick-n path>> (merge-paths) (remove-dot-segments)
+  6 pick-n (has-query?>>)
+  7 pick-n query>>
+  8 pick-n (has-fragment?>>)
+  9 pick-n fragment>>
+  10 <rot-n drop
+  10 <rot-n drop
+  (make-uri-raw)
+] ;
+
+\ Apply the RFC 3986 §5.3 reference-transform table on a base URI and an
+\ already-parsed reference, returning the resolved URI.
+(transform-references): ( B R -- T ) [
+  dup scheme>> #empty? not
+  [
+    nip (build-case-1)
+  ] [
+    dup (has-authority?>>)
+    [
+      (build-case-2)
+    ] [
+      dup path>> #empty?
+      [
+        (build-case-3)
+      ] [
+        dup path>> "/" #starts-with?
+        [
+          (build-case-4)
+        ] [
+          (build-case-5)
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+(resolve-impl): ( base rel-str strict? -- uri ) [
+  (parse-reference)
+  (transform-references)
+] ;
+
+\\ Resolve a relative reference string against a base URI per RFC 3986 §5.3.
+\\ The reference is parsed with strict scheme-byte validation.
+resolve(rfc3986): ( uri string -- uri ) [ t (resolve-impl) ] ;
+
+\\ Resolve a relative reference string against a base URI. The reference is
+\\ parsed with WHATWG-style scheme-byte permissiveness, but the resolution
+\\ algorithm is the shared RFC 3986 §5.3 transform.
+resolve(whatwg): ( uri string -- uri ) [ f (resolve-impl) ] ;
+
+\\ Default resolver: strict RFC 3986. Equivalent to `resolve(rfc3986)`.
+resolve: ( uri string -- uri ) [ resolve(rfc3986) ] ;
 
 \ === Serialization ===
 

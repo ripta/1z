@@ -1,0 +1,108 @@
+Stack: [ ]
+=== resolve(rfc3986): RFC 3986 §5.4.1 normal examples ===
+Stack: [ ]
+PASS: g:h
+Stack: [ ]
+PASS: g
+Stack: [ ]
+PASS: ./g
+Stack: [ ]
+PASS: g/
+Stack: [ ]
+PASS: /g
+Stack: [ ]
+PASS: //g
+Stack: [ ]
+PASS: ?y
+Stack: [ ]
+PASS: g?y
+Stack: [ ]
+PASS: #s
+Stack: [ ]
+PASS: g#s
+Stack: [ ]
+PASS: g?y#s
+Stack: [ ]
+PASS: ;x
+Stack: [ ]
+PASS: g;x
+Stack: [ ]
+PASS: g;x?y#s
+Stack: [ ]
+PASS: empty
+Stack: [ ]
+PASS: .
+Stack: [ ]
+PASS: ./
+Stack: [ ]
+PASS: ..
+Stack: [ ]
+PASS: ../
+Stack: [ ]
+PASS: ../g
+Stack: [ ]
+PASS: ../..
+Stack: [ ]
+PASS: ../../
+Stack: [ ]
+PASS: ../../g
+Stack: [ ]
+=== resolve(rfc3986): RFC 3986 §5.4.2 abnormal examples ===
+Stack: [ ]
+PASS: ../../../g
+Stack: [ ]
+PASS: ../../../../g
+Stack: [ ]
+PASS: /./g
+Stack: [ ]
+PASS: /../g
+Stack: [ ]
+PASS: g.
+Stack: [ ]
+PASS: .g
+Stack: [ ]
+PASS: g..
+Stack: [ ]
+PASS: ..g
+Stack: [ ]
+PASS: ./../g
+Stack: [ ]
+PASS: ./g/.
+Stack: [ ]
+PASS: g/./h
+Stack: [ ]
+PASS: g/../h
+Stack: [ ]
+PASS: g;x=1/./y
+Stack: [ ]
+PASS: g;x=1/../y
+Stack: [ ]
+=== resolve: alias of resolve(rfc3986) ===
+Stack: [ ]
+PASS: bare resolve alias
+Stack: [ ]
+PASS: bare resolve scheme passthrough
+Stack: [ ]
+=== resolve(whatwg): same §5.3 transform as resolve(rfc3986) ===
+Stack: [ ]
+PASS: whatwg g
+Stack: [ ]
+PASS: whatwg ../g
+Stack: [ ]
+PASS: whatwg ?y
+Stack: [ ]
+PASS: whatwg #s
+Stack: [ ]
+PASS: whatwg /./g
+Stack: [ ]
+=== resolve: fragment- and query-only edge cases ===
+Stack: [ ]
+Stack: [ "http://a/?q#frag" ]
+PASS: fragment-only keeps base query
+Stack: [ ]
+Stack: [ "http://a/?y" ]
+PASS: query-only drops base fragment
+Stack: [ ]
+Stack: [ "http://x/z" ]
+PASS: absolute reference is dot-normalized
+Stack: [ ]

@@ -1,0 +1,87 @@
+\ Integration tests for resolve(rfc3986), resolve(whatwg), and bare resolve.
+
+use "testing" ;
+use "net/uri" ;
+
+\\ Push a freshly parsed base URI for the §5.4 reference-resolution corpus.
+(base): [ "http://a/b/c/d;p?q" parse ] ;
+
+\ -----------------------------------------------------------------------
+"resolve(rfc3986): RFC 3986 §5.4.1 normal examples" test-section
+\ -----------------------------------------------------------------------
+
+(base) "g:h" resolve(rfc3986) >string "g:h" "g:h" assert=
+(base) "g" resolve(rfc3986) >string "http://a/b/c/g" "g" assert=
+(base) "./g" resolve(rfc3986) >string "http://a/b/c/g" "./g" assert=
+(base) "g/" resolve(rfc3986) >string "http://a/b/c/g/" "g/" assert=
+(base) "/g" resolve(rfc3986) >string "http://a/g" "/g" assert=
+(base) "//g" resolve(rfc3986) >string "http://g" "//g" assert=
+(base) "?y" resolve(rfc3986) >string "http://a/b/c/d;p?y" "?y" assert=
+(base) "g?y" resolve(rfc3986) >string "http://a/b/c/g?y" "g?y" assert=
+(base) "#s" resolve(rfc3986) >string "http://a/b/c/d;p?q#s" "#s" assert=
+(base) "g#s" resolve(rfc3986) >string "http://a/b/c/g#s" "g#s" assert=
+(base) "g?y#s" resolve(rfc3986) >string "http://a/b/c/g?y#s" "g?y#s" assert=
+(base) ";x" resolve(rfc3986) >string "http://a/b/c/;x" ";x" assert=
+(base) "g;x" resolve(rfc3986) >string "http://a/b/c/g;x" "g;x" assert=
+(base) "g;x?y#s" resolve(rfc3986) >string "http://a/b/c/g;x?y#s" "g;x?y#s" assert=
+(base) "" resolve(rfc3986) >string "http://a/b/c/d;p?q" "empty" assert=
+(base) "." resolve(rfc3986) >string "http://a/b/c/" "." assert=
+(base) "./" resolve(rfc3986) >string "http://a/b/c/" "./" assert=
+(base) ".." resolve(rfc3986) >string "http://a/b/" ".." assert=
+(base) "../" resolve(rfc3986) >string "http://a/b/" "../" assert=
+(base) "../g" resolve(rfc3986) >string "http://a/b/g" "../g" assert=
+(base) "../.." resolve(rfc3986) >string "http://a/" "../.." assert=
+(base) "../../" resolve(rfc3986) >string "http://a/" "../../" assert=
+(base) "../../g" resolve(rfc3986) >string "http://a/g" "../../g" assert=
+
+\ -----------------------------------------------------------------------
+"resolve(rfc3986): RFC 3986 §5.4.2 abnormal examples" test-section
+\ -----------------------------------------------------------------------
+
+(base) "../../../g" resolve(rfc3986) >string "http://a/g" "../../../g" assert=
+(base) "../../../../g" resolve(rfc3986) >string "http://a/g" "../../../../g" assert=
+(base) "/./g" resolve(rfc3986) >string "http://a/g" "/./g" assert=
+(base) "/../g" resolve(rfc3986) >string "http://a/g" "/../g" assert=
+(base) "g." resolve(rfc3986) >string "http://a/b/c/g." "g." assert=
+(base) ".g" resolve(rfc3986) >string "http://a/b/c/.g" ".g" assert=
+(base) "g.." resolve(rfc3986) >string "http://a/b/c/g.." "g.." assert=
+(base) "..g" resolve(rfc3986) >string "http://a/b/c/..g" "..g" assert=
+(base) "./../g" resolve(rfc3986) >string "http://a/b/g" "./../g" assert=
+(base) "./g/." resolve(rfc3986) >string "http://a/b/c/g/" "./g/." assert=
+(base) "g/./h" resolve(rfc3986) >string "http://a/b/c/g/h" "g/./h" assert=
+(base) "g/../h" resolve(rfc3986) >string "http://a/b/c/h" "g/../h" assert=
+(base) "g;x=1/./y" resolve(rfc3986) >string "http://a/b/c/g;x=1/y" "g;x=1/./y" assert=
+(base) "g;x=1/../y" resolve(rfc3986) >string "http://a/b/c/y" "g;x=1/../y" assert=
+
+\ -----------------------------------------------------------------------
+"resolve: alias of resolve(rfc3986)" test-section
+\ -----------------------------------------------------------------------
+
+(base) "../g" resolve >string "http://a/b/g" "bare resolve alias" assert=
+(base) "g:h" resolve >string "g:h" "bare resolve scheme passthrough" assert=
+
+\ -----------------------------------------------------------------------
+"resolve(whatwg): same §5.3 transform as resolve(rfc3986)" test-section
+\ -----------------------------------------------------------------------
+
+(base) "g" resolve(whatwg) >string "http://a/b/c/g" "whatwg g" assert=
+(base) "../g" resolve(whatwg) >string "http://a/b/g" "whatwg ../g" assert=
+(base) "?y" resolve(whatwg) >string "http://a/b/c/d;p?y" "whatwg ?y" assert=
+(base) "#s" resolve(whatwg) >string "http://a/b/c/d;p?q#s" "whatwg #s" assert=
+(base) "/./g" resolve(whatwg) >string "http://a/g" "whatwg /./g" assert=
+
+\ -----------------------------------------------------------------------
+"resolve: fragment- and query-only edge cases" test-section
+\ -----------------------------------------------------------------------
+
+\ Fragment-only resolution against a base with a query keeps the query.
+"http://a/?q" parse "#frag" resolve >string
+"http://a/?q#frag" "fragment-only keeps base query" assert=
+
+\ Query-only resolution against a base with a fragment drops the fragment.
+"http://a/?q#f" parse "?y" resolve >string
+"http://a/?y" "query-only drops base fragment" assert=
+
+\ Resolving an absolute URI still runs dot-segment removal on its path.
+"http://a/x" parse "http://x/./y/../z" resolve >string
+"http://x/z" "absolute reference is dot-normalized" assert=
