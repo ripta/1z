@@ -1,0 +1,43 @@
+\ lib/net/cgi.1z - CGI deployment adapter for net/http handlers.
+\
+\ A handler written for net/http (signature `( stream request -- )`) runs
+\ unchanged under cgi-run. This file currently holds the env-var translator.
+
+use "strings" ;
+use "net/http" ;
+
+\ Canonicalize a CGI HTTP_ env-var name into its HTTP header key. The caller
+\ must have already established that the env-var name starts with "HTTP_";
+\ the prefix is stripped unconditionally. After stripping, ASCII letters
+\ lowercase and underscores translate to hyphens, reversing RFC 3875's
+\ header-to-env-var mangling.
+(canonicalize-http-env-key): ( env-name -- header-name ) [
+  5 #drop lowercase >bytes
+  B{ } [ dup 0x5F = [ drop 0x2D ] when #push ] #reduce
+  bytes>
+] ;
+
+\ Lift HTTP_* env vars from a CGI environment hash into an HTTP headers
+\ hash with canonical lowercased keys. Non-HTTP_ keys are ignored. Values
+\ pass through verbatim; the web server is the source of truth for the
+\ env-var value, mirroring net/http's "trim once at the wire boundary"
+\ posture.
+\ `@keys` returns symbols even when the underlying keys were inserted as
+\ strings, so the iteration variable is coerced through `>string` before
+\ the prefix test and the canonicalize call.
+(cgi-headers): ( env -- headers ) [
+  H{ } over @keys
+  [
+    dup >string
+    dup "HTTP_" #starts-with?
+    [
+      (canonicalize-http-env-key)
+      swap
+      3 pick-n swap @get
+      @set
+    ]
+    [ 2drop ]
+    if
+  ] #each
+  nip
+] ;

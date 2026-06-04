@@ -1,0 +1,69 @@
+\ Integration tests for lib/net/cgi.1z
+
+use "testing" ;
+use "net/cgi" ;
+
+"(canonicalize-http-env-key): single segment" test-section
+
+"host" "HTTP_HOST" (canonicalize-http-env-key)
+"HTTP_HOST -> host" assert=
+
+"accept" "HTTP_ACCEPT" (canonicalize-http-env-key)
+"HTTP_ACCEPT -> accept" assert=
+
+"(canonicalize-http-env-key): underscore-bearing canonical key" test-section
+
+"user-agent" "HTTP_USER_AGENT" (canonicalize-http-env-key)
+"HTTP_USER_AGENT -> user-agent" assert=
+
+"x-forwarded-for" "HTTP_X_FORWARDED_FOR" (canonicalize-http-env-key)
+"HTTP_X_FORWARDED_FOR -> x-forwarded-for" assert=
+
+"accept-encoding" "HTTP_ACCEPT_ENCODING" (canonicalize-http-env-key)
+"HTTP_ACCEPT_ENCODING -> accept-encoding" assert=
+
+"(cgi-headers): empty env yields empty headers" test-section
+
+H{ } H{ } (cgi-headers)
+"empty env -> empty headers" assert=
+
+"(cgi-headers): env with no HTTP_* vars yields empty headers" test-section
+
+H{ } H{ "PATH" "/usr/bin" "REQUEST_METHOD" "GET" "SCRIPT_NAME" "/cgi-bin/s" }
+(cgi-headers)
+"non-HTTP_ env vars ignored" assert=
+
+"(cgi-headers): single HTTP_ var with underscore-bearing canonical key" test-section
+
+H{ "user-agent" "Mozilla/5.0" }
+H{ "HTTP_USER_AGENT" "Mozilla/5.0" } (cgi-headers)
+"single HTTP_USER_AGENT lifted to user-agent" assert=
+
+"(cgi-headers): multiple HTTP_ vars produce lowercased hyphenated keys" test-section
+
+H{ "HTTP_HOST" "example.com"
+  "HTTP_ACCEPT_ENCODING" "gzip"
+  "HTTP_X_FORWARDED_FOR" "192.0.2.1"
+} (cgi-headers)
+dup "host" @get "example.com" "host present" assert=
+dup "accept-encoding" @get "gzip" "accept-encoding present" assert=
+dup "x-forwarded-for" @get "192.0.2.1" "x-forwarded-for present" assert=
+@keys #len 3 "three entries lifted" assert=
+
+"(cgi-headers): non-HTTP_ vars mixed in are filtered out" test-section
+
+H{ "HTTP_HOST" "example.com"
+  "PATH" "/usr/bin"
+  "REQUEST_METHOD" "GET"
+  "HTTP_USER_AGENT" "Mozilla/5.0"
+  "SERVER_PORT" "80"
+} (cgi-headers)
+dup "host" @get "example.com" "HTTP_HOST lifted" assert=
+dup "user-agent" @get "Mozilla/5.0" "HTTP_USER_AGENT lifted" assert=
+@keys #len 2 "only HTTP_* keys lifted" assert=
+
+"(cgi-headers): values pass through verbatim" test-section
+
+H{ "HTTP_X_CUSTOM" "  spaces around  " } (cgi-headers)
+"x-custom" @get "  spaces around  "
+"value not trimmed by translator" assert=

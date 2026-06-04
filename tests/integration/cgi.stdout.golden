@@ -1,0 +1,62 @@
+=== (canonicalize-http-env-key): single segment ===
+Stack: [ ]
+Stack: [ "host" "host" ]
+PASS: HTTP_HOST -> host
+Stack: [ ]
+Stack: [ "accept" "accept" ]
+PASS: HTTP_ACCEPT -> accept
+Stack: [ ]
+=== (canonicalize-http-env-key): underscore-bearing canonical key ===
+Stack: [ ]
+Stack: [ "user-agent" "user-agent" ]
+PASS: HTTP_USER_AGENT -> user-agent
+Stack: [ ]
+Stack: [ "x-forwarded-for" "x-forwarded-for" ]
+PASS: HTTP_X_FORWARDED_FOR -> x-forwarded-for
+Stack: [ ]
+Stack: [ "accept-encoding" "accept-encoding" ]
+PASS: HTTP_ACCEPT_ENCODING -> accept-encoding
+Stack: [ ]
+=== (cgi-headers): empty env yields empty headers ===
+Stack: [ ]
+Stack: [ H{ } H{ } ]
+PASS: empty env -> empty headers
+Stack: [ ]
+=== (cgi-headers): env with no HTTP_* vars yields empty headers ===
+Stack: [ ]
+Stack: [ H{ } H{ REQUEST_METHOD: "GET" SCRIPT_NAME: "/cgi-bin/s" PATH: "/usr/bin" } ]
+Stack: [ H{ } H{ } ]
+PASS: non-HTTP_ env vars ignored
+Stack: [ ]
+=== (cgi-headers): single HTTP_ var with underscore-bearing canonical key ===
+Stack: [ ]
+Stack: [ H{ user-agent: "Mozilla/5.0" } ]
+Stack: [ H{ user-agent: "Mozilla/5.0" } H{ user-agent: "Mozilla/5.0" } ]
+PASS: single HTTP_USER_AGENT lifted to user-agent
+Stack: [ ]
+=== (cgi-headers): multiple HTTP_ vars produce lowercased hyphenated keys ===
+Stack: [ ]
+Stack: [ H{ accept-encoding: "gzip" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
+PASS: host present
+Stack: [ H{ accept-encoding: "gzip" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
+PASS: accept-encoding present
+Stack: [ H{ accept-encoding: "gzip" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
+PASS: x-forwarded-for present
+Stack: [ H{ accept-encoding: "gzip" host: "example.com" x-forwarded-for: "192.0.2.1" } ]
+PASS: three entries lifted
+Stack: [ ]
+=== (cgi-headers): non-HTTP_ vars mixed in are filtered out ===
+Stack: [ ]
+Stack: [ H{ user-agent: "Mozilla/5.0" host: "example.com" } ]
+PASS: HTTP_HOST lifted
+Stack: [ H{ user-agent: "Mozilla/5.0" host: "example.com" } ]
+PASS: HTTP_USER_AGENT lifted
+Stack: [ H{ user-agent: "Mozilla/5.0" host: "example.com" } ]
+PASS: only HTTP_* keys lifted
+Stack: [ ]
+=== (cgi-headers): values pass through verbatim ===
+Stack: [ ]
+Stack: [ H{ x-custom: "  spaces around  " } ]
+Stack: [ "  spaces around  " "  spaces around  " ]
+PASS: value not trimmed by translator
+Stack: [ ]
