@@ -1,0 +1,28 @@
+=== decode-query: re-exported through net/uri ===
+Stack: [ ]
+Stack: [ H{ b: { "2" } a: { "1" } } H{ b: { "2" } a: { "1" } } ]
+PASS: net/uri.decode-query produces the same hash as lib/data/url
+Stack: [ ]
+Stack: [ H{ tag: { "a" "b" } } H{ tag: { "a" "b" } } ]
+PASS: repeated keys accumulate through the re-export
+Stack: [ ]
+PASS: empty input through the re-export
+Stack: [ ]
+=== encode-query: re-exported through net/uri ===
+Stack: [ ]
+Stack: [ "k=value" "k=value" ]
+PASS: net/uri.encode-query single pair
+Stack: [ ]
+Stack: [ "tag=a&tag=b" "tag=a&tag=b" ]
+PASS: net/uri.encode-query repeated values
+Stack: [ ]
+Stack: [ "k=a+b" "k=a+b" ]
+PASS: net/uri.encode-query form codec (space-as-+)
+Stack: [ ]
+=== decode-query / encode-query: round-trip via parsed query>> ===
+Stack: [ ]
+Stack: [ "a=1&b=2" ]
+Stack: [ H{ b: { "2" } a: { "1" } } ]
+Stack: [ H{ b: { "2" } a: { "1" } } H{ b: { "2" } a: { "1" } } ]
+PASS: parse query>> decode-query through the re-export
+Stack: [ ]

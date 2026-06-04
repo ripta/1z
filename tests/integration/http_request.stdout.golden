@@ -133,66 +133,73 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ H{ name: "alice" } ]
+Stack: [ H{ name: { "alice" } } ]
 PASS: single pair value
 Stack: [ ]
 === read-form: multiple pairs ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ H{ b: "2" a: "1" c: "3" } ]
+Stack: [ H{ b: { "2" } a: { "1" } c: { "3" } } ]
 PASS: first pair
-Stack: [ H{ b: "2" a: "1" c: "3" } ]
+Stack: [ H{ b: { "2" } a: { "1" } c: { "3" } } ]
 PASS: second pair
-Stack: [ H{ b: "2" a: "1" c: "3" } ]
+Stack: [ H{ b: { "2" } a: { "1" } c: { "3" } } ]
 PASS: third pair
 Stack: [ ]
 === read-form: percent-decoded key ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ H{ name: "alice" } ]
+Stack: [ H{ name: { "alice" } } ]
 PASS: percent-decoded key
 Stack: [ ]
 === read-form: percent-decoded value ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ H{ name: "alice" } ]
+Stack: [ H{ name: { "alice" } } ]
 PASS: percent-decoded value
 Stack: [ ]
 === read-form: + decodes to space ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ H{ q: "hello world" } ]
+Stack: [ H{ q: { "hello world" } } ]
 PASS: + decodes to space
 Stack: [ ]
 === read-form: %2B decodes to literal + ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ H{ q: "a+b" } ]
+Stack: [ H{ q: { "a+b" } } ]
 PASS: %2B decodes to literal +
+Stack: [ ]
+=== read-form: repeated keys accumulate ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ H{ tag: { "a" "b" } } ]
+PASS: repeated key collects values in order
 Stack: [ ]
 === read-form: bare key has empty value ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ H{ flag: "" } ]
+Stack: [ H{ flag: { "" } } ]
 PASS: bare key value
-Stack: [ H{ flag: "" } ]
+Stack: [ H{ flag: { "" } } ]
 PASS: bare key creates one entry
 Stack: [ ]
 === read-form: stray ampersand skipped ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
-Stack: [ H{ b: "2" a: "1" } ]
+Stack: [ H{ b: { "2" } a: { "1" } } ]
 PASS: stray & does not create empty entry
-Stack: [ H{ b: "2" a: "1" } ]
+Stack: [ H{ b: { "2" } a: { "1" } } ]
 PASS: stray & a entry
-Stack: [ H{ b: "2" a: "1" } ]
+Stack: [ H{ b: { "2" } a: { "1" } } ]
 PASS: stray & b entry
 Stack: [ ]
 === read-form: short body throws EUnexpectedEOF ===

@@ -1,0 +1,33 @@
+\ Confirm that decode-query / encode-query resolve through net/uri's
+\ re-export and behave identically to the lib/data/url.1z definitions.
+
+use "testing" ;
+use "net/uri" ;
+
+"decode-query: re-exported through net/uri" test-section
+
+H{ a: { "1" } b: { "2" } } "a=1&b=2" decode-query
+"net/uri.decode-query produces the same hash as lib/data/url" assert=
+
+H{ tag: { "a" "b" } } "tag=a&tag=b" decode-query
+"repeated keys accumulate through the re-export" assert=
+
+H{ } "" decode-query "empty input through the re-export" assert=
+
+"encode-query: re-exported through net/uri" test-section
+
+"k=value" H{ k: { "value" } } encode-query
+"net/uri.encode-query single pair" assert=
+
+"tag=a&tag=b" H{ tag: { "a" "b" } } encode-query
+"net/uri.encode-query repeated values" assert=
+
+"k=a+b" H{ k: { "a b" } } encode-query
+"net/uri.encode-query form codec (space-as-+)" assert=
+
+"decode-query / encode-query: round-trip via parsed query>>" test-section
+
+"http://example.com/p?a=1&b=2" parse query>>
+decode-query
+H{ a: { "1" } b: { "2" } }
+"parse query>> decode-query through the re-export" assert=

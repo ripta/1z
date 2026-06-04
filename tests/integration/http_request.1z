@@ -113,45 +113,51 @@ stream-close
 <pipe> dup "name=alice" stream-write drop
 stream-close
 10 read-form
-"name" @get "alice" "single pair value" assert=
+"name" @get { "alice" } "single pair value" assert=
 
 "read-form: multiple pairs" test-section
 <pipe> dup "a=1&b=2&c=3" stream-write drop
 stream-close
 11 read-form
-dup "a" @get "1" "first pair" assert=
-dup "b" @get "2" "second pair" assert=
-"c" @get "3" "third pair" assert=
+dup "a" @get { "1" } "first pair" assert=
+dup "b" @get { "2" } "second pair" assert=
+"c" @get { "3" } "third pair" assert=
 
 "read-form: percent-decoded key" test-section
 <pipe> dup "na%6De=alice" stream-write drop
 stream-close
 12 read-form
-"name" @get "alice" "percent-decoded key" assert=
+"name" @get { "alice" } "percent-decoded key" assert=
 
 "read-form: percent-decoded value" test-section
 <pipe> dup "name=al%69ce" stream-write drop
 stream-close
 12 read-form
-"name" @get "alice" "percent-decoded value" assert=
+"name" @get { "alice" } "percent-decoded value" assert=
 
 "read-form: + decodes to space" test-section
 <pipe> dup "q=hello+world" stream-write drop
 stream-close
 13 read-form
-"q" @get "hello world" "+ decodes to space" assert=
+"q" @get { "hello world" } "+ decodes to space" assert=
 
 "read-form: %2B decodes to literal +" test-section
 <pipe> dup "q=a%2Bb" stream-write drop
 stream-close
 7 read-form
-"q" @get "a+b" "%2B decodes to literal +" assert=
+"q" @get { "a+b" } "%2B decodes to literal +" assert=
+
+"read-form: repeated keys accumulate" test-section
+<pipe> dup "tag=a&tag=b" stream-write drop
+stream-close
+11 read-form
+"tag" @get { "a" "b" } "repeated key collects values in order" assert=
 
 "read-form: bare key has empty value" test-section
 <pipe> dup "flag" stream-write drop
 stream-close
 4 read-form
-dup "flag" @get "" "bare key value" assert=
+dup "flag" @get { "" } "bare key value" assert=
 @keys #len 1 "bare key creates one entry" assert=
 
 "read-form: stray ampersand skipped" test-section
@@ -159,8 +165,8 @@ dup "flag" @get "" "bare key value" assert=
 stream-close
 8 read-form
 dup @keys #len 2 "stray & does not create empty entry" assert=
-dup "a" @get "1" "stray & a entry" assert=
-"b" @get "2" "stray & b entry" assert=
+dup "a" @get { "1" } "stray & a entry" assert=
+"b" @get { "2" } "stray & b entry" assert=
 
 "read-form: short body throws EUnexpectedEOF" test-section
 [ <pipe> dup "abc" stream-write drop stream-close 10 read-form ] unexpected-eof: "short body throws" assert-error-type

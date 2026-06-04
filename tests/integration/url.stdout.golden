@@ -249,3 +249,149 @@ Stack: [ ]
 Stack: [ [ [ 43 37 ] make-byte-array decode-bytes(form) ] ]
 PASS: + then trailing % still throws
 Stack: [ ]
+=== decode-query: typical key-value pairs ===
+Stack: [ ]
+PASS: empty input yields empty hash
+Stack: [ ]
+Stack: [ H{ b: { "2" } a: { "1" } } H{ b: { "2" } a: { "1" } } ]
+PASS: typical two-pair query
+Stack: [ ]
+PASS: single pair
+Stack: [ ]
+=== decode-query: repeated keys accumulate ===
+Stack: [ ]
+Stack: [ H{ tag: { "a" "b" } } H{ tag: { "a" "b" } } ]
+PASS: two values under same key, in order
+Stack: [ ]
+Stack: [ H{ tag: { "a" "b" "c" } } H{ tag: { "a" "b" "c" } } ]
+PASS: three values under same key, in order
+Stack: [ ]
+Stack: [ H{ b: { "2" } a: { "1" "3" } } H{ b: { "2" } a: { "1" "3" } } ]
+PASS: interleaved repeated key keeps insertion order
+Stack: [ ]
+=== decode-query: empty values ===
+Stack: [ ]
+Stack: [ H{ b: { "" } a: { "" } } H{ b: { "" } a: { "" } } ]
+PASS: both values empty (with =)
+Stack: [ ]
+Stack: [ H{ a: { "" } } H{ a: { "" } } ]
+PASS: single empty value
+Stack: [ ]
+=== decode-query: bare keys (no =) ===
+Stack: [ ]
+Stack: [ H{ flag: { "" } } H{ flag: { "" } } ]
+PASS: bare key produces empty-value entry
+Stack: [ ]
+Stack: [ H{ a: { "1" } flag: { "" } } H{ a: { "1" } flag: { "" } } ]
+PASS: bare key mixed with key=value
+Stack: [ ]
+Stack: [ H{ tag: { "" "" } } H{ tag: { "" "" } } ]
+PASS: repeated bare key accumulates empties
+Stack: [ ]
+=== decode-query: stray ampersands ===
+Stack: [ ]
+Stack: [ H{ b: { "2" } a: { "1" } } H{ b: { "2" } a: { "1" } } ]
+PASS: empty segments around and between pairs are skipped
+Stack: [ ]
+PASS: only empty segments
+Stack: [ ]
+=== decode-query: percent escapes ===
+Stack: [ ]
+Stack: [ H{ k: { "a/b?c" } } H{ k: { "a/b?c" } } ]
+PASS: ASCII reserved characters in value decode
+Stack: [ ]
+Stack: [ H{ a/b: { "v" } } H{ a/b: { "v" } } ]
+PASS: ASCII reserved characters in key decode
+Stack: [ ]
+Stack: [ H{ k: { "a b" } } H{ k: { "a b" } } ]
+PASS: + in value decodes to space
+Stack: [ ]
+Stack: [ H{ k: { "a+b" } } H{ k: { "a+b" } } ]
+PASS: %2B in value decodes to literal +
+Stack: [ ]
+Stack: [ H{ a b: { "c d" } } H{ a b: { "c d" } } ]
+PASS: + decodes to space in both key and value
+Stack: [ ]
+=== decode-query: multibyte UTF-8 ===
+Stack: [ ]
+Stack: [ H{ k: { "café" } } H{ k: { "café" } } ]
+PASS: multibyte UTF-8 in value (é)
+Stack: [ ]
+Stack: [ H{ k: { "中" } } H{ k: { "中" } } ]
+PASS: multibyte UTF-8 in value (CJK 中)
+Stack: [ ]
+Stack: [ H{ 中文: { "value" } } H{ 中文: { "value" } } ]
+PASS: multibyte UTF-8 in key
+Stack: [ ]
+=== decode-query: malformed input throws ===
+Stack: [ ]
+PASS: trailing % in value throws
+Stack: [ ]
+Stack: [ [ "k=%" decode-query ] invalid-argument: ]
+PASS: trailing % is EInvalidArgument
+Stack: [ ]
+PASS: non-hex in key throws
+Stack: [ ]
+PASS: non-hex in value throws
+Stack: [ ]
+=== encode-query: single-key cases ===
+Stack: [ ]
+PASS: empty hash yields empty string
+Stack: [ ]
+PASS: single pair
+Stack: [ ]
+PASS: empty value emits k=
+Stack: [ ]
+PASS: empty value array emits nothing
+Stack: [ ]
+=== encode-query: multi-value per key ===
+Stack: [ ]
+Stack: [ "tag=a&tag=b" "tag=a&tag=b" ]
+PASS: two values for one key, in array order
+Stack: [ ]
+Stack: [ "tag=a&tag=b&tag=c" "tag=a&tag=b&tag=c" ]
+PASS: three values for one key, in array order
+Stack: [ ]
+=== encode-query: percent-encoding the form codec ===
+Stack: [ ]
+Stack: [ "k=a+b" "k=a+b" ]
+PASS: space in value encodes to +
+Stack: [ ]
+Stack: [ "k=a%2Bb" "k=a%2Bb" ]
+PASS: literal + in value encodes to %2B
+Stack: [ ]
+Stack: [ "k=a%2Fb%3Fc%3Dd%26e" "k=a%2Fb%3Fc%3Dd%26e" ]
+PASS: reserved characters in value percent-encode
+Stack: [ ]
+Stack: [ "a+b=c+d" "a+b=c+d" ]
+PASS: space encodes to + in both key and value
+Stack: [ ]
+Stack: [ "k=caf%C3%A9" "k=caf%C3%A9" ]
+PASS: multibyte UTF-8 (é) encodes pairwise
+Stack: [ ]
+Stack: [ "k=%E4%B8%AD" "k=%E4%B8%AD" ]
+PASS: multibyte UTF-8 (CJK) encodes pairwise
+Stack: [ ]
+=== decode-query / encode-query: round-trips ===
+Stack: [ ]
+Stack: [ H{ k: { "value" } } H{ k: { "value" } } ]
+PASS: single ASCII pair round-trips through hash equality
+Stack: [ ]
+Stack: [ H{ tag: { "a" "b" } } H{ tag: { "a" "b" } } ]
+PASS: repeated key round-trips through hash equality
+Stack: [ ]
+Stack: [ H{ k: { "a b/c?d=e&f" } } H{ k: { "a b/c?d=e&f" } } ]
+PASS: reserved characters round-trip through hash equality
+Stack: [ ]
+Stack: [ H{ k: { "café" } } H{ k: { "café" } } ]
+PASS: multibyte UTF-8 round-trips through hash equality
+Stack: [ ]
+Stack: [ H{ k: { "中 café" } } H{ k: { "中 café" } } ]
+PASS: mixed ASCII space and multibyte round-trips
+Stack: [ ]
+Stack: [ "k=hello" "k=hello" ]
+PASS: single-pair string round-trips byte-equal
+Stack: [ ]
+Stack: [ "tag=a&tag=b" "tag=a&tag=b" ]
+PASS: single-key repeated-value string round-trips byte-equal
+Stack: [ ]

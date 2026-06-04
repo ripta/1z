@@ -907,3 +907,22 @@ normalize(whatwg): ( uri -- uri ) [ (normalize-impl) ] ;
 
 \\ Default normalizer: strict RFC 3986. Equivalent to `normalize(rfc3986)`.
 normalize: ( uri -- uri ) [ normalize(rfc3986) ] ;
+
+\ === Query helpers (re-exported from lib/data/url.1z) ===
+\ Structured access to the `?…` body lives next to the percent codec; this
+\ module re-exports the two words so a caller that already imported uri
+\ does not need a second `use` for them. The url module is bound under a
+\ private name and the forwarders defer through qualified access so the
+\ underlying helpers resolve through url.1z's own deps frame.
+
+(url-codec): "data/url" load ;
+
+\\ Decode an `application/x-www-form-urlencoded` body into a hash mapping
+\\ each decoded key to an array of decoded values. Re-exported from
+\\ `lib/data/url.1z`; see `url.decode-query` for the full contract.
+decode-query: ( string -- hash ) [ (url-codec).decode-query ] ;
+
+\\ Encode a hash whose values are arrays of strings into an
+\\ `application/x-www-form-urlencoded` body. Re-exported from
+\\ `lib/data/url.1z`; see `url.encode-query` for the full contract.
+encode-query: ( hash -- string ) [ (url-codec).encode-query ] ;

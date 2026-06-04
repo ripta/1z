@@ -76,40 +76,18 @@ read-request: ( stream -- request ) [
   make-request
 ] ;
 
-\ Parse a single form-body segment into the accumulator hash. Empty
-\ segments are skipped. A non-empty segment without `=` becomes a bare
-\ key with an empty value.
-(parse-form-pair): ( form pair -- form ) [
-  dup #empty?
-  [ drop ]
-  [
-    dup "=" split-once?
-    dup option:some?
-    [ option:some> nip
-      dup #first decode(form) swap #last decode(form) @set
-    ]
-    [ drop
-      decode(form) "" @set
-    ]
-    if
-  ]
-  if
-] ;
-
 \\ Read and decode an application/x-www-form-urlencoded body of `length`
-\\ bytes from a stream. Returns a hash of decoded keys to decoded values.
+\\ bytes from a stream. Returns a hash mapping each decoded key to an
+\\ array of decoded values, accumulating in the order they appeared.
 \\ Throws EUnexpectedEOF if the stream reaches EOF before `length` bytes
 \\ have been read; throws EInvalidArgument on malformed percent sequences.
 \\ Empty segments and pairs without `=` follow the WHATWG
 \\ application/x-www-form-urlencoded parser: empty segments are dropped;
-\\ a bare key produces an empty value.
+\\ a bare key produces an empty-string value.
 read-form: ( stream length -- form ) [
   dup [ stream-read(exact) ] dip
   over #len over =
-  [ drop bytes>
-    "&" split
-    H{ } [ (parse-form-pair) ] #reduce
-  ]
+  [ drop bytes> decode-query ]
   [ 2drop f "unexpected EOF reading form body" EUnexpectedEOF make-error throw ]
   if
 ] ;

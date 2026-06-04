@@ -1,5 +1,7 @@
 \ lib/data/url.1z - RFC 3986 percent-encoding for URLs
 
+use "strings" ;
+
 (url-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
 
 (invalid-hex-error): ( -- * ) [
@@ -167,3 +169,92 @@ decode-bytes(form): ( bytes -- bytes ) [
 \\ `decode-bytes(form)`. Throws `EInvalidArgument` on malformed `%HH`
 \\ sequences.
 decode(form): ( string -- string ) [ >bytes decode-bytes(form) bytes> ] ;
+
+\ Append `value` to the array stored at `key` in `hash`. Creates a fresh
+\ single-element array when the key is absent. Returns the updated hash.
+(append-multi): ( hash key value -- hash' ) [
+  -rot>             \ value hash key
+  2dup { } @get-or  \ value hash key list
+  3 <rot-n          \ hash key list value
+  #push             \ hash key list'
+  @set              \ hash'
+] ;
+
+\ Decode one `key=value` (or bare-key) segment and append it to the
+\ accumulator hash. Empty segments are skipped.
+(decode-query-pair): ( form pair -- form ) [
+  dup #empty?
+  [ drop ]
+  [
+    dup "=" split-once?
+    dup option:some?
+    [ option:some> nip
+      dup #first decode(form)
+      swap #last decode(form)
+      (append-multi)
+    ]
+    [ drop
+      decode(form) ""
+      (append-multi)
+    ]
+    if
+  ]
+  if
+] ;
+
+\\ Decode an `application/x-www-form-urlencoded` body into a hash mapping
+\\ each decoded key to an array of decoded values, accumulating in the
+\\ order they appeared. Splits the input on `&`; each non-empty segment
+\\ is split once on the first `=` and both sides are passed through
+\\ `decode(form)` (so `+` decodes to space and `%2B` to a literal `+`).
+\\ A segment without `=` becomes a bare key with an empty-string value.
+\\ Repeated keys accumulate; a key seen once still yields a one-element
+\\ array. An empty input yields the empty hash. Throws `EInvalidArgument`
+\\ on malformed `%HH` sequences inside any segment.
+decode-query: ( string -- hash ) [
+  dup #empty?
+  [ drop H{ } ]
+  [
+    "&" split
+    H{ } [ (decode-query-pair) ] #reduce
+  ]
+  if
+] ;
+
+\ Push one form-encoded `key=value` segment onto the accumulator vector.
+\ Called inside an inner #each whose surrounding stack is
+\ ( vec hash key-enc ... ); the vector sits at depth 3 from the value.
+(push-query-pair): ( vec hash key-enc value -- vec hash key-enc ) [
+  encode(form)               \ vec hash key-enc v-enc
+  "=" swap #append           \ vec hash key-enc "=v-enc"
+  over swap #append          \ vec hash key-enc "k=v"
+  3 pick-n swap #push! drop  \ vec hash key-enc
+] ;
+
+\ Emit all segments for one key. Captured state ( vec hash ) sits below
+\ the iterated key; the body fetches the value array and walks it. `@keys`
+\ returns symbols even when the keys were inserted as strings, so the key
+\ is coerced through `>string` before encoding.
+(emit-query-key): ( vec hash key -- vec hash ) [
+  over over @get             \ vec hash key arr
+  swap >string encode(form)  \ vec hash arr key-enc
+  swap                       \ vec hash key-enc arr
+  [ (push-query-pair) ] #each
+  drop  \ vec hash
+] ;
+
+\\ Encode a hash whose values are arrays of strings into an
+\\ `application/x-www-form-urlencoded` body. Each key emits one
+\\ `key=value` segment per array element, in the order the array was
+\\ stored; both sides are passed through `encode(form)` (so spaces become
+\\ `+` and other reserved bytes become `%HH`). An empty hash yields the
+\\ empty string. The order of keys in the output follows the hash's own
+\\ key iteration order, which is implementation-defined; callers that
+\\ need a specific ordering should sort the keys themselves.
+encode-query: ( hash -- string ) [
+  V{ } swap                   \ vec hash
+  dup @keys                   \ vec hash keys
+  [ (emit-query-key) ] #each  \ vec hash
+  drop                        \ vec
+  >array "&" #join            \ string
+] ;
