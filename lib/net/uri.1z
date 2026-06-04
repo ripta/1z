@@ -674,3 +674,236 @@ resolve: ( uri string -- uri ) [ resolve(rfc3986) ] ;
 \\ parser observed, so a value built by any of the `parse` variants produces
 \\ a string byte-equal to the original input.
 >string: method{ uri } [ (render-uri) ] ;
+
+\ === Normalization per RFC 3986 §6 ===
+
+\ Lowercase a single-character ASCII string in place. Bytes outside A-Z are
+\ returned unchanged. Non-ASCII characters pass through.
+(ascii-lower-char): ( ch -- ch ) [
+  dup upper?
+  [ >codepoint 32 + >char ]
+  when
+] ;
+
+\ Lowercase ASCII letters in a string character-by-character; non-ASCII
+\ bytes pass through. Used on scheme and host, which are guaranteed ASCII
+\ after parsing.
+(lower-loop): stack-recursive ( output input -- output ) [
+  dup #empty?
+  [ drop ]
+  [
+    dup 0 1 #slice (ascii-lower-char)
+    swap 1 over #len #slice
+    \ ( output lower-char input' )
+    [ #append ] dip
+    (lower-loop)
+  ] if
+] ;
+
+(lower-ascii): ( s -- s ) [
+  "" swap (lower-loop)
+] ;
+
+\ Map 0..15 to an uppercase hex character ("0".."9" / "A".."F").
+(nibble>upper-hex-char): ( n -- ch ) [
+  dup 10 < [ 48 + ] [ 55 + ] if >char
+] ;
+
+\ Decoded-byte value (0..255) is in the RFC 3986 unreserved set: A-Z / a-z /
+\ 0-9 / "-" / "." / "_" / "~". Used to decide whether a `%HH` triple should
+\ be replaced by its literal character.
+(unreserved-codepoint?): ( n -- ? ) [
+  >char
+  dup alnum?
+  [ drop t ] [
+    dup "-" =
+    over "." = or
+    over "_" = or
+    swap "~" = or
+  ] if
+] ;
+
+\ Walk a percent-normalization pass over a string. At every `%HH` triple
+\ whose two hex bytes parse cleanly, replace the triple with the literal
+\ character if the decoded byte is in the unreserved set, otherwise keep
+\ the triple but uppercase its hex digits. Anything else passes through
+\ untouched: a bare `%` followed by fewer than two characters, or two
+\ non-hex characters, are preserved as-is so already-broken input round-
+\ trips rather than throwing during normalization.
+\
+\ Each branch lands the stack at `( output chunk input' )` where `chunk` is
+\ the next bytes to append and `input'` is the remaining unread input, then
+\ `[ #append ] dip` produces `( output++chunk input' )` for the recursive
+\ tail call.
+(pct-loop): stack-recursive ( output input -- output ) [
+  dup #empty?
+  [ drop ]
+  [
+    dup 0 #nth "%" =
+    over #len 3 >= and
+    [
+      dup 1 #nth hex-digit?
+      over 2 #nth hex-digit? and
+      [
+        dup 1 #nth hex>fixnum 4 shift-left
+        over 2 #nth hex>fixnum bitor
+        \ ( output input byte )
+        dup (unreserved-codepoint?)
+        [
+          \ Replace triple with the literal character; advance 3.
+          >char
+          \ ( output input char )
+          swap 3 over #len #slice
+          \ ( output char input' )
+        ] [
+          \ Keep the triple but uppercase its hex digits; advance 3.
+          dup 4 ushift-right (nibble>upper-hex-char)
+          swap 15 bitand (nibble>upper-hex-char)
+          \ ( output input hi lo )
+          \ Build chunk = "%" + hi + lo.
+          swap "%" swap #append swap #append
+          \ ( output input chunk )
+          swap 3 over #len #slice
+          \ ( output chunk input' )
+        ] if
+      ] [
+        \ Not a valid hex pair: copy "%" and advance 1.
+        "%" swap 1 over #len #slice
+        \ ( output "%" input' )
+      ] if
+    ] [
+      \ Not `%` (or fewer than 3 chars left): copy one char and advance 1.
+      dup 0 1 #slice
+      swap 1 over #len #slice
+      \ ( output first-char input' )
+    ] if
+    [ #append ] dip
+    \ ( output' input' )
+    (pct-loop)
+  ] if
+] ;
+
+\\ Apply RFC 3986 §6.2.2.2 percent-encoding normalization to a string:
+\\ `%HH` triples whose decoded byte is in the unreserved set become the
+\\ literal byte; surviving triples have their hex digits uppercased.
+(normalize-pct): ( s -- s ) [
+  "" swap (pct-loop)
+] ;
+
+\ Return the default port for a scheme's hierarchical use, or `""` if the
+\ scheme has no recognized default. The schemes covered are the ones whose
+\ default ports are universally interoperable: http (80), https (443),
+\ ws (80), wss (443), ftp (21).
+(default-port-for): ( scheme -- port ) [
+  dup "http" = [ drop "80" ] [
+    dup "https" = [ drop "443" ] [
+      dup "ws" = [ drop "80" ] [
+        dup "wss" = [ drop "443" ] [
+          dup "ftp" = [ drop "21" ] [
+            drop ""
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\ Extract the userinfo (everything before the first `@`) from an authority
+\ string, or `""` if no `@` is present.
+(extract-userinfo): ( authority -- userinfo ) [
+  dup "@" #index-of dup f =
+  [ 2drop "" ]
+  [ 0 swap #slice ]
+  if
+] ;
+
+\ Re-derive the raw authority string from its parts: `[userinfo@]host[:port]`.
+\ Components that are empty are omitted along with their delimiter.
+(rebuild-authority): ( userinfo host port -- authority ) [
+  \ Convert port to suffix (":port" or "").
+  dup #empty? [ ] [ ":" swap #append ] if
+  \ ( userinfo host port-suffix )
+
+  \ Pull userinfo to top and convert to prefix ("userinfo@" or "").
+  2 <rot-n
+  dup #empty? [ ] [ "@" #append ] if
+  \ ( host port-suffix userinfo-prefix )
+
+  \ Pull host to top, then concatenate prefix + host + suffix.
+  2 <rot-n
+  \ ( port-suffix userinfo-prefix host )
+  #append swap #append
+] ;
+
+\ Per-component normalizers that each take a `uri` and return a single
+\ transformed component. Splitting these out keeps (normalize-impl) free of
+\ deep stack juggling.
+
+(norm-scheme): ( uri -- s ) [ scheme>> (lower-ascii) ] ;
+
+(norm-host): ( uri -- s ) [ host>> (lower-ascii) (normalize-pct) ] ;
+
+\ Effective port: empty if the stored port matches the scheme's default.
+(norm-port): ( uri -- s ) [
+  dup port>>
+  swap (norm-scheme) (default-port-for)
+  over = [ drop "" ] when
+] ;
+
+\ Rebuild the authority string from the normalized userinfo, host, and port.
+(norm-authority): ( uri -- s ) [
+  dup authority>> (extract-userinfo) (normalize-pct)
+  over (norm-host)
+  \ Stack: uri userinfo' host'. Pull uri to the top via 3-rot, then apply
+  \ (norm-port) so we end with ( userinfo' host' port' ) for the join.
+  <rot- (norm-port)
+  (rebuild-authority)
+] ;
+
+\ Path: percent-normalize, remove dot segments, then hoist an empty path on
+\ a URI that has an authority to "/" per RFC 3986 §6.2.3.
+(norm-path): ( uri -- s ) [
+  dup path>> (normalize-pct) (remove-dot-segments)
+  swap (has-authority?>>)
+  [ dup #empty? [ drop "/" ] when ] when
+] ;
+
+(norm-query): ( uri -- s ) [ query>> (normalize-pct) ] ;
+
+(norm-fragment): ( uri -- s ) [ fragment>> (normalize-pct) ] ;
+
+\ Shared normalization implementation. Both public normalize variants
+\ delegate here; the variant seam exists for future per-mode behavior such
+\ as differing percent-encoding sets or special-scheme handling.
+(normalize-impl): ( uri -- uri ) [
+  dup (norm-scheme)
+  1 pick-n (has-authority?>>)
+  2 pick-n (norm-authority)
+  3 pick-n (norm-host)
+  4 pick-n (norm-port)
+  5 pick-n (norm-path)
+  6 pick-n (has-query?>>)
+  7 pick-n (norm-query)
+  8 pick-n (has-fragment?>>)
+  9 pick-n (norm-fragment)
+  10 <rot-n drop
+  (make-uri-raw)
+] ;
+
+\\ Apply RFC 3986 §6 normalization. Both syntax-based (§6.2.2) and scheme-
+\\ based (§6.2.3) rules fire: scheme and host lowercased; `%HH` triples
+\\ whose decoded byte is unreserved replaced with the literal byte;
+\\ surviving triples uppercased; path normalized via dot-segment removal;
+\\ default ports for the recognized scheme set (`http`/`https`/`ws`/`wss`/
+\\ `ftp`) elided; empty path on a hierarchical URI hoisted to `/`.
+normalize(rfc3986): ( uri -- uri ) [ (normalize-impl) ] ;
+
+\\ Apply WHATWG URL normalization.
+\\
+\\ The output matches `normalize(rfc3986)` exactly; the variant word exists
+\\ as a stable seam for future WHATWG-specific behavior such as percent-
+\\ encoding sets or `file://` handling.
+normalize(whatwg): ( uri -- uri ) [ (normalize-impl) ] ;
+
+\\ Default normalizer: strict RFC 3986. Equivalent to `normalize(rfc3986)`.
+normalize: ( uri -- uri ) [ normalize(rfc3986) ] ;

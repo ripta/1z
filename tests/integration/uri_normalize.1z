@@ -1,0 +1,177 @@
+\ Integration tests for normalize(rfc3986), normalize(whatwg), and bare normalize.
+
+use "testing" ;
+use "net/uri" ;
+
+\ -----------------------------------------------------------------------
+"normalize(rfc3986): case normalization (scheme and host)" test-section
+\ -----------------------------------------------------------------------
+
+"HTTP://Example.COM/p" parse normalize(rfc3986) >string
+"http://example.com/p" "scheme and host lowercased" assert=
+
+"Http://USER@Example.COM/path" parse normalize(rfc3986) >string
+"http://USER@example.com/path" "userinfo not case-folded" assert=
+
+\ -----------------------------------------------------------------------
+"normalize(rfc3986): percent-encoding -- unreserved bytes decoded" test-section
+\ -----------------------------------------------------------------------
+
+"http://a/%41%62%43" parse normalize(rfc3986) >string
+"http://a/AbC" "ABC bytes are unreserved and get decoded" assert=
+
+"http://a/%7E%2D%2E%5F" parse normalize(rfc3986) >string
+"http://a/~-._" "tilde, dash, dot, underscore all unreserved" assert=
+
+"http://a/%30%39" parse normalize(rfc3986) >string
+"http://a/09" "digits get decoded" assert=
+
+\ -----------------------------------------------------------------------
+"normalize(rfc3986): percent-encoding -- reserved bytes keep, uppercase hex" test-section
+\ -----------------------------------------------------------------------
+
+"http://a/%2f%2F" parse normalize(rfc3986) >string
+"http://a/%2F%2F" "slash stays reserved; hex digits uppercased" assert=
+
+"http://a/%25%3a" parse normalize(rfc3986) >string
+"http://a/%25%3A" "percent and colon stay reserved; hex uppercased" assert=
+
+"http://a/%c3%a9" parse normalize(rfc3986) >string
+"http://a/%C3%A9" "non-ASCII bytes stay; hex uppercased" assert=
+
+\ -----------------------------------------------------------------------
+"normalize(rfc3986): percent-encoding across components" test-section
+\ -----------------------------------------------------------------------
+
+"http://a/p?q=%41%2f%62#f%7e" parse normalize(rfc3986) >string
+"http://a/p?q=A%2Fb#f~" "query and fragment also get percent-normalized" assert=
+
+\ -----------------------------------------------------------------------
+"normalize(rfc3986): path dot-segment removal" test-section
+\ -----------------------------------------------------------------------
+
+"http://a/b/./c/../d" parse normalize(rfc3986) >string
+"http://a/b/d" "dot segments removed" assert=
+
+"http://a/./x/y/.." parse normalize(rfc3986) >string
+"http://a/x/" "trailing /.. drops final segment" assert=
+
+\ -----------------------------------------------------------------------
+"normalize(rfc3986): default-port elision" test-section
+\ -----------------------------------------------------------------------
+
+"http://a:80/p" parse normalize(rfc3986) >string
+"http://a/p" "http default port 80 elided" assert=
+
+"https://a:443/p" parse normalize(rfc3986) >string
+"https://a/p" "https default port 443 elided" assert=
+
+"ws://a:80/p" parse normalize(rfc3986) >string
+"ws://a/p" "ws default port 80 elided" assert=
+
+"wss://a:443/p" parse normalize(rfc3986) >string
+"wss://a/p" "wss default port 443 elided" assert=
+
+"ftp://a:21/p" parse normalize(rfc3986) >string
+"ftp://a/p" "ftp default port 21 elided" assert=
+
+"http://a:8080/p" parse normalize(rfc3986) >string
+"http://a:8080/p" "non-default port preserved" assert=
+
+"http://a:443/p" parse normalize(rfc3986) >string
+"http://a:443/p" "non-matching port preserved (443 is not http's default)" assert=
+
+\ -----------------------------------------------------------------------
+"normalize(rfc3986): empty path on hierarchical URI hoisted to /" test-section
+\ -----------------------------------------------------------------------
+
+"http://example.com" parse normalize(rfc3986) >string
+"http://example.com/" "empty path under authority becomes /" assert=
+
+"https://a:443" parse normalize(rfc3986) >string
+"https://a/" "empty path combines with default-port elision" assert=
+
+\ A URI without authority keeps its (possibly empty) path unchanged.
+"mailto:user@example.com" parse normalize(rfc3986) >string
+"mailto:user@example.com" "no authority means empty-path rule does not fire" assert=
+
+"urn:isbn:1234567890" parse normalize(rfc3986) >string
+"urn:isbn:1234567890" "URN passes through with no authority" assert=
+
+\ -----------------------------------------------------------------------
+"normalize(rfc3986): identity on already-normalized" test-section
+\ -----------------------------------------------------------------------
+
+"http://example.com/a?b=1#c" parse normalize(rfc3986) >string
+"http://example.com/a?b=1#c" "already normalized: identity" assert=
+
+"https://example.com/" parse normalize(rfc3986) >string
+"https://example.com/" "minimal normalized form is identity" assert=
+
+\ -----------------------------------------------------------------------
+"normalize(rfc3986): combined transformations" test-section
+\ -----------------------------------------------------------------------
+
+"HTTP://Example.COM:80/a/./%62/../%43?q=%41#%7e" parse normalize(rfc3986) >string
+"http://example.com/a/C?q=A#~" "case + port + path + percent all together" assert=
+
+\ -----------------------------------------------------------------------
+"normalize(rfc3986): re-parse round-trip" test-section
+\ -----------------------------------------------------------------------
+
+"HTTP://Example.COM:80/a/./%62/../%43?q=%41#%7e" parse normalize(rfc3986)
+dup >string parse(rfc3986) >string
+swap >string
+"normalize output re-parses to the same string" assert=
+
+\ -----------------------------------------------------------------------
+"normalize(whatwg): same output as RFC mode on this corpus" test-section
+\ -----------------------------------------------------------------------
+
+"HTTP://Example.COM/p" parse normalize(whatwg) >string
+"http://example.com/p" "whatwg: case folding" assert=
+
+"http://a/%41%2f%7E" parse normalize(whatwg) >string
+"http://a/A%2F~" "whatwg: percent normalization" assert=
+
+"http://a:80/" parse normalize(whatwg) >string
+"http://a/" "whatwg: default-port elision" assert=
+
+"http://example.com" parse normalize(whatwg) >string
+"http://example.com/" "whatwg: empty path hoisted to /" assert=
+
+"http://a/b/./c/../d" parse normalize(whatwg) >string
+"http://a/b/d" "whatwg: dot-segment removal" assert=
+
+\ -----------------------------------------------------------------------
+"normalize: bare alias of normalize(rfc3986)" test-section
+\ -----------------------------------------------------------------------
+
+"HTTP://A:80/p" parse normalize >string
+"http://a/p" "bare normalize delegates to rfc3986 variant" assert=
+
+"http://a/%41" parse normalize >string
+"http://a/A" "bare normalize decodes unreserved" assert=
+
+\ -----------------------------------------------------------------------
+"normalize: edge cases" test-section
+\ -----------------------------------------------------------------------
+
+\ Authority with userinfo and port.
+"http://User%41:p@a:80/" parse normalize >string
+"http://UserA:p@a/" "userinfo percent-normalized; port elided" assert=
+
+\ Stray "%" with no hex bytes left passes through unchanged.
+"http://a/p%" parse normalize >string
+"http://a/p%" "trailing bare % is preserved" assert=
+
+\ Stray "%" followed by non-hex bytes passes through unchanged.
+"http://a/p%zz" parse normalize >string
+"http://a/p%zz" "%zz preserved (not a hex pair)" assert=
+
+\ Query-only and fragment-only edge cases.
+"http://a/?q=%41" parse normalize >string
+"http://a/?q=A" "query percent-normalized" assert=
+
+"http://a/#%7e" parse normalize >string
+"http://a/#~" "fragment percent-normalized" assert=

@@ -1,0 +1,142 @@
+=== normalize(rfc3986): case normalization (scheme and host) ===
+Stack: [ ]
+Stack: [ "http://example.com/p" ]
+PASS: scheme and host lowercased
+Stack: [ ]
+Stack: [ "http://USER@example.com/path" ]
+PASS: userinfo not case-folded
+Stack: [ ]
+=== normalize(rfc3986): percent-encoding -- unreserved bytes decoded ===
+Stack: [ ]
+Stack: [ "http://a/AbC" ]
+PASS: ABC bytes are unreserved and get decoded
+Stack: [ ]
+Stack: [ "http://a/~-._" ]
+PASS: tilde, dash, dot, underscore all unreserved
+Stack: [ ]
+Stack: [ "http://a/09" ]
+PASS: digits get decoded
+Stack: [ ]
+=== normalize(rfc3986): percent-encoding -- reserved bytes keep, uppercase hex ===
+Stack: [ ]
+Stack: [ "http://a/%2F%2F" ]
+PASS: slash stays reserved; hex digits uppercased
+Stack: [ ]
+Stack: [ "http://a/%25%3A" ]
+PASS: percent and colon stay reserved; hex uppercased
+Stack: [ ]
+Stack: [ "http://a/%C3%A9" ]
+PASS: non-ASCII bytes stay; hex uppercased
+Stack: [ ]
+=== normalize(rfc3986): percent-encoding across components ===
+Stack: [ ]
+Stack: [ "http://a/p?q=A%2Fb#f~" ]
+PASS: query and fragment also get percent-normalized
+Stack: [ ]
+=== normalize(rfc3986): path dot-segment removal ===
+Stack: [ ]
+Stack: [ "http://a/b/d" ]
+PASS: dot segments removed
+Stack: [ ]
+Stack: [ "http://a/x/" ]
+PASS: trailing /.. drops final segment
+Stack: [ ]
+=== normalize(rfc3986): default-port elision ===
+Stack: [ ]
+Stack: [ "http://a/p" ]
+PASS: http default port 80 elided
+Stack: [ ]
+Stack: [ "https://a/p" ]
+PASS: https default port 443 elided
+Stack: [ ]
+Stack: [ "ws://a/p" ]
+PASS: ws default port 80 elided
+Stack: [ ]
+Stack: [ "wss://a/p" ]
+PASS: wss default port 443 elided
+Stack: [ ]
+Stack: [ "ftp://a/p" ]
+PASS: ftp default port 21 elided
+Stack: [ ]
+Stack: [ "http://a:8080/p" ]
+PASS: non-default port preserved
+Stack: [ ]
+Stack: [ "http://a:443/p" ]
+PASS: non-matching port preserved (443 is not http's default)
+Stack: [ ]
+=== normalize(rfc3986): empty path on hierarchical URI hoisted to / ===
+Stack: [ ]
+Stack: [ "http://example.com/" ]
+PASS: empty path under authority becomes /
+Stack: [ ]
+Stack: [ "https://a/" ]
+PASS: empty path combines with default-port elision
+Stack: [ ]
+Stack: [ "mailto:user@example.com" ]
+PASS: no authority means empty-path rule does not fire
+Stack: [ ]
+Stack: [ "urn:isbn:1234567890" ]
+PASS: URN passes through with no authority
+Stack: [ ]
+=== normalize(rfc3986): identity on already-normalized ===
+Stack: [ ]
+Stack: [ "http://example.com/a?b=1#c" ]
+PASS: already normalized: identity
+Stack: [ ]
+Stack: [ "https://example.com/" ]
+PASS: minimal normalized form is identity
+Stack: [ ]
+=== normalize(rfc3986): combined transformations ===
+Stack: [ ]
+Stack: [ "http://example.com/a/C?q=A#~" ]
+PASS: case + port + path + percent all together
+Stack: [ ]
+=== normalize(rfc3986): re-parse round-trip ===
+Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/a/C" uri-has-query?: t uri-query: "q=A" uri-has-fragment?: t uri-fragment: "~" }> ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/a/C" uri-has-query?: t uri-query: "q=A" uri-has-fragment?: t uri-fragment: "~" }> "http://example.com/a/C?q=A#~" ]
+Stack: [ "http://example.com/a/C?q=A#~" "http://example.com/a/C?q=A#~" ]
+PASS: normalize output re-parses to the same string
+Stack: [ ]
+=== normalize(whatwg): same output as RFC mode on this corpus ===
+Stack: [ ]
+Stack: [ "http://example.com/p" ]
+PASS: whatwg: case folding
+Stack: [ ]
+Stack: [ "http://a/A%2F~" ]
+PASS: whatwg: percent normalization
+Stack: [ ]
+Stack: [ "http://a/" ]
+PASS: whatwg: default-port elision
+Stack: [ ]
+Stack: [ "http://example.com/" ]
+PASS: whatwg: empty path hoisted to /
+Stack: [ ]
+Stack: [ "http://a/b/d" ]
+PASS: whatwg: dot-segment removal
+Stack: [ ]
+=== normalize: bare alias of normalize(rfc3986) ===
+Stack: [ ]
+Stack: [ "http://a/p" ]
+PASS: bare normalize delegates to rfc3986 variant
+Stack: [ ]
+Stack: [ "http://a/A" ]
+PASS: bare normalize decodes unreserved
+Stack: [ ]
+=== normalize: edge cases ===
+Stack: [ ]
+Stack: [ "http://UserA:p@a/" ]
+PASS: userinfo percent-normalized; port elided
+Stack: [ ]
+Stack: [ "http://a/p%" ]
+PASS: trailing bare % is preserved
+Stack: [ ]
+Stack: [ "http://a/p%zz" ]
+PASS: %zz preserved (not a hex pair)
+Stack: [ ]
+Stack: [ "http://a/?q=A" ]
+PASS: query percent-normalized
+Stack: [ ]
+Stack: [ "http://a/#~" ]
+PASS: fragment percent-normalized
+Stack: [ ]
