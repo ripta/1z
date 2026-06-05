@@ -1,0 +1,67 @@
+\ Page-counter cgi-bin example.
+\
+\ Demonstrates persistent state in a CGI script: every request reads a
+\ visit counter from a file, increments it, writes it back, and responds
+\ with the new count.
+\
+\ Storage choice. The counter is a single decimal integer in a flat file,
+\ reached via lib/os/fs.1z's stream primitives. This is one defensible
+\ default for a low-traffic counter, not a prescription. A managed
+\ database, a key-value store, or a remote counter service would all be
+\ equally valid in production. The open-read-modify-write pattern shown
+\ here is appropriate when contention is rare; heavier load wants a
+\ backend with atomic increment semantics.
+\
+\ Deployment. The counter path comes from the PAGE_COUNTER_FILE
+\ environment variable, falling back to "page-counter.dat" in the
+\ script's working directory. Configure your web server to export
+\ PAGE_COUNTER_FILE pointing at a writable path.
+
+use "conversions" ;
+use "net/cgi" ;
+use "net/http" ;
+use "os/fs" ;
+use "strings" ;
+
+\\ Path to the counter file. Overridable via the PAGE_COUNTER_FILE
+\\ environment variable.
+counter-file: parameter{ [
+    environ "PAGE_COUNTER_FILE" "page-counter.dat" @get-or
+  ]
+} ;
+
+private{
+  \ Read the counter. A missing file means the counter is unset, so the
+  \ first visit creates it at 1.
+  (read-count): ( -- n ) [
+    counter-file get dup file-exists?
+    [
+      read: stream-open dup stream-read-all swap stream-close
+      bytes> trim
+      dup #empty? [ drop 0 ] [ parse-integer ] if
+    ]
+    [ drop 0 ]
+    if
+  ] ;
+
+  \ Overwrite the counter file with the new value.
+  (write-count): ( n -- ) [
+    >string
+    counter-file get write: stream-open
+    tuck swap stream-write drop
+    stream-close
+  ] ;
+}
+
+\\ Handle a single CGI request: increment the visit counter and return
+\\ its new value as plain text.
+page-counter-handler: ( stream request -- ) [
+  drop
+  (read-count) 1 + dup (write-count)
+  >string "Visits: " swap #append "\n" #append
+  [ 200 dup reason-for "text/plain; charset=utf-8" ] dip
+  <response>
+  send-response
+] ;
+
+[ page-counter-handler ] cgi-run

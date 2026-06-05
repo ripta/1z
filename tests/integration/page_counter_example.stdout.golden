@@ -1,0 +1,10 @@
+=== page-counter: pre-seed counter file ===
+=== page-counter: load example -- cgi-run dispatches handler ===
+Status: 200 OK
+Connection: close
+Content-Length: 10
+content-type: text/plain; charset=utf-8
+
+Visits: 2
+=== page-counter: counter file holds incremented value ===
+PASS: counter incremented from 1 to 2

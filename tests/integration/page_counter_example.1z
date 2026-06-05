@@ -1,0 +1,29 @@
+\ Integration test for the page-counter cgi-bin example. Pre-seeds the
+\ counter file at 1, loads the example (which runs cgi-run once), then
+\ asserts the file now reads 2 -- exercising the read-modify-write
+\ cycle, not just first-time creation.
+
+use "testing" ;
+use "os/fs" ;
+
+COUNTER-PATH: const [ "tests/integration/_tmp_page_counter.dat" ] ;
+
+"page-counter: pre-seed counter file" test-section
+
+COUNTER-PATH file-exists? [ COUNTER-PATH delete-file ] when
+COUNTER-PATH write: stream-open
+dup "1" stream-write drop
+stream-close
+
+"page-counter: load example -- cgi-run dispatches handler" test-section
+
+"../../examples/cgi-bin/page-counter.1z" load drop
+
+"page-counter: counter file holds incremented value" test-section
+
+COUNTER-PATH read: stream-open
+dup stream-read-all swap stream-close
+bytes>
+"2" "counter incremented from 1 to 2" assert=
+
+COUNTER-PATH delete-file
