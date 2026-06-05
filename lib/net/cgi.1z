@@ -1,8 +1,9 @@
 \ lib/net/cgi.1z - CGI deployment adapter for net/http handlers.
 \
 \ A handler written for net/http (signature `( stream request -- )`) runs
-\ unchanged under cgi-run. This file currently holds the env-var translator
-\ and the request populator.
+\ unchanged under cgi-run. This file holds the env-var translator, the
+\ request populator, and the `cgi-run` entry point. See
+\ `docs/guides/cgi.md` for an overview.
 
 use "strings" ;
 use "conversions" ;

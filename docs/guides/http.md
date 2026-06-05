@@ -168,4 +168,5 @@ See [`../reference/net/http.md`](../reference/net/http.md) for the full
 generated word list, and [`../reference/net/http/router.md`](../reference/net/http/router.md)
 for the router surface.
 
-The [next guide](ffi.md) covers calling C libraries from 1z.
+The [next guide](cgi.md) covers running net/http handlers as classical
+CGI scripts.
