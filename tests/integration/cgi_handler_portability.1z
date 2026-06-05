@@ -1,0 +1,225 @@
+\ Handler-portability acceptance test for the cgi-bin library.
+\ A single net/http handler word runs unchanged under both transports
+\ (HTTP and CGI), and the responses must be byte-equivalent after
+\ normalizing the legal status-line difference: HTTP emits
+\ `HTTP/1.1 <code> <reason>`; CGI emits `Status: <code> <reason>`.
+\ Everything else -- headers, blank line, body -- is identical.
+
+use "testing" ;
+use "conversions" ;
+use "net/http" ;
+use "net/cgi" ;
+
+private{
+  \ Build two pipes glued into one duplex stream. The returned
+  \ in-write is the test's handle on the input pipe (write body here);
+  \ out-read is the test's handle on the output pipe (read response
+  \ here); duplex is the stream the handler will use. The duplex owns
+  \ the read fd of the input pipe and the write fd of the output pipe;
+  \ closing the duplex closes both. Follows the wrapper-drop pattern
+  \ from tests/integration/duplex_stream.1z.
+  (make-test-pipes): ( -- in-write out-read duplex ) [
+    <pipe>           \ Ard Awr
+    swap stream>fd   \ Awr Ard-fd
+    <pipe>           \ Awr Ard-fd Brd Bwr
+    stream>fd        \ Awr Ard-fd Brd Bwr-fd
+    swap             \ Awr Ard-fd Bwr-fd Brd
+    -rot>            \ Awr Brd Ard-fd Bwr-fd
+    <duplex-stream>  \ Awr Brd duplex
+  ] ;
+
+  \ Write body into the input pipe, then close it so the handler's
+  \ read sees EOF after the body bytes.
+  (prime-input): ( in-write body -- ) [
+    over swap stream-write drop
+    stream-close
+  ] ;
+
+  \ Read everything from the output pipe and close it. Returns the
+  \ response as a string.
+  (drain-output): ( out-read -- response ) [
+    dup stream-read-all bytes>
+    swap stream-close
+  ] ;
+
+  \ HTTP-shaped harness. The handler-quot must be a `( stream -- )`
+  \ quotation, typically `<request> [ <handler-word> ] curry`. No
+  \ `response-status-line-prefix` binding here, so `send-response`
+  \ emits the default `HTTP/1.1 ` first-line prefix.
+  (run-http): ( body handler-quot -- response ) [
+    (make-test-pipes)
+    [ <rot- (prime-input) ] 2dip
+    swap
+    [ dup 2 pick-n call swap drop ] dip
+    swap stream-close
+    (drain-output)
+  ] ;
+
+  \ CGI-shaped harness. Same shape as (run-http) but wraps the
+  \ handler invocation in the `"Status: "` binding that `cgi-run`
+  \ installs around its `recover`. The handler-quot is the same
+  \ `( stream -- )` shape as for HTTP.
+  (run-cgi): ( body handler-quot -- response ) [
+    (make-test-pipes)
+    [ <rot- (prime-input) ] 2dip
+    swap
+    [
+      "Status: " response-status-line-prefix [
+        dup 2 pick-n call swap drop
+      ] with-parameter
+    ] dip
+    swap stream-close
+    (drain-output)
+  ] ;
+
+  \ Replace the leading `HTTP/1.1 ` prefix with `Status: ` so an HTTP
+  \ response can be compared byte-for-byte against a CGI response.
+  (normalize-prefix): ( http-response -- normalized ) [
+    9 #drop "Status: " swap #append
+  ] ;
+}
+
+\ Handler that echoes only the request path, used by the
+\ path-stitching round-trips. Reads nothing from the stream.
+path-only-handler: ( stream request -- ) [
+  path>>
+  200 dup reason-for
+  "text/plain; charset=utf-8"
+  3 pick-n
+  <response>
+  nip
+  send-response
+] ;
+
+\ Handler that exercises every cross-transport read path: path,
+\ query-string, header lookup, socket-derived field, and the form
+\ body via `read-form`. Emits a deterministic line-oriented response
+\ body so byte-equivalence asserts the whole pipeline matches.
+portable-handler: ( stream request -- ) [
+  \ Read form body using content-length from headers.
+  over over headers>> "content-length" @get parse-integer read-form
+  \ ( stream request form )
+
+  \ Accumulate the body string.
+  ""
+  "path=" 3 pick-n path>> #append "\n" #append #append
+  "query=" 3 pick-n query-string>> #append "\n" #append #append
+  "ua=" 3 pick-n headers>> "user-agent" @get #append "\n" #append #append
+  "remote=" 3 pick-n remote-addr>> #append "\n" #append #append
+  "name=" 2 pick-n "name" @get 0 #nth #append "\n" #append #append
+  \ ( stream request form body )
+
+  \ Drop form and request; build and send the response.
+  swap drop swap drop
+  \ ( stream body )
+  200 dup reason-for
+  "text/plain; charset=utf-8"
+  3 pick-n
+  <response>
+  nip
+  send-response
+] ;
+
+\ ---------------------------------------------------------------
+\ Path-stitching round-trips.
+\ Each section builds an HTTP fixture whose `path` equals the
+\ stitched CGI path, then asserts the handler produces the same
+\ response (modulo prefix) on both transports.
+\ ---------------------------------------------------------------
+
+"path: SCRIPT_NAME + PATH_INFO" test-section
+"GET" "/cgi-bin/blog/posts/2026" "" "HTTP/1.1" H{ }
+"" 0 "" 0 f "" ""
+make-request
+[ path-only-handler ] curry
+"" swap (run-http)
+(normalize-prefix)
+H{ "SCRIPT_NAME" "/cgi-bin/blog" "PATH_INFO" "/posts/2026" } (cgi-request)
+[ path-only-handler ] curry
+"" swap (run-cgi)
+"path round-trip: SCRIPT_NAME + PATH_INFO" assert=
+
+"path: SCRIPT_NAME only" test-section
+"GET" "/cgi-bin/blog" "" "HTTP/1.1" H{ }
+"" 0 "" 0 f "" ""
+make-request
+[ path-only-handler ] curry
+"" swap (run-http)
+(normalize-prefix)
+H{ "SCRIPT_NAME" "/cgi-bin/blog" } (cgi-request)
+[ path-only-handler ] curry
+"" swap (run-cgi)
+"path round-trip: SCRIPT_NAME only" assert=
+
+"path: PATH_INFO only" test-section
+"GET" "/posts/2026" "" "HTTP/1.1" H{ }
+"" 0 "" 0 f "" ""
+make-request
+[ path-only-handler ] curry
+"" swap (run-http)
+(normalize-prefix)
+H{ "PATH_INFO" "/posts/2026" } (cgi-request)
+[ path-only-handler ] curry
+"" swap (run-cgi)
+"path round-trip: PATH_INFO only" assert=
+
+"path: both empty" test-section
+"GET" "" "" "HTTP/1.1" H{ }
+"" 0 "" 0 f "" ""
+make-request
+[ path-only-handler ] curry
+"" swap (run-http)
+(normalize-prefix)
+H{ } (cgi-request)
+[ path-only-handler ] curry
+"" swap (run-cgi)
+"path round-trip: both empty" assert=
+
+"path: trailing slash plus leading slash yields literal //" test-section
+"GET" "/cgi-bin/blog//posts" "" "HTTP/1.1" H{ }
+"" 0 "" 0 f "" ""
+make-request
+[ path-only-handler ] curry
+"" swap (run-http)
+(normalize-prefix)
+H{ "SCRIPT_NAME" "/cgi-bin/blog/" "PATH_INFO" "/posts" } (cgi-request)
+[ path-only-handler ] curry
+"" swap (run-cgi)
+"path round-trip: literal //" assert=
+
+\ ---------------------------------------------------------------
+\ Comprehensive cross-transport equivalence.
+\ One handler word exercises path, query-string, header lookup,
+\ socket-derived field, form decode via read-form, and the wire
+\ written by send-response.
+\ ---------------------------------------------------------------
+
+"comprehensive: all read paths, byte-equivalent wire" test-section
+"POST" "/cgi-bin/blog/posts/2026" "tag=zig&debug=1" "HTTP/1.1"
+H{ "user-agent" "Mozilla/5.0"
+  "content-type" "application/x-www-form-urlencoded"
+  "content-length" "10"
+}
+"192.0.2.1" 54321 "example.com" 80
+f "" ""
+make-request
+[ portable-handler ] curry
+"name=alice" swap (run-http)
+(normalize-prefix)
+H{
+  "REQUEST_METHOD" "POST"
+  "SCRIPT_NAME" "/cgi-bin/blog"
+  "PATH_INFO" "/posts/2026"
+  "QUERY_STRING" "tag=zig&debug=1"
+  "SERVER_PROTOCOL" "HTTP/1.1"
+  "HTTP_USER_AGENT" "Mozilla/5.0"
+  "HTTP_CONTENT_TYPE" "application/x-www-form-urlencoded"
+  "HTTP_CONTENT_LENGTH" "10"
+  "REMOTE_ADDR" "192.0.2.1"
+  "REMOTE_PORT" "54321"
+  "SERVER_NAME" "example.com"
+  "SERVER_PORT" "80"
+} (cgi-request)
+[ portable-handler ] curry
+"name=alice" swap (run-cgi)
+"comprehensive round-trip" assert=
