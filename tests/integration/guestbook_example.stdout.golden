@@ -1,0 +1,24 @@
+=== guestbook: pre-seed database ===
+=== guestbook: load example -- cgi-run dispatches handler ===
+Status: 200 OK
+Connection: close
+Content-Length: 423
+content-type: text/html; charset=utf-8
+
+<!doctype html>
+<html><head><title>Guestbook</title></head><body>
+<h1>Guestbook</h1>
+<ul>
+<li><strong>Bob</strong>: Hello &lt;script&gt;</li>
+<li><strong>Alice</strong>: First post</li>
+</ul>
+<form method="post" action="">
+  <p><label>Name: <input name="name" type="text"></label></p>
+  <p><label>Message: <textarea name="message"></textarea></label></p>
+  <p><button type="submit">Sign</button></p>
+</form>
+</body></html>
+=== guestbook: row inserted by POST handler ===
+PASS: two rows after POST
+PASS: name stored verbatim
+PASS: message stored unescaped

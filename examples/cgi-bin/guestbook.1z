@@ -1,0 +1,146 @@
+\ Guestbook cgi-bin example.
+\
+\ Demonstrates a small dynamic-content CGI script: a GET request renders
+\ the current entries plus a submission form, a POST request decodes a
+\ urlencoded form body, persists the entry, and renders the updated
+\ page. Both name and message are run through the html-escape library
+\ before they reach the response body.
+\
+\ Storage choice. Entries live in a SQLite database reached via
+\ lib/sqlite.1z. This is one defensible default for a small dynamic
+\ guestbook -- a relational store is convenient as soon as records have
+\ structure -- not a prescription. A managed database, a key-value store,
+\ a JSON file, or a remote service would all be equally valid in
+\ production. The choice here exists to demonstrate cgi.1z working
+\ together with sqlite and html-escape end-to-end.
+\
+\ Deployment. The database path comes from the GUESTBOOK_DB environment
+\ variable, falling back to "guestbook.db" in the script's working
+\ directory. Configure your web server to export GUESTBOOK_DB pointing
+\ at a writable path. The script is safe to run on a fresh database;
+\ the schema is created lazily on first request via CREATE TABLE
+\ IF NOT EXISTS.
+
+use "conversions" ;
+use "data/html" ;
+use "net/cgi" ;
+use "net/http" ;
+use "sqlite" ;
+use "strings" ;
+use "time" ;
+
+private{
+  \ Create the entries table on first use. The IF NOT EXISTS guard makes
+  \ this safe to call on every request.
+  (init-schema): ( db -- ) [
+    "CREATE TABLE IF NOT EXISTS entries (name TEXT, message TEXT, created_at INTEGER)"
+    { } execute
+  ] ;
+
+  \ Insert one entry. created_at carries the current wall-clock time so
+  \ newer rows sort first; it is not rendered in the HTML.
+  (insert-entry): ( db name message -- ) [
+    now timestamp-sec 3 array-n
+    "INSERT INTO entries (name, message, created_at) VALUES (?1, ?2, ?3)"
+    swap execute
+  ] ;
+
+  \ Pull the first form value for a key, defaulting to the empty string
+  \ when the key is missing. `read-form` returns a hash mapping each key
+  \ to an array of values, so the lookup pattern is "default to a single
+  \ empty-string array, then take the first element".
+  (form-value): ( form key -- value ) [
+    { "" } @get-or 0 #nth
+  ] ;
+
+  \ Static submission form. The action is the empty string so the
+  \ browser POSTs back to the same URL the GET was served from.
+  (form-fragment): ( -- string ) [
+    "<form method=\"post\" action=\"\">\n"
+    "  <p><label>Name: <input name=\"name\" type=\"text\"></label></p>\n" #append
+    "  <p><label>Message: <textarea name=\"message\"></textarea></label></p>\n" #append
+    "  <p><button type=\"submit\">Sign</button></p>\n" #append
+    "</form>\n" #append
+  ] ;
+
+  \ Render one row hash as a list item. Both name and message are run
+  \ through `escape` so HTML-significant characters in user input cannot
+  \ break out of the rendered context.
+  (entry-html): ( row -- string ) [
+    dup "name" @get escape
+    "<li><strong>" swap #append "</strong>: " #append
+    swap "message" @get escape #append
+    "</li>\n" #append
+  ] ;
+
+  \ Render the entry list. Newest entries appear first; an empty table
+  \ produces a placeholder paragraph instead of an empty <ul>.
+  (entries-fragment): ( db -- string ) [
+    "SELECT name, message FROM entries ORDER BY created_at DESC, rowid DESC"
+    { } query-hash
+    [ (entry-html) ] #map #collect "" #join
+    dup #empty?
+    [ drop "<p>No entries yet.</p>\n" ]
+    [ "<ul>\n" swap #append "</ul>\n" #append ]
+    if
+  ] ;
+
+  \ Concatenate the page heading, the entry list, and the submission
+  \ form into a complete HTML document.
+  (render-page): ( db -- html ) [
+    (entries-fragment)
+    "<!doctype html>\n<html><head><title>Guestbook</title></head><body>\n<h1>Guestbook</h1>\n"
+    swap #append
+    (form-fragment) #append
+    "</body></html>\n" #append
+  ] ;
+
+  \ Send the rendered page as a 200 text/html response. Mirrors the
+  \ tail of examples/cgi-bin/page-counter.1z's handler.
+  (send-html): ( stream html -- ) [
+    [ 200 dup reason-for "text/html; charset=utf-8" ] dip
+    <response>
+    send-response
+  ] ;
+
+  \ Render the page for a GET request.
+  (handle-get): ( stream request db -- ) [
+    nip
+    (render-page)
+    (send-html)
+  ] ;
+
+  \ Decode the POST body, persist the entry when name and message are
+  \ both non-empty, then render the updated page.
+  (handle-post): ( stream request db -- ) [
+    \ ( stream request db ) -- pull a stream-and-length copy off for read-form.
+    2 pick-n
+    2 pick-n headers>> "content-length" "0" @get-or parse-integer
+    read-form
+    \ ( stream request db form )
+    dup "name" (form-value)
+    over "message" (form-value)
+    \ ( stream request db form name message )
+    2dup #empty? swap #empty? or
+    [ 2drop ]
+    [ 3 pick-n -rot> (insert-entry) ]
+    if
+    drop
+    \ ( stream request db )
+    (handle-get)
+  ] ;
+}
+
+\\ Handle a single CGI request: open the database, set up the schema,
+\\ then dispatch on the HTTP method. POST decodes the form body and
+\\ inserts the entry; everything else renders the current entry list.
+guestbook-handler: ( stream request -- ) [
+  environ "GUESTBOOK_DB" "guestbook.db" @get-or [
+    \ ( stream request db )
+    dup (init-schema)
+    over method>> "POST" =
+    [ (handle-post) ] [ (handle-get) ] if
+  ] using-db
+] ;
+
+[ guestbook-handler ] cgi-run

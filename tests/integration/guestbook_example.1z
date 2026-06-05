@@ -1,0 +1,39 @@
+\ Integration test for the guestbook cgi-bin example. Pre-seeds one entry,
+\ loads the example (which runs cgi-run once against the POST body in the
+\ .stdin sidecar), then asserts the new entry landed in the database. The
+\ rendered HTML response is captured into the golden file alongside the
+\ pre-seeded entry and the POST-inserted entry; the latter exercises the
+\ html-escape integration via the `<script>` substring in the message.
+
+use "testing" ;
+use "sqlite" ;
+use "os/fs" ;
+
+GUESTBOOK-PATH: const [ "tests/integration/_tmp_guestbook.db" ] ;
+
+"guestbook: pre-seed database" test-section
+
+GUESTBOOK-PATH file-exists? [ GUESTBOOK-PATH delete-file ] when
+GUESTBOOK-PATH [
+  dup "CREATE TABLE IF NOT EXISTS entries (name TEXT, message TEXT, created_at INTEGER)" { } execute
+  "INSERT INTO entries (name, message, created_at) VALUES (?1, ?2, ?3)" { "Alice" "First post" 0 } execute
+] using-db
+
+"guestbook: load example -- cgi-run dispatches handler" test-section
+
+"../../examples/cgi-bin/guestbook.1z" load drop
+
+"guestbook: row inserted by POST handler" test-section
+
+GUESTBOOK-PATH [
+  dup "SELECT COUNT(*) AS c FROM entries" { } query-hash
+  #collect 0 #nth "c" @get
+  2 "two rows after POST" assert=
+
+  "SELECT name, message FROM entries WHERE name = ?1" { "Bob" } query-hash
+  #collect 0 #nth
+  dup "name" @get "Bob" "name stored verbatim" assert=
+  "message" @get "Hello <script>" "message stored unescaped" assert=
+] using-db
+
+GUESTBOOK-PATH delete-file
