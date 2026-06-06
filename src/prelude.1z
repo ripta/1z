@@ -164,8 +164,11 @@ method{: parse-time [
   define: [ define-method ] @set!
 ] ;
 
-\\ Protocol definition syntax. Defines a word that validates a type implements all listed methods.
+\\ Protocol definition syntax. Defines a parse-time const that pushes the protocol's descriptor.
+\\ Runtime validation is performed by `assert-satisfies` (throws on mismatch) and `satisfies?`
+\\ (predicate).
 \   protocol-name: protocol{ method1: method2: } ;
+\   my-type: protocol-name assert-satisfies
 protocol{: parse-time [
   M{ }
   methods: "}" parse-values-until @set!

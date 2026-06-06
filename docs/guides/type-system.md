@@ -399,8 +399,12 @@ Output:
 
 ## Interface Contracts with `protocol{`
 
-A protocol pins down a set of methods that a type must implement. Validation
-fires at parse time -- if a method is missing, you get an error immediately.
+A protocol pins down a set of methods that a type must implement. A
+`protocol{` definition introduces a parse-time const that pushes the
+protocol's descriptor onto the stack; `assert-satisfies` consumes a type
+name and a constraint and throws `protocol-error` if the type does not
+implement every required method. The check fires at parse time when the
+`assert-satisfies` line is read.
 
 Define a protocol and validate a type against it:
 
@@ -415,7 +419,7 @@ area: generic ( shape -- n ) [ drop 0 ] ;
 perimeter: method{ circle } [ unmake-circle 2 * 314 * 100 / ] ;
 area: method{ circle } [ unmake-circle dup * 314 * 100 / ] ;
 
-circle: shapeful
+circle: shapeful assert-satisfies
 
 10 >circle perimeter .
 10 >circle area .
@@ -428,9 +432,10 @@ Output:
 314
 ```
 
-The line `circle: shapeful` checks that `circle` has implementations for
-both `perimeter` and `area`. If either were missing, 1z would throw a
-`protocol-error` at parse time.
+The line `circle: shapeful assert-satisfies` checks that `circle` has
+implementations for both `perimeter` and `area`. If either were missing,
+`assert-satisfies` would throw a `protocol-error` at parse time. The
+predicate form `satisfies?` returns a boolean instead of throwing.
 
 ### Typed Protocols
 
@@ -446,7 +451,7 @@ add: method{ my-num my-num } [
   unmake-my-num swap unmake-my-num + >my-num
 ] ;
 
-my-num: self-addable
+my-num: self-addable assert-satisfies
 ```
 
 This checks that `add` is registered for `my-num` in both argument

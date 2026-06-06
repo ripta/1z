@@ -557,7 +557,7 @@ of required method signatures:
 
 ```
 shapeful: protocol{ perimeter area } ;
-circle: shapeful    \ throws if methods missing
+circle: shapeful assert-satisfies    \ throws if methods missing
 ```
 
 ---
