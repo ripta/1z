@@ -172,6 +172,16 @@ pub fn resolveLoadPath(ctx: *Context, filename: []const u8, alloc: std.mem.Alloc
         }
     }
 
+    // Embedded stdlib fallback. Triggers only after every filesystem source has failed, and only
+    // for search-mode names. Virtual paths are diagnostic-only. A path-mode lookup of the value
+    // `"<stdlib>/strings.1z" load` keeps failing because path mode goes through realpath, which
+    // doesn't know about the bundle.
+    if (embedded_stdlib.findEntry(filename) != null) {
+        return std.fmt.allocPrint(alloc, "{s}{s}{s}", .{
+            embedded_stdlib.virtual_prefix, filename, embedded_stdlib.virtual_suffix,
+        }) catch return null;
+    }
+
     return null;
 }
 
@@ -1283,4 +1293,72 @@ test "classifyResolved returns null for virtual path with no entry" {
     if (!build_options.embed_stdlib) return error.SkipZigTest;
 
     try std.testing.expectEqual(@as(?ResolvedModule, null), classifyResolved("<stdlib>/no-such-module.1z"));
+}
+
+test "resolveLoadPath falls back to embedded for top-level name" {
+    if (!build_options.embed_stdlib) return error.SkipZigTest;
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    const alloc = ctx.quotationAllocator();
+    const resolved = resolveLoadPath(&ctx, "strings", alloc) orelse return error.UnexpectedNull;
+    try std.testing.expectEqualStrings("<stdlib>/strings.1z", resolved);
+}
+
+test "resolveLoadPath falls back to embedded for nested name" {
+    if (!build_options.embed_stdlib) return error.SkipZigTest;
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    const alloc = ctx.quotationAllocator();
+    const resolved = resolveLoadPath(&ctx, "math/grid", alloc) orelse return error.UnexpectedNull;
+    try std.testing.expectEqualStrings("<stdlib>/math/grid.1z", resolved);
+}
+
+test "resolveLoadPath rejects virtual path under path mode" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    const alloc = ctx.quotationAllocator();
+    try std.testing.expectEqual(@as(?[]const u8, null), resolveLoadPath(&ctx, "<stdlib>/strings.1z", alloc));
+}
+
+test "resolveLoadPath returns null for search-mode miss with embed enabled" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    const alloc = ctx.quotationAllocator();
+    try std.testing.expectEqual(@as(?[]const u8, null), resolveLoadPath(&ctx, "no-such-module-xyz", alloc));
+}
+
+test "load-file caches embedded module under virtual path" {
+    if (!build_options.embed_stdlib) return error.SkipZigTest;
+
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
+    try ctx.stack.push(.{ .string = "sequences" });
+    try nativeLoadFile(&ctx);
+
+    const top = try ctx.stack.pop();
+    defer container_backing.releaseValue(top);
+    try std.testing.expect(top == .module);
+    try std.testing.expectEqualStrings("sequences", top.module.name);
+
+    const entry = ctx.module_cache_value.map.get("<stdlib>/sequences.1z") orelse return error.MissingCacheEntry;
+    try std.testing.expect(entry == .module);
+    try std.testing.expectEqualStrings("sequences", entry.module.name);
 }
