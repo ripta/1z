@@ -595,6 +595,7 @@ pragma-get? ( name -- option )
 print ( str -- )
 print-line ( str -- )
 private{
+protocol-descriptor ( -- type )
 protocol{
 provenance ( -- type )
 provenance>> ( instance: method-info -- provenance: any )

@@ -166,6 +166,7 @@ pub fn classifyValue(val: Value) Classification {
         .iterator,
         .sandbox_spec,
         .type_descriptor,
+        .protocol_descriptor,
         => Classification.blobOf(.unexpected_variant),
     };
 }

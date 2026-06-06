@@ -1,0 +1,24 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: comparable validates my-box
+Stack: [ ]
+PASS: stringable validates my-box
+Stack: [ ]
+PASS: inspectable validates my-box
+Stack: [ ]
+PASS: doubleable validates twin
+Stack: [ ]
+PASS: re-defined doubleable still validates twin
+Stack: [ ]

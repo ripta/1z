@@ -271,6 +271,7 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
         .marker,
         .type_val,
         .type_descriptor,
+        .protocol_descriptor,
         .resource,
         .task,
         .iterator,
@@ -974,6 +975,7 @@ pub const Value = union(enum) {
     doc_string: []const u8,
     type_val: *TypeValue,
     type_descriptor: *const TypeDescriptor,
+    protocol_descriptor: *const ProtocolDescriptor,
     sandbox_spec: *SandboxSpec,
     unit: void,
 
@@ -1159,6 +1161,7 @@ pub const Value = union(enum) {
             .doc_string => |s| try writer.print("<doc-string \"{s}\">", .{s}),
             .type_val => |tv| try writer.print("<type:{s}>", .{tv.name}),
             .type_descriptor => |desc| try writer.print("<type-descriptor:{s}>", .{typeKindSymbol(desc.kind)}),
+            .protocol_descriptor => |desc| try writer.print("<protocol-descriptor:{s}>", .{desc.name}),
             .sandbox_spec => |spec| try spec.writeGranted(writer),
             .unit => try writer.writeAll("unit"),
         }
@@ -1295,6 +1298,7 @@ pub const Value = union(enum) {
                 return b.descriptor == null and a == b;
             },
             .type_descriptor => |a| a == other.type_descriptor,
+            .protocol_descriptor => |a| a == other.protocol_descriptor,
             .sandbox_spec => |a| a == other.sandbox_spec,
             .unit => true,
         };
@@ -1486,6 +1490,10 @@ pub const Value = union(enum) {
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
             .type_descriptor => |desc| {
+                const ptr_val = @intFromPtr(desc);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            .protocol_descriptor => |desc| {
                 const ptr_val = @intFromPtr(desc);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },

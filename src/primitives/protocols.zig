@@ -1,10 +1,15 @@
 const std = @import("std");
+
 const Context = @import("../context.zig").Context;
+
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const MutableMap = value_mod.MutableMap;
 const Instruction = value_mod.Instruction;
-const StackEffect = @import("../stack_effect.zig").StackEffect;
+const ProtocolDescriptor = value_mod.ProtocolDescriptor;
+
+const stack_effect_mod = @import("../stack_effect.zig");
+const StackEffect = stack_effect_mod.StackEffect;
 
 const markers_mod = @import("markers.zig");
 const dispatch_mod = @import("../dispatch.zig");
@@ -21,16 +26,18 @@ pub const primitives = [_]Primitive{
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    .{ .name = "protocol-check", .func = protocolCheckHelper, .stack_effect = "type-name methods protocol-name --" },
+    .{ .name = "protocol-check", .func = protocolCheckHelper, .stack_effect = "type-name descriptor --" },
 };
 
 /// define-protocol ( name: descriptor markers -- )
 ///
-/// Called by `;` when it recognizes a protocol descriptor. Creates a word that,
-/// when called with a type symbol on the stack, checks the dispatch table for
-/// each required method. Throws protocol-error if any method is missing.
+/// Called by `;` when it recognizes a protocol descriptor.
 ///
-/// The descriptor is a mutable-map with:
+/// Allocates a `ProtocolDescriptor` that owns the protocol's name and methods list, then emits a
+/// compound word whose body pushes the descriptor pointer and calls `native.protocol-check`.
+///
+/// The validator queries the descriptor at runtime. The method list and protocol name no longer
+/// live in the word body. The parse-time descriptor is a mutable-map with:
 ///
 /// - `methods:` flat array of symbols interleaved with optional stack-effects
 fn nativeDefineProtocol(ctx: *Context) anyerror!void {
@@ -78,20 +85,22 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
         },
     };
 
-    const instrs = try alloc.alloc(Instruction, 3);
-    instrs[0] = .{ .op = .{ .push_literal = .{ .array = methods_array } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .push_literal = .{ .string = protocol_name } }, .line = 0 };
-    instrs[2] = .{ .op = .{ .call_word = "native.protocol-check" }, .line = 0 };
+    const descriptor = try ctx.createProtocolDescriptor(protocol_name, methods_array);
+
+    const instrs = try alloc.alloc(Instruction, 2);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .protocol_descriptor = descriptor } }, .line = 0 };
+    instrs[1] = .{ .op = .{ .call_word = "native.protocol-check" }, .line = 0 };
 
     try ctx.defineWord(protocol_name, .{
-        .name = protocol_name,
+        .name = descriptor.name,
         .action = .{ .compound = instrs },
     });
 }
 
-/// Trampoline helper ( type-name methods protocol-name -- )
+/// Trampoline helper ( type-name descriptor -- )
 ///
-/// The methods array is a flat sequence of symbols interleaved with optional stack-effects.
+/// Reads `methods` and `name` off the descriptor. The methods slice is a flat sequence of symbols
+/// interleaved with optional stack-effects.
 ///
 /// For each symbol:
 ///
@@ -100,19 +109,11 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
 /// - The `any` sentinel triggers enumeration of dispatch entries.
 /// - Otherwise, bare `method` (backward compat) checking unary or same-type binary dispatch.
 fn protocolCheckHelper(ctx: *Context) anyerror!void {
-    const pname_val = try ctx.stack.pop();
-    const protocol_name = switch (pname_val) {
-        .string => |s| s,
+    const desc_val = try ctx.stack.pop();
+    const descriptor = switch (desc_val) {
+        .protocol_descriptor => |d| d,
         else => {
-            helpers.setTypeMismatchError(ctx, "string", pname_val);
-            return error.TypeMismatch;
-        },
-    };
-    const methods_val = try ctx.stack.pop();
-    const methods_array = switch (methods_val) {
-        .array => |arr| arr,
-        else => {
-            helpers.setTypeMismatchError(ctx, "array", methods_val);
+            helpers.setTypeMismatchError(ctx, "protocol-descriptor", desc_val);
             return error.TypeMismatch;
         },
     };
@@ -127,13 +128,12 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         try ctx.protocol_obligations.append(ctx.allocator, .{
             .type_name = type_name,
-            .methods_array = methods_array,
-            .protocol_name = protocol_name,
+            .descriptor = descriptor,
         });
         return;
     }
 
-    try validateProtocolObligation(ctx, type_name, methods_array, protocol_name);
+    try validateProtocolObligation(ctx, type_name, descriptor);
 }
 
 /// Validate a single protocol obligation: check that all required methods
@@ -143,9 +143,10 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
 pub fn validateProtocolObligation(
     ctx: *Context,
     type_name: []const u8,
-    methods_array: []const Value,
-    protocol_name: []const u8,
+    descriptor: *const ProtocolDescriptor,
 ) !void {
+    const methods_array = descriptor.methods;
+    const protocol_name = descriptor.name;
     var i: usize = 0;
     while (i < methods_array.len) {
         const method_val = methods_array[i];
@@ -188,8 +189,7 @@ pub fn validateObligationsSameType(ctx: *Context) !void {
         try validateObligationSameTypeOnly(
             ctx,
             obligation.type_name,
-            obligation.methods_array,
-            obligation.protocol_name,
+            obligation.descriptor,
         );
     }
 
@@ -201,9 +201,10 @@ pub fn validateObligationsSameType(ctx: *Context) !void {
 fn validateObligationSameTypeOnly(
     ctx: *Context,
     type_name: []const u8,
-    methods_array: []const Value,
-    protocol_name: []const u8,
+    descriptor: *const ProtocolDescriptor,
 ) !void {
+    const methods_array = descriptor.methods;
+    const protocol_name = descriptor.name;
     var i: usize = 0;
     while (i < methods_array.len) {
         const method_val = methods_array[i];

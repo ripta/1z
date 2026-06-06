@@ -250,6 +250,7 @@ pub fn valueTypeName(val: Value) []const u8 {
         .doc_string => "doc-string",
         .type_val => "type",
         .type_descriptor => "type-descriptor",
+        .protocol_descriptor => "protocol-descriptor",
         .sandbox_spec => "sandbox-spec",
         .unit => "unit",
     };
@@ -318,6 +319,11 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
             allocator,
             "<type-descriptor:{s}>",
             .{value_mod.typeKindSymbol(desc.kind)},
+        ),
+        .protocol_descriptor => |desc| std.fmt.allocPrint(
+            allocator,
+            "<protocol-descriptor:{s}>",
+            .{desc.name},
         ),
         .sandbox_spec => allocator.dupe(u8, "<sandbox-spec>"),
         .unit => allocator.dupe(u8, "unit"),

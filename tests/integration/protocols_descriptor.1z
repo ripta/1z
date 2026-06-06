@@ -1,0 +1,57 @@
+use "testing" ;
+
+\ -- Prelude protocols still validate identical types under the
+\    descriptor-backed body --
+
+my-box: virtual{ fixnum } ;
+
+cmp:     method{ my-box my-box } [ unmake-my-box swap unmake-my-box swap - ] ;
+>string: method{ my-box } [ unmake-my-box >string ] ;
+inspect: method{ my-box } [ unmake-my-box >string ] ;
+
+test-prelude-comparable: ( -- ) [
+  my-box: comparable
+  t "comparable validates my-box" assert-true
+] ;
+
+test-prelude-stringable: ( -- ) [
+  my-box: stringable
+  t "stringable validates my-box" assert-true
+] ;
+
+test-prelude-inspectable: ( -- ) [
+  my-box: inspectable
+  t "inspectable validates my-box" assert-true
+] ;
+
+\ -- Re-defining a protocol allocates a fresh descriptor; the new word
+\    body picks it up and validates against the same dispatch table. --
+
+doubleable: protocol{ doubled: } ;
+
+twin: virtual{ fixnum } ;
+
+doubled: generic ( v -- v ) [ ] ;
+doubled: method{ twin } [ unmake-twin 2 * >twin ] ;
+
+test-protocol-validates: ( -- ) [
+  twin: doubleable
+  t "doubleable validates twin" assert-true
+] ;
+
+\ Re-define the protocol; the new word should still check against the
+\ method registered for twin.
+doubleable: protocol{ doubled: } ;
+
+test-redefined-protocol-still-validates: ( -- ) [
+  twin: doubleable
+  t "re-defined doubleable still validates twin" assert-true
+] ;
+
+\ -- Run --
+
+test-prelude-comparable
+test-prelude-stringable
+test-prelude-inspectable
+test-protocol-validates
+test-redefined-protocol-still-validates

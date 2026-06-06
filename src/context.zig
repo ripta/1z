@@ -205,11 +205,14 @@ pub const AnonymousUnionKeyContext = struct {
 };
 
 /// A deferred protocol obligation recorded during module loading.
+///
 /// Validated after all definitions in the module have been processed.
+///
+/// The descriptor pointer is the durable handle to the protocol's methods and name; resolving the
+/// type's `TypeValue` happens at validation time.
 pub const ProtocolObligation = struct {
     type_name: []const u8,
-    methods_array: []const Value,
-    protocol_name: []const u8,
+    descriptor: *const value_mod.ProtocolDescriptor,
 };
 
 /// ErrorDetail captures information about an error for debugging purposes.

@@ -43,6 +43,7 @@ pub fn dispatchTypeName(val: Value) []const u8 {
         .doc_string => "doc-string",
         .type_val => "type",
         .type_descriptor => "type-descriptor",
+        .protocol_descriptor => "protocol-descriptor",
         .sandbox_spec => "sandbox-spec",
         .unit => "unit",
     };
@@ -106,6 +107,7 @@ pub fn builtinTypeName(comptime tag: std.meta.Tag(Value)) []const u8 {
         .doc_string => "doc-string",
         .type_val => "type",
         .type_descriptor => "type-descriptor",
+        .protocol_descriptor => "protocol-descriptor",
         .sandbox_spec => "sandbox-spec",
         .unit => "unit",
     };

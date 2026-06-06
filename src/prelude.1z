@@ -56,6 +56,7 @@ iterator: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f defin
 doc-string: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 type: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 type-descriptor: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
+protocol-descriptor: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 unit: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 sandbox-spec: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 

@@ -203,6 +203,10 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
             "<type-descriptor:{s}>",
             .{value_mod.typeKindSymbol(desc.kind)},
         ),
+        .protocol_descriptor => |desc| try writer.print(
+            "<protocol-descriptor:{s}>",
+            .{desc.name},
+        ),
         .sandbox_spec => try writer.writeAll("<sandbox-spec>"),
         .unit => try writer.writeAll("unit"),
     }

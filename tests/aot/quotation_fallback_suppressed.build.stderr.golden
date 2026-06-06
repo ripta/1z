@@ -3,4 +3,4 @@ AOT interpreter fallbacks: 1 total (quotation=1)
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: not linked
-runtime-image: words=0 stack-effects=1 typevalue-slots=61 blob-present=false
+runtime-image: words=0 stack-effects=1 typevalue-slots=62 blob-present=false
