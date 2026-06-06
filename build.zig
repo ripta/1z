@@ -1766,19 +1766,85 @@ fn createCommonModule(
 
 /// Emit a Zig source file containing the embedded stdlib lookup table.
 /// The table is always present so runtime imports stay unconditional;
-/// it is empty when -Dembed-stdlib is false.
+/// it is empty when -Dembed-stdlib is false. When -Dembed-stdlib is true,
+/// walk lib/**/*.1z and emit one @embedFile entry per source file, keyed
+/// by hierarchical module names (lib/ prefix and .1z suffix stripped,
+/// path separators normalized to '/').
 fn generateEmbeddedStdlib(b: *std.Build, embed: bool) std.Build.LazyPath {
-    _ = embed;
     const wf = b.addWriteFiles();
-    return wf.add("embedded_stdlib.zig",
+
+    var source: std.ArrayListUnmanaged(u8) = .{};
+    source.appendSlice(b.allocator,
         \\pub const Entry = struct {
         \\    name: []const u8,
         \\    source: []const u8,
         \\};
         \\
-        \\pub const entries: []const Entry = &.{};
+        \\pub const entries: []const Entry = &.{
         \\
-    );
+    ) catch @panic("OOM");
+
+    if (embed) appendEmbeddedStdlibEntries(b, wf, &source);
+
+    source.appendSlice(b.allocator,
+        \\};
+        \\
+    ) catch @panic("OOM");
+
+    return wf.add("embedded_stdlib.zig", source.items);
+}
+
+const EmbedStdlibEntry = struct {
+    module_name: []const u8,
+    rel_path: []const u8,
+
+    fn lessThan(_: void, a: EmbedStdlibEntry, c: EmbedStdlibEntry) bool {
+        return std.mem.lessThan(u8, a.module_name, c.module_name);
+    }
+};
+
+fn appendEmbeddedStdlibEntries(
+    b: *std.Build,
+    wf: *std.Build.Step.WriteFile,
+    source: *std.ArrayListUnmanaged(u8),
+) void {
+    var lib_dir = b.build_root.handle.openDir("lib", .{ .iterate = true }) catch |err| {
+        std.debug.print("Error: -Dembed-stdlib=true requires lib/ to be readable: {}\n", .{err});
+        @panic("lib/ open failed");
+    };
+    defer lib_dir.close();
+
+    var walker = lib_dir.walk(b.allocator) catch |err| {
+        std.debug.print("Error: walking lib/ failed: {}\n", .{err});
+        @panic("lib/ walk failed");
+    };
+    defer walker.deinit();
+
+    var entries: std.ArrayListUnmanaged(EmbedStdlibEntry) = .{};
+
+    while (walker.next() catch null) |entry| {
+        if (entry.kind != .file) continue;
+        if (!std.mem.endsWith(u8, entry.path, ".1z")) continue;
+
+        const rel_path = b.dupe(entry.path);
+        for (rel_path) |*c| {
+            if (c.* == '\\') c.* = '/';
+        }
+        const module_name = rel_path[0 .. rel_path.len - ".1z".len];
+        entries.append(b.allocator, .{
+            .module_name = module_name,
+            .rel_path = rel_path,
+        }) catch @panic("OOM");
+    }
+
+    std.mem.sort(EmbedStdlibEntry, entries.items, {}, EmbedStdlibEntry.lessThan);
+
+    for (entries.items) |e| {
+        _ = wf.addCopyFile(b.path(b.fmt("lib/{s}", .{e.rel_path})), e.rel_path);
+        source.print(b.allocator, "    .{{ .name = \"{s}\", .source = @embedFile(\"{s}\") }},\n", .{
+            e.module_name, e.rel_path,
+        }) catch @panic("OOM");
+    }
 }
 
 fn addIrSources(b: *std.Build, module: *std.Build.Module) void {
