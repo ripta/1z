@@ -55,10 +55,10 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
         try buildStackEffectValue(alloc, nested)
     else
         .{ .boolean = false };
-    fields[3] = if (param.type_annotation) |tv|
-        Value{ .type_val = @constCast(tv) }
-    else
-        .{ .boolean = false };
+    fields[3] = if (param.type_annotation) |ann| switch (ann) {
+        .type => |tv| Value{ .type_val = @constCast(tv) },
+        .protocol => unreachable,
+    } else .{ .boolean = false };
     return .{ .array = fields };
 }
 

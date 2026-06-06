@@ -905,9 +905,10 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
         } else if (pending_param_name) |name| {
             if (pending_is_annotated) {
                 const type_val = try parseTypeAnnotationToken(allocator, tokenizer, ctx, token);
+                const ann: ?stack_effect_mod.TypeAnnotation = if (type_val) |tv| .{ .type = tv } else null;
                 current_list.append(allocator, .{
                     .name = name,
-                    .type_annotation = type_val,
+                    .type_annotation = ann,
                     .is_row_variable = stack_effect_mod.isRowVariable(name),
                 }) catch return ParseError.OutOfMemory;
                 pending_param_name = null;
@@ -1552,10 +1553,12 @@ test "parse stack effect type union with context" {
     try std.testing.expectEqual(@as(usize, 1), effect.outputs.len);
     try std.testing.expect(effect.inputs[0].type_annotation != null);
     try std.testing.expect(effect.outputs[0].type_annotation != null);
-    try std.testing.expect(effect.inputs[0].type_annotation.? == effect.outputs[0].type_annotation.?);
-    try std.testing.expect(effect.inputs[0].type_annotation.?.member_types != null);
-    try std.testing.expectEqual(@as(usize, 2), effect.inputs[0].type_annotation.?.member_types.?.len);
-    try std.testing.expectEqualStrings("fixnum|string", effect.inputs[0].type_annotation.?.name);
+    const in_tv = effect.inputs[0].type_annotation.?.type;
+    const out_tv = effect.outputs[0].type_annotation.?.type;
+    try std.testing.expect(in_tv == out_tv);
+    try std.testing.expect(in_tv.member_types != null);
+    try std.testing.expectEqual(@as(usize, 2), in_tv.member_types.?.len);
+    try std.testing.expectEqualStrings("fixnum|string", in_tv.name);
 }
 
 test "named union definition parses anonymous union before semicolon" {

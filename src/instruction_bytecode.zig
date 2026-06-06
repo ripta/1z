@@ -64,10 +64,10 @@
 //! ## stack_effect fidelity
 //!
 //! The `stack_effect` encoding preserves param `name` and `is_row_variable`
-//! flags. It does not encode `type_annotation` (which holds a TypeValue
-//! pointer) or `quotation_effect` (which is recursive). A future revision
-//! can extend the wire format with a TypeValue slot resolver and recursive
-//! effects without renumbering the existing tags.
+//! flags. It does not encode `type_annotation` (which holds a TypeValue or
+//! ProtocolDescriptor pointer) or `quotation_effect` (which is recursive). A
+//! future revision can extend the wire format with a slot resolver and
+//! recursive effects without renumbering the existing tags.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;

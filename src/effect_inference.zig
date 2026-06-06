@@ -380,7 +380,10 @@ pub const InferenceEngine = struct {
                 if (!self.type_cache.contains(name)) {
                     const out_types = try self.allocator.alloc(StackEntry, eff.outputs.len);
                     for (eff.outputs, 0..) |param, i| {
-                        out_types[i] = if (param.type_annotation) |tv| .{ .typed = .{ .tv = tv } } else .other;
+                        out_types[i] = if (param.type_annotation) |ann| switch (ann) {
+                            .type => |tv| .{ .typed = .{ .tv = tv } },
+                            .protocol => unreachable,
+                        } else .other;
                     }
                     try self.type_cache.put(self.allocator, name, out_types);
                 }
@@ -409,7 +412,10 @@ pub const InferenceEngine = struct {
                         if (!self.type_cache.contains(name)) {
                             const out_types = try self.allocator.alloc(StackEntry, eff.outputs.len);
                             for (eff.outputs, 0..) |param, i| {
-                                out_types[i] = if (param.type_annotation) |tv| .{ .typed = .{ .tv = tv } } else .other;
+                                out_types[i] = if (param.type_annotation) |ann| switch (ann) {
+                                    .type => |tv| .{ .typed = .{ .tv = tv } },
+                                    .protocol => unreachable,
+                                } else .other;
                             }
                             try self.type_cache.put(self.allocator, name, out_types);
                         }
@@ -1315,7 +1321,11 @@ pub const InferenceEngine = struct {
             if (param.is_row_variable) continue;
             defer concrete_index += 1;
 
-            const expected_tv = param.type_annotation orelse continue;
+            const ann = param.type_annotation orelse continue;
+            const expected_tv = switch (ann) {
+                .type => |tv| tv,
+                .protocol => unreachable,
+            };
             const stack_pos = stack_model.items.len - concrete_count + concrete_index;
             const entry = stack_model.items[stack_pos];
 
@@ -1444,8 +1454,11 @@ pub const InferenceEngine = struct {
         stack_model.shrinkRetainingCapacity(stack_model.items.len - remove_count);
 
         for (eff.outputs) |param| {
-            if (param.type_annotation) |tv| {
-                try stack_model.append(self.allocator, .{ .typed = .{ .tv = tv } });
+            if (param.type_annotation) |ann| {
+                switch (ann) {
+                    .type => |tv| try stack_model.append(self.allocator, .{ .typed = .{ .tv = tv } }),
+                    .protocol => unreachable,
+                }
             } else {
                 try stack_model.append(self.allocator, .other);
             }
@@ -2781,7 +2794,7 @@ test "typed literal produces typed stack entry" {
     try dict.put("consume-fixnum", .{
         .name = "consume-fixnum",
         .stack_effect = .{
-            .inputs = &.{.{ .name = "n", .type_annotation = &fixnum_tv }},
+            .inputs = &.{.{ .name = "n", .type_annotation = .{ .type = &fixnum_tv } }},
             .outputs = &.{},
         },
         .action = .{ .native = dummy },
@@ -2826,7 +2839,7 @@ test "type mismatch emits diagnostic" {
     try dict.put("consume-fixnum", .{
         .name = "consume-fixnum",
         .stack_effect = .{
-            .inputs = &.{.{ .name = "n", .type_annotation = &fixnum_tv }},
+            .inputs = &.{.{ .name = "n", .type_annotation = .{ .type = &fixnum_tv } }},
             .outputs = &.{},
         },
         .action = .{ .native = dummy },
@@ -2874,7 +2887,7 @@ test "declared union input accepts matching typed value" {
     try dict.put("consume-union", .{
         .name = "consume-union",
         .stack_effect = .{
-            .inputs = &.{.{ .name = "x", .type_annotation = &union_tv }},
+            .inputs = &.{.{ .name = "x", .type_annotation = .{ .type = &union_tv } }},
             .outputs = &.{},
         },
         .action = .{ .native = dummy },
@@ -2918,7 +2931,7 @@ test "declared any input accepts concrete typed value" {
     try dict.put("consume-any", .{
         .name = "consume-any",
         .stack_effect = .{
-            .inputs = &.{.{ .name = "x", .type_annotation = &any_tv }},
+            .inputs = &.{.{ .name = "x", .type_annotation = .{ .type = &any_tv } }},
             .outputs = &.{},
         },
         .action = .{ .native = dummy },
@@ -2970,7 +2983,7 @@ test "declared parent enum input accepts tagged variant value" {
     try dict.put("consume-color", .{
         .name = "consume-color",
         .stack_effect = .{
-            .inputs = &.{.{ .name = "c", .type_annotation = &color_tv }},
+            .inputs = &.{.{ .name = "c", .type_annotation = .{ .type = &color_tv } }},
             .outputs = &.{},
         },
         .action = .{ .native = dummy },
@@ -3023,7 +3036,7 @@ test "declared base input accepts parameterized tagged value" {
     try dict.put("consume-array", .{
         .name = "consume-array",
         .stack_effect = .{
-            .inputs = &.{.{ .name = "xs", .type_annotation = &array_tv }},
+            .inputs = &.{.{ .name = "xs", .type_annotation = .{ .type = &array_tv } }},
             .outputs = &.{},
         },
         .action = .{ .native = dummy },
@@ -3087,7 +3100,7 @@ test "unknown type skips check" {
     try dict.put("consume-fixnum", .{
         .name = "consume-fixnum",
         .stack_effect = .{
-            .inputs = &.{.{ .name = "n", .type_annotation = &fixnum_tv }},
+            .inputs = &.{.{ .name = "n", .type_annotation = .{ .type = &fixnum_tv } }},
             .outputs = &.{},
         },
         .action = .{ .native = dummy },
@@ -3132,7 +3145,7 @@ test "type check mode off skips all checks" {
     try dict.put("consume-fixnum", .{
         .name = "consume-fixnum",
         .stack_effect = .{
-            .inputs = &.{.{ .name = "n", .type_annotation = &fixnum_tv }},
+            .inputs = &.{.{ .name = "n", .type_annotation = .{ .type = &fixnum_tv } }},
             .outputs = &.{},
         },
         .action = .{ .native = dummy },

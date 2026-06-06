@@ -1,5 +1,38 @@
 const std = @import("std");
-const TypeValue = @import("value.zig").TypeValue;
+const value_mod = @import("value.zig");
+const TypeValue = value_mod.TypeValue;
+const ProtocolDescriptor = value_mod.ProtocolDescriptor;
+
+/// A type annotation on a stack-effect parameter. Carries either a concrete
+/// type (the existing `( x: fixnum -- ... )` case) or a protocol bound
+/// (`( x: comparable -- ... )`). The two arms stay distinct because
+/// `TypeValue` describes value inhabitants while `ProtocolDescriptor`
+/// describes a constraint on types -- collapsing them would force every
+/// consumer to learn a runtime flag-check.
+pub const TypeAnnotation = union(enum) {
+    type: *const TypeValue,
+    protocol: *const ProtocolDescriptor,
+
+    pub fn name(self: TypeAnnotation) []const u8 {
+        return switch (self) {
+            .type => |tv| tv.name,
+            .protocol => |pd| pd.name,
+        };
+    }
+
+    pub fn eql(self: TypeAnnotation, other: TypeAnnotation) bool {
+        return switch (self) {
+            .type => |a| switch (other) {
+                .type => |b| a == b,
+                .protocol => false,
+            },
+            .protocol => |a| switch (other) {
+                .type => false,
+                .protocol => |b| a == b,
+            },
+        };
+    }
+};
 
 /// Represents a single parameter in a stack effect. Parameters can optionally
 /// have quotation annotations.
@@ -9,9 +42,9 @@ pub const StackEffectParam = struct {
     quotation_effect: ?*const StackEffect = null,
     /// True if name starts with ".." (a row variable like ..a, ..b)
     is_row_variable: bool = false,
-    /// If non-null, this parameter has a type annotation resolved to a TypeValue.
-    /// Mutually exclusive with quotation_effect.
-    type_annotation: ?*const TypeValue = null,
+    /// If non-null, this parameter has a type annotation -- either a concrete
+    /// type or a protocol bound. Mutually exclusive with quotation_effect.
+    type_annotation: ?TypeAnnotation = null,
 
     /// Write parameter to writer.
     pub fn write(self: StackEffectParam, writer: anytype) anyerror!void {
@@ -19,9 +52,9 @@ pub const StackEffectParam = struct {
         if (self.quotation_effect) |effect| {
             try writer.writeAll(": ");
             try effect.write(writer);
-        } else if (self.type_annotation) |tv| {
+        } else if (self.type_annotation) |ann| {
             try writer.writeAll(": ");
-            try writer.writeAll(tv.name);
+            try writer.writeAll(ann.name());
         }
     }
 
@@ -29,7 +62,12 @@ pub const StackEffectParam = struct {
         if (!std.mem.eql(u8, self.name, other.name)) return false;
         if (self.is_row_variable != other.is_row_variable) return false;
 
-        if (self.type_annotation != other.type_annotation) return false;
+        if (self.type_annotation) |a| {
+            const b = other.type_annotation orelse return false;
+            if (!a.eql(b)) return false;
+        } else if (other.type_annotation != null) {
+            return false;
+        }
 
         if (self.quotation_effect == null and other.quotation_effect == null) return true;
         if (self.quotation_effect == null or other.quotation_effect == null) return false;
@@ -481,7 +519,7 @@ test "passThroughParams for dip (one pass-through)" {
 
 test "type_annotation write format" {
     var tv = TypeValue{ .name = "fixnum", .descriptor = null };
-    const param = StackEffectParam{ .name = "n", .type_annotation = &tv };
+    const param = StackEffectParam{ .name = "n", .type_annotation = .{ .type = &tv } };
 
     var buf: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
@@ -493,10 +531,10 @@ test "type_annotation in full stack effect" {
     var tv = TypeValue{ .name = "fixnum", .descriptor = null };
     const effect = StackEffect{
         .inputs = &[_]StackEffectParam{
-            .{ .name = "n", .type_annotation = &tv },
+            .{ .name = "n", .type_annotation = .{ .type = &tv } },
         },
         .outputs = &[_]StackEffectParam{
-            .{ .name = "m", .type_annotation = &tv },
+            .{ .name = "m", .type_annotation = .{ .type = &tv } },
         },
     };
 
@@ -509,9 +547,9 @@ test "type_annotation in full stack effect" {
 test "type_annotation equality" {
     var tv_a = TypeValue{ .name = "fixnum", .descriptor = null };
     var tv_b = TypeValue{ .name = "string", .descriptor = null };
-    const a = StackEffectParam{ .name = "n", .type_annotation = &tv_a };
-    const b = StackEffectParam{ .name = "n", .type_annotation = &tv_a };
-    const c = StackEffectParam{ .name = "n", .type_annotation = &tv_b };
+    const a = StackEffectParam{ .name = "n", .type_annotation = .{ .type = &tv_a } };
+    const b = StackEffectParam{ .name = "n", .type_annotation = .{ .type = &tv_a } };
+    const c = StackEffectParam{ .name = "n", .type_annotation = .{ .type = &tv_b } };
     const d = StackEffectParam{ .name = "n" };
 
     try std.testing.expect(a.eql(b));
@@ -522,10 +560,36 @@ test "type_annotation equality" {
 
 test "type_annotation parameterized type" {
     var tv = TypeValue{ .name = "array(fixnum)", .descriptor = null };
-    const param = StackEffectParam{ .name = "arr", .type_annotation = &tv };
+    const param = StackEffectParam{ .name = "arr", .type_annotation = .{ .type = &tv } };
 
     var buf: [128]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     try param.write(fbs.writer());
     try std.testing.expectEqualStrings("arr: array(fixnum)", fbs.getWritten());
+}
+
+test "type_annotation protocol write format" {
+    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &.{}, .protocol_id = 0 };
+    const param = StackEffectParam{ .name = "n", .type_annotation = .{ .protocol = &pd } };
+
+    var buf: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try param.write(fbs.writer());
+    try std.testing.expectEqualStrings("n: comparable", fbs.getWritten());
+}
+
+test "type_annotation protocol equality" {
+    const pd_a = ProtocolDescriptor{ .name = "comparable", .methods = &.{}, .protocol_id = 0 };
+    const pd_b = ProtocolDescriptor{ .name = "stringable", .methods = &.{}, .protocol_id = 1 };
+    var tv = TypeValue{ .name = "fixnum", .descriptor = null };
+
+    const a = StackEffectParam{ .name = "n", .type_annotation = .{ .protocol = &pd_a } };
+    const b = StackEffectParam{ .name = "n", .type_annotation = .{ .protocol = &pd_a } };
+    const c = StackEffectParam{ .name = "n", .type_annotation = .{ .protocol = &pd_b } };
+    const d = StackEffectParam{ .name = "n", .type_annotation = .{ .type = &tv } };
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(!a.eql(c));
+    try std.testing.expect(!a.eql(d));
+    try std.testing.expect(!d.eql(a));
 }

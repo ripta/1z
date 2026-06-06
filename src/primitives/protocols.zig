@@ -353,7 +353,11 @@ fn validateObligationSameTypeOnly(
 fn isCrossTypeMethod(ctx: *Context, effect: StackEffect) bool {
     const n_inputs = @min(effect.inputs.len, 2);
     for (0..n_inputs) |pos| {
-        if (effect.inputs[pos].type_annotation) |tv| {
+        if (effect.inputs[pos].type_annotation) |ann| {
+            const tv = switch (ann) {
+                .type => |t| t,
+                .protocol => unreachable,
+            };
             if (tv == ctx.getAnyTypeSentinel()) return true;
             if (tv != ctx.getSelfTypeSentinel()) return true;
         }
@@ -386,7 +390,11 @@ fn validateTypedMethod(
     const n_inputs = @min(inputs.len, 2);
 
     for (0..n_inputs) |pos| {
-        if (inputs[pos].type_annotation) |tv| {
+        if (inputs[pos].type_annotation) |ann| {
+            const tv = switch (ann) {
+                .type => |t| t,
+                .protocol => unreachable,
+            };
             if (tv == ctx.getSelfTypeSentinel()) {
                 concrete_types[pos] = type_tv;
             } else if (tv == ctx.getAnyTypeSentinel()) {

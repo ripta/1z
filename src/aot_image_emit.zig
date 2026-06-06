@@ -826,8 +826,13 @@ fn registerParam(
     table: *StackEffectTable,
     param: StackEffectParam,
 ) Allocator.Error!void {
-    if (param.type_annotation) |tv| {
-        _ = try table.internType(tv);
+    if (param.type_annotation) |ann| {
+        switch (ann) {
+            .type => |tv| {
+                _ = try table.internType(tv);
+            },
+            .protocol => unreachable,
+        }
     }
     if (param.quotation_effect) |nested| {
         try registerStackEffect(table, nested);
@@ -2083,10 +2088,10 @@ fn emitEffectParamArray(
         const has_type: u8 = if (param.type_annotation != null) 1 else 0;
         const has_quot: u8 = if (param.quotation_effect != null) 1 else 0;
         const is_row: u8 = if (param.is_row_variable) 1 else 0;
-        const type_slot: u32 = if (param.type_annotation) |tv|
-            table.type_slot_index.get(tv) orelse 0
-        else
-            0;
+        const type_slot: u32 = if (param.type_annotation) |ann| switch (ann) {
+            .type => |tv| table.type_slot_index.get(tv) orelse 0,
+            .protocol => unreachable,
+        } else 0;
         const quot_idx: u32 = if (param.quotation_effect) |nested|
             table.lookupEffect(nested)
         else
@@ -3306,11 +3311,11 @@ test "emitImageC: stack-effect table dedupes type slots and emits sentinel index
     nested_effect.* = .{ .inputs = nested_inputs, .outputs = nested_outputs };
 
     const eff_a_inputs = try arena.dupe(StackEffectParam, &.{
-        .{ .name = "x", .type_annotation = tv_a },
-        .{ .name = "y", .type_annotation = tv_a }, // dedup target
+        .{ .name = "x", .type_annotation = .{ .type = tv_a } },
+        .{ .name = "y", .type_annotation = .{ .type = tv_a } }, // dedup target
     });
     const eff_a_outputs = try arena.dupe(StackEffectParam, &.{
-        .{ .name = "z", .type_annotation = tv_b },
+        .{ .name = "z", .type_annotation = .{ .type = tv_b } },
     });
 
     const eff_b_inputs = try arena.dupe(StackEffectParam, &.{
@@ -3552,7 +3557,7 @@ test "collectTypeValueData dedupes against stack-effect-discovered TypeValues" {
     tv.* = .{ .name = "color", .descriptor = desc };
 
     const eff_inputs = try arena.dupe(StackEffectParam, &.{
-        .{ .name = "x", .type_annotation = tv },
+        .{ .name = "x", .type_annotation = .{ .type = tv } },
     });
     const eff_outputs = try arena.dupe(StackEffectParam, &.{});
 

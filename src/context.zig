@@ -3699,7 +3699,11 @@ pub const Context = struct {
             if (param.is_row_variable) continue;
             defer concrete_index += 1;
 
-            const expected_tv = param.type_annotation orelse continue;
+            const ann = param.type_annotation orelse continue;
+            const expected_tv = switch (ann) {
+                .type => |tv| tv,
+                .protocol => unreachable,
+            };
             if (self.any_type_sentinel) |any_tv| {
                 if (expected_tv == any_tv) continue;
             }

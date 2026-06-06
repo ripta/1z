@@ -598,19 +598,30 @@ pub fn getStructTypeFromMaker(ctx: *const Context, maker_name: []const u8) ?*con
     };
 }
 
+fn fieldAnnotation(struct_type: *const StructType, field_index: usize) ?stack_effect_mod.TypeAnnotation {
+    if (struct_type.field_types.len == 0) return null;
+    const tv = struct_type.field_types[field_index] orelse return null;
+    return .{ .type = tv };
+}
+
+fn typeValAnnotation(struct_type: *const StructType) ?stack_effect_mod.TypeAnnotation {
+    const tv = struct_type.type_val orelse return null;
+    return .{ .type = tv };
+}
+
 fn buildConstructorEffect(alloc: std.mem.Allocator, struct_type: *const StructType) !StackEffect {
     const inputs = try alloc.alloc(StackEffectParam, struct_type.fields.len);
     for (struct_type.fields, 0..) |field, i| {
         inputs[i] = .{
             .name = field,
-            .type_annotation = if (struct_type.field_types.len != 0) struct_type.field_types[i] else null,
+            .type_annotation = fieldAnnotation(struct_type, i),
         };
     }
 
     const outputs = try alloc.alloc(StackEffectParam, 1);
     outputs[0] = .{
         .name = struct_type.name,
-        .type_annotation = struct_type.type_val,
+        .type_annotation = typeValAnnotation(struct_type),
     };
 
     return .{ .inputs = inputs, .outputs = outputs };
@@ -620,13 +631,13 @@ fn buildGetterEffect(alloc: std.mem.Allocator, struct_type: *const StructType, f
     const inputs = try alloc.alloc(StackEffectParam, 1);
     inputs[0] = .{
         .name = "instance",
-        .type_annotation = struct_type.type_val,
+        .type_annotation = typeValAnnotation(struct_type),
     };
 
     const outputs = try alloc.alloc(StackEffectParam, 1);
     outputs[0] = .{
         .name = struct_type.fields[field_index],
-        .type_annotation = if (struct_type.field_types.len != 0) struct_type.field_types[field_index] else null,
+        .type_annotation = fieldAnnotation(struct_type, field_index),
     };
 
     return .{ .inputs = inputs, .outputs = outputs };
@@ -636,17 +647,17 @@ fn buildSetterEffect(alloc: std.mem.Allocator, struct_type: *const StructType, f
     const inputs = try alloc.alloc(StackEffectParam, 2);
     inputs[0] = .{
         .name = "instance",
-        .type_annotation = struct_type.type_val,
+        .type_annotation = typeValAnnotation(struct_type),
     };
     inputs[1] = .{
         .name = struct_type.fields[field_index],
-        .type_annotation = if (struct_type.field_types.len != 0) struct_type.field_types[field_index] else null,
+        .type_annotation = fieldAnnotation(struct_type, field_index),
     };
 
     const outputs = try alloc.alloc(StackEffectParam, 1);
     outputs[0] = .{
         .name = "instance",
-        .type_annotation = struct_type.type_val,
+        .type_annotation = typeValAnnotation(struct_type),
     };
 
     return .{ .inputs = inputs, .outputs = outputs };
