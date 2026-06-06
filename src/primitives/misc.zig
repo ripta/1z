@@ -238,6 +238,14 @@ pub fn classifyResolved(resolved: []const u8) ?ResolvedModule {
     return .{ .file = .{ .path = resolved } };
 }
 
+/// Map a resolved module to the source-kind label used by `--trace-module-source`.
+pub fn moduleSourceKindOf(resolved_module: ResolvedModule) trace_mod.ModuleSourceKind {
+    return switch (resolved_module) {
+        .file => .filesystem,
+        .embedded => .embedded,
+    };
+}
+
 fn feedOneLine(
     ctx: *Context,
     alloc: std.mem.Allocator,
@@ -294,9 +302,14 @@ fn flushProcessor(
 pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const u8, alloc: std.mem.Allocator, resolved_module: ResolvedModule) anyerror!void {
     const resolved = resolved_module.resolvedPath();
 
-    if (ctx.trace.trace_modules) {
+    if (ctx.trace.trace_modules.lifecycle) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceModuleLoad(&tw, filename, resolved);
+    }
+
+    if (ctx.trace.trace_modules.source) {
+        var tw = trace_mod.TraceWriter.init();
+        trace_mod.traceModuleSourceLoad(&tw, moduleSourceKindOf(resolved_module), filename, resolved);
     }
 
     var file_handle: ?std.fs.File = null;
@@ -436,14 +449,14 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
             try module.deps.put(alloc, entry.key_ptr.*, mod_word);
         } else {
             try module.words.put(alloc, entry.key_ptr.*, mod_word);
-            if (ctx.trace.trace_modules) {
+            if (ctx.trace.trace_modules.define) {
                 var tw = trace_mod.TraceWriter.init();
                 trace_mod.traceModuleDefine(&tw, filename, entry.key_ptr.*, mod_word);
             }
         }
     }
 
-    if (ctx.trace.trace_modules) {
+    if (ctx.trace.trace_modules.lifecycle) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceModuleLoadEnd(&tw, filename, module.words.count());
     }
@@ -508,7 +521,7 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
             .host_callback => |host| .{ .host_callback = host },
         },
     });
-    if (ctx.trace.trace_modules) {
+    if (ctx.trace.trace_modules.import) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceModuleImport(&tw, ctx.current_source, name, module.name);
     }
@@ -1381,6 +1394,16 @@ test "classifyResolved returns null for virtual path with no entry" {
     if (!build_options.embed_stdlib) return error.SkipZigTest;
 
     try std.testing.expectEqual(@as(?ResolvedModule, null), classifyResolved("<stdlib>/no-such-module.1z"));
+}
+
+test "moduleSourceKindOf maps file to filesystem" {
+    const rm: ResolvedModule = .{ .file = .{ .path = "/abs/path/lib/strings.1z" } };
+    try std.testing.expectEqual(trace_mod.ModuleSourceKind.filesystem, moduleSourceKindOf(rm));
+}
+
+test "moduleSourceKindOf maps embedded to embedded" {
+    const rm: ResolvedModule = .{ .embedded = .{ .virtual_path = "<stdlib>/strings.1z", .source = "" } };
+    try std.testing.expectEqual(trace_mod.ModuleSourceKind.embedded, moduleSourceKindOf(rm));
 }
 
 test "resolveLoadPath falls back to embedded for top-level name" {

@@ -392,7 +392,8 @@ pragma? require-doc:            \ query at parse time
 1z --debug file.1z              \ interactive debugger
 1z --break=word file.1z         \ break at word
 1z --trace-words file.1z        \ execution tracing
-1z --trace-modules file.1z      \ module loading trace
+1z --trace-modules file.1z      \ all module-trace categories
+1z --trace-modules=source f.1z  \ just embedded vs filesystem source
 1z --deadlock-detect file.1z    \ scheduler diagnostics
 1z --benchmark file.1z          \ performance measurement
 ```

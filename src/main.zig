@@ -388,7 +388,19 @@ fn parseExecutionFlag(
         return .consumed;
     }
     if (std.mem.eql(u8, arg, "--trace-modules")) {
-        state.trace_config.trace_modules = true;
+        state.trace_config.trace_modules = trace_mod.ModuleTraceCategories.all();
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--trace-modules=")) {
+        const value = arg["--trace-modules=".len..];
+        state.trace_config.trace_modules = trace_mod.parseModuleTraceCategories(value) catch {
+            err_writer.print(
+                "Error: invalid value for --trace-modules: '{s}' (expected comma list of: lifecycle, source, define, import, deps)\n",
+                .{value},
+            ) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        };
         return .consumed;
     }
     if (std.mem.eql(u8, arg, "--trace-jit")) {
@@ -557,7 +569,7 @@ const execution_flags_help =
     \\  --compile=MODE            Set compile mode: off, eager, hybrid
     \\  --trace-words[=PAT]       Trace word execution (optional pattern filter)
     \\  --trace-resolve[=PAT]     Trace word resolution (optional pattern filter)
-    \\  --trace-modules           Trace module loading
+    \\  --trace-modules[=CATS]    Trace module loading (CATS: lifecycle,source,define,import,deps; bare=all)
     \\  --trace-jit               Trace JIT compilation
     \\  --trace-pic               Trace inline PIC hits
     \\  --trace-container-detect  Trace container CPU/memory detection fallbacks

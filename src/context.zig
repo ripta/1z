@@ -1182,7 +1182,7 @@ pub const Context = struct {
             });
         }
 
-        if (self.trace.trace_modules) {
+        if (self.trace.trace_modules.deps) {
             var tw = trace_mod.TraceWriter.init();
             trace_mod.traceModuleDepsPush(&tw, module.name, &module.words, &module.deps, 5);
         }
@@ -2913,7 +2913,7 @@ pub const Context = struct {
                 .compound => |instrs| {
                     try self.pushModuleDepsFrame(module);
                     defer {
-                        if (self.trace.trace_modules) {
+                        if (self.trace.trace_modules.deps) {
                             var tw = trace_mod.TraceWriter.init();
                             trace_mod.traceModuleDepsPop(&tw, module.name);
                         }
@@ -3904,7 +3904,7 @@ pub const Context = struct {
             const exec_result = self.executeInstructions(current_instructions, current_pic);
             exec_result catch |err| {
                 if (owns_frame) {
-                    if (self.trace.trace_modules) {
+                    if (self.trace.trace_modules.deps) {
                         if (current_module) |cm| {
                             var tw = trace_mod.TraceWriter.init();
                             trace_mod.traceModuleDepsPop(&tw, cm.name);
@@ -3933,7 +3933,7 @@ pub const Context = struct {
 
                 if (new_module) |new_mod| {
                     if (owns_frame and current_module.? != new_mod) {
-                        if (self.trace.trace_modules) {
+                        if (self.trace.trace_modules.deps) {
                             var tw = trace_mod.TraceWriter.init();
                             trace_mod.traceModuleDepsPop(&tw, current_module.?.name);
                         }
@@ -3947,7 +3947,7 @@ pub const Context = struct {
 
             // Normal terminatio:n pop frame before validation
             if (owns_frame) {
-                if (self.trace.trace_modules) {
+                if (self.trace.trace_modules.deps) {
                     if (current_module) |cm| {
                         var tw = trace_mod.TraceWriter.init();
                         trace_mod.traceModuleDepsPop(&tw, cm.name);
@@ -4070,7 +4070,7 @@ pub const Context = struct {
     /// Pop a module deps local frame, emitting a trace log when module
     /// tracing is enabled.
     pub fn popModuleDepsFrameTraced(self: *Context, mod: *const value_mod.Module) void {
-        if (self.trace.trace_modules) {
+        if (self.trace.trace_modules.deps) {
             var tw = trace_mod.TraceWriter.init();
             trace_mod.traceModuleDepsPop(&tw, mod.name);
         }

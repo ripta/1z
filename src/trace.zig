@@ -8,20 +8,93 @@ const Stack = @import("stack.zig").Stack;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const dispatch = @import("dispatch.zig");
 
+/// Categories of `--trace-modules` events. Each module-trace call site checks the
+/// field that matches the event it is about to emit.
+pub const ModuleTraceCategories = packed struct {
+    lifecycle: bool = false,
+    source: bool = false,
+    define: bool = false,
+    import: bool = false,
+    deps: bool = false,
+
+    /// True when at least one category is enabled.
+    pub fn any(self: ModuleTraceCategories) bool {
+        return self.lifecycle or self.source or self.define or self.import or self.deps;
+    }
+
+    /// All categories enabled. The shape produced by the bare `--trace-modules` flag.
+    pub fn all() ModuleTraceCategories {
+        return .{
+            .lifecycle = true,
+            .source = true,
+            .define = true,
+            .import = true,
+            .deps = true,
+        };
+    }
+};
+
+/// Error returned by `parseModuleTraceCategories` when the value is malformed.
+pub const ParseModuleTraceError = error{
+    EmptyValue,
+    UnknownCategory,
+};
+
+/// Parse a comma-separated category list (e.g., `"lifecycle,source"`) into a
+/// `ModuleTraceCategories`. Whitespace around each token is trimmed. Empty
+/// strings and unknown tokens fail.
+pub fn parseModuleTraceCategories(value: []const u8) ParseModuleTraceError!ModuleTraceCategories {
+    if (value.len == 0) return error.EmptyValue;
+
+    var cats: ModuleTraceCategories = .{};
+    var iter = std.mem.splitScalar(u8, value, ',');
+    while (iter.next()) |segment| {
+        const trimmed = std.mem.trim(u8, segment, " \t");
+        if (trimmed.len == 0) return error.EmptyValue;
+        if (std.mem.eql(u8, trimmed, "lifecycle")) {
+            cats.lifecycle = true;
+        } else if (std.mem.eql(u8, trimmed, "source")) {
+            cats.source = true;
+        } else if (std.mem.eql(u8, trimmed, "define")) {
+            cats.define = true;
+        } else if (std.mem.eql(u8, trimmed, "import")) {
+            cats.import = true;
+        } else if (std.mem.eql(u8, trimmed, "deps")) {
+            cats.deps = true;
+        } else {
+            return error.UnknownCategory;
+        }
+    }
+    return cats;
+}
+
 /// Configuration for execution tracing.
 pub const TraceConfig = struct {
     trace_words: bool = false,
     trace_words_pattern: ?[]const u8 = null,
     trace_resolve: bool = false,
     trace_resolve_pattern: ?[]const u8 = null,
-    trace_modules: bool = false,
+    trace_modules: ModuleTraceCategories = .{},
     trace_jit: bool = false,
     trace_pic: bool = false,
     trace_container_detect: bool = false,
     dump_scope: ?[]const u8 = null,
 
     pub fn isEnabled(self: TraceConfig) bool {
-        return self.trace_words or self.trace_resolve or self.trace_modules or self.trace_jit or self.trace_pic or self.trace_container_detect or self.dump_scope != null;
+        return self.trace_words or self.trace_resolve or self.trace_modules.any() or self.trace_jit or self.trace_pic or self.trace_container_detect or self.dump_scope != null;
+    }
+};
+
+/// Which backing store a module was loaded from.
+pub const ModuleSourceKind = enum {
+    embedded,
+    filesystem,
+
+    pub fn label(self: ModuleSourceKind) []const u8 {
+        return switch (self) {
+            .embedded => "embedded",
+            .filesystem => "filesystem",
+        };
     }
 };
 
@@ -199,6 +272,21 @@ pub fn traceModuleLoad(trace_writer: *TraceWriter, name: []const u8, path: []con
     const w = fbs.writer();
 
     w.print("MODULE load {s} ({s})\n", .{ name, path }) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a MODULE source load line for `--trace-module-source`.
+pub fn traceModuleSourceLoad(
+    trace_writer: *TraceWriter,
+    kind: ModuleSourceKind,
+    name: []const u8,
+    path: []const u8,
+) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    const w = fbs.writer();
+
+    w.print("MODULE source load {s} {s} ({s})\n", .{ kind.label(), name, path }) catch return;
     trace_writer.writeAll(fbs.getWritten());
 }
 
@@ -435,9 +523,85 @@ test "TraceConfig.isEnabled: trace_resolve" {
     try std.testing.expect(config.isEnabled());
 }
 
-test "TraceConfig.isEnabled: trace_modules" {
-    const config = TraceConfig{ .trace_modules = true };
+test "TraceConfig.isEnabled: trace_modules any category" {
+    const config = TraceConfig{ .trace_modules = .{ .lifecycle = true } };
     try std.testing.expect(config.isEnabled());
+}
+
+test "TraceConfig.isEnabled: trace_modules all categories" {
+    const config = TraceConfig{ .trace_modules = ModuleTraceCategories.all() };
+    try std.testing.expect(config.isEnabled());
+}
+
+test "TraceConfig.isEnabled: trace_modules empty" {
+    const config = TraceConfig{ .trace_modules = .{} };
+    try std.testing.expect(!config.isEnabled());
+}
+
+test "ModuleTraceCategories.any" {
+    try std.testing.expect(!(ModuleTraceCategories{}).any());
+    try std.testing.expect((ModuleTraceCategories{ .source = true }).any());
+    try std.testing.expect(ModuleTraceCategories.all().any());
+}
+
+test "ModuleTraceCategories.all" {
+    const cats = ModuleTraceCategories.all();
+    try std.testing.expect(cats.lifecycle);
+    try std.testing.expect(cats.source);
+    try std.testing.expect(cats.define);
+    try std.testing.expect(cats.import);
+    try std.testing.expect(cats.deps);
+}
+
+test "parseModuleTraceCategories: single category" {
+    const cats = try parseModuleTraceCategories("source");
+    try std.testing.expect(cats.source);
+    try std.testing.expect(!cats.lifecycle);
+    try std.testing.expect(!cats.define);
+    try std.testing.expect(!cats.import);
+    try std.testing.expect(!cats.deps);
+}
+
+test "parseModuleTraceCategories: multiple categories" {
+    const cats = try parseModuleTraceCategories("lifecycle,source,deps");
+    try std.testing.expect(cats.lifecycle);
+    try std.testing.expect(cats.source);
+    try std.testing.expect(cats.deps);
+    try std.testing.expect(!cats.define);
+    try std.testing.expect(!cats.import);
+}
+
+test "parseModuleTraceCategories: all five" {
+    const cats = try parseModuleTraceCategories("lifecycle,source,define,import,deps");
+    try std.testing.expect(cats.lifecycle);
+    try std.testing.expect(cats.source);
+    try std.testing.expect(cats.define);
+    try std.testing.expect(cats.import);
+    try std.testing.expect(cats.deps);
+}
+
+test "parseModuleTraceCategories: whitespace trimming" {
+    const cats = try parseModuleTraceCategories(" lifecycle , source ");
+    try std.testing.expect(cats.lifecycle);
+    try std.testing.expect(cats.source);
+}
+
+test "parseModuleTraceCategories: empty value" {
+    try std.testing.expectError(error.EmptyValue, parseModuleTraceCategories(""));
+}
+
+test "parseModuleTraceCategories: empty segment" {
+    try std.testing.expectError(error.EmptyValue, parseModuleTraceCategories("source,,deps"));
+}
+
+test "parseModuleTraceCategories: unknown category" {
+    try std.testing.expectError(error.UnknownCategory, parseModuleTraceCategories("bogus"));
+    try std.testing.expectError(error.UnknownCategory, parseModuleTraceCategories("source,bogus"));
+}
+
+test "ModuleSourceKind.label" {
+    try std.testing.expectEqualStrings("embedded", ModuleSourceKind.embedded.label());
+    try std.testing.expectEqualStrings("filesystem", ModuleSourceKind.filesystem.label());
 }
 
 test "TraceConfig.isEnabled: trace_container_detect" {
