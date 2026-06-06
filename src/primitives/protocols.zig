@@ -6,6 +6,7 @@ const ProtocolSatisfiesKey = context_mod.ProtocolSatisfiesKey;
 
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
+const Marker = value_mod.Marker;
 const MutableMap = value_mod.MutableMap;
 const Instruction = value_mod.Instruction;
 const ProtocolDescriptor = value_mod.ProtocolDescriptor;
@@ -25,6 +26,7 @@ const RegistryEntry = types_mod.RegistryEntry;
 
 pub const primitives = [_]Primitive{
     .{ .name = "define-protocol", .stack_effect = "name: descriptor markers --", .doc = "Define a protocol word that validates a type implements all required methods.", .func = nativeDefineProtocol },
+    .{ .name = "assert-satisfies", .stack_effect = "type-sym constraint --", .doc = "Throws a protocol-error if the named type does not satisfy the given protocol constraint.", .func = protocolCheckHelper },
 };
 
 pub const registry_entries = [_]RegistryEntry{
@@ -36,10 +38,11 @@ pub const registry_entries = [_]RegistryEntry{
 /// Called by `;` when it recognizes a protocol descriptor.
 ///
 /// Allocates a `ProtocolDescriptor` that owns the protocol's name and methods list, then emits a
-/// compound word whose body pushes the descriptor pointer and calls `native.protocol-check`.
+/// parse-time const word whose body pushes the descriptor pointer onto the stack. Runtime
+/// validation is performed by separate verbs (`assert-satisfies`); the protocol word itself is
+/// just a handle factory.
 ///
-/// The validator queries the descriptor at runtime. The method list and protocol name no longer
-/// live in the word body. The parse-time descriptor is a mutable-map with:
+/// The parse-time descriptor is a mutable-map with:
 ///
 /// - `methods:` flat array of symbols interleaved with optional stack-effects
 fn nativeDefineProtocol(ctx: *Context) anyerror!void {
@@ -89,12 +92,18 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
 
     const descriptor = try ctx.createProtocolDescriptor(protocol_name, methods_array);
 
-    const instrs = try alloc.alloc(Instruction, 2);
+    const instrs = try alloc.alloc(Instruction, 1);
     instrs[0] = .{ .op = .{ .push_literal = .{ .protocol_descriptor = descriptor } }, .line = 0 };
-    instrs[1] = .{ .op = .{ .call_word = "native.protocol-check" }, .line = 0 };
+
+    const word_markers = try alloc.alloc(*Marker, 2);
+    word_markers[0] = @constCast(&markers_mod.parse_time_marker);
+    word_markers[1] = @constCast(&markers_mod.const_marker);
 
     try ctx.defineWord(protocol_name, .{
         .name = descriptor.name,
+        .parse_time = true,
+        .markers = word_markers,
+        .provenance = .{ .generator = "protocol", .parent = descriptor.name, .role = "constraint" },
         .action = .{ .compound = instrs },
     });
 }

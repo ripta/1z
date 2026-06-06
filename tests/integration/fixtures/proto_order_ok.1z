@@ -9,7 +9,7 @@ show: generic ( val -- str ) [ drop "" ] ;
 order-type: virtual{ fixnum } ;
 
 \ Protocol obligation declared before the method is defined
-order-type: showable
+order-type: showable assert-satisfies
 
 \ Method defined after the protocol declaration
 show: method{ order-type } [

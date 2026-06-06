@@ -10,22 +10,23 @@ cmp:     method{ my-box my-box } [ unmake-my-box swap unmake-my-box swap - ] ;
 inspect: method{ my-box } [ unmake-my-box >string ] ;
 
 test-prelude-comparable: ( -- ) [
-  my-box: comparable
+  my-box: comparable assert-satisfies
   t "comparable validates my-box" assert-true
 ] ;
 
 test-prelude-stringable: ( -- ) [
-  my-box: stringable
+  my-box: stringable assert-satisfies
   t "stringable validates my-box" assert-true
 ] ;
 
 test-prelude-inspectable: ( -- ) [
-  my-box: inspectable
+  my-box: inspectable assert-satisfies
   t "inspectable validates my-box" assert-true
 ] ;
 
-\ -- Re-defining a protocol allocates a fresh descriptor; the new word
-\    body picks it up and validates against the same dispatch table. --
+\ -- A protocol word is a parse-time const; re-defining it throws
+\    cannot-redefine-const, matching the struct/virtual type
+\    precedent. --
 
 doubleable: protocol{ doubled: } ;
 
@@ -35,17 +36,8 @@ doubled: generic ( v -- v ) [ ] ;
 doubled: method{ twin } [ unmake-twin 2 * >twin ] ;
 
 test-protocol-validates: ( -- ) [
-  twin: doubleable
+  twin: doubleable assert-satisfies
   t "doubleable validates twin" assert-true
-] ;
-
-\ Re-define the protocol; the new word should still check against the
-\ method registered for twin.
-doubleable: protocol{ doubled: } ;
-
-test-redefined-protocol-still-validates: ( -- ) [
-  twin: doubleable
-  t "re-defined doubleable still validates twin" assert-true
 ] ;
 
 \ -- `>word-info` surfaces the descriptor for protocol words and `f`
@@ -72,13 +64,9 @@ test-stringable-protocol-info: ( -- ) [
   protocol_id>> fixnum? t "stringable protocol_id is a fixnum" assert=
 ] ;
 
-test-redefined-protocol-distinct-id: ( -- ) [
-  doubleable: >word-info protocol>>
-  protocol_id>>
-  doubleable: protocol{ doubled: } ;
-  doubleable: >word-info protocol>>
-  protocol_id>>
-  = f "re-defining doubleable mints a fresh protocol_id" assert=
+test-protocol-redefinition-rejected: ( -- ) [
+  [ doubleable: protocol{ doubled: } ;
+] cannot-redefine-const: "re-defining a protocol word throws cannot-redefine-const" assert-error-type
 ] ;
 
 test-non-protocol-word-has-f: ( -- ) [
@@ -88,15 +76,37 @@ test-non-protocol-word-has-f: ( -- ) [
   f "compound non-protocol word has no protocol field" assert=
 ] ;
 
+\ -- Const-pusher semantics: invoking a protocol word pushes its
+\    descriptor as a value rather than running a runtime validator. --
+
+test-protocol-pushes-descriptor-runtime: ( -- ) [
+  comparable comparable = t "comparable pushed twice is pointer-identical" assert=
+] ;
+
+\ A user-defined protocol behaves identically: invocation pushes the
+\ descriptor, and the pushed value is usable with `assert-satisfies`
+\ from inside a quotation.
+pushable:      protocol{ pushed-method: } ;
+pushed-method: generic ( v -- v ) [ ] ;
+push-target:   virtual{ fixnum } ;
+pushed-method: method{ push-target } [ unmake-push-target ] ;
+
+test-user-protocol-pushes-descriptor: ( -- ) [
+  pushable pushable = t "pushable pushed twice is pointer-identical" assert=
+  [ push-target: pushable assert-satisfies ] call
+  t "pushed descriptor flows through assert-satisfies inside a quotation" assert-true
+] ;
+
 \ -- Run --
 
 test-prelude-comparable
 test-prelude-stringable
 test-prelude-inspectable
 test-protocol-validates
-test-redefined-protocol-still-validates
 test-comparable-protocol-info
 test-inspectable-protocol-info
 test-stringable-protocol-info
-test-redefined-protocol-distinct-id
+test-protocol-redefinition-rejected
 test-non-protocol-word-has-f
+test-protocol-pushes-descriptor-runtime
+test-user-protocol-pushes-descriptor

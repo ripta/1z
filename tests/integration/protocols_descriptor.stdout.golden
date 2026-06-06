@@ -17,6 +17,10 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: comparable validates my-box
 Stack: [ ]
 PASS: stringable validates my-box
@@ -24,8 +28,6 @@ Stack: [ ]
 PASS: inspectable validates my-box
 Stack: [ ]
 PASS: doubleable validates twin
-Stack: [ ]
-PASS: re-defined doubleable still validates twin
 Stack: [ ]
 PASS: comparable has a protocol field
 PASS: comparable protocol name
@@ -39,8 +41,13 @@ Stack: [ ]
 PASS: stringable protocol name
 PASS: stringable protocol_id is a fixnum
 Stack: [ ]
-PASS: re-defining doubleable mints a fresh protocol_id
+PASS: re-defining a protocol word throws cannot-redefine-const
 Stack: [ ]
 PASS: native word dup has no protocol field
 PASS: compound non-protocol word has no protocol field
+Stack: [ ]
+PASS: comparable pushed twice is pointer-identical
+Stack: [ ]
+PASS: pushable pushed twice is pointer-identical
+PASS: pushed descriptor flows through assert-satisfies inside a quotation
 Stack: [ ]

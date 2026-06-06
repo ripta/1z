@@ -64,15 +64,15 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
 
 /// Recognize a protocol word and return a 3-element raw record
 /// `{name methods protocol_id}`. A word is a protocol word iff its body is
-/// the two-instruction shape that `nativeDefineProtocol` emits: a
-/// `push_literal` of a `protocol_descriptor` followed by a `call_word` of
-/// `native.protocol-check`. Returns `f` for any other shape.
+/// the single-instruction shape that `nativeDefineProtocol` emits: a
+/// `push_literal` of a `protocol_descriptor`. Returns `f` for any other
+/// shape.
 fn buildProtocolInfo(alloc: Allocator, word: WordDefinition) Allocator.Error!Value {
     const instrs = switch (word.action) {
         .compound => |body| body,
         .native, .host_callback => return .{ .boolean = false },
     };
-    if (instrs.len != 2) return .{ .boolean = false };
+    if (instrs.len != 1) return .{ .boolean = false };
 
     const descriptor: *const ProtocolDescriptor = switch (instrs[0].op) {
         .push_literal => |lit| switch (lit) {
@@ -81,9 +81,6 @@ fn buildProtocolInfo(alloc: Allocator, word: WordDefinition) Allocator.Error!Val
         },
         else => return .{ .boolean = false },
     };
-
-    const second_name = instrs[1].op.callTargetName() orelse return .{ .boolean = false };
-    if (!std.mem.eql(u8, second_name, "native.protocol-check")) return .{ .boolean = false };
 
     const methods_arr = try alloc.alloc(Value, descriptor.methods.len);
     @memcpy(methods_arr, descriptor.methods);

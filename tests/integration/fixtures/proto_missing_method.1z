@@ -5,4 +5,4 @@ showable: protocol{ show: } ;
 missing-type: virtual{ fixnum } ;
 
 \ Declare obligation without implementing show: for missing-type
-missing-type: showable
+missing-type: showable assert-satisfies

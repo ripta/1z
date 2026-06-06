@@ -10,14 +10,14 @@ late-method:   generic ( v -- v ) [ ] ;
 late-protocol: protocol{ late-method: } ;
 
 test-initial-failure: ( -- ) [
-  [ late-box: late-protocol ] "late-box initially fails late-protocol" assert-error
+  [ late-box: late-protocol assert-satisfies ] "late-box initially fails late-protocol" assert-error
 ] ;
 test-initial-failure
 
 late-method: method{ late-box } [ unmake-late-box ] ;
 
 test-after-binding: ( -- ) [
-  late-box: late-protocol
+  late-box: late-protocol assert-satisfies
   t "late-box passes late-protocol after late-method binding" assert-true
 ] ;
 test-after-binding

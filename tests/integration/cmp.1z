@@ -106,9 +106,9 @@ cmp: method{ weight weight } [ swap unmake-weight swap unmake-weight cmp ] ;
 10 >temperature 20 >temperature >= f "10 not >= 20 temp" assert=
 
 "comparable protocol" test-section
-temperature: comparable
+temperature: comparable assert-satisfies
 t "temperature satisfies comparable" assert-true
-weight: comparable
+weight: comparable assert-satisfies
 t "weight satisfies comparable" assert-true
 
 "cmp match on result" test-section

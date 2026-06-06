@@ -12,7 +12,7 @@ my-list: virtual{ array } ;
 ] ;
 
 test-iterable-validates: ( -- ) [
-  my-list: iterable
+  my-list: iterable assert-satisfies
   t "iterable protocol validates when >iterator is implemented" assert-true
 ] ;
 
@@ -34,7 +34,7 @@ area: method{ circle } [
 ] ;
 
 test-shapeful-validates: ( -- ) [
-  circle: shapeful
+  circle: shapeful assert-satisfies
   t "shapeful validates when both methods implemented" assert-true
 ] ;
 
@@ -58,7 +58,7 @@ inspect: method{ my-label } [
 ] ;
 
 test-single-method-validates: ( -- ) [
-  my-label: printable
+  my-label: printable assert-satisfies
   t "single-method protocol validates" assert-true
 ] ;
 
@@ -69,11 +69,11 @@ showable: protocol{ show: } ;
 my-thing: virtual{ fixnum } ;
 
 test-protocol-failure-throws: ( -- ) [
-  [ my-thing: showable ] "missing method throws protocol-error" assert-error
+  [ my-thing: showable assert-satisfies ] "missing method throws protocol-error" assert-error
 ] ;
 
 test-protocol-failure-error-type: ( -- ) [
-  [ my-thing: showable ] protocol-error: "protocol-error has correct error type" assert-error-type
+  [ my-thing: showable assert-satisfies ] protocol-error: "protocol-error has correct error type" assert-error-type
 ] ;
 
 \ -- User-defined >iterator dispatch --
@@ -106,7 +106,7 @@ add: method{ my-num my-num } [
 ] ;
 
 test-typed-self-both: ( -- ) [
-  my-num: self-addable
+  my-num: self-addable assert-satisfies
   t "typed protocol with self in both positions validates" assert-true
 ] ;
 
@@ -121,7 +121,7 @@ scale: method{ my-num fixnum } [
 ] ;
 
 test-typed-self-any: ( -- ) [
-  my-num: scalable
+  my-num: scalable assert-satisfies
   t "typed protocol with self and any validates" assert-true
 ] ;
 
@@ -134,7 +134,7 @@ inspect: method{ my-num } [
 mixed-proto: protocol{ inspect: add: ( a: self b: self -- result ) } ;
 
 test-mixed-protocol: ( -- ) [
-  my-num: mixed-proto
+  my-num: mixed-proto assert-satisfies
   t "mixed bare + typed methods in one protocol validates" assert-true
 ] ;
 
@@ -145,7 +145,7 @@ cross-scalable: protocol{ scale: ( a: self b: fixnum -- result ) } ;
 my-other: virtual{ fixnum } ;
 
 test-typed-protocol-failure: ( -- ) [
-  [ my-other: cross-scalable ] "typed protocol fails for missing cross-type method" assert-error
+  [ my-other: cross-scalable assert-satisfies ] "typed protocol fails for missing cross-type method" assert-error
 ] ;
 
 \ -- Backward compat: bare symbol still checks unary/same-type-binary --
@@ -153,7 +153,7 @@ test-typed-protocol-failure: ( -- ) [
 bare-proto: protocol{ inspect: } ;
 
 test-bare-backward-compat: ( -- ) [
-  my-label: bare-proto
+  my-label: bare-proto assert-satisfies
   t "bare symbol backward compat validates" assert-true
 ] ;
 
@@ -177,7 +177,7 @@ mul: method{ ca-val fixnum } [
 ] ;
 
 test-cross-arith-validates: ( -- ) [
-  ca-val: cross-arith
+  ca-val: cross-arith assert-satisfies
   t "cross-type arithmetic protocol validates with any" assert-true
 ] ;
 
@@ -194,7 +194,7 @@ combine: method{ fixnum la-val } [
 ] ;
 
 test-left-any-validates: ( -- ) [
-  la-val: left-any-proto
+  la-val: left-any-proto assert-satisfies
   t "protocol with any in first position validates" assert-true
 ] ;
 
@@ -207,7 +207,7 @@ transform: generic ( a b -- c ) [ drop ] ;
 am-val: virtual{ fixnum } ;
 
 test-any-no-registration: ( -- ) [
-  [ am-val: any-missing-proto ] "any wildcard with no registration throws" assert-error
+  [ am-val: any-missing-proto assert-satisfies ] "any wildcard with no registration throws" assert-error
 ] ;
 
 \ -- Multiple any-typed methods, partial registration (negative) --
@@ -227,7 +227,7 @@ op-a: method{ ma-val fixnum } [
 ] ;
 
 test-partial-any-methods: ( -- ) [
-  [ ma-val: multi-any-proto ] "partial any-typed methods throws for missing method" assert-error
+  [ ma-val: multi-any-proto assert-satisfies ] "partial any-typed methods throws for missing method" assert-error
 ] ;
 
 \ -- Error message content for cross-type failure --
@@ -239,7 +239,7 @@ missing-op: generic ( a b -- c ) [ drop ] ;
 err-val: virtual{ fixnum } ;
 
 test-error-message-content: ( -- ) [
-  [ err-val: err-proto ] [ ] recover
+  [ err-val: err-proto assert-satisfies ] [ ] recover
   dup "error-type" @get protocol-error: "error type is protocol-error" assert=
   "message" @get
   dup "err-val" #in? "error message contains type name" assert-true

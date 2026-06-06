@@ -10,4 +10,4 @@ show: method{ ok-type } [
   unmake-ok-type inspect
 ] ;
 
-ok-type: showable
+ok-type: showable assert-satisfies

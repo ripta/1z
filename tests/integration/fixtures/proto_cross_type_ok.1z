@@ -10,4 +10,4 @@ ct-val: virtual{ fixnum } ;
 
 \ No scale: method{ ct-val ... } registered -- cross-type, so deferred
 
-ct-val: scalable
+ct-val: scalable assert-satisfies
