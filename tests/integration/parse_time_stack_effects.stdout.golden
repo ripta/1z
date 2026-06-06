@@ -1,7 +1,7 @@
 === named word with effect before [ ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ word-info{ name: "add1" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "m" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/parse_time_stack_effects.1z" line: 7 column: 26 } module: f provenance: f compiled?: f } ]
+Stack: [ word-info{ name: "add1" stack-effect: stack-effect-info{ inputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "m" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { } native?: f body: [ 1 + ] methods: { } source-loc: source-loc{ file: "tests/integration/parse_time_stack_effects.1z" line: 7 column: 26 } module: f provenance: f compiled?: f protocol: f } ]
 PASS: effect attached via >word-info
 Stack: [ ]
 === anonymous quotation with effect ===
@@ -23,9 +23,9 @@ Stack: [ ]
 === markers before effect before [ ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ word-info{ name: "pt-word" stack-effect: stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { <marker:parse-time> } native?: f body: [ 42 ] methods: { } source-loc: source-loc{ file: "tests/integration/parse_time_stack_effects.1z" line: 23 column: 37 } module: f provenance: f compiled?: f } ]
+Stack: [ word-info{ name: "pt-word" stack-effect: stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { <marker:parse-time> } native?: f body: [ 42 ] methods: { } source-loc: source-loc{ file: "tests/integration/parse_time_stack_effects.1z" line: 23 column: 37 } module: f provenance: f compiled?: f protocol: f } ]
 PASS: effect with markers
-Stack: [ word-info{ name: "pt-word" stack-effect: stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { <marker:parse-time> } native?: f body: [ 42 ] methods: { } source-loc: source-loc{ file: "tests/integration/parse_time_stack_effects.1z" line: 23 column: 37 } module: f provenance: f compiled?: f } ]
+Stack: [ word-info{ name: "pt-word" stack-effect: stack-effect-info{ inputs: { } outputs: { stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: f } } } doc: f markers: { <marker:parse-time> } native?: f body: [ 42 ] methods: { } source-loc: source-loc{ file: "tests/integration/parse_time_stack_effects.1z" line: 23 column: 37 } module: f provenance: f compiled?: f protocol: f } ]
 PASS: has parse-time marker
 Stack: [ ]
 === nested quotation effects ===

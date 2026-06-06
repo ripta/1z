@@ -12,7 +12,7 @@ all-words-first-name-string?: [ all-words #first name>> string? ] ;
 "native.>word returns raw array for native word" test-section
 native.current-scope dup: native.>word
 dup array? t "native.>word returns an array" assert=
-dup #len 11 "native.>word array has 11 elements" assert=
+dup #len 12 "native.>word array has 12 elements" assert=
 dup 0 #nth "dup" "native.>word raw array name" assert=
 dup 1 #nth array? t "native.>word raw array stack-effect is array" assert=
 dup 1 #nth #first #len 1 "native.>word raw array stack-effect has 1 input" assert=
@@ -32,6 +32,7 @@ dup: >word-info
 dup name>> "dup" ">word-info name for native word" assert=
 dup native?>> t ">word-info native? for native word" assert=
 dup body>> f ">word-info body is f for native word" assert=
+dup protocol>> f ">word-info protocol is f for native word" assert=
 dup stack-effect>> dup
 inputs>> [ name>> ] #map #collect { "a" } ">word-info stack-effect inputs for dup" assert=
 outputs>> [ name>> ] #map #collect { "a" "a" } ">word-info stack-effect outputs for dup" assert=

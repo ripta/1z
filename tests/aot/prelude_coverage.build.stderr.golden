@@ -1,4 +1,4 @@
-Prelude compilation: 360/381 words compiled (94.5%)
+Prelude compilation: 367/388 words compiled (94.6%)
   word '#all' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -64,8 +64,8 @@ Prelude compilation: 360/381 words compiled (94.5%)
       hint: blocked until the AOT resolver includes this word
 Quotation bodies compiled: 0
 Inline PIC sites: 0/38 generic call sites preseeded
-AOT interpreter fallbacks: 285 total
-  native: 273
+AOT interpreter fallbacks: 291 total
+  native: 279
   compound-uncompiled: 4
   quotation: 8
   sites:
@@ -85,8 +85,8 @@ AOT interpreter fallbacks: 285 total
     native: >iterator -> curry (line 853)
     native: >iterator -> native.make-callback-iter (line 854)
     native: >iterator -> native.>iterator (line 856)
-    ... 269 more
-  static-check: jitInterpretedCall=4/4 jitNativeWordCall=273/273 jitCallQuotation=8/8 (matches build-time inventory)
+    ... 275 more
+  static-check: jitInterpretedCall=4/4 jitNativeWordCall=279/279 jitCallQuotation=8/8 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
@@ -112,4 +112,4 @@ Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: linked
-runtime-image: words=0 stack-effects=1 typevalue-slots=62 blob-present=false
+runtime-image: words=0 stack-effects=1 typevalue-slots=63 blob-present=false

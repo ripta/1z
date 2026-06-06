@@ -48,6 +48,46 @@ test-redefined-protocol-still-validates: ( -- ) [
   t "re-defined doubleable still validates twin" assert-true
 ] ;
 
+\ -- `>word-info` surfaces the descriptor for protocol words and `f`
+\    for everything else. --
+
+test-comparable-protocol-info: ( -- ) [
+  comparable: >word-info protocol>>
+  dup f = f "comparable has a protocol field" assert=
+  dup name>> "comparable" "comparable protocol name" assert=
+  dup methods>> #len 0 > t "comparable methods is non-empty" assert=
+  dup methods>> #first cmp: "comparable first method symbol" assert=
+  protocol_id>> fixnum? t "comparable protocol_id is a fixnum" assert=
+] ;
+
+test-inspectable-protocol-info: ( -- ) [
+  inspectable: >word-info protocol>>
+  dup name>> "inspectable" "inspectable protocol name" assert=
+  protocol_id>> fixnum? t "inspectable protocol_id is a fixnum" assert=
+] ;
+
+test-stringable-protocol-info: ( -- ) [
+  stringable: >word-info protocol>>
+  dup name>> "stringable" "stringable protocol name" assert=
+  protocol_id>> fixnum? t "stringable protocol_id is a fixnum" assert=
+] ;
+
+test-redefined-protocol-distinct-id: ( -- ) [
+  doubleable: >word-info protocol>>
+  protocol_id>>
+  doubleable: protocol{ doubled: } ;
+  doubleable: >word-info protocol>>
+  protocol_id>>
+  = f "re-defining doubleable mints a fresh protocol_id" assert=
+] ;
+
+test-non-protocol-word-has-f: ( -- ) [
+  dup: >word-info protocol>>
+  f "native word dup has no protocol field" assert=
+  test-prelude-comparable: >word-info protocol>>
+  f "compound non-protocol word has no protocol field" assert=
+] ;
+
 \ -- Run --
 
 test-prelude-comparable
@@ -55,3 +95,8 @@ test-prelude-stringable
 test-prelude-inspectable
 test-protocol-validates
 test-redefined-protocol-still-validates
+test-comparable-protocol-info
+test-inspectable-protocol-info
+test-stringable-protocol-info
+test-redefined-protocol-distinct-id
+test-non-protocol-word-has-f

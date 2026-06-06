@@ -13,6 +13,7 @@ const TypeDescriptor = value_mod.TypeDescriptor;
 const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
 const MutableMap = value_mod.MutableMap;
+const ProtocolDescriptor = value_mod.ProtocolDescriptor;
 
 const StackEffect = @import("../stack_effect.zig").StackEffect;
 
@@ -58,6 +59,39 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
         Value{ .type_val = @constCast(tv) }
     else
         .{ .boolean = false };
+    return .{ .array = fields };
+}
+
+/// Recognize a protocol word and return a 3-element raw record
+/// `{name methods protocol_id}`. A word is a protocol word iff its body is
+/// the two-instruction shape that `nativeDefineProtocol` emits: a
+/// `push_literal` of a `protocol_descriptor` followed by a `call_word` of
+/// `native.protocol-check`. Returns `f` for any other shape.
+fn buildProtocolInfo(alloc: Allocator, word: WordDefinition) Allocator.Error!Value {
+    const instrs = switch (word.action) {
+        .compound => |body| body,
+        .native, .host_callback => return .{ .boolean = false },
+    };
+    if (instrs.len != 2) return .{ .boolean = false };
+
+    const descriptor: *const ProtocolDescriptor = switch (instrs[0].op) {
+        .push_literal => |lit| switch (lit) {
+            .protocol_descriptor => |d| d,
+            else => return .{ .boolean = false },
+        },
+        else => return .{ .boolean = false },
+    };
+
+    const second_name = instrs[1].op.callTargetName() orelse return .{ .boolean = false };
+    if (!std.mem.eql(u8, second_name, "native.protocol-check")) return .{ .boolean = false };
+
+    const methods_arr = try alloc.alloc(Value, descriptor.methods.len);
+    @memcpy(methods_arr, descriptor.methods);
+
+    const fields = try alloc.alloc(Value, 3);
+    fields[0] = .{ .string = descriptor.name };
+    fields[1] = .{ .array = methods_arr };
+    fields[2] = .{ .fixnum = @intCast(descriptor.protocol_id) };
     return .{ .array = fields };
 }
 
@@ -161,8 +195,10 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
         break :blk false;
     };
 
-    // Raw array: name stack-effect doc markers native? body methods source-loc module provenance compiled?
-    const wi_fields = try alloc.alloc(Value, 11);
+    const protocol_val = try buildProtocolInfo(alloc, word);
+
+    // Raw array: name stack-effect doc markers native? body methods source-loc module provenance compiled? protocol
+    const wi_fields = try alloc.alloc(Value, 12);
     wi_fields[0] = .{ .string = name };
     wi_fields[1] = effect_val;
     wi_fields[2] = doc_val;
@@ -174,6 +210,7 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
     wi_fields[8] = module_val;
     wi_fields[9] = provenance_val;
     wi_fields[10] = .{ .boolean = is_compiled };
+    wi_fields[11] = protocol_val;
 
     return .{ .array = wi_fields };
 }

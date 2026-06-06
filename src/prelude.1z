@@ -940,10 +940,16 @@ dispatch-provenance: struct{ generator: string parent: string role: string field
 \\ A single method entry: the dispatch type signature and optional provenance.
 method-info: struct{ types: array provenance: any } ;
 
-\\ Structured word information for runtime introspection.
-word-info: struct{ name: string stack-effect: any doc: any markers: array native?: boolean body: any methods: array source-loc: any module: any provenance: any compiled?: boolean } ;
+\\ Descriptor of a protocol word: the protocol name, its required methods,
+\\ and the monotonic protocol_id assigned by the runtime. The methods array
+\\ is the flat shape the descriptor carries internally: symbols interleaved
+\\ with optional stack-effects.
+protocol-info: struct{ name: string methods: array protocol_id: fixnum } ;
 
-\\ Convert a raw 11-element array from native.>word into a word-info struct.
+\\ Structured word information for runtime introspection.
+word-info: struct{ name: string stack-effect: any doc: any markers: array native?: boolean body: any methods: array source-loc: any module: any provenance: any compiled?: boolean protocol: any } ;
+
+\\ Convert a raw 12-element array from native.>word into a word-info struct.
 (raw>word-info): [
   >param: [
     dup 0 #nth
@@ -963,6 +969,7 @@ word-info: struct{ name: string stack-effect: any doc: any markers: array native
   >provenance:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
   >dispatch-prov: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
   >method-info:   [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
+  >protocol-info: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-protocol-info nip ] if ] ;
 
   dup 0 #nth
   over 1 #nth >stack-effect-info
@@ -975,6 +982,7 @@ word-info: struct{ name: string stack-effect: any doc: any markers: array native
   8 pick-n 8 #nth
   9 pick-n 9 #nth >provenance
   10 pick-n 10 #nth
+  11 pick-n 11 #nth >protocol-info
   make-word-info nip
 ] ;
 

@@ -12,6 +12,11 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: comparable validates my-box
 Stack: [ ]
 PASS: stringable validates my-box
@@ -21,4 +26,21 @@ Stack: [ ]
 PASS: doubleable validates twin
 Stack: [ ]
 PASS: re-defined doubleable still validates twin
+Stack: [ ]
+PASS: comparable has a protocol field
+PASS: comparable protocol name
+PASS: comparable methods is non-empty
+PASS: comparable first method symbol
+PASS: comparable protocol_id is a fixnum
+Stack: [ ]
+PASS: inspectable protocol name
+PASS: inspectable protocol_id is a fixnum
+Stack: [ ]
+PASS: stringable protocol name
+PASS: stringable protocol_id is a fixnum
+Stack: [ ]
+PASS: re-defining doubleable mints a fresh protocol_id
+Stack: [ ]
+PASS: native word dup has no protocol field
+PASS: compound non-protocol word has no protocol field
 Stack: [ ]
