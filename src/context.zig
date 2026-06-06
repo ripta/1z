@@ -215,6 +215,29 @@ pub const ProtocolObligation = struct {
     descriptor: *const value_mod.ProtocolDescriptor,
 };
 
+/// Key for the per-context protocol satisfies-check memo.
+///
+/// It's keyed on the pointer pair of the implementing type's descriptor and the protocol descriptor.
+/// Both pointers are stable for the lifetime of the `Context`.
+pub const ProtocolSatisfiesKey = struct {
+    type_descriptor: *const value_mod.TypeDescriptor,
+    protocol_descriptor: *const value_mod.ProtocolDescriptor,
+};
+
+pub const ProtocolSatisfiesKeyContext = struct {
+    pub fn hash(_: @This(), key: ProtocolSatisfiesKey) u64 {
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&@intFromPtr(key.type_descriptor)));
+        h.update(std.mem.asBytes(&@intFromPtr(key.protocol_descriptor)));
+        return h.final();
+    }
+
+    pub fn eql(_: @This(), a: ProtocolSatisfiesKey, b: ProtocolSatisfiesKey) bool {
+        return a.type_descriptor == b.type_descriptor and
+            a.protocol_descriptor == b.protocol_descriptor;
+    }
+};
+
 /// ErrorDetail captures information about an error for debugging purposes.
 pub const ErrorDetail = struct {
     error_type: []const u8,
@@ -502,6 +525,18 @@ pub const Context = struct {
     /// descriptor; the list keeps stable pointers for the lifetime of the
     /// Context and lets deinit release the list header.
     protocol_descriptors: std.ArrayListUnmanaged(*value_mod.ProtocolDescriptor) = .{},
+    /// Memo of protocol satisfies-check results keyed on the
+    /// (implementing type descriptor, protocol descriptor) pointer pair.
+    /// Populated lazily on first check, and coarsely invalidated on any
+    /// dispatch-table mutation (method registration or dispatch-frame pop)
+    /// so a `(type, protocol)` answer cannot stay stale across a REPL or
+    /// runtime `method{` binding.
+    protocol_satisfies_cache: std.HashMapUnmanaged(
+        ProtocolSatisfiesKey,
+        bool,
+        ProtocolSatisfiesKeyContext,
+        80,
+    ) = .{},
     /// Registry of known pragma keys and their validation rules.
     pragma_registry: std.StringHashMapUnmanaged(PragmaRegistration) = .{},
     /// Stack of pragma frames for file-scoped pragma values.
@@ -944,6 +979,7 @@ pub const Context = struct {
         self.struct_descriptors.deinit(self.allocator);
         self.anonymous_union_type_values.deinit(self.allocator);
         self.protocol_descriptors.deinit(self.allocator);
+        self.protocol_satisfies_cache.deinit(self.allocator);
         self.dispatch.deinit();
         self.jit_dispatch.deinit();
         var pic_iter = self.pic_cache.iterator();
@@ -2481,6 +2517,20 @@ pub const Context = struct {
         return desc;
     }
 
+    /// Look up a cached satisfies-check result for `(type_desc, protocol_desc)`.
+    /// Returns `null` if no entry exists yet or the cache was invalidated
+    /// since the last write. The lock-free read pattern matches `pic_cache`.
+    pub fn lookupProtocolSatisfies(self: *const Context, key: ProtocolSatisfiesKey) ?bool {
+        return self.protocol_satisfies_cache.get(key);
+    }
+
+    /// Store the outcome of a satisfies-check. Best-effort: on allocation
+    /// failure the cache simply does not learn the entry, matching the
+    /// pattern in `getOrAllocPicTable`.
+    pub fn storeProtocolSatisfies(self: *Context, key: ProtocolSatisfiesKey, value: bool) void {
+        self.protocol_satisfies_cache.put(self.allocator, key, value) catch {};
+    }
+
     pub fn getOrCreateParameterizedTypeDescriptor(
         self: *Context,
         base: *const value_mod.TypeValue,
@@ -2738,6 +2788,7 @@ pub const Context = struct {
             self.dispatch_frames.items[last].deinit(self.allocator);
             self.dispatch_frames.items.len -= 1;
             self.dispatch.generation +%= 1;
+            self.protocol_satisfies_cache.clearRetainingCapacity();
         }
     }
 
@@ -2761,6 +2812,9 @@ pub const Context = struct {
         } else {
             try self.dispatch.register(key, entry, allow_overwrite);
         }
+        // Any new method binding may flip a satisfies-check answer; clear
+        // coarsely. (Reached only on a successful register.)
+        self.protocol_satisfies_cache.clearRetainingCapacity();
     }
 
     /// Look up a dispatch entry by key, walking frames then base table.
@@ -5099,6 +5153,93 @@ test "createProtocolDescriptor assigns monotonic protocol_id" {
     try std.testing.expectEqual(@as(u32, 0), desc0.protocol_id);
     try std.testing.expectEqual(@as(u32, 1), desc1.protocol_id);
     try std.testing.expectEqual(@as(u32, 2), desc2.protocol_id);
+}
+
+test "protocol satisfies cache returns stored hits" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const desc = try ctx.createProtocolDescriptor("comparable", &methods);
+
+    const key_yes = ProtocolSatisfiesKey{
+        .type_descriptor = fixnum_tv.descriptor.?,
+        .protocol_descriptor = desc,
+    };
+    const key_no = ProtocolSatisfiesKey{
+        .type_descriptor = string_tv.descriptor.?,
+        .protocol_descriptor = desc,
+    };
+
+    ctx.storeProtocolSatisfies(key_yes, true);
+    ctx.storeProtocolSatisfies(key_no, false);
+
+    try std.testing.expectEqual(@as(?bool, true), ctx.lookupProtocolSatisfies(key_yes));
+    try std.testing.expectEqual(@as(?bool, false), ctx.lookupProtocolSatisfies(key_no));
+}
+
+test "protocol satisfies cache miss returns null" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const desc = try ctx.createProtocolDescriptor("comparable", &methods);
+
+    const key = ProtocolSatisfiesKey{
+        .type_descriptor = fixnum_tv.descriptor.?,
+        .protocol_descriptor = desc,
+    };
+
+    try std.testing.expectEqual(@as(?bool, null), ctx.lookupProtocolSatisfies(key));
+}
+
+test "protocol satisfies cache invalidated by method registration" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const desc = try ctx.createProtocolDescriptor("comparable", &methods);
+
+    const key = ProtocolSatisfiesKey{
+        .type_descriptor = fixnum_tv.descriptor.?,
+        .protocol_descriptor = desc,
+    };
+    ctx.storeProtocolSatisfies(key, true);
+    try std.testing.expectEqual(@as(?bool, true), ctx.lookupProtocolSatisfies(key));
+
+    const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 }};
+    try ctx.registerDispatch(
+        .{ .dispatch_id = 7777, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    try std.testing.expectEqual(@as(?bool, null), ctx.lookupProtocolSatisfies(key));
+}
+
+test "protocol satisfies cache invalidated by dispatch frame pop" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const desc = try ctx.createProtocolDescriptor("comparable", &methods);
+
+    const key = ProtocolSatisfiesKey{
+        .type_descriptor = fixnum_tv.descriptor.?,
+        .protocol_descriptor = desc,
+    };
+
+    try ctx.pushDispatchFrame();
+    ctx.storeProtocolSatisfies(key, true);
+    try std.testing.expectEqual(@as(?bool, true), ctx.lookupProtocolSatisfies(key));
+
+    ctx.popDispatchFrame();
+    try std.testing.expectEqual(@as(?bool, null), ctx.lookupProtocolSatisfies(key));
 }
 
 test "anonymous union descriptor flags are inferred by intersection" {

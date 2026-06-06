@@ -1,6 +1,8 @@
 const std = @import("std");
 
-const Context = @import("../context.zig").Context;
+const context_mod = @import("../context.zig");
+const Context = context_mod.Context;
+const ProtocolSatisfiesKey = context_mod.ProtocolSatisfiesKey;
 
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
@@ -137,10 +139,41 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
 }
 
 /// Validate a single protocol obligation: check that all required methods
-/// are registered in the dispatch table. Same-type and bare methods are
-/// checked immediately; cross-type (`any`) methods are checked immediately
-/// as well (they enumerate dispatch entries).
+/// are registered in the dispatch table. Consults the per-`Context`
+/// satisfies-check memo so the steady-state path is a single hash lookup;
+/// on miss, runs the full walk and caches the outcome. Coarse invalidation
+/// in `registerDispatchLocked` / `popDispatchFrameLocked` keeps the memo
+/// honest across REPL definitions and runtime module loads.
 pub fn validateProtocolObligation(
+    ctx: *Context,
+    type_name: []const u8,
+    descriptor: *const ProtocolDescriptor,
+) !void {
+    const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
+        helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
+        return error.TypeMismatch;
+    };
+    const key = ProtocolSatisfiesKey{
+        .type_descriptor = type_tv.descriptor.?,
+        .protocol_descriptor = descriptor,
+    };
+
+    if (ctx.lookupProtocolSatisfies(key)) |cached| {
+        if (cached) return;
+        // Cached failure: re-walk to throw a method-specific protocol error.
+    }
+
+    validateProtocolObligationUncached(ctx, type_name, descriptor) catch |err| {
+        ctx.storeProtocolSatisfies(key, false);
+        return err;
+    };
+    ctx.storeProtocolSatisfies(key, true);
+}
+
+/// Full satisfies-check walk. Same-type and bare methods are checked
+/// immediately; cross-type (`any`) methods are checked immediately as well
+/// (they enumerate dispatch entries).
+fn validateProtocolObligationUncached(
     ctx: *Context,
     type_name: []const u8,
     descriptor: *const ProtocolDescriptor,

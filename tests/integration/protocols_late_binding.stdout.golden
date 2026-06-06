@@ -1,0 +1,10 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: late-box initially fails late-protocol
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: late-box passes late-protocol after late-method binding
+Stack: [ ]
