@@ -4,8 +4,8 @@ Error: --interpreter-fallback=false --lock-interpreter-setting was set, but at l
 AOT interpreter fallbacks: 4 total
   native: 4
   sites:
-    native: . -> inspect (line 605)
-    native: flush -> stream-flush (line 599)
-    native: stream-write-string -> stream-write (line 495)
-    native: keep -> dip (line 393)
+    native: . -> inspect (line 608)
+    native: flush -> stream-flush (line 602)
+    native: stream-write-string -> stream-write (line 498)
+    native: keep -> dip (line 396)
   static-check: jitInterpretedCall=0/0 jitNativeWordCall=4/4 jitCallQuotation=0/0 (matches build-time inventory)

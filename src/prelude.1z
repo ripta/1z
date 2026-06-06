@@ -214,11 +214,14 @@ load: dynamic-load ( filename -- module ) [
   if
 ] ;
 
-\\ Load a module by name or file path, bypassing the cache. Always delegates
-\\ to `load-file` and therefore throws `non-primary-worker` when called from
-\\ any task whose home worker is not the primary.
+\\ Load a module by name or file path, bypassing the cache. Pinned to the
+\\ original source kind: if the module was first loaded from the embedded
+\\ stdlib bundle, `reload` re-reads from the bundle even after a filesystem
+\\ stdlib becomes available mid-session. Delegates to `reload-file` and
+\\ therefore throws `non-primary-worker` when called from any task whose
+\\ home worker is not the primary.
 reload: dynamic-load ( filename -- module ) [
-  module-cache get swap load-file
+  module-cache get swap reload-file
 ] ;
 
 \ Control flow

@@ -33,6 +33,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "export", .stack_effect = "name --", .doc = "Promote an imported word to a public definition in the current scope.", .func = nativeExport },
     .{ .name = "compile!", .stack_effect = "sym --", .doc = "JIT-compile a word for integer arithmetic. Throws if the word is not found or not compilable.", .func = nativeCompile, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_compile_marker) } },
     .{ .name = "load-file", .stack_effect = "cache filename -- module", .doc = "Load a 1z source file unconditionally (no cache check) and store the result in the given M{} cache. Restricted to the primary worker; throws `non-primary-worker` when invoked from any other worker task.", .func = nativeLoadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
+    .{ .name = "reload-file", .stack_effect = "cache filename -- module", .doc = "Reload a 1z source file, pinned to its original source kind. Reuses the resolved path of an already-cached module instead of re-running the resolver chain, so a module first loaded from the embedded stdlib bundle reloads from the bundle even after a filesystem stdlib becomes available later in the session. Falls back to a fresh resolve when no cached entry exists. Restricted to the primary worker.", .func = nativeReloadFile, .capability = .io_fs, .markers = &.{ @constCast(&markers_mod.interpreter_dependent_marker), @constCast(&markers_mod.dynamic_load_marker) } },
 };
 
 const RegistryEntry = @import("types.zig").RegistryEntry;
@@ -1101,6 +1102,93 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
     return nativeLoadImpl(ctx, cache, filename, alloc, resolved_module);
 }
 
+/// Find the cache entry whose `Module.name` equals `filename`, returning the
+/// resolved-path key under which it lives. The returned slice is owned by
+/// the cache and remains valid for the lifetime of the entry.
+///
+/// Used by `reload-file` to pin a reload to the original source kind:
+/// the cached key is either a filesystem realpath or a `<stdlib>/...`
+/// virtual path, so reusing it preserves the bundle-vs-disk discriminator.
+fn findCachedResolvedPath(cache: *value_mod.MutableMap, filename: []const u8) ?[]const u8 {
+    var iter = cache.map.iterator();
+    while (iter.next()) |entry| {
+        const cached = switch (entry.value_ptr.*) {
+            .module => |m| m,
+            else => continue,
+        };
+        if (std.mem.eql(u8, cached.name, filename)) {
+            return entry.key_ptr.*;
+        }
+    }
+    return null;
+}
+
+/// reload-file ( cache filename -- module ) - Reload a file, pinned to its original source kind
+///
+/// Like `load-file`, but reuses the resolved path of an already-cached
+/// module instead of re-running the resolver chain. The cached key carries
+/// the source-kind discriminator (filesystem realpath vs `<stdlib>/...`
+/// virtual path), so a module first loaded from the embedded bundle
+/// reloads from the bundle even after a filesystem stdlib becomes
+/// available later in the session. When no cached entry exists, falls
+/// back to the same fresh resolve `load-file` performs.
+///
+/// Restricted to the primary worker; throws `non-primary-worker` when
+/// invoked from any other worker task.
+fn nativeReloadFile(ctx: *Context) anyerror!void {
+    if (ctx.scheduler) |sched| {
+        if (sched.isBackgroundWorker()) {
+            ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+                .error_type = "non-primary-worker",
+                .message = "reload-file cannot be called from a non-primary worker",
+            });
+            return error.UserThrown;
+        }
+    }
+
+    const alloc = ctx.quotationAllocator();
+
+    const filename = try popString(ctx);
+    const cache_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(cache_val);
+    const cache: *value_mod.MutableMap = switch (cache_val) {
+        .mutable_map => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "mutable-map", cache_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const resolved = blk: {
+        if (findCachedResolvedPath(cache, filename)) |pinned| break :blk pinned;
+        break :blk resolveLoadPath(ctx, filename, alloc) orelse {
+            const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
+            ctx.error_details.append(ctx.allocator, .{
+                .error_type = "file-not-found",
+                .message = msg,
+                .source = ctx.ownedCurrentSource(),
+                .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+                .word_name = "reload-file",
+            }) catch {};
+            return error.FileNotFound;
+        };
+    };
+
+    const resolved_module = classifyResolved(resolved) orelse {
+        const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
+        ctx.error_details.append(ctx.allocator, .{
+            .error_type = "file-not-found",
+            .message = msg,
+            .source = ctx.ownedCurrentSource(),
+            .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+            .word_name = "reload-file",
+        }) catch {};
+        return error.FileNotFound;
+    };
+
+    return nativeLoadImpl(ctx, cache, filename, alloc, resolved_module);
+}
+
 /// load-check-file ( cache filename -- module ) - Load a file in check mode (definitions only)
 ///
 /// Resolves the filename relative to the current working directory (not
@@ -1361,4 +1449,106 @@ test "load-file caches embedded module under virtual path" {
     const entry = ctx.module_cache_value.map.get("<stdlib>/sequences.1z") orelse return error.MissingCacheEntry;
     try std.testing.expect(entry == .module);
     try std.testing.expectEqualStrings("sequences", entry.module.name);
+}
+
+test "reload-file pins embedded module across mid-session filesystem availability" {
+    if (!build_options.embed_stdlib) return error.SkipZigTest;
+
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    // Initial load: no filesystem stdlib, fall back to embedded bundle.
+    try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
+    try ctx.stack.push(.{ .string = "sequences" });
+    try nativeLoadFile(&ctx);
+    {
+        const initial = try ctx.stack.pop();
+        defer container_backing.releaseValue(initial);
+        try std.testing.expect(initial == .module);
+    }
+    try std.testing.expect(ctx.module_cache_value.map.contains("<stdlib>/sequences.1z"));
+
+    // Stage a same-named file on disk and register its directory as a load
+    // path, simulating a filesystem stdlib that became available
+    // mid-session after the embedded fallback was already used.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var sub_file = try tmp.dir.createFile("sequences.1z", .{});
+    sub_file.close();
+    const tmp_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(tmp_path);
+    const tmp_path_owned = try ctx.quotationAllocator().dupe(u8, tmp_path);
+    try ctx.load_paths.append(ctx.allocator, tmp_path_owned);
+
+    // Sanity check: a fresh resolveLoadPath now prefers the disk version.
+    const fresh = resolveLoadPath(&ctx, "sequences", ctx.quotationAllocator()) orelse return error.UnexpectedNull;
+    try std.testing.expect(!std.mem.startsWith(u8, fresh, "<stdlib>/"));
+
+    // Reload: must stay pinned to the embedded virtual path.
+    try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
+    try ctx.stack.push(.{ .string = "sequences" });
+    try nativeReloadFile(&ctx);
+    const reloaded = try ctx.stack.pop();
+    defer container_backing.releaseValue(reloaded);
+    try std.testing.expect(reloaded == .module);
+    try std.testing.expectEqualStrings("sequences", reloaded.module.name);
+
+    try std.testing.expect(ctx.module_cache_value.map.contains("<stdlib>/sequences.1z"));
+    try std.testing.expect(!ctx.module_cache_value.map.contains(fresh));
+}
+
+test "reload-file pins filesystem module across mid-session unavailability" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    // Stage a temp lib directory with a minimal module file.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var sub_file = try tmp.dir.createFile("foo.1z", .{});
+    sub_file.close();
+    const tmp_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(tmp_path);
+    const tmp_path_owned = try ctx.quotationAllocator().dupe(u8, tmp_path);
+    try ctx.load_paths.append(ctx.allocator, tmp_path_owned);
+
+    // Initial load: resolves to the disk file.
+    try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
+    try ctx.stack.push(.{ .string = "foo" });
+    try nativeLoadFile(&ctx);
+    {
+        const initial = try ctx.stack.pop();
+        defer container_backing.releaseValue(initial);
+        try std.testing.expect(initial == .module);
+    }
+
+    // Capture the disk-path cache key set at first load.
+    var disk_key: ?[]const u8 = null;
+    var iter = ctx.module_cache_value.map.iterator();
+    while (iter.next()) |entry| {
+        const cached_mod = switch (entry.value_ptr.*) {
+            .module => |m| m,
+            else => continue,
+        };
+        if (std.mem.eql(u8, cached_mod.name, "foo")) {
+            disk_key = entry.key_ptr.*;
+            break;
+        }
+    }
+    try std.testing.expect(disk_key != null);
+    try std.testing.expect(!std.mem.startsWith(u8, disk_key.?, "<stdlib>/"));
+
+    // Reload: still pinned to the disk path, never regresses to embedded.
+    try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
+    try ctx.stack.push(.{ .string = "foo" });
+    try nativeReloadFile(&ctx);
+    const reloaded = try ctx.stack.pop();
+    defer container_backing.releaseValue(reloaded);
+    try std.testing.expect(reloaded == .module);
+    try std.testing.expectEqualStrings("foo", reloaded.module.name);
+
+    try std.testing.expect(!ctx.module_cache_value.map.contains("<stdlib>/foo.1z"));
 }
