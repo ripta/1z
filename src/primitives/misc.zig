@@ -1575,3 +1575,140 @@ test "reload-file pins filesystem module across mid-session unavailability" {
 
     try std.testing.expect(!ctx.module_cache_value.map.contains("<stdlib>/foo.1z"));
 }
+
+test "resolveLoadPath prefers configured stdlib_path over embedded" {
+    if (!build_options.embed_stdlib) return error.SkipZigTest;
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var sub_file = try tmp.dir.createFile("strings.1z", .{});
+    sub_file.close();
+    const tmp_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(tmp_path);
+    ctx.stdlib_path = try ctx.quotationAllocator().dupe(u8, tmp_path);
+
+    const alloc = ctx.quotationAllocator();
+    const resolved = resolveLoadPath(&ctx, "strings", alloc) orelse return error.UnexpectedNull;
+    try std.testing.expect(!std.mem.startsWith(u8, resolved, "<stdlib>/"));
+    try std.testing.expect(std.mem.endsWith(u8, resolved, "strings.1z"));
+}
+
+test "resolveLoadPath prefers load_paths over stdlib_path" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    // Two directories each carry a same-named probe module so the only thing
+    // distinguishing the resolved path is which slot the resolver picked.
+    var first_tmp = std.testing.tmpDir(.{});
+    defer first_tmp.cleanup();
+    var first_file = try first_tmp.dir.createFile("precedence-probe.1z", .{});
+    first_file.close();
+    const first_path = try first_tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(first_path);
+
+    var second_tmp = std.testing.tmpDir(.{});
+    defer second_tmp.cleanup();
+    var second_file = try second_tmp.dir.createFile("precedence-probe.1z", .{});
+    second_file.close();
+    const second_path = try second_tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(second_path);
+
+    const load_owned = try ctx.quotationAllocator().dupe(u8, first_path);
+    try ctx.load_paths.append(ctx.allocator, load_owned);
+    ctx.stdlib_path = try ctx.quotationAllocator().dupe(u8, second_path);
+
+    const alloc = ctx.quotationAllocator();
+    const resolved = resolveLoadPath(&ctx, "precedence-probe", alloc) orelse return error.UnexpectedNull;
+    try std.testing.expect(std.mem.startsWith(u8, resolved, first_path));
+}
+
+test "resolveLoadPath prefers load_paths over embedded" {
+    if (!build_options.embed_stdlib) return error.SkipZigTest;
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var sub_file = try tmp.dir.createFile("strings.1z", .{});
+    sub_file.close();
+    const tmp_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(tmp_path);
+    const tmp_owned = try ctx.quotationAllocator().dupe(u8, tmp_path);
+    try ctx.load_paths.append(ctx.allocator, tmp_owned);
+
+    const alloc = ctx.quotationAllocator();
+    const resolved = resolveLoadPath(&ctx, "strings", alloc) orelse return error.UnexpectedNull;
+    try std.testing.expect(!std.mem.startsWith(u8, resolved, "<stdlib>/"));
+    try std.testing.expect(std.mem.endsWith(u8, resolved, "strings.1z"));
+}
+
+test "resolveLoadPath falls through to embedded when stdlib_path is an empty dir" {
+    if (!build_options.embed_stdlib) return error.SkipZigTest;
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(tmp_path);
+    ctx.stdlib_path = try ctx.quotationAllocator().dupe(u8, tmp_path);
+
+    const alloc = ctx.quotationAllocator();
+    const resolved = resolveLoadPath(&ctx, "strings", alloc) orelse return error.UnexpectedNull;
+    try std.testing.expectEqualStrings("<stdlib>/strings.1z", resolved);
+}
+
+test "resolveLoadPath falls through to embedded when stdlib_path does not exist" {
+    if (!build_options.embed_stdlib) return error.SkipZigTest;
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.load_paths.clearRetainingCapacity();
+    ctx.stdlib_path = try ctx.quotationAllocator().dupe(u8, "/no/such/dir/onez-precedence-test");
+
+    const alloc = ctx.quotationAllocator();
+    const resolved = resolveLoadPath(&ctx, "strings", alloc) orelse return error.UnexpectedNull;
+    try std.testing.expectEqualStrings("<stdlib>/strings.1z", resolved);
+}
+
+test "resolveLoadPath returns null without embed and without stdlib_path" {
+    if (build_options.embed_stdlib) return error.SkipZigTest;
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.stdlib_path = null;
+    ctx.load_paths.clearRetainingCapacity();
+
+    const alloc = ctx.quotationAllocator();
+    try std.testing.expectEqual(@as(?[]const u8, null), resolveLoadPath(&ctx, "strings", alloc));
+}
+
+test "resolveLoadPath returns null without embed when stdlib_path is empty" {
+    if (build_options.embed_stdlib) return error.SkipZigTest;
+
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.load_paths.clearRetainingCapacity();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(tmp_path);
+    ctx.stdlib_path = try ctx.quotationAllocator().dupe(u8, tmp_path);
+
+    const alloc = ctx.quotationAllocator();
+    try std.testing.expectEqual(@as(?[]const u8, null), resolveLoadPath(&ctx, "strings", alloc));
+}
