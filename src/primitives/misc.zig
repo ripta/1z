@@ -18,6 +18,7 @@ const ir_codegen = @import("../ir_codegen.zig");
 const stack_effect_mod = @import("../stack_effect.zig");
 const container_backing = @import("../container_backing.zig");
 const dict_mod = @import("../dictionary.zig");
+const embedded_stdlib = @import("../embedded_stdlib.zig");
 
 const popString = helpers.popString;
 
@@ -192,25 +193,119 @@ fn nativeResolveLoadPath(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .string = resolved });
 }
 
-pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const u8, alloc: std.mem.Allocator, resolved: []const u8) anyerror!void {
+/// Internal representation of a module source resolved by `load-file` et al.
+///
+/// A `.file` is backed by a filesystem path.
+///
+/// An `.embedded` is backed by an `@embedFile` byte slice. The virtual `<stdlib>/...` path used as
+/// the cache key and in diagnostics.
+pub const ResolvedModule = union(enum) {
+    file: struct { path: []const u8 },
+    embedded: struct { virtual_path: []const u8, source: []const u8 },
+
+    pub fn resolvedPath(self: ResolvedModule) []const u8 {
+        return switch (self) {
+            .file => |f| f.path,
+            .embedded => |e| e.virtual_path,
+        };
+    }
+};
+
+/// Classify a resolved path string into a `ResolvedModule`.
+///
+/// Returns `null` when the path has the `<stdlib>/<name>.1z` shape but no matching entry exists in
+/// the embedded bundle, which the caller then surfaces as `file-not-found`.
+///
+/// Anything not matching the virtual shape is treated as a filesystem path.
+pub fn classifyResolved(resolved: []const u8) ?ResolvedModule {
+    if (embedded_stdlib.parseVirtualPath(resolved)) |name| {
+        if (embedded_stdlib.findEntry(name)) |entry| {
+            return .{ .embedded = .{ .virtual_path = resolved, .source = entry.source } };
+        }
+        return null;
+    }
+    return .{ .file = .{ .path = resolved } };
+}
+
+fn feedOneLine(
+    ctx: *Context,
+    alloc: std.mem.Allocator,
+    processor: *StatementProcessor,
+    line: []const u8,
+    file_line: usize,
+) anyerror!void {
+    processor.trackLine(file_line);
+    if (processor.start_line > 0) {
+        ctx.parse_line_offset = processor.start_line - 1;
+    }
+    switch (processor.feedLine(alloc, line, ctx)) {
+        .needs_more_input => {},
+        .parse_error => |err| return err,
+        .complete => |instrs| {
+            if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
+                try ctx.executeQuotation(.{ .instructions = instrs });
+            }
+            processor.reset();
+        },
+    }
+}
+
+fn flushProcessor(
+    ctx: *Context,
+    alloc: std.mem.Allocator,
+    processor: *StatementProcessor,
+) anyerror!void {
+    switch (processor.flush(alloc, ctx)) {
+        .needs_more_input => {},
+        .parse_error => |e| return e,
+        .complete => |instrs| {
+            if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
+                try ctx.executeQuotation(.{ .instructions = instrs });
+            }
+        },
+    }
+}
+
+/// Parse, execute, and cache a resolved module source.
+///
+/// `filename` is the user-facing string used as `ctx.current_source` for the duration of the
+/// load and recorded in import history; `resolved_module` carries the dispatch.
+///
+/// - A `.file` reads source lines from disk through a buffered reader and sets `ctx.current_source_dir`
+///   to the file's parent so relative `use` statements work.
+/// - An `.embedded` iterates the in-memory byte slice and clears `current_source_dir` so relative
+///   imports out of the bundle are filesystem-only.
+///
+/// The cache is keyed by the resolved path: either the canonical filesystem path, or the virtual
+/// `<stdlib>/...` path -- and is only written on first load. Existing entries are left untouched.
+///
+/// This word pushse the constructed module onto the stack on success.
+pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const u8, alloc: std.mem.Allocator, resolved_module: ResolvedModule) anyerror!void {
+    const resolved = resolved_module.resolvedPath();
+
     if (ctx.trace.trace_modules) {
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceModuleLoad(&tw, filename, resolved);
     }
 
-    const file = std.fs.cwd().openFile(resolved, .{}) catch {
-        // Add error context for FileNotFound
-        const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
-        ctx.error_details.append(ctx.allocator, .{
-            .error_type = "file-not-found",
-            .message = msg,
-            .source = ctx.ownedCurrentSource(),
-            .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
-            .word_name = "load",
-        }) catch {};
-        return error.FileNotFound;
-    };
-    defer file.close();
+    var file_handle: ?std.fs.File = null;
+    defer if (file_handle) |f| f.close();
+    switch (resolved_module) {
+        .file => |f| {
+            file_handle = std.fs.cwd().openFile(f.path, .{}) catch {
+                const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
+                ctx.error_details.append(ctx.allocator, .{
+                    .error_type = "file-not-found",
+                    .message = msg,
+                    .source = ctx.ownedCurrentSource(),
+                    .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+                    .word_name = "load",
+                }) catch {};
+                return error.FileNotFound;
+            };
+        },
+        .embedded => {},
+    }
 
     const old_source = ctx.current_source;
     ctx.current_source = filename;
@@ -220,13 +315,15 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     ctx.load_file_source = filename;
     defer ctx.load_file_source = old_load_file_source;
 
-    // Save/restore current_source_dir around file execution
+    // Save/restore current_source_dir around file execution. Embedded
+    // modules have no meaningful base directory; relative-path imports
+    // out of an embedded module remain filesystem-only.
     const old_source_dir = ctx.current_source_dir;
-    ctx.current_source_dir = std.fs.path.dirname(resolved);
+    ctx.current_source_dir = switch (resolved_module) {
+        .file => |f| std.fs.path.dirname(f.path),
+        .embedded => null,
+    };
     defer ctx.current_source_dir = old_source_dir;
-
-    var file_buf: [4096]u8 = undefined;
-    var reader = file.reader(&file_buf);
 
     try ctx.pushLocalFrame();
     errdefer ctx.popLocalFrame();
@@ -256,40 +353,33 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     defer ctx.parse_line_offset = old_line_offset;
 
     var processor: StatementProcessor = .{};
-    var file_line: usize = 0;
-    while (true) {
-        const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
-            error.EndOfStream => {
-                switch (processor.flush(alloc, ctx)) {
-                    .needs_more_input => {},
-                    .parse_error => |e| return e,
-                    .complete => |instrs| {
-                        if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
-                            try ctx.executeQuotation(.{ .instructions = instrs });
-                        }
+    switch (resolved_module) {
+        .file => {
+            var file_buf: [4096]u8 = undefined;
+            var reader = file_handle.?.reader(&file_buf);
+            var file_line: usize = 0;
+            while (true) {
+                const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
+                    error.EndOfStream => {
+                        try flushProcessor(ctx, alloc, &processor);
+                        break;
                     },
-                }
-                break;
-            },
-            else => return error.FileReadFailed,
-        };
+                    else => return error.FileReadFailed,
+                };
 
-        file_line += 1;
-        processor.trackLine(file_line);
-        if (processor.start_line > 0) {
-            ctx.parse_line_offset = processor.start_line - 1;
-        }
-
-        switch (processor.feedLine(alloc, line, ctx)) {
-            .needs_more_input => continue,
-            .parse_error => |err| return err,
-            .complete => |instrs| {
-                if (instrs.len > 0 and (!ctx.check_mode or Context.isDefinitionStatement(instrs))) {
-                    try ctx.executeQuotation(.{ .instructions = instrs });
-                }
-                processor.reset();
-            },
-        }
+                file_line += 1;
+                try feedOneLine(ctx, alloc, &processor, line, file_line);
+            }
+        },
+        .embedded => |e| {
+            var lines = std.mem.splitScalar(u8, e.source, '\n');
+            var file_line: usize = 0;
+            while (lines.next()) |line| {
+                file_line += 1;
+                try feedOneLine(ctx, alloc, &processor, line, file_line);
+            }
+            try flushProcessor(ctx, alloc, &processor);
+        },
     }
 
     // Validate deferred protocol obligations before finalizing the module.
@@ -986,7 +1076,19 @@ fn nativeLoadFile(ctx: *Context) anyerror!void {
         return error.FileNotFound;
     };
 
-    return nativeLoadImpl(ctx, cache, filename, alloc, resolved);
+    const resolved_module = classifyResolved(resolved) orelse {
+        const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
+        ctx.error_details.append(ctx.allocator, .{
+            .error_type = "file-not-found",
+            .message = msg,
+            .source = ctx.ownedCurrentSource(),
+            .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
+            .word_name = "load-file",
+        }) catch {};
+        return error.FileNotFound;
+    };
+
+    return nativeLoadImpl(ctx, cache, filename, alloc, resolved_module);
 }
 
 /// load-check-file ( cache filename -- module ) - Load a file in check mode (definitions only)
@@ -1030,7 +1132,7 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
     const prev_check_mode = ctx.check_mode;
     ctx.check_mode = true;
     defer ctx.check_mode = prev_check_mode;
-    return nativeLoadImpl(ctx, cache, filename, alloc, resolved);
+    return nativeLoadImpl(ctx, cache, filename, alloc, .{ .file = .{ .path = resolved } });
 }
 
 /// module-cache-value ( -- cache ) - Push the current module cache M{}
@@ -1153,4 +1255,32 @@ fn nativeModuleName(ctx: *Context) anyerror!void {
         },
     };
     try ctx.stack.push(.{ .string = module.name });
+}
+
+const build_options = @import("build_options");
+
+test "classifyResolved treats non-virtual paths as file" {
+    const rm = classifyResolved("/tmp/foo.1z") orelse return error.UnexpectedNull;
+    try std.testing.expect(rm == .file);
+    try std.testing.expectEqualStrings("/tmp/foo.1z", rm.file.path);
+}
+
+test "classifyResolved treats relative paths as file" {
+    const rm = classifyResolved("./local.1z") orelse return error.UnexpectedNull;
+    try std.testing.expect(rm == .file);
+}
+
+test "classifyResolved returns embedded for matching virtual path" {
+    if (!build_options.embed_stdlib) return error.SkipZigTest;
+
+    const rm = classifyResolved("<stdlib>/strings.1z") orelse return error.UnexpectedNull;
+    try std.testing.expect(rm == .embedded);
+    try std.testing.expectEqualStrings("<stdlib>/strings.1z", rm.embedded.virtual_path);
+    try std.testing.expect(rm.embedded.source.len > 0);
+}
+
+test "classifyResolved returns null for virtual path with no entry" {
+    if (!build_options.embed_stdlib) return error.SkipZigTest;
+
+    try std.testing.expectEqual(@as(?ResolvedModule, null), classifyResolved("<stdlib>/no-such-module.1z"));
 }

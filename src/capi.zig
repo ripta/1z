@@ -1800,7 +1800,12 @@ export fn onez_load_file(ptr: ?*anyopaque, path: [*]const u8, path_len: usize) c
         return ONEZ_ERR_LOAD_FAILED;
     };
 
-    misc.nativeLoadImpl(ctx, ctx.module_cache_value, filepath, alloc, resolved) catch |err| {
+    const resolved_module = misc.classifyResolved(resolved) orelse {
+        setLastError(handle, "file not found: {s}", .{filepath});
+        return ONEZ_ERR_LOAD_FAILED;
+    };
+
+    misc.nativeLoadImpl(ctx, ctx.module_cache_value, filepath, alloc, resolved_module) catch |err| {
         captureError(handle, err);
         return ONEZ_ERR_LOAD_FAILED;
     };
@@ -1833,7 +1838,11 @@ export fn onez_use_module(ptr: ?*anyopaque, name: [*]const u8, name_len: usize) 
         }
     } else blk: {
         // Load the module
-        misc.nativeLoadImpl(ctx, ctx.module_cache_value, mod_name, alloc, resolved) catch |err| {
+        const resolved_module = misc.classifyResolved(resolved) orelse {
+            setLastError(handle, "module not found: {s}", .{mod_name});
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+        misc.nativeLoadImpl(ctx, ctx.module_cache_value, mod_name, alloc, resolved_module) catch |err| {
             captureError(handle, err);
             return ONEZ_ERR_LOAD_FAILED;
         };
