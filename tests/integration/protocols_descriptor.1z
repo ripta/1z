@@ -66,7 +66,7 @@ test-stringable-protocol-info: ( -- ) [
 
 test-protocol-redefinition-rejected: ( -- ) [
   [ doubleable: protocol{ doubled: } ;
-] cannot-redefine-const: "re-defining a protocol word throws cannot-redefine-const" assert-error-type
+  ] cannot-redefine-const: "re-defining a protocol word throws cannot-redefine-const" assert-error-type
 ] ;
 
 test-non-protocol-word-has-f: ( -- ) [

@@ -27,6 +27,7 @@ const RegistryEntry = types_mod.RegistryEntry;
 pub const primitives = [_]Primitive{
     .{ .name = "define-protocol", .stack_effect = "name: descriptor markers --", .doc = "Define a protocol word that validates a type implements all required methods.", .func = nativeDefineProtocol },
     .{ .name = "assert-satisfies", .stack_effect = "type-sym constraint --", .doc = "Throws a protocol-error if the named type does not satisfy the given protocol constraint.", .func = protocolCheckHelper },
+    .{ .name = "satisfies?", .stack_effect = "type-sym constraint -- ?", .doc = "Returns t if the named type satisfies the protocol constraint, f otherwise.", .func = nativeSatisfies },
 };
 
 pub const registry_entries = [_]RegistryEntry{
@@ -145,6 +146,68 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
     }
 
     try validateProtocolObligation(ctx, type_name, descriptor);
+}
+
+/// satisfies? ( type-sym constraint -- ? )
+///
+/// Predicate companion to `assert-satisfies`: returns a boolean instead of throwing.
+/// Shares the per-`Context` satisfies memo populated by `assert-satisfies`, so the
+/// steady-state path is a single hash lookup either way.
+fn nativeSatisfies(ctx: *Context) anyerror!void {
+    const desc_val = try ctx.stack.pop();
+    const descriptor = switch (desc_val) {
+        .protocol_descriptor => |d| d,
+        else => {
+            helpers.setTypeMismatchError(ctx, "protocol-descriptor", desc_val);
+            return error.TypeMismatch;
+        },
+    };
+    const type_name = switch (try ctx.stack.pop()) {
+        .symbol => |s| s,
+        else => {
+            helpers.setErrorContext(ctx, "satisfies? expects a type name (symbol) on the stack", .{});
+            return error.TypeMismatch;
+        },
+    };
+
+    const result = try checkProtocolObligation(ctx, type_name, descriptor);
+    try ctx.stack.push(.{ .boolean = result });
+}
+
+/// Predicate-shaped variant of `validateProtocolObligation`. Returns true if the
+/// type satisfies the protocol, false otherwise; never raises `protocol-error`.
+/// Other failures (e.g. `TypeMismatch` from a malformed descriptor) still
+/// propagate, since those are programming errors rather than protocol mismatches.
+pub fn checkProtocolObligation(
+    ctx: *Context,
+    type_name: []const u8,
+    descriptor: *const ProtocolDescriptor,
+) !bool {
+    const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
+        helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
+        return error.TypeMismatch;
+    };
+    const key = ProtocolSatisfiesKey{
+        .type_descriptor = type_tv.descriptor.?,
+        .protocol_descriptor = descriptor,
+    };
+
+    if (ctx.lookupProtocolSatisfies(key)) |cached| {
+        return cached;
+    }
+
+    const saved_thrown = ctx.thrown_error;
+    if (validateProtocolObligationUncached(ctx, type_name, descriptor)) |_| {
+        ctx.storeProtocolSatisfies(key, true);
+        return true;
+    } else |err| {
+        if (err == error.UserThrown) {
+            ctx.thrown_error = saved_thrown;
+            ctx.storeProtocolSatisfies(key, false);
+            return false;
+        }
+        return err;
+    }
 }
 
 /// Validate a single protocol obligation: check that all required methods

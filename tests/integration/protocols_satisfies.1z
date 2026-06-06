@@ -1,0 +1,100 @@
+use "testing" ;
+
+\ -- Satisfied case --
+
+flyable: protocol{ fly: } ;
+
+bird: virtual{ string } ;
+
+fly: generic ( x -- y ) [ drop "soaring" ] ;
+
+fly: method{ bird } [
+  unmake-bird drop "flap flap"
+] ;
+
+test-satisfies-true: ( -- ) [
+  bird: flyable satisfies?
+  "bird satisfies flyable" assert-true
+] ;
+
+\ -- Unsatisfied case (no throw) --
+
+swimmable: protocol{ swim: } ;
+
+rock: virtual{ fixnum } ;
+
+test-satisfies-false: ( -- ) [
+  rock: swimmable satisfies?
+  f "rock does not satisfy swimmable" assert=
+] ;
+
+\ -- Cache coherence with assert-satisfies --
+
+singable: protocol{ sing: } ;
+
+canary: virtual{ string } ;
+
+sing: generic ( x -- y ) [ drop "" ] ;
+
+sing: method{ canary } [
+  unmake-canary
+] ;
+
+test-satisfies-then-assert: ( -- ) [
+  canary: singable satisfies?
+  "satisfies? returns true before assert-satisfies" assert-true
+  canary: singable assert-satisfies
+  t "assert-satisfies succeeds on the same pair (cache hit)" assert-true
+] ;
+
+\ -- Negative result stays cached --
+
+danceable: protocol{ dance: } ;
+
+statue: virtual{ string } ;
+
+test-satisfies-cached-negative: ( -- ) [
+  statue: danceable satisfies?
+  f "first call returns f" assert=
+  statue: danceable satisfies?
+  f "second call returns f (cache hit)" assert=
+] ;
+
+\ -- Cross-type protocol with `any` marker (positive) --
+
+scaleable: protocol{ scale-by: ( a: self b: any -- result ) } ;
+
+stretchy: virtual{ fixnum } ;
+
+scale-by: generic ( a b -- c ) [ drop ] ;
+
+scale-by: method{ stretchy fixnum } [
+  swap unmake-stretchy * >stretchy
+] ;
+
+test-satisfies-any-positive: ( -- ) [
+  stretchy: scaleable satisfies?
+  "stretchy satisfies scaleable with any marker" assert-true
+] ;
+
+\ -- Cross-type protocol with `any` marker (negative) --
+
+mappable: protocol{ remap: ( a: self b: any -- result ) } ;
+
+frozen: virtual{ fixnum } ;
+
+remap: generic ( a b -- c ) [ drop ] ;
+
+test-satisfies-any-negative: ( -- ) [
+  frozen: mappable satisfies?
+  f "frozen does not satisfy mappable" assert=
+] ;
+
+\ -- Run all tests --
+
+test-satisfies-true
+test-satisfies-false
+test-satisfies-then-assert
+test-satisfies-cached-negative
+test-satisfies-any-positive
+test-satisfies-any-negative

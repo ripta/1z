@@ -1,0 +1,39 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: bird satisfies flyable
+Stack: [ ]
+PASS: rock does not satisfy swimmable
+Stack: [ ]
+PASS: satisfies? returns true before assert-satisfies
+PASS: assert-satisfies succeeds on the same pair (cache hit)
+Stack: [ ]
+PASS: first call returns f
+PASS: second call returns f (cache hit)
+Stack: [ ]
+PASS: stretchy satisfies scaleable with any marker
+Stack: [ ]
+PASS: frozen does not satisfy mappable
+Stack: [ ]
