@@ -10,6 +10,7 @@ pub fn build(b: *std.Build) void {
     const verbose_test_reporting = envFlagIsSet(b, "VERBOSE");
     const slow_test_threshold_ms: u64 = 1000;
     const bail_stats = b.option(bool, "bail-stats", "Enable bail frequency instrumentation (writes stats to stderr on exit)") orelse false;
+    const embed_stdlib = b.option(bool, "embed-stdlib", "Embed lib/ stdlib source as a fallback module backing store") orelse false;
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
@@ -18,8 +19,11 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "verbose_test_reporting", verbose_test_reporting);
     options.addOption(u64, "slow_test_threshold_ms", slow_test_threshold_ms);
     options.addOption(bool, "bail_stats", bail_stats);
+    options.addOption(bool, "embed_stdlib", embed_stdlib);
 
-    const root_module = createCommonModule(b, target, optimize, options, b.path("src/main.zig"));
+    const embedded_stdlib_path = generateEmbeddedStdlib(b, embed_stdlib);
+
+    const root_module = createCommonModule(b, target, optimize, options, b.path("src/main.zig"), embedded_stdlib_path);
 
     // zig-out/bin/1z
     const exe = b.addExecutable(.{
@@ -30,7 +34,7 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_exe.step);
 
     // zig-out/bin/1z-lsp
-    const lsp_module = createCommonModule(b, target, optimize, options, b.path("src/lsp_main.zig"));
+    const lsp_module = createCommonModule(b, target, optimize, options, b.path("src/lsp_main.zig"), embedded_stdlib_path);
 
     const lsp_exe = b.addExecutable(.{
         .name = "1z-lsp",
@@ -42,7 +46,7 @@ pub fn build(b: *std.Build) void {
     // zig-out/clib/lib1z.a (static library)
     // Installed to clib/ instead of lib/ because zig-out/lib is symlinked
     // to the stdlib directory.
-    const capi_static_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"));
+    const capi_static_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"), embedded_stdlib_path);
 
     const static_lib = b.addLibrary(.{
         .name = "1z",
@@ -62,7 +66,7 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_static.step);
 
     // zig-out/clib/lib1z.dylib (shared library)
-    const capi_shared_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"));
+    const capi_shared_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"), embedded_stdlib_path);
 
     const shared_lib = b.addLibrary(.{
         .name = "1z",
@@ -115,7 +119,7 @@ pub fn build(b: *std.Build) void {
     });
 
     // Unit tests
-    const test_module = createCommonModule(b, target, optimize, options, b.path("src/main.zig"));
+    const test_module = createCommonModule(b, target, optimize, options, b.path("src/main.zig"), embedded_stdlib_path);
 
     const lib_unit_tests = b.addTest(.{
         .root_module = test_module,
@@ -1738,6 +1742,7 @@ fn createCommonModule(
     optimize: std.builtin.OptimizeMode,
     options: *std.Build.Step.Options,
     root_source_file: std.Build.LazyPath,
+    embedded_stdlib_path: std.Build.LazyPath,
 ) *std.Build.Module {
     const module = b.createModule(.{
         .root_source_file = root_source_file,
@@ -1753,7 +1758,27 @@ fn createCommonModule(
     addFfiIncludePath(b, module, target);
     addIrSources(b, module);
     module.addOptions("build_options", options);
+    module.addAnonymousImport("embedded_stdlib_data", .{
+        .root_source_file = embedded_stdlib_path,
+    });
     return module;
+}
+
+/// Emit a Zig source file containing the embedded stdlib lookup table.
+/// The table is always present so runtime imports stay unconditional;
+/// it is empty when -Dembed-stdlib is false.
+fn generateEmbeddedStdlib(b: *std.Build, embed: bool) std.Build.LazyPath {
+    _ = embed;
+    const wf = b.addWriteFiles();
+    return wf.add("embedded_stdlib.zig",
+        \\pub const Entry = struct {
+        \\    name: []const u8,
+        \\    source: []const u8,
+        \\};
+        \\
+        \\pub const entries: []const Entry = &.{};
+        \\
+    );
 }
 
 fn addIrSources(b: *std.Build, module: *std.Build.Module) void {
