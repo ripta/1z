@@ -583,6 +583,17 @@ pub const TypeKindData = union(TypeKind) {
     union_: void,
 };
 
+/// ProtocolDescriptor carries a protocol's metadata: its name, the method
+/// list as the flat symbol-interleaved-with-stack-effect array that
+/// `nativeDefineProtocol` and `protocolCheckHelper` already consume, and a
+/// monotonic protocol_id assigned by Context. Each `protocol{` definition
+/// allocates its own descriptor; identity is the pointer.
+pub const ProtocolDescriptor = struct {
+    name: []const u8,
+    methods: []const Value,
+    protocol_id: u32,
+};
+
 /// StructData carries the metadata of a struct-defined type.
 pub const StructData = struct {
     fields: []const []const u8 = &.{},

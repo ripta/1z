@@ -375,6 +375,9 @@ pub const Context = struct {
     /// Monotonic counter for assigning unique dispatch IDs to word definitions.
     /// Atomic for future thread-safety requirements.
     next_dispatch_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Monotonic counter for assigning unique IDs to protocol descriptors.
+    /// Atomic for future thread-safety requirements (M:N scheduler).
+    next_protocol_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// Dispatch table for user-defined operator/method dispatch.
     dispatch: DispatchTable,
     /// JIT dispatch table mapping word IDs to compiled code pointers.
@@ -491,6 +494,11 @@ pub const Context = struct {
         AnonymousUnionKeyContext,
         80,
     ) = .{},
+    /// Owned storage for ProtocolDescriptor records allocated via
+    /// createProtocolDescriptor. Each protocol{ definition produces a fresh
+    /// descriptor; the list keeps stable pointers for the lifetime of the
+    /// Context and lets deinit release the list header.
+    protocol_descriptors: std.ArrayListUnmanaged(*value_mod.ProtocolDescriptor) = .{},
     /// Registry of known pragma keys and their validation rules.
     pragma_registry: std.StringHashMapUnmanaged(PragmaRegistration) = .{},
     /// Stack of pragma frames for file-scoped pragma values.
@@ -932,6 +940,7 @@ pub const Context = struct {
         self.parameterized_type_descriptors.deinit(self.allocator);
         self.struct_descriptors.deinit(self.allocator);
         self.anonymous_union_type_values.deinit(self.allocator);
+        self.protocol_descriptors.deinit(self.allocator);
         self.dispatch.deinit();
         self.jit_dispatch.deinit();
         var pic_iter = self.pic_cache.iterator();
@@ -2440,6 +2449,33 @@ pub const Context = struct {
 
         try self.registerResourceTypeValue(name, tv);
         return tv;
+    }
+
+    /// Allocate a fresh ProtocolDescriptor owned by this Context. Each call
+    /// produces a distinct descriptor with a unique monotonic protocol_id;
+    /// there is no structural interning by name, mirroring the word-identity
+    /// semantics already in place for dispatch IDs. The descriptor body lives
+    /// in the quotation arena. The list header is freed by deinit.
+    pub fn createProtocolDescriptor(
+        self: *Context,
+        name: []const u8,
+        methods: []const value_mod.Value,
+    ) !*value_mod.ProtocolDescriptor {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        const alloc = self.quotationAllocator();
+        const desc = try alloc.create(value_mod.ProtocolDescriptor);
+        const name_dup = try alloc.dupe(u8, name);
+        const methods_dup = try alloc.alloc(value_mod.Value, methods.len);
+        @memcpy(methods_dup, methods);
+        desc.* = .{
+            .name = name_dup,
+            .methods = methods_dup,
+            .protocol_id = self.next_protocol_id.fetchAdd(1, .monotonic),
+        };
+        try self.protocol_descriptors.append(self.allocator, desc);
+        return desc;
     }
 
     pub fn getOrCreateParameterizedTypeDescriptor(
@@ -5016,6 +5052,50 @@ test "anonymous union interning reuses type value for same member set" {
     try std.testing.expectEqualStrings("bignum|fixnum|string", union1.name);
     try std.testing.expect(union1.member_types != null);
     try std.testing.expectEqual(@as(usize, 3), union1.member_types.?.len);
+}
+
+test "createProtocolDescriptor returns stable distinct pointers" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const methods_a = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const methods_b = [_]value_mod.Value{.{ .symbol = "inspect" }};
+
+    const desc1 = try ctx.createProtocolDescriptor("comparable", &methods_a);
+    const desc2 = try ctx.createProtocolDescriptor("inspectable", &methods_b);
+    try std.testing.expect(desc1 != desc2);
+
+    // Re-defining a protocol with the same name still produces a distinct
+    // descriptor; no structural interning by name.
+    const desc3 = try ctx.createProtocolDescriptor("comparable", &methods_a);
+    try std.testing.expect(desc1 != desc3);
+}
+
+test "createProtocolDescriptor populates name and methods" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const methods = [_]value_mod.Value{ .{ .symbol = "cmp" }, .{ .symbol = ">string" } };
+    const desc = try ctx.createProtocolDescriptor("ordered-stringable", &methods);
+
+    try std.testing.expectEqualStrings("ordered-stringable", desc.name);
+    try std.testing.expectEqual(@as(usize, 2), desc.methods.len);
+    try std.testing.expectEqualStrings("cmp", desc.methods[0].symbol);
+    try std.testing.expectEqualStrings(">string", desc.methods[1].symbol);
+}
+
+test "createProtocolDescriptor assigns monotonic protocol_id" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const desc0 = try ctx.createProtocolDescriptor("p0", &methods);
+    const desc1 = try ctx.createProtocolDescriptor("p1", &methods);
+    const desc2 = try ctx.createProtocolDescriptor("p2", &methods);
+
+    try std.testing.expectEqual(@as(u32, 0), desc0.protocol_id);
+    try std.testing.expectEqual(@as(u32, 1), desc1.protocol_id);
+    try std.testing.expectEqual(@as(u32, 2), desc2.protocol_id);
 }
 
 test "anonymous union descriptor flags are inferred by intersection" {
