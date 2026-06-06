@@ -645,16 +645,23 @@ pub const Context = struct {
         inline for (0..num_variants) |i| {
             const tag: std.meta.Tag(value_mod.Value) = @enumFromInt(i);
             const name = dispatch_mod.builtinTypeName(tag);
-            const desc = try value_mod.createBuiltinTypeDescriptor(
-                alloc,
-                builtinDescriptorFlags(tag),
-            );
 
-            const tv = try alloc.create(value_mod.TypeValue);
-            tv.* = .{ .name = name, .descriptor = desc };
+            // Umbrella type names (e.g. `constraint`) cover more than one
+            // variant tag. Reuse an already-allocated TypeValue when its
+            // name matches so `type-of` returns the same pointer and a
+            // single entry survives in `builtin_type_values`.
+            const tv = if (self.builtin_type_values.get(name)) |existing| existing else blk: {
+                const desc = try value_mod.createBuiltinTypeDescriptor(
+                    alloc,
+                    builtinDescriptorFlags(tag),
+                );
+                const new_tv = try alloc.create(value_mod.TypeValue);
+                new_tv.* = .{ .name = name, .descriptor = desc };
+                try self.builtin_type_values.put(self.allocator, name, new_tv);
+                break :blk new_tv;
+            };
 
             self.builtin_type_array[i] = tv;
-            try self.builtin_type_values.put(self.allocator, name, tv);
         }
     }
 

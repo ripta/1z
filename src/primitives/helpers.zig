@@ -250,7 +250,7 @@ pub fn valueTypeName(val: Value) []const u8 {
         .doc_string => "doc-string",
         .type_val => "type",
         .type_descriptor => "type-descriptor",
-        .protocol_descriptor => "protocol-descriptor",
+        .protocol_descriptor => "constraint",
         .sandbox_spec => "sandbox-spec",
         .unit => "unit",
     };

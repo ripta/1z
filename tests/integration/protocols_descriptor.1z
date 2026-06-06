@@ -83,6 +83,21 @@ test-protocol-pushes-descriptor-runtime: ( -- ) [
   comparable comparable = t "comparable pushed twice is pointer-identical" assert=
 ] ;
 
+\ -- type-of reports the umbrella `constraint` for any constraint-pushing
+\    word, regardless of which protocol it backs. --
+
+test-protocol-type-of-name: ( -- ) [
+  comparable type-name "constraint" "comparable type-of name is constraint" assert=
+  inspectable type-name "constraint" "inspectable type-of name is constraint" assert=
+  stringable type-name "constraint" "stringable type-of name is constraint" assert=
+] ;
+
+test-protocol-type-of-pointer-identity: ( -- ) [
+  comparable type-of constraint = "comparable type-of pointer-identical to constraint" assert-true
+  inspectable type-of constraint = "inspectable type-of pointer-identical to constraint" assert-true
+  stringable type-of constraint = "stringable type-of pointer-identical to constraint" assert-true
+] ;
+
 \ A user-defined protocol behaves identically: invocation pushes the
 \ descriptor, and the pushed value is usable with `assert-satisfies`
 \ from inside a quotation.
@@ -110,3 +125,5 @@ test-protocol-redefinition-rejected
 test-non-protocol-word-has-f
 test-protocol-pushes-descriptor-runtime
 test-user-protocol-pushes-descriptor
+test-protocol-type-of-name
+test-protocol-type-of-pointer-identity

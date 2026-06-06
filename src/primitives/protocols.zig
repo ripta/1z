@@ -125,7 +125,7 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
     const descriptor = switch (desc_val) {
         .protocol_descriptor => |d| d,
         else => {
-            helpers.setTypeMismatchError(ctx, "protocol-descriptor", desc_val);
+            helpers.setTypeMismatchError(ctx, "constraint", desc_val);
             return error.TypeMismatch;
         },
     };
@@ -158,7 +158,7 @@ fn nativeSatisfies(ctx: *Context) anyerror!void {
     const descriptor = switch (desc_val) {
         .protocol_descriptor => |d| d,
         else => {
-            helpers.setTypeMismatchError(ctx, "protocol-descriptor", desc_val);
+            helpers.setTypeMismatchError(ctx, "constraint", desc_val);
             return error.TypeMismatch;
         },
     };

@@ -21,6 +21,8 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: comparable validates my-box
 Stack: [ ]
 PASS: stringable validates my-box
@@ -50,4 +52,12 @@ PASS: comparable pushed twice is pointer-identical
 Stack: [ ]
 PASS: pushable pushed twice is pointer-identical
 PASS: pushed descriptor flows through assert-satisfies inside a quotation
+Stack: [ ]
+PASS: comparable type-of name is constraint
+PASS: inspectable type-of name is constraint
+PASS: stringable type-of name is constraint
+Stack: [ ]
+PASS: comparable type-of pointer-identical to constraint
+PASS: inspectable type-of pointer-identical to constraint
+PASS: stringable type-of pointer-identical to constraint
 Stack: [ ]
