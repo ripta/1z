@@ -1,5 +1,38 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Dictionary = @import("dictionary.zig").Dictionary;
+
+const is_freestanding = builtin.os.tag == .freestanding;
+
+// Freestanding builds never enter the interactive debugger, so the
+// terminal-driven line editor has no work to do. Substitute a no-op stub
+// that satisfies the field type and callsite contract so the rest of the
+// capi tree compiles.
+pub const LineEditor = if (is_freestanding) FreestandingLineEditor else HostedLineEditor;
+
+const FreestandingLineEditor = struct {
+    pub fn init(_: std.mem.Allocator) !FreestandingLineEditor {
+        return error.NotSupported;
+    }
+
+    pub fn deinit(_: *FreestandingLineEditor) void {}
+
+    pub fn readLine(_: *FreestandingLineEditor, _: []const u8) !?[]const u8 {
+        return null;
+    }
+
+    pub fn addHistory(_: *FreestandingLineEditor, _: []const u8) void {}
+
+    pub fn resolveHistoryPath(_: *FreestandingLineEditor) ?[]u8 {
+        return null;
+    }
+
+    pub fn loadHistory(_: *FreestandingLineEditor, _: []const u8) void {}
+
+    pub fn saveHistory(_: *FreestandingLineEditor, _: []const u8) void {}
+
+    pub fn setDictionary(_: *FreestandingLineEditor, _: ?*Dictionary) void {}
+};
 
 /// A single UTF-8 encoded codepoint (1-4 bytes).
 pub const Utf8Char = struct {
@@ -41,7 +74,7 @@ pub const Key = union(enum) {
 const max_history = 4096;
 
 /// LineEditor provides character-by-character line editing with raw terminal mode.
-pub const LineEditor = struct {
+const HostedLineEditor = struct {
     original_termios: std.posix.termios,
     raw_mode_enabled: bool = false,
     allocator: std.mem.Allocator,

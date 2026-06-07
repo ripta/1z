@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Context = @import("../context.zig").Context;
 const helpers = @import("../primitives/helpers.zig");
 const error_mapping = @import("../primitives/error_mapping.zig");
@@ -6,7 +7,49 @@ const RegistryEntry = @import("../primitives/types.zig").RegistryEntry;
 const Resource = @import("../value.zig").Resource;
 const container_backing = @import("../container_backing.zig");
 
-const c = @cImport({
+const is_freestanding = builtin.os.tag == .freestanding;
+
+// Freestanding builds skip the toy.h C source file; the toy registry
+// entries are gated to throw BuildUnsupported before reaching any c.*
+// reference.
+const c = if (is_freestanding) struct {
+    pub fn toy_add(a: c_int, b: c_int) c_int {
+        _ = a;
+        _ = b;
+        return 0;
+    }
+    pub fn toy_strlen(s: [*:0]const u8) usize {
+        _ = s;
+        return 0;
+    }
+    pub fn toy_greeting(s: [*:0]const u8) ?[*:0]u8 {
+        _ = s;
+        return null;
+    }
+    pub fn toy_checksum(p: [*]const u8, n: usize) u32 {
+        _ = p;
+        _ = n;
+        return 0;
+    }
+    pub fn toy_fill(p: [*]u8, n: usize, v: c_int) void {
+        _ = p;
+        _ = n;
+        _ = v;
+    }
+    pub fn toy_open() ?*anyopaque {
+        return null;
+    }
+    pub fn toy_close(p: ?*anyopaque) void {
+        _ = p;
+    }
+    pub fn toy_increment(p: ?*anyopaque) void {
+        _ = p;
+    }
+    pub fn toy_read(p: ?*anyopaque) c_int {
+        _ = p;
+        return 0;
+    }
+} else @cImport({
     @cInclude("toy.h");
 });
 

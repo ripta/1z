@@ -11,6 +11,7 @@ const Primitive = @import("types.zig").Primitive;
 const RegistryEntry = @import("types.zig").RegistryEntry;
 const helpers = @import("helpers.zig");
 const streams_mod = @import("streams.zig");
+const freestanding_compat = @import("../freestanding_compat.zig");
 
 const is_freestanding = builtin.os.tag == .freestanding;
 
@@ -35,7 +36,7 @@ pub const TlsState = struct {
     client: std.crypto.tls.Client,
     transport_reader: std.fs.File.Reader,
     transport_writer: std.fs.File.Writer,
-    fd: std.posix.fd_t,
+    fd: freestanding_compat.fd_t,
     read_buf: []u8,
     write_buf: []u8,
     transport_read_buf: []u8,

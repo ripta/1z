@@ -1,6 +1,98 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-const c = @cImport({
+const is_freestanding = builtin.os.tag == .freestanding;
+
+// Freestanding builds skip the ir/ir_builder C headers (the JIT backend is
+// not part of the bare-metal artifact). The stub keeps the module's surface
+// well-typed without dragging in the unavailable C headers; the JIT entry
+// points are unreachable on freestanding because nothing constructs an
+// ir_ctx in that build.
+const c = if (is_freestanding) struct {
+    pub const ir_ctx = extern struct {
+        unnamed_0: extern struct {
+            data: ?*anyopaque = null,
+        } = .{},
+        ret_type: c_int = 0,
+    };
+    pub const FILE = opaque {};
+    pub const SEEK_END: c_int = 2;
+    pub const SEEK_SET: c_int = 0;
+    pub const IR_FUNCTION: c_int = 0;
+    pub const IR_OPT_FOLDING: c_int = 0;
+    pub const IR_CONSTS_LIMIT_MIN: c_int = 0;
+    pub const IR_INSNS_LIMIT_MIN: c_int = 0;
+    pub const IR_I64: c_int = 0;
+    pub const IR_I32: c_int = 0;
+    pub const IR_BOOL: c_int = 0;
+    pub const IR_ADDR: c_int = 0;
+    pub const IR_ADD: c_int = 0;
+    pub const IR_NE: c_int = 0;
+    pub const IR_UNUSED: c_int = 0;
+    pub fn IR_OPT(op: c_int, ty: c_int) c_int {
+        _ = op;
+        _ = ty;
+        return 0;
+    }
+    pub fn ir_init(_: *ir_ctx, _: c_int, _: c_int, _: c_int) void {}
+    pub fn ir_free(_: *ir_ctx) void {}
+    pub fn _ir_START(_: *ir_ctx) void {}
+    pub fn _ir_PARAM(_: *ir_ctx, _: c_int, _: [*:0]const u8, _: c_int) c_int {
+        return 0;
+    }
+    pub fn _ir_LOAD(_: *ir_ctx, _: c_int, _: c_int) c_int {
+        return 0;
+    }
+    pub fn ir_const_addr(_: *ir_ctx, _: usize) c_int {
+        return 0;
+    }
+    pub fn _ir_RETURN(_: *ir_ctx, _: c_int) void {}
+    pub fn _ir_IF(_: *ir_ctx, _: c_int) c_int {
+        return 0;
+    }
+    pub fn _ir_IF_TRUE_cold(_: *ir_ctx, _: c_int) void {}
+    pub fn _ir_IF_FALSE(_: *ir_ctx, _: c_int) void {}
+    pub fn ir_fold2(_: *ir_ctx, _: c_int, _: c_int, _: c_int) c_int {
+        return 0;
+    }
+    pub fn ir_const_i32(_: *ir_ctx, _: c_int) c_int {
+        return 0;
+    }
+    pub fn ir_build_def_use_lists(_: *ir_ctx) void {}
+    pub fn ir_build_cfg(_: *ir_ctx) c_int {
+        return 0;
+    }
+    pub fn ir_assign_virtual_registers(_: *ir_ctx) c_int {
+        return 0;
+    }
+    pub fn ir_compute_dessa_moves(_: *ir_ctx) c_int {
+        return 0;
+    }
+    pub fn ir_emit_c(_: *ir_ctx, _: [*:0]const u8, _: *FILE) c_int {
+        return 0;
+    }
+    pub fn ir_jit_compile(_: *ir_ctx, _: c_int, _: *usize) ?*anyopaque {
+        return null;
+    }
+    pub fn ir_mem_unmap(_: *anyopaque, _: usize) c_int {
+        return 0;
+    }
+    pub fn tmpfile() ?*FILE {
+        return null;
+    }
+    pub fn fclose(_: *FILE) c_int {
+        return 0;
+    }
+    pub fn fseek(_: *FILE, _: c_long, _: c_int) c_int {
+        return 0;
+    }
+    pub fn ftell(_: *FILE) c_long {
+        return 0;
+    }
+    pub fn fread(_: [*]u8, _: usize, _: usize, _: *FILE) usize {
+        return 0;
+    }
+} else @cImport({
     @cInclude("ir.h");
     @cInclude("ir_builder.h");
 });

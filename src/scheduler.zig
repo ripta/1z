@@ -12,6 +12,7 @@ const ProcessWaitHandle = @import("multiplexer.zig").ProcessWaitHandle;
 const processWaitHandleKey = @import("multiplexer.zig").processWaitHandleKey;
 const trace = @import("trace.zig");
 const value_mod = @import("value.zig");
+const freestanding_compat = @import("freestanding_compat.zig");
 
 const is_freestanding = builtin.os.tag == .freestanding;
 
@@ -35,18 +36,16 @@ pub const IoWaitEntry = struct {
 
 pub const ProcessWaitEntry = struct {
     task: *Task,
-    pid: std.posix.pid_t,
+    pid: freestanding_compat.pid_t,
     handle: ProcessWaitHandle,
 };
 
 /// Read the monotonic clock and return the current time as a single i128 nanosecond value.
-pub fn monotonicNowNs() i128 {
-    if (is_freestanding) {
-        return baremetalNowNs();
-    } else {
-        const ts = std.posix.clock_gettime(.MONOTONIC) catch unreachable;
-        return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
-    }
+pub const monotonicNowNs = if (is_freestanding) baremetalNowNs else hostedMonotonicNowNs;
+
+fn hostedMonotonicNowNs() i128 {
+    const ts = std.posix.clock_gettime(.MONOTONIC) catch unreachable;
+    return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
 }
 
 /// Freestanding monotonic clock backed by the RISC-V `time` CSR. QEMU's
@@ -153,13 +152,13 @@ pub const Scheduler = struct {
     all_tasks: std.ArrayListUnmanaged(*Task) = .{},
     /// Guards `all_tasks` against concurrent appends from other worker
     /// threads (spawn dispatches a fresh task onto the target scheduler).
-    all_tasks_mu: std.Thread.Mutex = .{},
+    all_tasks_mu: freestanding_compat.Mutex = .{},
     /// Channels created during this scheduler's lifetime, freed on deinit.
     channels: std.ArrayListUnmanaged(*Channel) = .{},
     /// Platform I/O multiplexer for async-aware stream operations.
     multiplexer: Multiplexer,
     /// Maps file descriptors to tasks suspended waiting on I/O readiness.
-    io_wait_map: std.AutoHashMapUnmanaged(std.posix.fd_t, IoWaitEntry) = .{},
+    io_wait_map: std.AutoHashMapUnmanaged(freestanding_compat.fd_t, IoWaitEntry) = .{},
     /// Maps child-process wait handles to tasks suspended waiting on exit.
     process_wait_map: std.AutoHashMapUnmanaged(u64, ProcessWaitEntry) = .{},
     /// Wall-clock stall detection threshold in nanoseconds.
@@ -433,7 +432,7 @@ pub const Scheduler = struct {
 
     /// Register the current task's interest in an fd and suspend it until readiness.
     /// Called from stream primitives when an I/O operation would block.
-    pub fn ioSuspendCurrentTask(self: *Scheduler, fd: std.posix.fd_t, event: IoEvent) void {
+    pub fn ioSuspendCurrentTask(self: *Scheduler, fd: freestanding_compat.fd_t, event: IoEvent) void {
         if (self.current_task) |task| {
             self.multiplexer.register(fd, event) catch {};
             self.io_wait_map.put(self.allocator, fd, .{ .task = task, .event = event }) catch {};
@@ -443,7 +442,7 @@ pub const Scheduler = struct {
     }
 
     /// Suspend the current task until the child process exits.
-    pub fn processSuspendCurrentTask(self: *Scheduler, pid: std.posix.pid_t) !void {
+    pub fn processSuspendCurrentTask(self: *Scheduler, pid: freestanding_compat.pid_t) !void {
         const task = self.current_task orelse return;
         const handle = try self.multiplexer.registerProcessExit(pid);
         errdefer self.multiplexer.unregisterProcessExit(handle) catch {};
@@ -462,7 +461,7 @@ pub const Scheduler = struct {
     /// Move cancelled tasks from the I/O wait map to the run queue so they
     /// resume and unwind cooperatively through their cleanup handlers.
     fn drainCancelledIOWaiters(self: *Scheduler) void {
-        var removals = std.ArrayListUnmanaged(std.posix.fd_t){};
+        var removals = std.ArrayListUnmanaged(freestanding_compat.fd_t){};
         defer removals.deinit(self.allocator);
 
         var it = self.io_wait_map.iterator();

@@ -1,5 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
@@ -8772,6 +8775,7 @@ fn emitParamValidation(state: *CompileState, effect_ptr: usize) void {
 // =============================================================================
 
 export fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 0;
     const ctx: *Context = @ptrFromInt(ctx_raw);
 
@@ -8801,6 +8805,7 @@ export fn jitSafepoint(ctx_raw: usize) callconv(.c) i32 {
 }
 
 export fn jitGet(ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     dynamic_vars_mod.nativeGet(ctx) catch |err| {
@@ -8811,6 +8816,7 @@ export fn jitGet(ctx_raw: usize) callconv(.c) i32 {
 }
 
 export fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     dynamic_vars_mod.nativeWithParameter(ctx) catch |err| {
@@ -8821,6 +8827,7 @@ export fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
 }
 
 export fn jitRecover(ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     errors_mod.nativeRecover(ctx) catch |err| {
@@ -8831,6 +8838,7 @@ export fn jitRecover(ctx_raw: usize) callconv(.c) i32 {
 }
 
 export fn jitCleanup(ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     errors_mod.nativeCleanup(ctx) catch |err| {
@@ -8841,6 +8849,7 @@ export fn jitCleanup(ctx_raw: usize) callconv(.c) i32 {
 }
 
 export fn jitValidateParamEffects(ctx_raw: usize, effect_ptr_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const effect: *const StackEffect = @ptrFromInt(effect_ptr_raw);
@@ -8856,6 +8865,7 @@ export fn jitValidateParamEffects(ctx_raw: usize, effect_ptr_raw: usize) callcon
 }
 
 export fn jitIteratorOp(ctx_raw: usize, opcode_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const opcode = std.meta.intToEnum(IteratorOpcode, opcode_raw) catch return 1;
@@ -8884,6 +8894,7 @@ export fn jitIteratorOp(ctx_raw: usize, opcode_raw: usize) callconv(.c) i32 {
 /// entry directly, skipping the interpreter loop, stack inspection, and
 /// PIC cache management that jitInterpretedCall performs.
 export fn jitPicDispatch(ctx_raw: usize, word_id_raw: usize, tag_a_raw: usize, tag_b_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const tag_a: u8 = @intCast(tag_a_raw);
@@ -8942,6 +8953,7 @@ export fn jitPicDispatch(ctx_raw: usize, word_id_raw: usize, tag_a_raw: usize, t
 /// emits a PIC hit trace event when --trace-pic is enabled. The word name
 /// is passed as a pointer+length pair baked into the compiled code.
 export fn jitPicNativeCall(ctx_raw: usize, fn_ptr_raw: usize, name_ptr_raw: usize, name_len_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const fn_ptr: *const fn (*Context) anyerror!void = @ptrFromInt(fn_ptr_raw);
@@ -8961,6 +8973,7 @@ export fn jitPicNativeCall(ctx_raw: usize, fn_ptr_raw: usize, name_ptr_raw: usiz
 }
 
 export fn jitPicTopTagsMatch(ctx_raw: usize, tag_a_raw: usize, tag_b_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 0;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const items = ctx.stack.items.items;
@@ -8971,6 +8984,7 @@ export fn jitPicTopTagsMatch(ctx_raw: usize, tag_a_raw: usize, tag_b_raw: usize)
 }
 
 export fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const func: *const fn (*Context) anyerror!void = @ptrFromInt(fn_ptr_raw);
@@ -8982,6 +8996,7 @@ export fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
 }
 
 export fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     if (!ctx.allow_interpreted_fallback) {
@@ -9002,6 +9017,7 @@ export fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
 /// (they are typed as uintptr_t). This thin wrapper casts code_ptr to the
 /// proper function pointer type and dispatches.
 export fn jitCallCodePtr(jit_ctx_raw: usize, code_ptr_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (code_ptr_raw == 0) return 1;
     const func: *const fn (usize) callconv(.c) i32 = @ptrFromInt(code_ptr_raw);
     return func(jit_ctx_raw);
@@ -9015,6 +9031,7 @@ export fn jitCallCodePtr(jit_ctx_raw: usize, code_ptr_raw: usize) callconv(.c) i
 /// owning reference. No-op for scalar Values. Touches only the backing
 /// allocator, never ctx.stack, so callers need no sp store or stack refresh.
 export fn jitRetainSlot(value_ptr: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     const v: *const Value = @ptrFromInt(value_ptr);
     container_backing.retainValue(v.*);
     return 0;
@@ -9024,12 +9041,14 @@ export fn jitRetainSlot(value_ptr: usize) callconv(.c) i32 {
 /// Emitted where compiled code discards a `.raw_at_slot` entry that no
 /// native consumes (drop, the `if` condition). Mirror of jitRetainSlot.
 export fn jitReleaseSlot(value_ptr: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     const v: *const Value = @ptrFromInt(value_ptr);
     container_backing.releaseValue(v.*);
     return 0;
 }
 
 export fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(str_ptr);
@@ -9046,6 +9065,7 @@ export fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
 
 /// Push a symbol literal onto the stack. Same mechanism as jitPushString.
 export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(str_ptr);
@@ -9082,6 +9102,7 @@ fn recordSlotMiss(ctx: *Context, kind: []const u8, slot: usize) void {
 /// The runtime image loader patched the slot with the live `*TypeValue`
 /// pointer; the helper just pushes the Value variant.
 export fn jitPushTypeValueSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const table = ctx.image_typevalue_slots orelse {
@@ -9106,6 +9127,7 @@ export fn jitPushTypeValueSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 /// `onez_image_struct_type_slots[]`. The loader patched the slot during
 /// runtime-image rehydration; the helper just pushes the Value variant.
 export fn jitPushStructTypeSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const table = ctx.image_struct_type_slots orelse {
@@ -9130,6 +9152,7 @@ export fn jitPushStructTypeSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 /// well-known marker singleton or a freshly-allocated `*Marker` during
 /// runtime-image rehydration.
 export fn jitPushMarkerSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const table = ctx.image_marker_slots orelse {
@@ -9154,6 +9177,7 @@ export fn jitPushMarkerSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 /// and deserialized its default quotation during runtime-image
 /// rehydration.
 export fn jitPushParameterSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const table = ctx.image_parameter_slots orelse {
@@ -9179,6 +9203,7 @@ export fn jitPushParameterSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 /// deserialized from the description row's bytecode) during
 /// runtime-image rehydration; the helper pushes the stored Value.
 export fn jitPushTaggedSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const table = ctx.image_tagged_slots orelse {
@@ -9205,6 +9230,7 @@ export fn jitPushTaggedSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 /// before pushing so each push site donates its own reference and the
 /// slot's anchor reference remains intact.
 export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const table = ctx.image_mutable_map_slots orelse {
@@ -9232,6 +9258,7 @@ export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 /// `dest_ptr`. Unlike jitPushString which appends to the stack, this writes
 /// to an existing slot position used by materializeQuotations.
 export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize, quotation_id: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(data_ptr);
@@ -9255,6 +9282,7 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
 /// and push it onto the stack. The val_tag in the serialized data determines
 /// whether an array or hash is constructed.
 export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(data_ptr);
@@ -9280,6 +9308,7 @@ export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callcon
 /// pointer would scribble into freed memory; this call re-reads the live
 /// ptr+capacity from the Context so emitted code can re-LOAD both fields.
 export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (jit_ctx_raw == 0) return 0;
     const jc: *JitContext = @ptrFromInt(jit_ctx_raw);
     const ctx_raw: usize = @intFromPtr(jc.ctx);
@@ -9298,6 +9327,7 @@ export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
 /// reservation, so each compiled entry must re-check and grow the stack
 /// itself. Returns 0 on success, 2 (error_propagate) on OOM.
 export fn jitEnsureStackCapacity(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (jit_ctx_raw == 0) return 2;
     const jc: *JitContext = @ptrFromInt(jit_ctx_raw);
     // Fast path: capacity already suffices, so there is nothing to do and
@@ -9332,6 +9362,7 @@ export fn jitAppendNamedTraceFrame(
     name_len_raw: usize,
     line_raw: usize,
 ) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 0;
     if (name_ptr_raw == 0) return 0;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -9347,6 +9378,7 @@ export fn jitAppendBuiltinTraceFrame(
     frame_kind_raw: usize,
     line_raw: usize,
 ) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     if (ctx_raw == 0) return 0;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const kind: BuiltinTraceFrameKind = std.meta.intToEnum(BuiltinTraceFrameKind, frame_kind_raw) catch return 0;
@@ -9362,18 +9394,22 @@ export fn jitAppendBuiltinTraceFrame(
 }
 
 export fn jitOverflowError(ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     return setJitError(ctx_raw, error.Overflow);
 }
 
 export fn jitDivisionByZeroError(ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     return setJitError(ctx_raw, error.DivisionByZero);
 }
 
 export fn jitStackUnderflowError(ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     return setJitError(ctx_raw, error.StackUnderflow);
 }
 
 export fn jitTypeMismatchError(ctx_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
     return setJitError(ctx_raw, error.TypeMismatch);
 }
 
@@ -9452,6 +9488,8 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
 /// `jitInterpretedCall` so callers can swap one for the other in
 /// generated code.
 export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
+    if (comptime is_freestanding) return 1;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const word_id: u32 = @intCast(word_id_raw);
@@ -9553,6 +9591,8 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
 }
 
 export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+    if (comptime is_freestanding) return 0;
+    if (comptime is_freestanding) return 1;
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const word_id: u32 = @intCast(word_id_raw);

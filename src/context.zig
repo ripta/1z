@@ -1,10 +1,14 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 const Stack = @import("stack.zig").Stack;
 const dict_mod = @import("dictionary.zig");
 const Dictionary = dict_mod.Dictionary;
 const container_backing = @import("container_backing.zig");
+const freestanding_compat = @import("freestanding_compat.zig");
 
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
@@ -558,7 +562,7 @@ pub const Context = struct {
     parent_context: ?*const Context = null,
     /// RwLock protecting shared registries. Heap-allocated by the root context
     /// and shared by reference to all child task contexts.
-    shared_lock: *std.Thread.RwLock = undefined,
+    shared_lock: *freestanding_compat.RwLock = undefined,
     /// Debug-only tracker that asserts lock acquisition respects the ordering
     /// hierarchy: context > channel > tz. Heap-allocated by the root context.
     lock_order_tracker: *LockOrderTracker = undefined,
@@ -684,7 +688,7 @@ pub const Context = struct {
             .jit_dispatch = JitDispatchTable.init(allocator),
         };
 
-        ctx.shared_lock = allocator.create(std.Thread.RwLock) catch |err| {
+        ctx.shared_lock = allocator.create(freestanding_compat.RwLock) catch |err| {
             std.debug.panic("Failed to allocate shared lock: {any}", .{err});
         };
         ctx.shared_lock.* = .{};
@@ -1248,22 +1252,32 @@ pub const Context = struct {
     // Lock helpers (instrument lock_order_tracker for debug assertions)
     // =========================================================================
 
-    fn acquireSharedRead(self: *const Context) void {
+    const acquireSharedRead = if (is_freestanding) acquireSharedReadFreestanding else acquireSharedReadHosted;
+    const releaseSharedRead = if (is_freestanding) releaseSharedReadFreestanding else releaseSharedReadHosted;
+    const acquireSharedWrite = if (is_freestanding) acquireSharedWriteFreestanding else acquireSharedWriteHosted;
+    const releaseSharedWrite = if (is_freestanding) releaseSharedWriteFreestanding else releaseSharedWriteHosted;
+
+    fn acquireSharedReadFreestanding(_: *const Context) void {}
+    fn releaseSharedReadFreestanding(_: *const Context) void {}
+    fn acquireSharedWriteFreestanding(_: *const Context) void {}
+    fn releaseSharedWriteFreestanding(_: *const Context) void {}
+
+    fn acquireSharedReadHosted(self: *const Context) void {
         self.lock_order_tracker.acquire(.context_rw);
         self.shared_lock.lockShared();
     }
 
-    fn releaseSharedRead(self: *const Context) void {
+    fn releaseSharedReadHosted(self: *const Context) void {
         self.shared_lock.unlockShared();
         self.lock_order_tracker.release(.context_rw);
     }
 
-    fn acquireSharedWrite(self: *const Context) void {
+    fn acquireSharedWriteHosted(self: *const Context) void {
         self.lock_order_tracker.acquire(.context_rw);
         self.shared_lock.lock();
     }
 
-    fn releaseSharedWrite(self: *const Context) void {
+    fn releaseSharedWriteHosted(self: *const Context) void {
         self.shared_lock.unlock();
         self.lock_order_tracker.release(.context_rw);
     }

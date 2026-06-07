@@ -1,11 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const freestanding_compat = @import("freestanding_compat.zig");
 
 pub const IoEvent = enum { read, write };
 
 pub const ProcessWaitHandle = union(enum) {
-    pid: std.posix.pid_t,
-    pidfd: std.posix.fd_t,
+    pid: freestanding_compat.pid_t,
+    pidfd: freestanding_compat.fd_t,
 };
 
 pub fn processWaitHandleKey(handle: ProcessWaitHandle) u64 {
@@ -17,12 +18,12 @@ pub fn processWaitHandleKey(handle: ProcessWaitHandle) u64 {
 
 pub const ReadyEvent = union(enum) {
     io: struct {
-        fd: std.posix.fd_t,
+        fd: freestanding_compat.fd_t,
         event: IoEvent,
     },
     process_exit: struct {
         handle: ProcessWaitHandle,
-        pid: std.posix.pid_t,
+        pid: freestanding_compat.pid_t,
     },
     wake: struct {
         ident: u64,
@@ -108,7 +109,7 @@ pub const Multiplexer = struct {
         std.posix.close(self.mux_fd);
     }
 
-    pub fn register(self: *Multiplexer, fd: std.posix.fd_t, event: IoEvent) !void {
+    pub fn register(self: *Multiplexer, fd: freestanding_compat.fd_t, event: IoEvent) !void {
         if (is_kqueue) {
             const filter: i16 = if (event == .read) std.c.EVFILT.READ else std.c.EVFILT.WRITE;
             const ev = std.posix.Kevent{
@@ -134,7 +135,7 @@ pub const Multiplexer = struct {
         }
     }
 
-    pub fn registerProcessExit(self: *Multiplexer, pid: std.posix.pid_t) !ProcessWaitHandle {
+    pub fn registerProcessExit(self: *Multiplexer, pid: freestanding_compat.pid_t) !ProcessWaitHandle {
         if (is_kqueue) {
             const ev = std.posix.Kevent{
                 .ident = @intCast(pid),
@@ -163,7 +164,7 @@ pub const Multiplexer = struct {
         }
     }
 
-    pub fn unregister(self: *Multiplexer, fd: std.posix.fd_t, event: IoEvent) !void {
+    pub fn unregister(self: *Multiplexer, fd: freestanding_compat.fd_t, event: IoEvent) !void {
         if (is_kqueue) {
             const filter: i16 = if (event == .read) std.c.EVFILT.READ else std.c.EVFILT.WRITE;
             const ev = std.posix.Kevent{
@@ -294,9 +295,9 @@ pub const Multiplexer = struct {
 /// back-pointer. It does not own the multiplexer fd; only the eventfd it
 /// allocated on Linux is owned and closed on `deinit`.
 pub const WakeSource = struct {
-    mux_fd: std.posix.fd_t,
+    mux_fd: freestanding_compat.fd_t,
     ident: u64,
-    fd: if (is_epoll) std.posix.fd_t else void,
+    fd: if (is_epoll) freestanding_compat.fd_t else void,
 
     /// Wake the multiplexer's `poll()`. Safe to call from any thread.
     /// Coalesces: multiple signals before a poll observation are collapsed
@@ -346,7 +347,7 @@ pub const WakeSource = struct {
     }
 };
 
-fn openPidFd(pid: std.posix.pid_t) !std.posix.fd_t {
+fn openPidFd(pid: freestanding_compat.pid_t) !freestanding_compat.fd_t {
     if (!is_epoll) unreachable;
 
     const rc = std.os.linux.pidfd_open(pid, 0);

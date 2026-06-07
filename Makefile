@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test freestanding-build
+.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test freestanding-build freestanding-debug
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -435,6 +435,27 @@ freestanding-build: ## Compile-check the freestanding capi library for riscv64
 		exit 1; \
 	fi
 	@echo "PASS: lib1z.a built for riscv64-freestanding-none with no host-only symbol references"
+
+# Diagnostic-only targets. The default freestanding-build invokes the Zig 0.15
+# build runner, which buffers compiler output through `--listen=-` and only
+# reports "the following command terminated unexpectedly" when the underlying
+# compile crashes mid-analysis. These targets bypass the build runner so the
+# real file:line diagnostics surface, and capture a backtrace when the
+# compiler itself crashes (a known issue with Zig 0.15 deep-recursive type
+# chains in LLVM debug-info codegen, fixed by `-fstrip`).
+freestanding-debug-lldb: ## Run the failing freestanding build under lldb to capture a segfault backtrace
+	@CMD=$$(grep -E '^/.*zig build-lib .* --listen=-$$' $(ZIG_PREFIX)/freestanding-debug.log | tail -1 | sed 's/ --listen=-$$//'); \
+	test -n "$$CMD" || { echo "FAIL: run \`make freestanding-debug\` first to populate the log"; exit 1; }; \
+	lldb --batch -o run -o "bt 40" -o quit -- $$CMD
+
+freestanding-debug: ## Print real freestanding compile errors (no build-runner wrapping)
+	@echo "Running zig build to populate cache..."
+	@-zig build --prefix $(ZIG_PREFIX)/freestanding-riscv64 -Dtarget=riscv64-freestanding-none --verbose install 2>$(ZIG_PREFIX)/freestanding-debug.log; true
+	@CMD=$$(grep -E '^/.*zig build-lib .* --listen=-$$' $(ZIG_PREFIX)/freestanding-debug.log | tail -1 | sed 's/ --listen=-$$//'); \
+	test -n "$$CMD" || { echo "FAIL: could not extract zig build-lib command from verbose log"; cat $(ZIG_PREFIX)/freestanding-debug.log; exit 1; }; \
+	echo "Re-running underlying build-lib (default backend) ..."; \
+	echo "$$CMD -freference-trace"; \
+	eval "$$CMD -freference-trace"
 
 clean: ## Remove build artifacts
 	mv .zig-cache .old.zig-cache

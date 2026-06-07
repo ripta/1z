@@ -18,6 +18,7 @@ const Capability = types_mod.Capability;
 
 const helpers = @import("helpers.zig");
 const streams = @import("streams.zig");
+const freestanding_compat = @import("../freestanding_compat.zig");
 
 pub const registry_entries = [_]RegistryEntry{
     .{
@@ -217,13 +218,13 @@ fn pushChildStream(ctx: *Context, maybe_file: ?std.fs.File, mode: StreamMode, na
     }
 }
 
-fn popPid(ctx: *Context, opname: []const u8) !std.posix.pid_t {
+fn popPid(ctx: *Context, opname: []const u8) !freestanding_compat.pid_t {
     const raw = try helpers.popFixnum(ctx);
     if (raw <= 0) {
         helpers.setErrorContext(ctx, "{s}: pid must be a positive fixnum, got {d}", .{ opname, raw });
         return error.TypeMismatch;
     }
-    return std.math.cast(std.posix.pid_t, raw) orelse {
+    return std.math.cast(freestanding_compat.pid_t, raw) orelse {
         helpers.setErrorContext(ctx, "{s}: pid out of range: {d}", .{ opname, raw });
         return error.TypeMismatch;
     };
@@ -237,7 +238,7 @@ fn mapSpawnError(err: anyerror) anyerror {
     };
 }
 
-fn tryWaitPidNoHang(pid: std.posix.pid_t) ?u32 {
+fn tryWaitPidNoHang(pid: freestanding_compat.pid_t) ?u32 {
     const result = std.posix.waitpid(pid, std.posix.W.NOHANG);
     if (result.pid == 0) return null;
     return result.status;

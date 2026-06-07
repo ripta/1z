@@ -1,4 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 /// An allocator wrapper that enforces a hard cap on live memory usage.
 /// Tracks current live bytes (incremented on alloc/resize/remap, decremented on free).
@@ -112,11 +115,32 @@ pub const MemoryLimitAllocator = struct {
             attempted,
         }) catch "Error: memory limit exceeded\n";
 
+        writeMessageToStderr(msg);
+        exitProcess(1);
+    }
+
+    const exitProcess = if (is_freestanding) hangForever else processExitHosted;
+
+    fn hangForever(code: u8) noreturn {
+        _ = code;
+        while (true) {}
+    }
+
+    fn processExitHosted(code: u8) noreturn {
+        std.process.exit(code);
+    }
+
+    const writeMessageToStderr = if (is_freestanding) writeMessageToStderrFreestanding else writeMessageToStderrHosted;
+
+    fn writeMessageToStderrFreestanding(msg: []const u8) void {
+        _ = msg;
+    }
+
+    fn writeMessageToStderrHosted(msg: []const u8) void {
         var written: usize = 0;
         while (written < msg.len) {
             written += std.posix.write(std.posix.STDERR_FILENO, msg[written..]) catch break;
         }
-        std.process.exit(1);
     }
 
     pub fn formatBytesStatic(bytes: usize) []const u8 {

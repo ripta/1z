@@ -11,6 +11,7 @@ const VirtualType = value_mod.VirtualType;
 const Primitive = @import("types.zig").Primitive;
 const RegistryEntry = @import("types.zig").RegistryEntry;
 const helpers = @import("helpers.zig");
+const freestanding_compat = @import("../freestanding_compat.zig");
 
 const popFixnum = helpers.popFixnum;
 
@@ -291,7 +292,7 @@ fn nativeBind(ctx: *Context) anyerror!void {
     const addr_info = try extractAddr(ctx);
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
-    const fd: std.posix.fd_t = @intCast(fd_val);
+    const fd: freestanding_compat.fd_t = @intCast(fd_val);
 
     const sock_addr = try addrToSockaddr(ctx, addr_info);
 
@@ -318,7 +319,7 @@ fn nativeListen(ctx: *Context) anyerror!void {
     if (fd_val < 0) return error.InvalidArgument;
     if (backlog_val < 0) return error.InvalidArgument;
 
-    const fd: std.posix.fd_t = @intCast(fd_val);
+    const fd: freestanding_compat.fd_t = @intCast(fd_val);
     const backlog: u31 = @intCast(@min(backlog_val, std.math.maxInt(u31)));
 
     std.posix.listen(fd, backlog) catch {
@@ -332,7 +333,7 @@ fn nativeAccept(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "accept");
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
-    const fd: std.posix.fd_t = @intCast(fd_val);
+    const fd: freestanding_compat.fd_t = @intCast(fd_val);
 
     if (ctx.scheduler != null) {
         setNonBlocking(fd);
@@ -375,7 +376,7 @@ fn nativeConnect(ctx: *Context) anyerror!void {
     const addr_info = try extractAddr(ctx);
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
-    const fd: std.posix.fd_t = @intCast(fd_val);
+    const fd: freestanding_compat.fd_t = @intCast(fd_val);
 
     const sock_addr = try addrToSockaddr(ctx, addr_info);
 
@@ -426,7 +427,7 @@ fn nativeFdClose(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "fd-close");
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
-    const fd: std.posix.fd_t = @intCast(fd_val);
+    const fd: freestanding_compat.fd_t = @intCast(fd_val);
     std.posix.close(fd);
 }
 
@@ -463,7 +464,7 @@ fn nativeUdpSendto(ctx: *Context) anyerror!void {
     const data_val = try ctx.stack.pop();
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
-    const fd: std.posix.fd_t = @intCast(fd_val);
+    const fd: freestanding_compat.fd_t = @intCast(fd_val);
 
     const bytes = try extractDataBytes(ctx, data_val);
     const sock_addr = try addrToSockaddr(ctx, addr_info);
@@ -498,7 +499,7 @@ fn nativeUdpRecvfrom(ctx: *Context) anyerror!void {
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     if (maxlen <= 0) return error.InvalidArgument;
-    const fd: std.posix.fd_t = @intCast(fd_val);
+    const fd: freestanding_compat.fd_t = @intCast(fd_val);
 
     const alloc = ctx.quotationAllocator();
     const buffer = try alloc.alloc(u8, @intCast(maxlen));
@@ -545,7 +546,7 @@ fn nativeUdpSend(ctx: *Context) anyerror!void {
     const data_val = try ctx.stack.pop();
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
-    const fd: std.posix.fd_t = @intCast(fd_val);
+    const fd: freestanding_compat.fd_t = @intCast(fd_val);
 
     const bytes = try extractDataBytes(ctx, data_val);
 
@@ -579,7 +580,7 @@ fn nativeUdpRecv(ctx: *Context) anyerror!void {
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     if (maxlen <= 0) return error.InvalidArgument;
-    const fd: std.posix.fd_t = @intCast(fd_val);
+    const fd: freestanding_compat.fd_t = @intCast(fd_val);
 
     const alloc = ctx.quotationAllocator();
     const buffer = try alloc.alloc(u8, @intCast(maxlen));
@@ -618,7 +619,7 @@ fn nativeSetsockopt(ctx: *Context) anyerror!void {
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
 
-    const fd: std.posix.fd_t = @intCast(fd_val);
+    const fd: freestanding_compat.fd_t = @intCast(fd_val);
     const level: i32 = @intCast(level_val);
     const optname: u32 = @intCast(optname_val);
 
@@ -762,7 +763,7 @@ fn addrToSockaddr(ctx: *Context, info: AddrInfo) !std.net.Address {
 }
 
 /// Set O_NONBLOCK on a raw file descriptor.
-fn setNonBlocking(fd: std.posix.fd_t) void {
+fn setNonBlocking(fd: freestanding_compat.fd_t) void {
     const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
     if (raw_flags < 0) return;
     var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
@@ -771,7 +772,7 @@ fn setNonBlocking(fd: std.posix.fd_t) void {
 }
 
 /// Clear O_NONBLOCK on a raw file descriptor.
-fn clearNonBlocking(fd: std.posix.fd_t) void {
+fn clearNonBlocking(fd: freestanding_compat.fd_t) void {
     const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
     if (raw_flags < 0) return;
     var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
