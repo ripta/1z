@@ -1,4 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
@@ -38,6 +41,7 @@ pub const registry_entries = [_]RegistryEntry{
 };
 
 fn nativeSpawnProcess(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn-process");
     const stderr_sym = try helpers.popSymbol(ctx);
     const stdout_sym = try helpers.popSymbol(ctx);
     const stdin_sym = try helpers.popSymbol(ctx);
@@ -67,6 +71,7 @@ fn nativeSpawnProcess(ctx: *Context) anyerror!void {
 }
 
 fn nativeWaitPid(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "wait-pid");
     const pid = try popPid(ctx, "wait-pid");
 
     if (ctx.scheduler) |scheduler| {
@@ -86,6 +91,7 @@ fn nativeWaitPid(ctx: *Context) anyerror!void {
 }
 
 fn nativeKillPid(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "kill-pid");
     const signal_num = try helpers.popFixnum(ctx);
     const pid = try popPid(ctx, "kill-pid");
     if (signal_num < 0 or signal_num > std.math.maxInt(u8)) {

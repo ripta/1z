@@ -1,6 +1,80 @@
 const std = @import("std");
 const builtin = @import("builtin");
-pub const c_ffi = @cImport({
+
+const is_freestanding = builtin.os.tag == .freestanding;
+
+// Freestanding builds have no libffi headers and no dynamic linker. Every
+// registered native gates on `is_freestanding` and throws BuildUnsupported
+// before reaching any c_ffi reference; this stub keeps the surrounding
+// function signatures well-typed so the module still compiles.
+pub const c_ffi = if (is_freestanding) struct {
+    pub const ffi_type = extern struct {};
+    pub const ffi_cif = extern struct {};
+    pub const ffi_closure = extern struct {};
+    pub const ffi_status = c_uint;
+    pub const FFI_OK: c_uint = 0;
+    pub const FFI_DEFAULT_ABI: c_uint = 0;
+    pub const FFI_TYPE_STRUCT: c_uint = 0;
+
+    pub var ffi_type_void: ffi_type = .{};
+    pub var ffi_type_pointer: ffi_type = .{};
+    pub var ffi_type_float: ffi_type = .{};
+    pub var ffi_type_double: ffi_type = .{};
+    pub var ffi_type_sint8: ffi_type = .{};
+    pub var ffi_type_sint16: ffi_type = .{};
+    pub var ffi_type_sint32: ffi_type = .{};
+    pub var ffi_type_sint64: ffi_type = .{};
+    pub var ffi_type_uint8: ffi_type = .{};
+    pub var ffi_type_uint16: ffi_type = .{};
+    pub var ffi_type_uint32: ffi_type = .{};
+    pub var ffi_type_uint64: ffi_type = .{};
+
+    pub fn ffi_prep_cif(cif: ?*ffi_cif, abi: c_uint, nargs: c_uint, rtype: [*c]ffi_type, atypes: [*c][*c]ffi_type) callconv(.c) ffi_status {
+        _ = cif;
+        _ = abi;
+        _ = nargs;
+        _ = rtype;
+        _ = atypes;
+        return 0;
+    }
+    pub fn ffi_prep_cif_var(cif: ?*ffi_cif, abi: c_uint, nfixed: c_uint, ntotal: c_uint, rtype: [*c]ffi_type, atypes: [*c][*c]ffi_type) callconv(.c) ffi_status {
+        _ = cif;
+        _ = abi;
+        _ = nfixed;
+        _ = ntotal;
+        _ = rtype;
+        _ = atypes;
+        return 0;
+    }
+    pub fn ffi_call(cif: ?*ffi_cif, fn_ptr: ?*const fn () callconv(.c) void, rvalue: ?*anyopaque, avalue: [*c]?*anyopaque) callconv(.c) void {
+        _ = cif;
+        _ = fn_ptr;
+        _ = rvalue;
+        _ = avalue;
+    }
+    pub fn ffi_closure_alloc(size: usize, code: [*c]?*anyopaque) callconv(.c) ?*anyopaque {
+        _ = size;
+        _ = code;
+        return null;
+    }
+    pub fn ffi_closure_free(ptr: ?*anyopaque) callconv(.c) void {
+        _ = ptr;
+    }
+    pub fn ffi_prep_closure_loc(closure: ?*ffi_closure, cif: ?*ffi_cif, fun: ?*const fn () callconv(.c) void, user_data: ?*anyopaque, code_loc: ?*anyopaque) callconv(.c) ffi_status {
+        _ = closure;
+        _ = cif;
+        _ = fun;
+        _ = user_data;
+        _ = code_loc;
+        return 0;
+    }
+    pub fn ffi_get_struct_offsets(abi: c_uint, struct_type: [*c]ffi_type, offsets: [*c]usize) callconv(.c) ffi_status {
+        _ = abi;
+        _ = struct_type;
+        _ = offsets;
+        return 0;
+    }
+} else @cImport({
     @cInclude("ffi.h");
 });
 const Context = @import("../context.zig").Context;
@@ -74,6 +148,7 @@ fn allocPrintZ(alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype
 /// In this case, the resource will have a type name of "dylib-static" and will not be closed
 /// when the resource is closed, since it does not represent an actual dynamic library handle.
 fn nativeLibOpen(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "lib-open");
     const alloc = ctx.arena.allocator();
     const name = try helpers.popString(ctx);
 
@@ -131,6 +206,7 @@ fn nativeLibOpen(ctx: *Context) anyerror!void {
 /// a pointer to the symbol. This "ffi-fn" resource can then be used with bind-sig to
 /// associate it with a signature for invocation.
 fn nativeLibSymbol(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "lib-symbol");
     const alloc = ctx.arena.allocator();
     const name = try helpers.popString(ctx);
     const lib_resource = try helpers.popResource(ctx);
@@ -176,6 +252,7 @@ fn nativeLibSymbol(ctx: *Context) anyerror!void {
 /// and extracts the parameter and return type information from the "ffi-sig". It then constructs
 /// an internal FfiSignature representation and attaches it to the "ffi-fn" resource for
 fn nativeBindSig(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "bind-sig");
     const alloc = ctx.arena.allocator();
 
     const sig_val = try ctx.stack.pop();
@@ -382,6 +459,7 @@ const ArgSlot = extern union {
 ///
 /// After the call, it marshals the return value back into a 1z Value and pushes it onto the stack.
 fn nativeFfiCall(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "ffi-call");
     const alloc = ctx.arena.allocator();
 
     const ffi_fn_val = try ctx.stack.pop();
@@ -1096,6 +1174,7 @@ fn marshalOutParam(ctx: *Context, param_type: FfiType, slot: *const ArgSlot) !vo
 /// The resource wraps the internal buffer pointer; it becomes dangling
 /// if the byte array is resized or freed.
 fn nativeBytesRawPtr(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "bytes-raw-ptr");
     const alloc = ctx.arena.allocator();
 
     const ba = try helpers.popByteArray(ctx);
@@ -1122,6 +1201,7 @@ fn nativeBytesRawPtr(ctx: *Context) anyerror!void {
 /// Copies n bytes from a raw pointer resource into a new byte-array.
 /// The resource is not consumed or closed.
 fn nativeFfiPtrLenToBytes(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "ffi-ptr+len>bytes");
     const n_val = try helpers.popFixnum(ctx);
     const resource_val = try ctx.stack.pop();
 
@@ -1163,6 +1243,7 @@ fn nativeFfiPtrLenToBytes(ctx: *Context) anyerror!void {
 /// No copy is performed; the returned byte-array is only valid while the
 /// source pointer remains alive. The resource is not consumed or closed.
 fn nativeFfiPtrLenToBorrowedBytes(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "ffi-ptr+len>borrowed-bytes");
     const n_val = try helpers.popFixnum(ctx);
     const resource_val = try ctx.stack.pop();
 
@@ -1236,6 +1317,7 @@ pub fn ffiCloseCall(ffi_close: *const FfiCloseFn, ptr: *anyopaque) void {
 
 /// bind-close ( resource ffi-fn -- ) - Bind an FFI close function to a resource.
 fn nativeBindClose(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "bind-close");
     const alloc = ctx.arena.allocator();
 
     const ffi_fn_val = try ctx.stack.pop();
@@ -1440,6 +1522,7 @@ fn callbackCloseFn(ptr: *anyopaque) void {
 }
 
 fn nativeFfiCallback(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "ffi-callback");
     const alloc = ctx.arena.allocator();
 
     const sig_val = try ctx.stack.pop();

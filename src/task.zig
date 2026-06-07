@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const container_backing = @import("container_backing.zig");
 const Allocator = std.mem.Allocator;
 const Context = @import("context.zig").Context;
@@ -7,7 +8,55 @@ const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
 const ErrorObject = value_mod.ErrorObject;
 
-const mc = @cImport({
+const is_freestanding = builtin.os.tag == .freestanding;
+
+// Freestanding builds have no libc and no minicoro header to import; the
+// freestanding scheduler is single-worker with no live coroutines, so this
+// stub keeps the surrounding type references well-formed without ever
+// being called.
+const mc = if (is_freestanding) struct {
+    pub const mco_coro = opaque {};
+    pub const mco_desc = extern struct {
+        func: ?*const fn (?*mco_coro) callconv(.c) void = null,
+        user_data: ?*anyopaque = null,
+        alloc_cb: ?*anyopaque = null,
+        dealloc_cb: ?*anyopaque = null,
+        allocator_data: ?*anyopaque = null,
+        storage_size: usize = 0,
+        coro_size: usize = 0,
+        stack_size: usize = 0,
+    };
+    pub const MCO_SUCCESS: c_int = 0;
+    pub fn mco_resume(co: ?*mco_coro) callconv(.c) c_int {
+        _ = co;
+        return 0;
+    }
+    pub fn mco_yield(co: ?*mco_coro) callconv(.c) c_int {
+        _ = co;
+        return 0;
+    }
+    pub fn mco_running() callconv(.c) ?*mco_coro {
+        return null;
+    }
+    pub fn mco_destroy(co: ?*mco_coro) callconv(.c) c_int {
+        _ = co;
+        return 0;
+    }
+    pub fn mco_get_user_data(co: ?*mco_coro) callconv(.c) ?*anyopaque {
+        _ = co;
+        return null;
+    }
+    pub fn mco_desc_init(func: anytype, stack_size: usize) callconv(.c) mco_desc {
+        _ = func;
+        _ = stack_size;
+        return .{};
+    }
+    pub fn mco_create(out: *?*mco_coro, desc: *const mco_desc) callconv(.c) c_int {
+        _ = out;
+        _ = desc;
+        return 0;
+    }
+} else @cImport({
     @cInclude("minicoro.h");
 });
 

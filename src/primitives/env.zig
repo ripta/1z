@@ -5,6 +5,9 @@ const value_mod = @import("../value.zig");
 const HashTable = value_mod.HashTable;
 
 const Primitive = @import("types.zig").Primitive;
+const helpers = @import("helpers.zig");
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 pub const primitives = [_]Primitive{
     .{ .name = "environ", .stack_effect = "-- hash", .doc = "Return a fresh hash of current environment variables.", .func = nativeEnviron, .capability = .system },
@@ -13,6 +16,7 @@ pub const primitives = [_]Primitive{
 
 /// environ ( -- hash ) - Return a fresh hash of current environment variables
 fn nativeEnviron(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "environ");
     const alloc = ctx.quotationAllocator();
 
     const hash = alloc.create(HashTable) catch return error.OutOfMemory;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
@@ -10,6 +11,8 @@ const Primitive = @import("types.zig").Primitive;
 const RegistryEntry = @import("types.zig").RegistryEntry;
 const helpers = @import("helpers.zig");
 const streams_mod = @import("streams.zig");
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 pub const primitives = [_]Primitive{};
 
@@ -178,6 +181,7 @@ fn extractTlsConfig(ctx: *Context, val: Value) !*TlsConfig {
 
 /// tls-config ( -- resource )
 fn nativeTlsConfig(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "tls-config");
     const alloc = ctx.arena.allocator();
 
     const config = try alloc.create(TlsConfig);
@@ -204,6 +208,7 @@ fn nativeTlsConfig(ctx: *Context) anyerror!void {
 
 /// tls-config-no-verify ( -- resource )
 fn nativeTlsConfigNoVerify(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "tls-config-no-verify");
     const alloc = ctx.arena.allocator();
 
     const config = try alloc.create(TlsConfig);
@@ -230,6 +235,7 @@ fn nativeTlsConfigNoVerify(ctx: *Context) anyerror!void {
 /// and each certificate is added to the config's CA bundle. If the bundle is
 /// null (no-verify config), it is initialized to empty before adding.
 fn nativeTlsConfigAddCaPem(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "tls-config-add-ca-pem");
     const pem_val = try ctx.stack.pop();
     const pem_data: []const u8 = switch (pem_val) {
         .string => |s| s,
@@ -285,6 +291,7 @@ fn nativeTlsConfigAddCaPem(ctx: *Context) anyerror!void {
 /// stream delegates I/O through the TLS vtable and chains to the original
 /// stream via the `inner` pointer.
 fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "tls-upgrade");
     const hostname = try helpers.popString(ctx);
     const config_val = try ctx.stack.pop();
     const stream = try helpers.popStream(ctx);

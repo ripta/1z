@@ -43,6 +43,8 @@ pub const InterpreterError = error{
     // Recursion error types
     NonTailRecursion,
     StackOverflow,
+    // Build/platform error types
+    BuildUnsupported,
 };
 
 const Marker = @import("../value.zig").Marker;

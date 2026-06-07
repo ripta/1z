@@ -11,6 +11,7 @@ pub fn build(b: *std.Build) void {
     const slow_test_threshold_ms: u64 = 1000;
     const bail_stats = b.option(bool, "bail-stats", "Enable bail frequency instrumentation (writes stats to stderr on exit)") orelse false;
     const embed_stdlib = b.option(bool, "embed-stdlib", "Embed lib/ stdlib source as a fallback module backing store") orelse false;
+    const freestanding_heap_mib = b.option(u32, "freestanding-heap-mib", "Static-region size for the freestanding allocator in MiB") orelse 16;
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);
@@ -20,28 +21,44 @@ pub fn build(b: *std.Build) void {
     options.addOption(u64, "slow_test_threshold_ms", slow_test_threshold_ms);
     options.addOption(bool, "bail_stats", bail_stats);
     options.addOption(bool, "embed_stdlib", embed_stdlib);
+    options.addOption(u32, "freestanding_heap_mib", freestanding_heap_mib);
 
     const embedded_stdlib_path = generateEmbeddedStdlib(b, embed_stdlib);
 
-    const root_module = createCommonModule(b, target, optimize, options, b.path("src/main.zig"), embedded_stdlib_path);
+    const is_freestanding = target.result.os.tag == .freestanding;
 
-    // zig-out/bin/1z
-    const exe = b.addExecutable(.{
-        .name = "1z",
-        .root_module = root_module,
-    });
-    const install_exe = b.addInstallArtifact(exe, .{});
-    b.getInstallStep().dependOn(&install_exe.step);
+    // Freestanding builds only emit the static capi library; the executables
+    // and shared library both require an OS-level entry point and dynamic
+    // linker that the bare-metal target lacks.
+    var maybe_exe: ?*std.Build.Step.Compile = null;
+    var maybe_install_exe: ?*std.Build.Step.InstallArtifact = null;
+    var maybe_lsp_exe: ?*std.Build.Step.Compile = null;
+    var maybe_install_lsp: ?*std.Build.Step.InstallArtifact = null;
+    if (!is_freestanding) {
+        const root_module = createCommonModule(b, target, optimize, options, b.path("src/main.zig"), embedded_stdlib_path);
 
-    // zig-out/bin/1z-lsp
-    const lsp_module = createCommonModule(b, target, optimize, options, b.path("src/lsp_main.zig"), embedded_stdlib_path);
+        // zig-out/bin/1z
+        const e = b.addExecutable(.{
+            .name = "1z",
+            .root_module = root_module,
+        });
+        const install_exe = b.addInstallArtifact(e, .{});
+        b.getInstallStep().dependOn(&install_exe.step);
+        maybe_exe = e;
+        maybe_install_exe = install_exe;
 
-    const lsp_exe = b.addExecutable(.{
-        .name = "1z-lsp",
-        .root_module = lsp_module,
-    });
-    const install_lsp = b.addInstallArtifact(lsp_exe, .{});
-    b.getInstallStep().dependOn(&install_lsp.step);
+        // zig-out/bin/1z-lsp
+        const lsp_module = createCommonModule(b, target, optimize, options, b.path("src/lsp_main.zig"), embedded_stdlib_path);
+
+        const lsp_exe = b.addExecutable(.{
+            .name = "1z-lsp",
+            .root_module = lsp_module,
+        });
+        const install_lsp = b.addInstallArtifact(lsp_exe, .{});
+        b.getInstallStep().dependOn(&install_lsp.step);
+        maybe_lsp_exe = lsp_exe;
+        maybe_install_lsp = install_lsp;
+    }
 
     // zig-out/clib/lib1z.a (static library)
     // Installed to clib/ instead of lib/ because zig-out/lib is symlinked
@@ -65,28 +82,40 @@ pub fn build(b: *std.Build) void {
     });
     b.getInstallStep().dependOn(&install_static.step);
 
-    // zig-out/clib/lib1z.dylib (shared library)
-    const capi_shared_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"), embedded_stdlib_path);
+    if (!is_freestanding) {
+        // zig-out/clib/lib1z.dylib (shared library)
+        const capi_shared_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"), embedded_stdlib_path);
 
-    const shared_lib = b.addLibrary(.{
-        .name = "1z",
-        .root_module = capi_shared_module,
-        .linkage = .dynamic,
-    });
-    const install_shared = b.addInstallArtifact(shared_lib, .{
-        .dest_dir = .{ .override = .{ .custom = "clib" } },
-    });
-    b.getInstallStep().dependOn(&install_shared.step);
+        const shared_lib = b.addLibrary(.{
+            .name = "1z",
+            .root_module = capi_shared_module,
+            .linkage = .dynamic,
+        });
+        const install_shared = b.addInstallArtifact(shared_lib, .{
+            .dest_dir = .{ .override = .{ .custom = "clib" } },
+        });
+        b.getInstallStep().dependOn(&install_shared.step);
 
-    // zig-out/lib -> lib/
-    //
-    // TODO(ripta): A bit hacky, but otherwise the stdlib path has to be
-    //              specified manually on every invocation.
-    const symlink_step = b.addSystemCommand(&.{ "ln", "-sfn" });
-    symlink_step.addDirectoryArg(b.path("lib"));
-    symlink_step.addArg(b.fmt("{s}/lib", .{b.install_path}));
-    symlink_step.step.dependOn(&install_exe.step);
-    b.getInstallStep().dependOn(&symlink_step.step);
+        // zig-out/lib -> lib/
+        //
+        // TODO(ripta): A bit hacky, but otherwise the stdlib path has to be
+        //              specified manually on every invocation.
+        const symlink_step = b.addSystemCommand(&.{ "ln", "-sfn" });
+        symlink_step.addDirectoryArg(b.path("lib"));
+        symlink_step.addArg(b.fmt("{s}/lib", .{b.install_path}));
+        if (maybe_install_exe) |ie| symlink_step.step.dependOn(&ie.step);
+        b.getInstallStep().dependOn(&symlink_step.step);
+    }
+
+    if (is_freestanding) {
+        // The freestanding build is only the static library; no executables to
+        // run, document, or test against. Bail before the rest of the wiring.
+        return;
+    }
+    const exe = maybe_exe.?;
+    const install_exe = maybe_install_exe.?;
+    const lsp_exe = maybe_lsp_exe.?;
+    const install_lsp = maybe_install_lsp.?;
 
     // zig-out/docs
     const docs = b.addInstallDirectory(.{
@@ -1744,19 +1773,26 @@ fn createCommonModule(
     root_source_file: std.Build.LazyPath,
     embedded_stdlib_path: std.Build.LazyPath,
 ) *std.Build.Module {
+    const is_freestanding = target.result.os.tag == .freestanding;
     const module = b.createModule(.{
         .root_source_file = root_source_file,
         .target = target,
         .optimize = optimize,
-        .link_libc = true,
+        .link_libc = !is_freestanding,
     });
-    module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
-    module.addIncludePath(b.path("ext/toy"));
-    module.addCSourceFile(.{ .file = b.path("ext/minicoro/minicoro.c"), .flags = &.{} });
-    module.addIncludePath(b.path("ext/minicoro"));
-    module.linkSystemLibrary("ffi", .{});
-    addFfiIncludePath(b, module, target);
-    addIrSources(b, module);
+    // Freestanding builds skip the C dependencies (libffi, toy tokenizer,
+    // minicoro coroutines, ir JIT backend). The native words that would
+    // reach into them are capability-gated and throw BuildUnsupported on
+    // freestanding; the bare-metal program never invokes them.
+    if (!is_freestanding) {
+        module.addCSourceFile(.{ .file = b.path("ext/toy/toy.c"), .flags = &.{} });
+        module.addIncludePath(b.path("ext/toy"));
+        module.addCSourceFile(.{ .file = b.path("ext/minicoro/minicoro.c"), .flags = &.{} });
+        module.addIncludePath(b.path("ext/minicoro"));
+        module.linkSystemLibrary("ffi", .{});
+        addFfiIncludePath(b, module, target);
+        addIrSources(b, module);
+    }
     module.addOptions("build_options", options);
     module.addAnonymousImport("embedded_stdlib_data", .{
         .root_source_file = embedded_stdlib_path,

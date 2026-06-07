@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const native_os = builtin.os.tag;
+const is_freestanding = native_os == .freestanding;
 
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
@@ -153,6 +154,7 @@ fn makeInetAddr(ctx: *Context, alloc: std.mem.Allocator, tag: *const VirtualType
 /// Resolves an addr:tcp or addr:udp value to an array of addr:tcp/udp values with IP addresses.
 /// For addr:unix, returns the same value in a single-element array.
 fn nativeResolve(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "resolve");
     const addr_info = try extractAddr(ctx);
     const alloc = ctx.quotationAllocator();
 
@@ -249,6 +251,7 @@ fn formatAddress(addr: std.net.Address, buf: *[46]u8) []const u8 {
 
 /// socket ( addr -- fd )
 fn nativeSocket(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "socket");
     const addr_info = try extractAddr(ctx);
 
     const family: u32 = switch (addr_info.kind) {
@@ -284,6 +287,7 @@ fn nativeSocket(ctx: *Context) anyerror!void {
 
 /// bind ( fd addr -- )
 fn nativeBind(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "bind");
     const addr_info = try extractAddr(ctx);
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
@@ -308,6 +312,7 @@ fn nativeBind(ctx: *Context) anyerror!void {
 
 /// listen ( fd backlog -- )
 fn nativeListen(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "listen");
     const backlog_val = try popFixnum(ctx);
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
@@ -324,6 +329,7 @@ fn nativeListen(ctx: *Context) anyerror!void {
 
 /// accept ( fd -- fd host port )
 fn nativeAccept(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "accept");
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     const fd: std.posix.fd_t = @intCast(fd_val);
@@ -365,6 +371,7 @@ fn nativeAccept(ctx: *Context) anyerror!void {
 
 /// connect ( fd addr -- )
 fn nativeConnect(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "connect");
     const addr_info = try extractAddr(ctx);
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
@@ -416,6 +423,7 @@ fn nativeConnect(ctx: *Context) anyerror!void {
 
 /// fd-close ( fd -- )
 fn nativeFdClose(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "fd-close");
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
     const fd: std.posix.fd_t = @intCast(fd_val);
@@ -450,6 +458,7 @@ fn makeBytesValue(alloc: std.mem.Allocator, data: []const u8) !Value {
 
 /// udp-sendto ( fd data addr -- n )
 fn nativeUdpSendto(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "udp-sendto");
     const addr_info = try extractAddr(ctx);
     const data_val = try ctx.stack.pop();
     const fd_val = try popFixnum(ctx);
@@ -484,6 +493,7 @@ fn nativeUdpSendto(ctx: *Context) anyerror!void {
 
 /// udp-recvfrom ( fd maxlen -- data host port )
 fn nativeUdpRecvfrom(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "udp-recvfrom");
     const maxlen = try popFixnum(ctx);
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
@@ -531,6 +541,7 @@ fn nativeUdpRecvfrom(ctx: *Context) anyerror!void {
 
 /// udp-send ( fd data -- n )
 fn nativeUdpSend(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "udp-send");
     const data_val = try ctx.stack.pop();
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
@@ -563,6 +574,7 @@ fn nativeUdpSend(ctx: *Context) anyerror!void {
 
 /// udp-recv ( fd maxlen -- data )
 fn nativeUdpRecv(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "udp-recv");
     const maxlen = try popFixnum(ctx);
     const fd_val = try popFixnum(ctx);
     if (fd_val < 0) return error.InvalidArgument;
@@ -599,6 +611,7 @@ fn nativeUdpRecv(ctx: *Context) anyerror!void {
 
 /// setsockopt ( fd level optname value -- )
 fn nativeSetsockopt(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "setsockopt");
     const val = try ctx.stack.pop();
     const optname_val = try popFixnum(ctx);
     const level_val = try popFixnum(ctx);
@@ -632,6 +645,7 @@ fn nativeSetsockopt(ctx: *Context) anyerror!void {
 
 /// inet-pton ( family str -- bytes )
 fn nativeInetPton(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "inet-pton");
     const str = try helpers.popString(ctx);
     const family = try popFixnum(ctx);
     const alloc = ctx.quotationAllocator();
@@ -662,6 +676,7 @@ fn nativeInetPton(ctx: *Context) anyerror!void {
 
 /// sock-const ( str -- n )
 fn nativeSockConst(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "sock-const");
     const name = try helpers.popString(ctx);
 
     const val: i64 = if (std.mem.eql(u8, name, "SOL_SOCKET"))
@@ -688,10 +703,14 @@ fn nativeSockConst(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = val });
 }
 
+// Freestanding builds gate `nativeSockConst` to throw before reading any of
+// these constants, but the comptime switch still evaluates, so the
+// freestanding arm needs a sentinel value rather than @compileError.
 const ip_add_membership: i64 = switch (native_os) {
     .macos, .ios, .tvos, .watchos, .visionos => 12,
     .linux => 35,
     .freebsd, .netbsd, .openbsd, .dragonfly => 12,
+    .freestanding => 0,
     else => @compileError("unsupported OS for IP_ADD_MEMBERSHIP"),
 };
 
@@ -699,6 +718,7 @@ const ip_drop_membership: i64 = switch (native_os) {
     .macos, .ios, .tvos, .watchos, .visionos => 13,
     .linux => 36,
     .freebsd, .netbsd, .openbsd, .dragonfly => 13,
+    .freestanding => 0,
     else => @compileError("unsupported OS for IP_DROP_MEMBERSHIP"),
 };
 
@@ -706,6 +726,7 @@ const ip_multicast_loop: i64 = switch (native_os) {
     .macos, .ios, .tvos, .watchos, .visionos => 11,
     .linux => 34,
     .freebsd, .netbsd, .openbsd, .dragonfly => 11,
+    .freestanding => 0,
     else => @compileError("unsupported OS for IP_MULTICAST_LOOP"),
 };
 
@@ -713,6 +734,7 @@ const ip_multicast_ttl: i64 = switch (native_os) {
     .macos, .ios, .tvos, .watchos, .visionos => 10,
     .linux => 33,
     .freebsd, .netbsd, .openbsd, .dragonfly => 10,
+    .freestanding => 0,
     else => @compileError("unsupported OS for IP_MULTICAST_TTL"),
 };
 

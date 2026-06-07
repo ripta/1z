@@ -1,4 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const build_options = @import("build_options");
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 const context_mod = @import("context.zig");
 const Context = context_mod.Context;
@@ -51,8 +55,32 @@ const OwnedDiagnostic = struct {
     word_name: [:0]const u8,
 };
 
+// Freestanding builds have no page allocator and no GeneralPurposeAllocator
+// backed by the OS. The runtime carves all dynamic allocations out of a
+// statically reserved region whose size is fixed at build time via the
+// `freestanding-heap-mib` build option. Running out of this region throws a
+// 1z-level OutOfMemory just like a hosted heap exhaustion would.
+const HostGpa = if (is_freestanding) std.heap.FixedBufferAllocator else std.heap.GeneralPurposeAllocator(.{});
+
+const freestanding_heap_size: usize = @as(usize, build_options.freestanding_heap_mib) << 20;
+var freestanding_heap_buf: [if (is_freestanding) freestanding_heap_size else 0]u8 align(16) = undefined;
+var freestanding_root_fba: std.heap.FixedBufferAllocator = undefined;
+var freestanding_root_inited: bool = false;
+
+fn rootAllocator() std.mem.Allocator {
+    if (is_freestanding) {
+        if (!freestanding_root_inited) {
+            freestanding_root_fba = std.heap.FixedBufferAllocator.init(&freestanding_heap_buf);
+            freestanding_root_inited = true;
+        }
+        return freestanding_root_fba.allocator();
+    } else {
+        return std.heap.page_allocator;
+    }
+}
+
 const OnezHandle = struct {
-    gpa: *std.heap.GeneralPurposeAllocator(.{}),
+    gpa: *HostGpa,
     ctx: *Context,
     last_error: ?[:0]const u8 = null,
     host_words: std.ArrayListUnmanaged(HostWordRegistration) = .{},
@@ -70,8 +98,6 @@ const OnezHandle = struct {
     debug_callback: ?OnezDebugCallbackFn = null,
     debug_userdata: ?*anyopaque = null,
 };
-
-const page = std.heap.page_allocator;
 
 // Type constants for onez_stack_type return values.
 pub const ONEZ_TYPE_UNKNOWN: c_int = 0;
@@ -138,31 +164,48 @@ comptime {
 /// Call onez_load_prelude() afterwards to load the default or a custom
 /// prelude, or skip the prelude entirely for bare-metal embedding.
 export fn onez_init_no_prelude() ?*anyopaque {
-    const gpa = page.create(std.heap.GeneralPurposeAllocator(.{})) catch return null;
-    gpa.* = .{};
+    const gpa = createGpa() orelse return null;
     const allocator = gpa.allocator();
 
     const ctx = allocator.create(Context) catch return null;
     ctx.* = Context.init(allocator);
 
-    // stdlib relative to the library binary for now
-    var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-    if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
-        const lib_path = std.fs.path.join(ctx.quotationAllocator(), &.{ exe_dir, "../lib" }) catch null;
-        if (lib_path) |lp| {
-            var real_buf: [std.fs.max_path_bytes]u8 = undefined;
-            if (std.fs.cwd().realpath(lp, &real_buf)) |real| {
-                ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, real) catch null;
-            } else |_| {}
-        }
-    } else |_| {}
+    // Freestanding builds have no filesystem to discover the stdlib from;
+    // ctx.stdlib_path stays null and any `use` of a stdlib module relies on
+    // the embedded fallback (or fails fast).
+    if (!is_freestanding) {
+        var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+        if (std.fs.selfExeDirPath(&self_exe_buf)) |exe_dir| {
+            const lib_path = std.fs.path.join(ctx.quotationAllocator(), &.{ exe_dir, "../lib" }) catch null;
+            if (lib_path) |lp| {
+                var real_buf: [std.fs.max_path_bytes]u8 = undefined;
+                if (std.fs.cwd().realpath(lp, &real_buf)) |real| {
+                    ctx.stdlib_path = ctx.quotationAllocator().dupe(u8, real) catch null;
+                } else |_| {}
+            }
+        } else |_| {}
+    }
 
-    const handle = page.create(OnezHandle) catch return null;
+    const handle = allocator.create(OnezHandle) catch return null;
     handle.* = .{
         .gpa = gpa,
         .ctx = ctx,
     };
     return handle;
+}
+
+fn createGpa() ?*HostGpa {
+    if (is_freestanding) {
+        if (!freestanding_root_inited) {
+            freestanding_root_fba = std.heap.FixedBufferAllocator.init(&freestanding_heap_buf);
+            freestanding_root_inited = true;
+        }
+        return &freestanding_root_fba;
+    } else {
+        const gpa = std.heap.page_allocator.create(HostGpa) catch return null;
+        gpa.* = .{};
+        return gpa;
+    }
 }
 
 /// Initialize the 1z runtime and load the default embedded prelude.
@@ -214,10 +257,16 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
     }
 
     handle.ctx.deinit();
+    if (is_freestanding) {
+        // The static FBA-backed heap is never freed; the bare-metal program
+        // either runs to completion or hangs. Nothing to tear down beyond the
+        // ctx-level deinit above.
+        return;
+    }
     allocator.destroy(handle.ctx);
     _ = handle.gpa.deinit();
-    page.destroy(handle.gpa);
-    page.destroy(handle);
+    std.heap.page_allocator.destroy(handle.gpa);
+    std.heap.page_allocator.destroy(handle);
 }
 
 /// Load a prelude into a context.
@@ -233,6 +282,10 @@ export fn onez_load_prelude(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
     clearLastError(handle);
 
     if (path) |p| {
+        if (is_freestanding) {
+            setLastError(handle, "file-based prelude loading is not available on this build", .{});
+            return ONEZ_ERR_LOAD_FAILED;
+        }
         const filepath = std.mem.span(p);
         const alloc = ctx.quotationAllocator();
 
@@ -393,6 +446,11 @@ export fn onez_eval_file(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
 
     ctx.clearExecutionDetails();
     clearLastError(handle);
+
+    if (is_freestanding) {
+        setLastError(handle, "onez_eval_file is not available on this build", .{});
+        return ONEZ_ERR_LOAD_FAILED;
+    }
 
     const filepath = std.mem.span(path orelse {
         setLastError(handle, "null path passed to onez_eval_file", .{});
@@ -1936,6 +1994,9 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
 export fn onez_print_error(ptr: ?*anyopaque) void {
     const handle = castHandle(ptr) orelse return;
     const ctx = handle.ctx;
+
+    // No stderr on freestanding; the bare-metal program has its own routing.
+    if (is_freestanding) return;
 
     const stderr_file: std.fs.File = .stderr();
     var stderr_buf: [4096]u8 = undefined;

@@ -1,5 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const posix = std.posix;
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 const Context = @import("../context.zig").Context;
 const signal_mod = @import("../signal.zig");
@@ -44,6 +47,7 @@ pub const registry_entries = [_]RegistryEntry{
 
 /// ( signal quot -- )
 fn nativeSetSignalHandler(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "set-signal-handler");
     const quot = try helpers.popQuotation(ctx);
     const signum = try helpers.popFixnum(ctx);
 
@@ -62,6 +66,7 @@ fn nativeSetSignalHandler(ctx: *Context) anyerror!void {
 /// For SIGINT, keep our special handler so that the default "interrupted" behavior is preserved.
 /// For other signals, restore the OS default.
 fn nativeClearSignalHandler(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "clear-signal-handler");
     const signum = try helpers.popFixnum(ctx);
 
     if (!signal_mod.isHandleable(signum)) {
@@ -78,6 +83,7 @@ fn nativeClearSignalHandler(ctx: *Context) anyerror!void {
 
 /// ( signal -- quot/f )
 fn nativeGetSignalHandler(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "get-signal-handler");
     const signum = try helpers.popFixnum(ctx);
     if (!signal_mod.isHandleable(signum)) {
         helpers.setErrorContext(ctx, "get-signal-handler: invalid or uncatchable signal number {d}", .{signum});
@@ -109,6 +115,7 @@ const signal_names = .{
 ///
 /// Accepts a symbol (INT:) or string ("INT").
 fn nativeSignalNumber(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "signal-number");
     const val = ctx.stack.pop() catch return error.StackUnderflow;
     const name = switch (val) {
         .symbol => |s| s,

@@ -1,6 +1,9 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Context = @import("../context.zig").Context;
+
+const is_freestanding = builtin.os.tag == .freestanding;
 const task_mod = @import("../task.zig");
 const Task = task_mod.Task;
 const TaskScope = task_mod.TaskScope;
@@ -160,6 +163,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     // this thread, and let background workers handle tasks dispatched
     // there by `spawn`'s least-loaded selection.
     const n: usize = blk: {
+        if (is_freestanding) break :blk 1;
         if (ctx.worker_count > 0) break :blk ctx.worker_count;
         break :blk container_limits.detectCpus(ctx.trace.trace_container_detect).count;
     };

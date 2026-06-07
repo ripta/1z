@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test
+.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test freestanding-build
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -419,6 +419,22 @@ profiles: build ## Run profile sample workloads and refresh their .sample files
 
 build-example: build ## Build the C embedding example
 	zig cc -o $(ZIG_PREFIX)/embed examples/embed.c -Iinclude $(ZIG_PREFIX)/clib/lib1z.a -lffi
+
+freestanding-build: ## Compile-check the freestanding capi library for riscv64
+	@echo "Building lib1z.a for riscv64-freestanding-none..."
+	zig build --prefix $(ZIG_PREFIX)/freestanding-riscv64 -Dtarget=riscv64-freestanding-none --verbose install
+	@if [ ! -f $(ZIG_PREFIX)/freestanding-riscv64/clib/lib1z.a ]; then \
+		echo "FAIL: lib1z.a was not produced"; \
+		exit 1; \
+	fi
+	@echo "Checking for banned host symbols..."
+	@banned=$$(nm -u $(ZIG_PREFIX)/freestanding-riscv64/clib/lib1z.a 2>/dev/null | grep -E '(kqueue|epoll_create1|clock_gettime|dlopen|dlsym|getenv|selfExeDirPath)' || true); \
+	if [ -n "$$banned" ]; then \
+		echo "FAIL: freestanding lib1z.a references host-only symbols:"; \
+		echo "$$banned"; \
+		exit 1; \
+	fi
+	@echo "PASS: lib1z.a built for riscv64-freestanding-none with no host-only symbol references"
 
 clean: ## Remove build artifacts
 	mv .zig-cache .old.zig-cache

@@ -41,6 +41,12 @@ const is_kqueue = switch (builtin.os.tag) {
 
 const is_epoll = builtin.os.tag == .linux;
 
+// Freestanding (and any other non-supported OS) gets a no-op Multiplexer.
+// The scheduler keeps holding the field and calling methods; everything
+// returns the empty event list. Async I/O is silently unavailable, which
+// matches the print-only capability tier of the freestanding port.
+const is_noop = !is_kqueue and !is_epoll;
+
 const max_events = 64;
 
 pub const Multiplexer = struct {
@@ -61,7 +67,7 @@ pub const Multiplexer = struct {
         } else if (is_epoll) {
             return .{ .mux_fd = try std.posix.epoll_create1(0) };
         } else {
-            @compileError("Multiplexer: unsupported platform");
+            return .{ .mux_fd = -1 };
         }
     }
 
@@ -93,11 +99,12 @@ pub const Multiplexer = struct {
             try std.posix.epoll_ctl(self.mux_fd, std.os.linux.EPOLL.CTL_ADD, fd, &ev);
             return .{ .mux_fd = self.mux_fd, .ident = ident, .fd = fd };
         } else {
-            @compileError("Multiplexer: unsupported platform");
+            return .{ .mux_fd = self.mux_fd, .ident = ident, .fd = {} };
         }
     }
 
     pub fn deinit(self: *Multiplexer) void {
+        if (is_noop) return;
         std.posix.close(self.mux_fd);
     }
 
@@ -152,7 +159,7 @@ pub const Multiplexer = struct {
             try std.posix.epoll_ctl(self.mux_fd, std.os.linux.EPOLL.CTL_ADD, pidfd, &ev);
             return .{ .pidfd = pidfd };
         } else {
-            @compileError("Multiplexer: unsupported platform");
+            return .{ .pid = pid };
         }
     }
 
@@ -268,7 +275,7 @@ pub const Multiplexer = struct {
             }
             return self.ready_buf[0..n];
         } else {
-            @compileError("Multiplexer: unsupported platform");
+            return &.{};
         }
     }
 };

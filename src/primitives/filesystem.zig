@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Context = @import("../context.zig").Context;
 const Value = @import("../value.zig").Value;
 const HashTable = @import("../value.zig").HashTable;
@@ -7,6 +8,8 @@ const mapFileOpenError = @import("error_mapping.zig").mapFileOpenError;
 const mapFileCreateError = @import("error_mapping.zig").mapFileCreateError;
 const Primitive = @import("types.zig").Primitive;
 const RegistryEntry = @import("types.zig").RegistryEntry;
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 pub const primitives = [_]Primitive{
     .{ .name = "create-directory", .stack_effect = "path --", .doc = "Create a directory and all parent directories (mkdir -p behavior).", .func = nativeCreateDirectory, .capability = .io_fs },
@@ -29,6 +32,7 @@ pub const registry_entries = [_]RegistryEntry{
 
 /// create-directory ( path -- )
 fn nativeCreateDirectory(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "create-directory");
     const path = try helpers.popString(ctx);
     std.fs.cwd().makePath(path) catch |err| {
         helpers.setErrorContext(ctx, "create-directory: {s}", .{@errorName(err)});
@@ -38,6 +42,7 @@ fn nativeCreateDirectory(ctx: *Context) anyerror!void {
 
 /// delete-directory ( path -- )
 fn nativeDeleteDirectory(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "delete-directory");
     const path = try helpers.popString(ctx);
     std.fs.cwd().deleteDir(path) catch |err| {
         helpers.setErrorContext(ctx, "delete-directory: {s}", .{@errorName(err)});
@@ -47,6 +52,7 @@ fn nativeDeleteDirectory(ctx: *Context) anyerror!void {
 
 /// list-directory ( path -- array )
 fn nativeListDirectory(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "list-directory");
     const path = try helpers.popString(ctx);
     const alloc = ctx.quotationAllocator();
 
@@ -82,6 +88,7 @@ fn nativeListDirectory(ctx: *Context) anyerror!void {
 
 /// delete-file ( path -- )
 fn nativeDeleteFile(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "delete-file");
     const path = try helpers.popString(ctx);
     std.fs.cwd().deleteFile(path) catch |err| {
         helpers.setErrorContext(ctx, "delete-file: {s}", .{@errorName(err)});
@@ -91,6 +98,7 @@ fn nativeDeleteFile(ctx: *Context) anyerror!void {
 
 /// rename-path ( old new -- )
 fn nativeRenamePath(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "rename-path");
     const new = try helpers.popString(ctx);
     const old = try helpers.popString(ctx);
     std.fs.cwd().rename(old, new) catch |err| {
@@ -101,6 +109,7 @@ fn nativeRenamePath(ctx: *Context) anyerror!void {
 
 /// copy-file ( src dst -- )
 fn nativeCopyFile(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "copy-file");
     const dst = try helpers.popString(ctx);
     const src = try helpers.popString(ctx);
     const cwd = std.fs.cwd();
@@ -116,6 +125,7 @@ fn nativeCopyFile(ctx: *Context) anyerror!void {
 
 /// path-exists? ( path -- bool )
 fn nativePathExists(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "path-exists?");
     const path = try helpers.popString(ctx);
     std.fs.cwd().access(path, .{}) catch |err| {
         if (err == error.FileNotFound) {
@@ -130,6 +140,7 @@ fn nativePathExists(ctx: *Context) anyerror!void {
 
 /// file-info ( path -- hash )
 fn nativeFileInfo(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "file-info");
     const path = try helpers.popString(ctx);
     const alloc = ctx.quotationAllocator();
 
@@ -175,6 +186,7 @@ fn nativeFileInfo(ctx: *Context) anyerror!void {
 
 /// create-symlink ( target link-path -- )
 fn nativeCreateSymlink(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "create-symlink");
     const link_path = try helpers.popString(ctx);
     const target = try helpers.popString(ctx);
     std.fs.cwd().symLink(target, link_path, .{}) catch |err| {
@@ -185,6 +197,7 @@ fn nativeCreateSymlink(ctx: *Context) anyerror!void {
 
 /// read-symlink ( path -- target-path )
 fn nativeReadSymlink(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "read-symlink");
     const path = try helpers.popString(ctx);
     const alloc = ctx.quotationAllocator();
     var buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -198,6 +211,7 @@ fn nativeReadSymlink(ctx: *Context) anyerror!void {
 
 /// set-permissions ( path mode -- )
 fn nativeSetPermissions(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "set-permissions");
     const mode = try helpers.popFixnum(ctx);
     const path = try helpers.popString(ctx);
     std.posix.fchmodat(std.fs.cwd().fd, path, @intCast(mode), 0) catch |err| {

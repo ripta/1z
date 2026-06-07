@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const task_mod = @import("task.zig");
 const Task = task_mod.Task;
@@ -11,6 +12,8 @@ const ProcessWaitHandle = @import("multiplexer.zig").ProcessWaitHandle;
 const processWaitHandleKey = @import("multiplexer.zig").processWaitHandleKey;
 const trace = @import("trace.zig");
 const value_mod = @import("value.zig");
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 /// Entry in the sleep queue: a task and its absolute monotonic wake time in nanoseconds.
 pub const SleepEntry = struct {
@@ -38,8 +41,25 @@ pub const ProcessWaitEntry = struct {
 
 /// Read the monotonic clock and return the current time as a single i128 nanosecond value.
 pub fn monotonicNowNs() i128 {
-    const ts = std.posix.clock_gettime(.MONOTONIC) catch unreachable;
-    return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+    if (is_freestanding) {
+        return baremetalNowNs();
+    } else {
+        const ts = std.posix.clock_gettime(.MONOTONIC) catch unreachable;
+        return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+    }
+}
+
+/// Freestanding monotonic clock backed by the RISC-V `time` CSR. QEMU's
+/// `virt` machine clocks `time` at 10 MHz, so each tick is 100 ns. The
+/// timebase is hardcoded for now; a build option can replace it when a
+/// non-QEMU board is supported.
+fn baremetalNowNs() i128 {
+    if (builtin.cpu.arch != .riscv64) @compileError("freestanding monotonic clock is only implemented for riscv64");
+    var ticks: u64 = undefined;
+    asm volatile ("rdtime %[ticks]"
+        : [ticks] "=r" (ticks),
+    );
+    return @as(i128, ticks) * 100;
 }
 
 pub const ClockMode = union(enum) {
@@ -650,12 +670,23 @@ pub const Scheduler = struct {
                 if (!ops.claimStallReport(owner)) return;
                 ops.emitPoolStallDetect(owner, threshold_ns);
                 ops.dumpAllPoolTasks(owner);
-                std.process.exit(124);
+                exitOrHang(124);
             }
         }
         self.emitStallDetect(threshold_ns);
         self.dumpAllTasks();
-        std.process.exit(124);
+        exitOrHang(124);
+    }
+
+    /// Terminate the process with the given exit code on hosted builds.
+    /// On freestanding builds there is no process to exit, so we spin forever
+    /// and leave it to the platform layer's trap handler to do something
+    /// useful with the hung CPU.
+    fn exitOrHang(code: u8) noreturn {
+        if (is_freestanding) {
+            while (true) {}
+        }
+        std.process.exit(code);
     }
 
     fn emitStallDetect(self: *Scheduler, threshold_ns: i128) void {

@@ -359,6 +359,17 @@ pub fn setErrorHint(ctx: *Context, hint: []const u8) void {
     ctx.pending_error_hint = hint;
 }
 
+/// Report that a word is not available on the current build target.
+/// Used by capability-gated primitives in freestanding builds where the
+/// underlying OS surface is unavailable. The dispatch-time sandbox check
+/// produces a similar error for hosted builds when a sandbox denies the
+/// capability; this helper signals a structurally different condition --
+/// the OS surface itself does not exist in this build.
+pub fn throwBuildUnsupported(ctx: *Context, word_name: []const u8) error{BuildUnsupported} {
+    setErrorContext(ctx, "'{s}' is not available on this build", .{word_name});
+    return error.BuildUnsupported;
+}
+
 // =============================================================================
 // Type-safe poppers
 // =============================================================================
