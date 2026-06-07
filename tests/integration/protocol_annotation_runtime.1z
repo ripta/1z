@@ -1,0 +1,102 @@
+use "testing" ;
+
+\ A protocol that requires `fly:`, plus a virtual type that implements it.
+flyable: protocol{ fly: } ;
+
+bird: virtual{ string } ;
+
+fly: generic ( x -- y ) [ drop "soaring" ] ;
+
+fly: method{ bird } [
+  unmake-bird drop "flap flap"
+] ;
+
+\ A type that does NOT satisfy `flyable`.
+rock: virtual{ fixnum } ;
+
+\ Word with a protocol-bounded input parameter.
+flap: ( x: flyable -- y ) [ fly ] ;
+
+test-satisfying-flows-through: ( -- ) [
+  "raven" >bird flap
+  "flap flap" "satisfying call returns the method's result" assert=
+] ;
+
+test-non-satisfying-throws: ( -- ) [
+  [ 7 >rock flap ] "rock does not satisfy flyable" assert-error
+] ;
+
+test-error-type-is-protocol-error: ( -- ) [
+  [ 7 >rock flap ] protocol-error: "error type is protocol-error" assert-error-type
+] ;
+
+test-error-message-names-protocol: ( -- ) [
+  [ 7 >rock flap ]
+  [
+    \ Handler receives the error value on top; the body's residual <rock 7>
+    \ sits beneath it. Inspect the error fields, then drop the residual.
+    dup "error-type" @get protocol-error: "error type" assert=
+    "message" @get
+    dup "flyable" #in? "message contains protocol name" assert-true
+    dup "rock" #in? "message contains actual type name" assert-true
+    "x" #in? "message contains parameter name" assert-true
+    drop
+  ]
+  recover
+] ;
+
+\ The runtime check shares the satisfies memo, so a satisfying call after a
+\ failing one still flows through.
+test-cache-coherence: ( -- ) [
+  "phoenix" >bird flap
+  "flap flap" "satisfying call after a failed one still works" assert=
+] ;
+
+\ A second protocol so we can verify two bounds on one word both check.
+swimmable: protocol{ swim: } ;
+
+fish: virtual{ string } ;
+
+swim: generic ( x -- y ) [ drop "drifting" ] ;
+
+swim: method{ fish } [
+  unmake-fish drop "splash"
+] ;
+
+\ Word with two protocol-bounded inputs. The body drops both so the test
+\ focuses purely on the call-site validation of each parameter.
+ferry: ( a: flyable b: swimmable -- ) [ drop drop ] ;
+
+test-two-bounds-both-satisfied: ( -- ) [
+  "eagle" >bird "trout" >fish ferry
+  t "both bounds satisfied -- no error" assert-true
+] ;
+
+test-two-bounds-second-fails: ( -- ) [
+  [ "eagle" >bird 9 >rock ferry ] "rock fails the swimmable bound" assert-error
+] ;
+
+test-two-bounds-second-fails-type: ( -- ) [
+  [ "eagle" >bird 9 >rock ferry ] protocol-error: "second-bound failure is protocol-error" assert-error-type
+] ;
+
+test-two-bounds-first-fails: ( -- ) [
+  [ 9 >rock "trout" >fish ferry ] "rock fails the flyable bound" assert-error
+] ;
+
+test-two-bounds-first-fails-type: ( -- ) [
+  [ 9 >rock "trout" >fish ferry ] protocol-error: "first-bound failure is protocol-error" assert-error-type
+] ;
+
+\ -- Run all tests --
+
+test-satisfying-flows-through
+test-non-satisfying-throws
+test-error-type-is-protocol-error
+test-error-message-names-protocol
+test-cache-coherence
+test-two-bounds-both-satisfied
+test-two-bounds-second-fails
+test-two-bounds-second-fails-type
+test-two-bounds-first-fails
+test-two-bounds-first-fails-type

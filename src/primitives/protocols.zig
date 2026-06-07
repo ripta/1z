@@ -187,6 +187,22 @@ pub fn checkProtocolObligation(
         helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
         return error.TypeMismatch;
     };
+    return satisfiesByDescriptor(ctx, type_tv, descriptor);
+}
+
+/// Pointer-only entry into the satisfies-check: callers that already have a
+/// resolved `TypeValue` skip the name-to-TypeValue lookup. Returns true on
+/// satisfy, false on mismatch, and never raises `protocol-error`. Programming
+/// errors (e.g. a malformed descriptor) still propagate.
+///
+/// Used by the runtime check in `Context.validateTypeAnnotations` for
+/// protocol-bounded parameters, where the call site already has a resolved
+/// `TypeValue` for the actual stack value.
+pub fn satisfiesByDescriptor(
+    ctx: *Context,
+    type_tv: *const value_mod.TypeValue,
+    descriptor: *const ProtocolDescriptor,
+) !bool {
     const key = ProtocolSatisfiesKey{
         .type_descriptor = type_tv.descriptor.?,
         .protocol_descriptor = descriptor,
@@ -197,7 +213,7 @@ pub fn checkProtocolObligation(
     }
 
     const saved_thrown = ctx.thrown_error;
-    if (validateProtocolObligationUncached(ctx, type_name, descriptor)) |_| {
+    if (validateProtocolObligationUncached(ctx, type_tv.name, descriptor)) |_| {
         ctx.storeProtocolSatisfies(key, true);
         return true;
     } else |err| {

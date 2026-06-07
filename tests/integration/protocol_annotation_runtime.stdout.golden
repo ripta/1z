@@ -1,0 +1,44 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: satisfying call returns the method's result
+Stack: [ ]
+PASS: rock does not satisfy flyable
+Stack: [ ]
+PASS: error type is protocol-error
+Stack: [ ]
+PASS: error type
+PASS: message contains protocol name
+PASS: message contains actual type name
+PASS: message contains parameter name
+Stack: [ ]
+PASS: satisfying call after a failed one still works
+Stack: [ ]
+PASS: both bounds satisfied -- no error
+Stack: [ ]
+PASS: rock fails the swimmable bound
+Stack: [ ]
+PASS: second-bound failure is protocol-error
+Stack: [ ]
+PASS: rock fails the flyable bound
+Stack: [ ]
+PASS: first-bound failure is protocol-error
+Stack: [ ]

@@ -14,6 +14,7 @@ const Value = value_mod.Value;
 const debugger_mod = @import("debugger/mod.zig");
 
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
+const protocols_mod = @import("primitives/protocols.zig");
 
 const dispatch_mod = @import("dispatch.zig");
 const DispatchEntry = dispatch_mod.DispatchEntry;
@@ -3700,38 +3701,62 @@ pub const Context = struct {
             defer concrete_index += 1;
 
             const ann = param.type_annotation orelse continue;
-            const expected_tv = switch (ann) {
-                .type => |tv| tv,
-                // Protocol-bound runtime enforcement is delivered separately;
-                // until then the runtime check is a no-op for protocol arms.
-                .protocol => continue,
-            };
-            if (self.any_type_sentinel) |any_tv| {
-                if (expected_tv == any_tv) continue;
-            }
 
             const offset_from_top = concrete_params - 1 - concrete_index;
             const stack_index = self.stack.depth() - 1 - offset_from_top;
             const val = self.stack.items.items[stack_index];
 
-            const val_tv = helpers.resolveValueTypeValue(self, val) orelse continue;
-            if (helpers.valueMatchesType(self, val, expected_tv)) continue;
+            switch (ann) {
+                .type => |expected_tv| {
+                    if (self.any_type_sentinel) |any_tv| {
+                        if (expected_tv == any_tv) continue;
+                    }
 
-            // Type mismatch
-            const actual_name = val_tv.name;
-            const msg = std.fmt.allocPrint(self.arena.allocator(), "type mismatch for parameter '{s}': expected {s}, got {s}", .{ param.name, expected_tv.name, actual_name }) catch "type mismatch";
+                    const val_tv = helpers.resolveValueTypeValue(self, val) orelse continue;
+                    if (helpers.valueMatchesType(self, val, expected_tv)) continue;
 
-            const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
-                .string => |s| std.mem.eql(u8, s, "warning"),
-                else => false,
-            } else false;
+                    const actual_name = val_tv.name;
+                    const msg = std.fmt.allocPrint(self.arena.allocator(), "type mismatch for parameter '{s}': expected {s}, got {s}", .{ param.name, expected_tv.name, actual_name }) catch "type mismatch";
 
-            if (is_warning) {
-                var tw = trace_mod.TraceWriter.init();
-                tw.print("warning: {s}\n", .{msg});
-            } else {
-                self.pending_error_message = msg;
-                return error.TypeError;
+                    const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
+                        .string => |s| std.mem.eql(u8, s, "warning"),
+                        else => false,
+                    } else false;
+
+                    if (is_warning) {
+                        var tw = trace_mod.TraceWriter.init();
+                        tw.print("warning: {s}\n", .{msg});
+                    } else {
+                        self.pending_error_message = msg;
+                        return error.TypeError;
+                    }
+                },
+                .protocol => |descriptor| {
+                    const val_tv = helpers.resolveValueTypeValue(self, val) orelse continue;
+                    if (val_tv.descriptor == null) continue;
+
+                    const satisfies = try protocols_mod.satisfiesByDescriptor(self, val_tv, descriptor);
+                    if (satisfies) continue;
+
+                    const actual_name = val_tv.name;
+                    const msg = std.fmt.allocPrint(self.arena.allocator(), "parameter '{s}': type '{s}' does not satisfy protocol '{s}'", .{ param.name, actual_name, descriptor.name }) catch "protocol mismatch";
+
+                    const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
+                        .string => |s| std.mem.eql(u8, s, "warning"),
+                        else => false,
+                    } else false;
+
+                    if (is_warning) {
+                        var tw = trace_mod.TraceWriter.init();
+                        tw.print("warning: {s}\n", .{msg});
+                    } else {
+                        self.thrown_error = value_mod.boxErrorObject(self.quotationAllocator(), .{
+                            .error_type = "protocol-error",
+                            .message = msg,
+                        }) catch null;
+                        return error.UserThrown;
+                    }
+                },
             }
         }
     }
