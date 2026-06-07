@@ -949,6 +949,22 @@ method-info: struct{ types: array provenance: any } ;
 \\ with optional stack-effects.
 protocol-info: struct{ name: string methods: array protocol_id: fixnum } ;
 
+\\ True when the parameter carries a protocol bound.
+protocol-bound?: ( stack-effect-param -- ? ) [ type-annotation>> type-of constraint = ] ;
+
+\\ True when the parameter carries a concrete-type annotation.
+type-bound?: ( stack-effect-param -- ? ) [ type-annotation>> type-of type = ] ;
+
+\\ The bound protocol as a protocol-info struct, or f if the parameter has
+\\ no protocol bound. Mirrors the shape of `>word-info protocol>>` so
+\\ consumers do not need to special-case the source.
+protocol-info>>: ( stack-effect-param -- protocol-info ) [
+  dup protocol-bound? [
+    type-annotation>> native.>protocol-info
+    dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-protocol-info nip
+  ] [ drop f ] if
+] ;
+
 \\ Structured word information for runtime introspection.
 word-info: struct{ name: string stack-effect: any doc: any markers: array native?: boolean body: any methods: array source-loc: any module: any provenance: any compiled?: boolean protocol: any } ;
 

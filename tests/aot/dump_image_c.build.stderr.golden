@@ -287,9 +287,9 @@ __attribute__((used)) const struct onez_typevalue *onez_image_typevalue_slots[66
     NULL, /* slot 53: ordering:eq (filled by the loader). */
     NULL, /* slot 54: unit (filled by the loader). */
     NULL, /* slot 55: on:exit (filled by the loader). */
-    NULL, /* slot 56: result-value (filled by the loader). */
-    NULL, /* slot 57: mutable-map (filled by the loader). */
-    NULL, /* slot 58: constraint (filled by the loader). */
+    NULL, /* slot 56: constraint (filled by the loader). */
+    NULL, /* slot 57: result-value (filled by the loader). */
+    NULL, /* slot 58: mutable-map (filled by the loader). */
     NULL, /* slot 59: float (filled by the loader). */
     NULL, /* slot 60: stream (filled by the loader). */
     NULL, /* slot 61: ordering:gt (filled by the loader). */
@@ -562,7 +562,7 @@ static const uint32_t onez_image_td_12_field_type_slots[] = { 4, 4, 4, 4 };
 static const char onez_image_td_16_v0_name[] = "ok";
 static const char onez_image_td_16_v1_name[] = "err";
 static const onez_image_enum_variant_t onez_image_td_16_variants[] = {
-    { .name = onez_image_td_16_v0_name, .name_len = 2, .type_slot = 56 },
+    { .name = onez_image_td_16_v0_name, .name_len = 2, .type_slot = 57 },
     { .name = onez_image_td_16_v1_name, .name_len = 3, .type_slot = 33 },
 };
 static const char onez_image_td_17_f0_name[] = "inputs";
@@ -639,9 +639,9 @@ static const uint32_t onez_image_td_40_field_type_slots[] = { 4, 38, 19, 19 };
 static const char onez_image_td_49_f0_name[] = "value";
 static const char *const onez_image_td_49_field_names[] = { onez_image_td_49_f0_name };
 static const uint32_t onez_image_td_49_field_name_lens[] = { 5 };
-static const char onez_image_td_55_f0_name[] = "value";
-static const char *const onez_image_td_55_field_names[] = { onez_image_td_55_f0_name };
-static const uint32_t onez_image_td_55_field_name_lens[] = { 5 };
+static const char onez_image_td_56_f0_name[] = "value";
+static const char *const onez_image_td_56_field_names[] = { onez_image_td_56_f0_name };
+static const uint32_t onez_image_td_56_field_name_lens[] = { 5 };
 
 __attribute__((used)) static const onez_image_typedescriptor_t onez_image_typedescriptors_storage[] = {
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 4, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = onez_image_td_0_variants, .variant_count = 2, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
@@ -680,7 +680,7 @@ __attribute__((used)) static const onez_image_typedescriptor_t onez_image_typede
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 1, .exact = 1, .integer = 1, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 56, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 17, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 57, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 17, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_38_field_names, .field_name_lens = onez_image_td_38_field_name_lens, .field_count = 12, .field_type_slots = onez_image_td_38_field_type_slots, .field_type_count = 12, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 54, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 21, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
@@ -699,9 +699,9 @@ __attribute__((used)) static const onez_image_typedescriptor_t onez_image_typede
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 54, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 26, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 54, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 21, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_55_field_names, .field_name_lens = onez_image_td_55_field_name_lens, .field_count = 1, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 1, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_56_field_names, .field_name_lens = onez_image_td_56_field_name_lens, .field_count = 1, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 1, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 1, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 1, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 54, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 26, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
@@ -766,9 +766,9 @@ static const char onez_image_tv_51_name[] = "on:word-defined";
 static const char onez_image_tv_52_name[] = "ordering:eq";
 static const char onez_image_tv_53_name[] = "unit";
 static const char onez_image_tv_54_name[] = "on:exit";
-static const char onez_image_tv_55_name[] = "result-value";
-static const char onez_image_tv_56_name[] = "mutable-map";
-static const char onez_image_tv_57_name[] = "constraint";
+static const char onez_image_tv_55_name[] = "constraint";
+static const char onez_image_tv_56_name[] = "result-value";
+static const char onez_image_tv_57_name[] = "mutable-map";
 static const char onez_image_tv_58_name[] = "float";
 static const char onez_image_tv_59_name[] = "stream";
 static const char onez_image_tv_60_name[] = "ordering:gt";
@@ -833,9 +833,9 @@ __attribute__((used)) static const onez_image_typevalue_t onez_image_typevalues_
     { .name = onez_image_tv_52_name, .name_len = 11, .slot = 53, .descriptor = &onez_image_typedescriptors_storage[52], .member_type_slots = NULL, .member_type_count = 0 },
     { .name = onez_image_tv_53_name, .name_len = 4, .slot = 54, .descriptor = &onez_image_typedescriptors_storage[53], .member_type_slots = NULL, .member_type_count = 0 },
     { .name = onez_image_tv_54_name, .name_len = 7, .slot = 55, .descriptor = &onez_image_typedescriptors_storage[54], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_55_name, .name_len = 12, .slot = 56, .descriptor = &onez_image_typedescriptors_storage[55], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_56_name, .name_len = 11, .slot = 57, .descriptor = &onez_image_typedescriptors_storage[56], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_57_name, .name_len = 10, .slot = 58, .descriptor = &onez_image_typedescriptors_storage[57], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_55_name, .name_len = 10, .slot = 56, .descriptor = &onez_image_typedescriptors_storage[55], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_56_name, .name_len = 12, .slot = 57, .descriptor = &onez_image_typedescriptors_storage[56], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_57_name, .name_len = 11, .slot = 58, .descriptor = &onez_image_typedescriptors_storage[57], .member_type_slots = NULL, .member_type_count = 0 },
     { .name = onez_image_tv_58_name, .name_len = 5, .slot = 59, .descriptor = &onez_image_typedescriptors_storage[58], .member_type_slots = NULL, .member_type_count = 0 },
     { .name = onez_image_tv_59_name, .name_len = 6, .slot = 60, .descriptor = &onez_image_typedescriptors_storage[59], .member_type_slots = NULL, .member_type_count = 0 },
     { .name = onez_image_tv_60_name, .name_len = 11, .slot = 61, .descriptor = &onez_image_typedescriptors_storage[60], .member_type_slots = NULL, .member_type_count = 0 },

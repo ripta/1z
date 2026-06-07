@@ -21,6 +21,35 @@ Stack: [ ]
 Stack: [ stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } ]
 PASS: concrete annotation still a type
 Stack: [ ]
+=== introspection accessors discriminate protocol-bound from type-bound ===
+Stack: [ ]
+Stack: [ stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: <protocol-descriptor:doubleable> } ]
+PASS: protocol-bound input is protocol-bound?
+Stack: [ stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: <protocol-descriptor:doubleable> } ]
+PASS: protocol-bound input is not type-bound?
+Stack: [ ]
+Stack: [ stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } ]
+PASS: type-bound input is type-bound?
+Stack: [ stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } ]
+PASS: type-bound input is not protocol-bound?
+Stack: [ ]
+=== protocol-info>> yields the same shape as `>word-info protocol>>` ===
+Stack: [ ]
+Stack: [ protocol-info{ name: "doubleable" methods: { *: ( a: self b: self -- c: self ) } protocol_id: 3 } ]
+PASS: protocol-info>> returns a struct on a protocol-bound input
+Stack: [ protocol-info{ name: "doubleable" methods: { *: ( a: self b: self -- c: self ) } protocol_id: 3 } ]
+PASS: protocol-info>> name is doubleable
+Stack: [ protocol-info{ name: "doubleable" methods: { *: ( a: self b: self -- c: self ) } protocol_id: 3 } ]
+PASS: protocol-info>> protocol_id is a fixnum
+Stack: [ ]
+Stack: [ protocol-info{ name: "doubleable" methods: { *: ( a: self b: self -- c: self ) } protocol_id: 3 } ]
+PASS: protocol-info>> works symmetrically on outputs
+Stack: [ ]
+=== protocol-info>> is f on a concrete-typed parameter ===
+Stack: [ ]
+Stack: [ f ]
+PASS: protocol-info>> is f on a type-bound input
+Stack: [ ]
 === `|` continuation after a protocol fails parsing ===
 Stack: [ ]
 Stack: [ [ "bad: ( x: doubleable | fixnum -- ) [ ] ;" eval-string ] ]

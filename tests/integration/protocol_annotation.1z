@@ -23,6 +23,28 @@ typed-fn: ( n: fixnum -- m: fixnum ) [ 1 + ] ;
 typed-fn: >word-info stack-effect>> inputs>> #first
 type-annotation>> fixnum "concrete annotation still a type" assert=
 
+"introspection accessors discriminate protocol-bound from type-bound" test-section
+dbl: >word-info stack-effect>> inputs>> #first
+dup protocol-bound? t "protocol-bound input is protocol-bound?" assert=
+type-bound? f "protocol-bound input is not type-bound?" assert=
+
+typed-fn: >word-info stack-effect>> inputs>> #first
+dup type-bound? t "type-bound input is type-bound?" assert=
+protocol-bound? f "type-bound input is not protocol-bound?" assert=
+
+"protocol-info>> yields the same shape as `>word-info protocol>>`" test-section
+dbl: >word-info stack-effect>> inputs>> #first protocol-info>>
+dup f = f "protocol-info>> returns a struct on a protocol-bound input" assert=
+dup name>> "doubleable" "protocol-info>> name is doubleable" assert=
+protocol_id>> fixnum? t "protocol-info>> protocol_id is a fixnum" assert=
+
+dbl: >word-info stack-effect>> outputs>> #first protocol-info>>
+name>> "doubleable" "protocol-info>> works symmetrically on outputs" assert=
+
+"protocol-info>> is f on a concrete-typed parameter" test-section
+typed-fn: >word-info stack-effect>> inputs>> #first protocol-info>>
+f "protocol-info>> is f on a type-bound input" assert=
+
 "`|` continuation after a protocol fails parsing" test-section
 [ "bad: ( x: doubleable | fixnum -- ) [ ] ;" eval-string ]
 "protocol bounds cannot be unioned" assert-error

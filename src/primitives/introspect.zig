@@ -32,6 +32,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "all-words", .func = nativeAllWords, .stack_effect = "-- array" },
     .{ .name = "current-scope", .func = nativeCurrentScope, .stack_effect = "-- module" },
     .{ .name = "local-scope", .func = nativeLocalScope, .stack_effect = "-- module" },
+    .{ .name = ">protocol-info", .func = nativeProtocolDescriptorToInfo, .stack_effect = "constraint -- array" },
     .{ .name = "dead-definitions", .func = nativeDeadDefinitions },
     .{ .name = "defined?", .func = nativeDefined, .stack_effect = "module name -- ?" },
     .{ .name = "locally-defined?", .func = nativeLocallyDefined },
@@ -62,6 +63,19 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
     return .{ .array = fields };
 }
 
+/// Build a 3-element raw record `{name methods protocol_id}` from a protocol
+/// descriptor. The prelude wraps this into the `protocol-info` struct.
+fn buildProtocolDescriptorRecord(alloc: Allocator, descriptor: *const ProtocolDescriptor) Allocator.Error!Value {
+    const methods_arr = try alloc.alloc(Value, descriptor.methods.len);
+    @memcpy(methods_arr, descriptor.methods);
+
+    const fields = try alloc.alloc(Value, 3);
+    fields[0] = .{ .string = descriptor.name };
+    fields[1] = .{ .array = methods_arr };
+    fields[2] = .{ .fixnum = @intCast(descriptor.protocol_id) };
+    return .{ .array = fields };
+}
+
 /// Recognize a protocol word and return a 3-element raw record
 /// `{name methods protocol_id}`. A word is a protocol word iff its body is
 /// the single-instruction shape that `nativeDefineProtocol` emits: a
@@ -82,14 +96,7 @@ fn buildProtocolInfo(alloc: Allocator, word: WordDefinition) Allocator.Error!Val
         else => return .{ .boolean = false },
     };
 
-    const methods_arr = try alloc.alloc(Value, descriptor.methods.len);
-    @memcpy(methods_arr, descriptor.methods);
-
-    const fields = try alloc.alloc(Value, 3);
-    fields[0] = .{ .string = descriptor.name };
-    fields[1] = .{ .array = methods_arr };
-    fields[2] = .{ .fixnum = @intCast(descriptor.protocol_id) };
-    return .{ .array = fields };
+    return buildProtocolDescriptorRecord(alloc, descriptor);
 }
 
 fn buildStackEffectValue(alloc: Allocator, effect: *const StackEffect) Allocator.Error!Value {
@@ -589,6 +596,23 @@ fn nativeToWord(ctx: *Context) anyerror!void {
 
     const word = moduleWordToWordDef(name, mod_word);
     try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
+}
+
+/// >protocol-info ( constraint -- array ) - Convert a protocol descriptor value into the same
+/// 3-element raw record `{name methods protocol_id}` that `>word-info`'s `protocol` field carries.
+///
+/// The prelude wraps the result into the `protocol-info` struct.
+fn nativeProtocolDescriptorToInfo(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const val = try ctx.stack.pop();
+    const descriptor = switch (val) {
+        .protocol_descriptor => |d| d,
+        else => {
+            helpers.setTypeMismatchError(ctx, "constraint", val);
+            return error.TypeMismatch;
+        },
+    };
+    try ctx.stack.push(try buildProtocolDescriptorRecord(alloc, descriptor));
 }
 
 /// type-descriptor ( symbol|type -- type-descriptor ) - Look up a type descriptor by name or type value.
