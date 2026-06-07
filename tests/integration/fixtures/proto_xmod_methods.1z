@@ -1,0 +1,7 @@
+\ Cross-module methods fixture: registers the cross-type protocol method
+\ on the virtual type. Loaded separately to exercise the deferred path.
+
+use "proto_xmod_protocol.1z" ;
+use "proto_xmod_type.1z" ;
+
+xmod-scale: method{ xmod-widget any } [ drop ] ;

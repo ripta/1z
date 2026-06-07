@@ -1,0 +1,4 @@
+\ Cross-module type fixture: a virtual type with no method registrations.
+\ The protocol's required method is contributed in a separate module.
+
+xmod-widget: virtual{ fixnum } ;

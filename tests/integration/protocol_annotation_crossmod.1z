@@ -1,0 +1,31 @@
+\ Cross-module visibility for protocol-bounded parameters. Runs under
+\ `1z check`; `type-check: "warning"` keeps the run alive while making
+\ analyzer diagnostics observable on stderr.
+\
+\ The protocol `xmod-scaleable` has a single cross-type method
+\ (`xmod-scale: ( a: self b: any -- result )`) whose registration for
+\ `xmod-widget` lives in `proto_xmod_methods.1z`. The analyzer must
+\ stay silent at the call site whether or not the methods module has
+\ loaded, since the runtime check covers the cross-type path.
+pragma{ type-check: "warning" }
+
+use "fixtures/proto_xmod_protocol.1z" ;
+use "fixtures/proto_xmod_type.1z" ;
+
+\ Producer yields the virtual type without any method registration.
+make-widget: ( -- y: xmod-widget ) [ 5 >xmod-widget ] ;
+
+\ Consumer accepts the protocol-bound parameter.
+consume-scaleable: ( x: xmod-scaleable -- ) [ drop ] ;
+
+\ Pipeline before the methods module loads. Even though no
+\ `xmod-scale: method{ xmod-widget any }` is registered yet, the
+\ analyzer must not emit a diagnostic because the protocol's only
+\ requirement is cross-type.
+unloaded-pipeline: ( -- ) [ make-widget consume-scaleable ] ;
+
+\ Load the contributing methods module and confirm the same composition
+\ stays silent.
+use "fixtures/proto_xmod_methods.1z" ;
+
+loaded-pipeline: ( -- ) [ make-widget consume-scaleable ] ;

@@ -1375,13 +1375,13 @@ pub const InferenceEngine = struct {
                     const ctx = self.ctx orelse continue;
                     const mismatch_actual: ?[]const u8 = switch (entry) {
                         .typed => |typed| blk: {
-                            const satisfies = protocols_mod.satisfiesByDescriptor(ctx, typed.tv, descriptor) catch break :blk null;
+                            const satisfies = protocols_mod.satisfiesByDescriptorSameTypeOnly(ctx, typed.tv, descriptor) catch break :blk null;
                             if (satisfies) break :blk null;
                             break :blk typed.tv.name;
                         },
                         .typed_union => |tu| blk: {
                             for (tu.types[0..tu.len]) |member| {
-                                const satisfies = protocols_mod.satisfiesByDescriptor(ctx, member.tv, descriptor) catch break :blk null;
+                                const satisfies = protocols_mod.satisfiesByDescriptorSameTypeOnly(ctx, member.tv, descriptor) catch break :blk null;
                                 if (!satisfies) {
                                     break :blk tu.format(self.allocator) catch null;
                                 }

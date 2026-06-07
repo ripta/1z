@@ -226,6 +226,65 @@ pub fn satisfiesByDescriptor(
     }
 }
 
+/// Parse-time satisfies check that only verifies same-type methods.
+/// Cross-type methods (those with `any` annotations or non-self concrete
+/// annotations) are skipped because the contributing modules may not have
+/// loaded yet; the runtime check at the call site remains authoritative
+/// for those.
+///
+/// Returns true when every same-type method in the descriptor has a
+/// matching dispatch entry for `type_tv`, including the trivial case
+/// where the descriptor contains only cross-type methods.
+pub fn satisfiesByDescriptorSameTypeOnly(
+    ctx: *Context,
+    type_tv: *const value_mod.TypeValue,
+    descriptor: *const ProtocolDescriptor,
+) !bool {
+    const methods_array = descriptor.methods;
+    var i: usize = 0;
+    while (i < methods_array.len) {
+        const method_val = methods_array[i];
+        const method_name = switch (method_val) {
+            .symbol => |s| s,
+            else => {
+                helpers.setErrorContext(ctx, "protocol method entries must be symbols", .{});
+                return error.TypeMismatch;
+            },
+        };
+        i += 1;
+
+        if (i < methods_array.len and methods_array[i] == .stack_effect) {
+            const effect = methods_array[i].stack_effect;
+            i += 1;
+            if (isCrossTypeMethod(ctx, effect)) continue;
+            if (!sameTypeMethodRegistered(ctx, method_name, effect, type_tv)) return false;
+        } else {
+            const did = ctx.resolveDispatchId(method_name) orelse return false;
+            const has_method = ctx.lookupUnaryDispatch(did, type_tv.descriptor.?) != null or
+                ctx.lookupBinaryDispatch(did, type_tv.descriptor.?, type_tv.descriptor.?) != null;
+            if (!has_method) return false;
+        }
+    }
+    return true;
+}
+
+/// Check that a same-type method has a dispatch entry for `type_tv`.
+/// Caller must have verified `isCrossTypeMethod(ctx, effect) == false`,
+/// so every input is either unannotated or carries the `self` sentinel.
+fn sameTypeMethodRegistered(
+    ctx: *Context,
+    method_name: []const u8,
+    effect: StackEffect,
+    type_tv: *const value_mod.TypeValue,
+) bool {
+    const did = ctx.resolveDispatchId(method_name) orelse return false;
+    const n_inputs = @min(effect.inputs.len, 2);
+    if (n_inputs <= 1) {
+        return ctx.lookupUnaryDispatch(did, type_tv.descriptor.?) != null;
+    }
+    return ctx.lookupBinaryDispatch(did, type_tv.descriptor.?, type_tv.descriptor.?) != null;
+}
+
 /// Validate a single protocol obligation: check that all required methods
 /// are registered in the dispatch table. Consults the per-`Context`
 /// satisfies-check memo so the steady-state path is a single hash lookup;

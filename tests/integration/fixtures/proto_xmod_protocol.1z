@@ -1,0 +1,8 @@
+\ Cross-module protocol fixture for the protocol-bound analyzer test.
+\ Defines a protocol whose required method is cross-type (carries an
+\ `any` annotation), so per-type method registrations may live in a
+\ separate module that the importing program has not yet loaded.
+
+xmod-scaleable: protocol{ xmod-scale: ( a: self b: any -- result ) } ;
+
+xmod-scale: generic ( a b -- c ) [ drop ] ;
