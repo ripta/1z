@@ -364,6 +364,63 @@ pub fn build(b: *std.Build) void {
 
     update_lsp_golden_step.dependOn(&update_lsp_files.step);
     if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, lsp_test_step, "lsp", lsp_status_files.items);
+
+    addBaremetalRiscv64VirtTest(b, optimize);
+}
+
+fn addBaremetalRiscv64VirtTest(
+    b: *std.Build,
+    optimize: std.builtin.OptimizeMode,
+) void {
+    const target = b.resolveTargetQuery(.{
+        .cpu_arch = .riscv64,
+        .os_tag = .freestanding,
+        .abi = .none,
+    });
+
+    const platform_module = b.createModule(.{
+        .root_source_file = b.path("src/baremetal/riscv64/virt/platform.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = false,
+        .single_threaded = true,
+        .stack_check = false,
+        .stack_protector = false,
+        .pic = false,
+        .red_zone = false,
+    });
+    platform_module.addAssemblyFile(b.path("src/baremetal/riscv64/virt/boot.S"));
+
+    const platform_lib = b.addLibrary(.{
+        .name = "1z-riscv64-virt",
+        .root_module = platform_module,
+        .linkage = .static,
+    });
+
+    const stub_module = b.createModule(.{
+        .root_source_file = b.path("tests/baremetal/riscv64/uart_stub.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = false,
+        .single_threaded = true,
+        .stack_check = false,
+        .stack_protector = false,
+        .pic = false,
+        .red_zone = false,
+    });
+    stub_module.addImport("virt-platform", platform_module);
+
+    const uart_stub = b.addExecutable(.{
+        .name = "1z-riscv64-virt-uart-stub",
+        .root_module = stub_module,
+    });
+    uart_stub.linkLibrary(platform_lib);
+    uart_stub.setLinkerScript(b.path("src/baremetal/riscv64/virt/linker.ld"));
+    uart_stub.link_gc_sections = true;
+
+    const test_step = b.step("baremetal-riscv64-test", "Compile riscv64 virt platform library and linked UART stub");
+    test_step.dependOn(&platform_lib.step);
+    test_step.dependOn(&uart_stub.step);
 }
 
 fn addFfiIncludePath(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
