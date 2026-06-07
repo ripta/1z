@@ -388,6 +388,7 @@ pub const Server = struct {
             self.ctx.getAnyTypeSentinel(),
             .err,
             .err,
+            self.ctx,
         );
         defer engine.deinit();
         engine.analyzeAll(uri) catch return;

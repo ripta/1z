@@ -1,0 +1,47 @@
+\ Parse-time analyzer constraint propagation for protocol-bounded
+\ annotations. Runs under `1z check` so the static analyzer fires;
+\ `type-check: "warning"` keeps the run alive while making the
+\ diagnostics observable on stderr.
+pragma{ type-check: "warning" }
+
+flyable: protocol{ fly: } ;
+swimmable: protocol{ swim: } ;
+
+bird: virtual{ string } ;
+fish: virtual{ string } ;
+rock: virtual{ fixnum } ;
+
+fly: generic ( x -- y ) [ drop "soaring" ] ;
+swim: generic ( x -- y ) [ drop "drifting" ] ;
+
+fly: method{ bird } [ unmake-bird drop "flap" ] ;
+swim: method{ fish } [ unmake-fish drop "splash" ] ;
+
+\ Typed-output producers so the analyzer tracks concrete or
+\ protocol-bounded outputs precisely past the call site.
+make-bird: ( -- y: bird )    [ "phoenix" >bird ] ;
+make-rock: ( -- y: rock )    [ 7 >rock ] ;
+take-off:  ( -- y: flyable ) [ make-bird ] ;
+
+\ Same-protocol consumer.
+land: ( x: flyable -- y ) [ fly ] ;
+
+\ Different-protocol consumer.
+dive: ( x: swimmable -- y ) [ swim ] ;
+
+\ Identity match: producer's `flyable` output flows into consumer's
+\ `flyable` input. Same descriptor pointer; no diagnostic emitted.
+identity-pipeline: ( -- y ) [ take-off land ] ;
+
+\ Non-identical pair: producer's `flyable` output flows into consumer's
+\ `swimmable` input. Different descriptors; analyzer stays silent and
+\ defers to the runtime check.
+crossover-pipeline: ( -- y ) [ take-off dive ] ;
+
+\ Concrete value satisfying the bound: a bird satisfies `flyable` because
+\ `bird` registers `fly:`. No diagnostic emitted.
+satisfy-pipeline: ( -- y ) [ make-bird land ] ;
+
+\ Concrete value failing the bound: a rock does NOT satisfy `flyable`.
+\ Under "warning" mode, the analyzer emits a diagnostic on stderr.
+fail-pipeline: ( -- y ) [ make-rock land ] ;
