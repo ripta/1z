@@ -1,0 +1,28 @@
+use "testing" ;
+
+\ Establish a protocol so we have a constraint to bind on. The protocol's
+\ underlying methods don't matter for these tests; what matters is that
+\ `doubleable` is a parse-time const that pushes a protocol descriptor.
+doubleable: protocol{ *: ( a: self b: self -- c: self ) } ;
+
+"protocol bound parses and round-trips through stack-effect rendering" test-section
+dbl: ( x: doubleable -- y: doubleable ) [ dup * ] ;
+dbl: >word-info stack-effect>> >string
+"( x: doubleable -- y: doubleable )" "rendering" assert=
+
+"introspection field surfaces the protocol descriptor" test-section
+dbl: >word-info stack-effect>> inputs>> #first
+type-annotation>> doubleable "annotation is doubleable" assert=
+
+"output position is treated symmetrically" test-section
+dbl: >word-info stack-effect>> outputs>> #first
+type-annotation>> doubleable "output annotation is doubleable" assert=
+
+"non-protocol annotation still resolves as a type" test-section
+typed-fn: ( n: fixnum -- m: fixnum ) [ 1 + ] ;
+typed-fn: >word-info stack-effect>> inputs>> #first
+type-annotation>> fixnum "concrete annotation still a type" assert=
+
+"`|` continuation after a protocol fails parsing" test-section
+[ "bad: ( x: doubleable | fixnum -- ) [ ] ;" eval-string ]
+"protocol bounds cannot be unioned" assert-error

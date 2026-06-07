@@ -216,12 +216,17 @@ fn nativeTypeHasProperty(ctx: *Context) anyerror!void {
     }
 }
 
-/// native.type-name ( type -- string ) - Extract the name string from a type value.
+/// native.type-name ( type -- string ) - Extract the name string from a type
+/// value or a protocol descriptor. Accepting both keeps stack-effect display
+/// uniform across concrete-type and protocol-bound annotations.
 fn nativeTypeName(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
         .type_val => |tv| {
             try ctx.stack.push(.{ .string = tv.name });
+        },
+        .protocol_descriptor => |pd| {
+            try ctx.stack.push(.{ .string = pd.name });
         },
         else => {
             helpers.setTypeMismatchError(ctx, "type", val);

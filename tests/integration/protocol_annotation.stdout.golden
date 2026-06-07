@@ -1,0 +1,28 @@
+Stack: [ ]
+=== protocol bound parses and round-trips through stack-effect rendering ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "( x: doubleable -- y: doubleable )" ]
+PASS: rendering
+Stack: [ ]
+=== introspection field surfaces the protocol descriptor ===
+Stack: [ ]
+Stack: [ stack-effect-param{ name: "x" row-variable?: f nested-effect: f type-annotation: <protocol-descriptor:doubleable> } ]
+PASS: annotation is doubleable
+Stack: [ ]
+=== output position is treated symmetrically ===
+Stack: [ ]
+Stack: [ stack-effect-param{ name: "y" row-variable?: f nested-effect: f type-annotation: <protocol-descriptor:doubleable> } ]
+PASS: output annotation is doubleable
+Stack: [ ]
+=== non-protocol annotation still resolves as a type ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ stack-effect-param{ name: "n" row-variable?: f nested-effect: f type-annotation: <type:fixnum> } ]
+PASS: concrete annotation still a type
+Stack: [ ]
+=== `|` continuation after a protocol fails parsing ===
+Stack: [ ]
+Stack: [ [ "bad: ( x: doubleable | fixnum -- ) [ ] ;" eval-string ] ]
+PASS: protocol bounds cannot be unioned
+Stack: [ ]

@@ -3702,7 +3702,9 @@ pub const Context = struct {
             const ann = param.type_annotation orelse continue;
             const expected_tv = switch (ann) {
                 .type => |tv| tv,
-                .protocol => unreachable,
+                // Protocol-bound runtime enforcement is delivered separately;
+                // until then the runtime check is a no-op for protocol arms.
+                .protocol => continue,
             };
             if (self.any_type_sentinel) |any_tv| {
                 if (expected_tv == any_tv) continue;

@@ -706,12 +706,21 @@ fn isTypeAnnotationCandidate(token: []const u8) bool {
     return true;
 }
 
-/// Resolve a type annotation token to a TypeValue pointer by looking up
-/// the word in the context.
-///
-/// Returns null if ctx is null, as is in unit tests, or if the word is
-/// not found, or if the word is not a type.
-fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?*const value_mod.TypeValue {
+/// Result of resolving a token in stack-effect annotation position. Either
+/// a concrete `TypeValue` (the existing path -- includes the `self` and
+/// `any` marker sentinels) or a `ProtocolDescriptor` produced by a
+/// constraint-pushing protocol word.
+const ResolvedAnnotation = union(enum) {
+    type: *const value_mod.TypeValue,
+    protocol: *const value_mod.ProtocolDescriptor,
+};
+
+/// Resolve a type annotation token by looking up the word in the context
+/// and, when the word is a parse-time const, executing it and consuming the
+/// single value it pushes. Returns null if ctx is null (as in unit tests),
+/// the token is not a candidate, the word is not parse-time, or the pushed
+/// value is neither a type nor a protocol descriptor.
+fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?ResolvedAnnotation {
     const c = ctx orelse return null;
     if (!isTypeAnnotationCandidate(token)) return null;
     if (c.lookupWord(token)) |word| {
@@ -728,10 +737,11 @@ fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?*const value_mod.Ty
             const post_depth = c.stack.depth();
             if (post_depth > pre_depth) {
                 const val = c.stack.pop() catch return null;
-                if (val == .type_val) return val.type_val;
+                if (val == .type_val) return .{ .type = val.type_val };
+                if (val == .protocol_descriptor) return .{ .protocol = val.protocol_descriptor };
                 if (val == .marker) {
-                    if (markers_mod.isSelfMarker(val.marker)) return c.getSelfTypeSentinel();
-                    if (markers_mod.isAnyMarker(val.marker)) return c.getAnyTypeSentinel();
+                    if (markers_mod.isSelfMarker(val.marker)) return .{ .type = c.getSelfTypeSentinel() };
+                    if (markers_mod.isAnyMarker(val.marker)) return .{ .type = c.getAnyTypeSentinel() };
                 }
             }
         }
@@ -770,8 +780,12 @@ fn parseTypeUnionTail(
         const member_tok = nextTokenOrYield(tokenizer) orelse {
             return invalidTypeUnion(ctx, allocator, "expected a type after '|'", .{});
         };
-        const member_type = resolveTypeAnnotation(ctx, member_tok.text) orelse {
+        const resolved = resolveTypeAnnotation(ctx, member_tok.text) orelse {
             return invalidTypeUnion(ctx, allocator, "'{s}' is not a known type in union position", .{member_tok.text});
+        };
+        const member_type = switch (resolved) {
+            .type => |t| t,
+            .protocol => return invalidTypeUnion(ctx, allocator, "protocol '{s}' cannot appear in a type union; protocol composition with '|' is not yet supported", .{member_tok.text}),
         };
         members.append(allocator, member_type) catch return ParseError.OutOfMemory;
 
@@ -785,20 +799,27 @@ fn parseTypeUnionTail(
 }
 
 /// Parse a type annotation token, greedily consuming a trailing `|` union
-/// continuation when present.
+/// continuation when the head is a concrete type. A protocol head followed
+/// by `|` raises an `InvalidTypeUnion` diagnostic; protocol composition
+/// with `|` is not yet supported.
 fn parseTypeAnnotationToken(
     allocator: Allocator,
     tokenizer: *Tokenizer,
     ctx: ?*Context,
     token: []const u8,
-) ParseError!?*const value_mod.TypeValue {
-    const first_type = resolveTypeAnnotation(ctx, token) orelse return null;
-    const next_tok = nextTokenOrYield(tokenizer) orelse return first_type;
+) ParseError!?ResolvedAnnotation {
+    const first = resolveTypeAnnotation(ctx, token) orelse return null;
+    const next_tok = nextTokenOrYield(tokenizer) orelse return first;
     if (!std.mem.eql(u8, next_tok.text, "|")) {
         tokenizer.peeked = next_tok;
-        return first_type;
+        return first;
     }
-    return parseTypeUnionTail(allocator, tokenizer, ctx, first_type);
+    const first_type = switch (first) {
+        .type => |t| t,
+        .protocol => return invalidTypeUnion(ctx, allocator, "protocol '{s}' cannot appear in a type union; protocol composition with '|' is not yet supported", .{token}),
+    };
+    const union_type = try parseTypeUnionTail(allocator, tokenizer, ctx, first_type);
+    return .{ .type = union_type };
 }
 
 /// Try to interpret an otherwise-unrecognized token as the start of an
@@ -815,7 +836,11 @@ pub fn maybeParseTypeUnionToken(
     // consuming any tokens or mutating tokenizer state.
     if (!peekNextTokenIsPipe(tokenizer)) return null;
 
-    const first_type = resolveTypeAnnotation(ctx, token) orelse return null;
+    const first = resolveTypeAnnotation(ctx, token) orelse return null;
+    const first_type = switch (first) {
+        .type => |t| t,
+        .protocol => return null,
+    };
     // Consume the `|` we already verified is there.
     _ = nextTokenOrYield(tokenizer);
     return parseTypeUnionTail(allocator, tokenizer, ctx, first_type);
@@ -904,8 +929,11 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
             current_list = &outputs;
         } else if (pending_param_name) |name| {
             if (pending_is_annotated) {
-                const type_val = try parseTypeAnnotationToken(allocator, tokenizer, ctx, token);
-                const ann: ?stack_effect_mod.TypeAnnotation = if (type_val) |tv| .{ .type = tv } else null;
+                const resolved = try parseTypeAnnotationToken(allocator, tokenizer, ctx, token);
+                const ann: ?stack_effect_mod.TypeAnnotation = if (resolved) |r| switch (r) {
+                    .type => |tv| .{ .type = tv },
+                    .protocol => |pd| .{ .protocol = pd },
+                } else null;
                 current_list.append(allocator, .{
                     .name = name,
                     .type_annotation = ann,

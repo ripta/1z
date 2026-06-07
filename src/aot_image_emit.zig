@@ -831,7 +831,11 @@ fn registerParam(
             .type => |tv| {
                 _ = try table.internType(tv);
             },
-            .protocol => unreachable,
+            // Protocol descriptor serialization is not yet wired through the
+            // AOT slot tables; skip interning for now so a binary with a
+            // protocol-bound signature builds without crashing. The slot
+            // emitted at the use site reads as "no annotation".
+            .protocol => {},
         }
     }
     if (param.quotation_effect) |nested| {
@@ -2085,12 +2089,16 @@ fn emitEffectParamArray(
     try writeEffectParamArraySym(out, allocator, eff_idx, is_input);
     try out.appendSlice(allocator, "[] = {\n");
     for (params, 0..) |param, i| {
-        const has_type: u8 = if (param.type_annotation != null) 1 else 0;
+        // Protocol-bound annotations are serialized as "no annotation" for
+        // now; the parallel slot table for descriptors lands with later AOT
+        // work. Drop them at emission so the binary still builds.
+        const has_concrete_type = if (param.type_annotation) |ann| ann == .type else false;
+        const has_type: u8 = if (has_concrete_type) 1 else 0;
         const has_quot: u8 = if (param.quotation_effect != null) 1 else 0;
         const is_row: u8 = if (param.is_row_variable) 1 else 0;
         const type_slot: u32 = if (param.type_annotation) |ann| switch (ann) {
             .type => |tv| table.type_slot_index.get(tv) orelse 0,
-            .protocol => unreachable,
+            .protocol => 0,
         } else 0;
         const quot_idx: u32 = if (param.quotation_effect) |nested|
             table.lookupEffect(nested)

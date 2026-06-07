@@ -57,7 +57,7 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
         .{ .boolean = false };
     fields[3] = if (param.type_annotation) |ann| switch (ann) {
         .type => |tv| Value{ .type_val = @constCast(tv) },
-        .protocol => unreachable,
+        .protocol => |pd| Value{ .protocol_descriptor = pd },
     } else .{ .boolean = false };
     return .{ .array = fields };
 }

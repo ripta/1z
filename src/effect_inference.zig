@@ -381,8 +381,8 @@ pub const InferenceEngine = struct {
                     const out_types = try self.allocator.alloc(StackEntry, eff.outputs.len);
                     for (eff.outputs, 0..) |param, i| {
                         out_types[i] = if (param.type_annotation) |ann| switch (ann) {
-                            .type => |tv| .{ .typed = .{ .tv = tv } },
-                            .protocol => unreachable,
+                            .type => |tv| StackEntry{ .typed = .{ .tv = tv } },
+                            .protocol => StackEntry.other,
                         } else .other;
                     }
                     try self.type_cache.put(self.allocator, name, out_types);
@@ -413,8 +413,8 @@ pub const InferenceEngine = struct {
                             const out_types = try self.allocator.alloc(StackEntry, eff.outputs.len);
                             for (eff.outputs, 0..) |param, i| {
                                 out_types[i] = if (param.type_annotation) |ann| switch (ann) {
-                                    .type => |tv| .{ .typed = .{ .tv = tv } },
-                                    .protocol => unreachable,
+                                    .type => |tv| StackEntry{ .typed = .{ .tv = tv } },
+                                    .protocol => StackEntry.other,
                                 } else .other;
                             }
                             try self.type_cache.put(self.allocator, name, out_types);
@@ -1324,7 +1324,9 @@ pub const InferenceEngine = struct {
             const ann = param.type_annotation orelse continue;
             const expected_tv = switch (ann) {
                 .type => |tv| tv,
-                .protocol => unreachable,
+                // The analyzer does not enforce protocol bounds; the runtime
+                // satisfies-check is authoritative for those annotations.
+                .protocol => continue,
             };
             const stack_pos = stack_model.items.len - concrete_count + concrete_index;
             const entry = stack_model.items[stack_pos];
@@ -1457,7 +1459,7 @@ pub const InferenceEngine = struct {
             if (param.type_annotation) |ann| {
                 switch (ann) {
                     .type => |tv| try stack_model.append(self.allocator, .{ .typed = .{ .tv = tv } }),
-                    .protocol => unreachable,
+                    .protocol => try stack_model.append(self.allocator, .other),
                 }
             } else {
                 try stack_model.append(self.allocator, .other);

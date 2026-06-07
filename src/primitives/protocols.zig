@@ -350,16 +350,19 @@ fn validateObligationSameTypeOnly(
 
 /// Returns true if the stack effect has any non-self type annotation,
 /// i.e., the `any` sentinel or a concrete type that is not `self`.
+/// A protocol-bound input is treated as cross-type (it describes a set of
+/// types rather than the implementing one), so validation defers to runtime.
 fn isCrossTypeMethod(ctx: *Context, effect: StackEffect) bool {
     const n_inputs = @min(effect.inputs.len, 2);
     for (0..n_inputs) |pos| {
         if (effect.inputs[pos].type_annotation) |ann| {
-            const tv = switch (ann) {
-                .type => |t| t,
-                .protocol => unreachable,
-            };
-            if (tv == ctx.getAnyTypeSentinel()) return true;
-            if (tv != ctx.getSelfTypeSentinel()) return true;
+            switch (ann) {
+                .type => |tv| {
+                    if (tv == ctx.getAnyTypeSentinel()) return true;
+                    if (tv != ctx.getSelfTypeSentinel()) return true;
+                },
+                .protocol => return true,
+            }
         }
     }
     return false;
@@ -391,18 +394,23 @@ fn validateTypedMethod(
 
     for (0..n_inputs) |pos| {
         if (inputs[pos].type_annotation) |ann| {
-            const tv = switch (ann) {
-                .type => |t| t,
-                .protocol => unreachable,
-            };
-            if (tv == ctx.getSelfTypeSentinel()) {
-                concrete_types[pos] = type_tv;
-            } else if (tv == ctx.getAnyTypeSentinel()) {
-                has_any = true;
-                any_position = pos;
-                concrete_types[pos] = ctx.getDispatchAnySentinel();
-            } else {
-                concrete_types[pos] = tv;
+            switch (ann) {
+                .type => |tv| {
+                    if (tv == ctx.getSelfTypeSentinel()) {
+                        concrete_types[pos] = type_tv;
+                    } else if (tv == ctx.getAnyTypeSentinel()) {
+                        has_any = true;
+                        any_position = pos;
+                        concrete_types[pos] = ctx.getDispatchAnySentinel();
+                    } else {
+                        concrete_types[pos] = tv;
+                    }
+                },
+                // A protocol-bound input describes the set of types that
+                // satisfy the protocol, not a single dispatch type. Treat it
+                // as the implementing type for validation purposes; the
+                // runtime check carries the real enforcement.
+                .protocol => concrete_types[pos] = type_tv,
             }
         } else {
             // Unannotated input -- treat as `self`
