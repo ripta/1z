@@ -6909,6 +6909,12 @@ pub const AotMetadata = struct {
     /// Optional: omitted from the binary when null (older builds). Set by
     /// the build driver after a successful freeze.
     dynamic_features: ?[]const u8 = null,
+    /// True when the build driver resolved a freestanding target triple
+    /// (i.e. `os.tag == .freestanding`). Drives the emitted C preamble:
+    /// libc headers, `int main(int argc, char **argv)`, and the
+    /// `ONEZ_INTERPRETER_FALLBACK` env-var sniff are dropped in favor of
+    /// a `kernel_main(void)` entry that a linker script will reference.
+    freestanding: bool = false,
 };
 
 pub fn emitProgramC(
@@ -6947,16 +6953,30 @@ pub fn emitProgramC(
     }
 
     // 1. Preamble
-    try out.appendSlice(allocator,
-        \\#include <stdint.h>
-        \\#include <stdbool.h>
-        \\#include <stddef.h>
-        \\#include <stdio.h>
-        \\#include <stdlib.h>
-        \\#include <string.h>
-        \\
-        \\
-    );
+    //
+    // Freestanding mode targets `os.tag == .freestanding`: no libc, so the
+    // stdio, stdlib, and string headers are dropped. Only the headers providing
+    // fixed-width integers, bool, and size_t/NULL stay.
+    if (meta.freestanding) {
+        try out.appendSlice(allocator,
+            \\#include <stdint.h>
+            \\#include <stdbool.h>
+            \\#include <stddef.h>
+            \\
+            \\
+        );
+    } else {
+        try out.appendSlice(allocator,
+            \\#include <stdint.h>
+            \\#include <stdbool.h>
+            \\#include <stddef.h>
+            \\#include <stdio.h>
+            \\#include <stdlib.h>
+            \\#include <string.h>
+            \\
+            \\
+        );
+    }
 
     // Runtime entry point externs
     try out.appendSlice(allocator,
@@ -7813,7 +7833,15 @@ pub fn emitProgramC(
     // onez_runtime_register_compiled below; calling onez_init() would drag
     // the parser/tokenizer/statement processor into the binary just to
     // re-evaluate the prelude source at startup.
-    try out.appendSlice(allocator, "int main(int argc, char **argv) {\n");
+    //
+    // Freestanding mode swaps `main` for `kernel_main` because there is no
+    // libc-supplied startup to call us with argc/argv. The linker script
+    // introduced by the platform layer references `kernel_main` directly.
+    if (meta.freestanding) {
+        try out.appendSlice(allocator, "int kernel_main(void) {\n");
+    } else {
+        try out.appendSlice(allocator, "int main(int argc, char **argv) {\n");
+    }
     try out.appendSlice(allocator, if (interpreter_free)
         "    void *rt = onez_init_no_prelude();\n"
     else
@@ -7893,7 +7921,9 @@ pub fn emitProgramC(
         );
     }
 
-    try out.appendSlice(allocator, "    onez_set_args(rt, argc, argv);\n");
+    if (!meta.freestanding) {
+        try out.appendSlice(allocator, "    onez_set_args(rt, argc, argv);\n");
+    }
 
     // Register statically linked FFI libraries.
     if (static_libs.len > 0) {
@@ -7932,23 +7962,36 @@ pub fn emitProgramC(
         };
         const locked: u8 = if (lock_interpreter_setting) 1 else 0;
 
-        var fb_buf: [128]u8 = undefined;
-        const fb_str = std.fmt.bufPrint(&fb_buf, "    {{\n        int fallback_allowed = {d};\n        int setting_locked = {d};\n", .{ default_allowed, locked }) catch unreachable;
-        try out.appendSlice(allocator, fb_str);
-        try out.appendSlice(allocator,
-            \\        const char *env = getenv("ONEZ_INTERPRETER_FALLBACK");
-            \\        if (setting_locked && env) {
-            \\            fprintf(stderr, "Fatal: ONEZ_INTERPRETER_FALLBACK is set but the interpreter setting is locked; remove the env var or rebuild without lock\n");
-            \\            return 1;
-            \\        }
-            \\        if (!setting_locked && env) {
-            \\            if (env[0] == '0') fallback_allowed = 0;
-            \\            else if (env[0] == '1') fallback_allowed = 1;
-            \\        }
-            \\        onez_set_interpreter_fallback(rt, fallback_allowed);
-            \\    }
-            \\
-        );
+        if (meta.freestanding) {
+            // No libc means no getenv/fprintf; the compile-time-resolved fallback is also the
+            // runtime fallback. The `locked` bit is recorded in metadata for inspection but has
+            // no effect here because there is no env-var override to lock against.
+            var fb_buf: [64]u8 = undefined;
+            const fb_str = std.fmt.bufPrint(
+                &fb_buf,
+                "    onez_set_interpreter_fallback(rt, {d});\n",
+                .{default_allowed},
+            ) catch unreachable;
+            try out.appendSlice(allocator, fb_str);
+        } else {
+            var fb_buf: [128]u8 = undefined;
+            const fb_str = std.fmt.bufPrint(&fb_buf, "    {{\n        int fallback_allowed = {d};\n        int setting_locked = {d};\n", .{ default_allowed, locked }) catch unreachable;
+            try out.appendSlice(allocator, fb_str);
+            try out.appendSlice(allocator,
+                \\        const char *env = getenv("ONEZ_INTERPRETER_FALLBACK");
+                \\        if (setting_locked && env) {
+                \\            fprintf(stderr, "Fatal: ONEZ_INTERPRETER_FALLBACK is set but the interpreter setting is locked; remove the env var or rebuild without lock\n");
+                \\            return 1;
+                \\        }
+                \\        if (!setting_locked && env) {
+                \\            if (env[0] == '0') fallback_allowed = 0;
+                \\            else if (env[0] == '1') fallback_allowed = 1;
+                \\        }
+                \\        onez_set_interpreter_fallback(rt, fallback_allowed);
+                \\    }
+                \\
+            );
+        }
     }
 
     // Format dispatch table size
@@ -10222,6 +10265,57 @@ test "emitProgramC: compiled quotation forward declaration carries asm-name" {
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_q_0(uintptr_t jit_ctx) asm(\"main/quot@7:11\");") != null);
+}
+
+test "emitProgramC: hosted preamble contains libc includes and main shim" {
+    const body_instrs = makeInstructions(.{@as(i64, 1)});
+
+    const words = [_]AotWordDesc{
+        .{ .name = "main", .instructions = &body_instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "#include <stdio.h>") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "#include <stdlib.h>") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "#include <string.h>") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "int main(int argc, char **argv)") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_set_args(rt, argc, argv)") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "getenv(\"ONEZ_INTERPRETER_FALLBACK\")") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "fprintf(stderr,") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "kernel_main") == null);
+}
+
+test "emitProgramC: freestanding preamble drops libc and emits kernel_main" {
+    const body_instrs = makeInstructions(.{@as(i64, 1)});
+
+    const words = [_]AotWordDesc{
+        .{ .name = "main", .instructions = &body_instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    var meta = test_aot_metadata;
+    meta.freestanding = true;
+    meta.target_triple = "riscv64-freestanding-none";
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, meta, &diag, null, false, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "#include <stdio.h>") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "#include <stdlib.h>") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "#include <string.h>") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "int main(int argc") == null);
+    // The extern forward declaration of onez_set_args is still emitted; we
+    // only require that the call site (which references argc/argv) is gone.
+    try testing.expect(std.mem.indexOf(u8, source, "onez_set_args(rt,") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "getenv(") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "fprintf(") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "int kernel_main(void)") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "#include <stdint.h>") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "#include <stdbool.h>") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "#include <stddef.h>") != null);
 }
 
 test "compile double: 2 *" {

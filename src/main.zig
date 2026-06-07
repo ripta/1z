@@ -784,7 +784,8 @@ fn printBuildHelp() void {
     w.writeAll("  --link-static=LIB             Statically link library LIB (repeatable)\n") catch {};
     w.writeAll("  --dump-aot-image-classification  Print AOT image word classification\n") catch {};
     w.writeAll("  --dump-aot-image-c            Print the generated runtime-image C source\n") catch {};
-    w.writeAll("  --emit-runtime-image          Embed a runtime program image in the binary\n\n") catch {};
+    w.writeAll("  --emit-runtime-image          Embed a runtime program image in the binary\n") catch {};
+    w.writeAll("  --target=TRIPLE               Cross-compilation target (e.g. riscv64-freestanding-none)\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
@@ -2404,6 +2405,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var emit_runtime_image_flag = false;
     var interpreter_fallback: ir_codegen.InterpreterFallbackMode = .auto;
     var lock_interpreter_setting = false;
+    var target_triple_override: ?[]const u8 = null;
+    var target_is_freestanding = false;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
     defer static_libs.deinit(base_allocator);
 
@@ -2475,6 +2478,22 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         }
         if (std.mem.eql(u8, arg, "--lock-interpreter-setting")) {
             lock_interpreter_setting = true;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--target=")) {
+            const value = arg["--target=".len..];
+            const query = std.Target.Query.parse(.{ .arch_os_abi = value }) catch |err| {
+                err_writer.print(
+                    "Error: --target='{s}' is not a valid target triple: {s}\n",
+                    .{ value, @errorName(err) },
+                ) catch {};
+                err_writer.flush() catch {};
+                return 1;
+            };
+            target_triple_override = value;
+            if (query.os_tag) |tag| {
+                target_is_freestanding = (tag == .freestanding);
+            }
             continue;
         }
         if (std.mem.startsWith(u8, arg, "-")) {
@@ -2708,7 +2727,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         .interpreter_fallback_mode = interpreter_fallback,
         .interpreter_setting_locked = lock_interpreter_setting,
         .runtime_image_present = false,
-        .target_triple = target_triple,
+        .target_triple = target_triple_override orelse target_triple,
         .build_mode = @tagName(builtin.mode),
         .onez_version = version,
         .prelude_hash_hex = &prelude_hash_hex_buf,
@@ -2717,6 +2736,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         .c_compiler_id = cc_probe.id,
         .c_compiler_version = cc_probe.banner,
         .dynamic_features = touched_features,
+        .freestanding = target_is_freestanding,
     };
 
     const c_source = ir_codegen.emitProgramC(
