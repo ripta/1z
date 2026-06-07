@@ -40,8 +40,8 @@ See also: [Stack Fundamentals](tutorials/stack-fundamentals.md),
 | `>name` | Conversion (to target) | `>string`, `>float` |
 | `name?` | Predicate | `fixnum?`, `empty?` |
 | `name!` | Mutating operation | `@set!`, `#push!` |
-| `>>field` | Struct setter | `>>name` |
-| `field>>` | Struct getter | `name>>` |
+| `>>name` | Struct setter | `>>foo` |
+| `name>>` | Struct getter | `foo>>` |
 | `<name>` | Smart constructor | `<range>`, `<channel>` |
 | `make-name` | Raw constructor | `make-person` |
 | `unmake-name` | Destructuring | `unmake-person` |
@@ -77,7 +77,7 @@ Generated words per type:
 
 | Type | Generated |
 |------|-----------|
-| `struct{ }` | `make-name`, `unmake-name`, `field>>`, `>>field`, `name?` |
+| `struct{ }` | `make-name`, `unmake-name`, `name>>`, `>>name`, `name?` |
 | `virtual{ inner }` | `>name`, `unmake-name`, `name?` |
 | `virtual{ struct{ } }` | `make-name`, `>name`, `unmake-name`, `name?`, `name>hash` |
 | `enum{ }` | `enum:variant` constructors, `>enum:variant` wrap, `enum:variant>` unwrap, `enum:variant?`, `enum?` predicates |
