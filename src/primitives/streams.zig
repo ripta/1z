@@ -1,8 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const native_os = builtin.os.tag;
-const is_freestanding = native_os == .freestanding;
-const freestanding_compat = @import("../freestanding_compat.zig");
 
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
@@ -88,22 +86,8 @@ pub const file_vtable = StreamVTable{
     .flush = fileFlush,
 };
 
-const fileRead = if (is_freestanding) fileReadFreestanding else fileReadHosted;
-const fileWrite = if (is_freestanding) fileWriteFreestanding else fileWriteHosted;
-const fileClose = if (is_freestanding) fileCloseFreestanding else fileCloseHosted;
-const fileFlush = if (is_freestanding) fileFlushFreestanding else fileFlushHosted;
-
-fn fileReadFreestanding(_: *Stream, _: []u8, _: *Context) anyerror!usize {
-    return error.NotSupported;
-}
-fn fileWriteFreestanding(_: *Stream, _: []const u8, _: *Context) anyerror!usize {
-    return error.NotSupported;
-}
-fn fileCloseFreestanding(_: *Stream) void {}
-fn fileFlushFreestanding(_: *Stream) anyerror!void {}
-
 /// Read from the underlying fd, yielding to the scheduler on WouldBlock.
-fn fileReadHosted(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
+fn fileRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
     if (ctx.scheduler != null and !stream.nonblocking_set) {
         setNonBlocking(stream);
     }
@@ -126,7 +110,7 @@ fn fileReadHosted(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
 }
 
 /// Write to the underlying fd, yielding to the scheduler on WouldBlock.
-fn fileWriteHosted(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
+fn fileWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
     if (ctx.scheduler != null and !stream.nonblocking_set) {
         setNonBlocking(stream);
     }
@@ -149,7 +133,7 @@ fn fileWriteHosted(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!u
 }
 
 /// Close the base fd. Guards stdin/stdout/stderr from actual close.
-fn fileCloseHosted(stream: *Stream) void {
+fn fileClose(stream: *Stream) void {
     restoreBlocking(stream);
 
     if (isStandardStream(stream.name)) {
@@ -164,7 +148,7 @@ fn fileCloseHosted(stream: *Stream) void {
 ///
 /// NOTE(ripta): The standard streams and fd-based streams, e.g., sockets and pipes,
 ///              are unbuffered at the zig file level, so sync is a no-op or unsupported.
-fn fileFlushHosted(stream: *Stream) anyerror!void {
+fn fileFlush(stream: *Stream) anyerror!void {
     if (isStandardStream(stream.name) or
         std.mem.eql(u8, stream.name, "fd") or
         std.mem.startsWith(u8, stream.name, "pipe"))
@@ -185,7 +169,7 @@ fn isStandardStream(name: []const u8) bool {
 }
 
 /// Create a base file stream from a fd with the given mode and name.
-pub fn createFileStream(fd: freestanding_compat.fd_t, mode: StreamMode, name: []const u8) Stream {
+pub fn createFileStream(fd: std.posix.fd_t, mode: StreamMode, name: []const u8) Stream {
     return Stream{
         .vtable = &file_vtable,
         .fd = fd,
@@ -331,8 +315,8 @@ pub fn nativeStringStreamToString(ctx: *Context) anyerror!void {
 /// Stored in `Stream.impl`; `Stream.fd` is left at the `-1` sentinel so
 /// positioning words error cleanly through their existing fd < 0 guard.
 const DuplexState = struct {
-    read_fd: freestanding_compat.fd_t,
-    write_fd: freestanding_compat.fd_t,
+    read_fd: std.posix.fd_t,
+    write_fd: std.posix.fd_t,
     read_nonblocking_set: bool = false,
     write_nonblocking_set: bool = false,
     allocator: std.mem.Allocator,
@@ -345,21 +329,9 @@ pub const duplex_vtable = StreamVTable{
     .flush = duplexFlush,
 };
 
-const duplexRead = if (is_freestanding) duplexReadFreestanding else duplexReadHosted;
-const duplexWrite = if (is_freestanding) duplexWriteFreestanding else duplexWriteHosted;
-const duplexClose = if (is_freestanding) duplexCloseFreestanding else duplexCloseHosted;
-
-fn duplexReadFreestanding(_: *Stream, _: []u8, _: *Context) anyerror!usize {
-    return error.NotSupported;
-}
-fn duplexWriteFreestanding(_: *Stream, _: []const u8, _: *Context) anyerror!usize {
-    return error.NotSupported;
-}
-fn duplexCloseFreestanding(_: *Stream) void {}
-
 /// Read from the duplex stream's read fd, yielding to the scheduler on
 /// WouldBlock. Mirrors `fileRead` with per-direction non-blocking tracking.
-fn duplexReadHosted(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
+fn duplexRead(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize {
     const state: *DuplexState = @ptrCast(@alignCast(stream.impl.?));
     if (ctx.scheduler != null and !state.read_nonblocking_set) {
         setNonBlockingFd(state.read_fd);
@@ -388,7 +360,7 @@ fn duplexReadHosted(stream: *Stream, buffer: []u8, ctx: *Context) anyerror!usize
 
 /// Write to the duplex stream's write fd, yielding to the scheduler on
 /// WouldBlock. Mirrors `fileWrite` with per-direction non-blocking tracking.
-fn duplexWriteHosted(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
+fn duplexWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
     const state: *DuplexState = @ptrCast(@alignCast(stream.impl.?));
     if (ctx.scheduler != null and !state.write_nonblocking_set) {
         setNonBlockingFd(state.write_fd);
@@ -417,7 +389,7 @@ fn duplexWriteHosted(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror
 
 /// Close both fds through the stdio guard so wrapping
 /// (STDIN_FILENO, STDOUT_FILENO) is safe, then free the per-stream state.
-fn duplexCloseHosted(stream: *Stream) void {
+fn duplexClose(stream: *Stream) void {
     const state: *DuplexState = @ptrCast(@alignCast(stream.impl.?));
     if (state.read_nonblocking_set) {
         clearNonBlockingFd(state.read_fd);
@@ -442,14 +414,10 @@ fn duplexFlush(_: *Stream) anyerror!void {}
 /// Close `fd` unless it is one of the standard streams. The fd-based
 /// counterpart of `isStandardStream`; used by `duplexClose` since a duplex
 /// stream over stdio carries a different `Stream.name`.
-const closeFdGuarded = if (is_freestanding) closeFdGuardedFreestanding else closeFdGuardedHosted;
-
-fn closeFdGuardedFreestanding(_: freestanding_compat.fd_t) void {}
-
-fn closeFdGuardedHosted(fd: freestanding_compat.fd_t) void {
-    if (fd == freestanding_compat.STDIN_FILENO or
-        fd == freestanding_compat.STDOUT_FILENO or
-        fd == freestanding_compat.STDERR_FILENO) return;
+fn closeFdGuarded(fd: std.posix.fd_t) void {
+    if (fd == std.posix.STDIN_FILENO or
+        fd == std.posix.STDOUT_FILENO or
+        fd == std.posix.STDERR_FILENO) return;
     const file = std.fs.File{ .handle = fd };
     file.close();
 }
@@ -496,7 +464,7 @@ pub fn nativeDuplexStream(ctx: *Context) anyerror!void {
 pub fn nativeStdin(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
-    stream.* = createFileStream(freestanding_compat.STDIN_FILENO, .read, "stdin");
+    stream.* = createFileStream(std.posix.STDIN_FILENO, .read, "stdin");
     stream.buffering = .line;
     try ctx.stack.push(.{ .stream = stream });
 }
@@ -505,7 +473,7 @@ pub fn nativeStdin(ctx: *Context) anyerror!void {
 pub fn nativeStdout(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
-    stream.* = createFileStream(freestanding_compat.STDOUT_FILENO, .write, "stdout");
+    stream.* = createFileStream(std.posix.STDOUT_FILENO, .write, "stdout");
     stream.buffering = .line;
     try ctx.stack.push(.{ .stream = stream });
 }
@@ -514,7 +482,7 @@ pub fn nativeStdout(ctx: *Context) anyerror!void {
 pub fn nativeStderr(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
-    stream.* = createFileStream(freestanding_compat.STDERR_FILENO, .write, "stderr");
+    stream.* = createFileStream(std.posix.STDERR_FILENO, .write, "stderr");
     stream.buffering = .line;
     try ctx.stack.push(.{ .stream = stream });
 }
@@ -762,20 +730,8 @@ pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
 // Stream positioning primitives
 // =============================================================================
 
-pub const nativeStreamTell = if (is_freestanding) freestandingThrow("stream-tell") else nativeStreamTellHosted;
-pub const nativeStreamSeek = if (is_freestanding) freestandingThrow("stream-seek") else nativeStreamSeekHosted;
-pub const nativeStreamSeekEnd = if (is_freestanding) freestandingThrow("stream-seek-end") else nativeStreamSeekEndHosted;
-
-fn freestandingThrow(comptime word: []const u8) fn (ctx: *Context) anyerror!void {
-    return struct {
-        fn run(ctx: *Context) anyerror!void {
-            return helpers.throwBuildUnsupported(ctx, word);
-        }
-    }.run;
-}
-
 /// stream-tell ( stream -- pos ) - Get current stream position
-fn nativeStreamTellHosted(ctx: *Context) anyerror!void {
+pub fn nativeStreamTell(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
     if (stream.fd < 0) return error.NotSeekable;
@@ -789,7 +745,7 @@ fn nativeStreamTellHosted(ctx: *Context) anyerror!void {
 }
 
 /// stream-seek ( stream pos -- ) - Seek to absolute position
-fn nativeStreamSeekHosted(ctx: *Context) anyerror!void {
+pub fn nativeStreamSeek(ctx: *Context) anyerror!void {
     const pos = try popFixnum(ctx);
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -806,7 +762,7 @@ fn nativeStreamSeekHosted(ctx: *Context) anyerror!void {
 }
 
 /// stream-seek-end ( stream offset -- ) - Seek relative to end of stream
-fn nativeStreamSeekEndHosted(ctx: *Context) anyerror!void {
+pub fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
     const offset = try popFixnum(ctx);
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -890,10 +846,8 @@ pub fn nativeFdToStream(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .stream = stream });
 }
 
-const nativePipe = if (is_freestanding) freestandingThrow("<pipe>") else nativePipeHosted;
-
 /// <pipe> ( -- rd wr ) - Create a Unix pipe, returning read-end and write-end streams
-fn nativePipeHosted(ctx: *Context) anyerror!void {
+fn nativePipe(ctx: *Context) anyerror!void {
     if (native_os == .windows) {
         return error.UnsupportedOperation;
     }
@@ -968,12 +922,7 @@ pub fn restoreBlocking(stream: *Stream) void {
     stream.nonblocking_set = false;
 }
 
-pub const setNonBlockingFd = if (is_freestanding) noopFd else setNonBlockingFdHosted;
-pub const clearNonBlockingFd = if (is_freestanding) noopFd else clearNonBlockingFdHosted;
-
-fn noopFd(_: freestanding_compat.fd_t) void {}
-
-fn setNonBlockingFdHosted(fd: freestanding_compat.fd_t) void {
+pub fn setNonBlockingFd(fd: std.posix.fd_t) void {
     const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
     if (raw_flags < 0) return;
     var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
@@ -981,7 +930,7 @@ fn setNonBlockingFdHosted(fd: freestanding_compat.fd_t) void {
     _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(flags)));
 }
 
-fn clearNonBlockingFdHosted(fd: freestanding_compat.fd_t) void {
+pub fn clearNonBlockingFd(fd: std.posix.fd_t) void {
     const raw_flags = std.c.fcntl(fd, std.c.F.GETFL);
     if (raw_flags < 0) return;
     var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));

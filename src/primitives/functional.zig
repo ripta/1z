@@ -1,9 +1,5 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const Context = @import("../context.zig").Context;
-const freestanding_compat = @import("../freestanding_compat.zig");
-
-const is_freestanding = builtin.os.tag == .freestanding;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
@@ -464,15 +460,10 @@ fn printReportTable(_: *Context, report: *BenchmarkReport) !void {
     }
 
     // Buffered writes causing problems =\
-    if (!is_freestanding) writeAllToStdout(output.items);
-}
-
-fn writeAllToStdout(bytes: []const u8) void {
-    if (is_freestanding) return;
-    const fd = freestanding_compat.STDOUT_FILENO;
+    const fd = std.posix.STDOUT_FILENO;
     var written: usize = 0;
-    while (written < bytes.len) {
-        written += std.posix.write(fd, bytes[written..]) catch break;
+    while (written < output.items.len) {
+        written += std.posix.write(fd, output.items[written..]) catch break;
     }
 }
 

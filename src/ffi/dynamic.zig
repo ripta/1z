@@ -8,12 +8,7 @@ const is_freestanding = builtin.os.tag == .freestanding;
 // before reaching any c_ffi reference; this stub keeps the surrounding
 // function signatures well-typed so the module still compiles.
 pub const c_ffi = if (is_freestanding) struct {
-    pub const ffi_type = extern struct {
-        size: usize = 0,
-        alignment: c_ushort = 0,
-        type: c_ushort = 0,
-        elements: [*c][*c]ffi_type = null,
-    };
+    pub const ffi_type = extern struct {};
     pub const ffi_cif = extern struct {};
     pub const ffi_closure = extern struct {};
     pub const ffi_status = c_uint;

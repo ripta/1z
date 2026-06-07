@@ -1,8 +1,5 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
-
-const is_freestanding = builtin.os.tag == .freestanding;
 
 const value_mod = @import("../value.zig");
 const Instruction = value_mod.Instruction;
@@ -112,7 +109,6 @@ pub const Debugger = struct {
     /// Read a line from the editor (TTY) or stdin (piped).
     /// Returns null on EOF. Caller must call `freeLine` when done.
     fn readLine(self: *Debugger) ?[]const u8 {
-        if (comptime is_freestanding) return null;
         if (self.editor) |*ed| {
             const maybe_line = ed.readLine("debug> ") catch {
                 return null;
@@ -144,7 +140,6 @@ pub const Debugger = struct {
     /// Enter the interactive debug prompt. Displays instruction context,
     /// then loops reading commands until a stepping command is issued.
     pub fn enterPrompt(self: *Debugger, instr: Instruction, ctx: *Context) !void {
-        if (comptime is_freestanding) return;
         self.events.emit(.paused, ctx);
 
         const stderr_file: std.fs.File = .stderr();

@@ -1,5 +1,4 @@
 const std = @import("std");
-const freestanding_compat = @import("freestanding_compat.zig");
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
@@ -81,7 +80,7 @@ fn accountBackingDestroyed() void {
 /// the first real call site; the helpers below wrap the raw mutex.
 pub const ContainerHeader = struct {
     refcount: std.atomic.Value(u32),
-    mutex: freestanding_compat.Mutex,
+    mutex: std.Thread.Mutex,
     len: usize,
     capacity: usize,
     storage: ?*anyopaque,

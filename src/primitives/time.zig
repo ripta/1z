@@ -1,6 +1,4 @@
 const std = @import("std");
-const builtin = @import("builtin");
-const freestanding_compat = @import("../freestanding_compat.zig");
 const Context = @import("../context.zig").Context;
 const helpers = @import("helpers.zig");
 const popFixnum = helpers.popFixnum;
@@ -10,32 +8,14 @@ const setErrorContext = helpers.setErrorContext;
 const Primitive = @import("types.zig").Primitive;
 const Scheduler = @import("../scheduler.zig").Scheduler;
 
-const is_freestanding = builtin.os.tag == .freestanding;
-
 pub const primitives = [_]Primitive{
     .{ .name = "clock-realtime", .stack_effect = "-- sec nsec", .doc = "Current wall-clock time (UTC) since Unix epoch.", .func = nativeClockRealtime },
     .{ .name = "clock-monotonic", .stack_effect = "-- sec nsec", .doc = "Monotonic clock for measuring durations.", .func = nativeClockMonotonic },
     .{ .name = "tz-decompose", .stack_effect = "sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev", .doc = "Decompose epoch seconds in a named timezone via libc localtime_r.", .func = nativeTzDecompose },
 };
 
-const nativeClockRealtime = if (is_freestanding) nativeClockRealtimeFreestanding else nativeClockRealtimeHosted;
-const nativeClockMonotonic = if (is_freestanding) nativeClockMonotonicFreestanding else nativeClockMonotonicHosted;
-const nativeTzDecompose = if (is_freestanding) nativeTzDecomposeFreestanding else nativeTzDecomposeHosted;
-
-fn nativeClockRealtimeFreestanding(ctx: *Context) anyerror!void {
-    return helpers.throwBuildUnsupported(ctx, "clock-realtime");
-}
-
-fn nativeClockMonotonicFreestanding(ctx: *Context) anyerror!void {
-    return helpers.throwBuildUnsupported(ctx, "clock-monotonic");
-}
-
-fn nativeTzDecomposeFreestanding(ctx: *Context) anyerror!void {
-    return helpers.throwBuildUnsupported(ctx, "tz-decompose");
-}
-
 /// clock-realtime ( -- sec nsec ) - Current wall-clock time (UTC) since Unix epoch
-fn nativeClockRealtimeHosted(ctx: *Context) anyerror!void {
+fn nativeClockRealtime(ctx: *Context) anyerror!void {
     const ts = std.posix.clock_gettime(.REALTIME) catch |err| {
         return switch (err) {
             error.UnsupportedClock => error.InvalidType,
@@ -48,7 +28,7 @@ fn nativeClockRealtimeHosted(ctx: *Context) anyerror!void {
 }
 
 /// clock-monotonic ( -- sec nsec ) - Monotonic clock for measuring durations
-fn nativeClockMonotonicHosted(ctx: *Context) anyerror!void {
+fn nativeClockMonotonic(ctx: *Context) anyerror!void {
     if (ctx.scheduler) |sched| {
         switch (sched.clock) {
             .fake => |ns| {
@@ -98,14 +78,14 @@ const c = struct {
     extern "c" fn getenv(name: [*:0]const u8) ?[*:0]const u8;
 };
 
-var tz_mutex = freestanding_compat.Mutex{};
+var tz_mutex = std.Thread.Mutex{};
 
 /// tz-decompose ( sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev )
 ///
 /// Decompose epoch seconds in a named timezone via libc localtime_r.
 /// If tz-name is empty, uses the system's local timezone.
 /// Pushes 10 raw values for consumption by 1z-level struct/hash builders.
-fn nativeTzDecomposeHosted(ctx: *Context) anyerror!void {
+fn nativeTzDecompose(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const tz_name = try popString(ctx);

@@ -4,7 +4,6 @@ const Value = @import("value.zig").Value;
 const Task = @import("task.zig").Task;
 
 const container_backing = @import("container_backing.zig");
-const freestanding_compat = @import("freestanding_compat.zig");
 
 pub const Channel = struct {
     capacity: usize,
@@ -13,7 +12,7 @@ pub const Channel = struct {
     waiting_senders: std.ArrayListUnmanaged(SenderEntry),
     waiting_receivers: std.ArrayListUnmanaged(ReceiverEntry),
     allocator: Allocator,
-    mutex: freestanding_compat.Mutex = .{},
+    mutex: std.Thread.Mutex = .{},
 
     pub fn init(allocator: Allocator, capacity: usize) !*Channel {
         const ch = try allocator.create(Channel);

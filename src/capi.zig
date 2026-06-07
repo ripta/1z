@@ -4,24 +4,6 @@ const build_options = @import("build_options");
 
 const is_freestanding = builtin.os.tag == .freestanding;
 
-// Freestanding targets do not have a known page size; Zig's std.heap refuses
-// to analyze without one. Pick 4 KiB to match QEMU `virt` and the OpenSBI
-// handoff convention for riscv64. Hosted targets must keep the OS-derived
-// default -- macOS aarch64 uses 16 KiB pages, and forcing 4 KiB misaligns
-// page-aligned allocations and crashes AOT-linked binaries.
-pub const std_options: std.Options = .{
-    .page_size_min = if (is_freestanding) 4096 else null,
-};
-
-// The default panic handler reaches into std.Thread for stderr locking,
-// which has no implementation on freestanding. On freestanding, install
-// a minimal trap-based handler; on hosted, mirror Zig's stock default so
-// AOT runtime semantics are unchanged.
-pub const panic = if (is_freestanding)
-    std.debug.no_panic
-else
-    std.debug.FullPanic(std.debug.defaultPanic);
-
 const context_mod = @import("context.zig");
 const Context = context_mod.Context;
 
@@ -204,8 +186,7 @@ export fn onez_init_no_prelude() ?*anyopaque {
         } else |_| {}
     }
 
-    const handle_alloc = if (is_freestanding) allocator else std.heap.page_allocator;
-    const handle = handle_alloc.create(OnezHandle) catch return null;
+    const handle = allocator.create(OnezHandle) catch return null;
     handle.* = .{
         .gpa = gpa,
         .ctx = ctx,
@@ -1892,7 +1873,6 @@ export fn onez_load_file(ptr: ?*anyopaque, path: [*]const u8, path_len: usize) c
 }
 
 export fn onez_use_module(ptr: ?*anyopaque, name: [*]const u8, name_len: usize) c_int {
-    if (comptime is_freestanding) return ONEZ_ERR_LOAD_FAILED;
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
     const alloc = ctx.quotationAllocator();

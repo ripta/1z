@@ -7,7 +7,6 @@ const value_mod = @import("value.zig");
 const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
 const ErrorObject = value_mod.ErrorObject;
-const freestanding_compat = @import("freestanding_compat.zig");
 
 const is_freestanding = builtin.os.tag == .freestanding;
 
@@ -16,10 +15,7 @@ const is_freestanding = builtin.os.tag == .freestanding;
 // stub keeps the surrounding type references well-formed without ever
 // being called.
 const mc = if (is_freestanding) struct {
-    pub const mco_coro = extern struct {
-        stack_base: ?*anyopaque = null,
-        stack_size: usize = 0,
-    };
+    pub const mco_coro = opaque {};
     pub const mco_desc = extern struct {
         func: ?*const fn (?*mco_coro) callconv(.c) void = null,
         user_data: ?*anyopaque = null,
@@ -50,7 +46,7 @@ const mc = if (is_freestanding) struct {
         _ = co;
         return null;
     }
-    pub fn mco_desc_init(func: ?*const fn (?*mco_coro) callconv(.c) void, stack_size: usize) callconv(.c) mco_desc {
+    pub fn mco_desc_init(func: anytype, stack_size: usize) callconv(.c) mco_desc {
         _ = func;
         _ = stack_size;
         return .{};
@@ -157,8 +153,8 @@ pub const Task = struct {
     scope: *TaskScope,
     cancellation_phase: std.atomic.Value(CancellationPhase) = std.atomic.Value(CancellationPhase).init(.none),
     blocked_on_channel: ?*anyopaque = null,
-    blocked_on_io_fd: ?freestanding_compat.fd_t = null,
-    blocked_on_process_pid: ?freestanding_compat.pid_t = null,
+    blocked_on_io_fd: ?std.posix.fd_t = null,
+    blocked_on_process_pid: ?std.posix.pid_t = null,
     blocked_on_process_key: ?u64 = null,
     blocked_on_scope: ?*TaskScope = null,
     /// Set by a sender when it delivers a value directly to this receiver's
@@ -227,7 +223,7 @@ pub const TaskScope = struct {
     children: std.ArrayListUnmanaged(*Task),
     /// Guards `children` against concurrent appends from spawns on other
     /// worker threads and reads from sibling-cancellation iteration.
-    children_mu: freestanding_compat.Mutex = .{},
+    children_mu: std.Thread.Mutex = .{},
     /// The coordinator task that runs the task-scope body. Excluded from
     /// sibling cancellation so it can observe child failures via await.
     scope_task: ?*Task = null,
@@ -314,21 +310,7 @@ pub fn initCoroContext(
 /// Returns the full allocation of guard plus usable.
 ///
 /// Layout: [guard page (PROT_NONE)] [usable stack space]
-pub const allocateTaskStack = if (is_freestanding) allocateTaskStackFreestanding else allocateTaskStackHosted;
-
-/// Free a stack allocated by allocateTaskStack.
-pub const freeTaskStack = if (is_freestanding) freeTaskStackFreestanding else freeTaskStackHosted;
-
-fn allocateTaskStackFreestanding(size: usize) ![]align(std.heap.page_size_min) u8 {
-    _ = size;
-    return error.OutOfMemory;
-}
-
-fn freeTaskStackFreestanding(mem: []align(std.heap.page_size_min) u8) void {
-    _ = mem;
-}
-
-fn allocateTaskStackHosted(size: usize) ![]align(std.heap.page_size_min) u8 {
+pub fn allocateTaskStack(size: usize) ![]align(std.heap.page_size_min) u8 {
     const page_size = std.heap.page_size_min;
     const total_size = size + page_size;
     const mem = std.posix.mmap(
@@ -352,7 +334,8 @@ fn allocateTaskStackHosted(size: usize) ![]align(std.heap.page_size_min) u8 {
     return @alignCast(mem);
 }
 
-fn freeTaskStackHosted(mem: []align(std.heap.page_size_min) u8) void {
+/// Free a stack allocated by allocateTaskStack.
+pub fn freeTaskStack(mem: []align(std.heap.page_size_min) u8) void {
     std.posix.munmap(mem);
 }
 

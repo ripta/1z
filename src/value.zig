@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const freestanding_compat = @import("freestanding_compat.zig");
-
 const context_mod = @import("context.zig");
 const Context = context_mod.Context;
 
@@ -395,7 +393,7 @@ pub const StreamVTable = struct {
 /// descriptor for scheduler integration and fcntl operations.
 pub const Stream = struct {
     vtable: *const StreamVTable,
-    fd: freestanding_compat.fd_t,
+    fd: std.posix.fd_t,
     mode: StreamMode,
     closed: bool = false,
     // For display: "stdout", "stderr", file path

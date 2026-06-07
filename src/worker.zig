@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const freestanding_compat = @import("freestanding_compat.zig");
 const scheduler_mod = @import("scheduler.zig");
 const Scheduler = scheduler_mod.Scheduler;
 const WorkerOps = scheduler_mod.WorkerOps;
@@ -145,7 +144,7 @@ pub const Worker = struct {
     /// append here under `external_queue_mu` and signal `wake`; this
     /// worker's scheduler drains it at the top of every loop iteration.
     external_queue: std.ArrayListUnmanaged(*Task) = .{},
-    external_queue_mu: freestanding_compat.Mutex = .{},
+    external_queue_mu: std.Thread.Mutex = .{},
     /// Cross-thread cancellation request buffer. Cancellers on other
     /// worker threads append a target task here under `cancel_queue_mu`
     /// and signal `wake`; this worker's scheduler drains it at the top of
@@ -155,7 +154,7 @@ pub const Worker = struct {
     /// (IO/sleep/process/scope/channel) instead of unconditionally
     /// appending to the run queue.
     cancel_queue: std.ArrayListUnmanaged(*Task) = .{},
-    cancel_queue_mu: freestanding_compat.Mutex = .{},
+    cancel_queue_mu: std.Thread.Mutex = .{},
     /// Wake source registered with `scheduler.multiplexer`; lets other
     /// threads interrupt a blocking `poll()` so newly enqueued external
     /// tasks are observed promptly.
