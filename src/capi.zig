@@ -202,7 +202,7 @@ fn createGpa() ?*HostGpa {
         }
         return &freestanding_root_fba;
     } else {
-        const gpa = std.heap.page_allocator.create(HostGpa) catch return null;
+        const gpa = std.heap.smp_allocator.create(HostGpa) catch return null;
         gpa.* = .{};
         return gpa;
     }
@@ -264,9 +264,10 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
         return;
     }
     allocator.destroy(handle.ctx);
-    _ = handle.gpa.deinit();
-    std.heap.page_allocator.destroy(handle.gpa);
-    std.heap.page_allocator.destroy(handle);
+    const gpa = handle.gpa;
+    allocator.destroy(handle);
+    _ = gpa.deinit();
+    std.heap.smp_allocator.destroy(gpa);
 }
 
 /// Load a prelude into a context.
