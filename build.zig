@@ -63,7 +63,11 @@ pub fn build(b: *std.Build) void {
     // zig-out/clib/lib1z.a (static library)
     // Installed to clib/ instead of lib/ because zig-out/lib is symlinked
     // to the stdlib directory.
-    const capi_static_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"), embedded_stdlib_path);
+    const capi_static_root = if (is_freestanding)
+        b.path("src/capi_freestanding.zig")
+    else
+        b.path("src/capi.zig");
+    const capi_static_module = createCommonModule(b, target, optimize, options, capi_static_root, embedded_stdlib_path);
 
     const static_lib = b.addLibrary(.{
         .name = "1z",
