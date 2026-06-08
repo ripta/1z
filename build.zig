@@ -164,8 +164,20 @@ pub fn build(b: *std.Build) void {
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
     run_lib_unit_tests.setName("unit tests");
 
+    const freestanding_capi_test_module = createCommonModule(b, target, optimize, options, b.path("src/capi_freestanding.zig"), embedded_stdlib_path);
+    const freestanding_capi_unit_tests = b.addTest(.{
+        .root_module = freestanding_capi_test_module,
+        .test_runner = .{
+            .path = b.path("src/unit_test_runner.zig"),
+            .mode = .simple,
+        },
+    });
+    const run_freestanding_capi_unit_tests = b.addRunArtifact(freestanding_capi_unit_tests);
+    run_freestanding_capi_unit_tests.setName("freestanding capi unit tests");
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
+    test_step.dependOn(&run_freestanding_capi_unit_tests.step);
 
     // Shared library build for dynamic FFI tests
     const toy_shared_module = b.createModule(.{
@@ -365,12 +377,14 @@ pub fn build(b: *std.Build) void {
     update_lsp_golden_step.dependOn(&update_lsp_files.step);
     if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, lsp_test_step, "lsp", lsp_status_files.items);
 
-    addBaremetalRiscv64VirtTest(b, optimize);
+    addBaremetalRiscv64VirtTest(b, optimize, options, embedded_stdlib_path);
 }
 
 fn addBaremetalRiscv64VirtTest(
     b: *std.Build,
     optimize: std.builtin.OptimizeMode,
+    options: *std.Build.Step.Options,
+    embedded_stdlib_path: std.Build.LazyPath,
 ) void {
     const target = b.resolveTargetQuery(.{
         .cpu_arch = .riscv64,
@@ -397,6 +411,21 @@ fn addBaremetalRiscv64VirtTest(
         .linkage = .static,
     });
 
+    const runtime_module = createCommonModule(b, target, optimize, options, b.path("src/capi_freestanding.zig"), embedded_stdlib_path);
+    runtime_module.single_threaded = true;
+    runtime_module.stack_check = false;
+    runtime_module.stack_protector = false;
+    runtime_module.pic = false;
+    runtime_module.red_zone = false;
+
+    const runtime_lib = b.addLibrary(.{
+        .name = "1z-riscv64-freestanding-runtime",
+        .root_module = runtime_module,
+        .linkage = .static,
+    });
+    runtime_lib.link_function_sections = true;
+    runtime_lib.link_data_sections = true;
+
     const stub_module = b.createModule(.{
         .root_source_file = b.path("tests/baremetal/riscv64/uart_stub.zig"),
         .target = target,
@@ -418,9 +447,33 @@ fn addBaremetalRiscv64VirtTest(
     uart_stub.setLinkerScript(b.path("src/baremetal/riscv64/virt/linker.ld"));
     uart_stub.link_gc_sections = true;
 
-    const test_step = b.step("baremetal-riscv64-test", "Compile riscv64 virt platform library and linked UART stub");
+    const runtime_stub_module = b.createModule(.{
+        .root_source_file = b.path("tests/baremetal/riscv64/freestanding_runtime_stub.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = false,
+        .single_threaded = true,
+        .stack_check = false,
+        .stack_protector = false,
+        .pic = false,
+        .red_zone = false,
+    });
+    runtime_stub_module.addImport("virt-platform", platform_module);
+
+    const runtime_stub = b.addExecutable(.{
+        .name = "1z-riscv64-freestanding-runtime-stub",
+        .root_module = runtime_stub_module,
+    });
+    runtime_stub.linkLibrary(platform_lib);
+    runtime_stub.linkLibrary(runtime_lib);
+    runtime_stub.setLinkerScript(b.path("src/baremetal/riscv64/virt/linker.ld"));
+    runtime_stub.link_gc_sections = true;
+
+    const test_step = b.step("baremetal-riscv64-test", "Compile riscv64 virt platform library and linked UART/runtime stubs");
     test_step.dependOn(&platform_lib.step);
+    test_step.dependOn(&runtime_lib.step);
     test_step.dependOn(&uart_stub.step);
+    test_step.dependOn(&runtime_stub.step);
 }
 
 fn addFfiIncludePath(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
