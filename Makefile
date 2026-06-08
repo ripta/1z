@@ -436,8 +436,9 @@ freestanding-build: ## Compile-check the freestanding capi library for riscv64
 	fi
 	@echo "PASS: lib1z.a built for riscv64-freestanding-none with no host-only symbol references"
 
-baremetal-riscv64-test: ## Compile-check the riscv64 virt platform library and UART stub
+baremetal-riscv64-test: ## Build the riscv64 virt platform and an AOT freestanding ELF, then boot it under QEMU and compare serial output
 	timeout $(TARGET_TIMEOUT) zig build baremetal-riscv64-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)
+	scripts/baremetal-riscv64-test.sh $(ZIG_PREFIX)/baremetal/riscv64/1z-hello.elf tests/baremetal/riscv64/hello.serial.expected $(TARGET_TIMEOUT)
 
 clean: ## Remove build artifacts
 	mv .zig-cache .old.zig-cache

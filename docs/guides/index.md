@@ -21,7 +21,9 @@ definitions, and control flow.
 9. [Foreign Function Interface](ffi.md) -- calling C libraries from 1z
 10. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
     and `samply` see 1z words in AOT binaries
-11. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
+11. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
+    on QEMU riscv64 with no operating system
+12. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
     comparison for experienced stack-language programmers
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with

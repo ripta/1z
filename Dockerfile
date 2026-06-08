@@ -17,11 +17,13 @@ RUN if [ -d /usr/lib/x86_64-linux-gnu ]; then \
         ln -sf /lib/aarch64-linux-gnu/libm.so.6 /usr/lib/aarch64-linux-gnu/libm.so; \
     fi
 
-# Profiling tools used by `make aot-symbol-verify`. Kept out of the runtime
-# dependency closure so the production image stays slim; this RUN only matters
-# when the verification harness runs inside the build image.
+# Profiling tools used by `make aot-symbol-verify`.
+# The emulator used by `make baremetal-riscv64-test`.
+#
+# Kept out of the runtime dependency closure so the production image stays slim;
+# this RUN only matters when those harnesses run inside the build image.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates curl linux-perf && \
+    apt-get install -y --no-install-recommends ca-certificates curl linux-perf qemu-system-misc && \
     rm -rf /var/lib/apt/lists/*
 
 ARG SAMPLY_VERSION=0.13.1

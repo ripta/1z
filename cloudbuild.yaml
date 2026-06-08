@@ -28,3 +28,14 @@ steps:
         make build
         make test TIMEOUT=300 VERBOSE=1
         make run ARGS=./examples/showcase.1z
+
+  - name: '1z-build:local'
+    env:
+      - ZIG_GLOBAL_CACHE_DIR=/home/build/.cache/zig
+      - ZIG_LOCAL_CACHE_DIR=/home/build/.zig-cache
+    entrypoint: 'bash'
+    args:
+      - -c
+      - |
+        set -eux
+        make baremetal-riscv64-test TARGET_TIMEOUT=300

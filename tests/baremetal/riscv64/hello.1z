@@ -1,0 +1,4 @@
+\ End-to-end bare-metal AOT program: prints a fixed line through the output
+\ stream, which the freestanding runtime routes to the NS16550 UART. Prelude-only
+\ on purpose, so it never touches the module loader or any disabled capability.
+"hello, bare metal" print-line

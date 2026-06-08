@@ -502,8 +502,9 @@ fn addBaremetalRiscv64VirtTest(
     runtime_stub.setLinkerScript(b.path("src/baremetal/riscv64/virt/linker.ld"));
     runtime_stub.link_gc_sections = true;
 
-    // AOT-compile a noöp 1z program to a freestanding riscv64 ELF, driving the host `1z` as a cross-link
-    // front end against the platform, entry, and runtime archives plus the platform linker script.
+    // NOTE(ripta): AOT-compile a noöp 1z program to a freestanding riscv64 ELF, driving the host
+    //              `1z` as a cross-link front end against the platform, entry, and runtime archives
+    //              plus the platform linker script.
     const aot_build = b.addRunArtifact(host_exe);
     aot_build.setName("baremetal aot build: noop");
     aot_build.addArg("build");
@@ -517,21 +518,42 @@ fn addBaremetalRiscv64VirtTest(
     const kernel_elf = aot_build.addOutputFileArg("kernel.elf");
     aot_build.addFileArg(b.path("tests/baremetal/riscv64/noop.1z"));
 
-    // Verify the linked ELF carries the expected boot symbols and imports no hosted libc. The freestanding
-    // link is -nostdlib, so a successful link already proves there are no stray libc references. The
-    // symbol assertions pin the bare-metal entry surface in place.
+    // NOTE(ripta): Verify the linked ELF carries the expected boot symbols and imports no hosted libc. The
+    //              freestanding link is -nostdlib, so a successful link already proves there are no stray
+    //              libc references. The symbol assertions pin the bare-metal entry surface in place.
     const verify = b.addSystemCommand(&.{ "sh", "-c", baremetal_verify_script, "baremetal-verify" });
     verify.addFileArg(kernel_elf);
     verify.setName("baremetal aot verify: symbols and no libc");
     verify.expectExitCode(0);
 
-    const test_step = b.step("baremetal-riscv64-test", "Compile riscv64 virt platform library, stubs, and an AOT freestanding ELF");
+    // NOTE(ripta): AOT-compile the hello-world program against the same archives and install the
+    //              ELF at a stable prefix path. The Makefile target boots this ELF under qemu and
+    //              compares its serial output. The emulation run lives in the Makefile so the qemu
+    //              dependency is opt-in and a missing emulator surfaces as an actionable message
+    //              rather than an opaque build-step failure.
+    const hello_build = b.addRunArtifact(host_exe);
+    hello_build.setName("baremetal aot build: hello");
+    hello_build.addArg("build");
+    hello_build.addArg("--target=riscv64-freestanding-none");
+    hello_build.addArg("--interpreter-fallback=false");
+    hello_build.addPrefixedFileArg("--linker-script=", b.path("src/baremetal/riscv64/virt/linker.ld"));
+    hello_build.addPrefixedFileArg("--link-object=", entry_lib.getEmittedBin());
+    hello_build.addPrefixedFileArg("--link-object=", platform_lib.getEmittedBin());
+    hello_build.addPrefixedFileArg("--link-object=", runtime_lib.getEmittedBin());
+    hello_build.addArg("-o");
+    const hello_elf = hello_build.addOutputFileArg("1z-hello.elf");
+    hello_build.addFileArg(b.path("tests/baremetal/riscv64/hello.1z"));
+
+    const install_hello = b.addInstallFile(hello_elf, "baremetal/riscv64/1z-hello.elf");
+
+    const test_step = b.step("baremetal-riscv64-test", "Compile riscv64 virt platform library, stubs, and AOT freestanding ELFs");
     test_step.dependOn(&platform_lib.step);
     test_step.dependOn(&runtime_lib.step);
     test_step.dependOn(&entry_lib.step);
     test_step.dependOn(&uart_stub.step);
     test_step.dependOn(&runtime_stub.step);
     test_step.dependOn(&verify.step);
+    test_step.dependOn(&install_hello.step);
 }
 
 const baremetal_verify_script =
