@@ -754,6 +754,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .dispatch_id = callee.dispatch_id,
         .bounded_protocol = if (bounded) |b| b.descriptor else null,
         .bounded_arity = if (bounded) |b| b.arity else .unary,
+        .bounded_trace_name = if (bounded) |b| ctx.boundedDispatchTraceName(b.descriptor) else null,
     };
 }
 

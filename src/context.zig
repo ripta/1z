@@ -543,6 +543,15 @@ pub const Context = struct {
         ProtocolSatisfiesKeyContext,
         80,
     ) = .{},
+    /// Memo of the diagnostic identity (`satisfies-and-dispatch[<protocol>]`)
+    /// shown for protocol-bounded dispatch sites in word traces, scheduler
+    /// dumps, and error backtraces. Keyed by protocol descriptor so all call
+    /// sites bound by the same protocol share one program-lifetime string;
+    /// populated during compilation, never on the runtime hot path.
+    bounded_dispatch_trace_names: std.AutoHashMapUnmanaged(
+        *const value_mod.ProtocolDescriptor,
+        []const u8,
+    ) = .{},
     /// Registry of known pragma keys and their validation rules.
     pragma_registry: std.StringHashMapUnmanaged(PragmaRegistration) = .{},
     /// Stack of pragma frames for file-scoped pragma values.
@@ -993,6 +1002,7 @@ pub const Context = struct {
         self.anonymous_union_type_values.deinit(self.allocator);
         self.protocol_descriptors.deinit(self.allocator);
         self.protocol_satisfies_cache.deinit(self.allocator);
+        self.bounded_dispatch_trace_names.deinit(self.allocator);
         self.dispatch.deinit();
         self.jit_dispatch.deinit();
         var pic_iter = self.pic_cache.iterator();
@@ -2530,6 +2540,26 @@ pub const Context = struct {
         return desc;
     }
 
+    /// Return the diagnostic identity for a protocol-bounded dispatch site
+    /// bound by `descriptor`: `satisfies-and-dispatch[<protocol>]`. Composed
+    /// once per protocol with the program-lifetime quotation allocator and
+    /// memoized, so every bounded call site shares the string and no runtime
+    /// allocation occurs. Returns a stable fallback if composition fails.
+    pub fn boundedDispatchTraceName(
+        self: *Context,
+        descriptor: *const value_mod.ProtocolDescriptor,
+    ) []const u8 {
+        if (self.bounded_dispatch_trace_names.get(descriptor)) |name| return name;
+        const alloc = self.quotationAllocator();
+        const name = std.fmt.allocPrint(
+            alloc,
+            "satisfies-and-dispatch[{s}]",
+            .{descriptor.name},
+        ) catch return "satisfies-and-dispatch";
+        self.bounded_dispatch_trace_names.put(self.allocator, descriptor, name) catch return name;
+        return name;
+    }
+
     /// Look up a cached satisfies-check result for `(type_desc, protocol_desc)`.
     /// Returns `null` if no entry exists yet or the cache was invalidated
     /// since the last write. The lock-free read pattern matches `pic_cache`.
@@ -3072,7 +3102,7 @@ pub const Context = struct {
     }
 
     /// Pop a call frame from the call stack.
-    fn popCallFrame(self: *Context) void {
+    pub fn popCallFrame(self: *Context) void {
         if (self.call_stack.items.len > 0) {
             _ = self.call_stack.pop();
         }
@@ -4704,6 +4734,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .dispatch_id = callee.dispatch_id,
         .bounded_protocol = if (bounded) |b| b.descriptor else null,
         .bounded_arity = if (bounded) |b| b.arity else .unary,
+        .bounded_trace_name = if (bounded) |b| ctx.boundedDispatchTraceName(b.descriptor) else null,
     };
     if (stack_effect_mod.hasAnyRowVariable(effect)) {
         result.callee_effect = ctx.lookupWordStackEffectPtr(name);

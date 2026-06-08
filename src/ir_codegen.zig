@@ -870,6 +870,11 @@ pub const ResolvedWord = struct {
     /// or an ordinary dispatch. Carries the bound protocol and arity.
     bounded_protocol: ?*const value_mod.ProtocolDescriptor = null,
     bounded_arity: dispatch_helpers.ProtocolArity = .unary,
+    /// Diagnostic identity (`satisfies-and-dispatch[<protocol>]`) baked into
+    /// the helper call so word traces, scheduler dumps, and error backtraces
+    /// name the bounded site by its protocol. Set whenever `bounded_protocol`
+    /// is set.
+    bounded_trace_name: ?[]const u8 = null,
 };
 
 /// Callback interface for resolving word names to dispatch table IDs.
@@ -5432,7 +5437,7 @@ fn compileInstructions(
                         flushToPhysicalStack(state, stack, sp.*);
                         _ = emitCallbackPreamble(state, sp.*);
 
-                        emitSatisfiesAndDispatch(state, resolved.dispatch_id, @intFromPtr(resolved.bounded_protocol.?), resolved.bounded_arity);
+                        emitSatisfiesAndDispatch(state, resolved.dispatch_id, @intFromPtr(resolved.bounded_protocol.?), resolved.bounded_arity, resolved.bounded_trace_name orelse name, instr.line);
 
                         if (exitFallsThrough(state.exit_kind)) {
                             const had_row = sp.* > 0 and stack[0].isRowRegion();
@@ -8829,6 +8834,8 @@ fn emitSatisfiesAndDispatch(
     dispatch_id: u32,
     descriptor_ptr: usize,
     arity: dispatch_helpers.ProtocolArity,
+    trace_name: []const u8,
+    line: usize,
 ) void {
     if (state.satisfies_dispatch_fn == c.IR_UNUSED) return;
     if (state.aot_mode) return;
@@ -8840,10 +8847,19 @@ fn emitSatisfiesAndDispatch(
         const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
         break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
     };
-    const did_const = c.ir_const_addr(state.ctx, dispatch_id);
-    const desc_const = c.ir_const_addr(state.ctx, descriptor_ptr);
-    const arity_const = c.ir_const_addr(state.ctx, @intFromEnum(arity));
-    const call_result = c._ir_CALL_4(state.ctx, c.IR_I32, state.satisfies_dispatch_fn, ctx_val, did_const, desc_const, arity_const);
+    // The trace-name pointer is process-local memory composed and memoized at
+    // compile time, so baking it as a constant is sound on the JIT-only path
+    // this helper guards.
+    var args = [_]c.ir_ref{
+        ctx_val,
+        c.ir_const_addr(state.ctx, dispatch_id),
+        c.ir_const_addr(state.ctx, descriptor_ptr),
+        c.ir_const_addr(state.ctx, @intFromEnum(arity)),
+        c.ir_const_addr(state.ctx, @intFromPtr(trace_name.ptr)),
+        c.ir_const_addr(state.ctx, trace_name.len),
+        c.ir_const_addr(state.ctx, line),
+    };
+    const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.satisfies_dispatch_fn, args.len, &args);
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 }
 
@@ -8944,12 +8960,19 @@ export fn jitSatisfiesAndDispatch(
     dispatch_id_raw: usize,
     descriptor_ptr_raw: usize,
     arity_raw: usize,
+    name_ptr_raw: usize,
+    name_len_raw: usize,
+    line_raw: usize,
 ) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const descriptor: *const value_mod.ProtocolDescriptor = @ptrFromInt(descriptor_ptr_raw);
     const arity = std.meta.intToEnum(dispatch_helpers.ProtocolArity, arity_raw) catch return 1;
-    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), descriptor, arity) catch |err| {
+    const trace_name: []const u8 = if (name_len_raw > 0 and name_ptr_raw != 0)
+        @as([*]const u8, @ptrFromInt(name_ptr_raw))[0..name_len_raw]
+    else
+        "satisfies-and-dispatch";
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), descriptor, arity, trace_name, @intCast(line_raw)) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };

@@ -1,0 +1,2 @@
+--trace-words=satisfies-and-dispatch[flyable],satisfies-and-dispatch[ordered]
+--no-show-stack

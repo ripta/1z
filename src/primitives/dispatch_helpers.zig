@@ -19,6 +19,7 @@ const StackEffect = stack_effect_mod.StackEffect;
 const protocols_mod = @import("protocols.zig");
 const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
+const trace_mod = @import("../trace.zig");
 
 /// Execute a dispatch entry body, handling both quotation and native_fn variants.
 pub fn executeDispatchBody(ctx: *Context, body: dispatch_mod.DispatchBody) !void {
@@ -438,7 +439,20 @@ pub fn satisfiesAndDispatch(
     dispatch_id: u32,
     descriptor: *const ProtocolDescriptor,
     arity: ProtocolArity,
+    trace_name: []const u8,
+    line: usize,
 ) !void {
+    // Name the bounded site by its protocol for the duration of the dispatch.
+    // The frame makes the site visible to scheduler task dumps when a body
+    // parks here and to call-stack-based error backtraces; the live event
+    // mirrors the interpreter's `--trace-words` output for an ordinary word.
+    const source = ctx.jit_trace_source orelse ctx.current_source;
+    ctx.pushCallFrame(trace_name, source, line, 0);
+    defer ctx.popCallFrame();
+    if (ctx.trace.trace_words and trace_mod.matchesPattern(trace_name, ctx.trace.trace_words_pattern)) {
+        var tw = trace_mod.TraceWriter.init();
+        trace_mod.traceWord(&tw, trace_name, source, line, &ctx.stack);
+    }
     switch (arity) {
         .binary => {
             if (ctx.stack.depth() < 2) return error.StackUnderflow;
@@ -870,8 +884,12 @@ test "satisfiesAndDispatch dispatches a satisfying type" {
     const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
 
     try ctx.stack.push(.{ .fixnum = 42 });
-    try satisfiesAndDispatch(&ctx, did, descriptor, .unary);
+    const frames_before = ctx.call_stack.items.len;
+    try satisfiesAndDispatch(&ctx, did, descriptor, .unary, ctx.boundedDispatchTraceName(descriptor), 0);
 
+    // The diagnostic frame is pushed for the dispatch and popped on the way
+    // out, leaving the call stack balanced.
+    try std.testing.expectEqual(frames_before, ctx.call_stack.items.len);
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     try std.testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
 }
@@ -896,8 +914,12 @@ test "satisfiesAndDispatch raises protocol-error for a non-satisfying type" {
     const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
 
     try ctx.stack.push(.{ .boolean = true });
-    const result = satisfiesAndDispatch(&ctx, did, descriptor, .unary);
+    const frames_before = ctx.call_stack.items.len;
+    const result = satisfiesAndDispatch(&ctx, did, descriptor, .unary, ctx.boundedDispatchTraceName(descriptor), 0);
     try std.testing.expectError(error.UserThrown, result);
+
+    // The diagnostic frame is popped even on the protocol-error path.
+    try std.testing.expectEqual(frames_before, ctx.call_stack.items.len);
 
     const thrown = ctx.thrown_error.?;
     try std.testing.expectEqualStrings("protocol-error", thrown.error_type);
@@ -913,7 +935,7 @@ test "satisfiesAndDispatch reaches a method registered after a failed check" {
 
     // No method yet: the check fails and memoizes the negative answer.
     try ctx.stack.push(.{ .fixnum = 42 });
-    try std.testing.expectError(error.UserThrown, satisfiesAndDispatch(&ctx, did, descriptor, .unary));
+    try std.testing.expectError(error.UserThrown, satisfiesAndDispatch(&ctx, did, descriptor, .unary, ctx.boundedDispatchTraceName(descriptor), 0));
     try ctx.stack.popAndRelease();
 
     // Registering the method invalidates the satisfies memo coarsely, so the
@@ -928,7 +950,7 @@ test "satisfiesAndDispatch reaches a method registered after a failed check" {
     );
 
     try ctx.stack.push(.{ .fixnum = 42 });
-    try satisfiesAndDispatch(&ctx, did, descriptor, .unary);
+    try satisfiesAndDispatch(&ctx, did, descriptor, .unary, ctx.boundedDispatchTraceName(descriptor), 0);
     try std.testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
 }
 
@@ -952,7 +974,7 @@ test "satisfiesAndDispatch handles a binary satisfying pair" {
 
     try ctx.stack.push(.{ .fixnum = 3 });
     try ctx.stack.push(.{ .fixnum = 5 });
-    try satisfiesAndDispatch(&ctx, did, descriptor, .binary);
+    try satisfiesAndDispatch(&ctx, did, descriptor, .binary, ctx.boundedDispatchTraceName(descriptor), 0);
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     try std.testing.expectEqual(@as(i64, 8), (try ctx.stack.pop()).fixnum);

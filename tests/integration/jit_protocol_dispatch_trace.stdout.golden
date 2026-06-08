@@ -1,0 +1,2 @@
+PASS: unary bounded dispatch reaches the method
+PASS: binary bounded dispatch sums via the method

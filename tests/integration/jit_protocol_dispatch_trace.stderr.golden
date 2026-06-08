@@ -1,0 +1,2 @@
+TRACE call satisfies-and-dispatch[flyable] at tests/integration/jit_protocol_dispatch_trace.1z:17 stack=[bird:<bird>]
+TRACE call satisfies-and-dispatch[ordered] at tests/integration/jit_protocol_dispatch_trace.1z:29 stack=[card:<card> card:<card>]

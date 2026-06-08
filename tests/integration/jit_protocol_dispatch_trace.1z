@@ -1,0 +1,34 @@
+use "testing" ;
+
+\ A compiled, protocol-bounded dispatch site names itself by its protocol in
+\ `--trace-words` output (and, by the same identity, in scheduler dumps and
+\ error backtraces). The trace flag selects the bracketed per-protocol names so
+\ the golden stays focused on the bounded sites rather than every inner word.
+
+flyable: protocol{ soar: } ;
+
+bird: virtual{ string } ;
+
+soar: generic ( x: flyable -- y ) [ drop "fallback" ] ;
+
+soar: method{ bird } [ unmake-bird drop "soaring" ] ;
+
+\ Compiled caller: the `soar` call site is a unary protocol-bounded dispatch.
+do-soar: ( x -- y ) [ soar ] ;
+do-soar: compile!
+
+ordered: protocol{ rank: } ;
+
+card: virtual{ fixnum } ;
+
+rank: generic ( a: ordered b: ordered -- n ) [ drop drop 0 ] ;
+
+rank: method{ card card } [ unmake-card swap unmake-card + ] ;
+
+\ Compiled caller: the `rank` call site is a binary protocol-bounded dispatch.
+do-rank: ( a b -- n ) [ rank ] ;
+do-rank: compile!
+
+\ Driving each compiled caller emits one trace event named by its protocol.
+"raven" >bird do-soar "soaring" "unary bounded dispatch reaches the method" assert=
+3 >card 4 >card do-rank 7 "binary bounded dispatch sums via the method" assert=
