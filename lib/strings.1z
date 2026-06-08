@@ -15,27 +15,27 @@ use "scanner" ;
 \   "hello" "," split         →  { "hello" }
 \   "" "," split              →  { "" }
 \   "a::b::c" "::" split      →  { "a" "b" "c" }
-(split-scan): stack-recursive ( str delim vec pos -- array ) [
-  3 pick-n 3 pick-n 2 pick-n #index-of-from
-  dup
-  [
-    \ Found at idx: push str[pos..idx] to vec, advance pos, recurse
-    4 pick-n 2 pick-n 2 pick-n #slice
-    3 pick-n swap #push! drop
-    3 pick-n #len + swap drop
-    (split-scan)
-  ]
-  [
-    \ Not found: push str[pos..end] to vec, freeze
-    drop
-    3 pick-n dup #len 2 pick-n swap #slice
-    2 pick-n swap #push! drop
-    drop nip nip >array
-  ]
-  if
-] ;
-
 split: ( str delim -- array ) [
+  (split-scan): stack-recursive ( str delim vec pos -- array ) [
+    3 pick-n 3 pick-n 2 pick-n #index-of-from
+    dup
+    [
+      \ Found at idx: push str[pos..idx] to vec, advance pos, recurse
+      4 pick-n 2 pick-n 2 pick-n #slice
+      3 pick-n swap #push! drop
+      3 pick-n #len + swap drop
+      (split-scan)
+    ]
+    [
+      \ Not found: push str[pos..end] to vec, freeze
+      drop
+      3 pick-n dup #len 2 pick-n swap #slice
+      2 pick-n swap #push! drop
+      drop nip nip >array
+    ]
+    if
+  ] ;
+
   dup #len 0 =
   [ drop 1array ]
   [
@@ -77,7 +77,7 @@ split: ( str delim -- array ) [
 ] ;
 
 \ Helper for repeat: ( pattern result n -- pattern result )
-repeat-loop: ( pattern result n -- pattern result ) [
+repeat-loop: [
   dup 0 >
   [
     1 -
