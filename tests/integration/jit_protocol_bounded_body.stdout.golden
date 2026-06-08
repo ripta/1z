@@ -1,0 +1,21 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: mono inner + on a bound fixnum input
+Stack: [ ]
+PASS: poly inner + on two bound fixnum inputs
+Stack: [ ]
+PASS: poly inner + on two bound float inputs
+Stack: [ ]
+PASS: non-satisfying input raises in compiled body
+Stack: [ ]

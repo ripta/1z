@@ -1,0 +1,57 @@
+use "testing" ;
+
+\ Compiling the BODY of a word whose own input parameter is protocol-bounded.
+\ The bound input is an unknown-concrete-type stack entry, and inner arithmetic
+\ reuses the ordinary polymorphic-fallback machinery. One compiled body per
+\ word -- no per-type specialization.
+
+\ A protocol satisfied by the primitive numeric types directly, so a bound
+\ input is itself a valid `+` operand. Satisfaction requires a type-specific
+\ method, not just the generic fallback, so fixnum and float each register one.
+
+addable: protocol{ bump: } ;
+
+bump: generic ( x -- x ) [ ] ;
+
+bump: method{ fixnum } [ ] ;
+
+bump: method{ float } [ ] ;
+
+\ Monomorphic inner +: one operand is a compile-time-known fixnum, so the bound
+\ input flows through the typed (bail-on-mismatch) arithmetic path.
+mono-bump: ( x: addable -- y ) [ 10 + ] ;
+mono-bump: compile!
+
+\ Polymorphic inner +: both operands are unknown bound inputs, so the inner +
+\ compiles through the polymorphic fixnum/float arithmetic path.
+poly-bump: ( a: addable b: addable -- c ) [ + ] ;
+poly-bump: compile!
+
+\ A type that does NOT satisfy `addable`.
+tag: virtual{ string } ;
+
+test-mono-fixnum: ( -- ) [
+  5 mono-bump
+  15 "mono inner + on a bound fixnum input" assert=
+] ;
+
+test-poly-fixnum: ( -- ) [
+  3 4 poly-bump
+  7 "poly inner + on two bound fixnum inputs" assert=
+] ;
+
+test-poly-float: ( -- ) [
+  1.5 2.5 poly-bump
+  4.0 "poly inner + on two bound float inputs" assert=
+] ;
+
+test-bound-still-enforced: ( -- ) [
+  [ "x" >tag mono-bump ] protocol-error: "non-satisfying input raises in compiled body" assert-error-type
+] ;
+
+\ -- Run all tests --
+
+test-mono-fixnum
+test-poly-fixnum
+test-poly-float
+test-bound-still-enforced
