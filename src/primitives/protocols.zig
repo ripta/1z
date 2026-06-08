@@ -578,6 +578,16 @@ fn hasAnyMatchingEntry(
     return false;
 }
 
+/// Box a `protocol-error` carrying `message` into `ctx.thrown_error` and signal it.
+/// Caller supplies the formatted message.
+pub fn raiseProtocolError(ctx: *Context, message: []const u8) error{UserThrown} {
+    ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "protocol-error",
+        .message = message,
+    }) catch null;
+    return error.UserThrown;
+}
+
 fn throwProtocolError(ctx: *Context, type_name: []const u8, method_name: []const u8, protocol_name: []const u8) void {
     const msg = std.fmt.allocPrint(
         ctx.arena.allocator(),

@@ -1,12 +1,19 @@
 const std = @import("std");
 const Context = @import("../context.zig").Context;
 const dispatch_mod = @import("../dispatch.zig");
+
 const pic_mod = @import("../pic.zig");
 const PolymorphicCache = pic_mod.PolymorphicCache;
-const value_mod = @import("../value.zig");
+
 const container_backing = @import("../container_backing.zig");
+
+const value_mod = @import("../value.zig");
 const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
+const ProtocolDescriptor = value_mod.ProtocolDescriptor;
+
+const protocols_mod = @import("protocols.zig");
+const helpers = @import("helpers.zig");
 
 /// Execute a dispatch entry body, handling both quotation and native_fn variants.
 pub fn executeDispatchBody(ctx: *Context, body: dispatch_mod.DispatchBody) !void {
@@ -393,6 +400,78 @@ pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*Polymorphi
     return false;
 }
 
+/// Operand arity of a protocol-bounded call site, as known statically by the caller. Selects how
+/// many operands the satisfies-check guards and which dispatch lookup runs.
+pub const ProtocolArity = enum { unary, binary };
+
+/// Verify the dispatched operand satisfies `descriptor`. Mirrors the interpreter's per-parameter
+/// check in `Context.validateTypeAnnotations`: a value whose type cannot be resolved, or has no
+/// descriptor, is left to the dispatch lookup rather than failing the bound. A non-satisfying
+/// operand raises `protocol-error`.
+fn checkOperand(ctx: *Context, val: Value, descriptor: *const ProtocolDescriptor) !void {
+    const val_tv = helpers.resolveValueTypeValue(ctx, val) orelse return;
+    if (val_tv.descriptor == null) return;
+    if (try protocols_mod.satisfiesByDescriptor(ctx, val_tv, descriptor)) return;
+
+    const msg = std.fmt.allocPrint(
+        ctx.arena.allocator(),
+        "type '{s}' does not satisfy protocol '{s}'",
+        .{ val_tv.name, descriptor.name },
+    ) catch "protocol mismatch";
+    return protocols_mod.raiseProtocolError(ctx, msg);
+}
+
+/// Protocol-bounded dispatch helper emitted by compiled code at a call site whose parameter is
+/// protocol-bound. Every operand the dispatch consumes is satisfies-checked against `descriptor`
+/// first; a non-satisfying operand raises `protocol-error`.
+///
+/// On success the existing dispatch lookup resolves the concrete-type method and transfers into
+/// it, leaving the operands on the stack for the body to consume. No polymorphic inline cache is
+/// consulted or installed at bounded sites.
+pub fn satisfiesAndDispatch(
+    ctx: *Context,
+    dispatch_id: u32,
+    descriptor: *const ProtocolDescriptor,
+    arity: ProtocolArity,
+) !void {
+    switch (arity) {
+        .binary => {
+            if (ctx.stack.depth() < 2) return error.StackUnderflow;
+            const a = try ctx.stack.peekN(1);
+            const b = try ctx.stack.peek();
+            try checkOperand(ctx, a, descriptor);
+            try checkOperand(ctx, b, descriptor);
+
+            if (lookupBinaryWithFallback(ctx, dispatch_id, a, b)) |result| {
+                if (result.unwrap_a or result.unwrap_b) {
+                    try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
+                }
+                try executeDispatchBody(ctx, result.entry.body);
+                return;
+            }
+        },
+        .unary => {
+            if (ctx.stack.depth() < 1) return error.StackUnderflow;
+            const a = try ctx.stack.peek();
+            try checkOperand(ctx, a, descriptor);
+
+            if (lookupUnaryWithFallback(ctx, dispatch_id, a)) |result| {
+                if (result.unwrap_a) {
+                    try autoUnwrapTopOperand(ctx);
+                }
+                try executeDispatchBody(ctx, result.entry.body);
+                return;
+            }
+        },
+    }
+
+    // Operands satisfied the bound but no concrete-type method resolved. This is reachable for a
+    // binary site whose mixed operand pair has no registered method; surface the same failure the
+    // interpreter's generic dispatch does.
+    ctx.pending_error_message = "no method found for generic word";
+    return error.TypeError;
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -690,4 +769,118 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
     try std.testing.expectEqual(@as(u8, 1), cache.count);
     try std.testing.expectEqual(fixnum_tv.descriptor.?, cache.entries[0].type_a);
     try std.testing.expectEqual(ctx.getDispatchUnarySentinel().descriptor.?, cache.entries[0].type_b);
+}
+
+/// Define a generic word `name`, so that it has a dispatch_id resolvable by the protocol
+/// satisfies-check, and return that dispatch_id.
+fn defineGenericForTest(ctx: *Context, name: []const u8) !u32 {
+    try ctx.defineWord(name, .{ .name = name, .action = .{ .compound = &[_]Instruction{} } });
+    return ctx.resolveDispatchId(name).?;
+}
+
+test "satisfiesAndDispatch dispatches a satisfying type" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const did = try defineGenericForTest(&ctx, "describe");
+
+    const body = &[_]Instruction{
+        .{ .op = .{ .call_word = "inspect" }, .line = 0 },
+    };
+    try ctx.registerDispatch(
+        .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try satisfiesAndDispatch(&ctx, did, descriptor, .unary);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
+}
+
+test "satisfiesAndDispatch raises protocol-error for a non-satisfying type" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const did = try defineGenericForTest(&ctx, "describe");
+
+    // describe is registered only for fixnum, so a boolean does not satisfy.
+    const body = &[_]Instruction{
+        .{ .op = .{ .call_word = "inspect" }, .line = 0 },
+    };
+    try ctx.registerDispatch(
+        .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
+
+    try ctx.stack.push(.{ .boolean = true });
+    const result = satisfiesAndDispatch(&ctx, did, descriptor, .unary);
+    try std.testing.expectError(error.UserThrown, result);
+
+    const thrown = ctx.thrown_error.?;
+    try std.testing.expectEqualStrings("protocol-error", thrown.error_type);
+}
+
+test "satisfiesAndDispatch reaches a method registered after a failed check" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const did = try defineGenericForTest(&ctx, "describe");
+    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
+
+    // No method yet: the check fails and memoizes the negative answer.
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try std.testing.expectError(error.UserThrown, satisfiesAndDispatch(&ctx, did, descriptor, .unary));
+    try ctx.stack.popAndRelease();
+
+    // Registering the method invalidates the satisfies memo coarsely, so the
+    // next call re-checks, satisfies, and dispatches the new entry.
+    const body = &[_]Instruction{
+        .{ .op = .{ .call_word = "inspect" }, .line = 0 },
+    };
+    try ctx.registerDispatch(
+        .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try satisfiesAndDispatch(&ctx, did, descriptor, .unary);
+    try std.testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
+}
+
+test "satisfiesAndDispatch handles a binary satisfying pair" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const did = try defineGenericForTest(&ctx, "cmp");
+
+    const body = &[_]Instruction{
+        .{ .op = .{ .call_word = "+" }, .line = 0 },
+    };
+    try ctx.registerDispatch(
+        .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    const descriptor = try ctx.createProtocolDescriptor("comparable", &[_]Value{.{ .symbol = "cmp" }});
+
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try satisfiesAndDispatch(&ctx, did, descriptor, .binary);
+
+    try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
+    try std.testing.expectEqual(@as(i64, 8), (try ctx.stack.pop()).fixnum);
 }

@@ -3750,11 +3750,7 @@ pub const Context = struct {
                         var tw = trace_mod.TraceWriter.init();
                         tw.print("warning: {s}\n", .{msg});
                     } else {
-                        self.thrown_error = value_mod.boxErrorObject(self.quotationAllocator(), .{
-                            .error_type = "protocol-error",
-                            .message = msg,
-                        }) catch null;
-                        return error.UserThrown;
+                        return protocols_mod.raiseProtocolError(self, msg);
                     }
                 },
             }
