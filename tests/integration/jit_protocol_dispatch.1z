@@ -1,0 +1,74 @@
+use "testing" ;
+
+\ A protocol whose required method is the generic we dispatch on. When a
+\ generic word's operands are bound by a protocol that requires that same
+\ generic, a satisfying operand always has a registered method -- so compiled
+\ code can fuse the satisfies-check and the dispatch into one helper call.
+
+flyable: protocol{ soar: } ;
+
+bird: virtual{ string } ;
+
+\ Generic bounded by `flyable` on its single operand.
+soar: generic ( x: flyable -- y ) [ drop "fallback" ] ;
+
+soar: method{ bird } [ unmake-bird drop "soaring" ] ;
+
+\ A type that does NOT satisfy `flyable`.
+rock: virtual{ fixnum } ;
+
+\ Compiled caller: the `soar` call site is a protocol-bounded generic dispatch
+\ site, so the JIT emits the satisfies-and-dispatch helper here.
+do-soar: ( x -- y ) [ soar ] ;
+do-soar: compile!
+
+test-satisfying-dispatches: ( -- ) [
+  "raven" >bird do-soar
+  "soaring" "compiled bounded dispatch reaches the method" assert=
+] ;
+
+test-non-satisfying-raises: ( -- ) [
+  [ 7 >rock do-soar ] "rock does not satisfy flyable" assert-error
+] ;
+
+test-error-type-is-protocol-error: ( -- ) [
+  [ 7 >rock do-soar ] protocol-error: "error type is protocol-error" assert-error-type
+] ;
+
+\ The satisfies memo is shared, so a satisfying call after a failing one still
+\ flows through the compiled helper.
+test-cache-coherence: ( -- ) [
+  "phoenix" >bird do-soar
+  "soaring" "satisfying call after a failed one still dispatches" assert=
+] ;
+
+\ Binary form: a generic bounded by one protocol on both operands.
+
+ordered: protocol{ rank: } ;
+
+card: virtual{ fixnum } ;
+
+rank: generic ( a: ordered b: ordered -- n ) [ drop drop 0 ] ;
+
+rank: method{ card card } [ unmake-card swap unmake-card + ] ;
+
+do-rank: ( a b -- n ) [ rank ] ;
+do-rank: compile!
+
+test-binary-dispatches: ( -- ) [
+  3 >card 4 >card do-rank
+  7 "binary bounded dispatch sums via the method" assert=
+] ;
+
+test-binary-second-fails: ( -- ) [
+  [ 3 >card 9 >rock do-rank ] protocol-error: "rock fails the ordered bound" assert-error-type
+] ;
+
+\ -- Run all tests --
+
+test-satisfying-dispatches
+test-non-satisfying-raises
+test-error-type-is-protocol-error
+test-cache-coherence
+test-binary-dispatches
+test-binary-second-fails

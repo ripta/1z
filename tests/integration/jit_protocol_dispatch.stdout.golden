@@ -1,0 +1,31 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: compiled bounded dispatch reaches the method
+Stack: [ ]
+PASS: rock does not satisfy flyable
+Stack: [ ]
+PASS: error type is protocol-error
+Stack: [ ]
+PASS: satisfying call after a failed one still dispatches
+Stack: [ ]
+PASS: binary bounded dispatch sums via the method
+Stack: [ ]
+PASS: rock fails the ordered bound
+Stack: [ ]

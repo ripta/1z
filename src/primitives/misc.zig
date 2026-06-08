@@ -7,6 +7,7 @@ const ModuleWord = value_mod.ModuleWord;
 const StatementProcessor = @import("../statement.zig").StatementProcessor;
 
 const markers_mod = @import("markers.zig");
+const dispatch_helpers = @import("dispatch_helpers.zig");
 const helpers = @import("helpers.zig");
 const hooks = @import("hooks.zig");
 const protocols = @import("protocols.zig");
@@ -728,6 +729,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .native_fn_ptr = @intFromPtr(func),
                 .stack_effect_ptr = effect_ptr,
                 .never_returns = hasNeverReturnsMarker(callee.markers),
+                .dispatch_id = callee.dispatch_id,
             };
         },
         .host_callback => return null,
@@ -741,12 +743,17 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         break :blk id;
     };
 
+    const bounded = dispatch_helpers.boundedDispatchFor(&effect, callee.markers, name);
+
     return ir_codegen.ResolvedWord{
         .word_id = word_id,
         .input_count = @intCast(effect.inputs.len),
         .output_count = @intCast(effect.outputs.len),
         .stack_effect_ptr = effect_ptr,
         .never_returns = hasNeverReturnsMarker(callee.markers),
+        .dispatch_id = callee.dispatch_id,
+        .bounded_protocol = if (bounded) |b| b.descriptor else null,
+        .bounded_arity = if (bounded) |b| b.arity else .unary,
     };
 }
 

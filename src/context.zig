@@ -64,6 +64,11 @@ pub const prelude_source = @embedFile("prelude.1z");
 
 pub const CompileMode = enum { off, eager, hybrid };
 
+/// Scope for `validateTypeAnnotationsScoped`: `all` validates every annotation,
+/// `except_protocols` skips protocol bounds (used at compiled protocol-bounded
+/// dispatch sites, where the dispatch helper checks the bound itself).
+pub const AnnotationScope = enum { all, except_protocols };
+
 pub const ExecutionError = error{
     UnknownWord,
     StackUnderflow,
@@ -3687,6 +3692,15 @@ pub const Context = struct {
     /// For each annotated input, check that the actual stack value's type
     /// matches the declared TypeValue via pointer identity.
     pub fn validateTypeAnnotations(self: *Context, effect: *const StackEffect) !void {
+        return self.validateTypeAnnotationsScoped(effect, .all);
+    }
+
+    /// Validate type annotations, optionally skipping protocol bounds. Compiled
+    /// code at a protocol-bounded generic dispatch site performs the satisfies-
+    /// check inside the dispatch helper, so it validates the remaining (concrete
+    /// type) annotations with `.except_protocols` to avoid checking the bound
+    /// twice.
+    pub fn validateTypeAnnotationsScoped(self: *Context, effect: *const StackEffect, scope: AnnotationScope) !void {
         // Check pragma for opt-out
         if (self.getPragma("type-check")) |pv| {
             if (pv == .string and std.mem.eql(u8, pv.string, "off")) return;
@@ -3732,6 +3746,8 @@ pub const Context = struct {
                     }
                 },
                 .protocol => |descriptor| {
+                    if (scope == .except_protocols) continue;
+
                     const val_tv = helpers.resolveValueTypeValue(self, val) orelse continue;
                     if (val_tv.descriptor == null) continue;
 
@@ -4660,6 +4676,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .is_native = true,
                 .native_fn_ptr = @intFromPtr(func),
                 .never_returns = hasNeverReturnsMarker(callee.markers),
+                .dispatch_id = callee.dispatch_id,
             };
             if (stack_effect_mod.hasAnyRowVariable(effect)) {
                 result.callee_effect = ctx.lookupWordStackEffectPtr(name);
@@ -4677,11 +4694,16 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         break :blk id;
     };
 
+    const bounded = dispatch_helpers.boundedDispatchFor(&effect, callee.markers, name);
+
     var result = ir_codegen.ResolvedWord{
         .word_id = word_id,
         .input_count = @intCast(effect.inputs.len),
         .output_count = @intCast(effect.outputs.len),
         .never_returns = hasNeverReturnsMarker(callee.markers),
+        .dispatch_id = callee.dispatch_id,
+        .bounded_protocol = if (bounded) |b| b.descriptor else null,
+        .bounded_arity = if (bounded) |b| b.arity else .unary,
     };
     if (stack_effect_mod.hasAnyRowVariable(effect)) {
         result.callee_effect = ctx.lookupWordStackEffectPtr(name);
@@ -5228,6 +5250,47 @@ test "protocol satisfies cache miss returns null" {
     };
 
     try std.testing.expectEqual(@as(?bool, null), ctx.lookupProtocolSatisfies(key));
+}
+
+test "validateTypeAnnotationsScoped except_protocols skips protocol bounds" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const methods = [_]value_mod.Value{.{ .symbol = "no-such-method" }};
+    const desc = try ctx.createProtocolDescriptor("needy", &methods);
+
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x", .type_annotation = .{ .protocol = desc } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+
+    // `.all` checks the bound; fixnum does not satisfy `needy`, so it raises.
+    try std.testing.expectError(error.UserThrown, ctx.validateTypeAnnotationsScoped(&effect, .all));
+
+    // `.except_protocols` skips the bound, so the same input passes.
+    try ctx.validateTypeAnnotationsScoped(&effect, .except_protocols);
+}
+
+test "validateTypeAnnotationsScoped except_protocols still checks concrete types" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "x", .type_annotation = .{ .type = string_tv } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+
+    // Concrete-type annotations are still validated under `.except_protocols`.
+    try std.testing.expectError(error.TypeError, ctx.validateTypeAnnotationsScoped(&effect, .except_protocols));
 }
 
 test "protocol satisfies cache invalidated by method registration" {

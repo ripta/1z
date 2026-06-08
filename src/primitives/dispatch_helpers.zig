@@ -11,8 +11,13 @@ const value_mod = @import("../value.zig");
 const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
 const ProtocolDescriptor = value_mod.ProtocolDescriptor;
+const Marker = value_mod.Marker;
+
+const stack_effect_mod = @import("../stack_effect.zig");
+const StackEffect = stack_effect_mod.StackEffect;
 
 const protocols_mod = @import("protocols.zig");
+const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
 
 /// Execute a dispatch entry body, handling both quotation and native_fn variants.
@@ -472,6 +477,74 @@ pub fn satisfiesAndDispatch(
     return error.TypeError;
 }
 
+/// True when `descriptor`'s method list names `method_name`. The methods array is a flat sequence
+/// of method-name symbols, each optionally followed by a stack-effect entry; only the symbols are
+/// method names.
+pub fn protocolRequiresMethod(descriptor: *const ProtocolDescriptor, method_name: []const u8) bool {
+    for (descriptor.methods) |entry| {
+        switch (entry) {
+            .symbol => |s| if (std.mem.eql(u8, s, method_name)) return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// The bound protocol and dispatch arity of a protocol-bounded generic call site.
+pub const BoundedDispatch = struct {
+    descriptor: *const ProtocolDescriptor,
+    arity: ProtocolArity,
+};
+
+/// Decide whether a call to word `name` with stack effect `effect` and `markers` is a
+/// protocol-bounded generic dispatch site that compiled code should lower to `satisfiesAndDispatch`
+/// rather than the usual dispatch path. Returns the bound protocol and dispatch arity when:
+///
+///   1. the word is generic (carries the `generic` marker),
+///   2. it has no row-variable inputs and exactly one or two concrete inputs,
+///   3. every concrete input is bound by the *same* protocol descriptor P, and
+///   4. P requires `name` as one of its methods.
+///
+/// Condition 4 guarantees that any operand satisfying P has a registered method for `name`, so the
+/// dispatch can never miss and the helper's raise-on-miss path is unreachable. That keeps compiled
+/// behavior identical to the interpreter, which would otherwise run the generic's fallback body on
+/// a miss. Mixed-protocol or otherwise non-conforming generics return null and keep the existing
+/// dispatch path.
+pub fn boundedDispatchFor(
+    effect: *const StackEffect,
+    markers: []const *Marker,
+    name: []const u8,
+) ?BoundedDispatch {
+    const is_generic = for (markers) |mk| {
+        if (markers_mod.isGenericMarker(mk)) break true;
+    } else false;
+    if (!is_generic) return null;
+
+    if (stack_effect_mod.hasAnyRowVariable(effect.*)) return null;
+
+    const n = effect.inputs.len;
+    if (n != 1 and n != 2) return null;
+
+    var descriptor: ?*const ProtocolDescriptor = null;
+    for (effect.inputs) |param| {
+        const ann = param.type_annotation orelse return null;
+        const pd = switch (ann) {
+            .protocol => |p| p,
+            .type => return null,
+        };
+        if (descriptor) |d| {
+            if (d != pd) return null;
+        } else {
+            descriptor = pd;
+        }
+    }
+
+    const d = descriptor orelse return null;
+    if (!protocolRequiresMethod(d, name)) return null;
+
+    return .{ .descriptor = d, .arity = if (n == 2) .binary else .unary };
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -883,4 +956,121 @@ test "satisfiesAndDispatch handles a binary satisfying pair" {
 
     try std.testing.expectEqual(@as(usize, 1), ctx.stack.depth());
     try std.testing.expectEqual(@as(i64, 8), (try ctx.stack.pop()).fixnum);
+}
+
+const StackEffectParam = stack_effect_mod.StackEffectParam;
+
+fn genericMarkers() [1]*Marker {
+    return [1]*Marker{@constCast(&markers_mod.generic_marker)};
+}
+
+test "boundedDispatchFor: unary generic bounded by a requiring protocol" {
+    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{.{ .symbol = "soar" }}, .protocol_id = 0 };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .protocol = &pd } }},
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+    const markers = genericMarkers();
+    const result = boundedDispatchFor(&effect, &markers, "soar").?;
+    try std.testing.expectEqual(&pd, result.descriptor);
+    try std.testing.expectEqual(ProtocolArity.unary, result.arity);
+}
+
+test "boundedDispatchFor: binary generic with one protocol on both operands" {
+    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &[_]Value{.{ .symbol = "cmp" }}, .protocol_id = 0 };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "a", .type_annotation = .{ .protocol = &pd } },
+            .{ .name = "b", .type_annotation = .{ .protocol = &pd } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "o" }},
+    };
+    const markers = genericMarkers();
+    const result = boundedDispatchFor(&effect, &markers, "cmp").?;
+    try std.testing.expectEqual(&pd, result.descriptor);
+    try std.testing.expectEqual(ProtocolArity.binary, result.arity);
+}
+
+test "boundedDispatchFor: non-generic word returns null" {
+    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{.{ .symbol = "soar" }}, .protocol_id = 0 };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .protocol = &pd } }},
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+    const markers = [_]*Marker{};
+    try std.testing.expectEqual(@as(?BoundedDispatch, null), boundedDispatchFor(&effect, &markers, "soar"));
+}
+
+test "boundedDispatchFor: protocol not requiring the generic returns null" {
+    const pd = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{.{ .symbol = "fly" }}, .protocol_id = 0 };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .protocol = &pd } }},
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+    const markers = genericMarkers();
+    // `flyable` requires `fly`, not the dispatched generic `soar`.
+    try std.testing.expectEqual(@as(?BoundedDispatch, null), boundedDispatchFor(&effect, &markers, "soar"));
+}
+
+test "boundedDispatchFor: mixed protocols return null" {
+    const fly = ProtocolDescriptor{ .name = "flyable", .methods = &[_]Value{.{ .symbol = "go" }}, .protocol_id = 0 };
+    const swim = ProtocolDescriptor{ .name = "swimmable", .methods = &[_]Value{.{ .symbol = "go" }}, .protocol_id = 1 };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "a", .type_annotation = .{ .protocol = &fly } },
+            .{ .name = "b", .type_annotation = .{ .protocol = &swim } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "o" }},
+    };
+    const markers = genericMarkers();
+    try std.testing.expectEqual(@as(?BoundedDispatch, null), boundedDispatchFor(&effect, &markers, "go"));
+}
+
+test "boundedDispatchFor: concrete-type annotation returns null" {
+    var tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "x", .type_annotation = .{ .type = &tv } }},
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+    const markers = genericMarkers();
+    try std.testing.expectEqual(@as(?BoundedDispatch, null), boundedDispatchFor(&effect, &markers, "soar"));
+}
+
+test "boundedDispatchFor: more than two inputs returns null" {
+    const pd = ProtocolDescriptor{ .name = "p", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 0 };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "a", .type_annotation = .{ .protocol = &pd } },
+            .{ .name = "b", .type_annotation = .{ .protocol = &pd } },
+            .{ .name = "c", .type_annotation = .{ .protocol = &pd } },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "o" }},
+    };
+    const markers = genericMarkers();
+    try std.testing.expectEqual(@as(?BoundedDispatch, null), boundedDispatchFor(&effect, &markers, "m"));
+}
+
+test "boundedDispatchFor: unannotated input returns null" {
+    const pd = ProtocolDescriptor{ .name = "p", .methods = &[_]Value{.{ .symbol = "m" }}, .protocol_id = 0 };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "a", .type_annotation = .{ .protocol = &pd } },
+            .{ .name = "b" },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "o" }},
+    };
+    const markers = genericMarkers();
+    try std.testing.expectEqual(@as(?BoundedDispatch, null), boundedDispatchFor(&effect, &markers, "m"));
+}
+
+test "protocolRequiresMethod: skips stack-effect entries" {
+    const empty = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+    const pd = ProtocolDescriptor{
+        .name = "p",
+        .methods = &[_]Value{ .{ .symbol = "m" }, .{ .stack_effect = empty }, .{ .symbol = "n" } },
+        .protocol_id = 0,
+    };
+    try std.testing.expect(protocolRequiresMethod(&pd, "m"));
+    try std.testing.expect(protocolRequiresMethod(&pd, "n"));
+    try std.testing.expect(!protocolRequiresMethod(&pd, "missing"));
 }

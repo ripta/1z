@@ -862,6 +862,14 @@ pub const ResolvedWord = struct {
     /// The compiler emits a terminal return after the call instead of
     /// continuing control flow in the current block.
     never_returns: bool = false,
+    /// Monotonic dispatch ID of the callee, used by the protocol-bounded
+    /// dispatch helper to resolve the concrete-type method.
+    dispatch_id: u32 = 0,
+    /// When non-null, this call is a protocol-bounded generic dispatch site:
+    /// the compiler emits `satisfiesAndDispatch` instead of installing a PIC
+    /// or an ordinary dispatch. Carries the bound protocol and arity.
+    bounded_protocol: ?*const value_mod.ProtocolDescriptor = null,
+    bounded_arity: dispatch_helpers.ProtocolArity = .unary,
 };
 
 /// Callback interface for resolving word names to dispatch table IDs.
@@ -1840,6 +1848,9 @@ const CompileState = struct {
     retain_slot_fn: c.ir_ref = c.IR_UNUSED,
     release_slot_fn: c.ir_ref = c.IR_UNUSED,
     validate_params_fn: c.ir_ref = c.IR_UNUSED,
+    /// Function ref for `jitSatisfiesAndDispatch`, emitted at protocol-bounded
+    /// generic dispatch sites. JIT-only; left unused in AOT mode.
+    satisfies_dispatch_fn: c.ir_ref = c.IR_UNUSED,
     interp_ctx: ?*const Context = null,
     /// Interpreter PIC table for the word being compiled. Each instruction
     /// index maps to a PolymorphicCache recording observed type pairs.
@@ -5405,6 +5416,34 @@ fn compileInstructions(
                                 resetStackToPhysical(stack, sp.*);
                             }
                         }
+                    } else if (resolved.bounded_protocol != null) {
+                        // Protocol-bounded generic dispatch: emit the helper that
+                        // satisfies-checks the operand(s) and dispatches the
+                        // concrete-type method in one call. No PIC is installed,
+                        // and the protocol bound is checked exactly once (by the
+                        // helper) rather than re-validated. The emission predicate
+                        // guarantees the bound protocol requires this generic, so a
+                        // satisfying operand always resolves a method -- the helper
+                        // never reaches its raise-on-miss path, matching the
+                        // interpreter's behavior.
+                        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
+
+                        try materializeQuotations(state, stack, sp.*);
+                        flushToPhysicalStack(state, stack, sp.*);
+                        _ = emitCallbackPreamble(state, sp.*);
+
+                        emitSatisfiesAndDispatch(state, resolved.dispatch_id, @intFromPtr(resolved.bounded_protocol.?), resolved.bounded_arity);
+
+                        if (exitFallsThrough(state.exit_kind)) {
+                            const had_row = sp.* > 0 and stack[0].isRowRegion();
+                            sp.* = sp.* - effective_in + effective_out;
+                            if (had_row and sp.* == 0) {
+                                reloadBaseAfterDynamicCall(state);
+                                sp.* = 1;
+                            } else {
+                                resetStackToPhysical(stack, sp.*);
+                            }
+                        }
                     } else {
                         // Compound word: dispatch table indirect call
                         DispatchLayout.ensureInit();
@@ -5611,12 +5650,14 @@ const PreScanFlags = struct {
     needs_param_validation: bool = false,
     needs_poly_fallback: bool = false,
     needs_pic_dispatch: bool = false,
+    needs_satisfies_dispatch: bool = false,
 
     fn needsErrorPropagation(self: PreScanFlags) bool {
         return self.needs_error_handling or self.needs_safepoint or
             self.needs_dynamic_vars or self.needs_iterators or
             self.needs_native_call or self.needs_dispatch or
-            self.needs_param_validation or self.needs_poly_fallback;
+            self.needs_param_validation or self.needs_poly_fallback or
+            self.needs_satisfies_dispatch;
     }
 };
 
@@ -5664,6 +5705,9 @@ fn preScanInstructions(
                             }
                             if (resolved.stack_effect_ptr != null) {
                                 flags.needs_param_validation = true;
+                            }
+                            if (resolved.bounded_protocol != null) {
+                                flags.needs_satisfies_dispatch = true;
                             }
                         } else if (!in_quotation) {
                             return IrCodegenError.NotCompilable;
@@ -5840,6 +5884,11 @@ fn compileWordPass(
     else
         c.IR_UNUSED;
 
+    const satisfies_dispatch_fn = if (scan_flags.needs_satisfies_dispatch)
+        c.ir_const_addr(&ctx, @intFromPtr(&jitSatisfiesAndDispatch))
+    else
+        c.IR_UNUSED;
+
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
     const error_propagate_status = c.ir_const_i32(&ctx, 2);
@@ -5945,6 +5994,7 @@ fn compileWordPass(
         .retain_slot_fn = retain_slot_fn,
         .release_slot_fn = release_slot_fn,
         .validate_params_fn = validate_params_fn,
+        .satisfies_dispatch_fn = satisfies_dispatch_fn,
         .interp_ctx = interp_ctx,
         .pic_table = pic_table,
         .error_propagate_status = error_propagate_status,
@@ -8767,6 +8817,36 @@ fn emitParamValidation(state: *CompileState, effect_ptr: usize) void {
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 }
 
+/// Emit a protocol-bounded generic dispatch call at the current IR position.
+/// Calls `jitSatisfiesAndDispatch`, which satisfies-checks the dispatched
+/// operand(s) against `descriptor_ptr` and then resolves and runs the
+/// concrete-type method by `dispatch_id`. This replaces both the protocol
+/// re-check and the ordinary dispatch at a bounded site -- no PIC is installed.
+/// JIT-only: the descriptor pointer is process-local, so AOT (which runs in a
+/// fresh process) keeps its own path.
+fn emitSatisfiesAndDispatch(
+    state: *CompileState,
+    dispatch_id: u32,
+    descriptor_ptr: usize,
+    arity: dispatch_helpers.ProtocolArity,
+) void {
+    if (state.satisfies_dispatch_fn == c.IR_UNUSED) return;
+    if (state.aot_mode) return;
+    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+        state.preloaded_ctx_val
+    else blk: {
+        JitContextLayout.ensureInit();
+        const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
+        const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+        break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
+    };
+    const did_const = c.ir_const_addr(state.ctx, dispatch_id);
+    const desc_const = c.ir_const_addr(state.ctx, descriptor_ptr);
+    const arity_const = c.ir_const_addr(state.ctx, @intFromEnum(arity));
+    const call_result = c._ir_CALL_4(state.ctx, c.IR_I32, state.satisfies_dispatch_fn, ctx_val, did_const, desc_const, arity_const);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+}
+
 // =============================================================================
 // Trampoline
 // =============================================================================
@@ -8849,6 +8929,27 @@ export fn jitValidateParamEffects(ctx_raw: usize, effect_ptr_raw: usize) callcon
         return 2;
     };
     ctx.validateTypeAnnotations(effect) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// Protocol-bounded generic dispatch helper emitted at bounded call sites.
+/// Satisfies-checks the dispatched operand(s) against the protocol descriptor
+/// and dispatches the concrete-type method by `dispatch_id`, raising on a
+/// non-satisfying operand.
+export fn jitSatisfiesAndDispatch(
+    ctx_raw: usize,
+    dispatch_id_raw: usize,
+    descriptor_ptr_raw: usize,
+    arity_raw: usize,
+) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const descriptor: *const value_mod.ProtocolDescriptor = @ptrFromInt(descriptor_ptr_raw);
+    const arity = std.meta.intToEnum(dispatch_helpers.ProtocolArity, arity_raw) catch return 1;
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), descriptor, arity) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
