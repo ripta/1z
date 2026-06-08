@@ -11,6 +11,8 @@ Build options:
   --interpreter-fallback=MODE   Interpreter fallback policy: true, false, auto (default: auto)
   --lock-interpreter-setting    Lock the fallback policy into the binary
   --link-static=LIB             Statically link library LIB (repeatable)
+  --link-object=PATH            Link an extra object or archive PATH (repeatable)
+  --linker-script=PATH          Linker script for bare-metal/freestanding targets
   --dump-aot-image-classification  Print AOT image word classification
   --dump-aot-image-c            Print the generated runtime-image C source
   --emit-runtime-image          Embed a runtime program image in the binary

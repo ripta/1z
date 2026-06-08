@@ -377,11 +377,12 @@ pub fn build(b: *std.Build) void {
     update_lsp_golden_step.dependOn(&update_lsp_files.step);
     if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, lsp_test_step, "lsp", lsp_status_files.items);
 
-    addBaremetalRiscv64VirtTest(b, optimize, options, embedded_stdlib_path);
+    addBaremetalRiscv64VirtTest(b, exe, optimize, options, embedded_stdlib_path);
 }
 
 fn addBaremetalRiscv64VirtTest(
     b: *std.Build,
+    host_exe: *std.Build.Step.Compile,
     optimize: std.builtin.OptimizeMode,
     options: *std.Build.Step.Options,
     embedded_stdlib_path: std.Build.LazyPath,
@@ -402,6 +403,8 @@ fn addBaremetalRiscv64VirtTest(
         .stack_protector = false,
         .pic = false,
         .red_zone = false,
+        .code_model = .medium, // The kernel loads high (0x80200000), beyond medlow's reach
+        .sanitize_c = .off, // No UBSan runtime on bare metal, since its objects are not medany-built.
     });
     platform_module.addAssemblyFile(b.path("src/baremetal/riscv64/virt/boot.S"));
 
@@ -417,6 +420,8 @@ fn addBaremetalRiscv64VirtTest(
     runtime_module.stack_protector = false;
     runtime_module.pic = false;
     runtime_module.red_zone = false;
+    runtime_module.code_model = .medium;
+    runtime_module.sanitize_c = .off;
 
     const runtime_lib = b.addLibrary(.{
         .name = "1z-riscv64-freestanding-runtime",
@@ -425,6 +430,30 @@ fn addBaremetalRiscv64VirtTest(
     });
     runtime_lib.link_function_sections = true;
     runtime_lib.link_data_sections = true;
+
+    // Production bare-metal entry shim (onez_baremetal_main + UART writer),
+    // kept out of the test-stub modules that define their own entry point.
+    const entry_module = b.createModule(.{
+        .root_source_file = b.path("src/baremetal/riscv64/virt/runtime_entry.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = false,
+        .single_threaded = true,
+        .stack_check = false,
+        .stack_protector = false,
+        .pic = false,
+        .red_zone = false,
+        .code_model = .medium,
+        .sanitize_c = .off,
+    });
+
+    const entry_lib = b.addLibrary(.{
+        .name = "1z-riscv64-virt-entry",
+        .root_module = entry_module,
+        .linkage = .static,
+    });
+    entry_lib.link_function_sections = true;
+    entry_lib.link_data_sections = true;
 
     const stub_module = b.createModule(.{
         .root_source_file = b.path("tests/baremetal/riscv64/uart_stub.zig"),
@@ -436,6 +465,8 @@ fn addBaremetalRiscv64VirtTest(
         .stack_protector = false,
         .pic = false,
         .red_zone = false,
+        .code_model = .medium,
+        .sanitize_c = .off,
     });
     stub_module.addImport("virt-platform", platform_module);
 
@@ -457,6 +488,8 @@ fn addBaremetalRiscv64VirtTest(
         .stack_protector = false,
         .pic = false,
         .red_zone = false,
+        .code_model = .medium,
+        .sanitize_c = .off,
     });
     runtime_stub_module.addImport("virt-platform", platform_module);
 
@@ -469,12 +502,56 @@ fn addBaremetalRiscv64VirtTest(
     runtime_stub.setLinkerScript(b.path("src/baremetal/riscv64/virt/linker.ld"));
     runtime_stub.link_gc_sections = true;
 
-    const test_step = b.step("baremetal-riscv64-test", "Compile riscv64 virt platform library and linked UART/runtime stubs");
+    // AOT-compile a noöp 1z program to a freestanding riscv64 ELF, driving the host `1z` as a cross-link
+    // front end against the platform, entry, and runtime archives plus the platform linker script.
+    const aot_build = b.addRunArtifact(host_exe);
+    aot_build.setName("baremetal aot build: noop");
+    aot_build.addArg("build");
+    aot_build.addArg("--target=riscv64-freestanding-none");
+    aot_build.addArg("--interpreter-fallback=false");
+    aot_build.addPrefixedFileArg("--linker-script=", b.path("src/baremetal/riscv64/virt/linker.ld"));
+    aot_build.addPrefixedFileArg("--link-object=", entry_lib.getEmittedBin());
+    aot_build.addPrefixedFileArg("--link-object=", platform_lib.getEmittedBin());
+    aot_build.addPrefixedFileArg("--link-object=", runtime_lib.getEmittedBin());
+    aot_build.addArg("-o");
+    const kernel_elf = aot_build.addOutputFileArg("kernel.elf");
+    aot_build.addFileArg(b.path("tests/baremetal/riscv64/noop.1z"));
+
+    // Verify the linked ELF carries the expected boot symbols and imports no hosted libc. The freestanding
+    // link is -nostdlib, so a successful link already proves there are no stray libc references. The
+    // symbol assertions pin the bare-metal entry surface in place.
+    const verify = b.addSystemCommand(&.{ "sh", "-c", baremetal_verify_script, "baremetal-verify" });
+    verify.addFileArg(kernel_elf);
+    verify.setName("baremetal aot verify: symbols and no libc");
+    verify.expectExitCode(0);
+
+    const test_step = b.step("baremetal-riscv64-test", "Compile riscv64 virt platform library, stubs, and an AOT freestanding ELF");
     test_step.dependOn(&platform_lib.step);
     test_step.dependOn(&runtime_lib.step);
+    test_step.dependOn(&entry_lib.step);
     test_step.dependOn(&uart_stub.step);
     test_step.dependOn(&runtime_stub.step);
+    test_step.dependOn(&verify.step);
 }
+
+const baremetal_verify_script =
+    \\set -e
+    \\elf="$1"
+    \\for sym in _start kernel_main onez_baremetal_main onez_virt_uart_writer; do
+    \\    if ! nm "$elf" | grep -qE "[Tt] $sym$"; then
+    \\        echo "FAIL: linked ELF is missing symbol '$sym'"
+    \\        nm "$elf" | grep -E "$sym" || true
+    \\        exit 1
+    \\    fi
+    \\done
+    \\banned=$(nm -u "$elf" 2>/dev/null | grep -E '(printf|fprintf|malloc|free|getenv|fopen|fwrite|memcpy|memset|memmove|memcmp)' || true)
+    \\if [ -n "$banned" ]; then
+    \\    echo "FAIL: linked ELF references hosted libc symbols:"
+    \\    echo "$banned"
+    \\    exit 1
+    \\fi
+    \\echo "PASS: linked freestanding ELF carries _start/kernel_main/onez_baremetal_main/onez_virt_uart_writer and no hosted libc imports"
+;
 
 fn addFfiIncludePath(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
     // @cInclude("ffi.h") needs an extra include path on macOS where the

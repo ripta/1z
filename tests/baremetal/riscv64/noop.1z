@@ -1,0 +1,4 @@
+\ Minimal AOT input for the bare-metal freestanding link check: it computes and
+\ discards a value so the program has a compilable entry word without touching
+\ the output stream, filesystem, or any disabled capability module.
+1 2 + drop

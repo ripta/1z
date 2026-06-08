@@ -782,6 +782,8 @@ fn printBuildHelp() void {
     w.writeAll("  --interpreter-fallback=MODE   Interpreter fallback policy: true, false, auto (default: auto)\n") catch {};
     w.writeAll("  --lock-interpreter-setting    Lock the fallback policy into the binary\n") catch {};
     w.writeAll("  --link-static=LIB             Statically link library LIB (repeatable)\n") catch {};
+    w.writeAll("  --link-object=PATH            Link an extra object or archive PATH (repeatable)\n") catch {};
+    w.writeAll("  --linker-script=PATH          Linker script for bare-metal/freestanding targets\n") catch {};
     w.writeAll("  --dump-aot-image-classification  Print AOT image word classification\n") catch {};
     w.writeAll("  --dump-aot-image-c            Print the generated runtime-image C source\n") catch {};
     w.writeAll("  --emit-runtime-image          Embed a runtime program image in the binary\n") catch {};
@@ -2407,8 +2409,11 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var lock_interpreter_setting = false;
     var target_triple_override: ?[]const u8 = null;
     var target_is_freestanding = false;
+    var linker_script: ?[]const u8 = null;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
     defer static_libs.deinit(base_allocator);
+    var link_objects: std.ArrayListUnmanaged([]const u8) = .{};
+    defer link_objects.deinit(base_allocator);
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -2459,6 +2464,18 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 err_writer.flush() catch {};
                 return 1;
             };
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--link-object=")) {
+            link_objects.append(base_allocator, arg["--link-object=".len..]) catch {
+                err_writer.writeAll("Error: out of memory\n") catch {};
+                err_writer.flush() catch {};
+                return 1;
+            };
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--linker-script=")) {
+            linker_script = arg["--linker-script=".len..];
             continue;
         }
         if (std.mem.startsWith(u8, arg, "--interpreter-fallback=")) {
@@ -2896,18 +2913,23 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     tmp_file.close();
     // Temp file cleanup is at the end, after we know the cc result.
 
-    // Discover lib1z.a path relative to this executable.
-    const lib1z_path = if (exe_dir_slice) |exe_dir|
-        std.fs.path.join(allocator, &.{ exe_dir, "../clib/lib1z.a" }) catch null
+    // Discover lib1z.a path relative to this executable. Freestanding builds
+    // do not link the host runtime; the caller supplies a freestanding runtime
+    // archive (and the bare-metal platform archives) via --link-object.
+    const lib1z_path = if (!target_is_freestanding)
+        (if (exe_dir_slice) |exe_dir|
+            std.fs.path.join(allocator, &.{ exe_dir, "../clib/lib1z.a" }) catch null
+        else
+            null)
     else
         null;
     defer if (lib1z_path) |p| allocator.free(p);
 
-    const resolved_lib = lib1z_path orelse {
+    if (!target_is_freestanding and lib1z_path == null) {
         err_writer.writeAll("Error: cannot locate lib1z.a\n") catch {};
         err_writer.flush() catch {};
         return 1;
-    };
+    }
 
     // Stage 2: Invoke C compiler.
     // Default to zig cc since lib1z.a is built with Zig's C backend and may
@@ -2917,30 +2939,72 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     var cc_argv: std.ArrayListUnmanaged([]const u8) = .{};
     defer cc_argv.deinit(allocator);
+    // Flags formatted at runtime must outlive the child process; free them once
+    // the command has finished.
+    var owned_flags: std.ArrayListUnmanaged([]const u8) = .{};
+    defer {
+        for (owned_flags.items) |f| allocator.free(f);
+        owned_flags.deinit(allocator);
+    }
     cc_argv.append(allocator, cc_cmd) catch return 1;
     if (cc_env == null) cc_argv.append(allocator, "cc") catch return 1;
     cc_argv.append(allocator, "-o") catch return 1;
     cc_argv.append(allocator, output) catch return 1;
     cc_argv.append(allocator, tmp_path) catch return 1;
-    cc_argv.append(allocator, resolved_lib) catch return 1;
-    // XXX(ripta): linker GC when the binary is interpreter-free (no jitInterpretedCall / jitCallQuotation),
-    //             the linker drops the unreferenced interpreter code. Harmless when the interpreter is in
-    //             use because the symbols are still referenced.
-    switch (builtin.os.tag) {
-        .macos => {
-            cc_argv.append(allocator, "-Wl,-dead_strip") catch return 1;
-        },
-        .linux => {
-            cc_argv.append(allocator, "-ffunction-sections") catch return 1;
-            cc_argv.append(allocator, "-fdata-sections") catch return 1;
-            cc_argv.append(allocator, "-Wl,--gc-sections") catch return 1;
-        },
-        else => {},
-    }
-    cc_argv.append(allocator, "-lffi") catch return 1;
-    for (static_libs.items) |lib_name| {
-        const flag = std.fmt.allocPrint(allocator, "-l{s}", .{lib_name}) catch return 1;
-        cc_argv.append(allocator, flag) catch return 1;
+
+    if (target_is_freestanding) {
+        // Cross-link a bare-metal ELF: target the requested triple, drop the
+        // hosted C runtime, and link only what the caller passes in plus the
+        // linker script that places the kernel.
+        cc_argv.append(allocator, "-target") catch return 1;
+        cc_argv.append(allocator, target_triple_override.?) catch return 1;
+        cc_argv.append(allocator, "-ffreestanding") catch return 1;
+        cc_argv.append(allocator, "-nostdlib") catch return 1;
+        // zig cc instruments C with UBSan by default, which would pull in the
+        // hosted UBSan runtime; there is no such runtime on bare metal.
+        cc_argv.append(allocator, "-fno-sanitize=undefined") catch return 1;
+        // Bare-metal kernels load high in the address space (e.g. the riscv64
+        // virt OpenSBI handoff at 0x80200000), beyond what the default medlow
+        // code model can reach with absolute lui/HI20 relocations.
+        if (std.mem.startsWith(u8, target_triple_override.?, "riscv")) {
+            cc_argv.append(allocator, "-mcmodel=medany") catch return 1;
+        }
+        cc_argv.append(allocator, "-ffunction-sections") catch return 1;
+        cc_argv.append(allocator, "-fdata-sections") catch return 1;
+        cc_argv.append(allocator, "-Wl,--gc-sections") catch return 1;
+        for (link_objects.items) |obj| {
+            cc_argv.append(allocator, obj) catch return 1;
+        }
+        if (linker_script) |script| {
+            const flag = std.fmt.allocPrint(allocator, "-Wl,-T,{s}", .{script}) catch return 1;
+            owned_flags.append(allocator, flag) catch return 1;
+            cc_argv.append(allocator, flag) catch return 1;
+        }
+    } else {
+        cc_argv.append(allocator, lib1z_path.?) catch return 1;
+        // XXX(ripta): linker GC when the binary is interpreter-free (no jitInterpretedCall / jitCallQuotation),
+        //             the linker drops the unreferenced interpreter code. Harmless when the interpreter is in
+        //             use because the symbols are still referenced.
+        switch (builtin.os.tag) {
+            .macos => {
+                cc_argv.append(allocator, "-Wl,-dead_strip") catch return 1;
+            },
+            .linux => {
+                cc_argv.append(allocator, "-ffunction-sections") catch return 1;
+                cc_argv.append(allocator, "-fdata-sections") catch return 1;
+                cc_argv.append(allocator, "-Wl,--gc-sections") catch return 1;
+            },
+            else => {},
+        }
+        cc_argv.append(allocator, "-lffi") catch return 1;
+        for (static_libs.items) |lib_name| {
+            const flag = std.fmt.allocPrint(allocator, "-l{s}", .{lib_name}) catch return 1;
+            owned_flags.append(allocator, flag) catch return 1;
+            cc_argv.append(allocator, flag) catch return 1;
+        }
+        for (link_objects.items) |obj| {
+            cc_argv.append(allocator, obj) catch return 1;
+        }
     }
 
     var child = std.process.Child.init(cc_argv.items, allocator);
