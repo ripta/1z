@@ -2,6 +2,8 @@
 \
 \ Measures the overhead of the scanner library layer (struct construction,
 \ field access, option wrapping) compared to raw #index-of-from usage.
+\
+\ Written without run-benchmarks/benchmark-auto for AOT compatibility.
 
 use "strings" ;
 use "scanner" ;
@@ -69,38 +71,110 @@ scanner-split: ( str delim -- array ) [
 
 \ --- Test strings ---
 
-small-str:    "hello,world" ;
-medium-str:   100 "," make-delimited ;
-large-str:    1000 "," make-delimited ;
-multi-medium: 100 "::" make-delimited ;
-multi-large:  1000 "::" make-delimited ;
+small-str:    ( -- str ) [ "hello,world" ] ;
+medium-str:   ( -- str ) [ 100 "," make-delimited ] ;
+large-str:    ( -- str ) [ 1000 "," make-delimited ] ;
+multi-medium: ( -- str ) [ 100 "::" make-delimited ] ;
+multi-large:  ( -- str ) [ 1000 "::" make-delimited ] ;
 
-\ --- Benchmarks ---
+\ --- Benchmark loops ---
 
-"--- split-once? (scanner-based) ---" print-line
+bench-split-once-small: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - small-str "," split-once? drop bench-split-once-small
+  ] if
+] ;
 
-[
-  "split-once? (small)" [ small-str "," split-once? drop ] benchmark-auto
-  "split-once? (100 fields)" [ medium-str "," split-once? drop ] benchmark-auto
-  "split-once? (1000 fields)" [ large-str "," split-once? drop ] benchmark-auto
-] run-benchmarks
+bench-split-once-medium: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - medium-str "," split-once? drop bench-split-once-medium
+  ] if
+] ;
 
-nl "--- Full split: direct (#index-of-from) vs scanner-based ---" print-line
+bench-split-once-large: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - large-str "," split-once? drop bench-split-once-large
+  ] if
+] ;
 
-[
-  "split (direct, small)" [ small-str "," split drop ] benchmark-auto
-  "scanner-split (small)" [ small-str "," scanner-split drop ] benchmark-auto
-  "split (direct, 100)" [ medium-str "," split drop ] benchmark-auto
-  "scanner-split (100)" [ medium-str "," scanner-split drop ] benchmark-auto
-  "split (direct, 1000)" [ large-str "," split drop ] benchmark-auto
-  "scanner-split (1000)" [ large-str "," scanner-split drop ] benchmark-auto
-] run-benchmarks
+bench-split-direct-small: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - small-str "," split drop bench-split-direct-small
+  ] if
+] ;
 
-nl "--- Multi-char delimiter: direct vs scanner ---" print-line
+bench-scanner-split-small: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - small-str "," scanner-split drop bench-scanner-split-small
+  ] if
+] ;
 
-[
-  "split (direct, :: 100)" [ multi-medium "::" split drop ] benchmark-auto
-  "scanner-split (:: 100)" [ multi-medium "::" scanner-split drop ] benchmark-auto
-  "split (direct, :: 1000)" [ multi-large "::" split drop ] benchmark-auto
-  "scanner-split (:: 1000)" [ multi-large "::" scanner-split drop ] benchmark-auto
-] run-benchmarks
+bench-split-direct-medium: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - medium-str "," split drop bench-split-direct-medium
+  ] if
+] ;
+
+bench-scanner-split-medium: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - medium-str "," scanner-split drop bench-scanner-split-medium
+  ] if
+] ;
+
+bench-split-direct-large: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - large-str "," split drop bench-split-direct-large
+  ] if
+] ;
+
+bench-scanner-split-large: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - large-str "," scanner-split drop bench-scanner-split-large
+  ] if
+] ;
+
+bench-split-direct-multi-medium: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - multi-medium "::" split drop bench-split-direct-multi-medium
+  ] if
+] ;
+
+bench-scanner-split-multi-medium: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - multi-medium "::" scanner-split drop bench-scanner-split-multi-medium
+  ] if
+] ;
+
+bench-split-direct-multi-large: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - multi-large "::" split drop bench-split-direct-multi-large
+  ] if
+] ;
+
+bench-scanner-split-multi-large: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - multi-large "::" scanner-split drop bench-scanner-split-multi-large
+  ] if
+] ;
+
+\ --- Run benchmarks ---
+
+\ Iteration counts are constrained by the 256 MB default memory limit.
+\ split and scanner-split allocate arrays on every call and the
+\ tail-recursive loop retains them until the recursion unwinds.
+
+"split-once? (small)" print 5000 bench-split-once-small " done" print-line
+"split-once? (100 fields)" print 500 bench-split-once-medium " done" print-line
+"split-once? (1000 fields)" print 50 bench-split-once-large " done" print-line
+
+"split (direct, small)" print 5000 bench-split-direct-small " done" print-line
+"scanner-split (small)" print 5000 bench-scanner-split-small " done" print-line
+"split (direct, 100)" print 50 bench-split-direct-medium " done" print-line
+"scanner-split (100)" print 50 bench-scanner-split-medium " done" print-line
+"split (direct, 1000)" print 5 bench-split-direct-large " done" print-line
+"scanner-split (1000)" print 5 bench-scanner-split-large " done" print-line
+
+"split (direct, :: 100)" print 50 bench-split-direct-multi-medium " done" print-line
+"scanner-split (:: 100)" print 50 bench-scanner-split-multi-medium " done" print-line
+"split (direct, :: 1000)" print 5 bench-split-direct-multi-large " done" print-line
+"scanner-split (:: 1000)" print 5 bench-scanner-split-multi-large " done" print-line

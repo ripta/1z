@@ -25,7 +25,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "benchmark-run", .stack_effect = "report label quot -- report", .doc = "Benchmark a quotation once and add to report.", .func = nativeBenchmarkRun },
     .{ .name = "benchmark-n", .stack_effect = "report label n quot -- report", .doc = "Benchmark a quotation N times and add to report.", .func = nativeBenchmarkN },
     .{ .name = "benchmark-auto", .stack_effect = "report label quot -- report", .doc = "Auto-calibrate iterations targeting ~100ms and add to report.", .func = nativeBenchmarkAuto },
-    .{ .name = "print-benchmark-report", .doc = "Print benchmark results as a formatted table.", .func = nativePrintBenchmarkReport },
+    .{ .name = "print-benchmark-report", .stack_effect = "report --", .doc = "Print benchmark results as a formatted table.", .func = nativePrintBenchmarkReport },
 };
 
 /// curry ( x quot -- quot' ) - Partially apply a value to a quotation
