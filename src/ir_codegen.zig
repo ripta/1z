@@ -515,6 +515,15 @@ pub const AotWordDesc = struct {
     /// AOT codegen uses this to format the qualified asm-name override as `<parent>/<name>`;
     /// a null or empty parent falls back to a bare-name asm-name.
     parent: ?[]const u8 = null,
+    /// Dispatch ID for protocol-bounded call sites. Zero when the word is not a
+    /// protocol-bounded generic.
+    bounded_dispatch_id: u32 = 0,
+    /// When non-null, this word is a protocol-bounded generic. AOT codegen emits
+    /// the satisfies-and-dispatch helper at call sites, referencing the descriptor
+    /// via a slot-table index instead of a process-local pointer.
+    bounded_protocol: ?*const value_mod.ProtocolDescriptor = null,
+    /// Arity for the bounded dispatch. Meaningful only when `bounded_protocol` is non-null.
+    bounded_arity: dispatch_helpers.ProtocolArity = .unary,
 };
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
@@ -1744,6 +1753,7 @@ pub const AotImageSlotMaps = struct {
     parameter_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.Parameter, u32),
     tagged_slot_index: *const std.AutoHashMapUnmanaged(ibc.TaggedKey, u32),
     mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32),
+    protocol_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.ProtocolDescriptor, u32),
 };
 
 /// Resolution result for a typed-literal slot lookup. Carries the
@@ -1856,6 +1866,9 @@ const CompileState = struct {
     /// Function ref for `jitSatisfiesAndDispatch`, emitted at protocol-bounded
     /// generic dispatch sites. JIT-only; left unused in AOT mode.
     satisfies_dispatch_fn: c.ir_ref = c.IR_UNUSED,
+    /// Function ref for `aotSatisfiesAndDispatch`, emitted at protocol-bounded
+    /// generic dispatch sites in AOT mode. JIT mode uses satisfies_dispatch_fn.
+    aot_satisfies_dispatch_fn: c.ir_ref = c.IR_UNUSED,
     interp_ctx: ?*const Context = null,
     /// Interpreter PIC table for the word being compiled. Each instruction
     /// index maps to a PolymorphicCache recording observed type pairs.
@@ -5397,6 +5410,31 @@ fn compileInstructions(
                                 resetStackToPhysical(stack, sp.*);
                             }
                         }
+                    } else if (state.aot_mode and resolved.bounded_protocol != null and state.aot_slot_maps != null) {
+                        // AOT protocol-bounded generic dispatch: emit the
+                        // slot-indexed helper that satisfies-checks the
+                        // operand(s) and dispatches the concrete-type method.
+                        // Uses slot-table index instead of a process-local
+                        // descriptor pointer so the AOT binary works across
+                        // process boundaries.
+                        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
+
+                        try materializeQuotations(state, stack, sp.*);
+                        flushToPhysicalStack(state, stack, sp.*);
+                        _ = emitCallbackPreamble(state, sp.*);
+
+                        emitAotSatisfiesAndDispatch(state, resolved.dispatch_id, resolved.bounded_protocol.?, resolved.bounded_arity, instr.line);
+
+                        if (exitFallsThrough(state.exit_kind)) {
+                            const had_row = sp.* > 0 and stack[0].isRowRegion();
+                            sp.* = sp.* - effective_in + effective_out;
+                            if (had_row and sp.* == 0) {
+                                reloadBaseAfterDynamicCall(state);
+                                sp.* = 1;
+                            } else {
+                                resetStackToPhysical(stack, sp.*);
+                            }
+                        }
                     } else if (state.aot_mode) {
                         // AOT mode: direct call by name or interpreter fallback
                         if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
@@ -6478,6 +6516,13 @@ fn emitWordCAotPass(
     const native_word_call_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNativeWordCall"), proto_3arg);
 
     const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+    const proto_5arg = c.ir_proto_5(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
+
+    const aot_satisfies_dispatch_fn = if (scan_flags.needs_satisfies_dispatch)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "aotSatisfiesAndDispatch"), proto_5arg)
+    else
+        c.IR_UNUSED;
+
     const pic_dispatch_fn = if (scan_flags.needs_native_call or interp_ctx_param != null)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicDispatch"), proto_4arg)
     else
@@ -6618,6 +6663,7 @@ fn emitWordCAotPass(
         .retain_slot_fn = retain_slot_fn,
         .release_slot_fn = release_slot_fn,
         .validate_params_fn = validate_params_fn,
+        .aot_satisfies_dispatch_fn = aot_satisfies_dispatch_fn,
         .pic_table = pic_table,
         .pic_stats = pic_stats_out,
         .aot_fallback_emit_count = aot_fallback_emit_count_out,
@@ -6952,6 +6998,7 @@ pub const AotMetadata = struct {
     runtime_image_parameter_slot_count: u32 = 0,
     runtime_image_tagged_slot_count: u32 = 0,
     runtime_image_mutable_map_slot_count: u32 = 0,
+    runtime_image_protocoldescriptor_slot_count: u32 = 0,
     /// Optional toolchain provenance. An empty slice means the field
     /// was unavailable at build time and must not appear in the
     /// embedded metadata or in `1z inspect` output.
@@ -7046,7 +7093,7 @@ pub fn emitProgramC(
         \\extern void onez_deinit(void *rt);
         \\extern int onez_set_static_libs(void *rt, const char **names, unsigned int count);
         \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
-        \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots);
+        \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *protocoldescriptor_slots);
         \\
         \\
     );
@@ -7071,6 +7118,9 @@ pub fn emitProgramC(
                 .never_returns = entry.never_returns,
                 .is_native = entry.is_native,
                 .native_fn_ptr = entry.native_fn_ptr,
+                .dispatch_id = entry.bounded_dispatch_id,
+                .bounded_protocol = entry.bounded_protocol,
+                .bounded_arity = entry.bounded_arity,
             };
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
@@ -7131,6 +7181,12 @@ pub fn emitProgramC(
             .{ .metadata_only = false },
             extra_bodies.items,
         );
+        // Intern every protocol-bounded descriptor from the word list so
+        // the slot table covers all bounded call sites in this build.
+        for (words) |w| {
+            if (w.bounded_protocol) |pd|
+                _ = try image_collection.?.effect_table.internProtocol(pd);
+        }
         image_slot_maps = .{
             .typevalue_slot_index = &image_collection.?.effect_table.type_slot_index,
             .struct_type_slot_index = &image_collection.?.struct_index,
@@ -7138,6 +7194,7 @@ pub fn emitProgramC(
             .parameter_slot_index = &image_collection.?.effect_table.parameter_slot_index,
             .tagged_slot_index = &image_collection.?.effect_table.tagged_slot_index,
             .mutable_map_slot_index = &image_collection.?.effect_table.mutable_map_slot_index,
+            .protocol_slot_index = &image_collection.?.effect_table.protocol_slot_index,
         };
     }
     const slot_maps_ptr: ?*const AotImageSlotMaps = if (image_slot_maps) |*m| m else null;
@@ -7600,6 +7657,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static inline int32_t onez_push_tagged_slot(uintptr_t ctx, uintptr_t slot) { return jitPushTaggedSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushMutableMapSlot(uintptr_t ctx, uintptr_t slot);\n");
     try out.appendSlice(allocator, "static inline int32_t onez_push_mutable_map_slot(uintptr_t ctx, uintptr_t slot) { return jitPushMutableMapSlot(ctx, slot); }\n");
+    try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatch(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
     try out.appendSlice(allocator, "\n");
 
     // 4a. Forward declarations (only for successfully compiled words)
@@ -7799,6 +7857,7 @@ pub fn emitProgramC(
         meta.runtime_image_struct_type_slot_count = stats.struct_type_slot_count;
         meta.runtime_image_marker_slot_count = stats.marker_slot_count;
         meta.runtime_image_mutable_map_slot_count = stats.mutable_map_slot_count;
+        meta.runtime_image_protocoldescriptor_slot_count = stats.protocoldescriptor_slot_count;
         meta.runtime_image_parameter_slot_count = stats.parameter_slot_count;
         meta.runtime_image_tagged_slot_count = stats.tagged_slot_count;
     }
@@ -7944,6 +8003,12 @@ pub fn emitProgramC(
                 \\
             );
         }
+        if (meta.runtime_image_protocoldescriptor_slot_count > 0) {
+            try out.appendSlice(allocator,
+                \\    extern struct onez_protocoldescriptor *onez_image_protocoldescriptor_slots[];
+                \\
+            );
+        }
 
         try out.appendSlice(allocator, "    if (onez_load_runtime_image(rt, &onez_image_v1, onez_image_typevalue_slots, ");
         try out.appendSlice(allocator, if (meta.runtime_image_struct_type_slot_count > 0)
@@ -7963,7 +8028,11 @@ pub fn emitProgramC(
         else
             "NULL, ");
         try out.appendSlice(allocator, if (meta.runtime_image_mutable_map_slot_count > 0)
-            "onez_image_mutable_map_slots"
+            "onez_image_mutable_map_slots, "
+        else
+            "NULL, ");
+        try out.appendSlice(allocator, if (meta.runtime_image_protocoldescriptor_slot_count > 0)
+            "onez_image_protocoldescriptor_slots"
         else
             "NULL");
         try out.appendSlice(allocator,
@@ -8863,6 +8932,32 @@ fn emitSatisfiesAndDispatch(
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 }
 
+/// AOT counterpart of emitSatisfiesAndDispatch. Looks up the protocol
+/// descriptor's slot index and emits a 5-arg call to `aotSatisfiesAndDispatch`,
+/// which dereferences the slot at runtime to get the descriptor. This avoids
+/// baking process-local descriptor pointers into the AOT binary.
+fn emitAotSatisfiesAndDispatch(
+    state: *CompileState,
+    dispatch_id: u32,
+    protocol: *const value_mod.ProtocolDescriptor,
+    arity: dispatch_helpers.ProtocolArity,
+    line: usize,
+) void {
+    if (state.aot_satisfies_dispatch_fn == c.IR_UNUSED) return;
+    const maps = state.aot_slot_maps orelse return;
+    const slot_idx = maps.protocol_slot_index.get(protocol) orelse return;
+    const ctx_val = state.preloaded_ctx_val;
+    var args = [_]c.ir_ref{
+        ctx_val,
+        c.ir_const_addr(state.ctx, dispatch_id),
+        c.ir_const_addr(state.ctx, slot_idx),
+        c.ir_const_addr(state.ctx, @intFromEnum(arity)),
+        c.ir_const_addr(state.ctx, line),
+    };
+    const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.aot_satisfies_dispatch_fn, args.len, &args);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+}
+
 // =============================================================================
 // Trampoline
 // =============================================================================
@@ -8972,6 +9067,43 @@ export fn jitSatisfiesAndDispatch(
         @as([*]const u8, @ptrFromInt(name_ptr_raw))[0..name_len_raw]
     else
         "satisfies-and-dispatch";
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), descriptor, arity, trace_name, @intCast(line_raw)) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// AOT counterpart of jitSatisfiesAndDispatch. Looks up the protocol descriptor
+/// through the runtime-image slot table and dispatches the concrete-type method.
+/// Slot-indexed so the AOT binary does not bake process-local pointers.
+export fn aotSatisfiesAndDispatch(
+    ctx_raw: usize,
+    dispatch_id_raw: usize,
+    slot_idx_raw: usize,
+    arity_raw: usize,
+    line_raw: usize,
+) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const slots = ctx.image_protocoldescriptor_slots orelse {
+        ctx.jit_pending_error = error.UserThrown;
+        return 2;
+    };
+    if (slot_idx_raw >= ctx.image_protocoldescriptor_slot_count) {
+        ctx.jit_pending_error = error.UserThrown;
+        return 2;
+    }
+    const descriptor = slots[slot_idx_raw] orelse {
+        ctx.jit_pending_error = error.UserThrown;
+        return 2;
+    };
+    const arity = std.meta.intToEnum(dispatch_helpers.ProtocolArity, arity_raw) catch {
+        ctx.jit_pending_error = error.UserThrown;
+        return 2;
+    };
+    var trace_buf: [128]u8 = undefined;
+    const trace_name = std.fmt.bufPrint(&trace_buf, "satisfies-and-dispatch[{s}]", .{descriptor.name}) catch "satisfies-and-dispatch";
     dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), descriptor, arity, trace_name, @intCast(line_raw)) catch |err| {
         ctx.jit_pending_error = err;
         return 2;

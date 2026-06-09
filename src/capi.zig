@@ -333,6 +333,7 @@ export fn onez_load_runtime_image(
     parameter_slots_ptr: ?*anyopaque,
     tagged_slots_ptr: ?*anyopaque,
     mutable_map_slots_ptr: ?*anyopaque,
+    protocoldescriptor_slots_ptr: ?*anyopaque,
 ) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
@@ -367,6 +368,10 @@ export fn onez_load_runtime_image(
         @ptrCast(@alignCast(sp))
     else
         null;
+    const protocoldescriptor_slots: ?aot_image_loader.ProtocolDescriptorSlotTable = if (protocoldescriptor_slots_ptr) |sp|
+        @ptrCast(@alignCast(sp))
+    else
+        null;
 
     aot_image_loader.loadIntoContext(ctx, header, .{
         .typevalues = typevalue_slots,
@@ -375,6 +380,7 @@ export fn onez_load_runtime_image(
         .parameters = parameter_slots,
         .tagged = tagged_slots,
         .mutable_maps = mutable_map_slots,
+        .protocol_descriptors = protocoldescriptor_slots,
     }, null) catch |err| {
         captureError(handle, err);
         return ONEZ_ERR_LOAD_FAILED;

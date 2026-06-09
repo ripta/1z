@@ -223,6 +223,15 @@ pub const MutableMapDescription = extern struct {
     entries_bytecode_len: u32,
 };
 
+/// Zig mirror of `onez_image_protocoldescriptor_description_t`. One row per
+/// slot in `onez_image_protocoldescriptor_slots[]`. The loader looks up the
+/// protocol by name in the runtime context and patches the slot.
+pub const ProtocolDescriptorDescription = extern struct {
+    name: [*]const u8,
+    name_len: u32,
+    slot: u32,
+};
+
 pub const Header = extern struct {
     format_version: u32,
     module_count: u32,
@@ -236,6 +245,7 @@ pub const Header = extern struct {
     parameter_slot_count: u32,
     tagged_slot_count: u32,
     mutable_map_slot_count: u32,
+    protocoldescriptor_slot_count: u32,
     modules: ?[*]const Module,
     words: ?[*]const Word,
     markers: ?[*]const Marker,
@@ -247,6 +257,7 @@ pub const Header = extern struct {
     parameter_descriptions: ?[*]const ParameterDescription,
     tagged_descriptions: ?[*]const TaggedDescription,
     mutable_map_descriptions: ?[*]const MutableMapDescription,
+    protocoldescriptor_descriptions: ?[*]const ProtocolDescriptorDescription,
 };
 
 /// Slot table type matching the C declaration:
@@ -290,6 +301,12 @@ pub const TaggedSlotTable = [*]?*const value_mod.Value;
 /// is preserved.
 pub const MutableMapSlotTable = [*]?*value_mod.MutableMap;
 
+/// Slot table for `*ProtocolDescriptor` pointers at protocol-bounded call
+/// sites. Each slot is populated by the loader from the runtime context's
+/// protocol registry via name lookup. Null when no bounded sites were
+/// emitted (zero-slot count).
+pub const ProtocolDescriptorSlotTable = [*]?*const value_mod.ProtocolDescriptor;
+
 /// All loader-populated slot tables, passed together so the
 /// `loadIntoContext` signature stays compact as new tables land. Any
 /// individual field may be null when its corresponding C symbol was
@@ -301,6 +318,7 @@ pub const SlotTables = struct {
     parameters: ?ParameterSlotTable = null,
     tagged: ?TaggedSlotTable = null,
     mutable_maps: ?MutableMapSlotTable = null,
+    protocol_descriptors: ?ProtocolDescriptorSlotTable = null,
 };
 
 /// PIC snapshot relocation entry. Each entry says "rewrite this
@@ -354,6 +372,7 @@ pub fn loadIntoContext(
     try populateTypeValueSlots(ctx, header, slots.typevalues, slots.struct_types);
     try populateMarkerSlots(ctx, header, slots.markers);
     try populateParameterSlots(ctx, header, slots.parameters);
+    try populateProtocolDescriptorSlots(ctx, header, slots.protocol_descriptors);
     if (pic_relocs) |relocs| {
         try resolvePicRelocations(header, slots.typevalues, relocs);
     }
@@ -374,6 +393,8 @@ pub fn loadIntoContext(
     ctx.image_tagged_slot_count = header.tagged_slot_count;
     ctx.image_mutable_map_slots = slots.mutable_maps;
     ctx.image_mutable_map_slot_count = header.mutable_map_slot_count;
+    ctx.image_protocoldescriptor_slots = slots.protocol_descriptors;
+    ctx.image_protocoldescriptor_slot_count = header.protocoldescriptor_slot_count;
 
     // Mutable_map slots populate before tagged slots so a tagged
     // inner value carrying a `.mutable_map` resolves correctly.
@@ -1273,6 +1294,36 @@ fn replaceWordBodyWithTypeValuePush(
     word_entry.action = .{ .compound = instrs };
 }
 
+// -- Protocol descriptor slot population --------------------------------
+
+/// Walk the protocol descriptor description table and patch
+/// `onez_image_protocoldescriptor_slots[]`. For each row, look up the
+/// protocol by name in `ctx.protocol_descriptors`. If found, patch the
+/// slot. If not found (interpreter-free mode where protocol definitions
+/// have not been replayed), the slot stays null; the trampoline handles
+/// the null case at runtime.
+fn populateProtocolDescriptorSlots(
+    ctx: *Context,
+    header: *const Header,
+    slots: ?ProtocolDescriptorSlotTable,
+) LoaderError!void {
+    if (header.protocoldescriptor_slot_count == 0) return;
+    const descs = header.protocoldescriptor_descriptions orelse return;
+    const slot_table = slots orelse return;
+    var i: u32 = 0;
+    while (i < header.protocoldescriptor_slot_count) : (i += 1) {
+        const row = descs[i];
+        if (row.slot >= header.protocoldescriptor_slot_count) return LoaderError.BadSlotIndex;
+        const name = nameSlice(row.name, row.name_len);
+        for (ctx.protocol_descriptors.items) |pd| {
+            if (std.mem.eql(u8, pd.name, name)) {
+                slot_table[row.slot] = pd;
+                break;
+            }
+        }
+    }
+}
+
 // -- PIC relocation walk -----------------------------------------------
 
 fn resolvePicRelocations(
@@ -1376,6 +1427,8 @@ fn emptyHeader() Header {
         .parameter_descriptions = null,
         .tagged_descriptions = null,
         .mutable_map_descriptions = null,
+        .protocoldescriptor_slot_count = 0,
+        .protocoldescriptor_descriptions = null,
     };
 }
 

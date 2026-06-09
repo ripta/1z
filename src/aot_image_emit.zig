@@ -51,7 +51,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 4;
+pub const format_version: u32 = 5;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -97,6 +97,10 @@ pub const ImageEmissionStats = struct {
     /// and patched at load time with a freshly-allocated `*MutableMap`
     /// populated from the row's serialized entry bytes.
     mutable_map_slot_count: u32 = 0,
+    /// Number of distinct `*ProtocolDescriptor` pointers from protocol-bounded
+    /// call sites. Emitted as `onez_image_protocoldescriptor_slots[]` and
+    /// patched at load time by name lookup in the runtime context.
+    protocoldescriptor_slot_count: u32 = 0,
 };
 
 /// Knobs for `emitImageC`. The default (`metadata_only = false`) emits
@@ -248,6 +252,8 @@ pub fn emitImageCFromCollection(
     try emitTypeValueData(out, allocator, effect_table, struct_plans_items, struct_index);
     try emitTaggedDescriptionsStorage(out, allocator, effect_table, struct_index);
     try emitMutableMapDescriptionsStorage(out, allocator, effect_table, struct_index);
+    try emitProtocolDescriptorSlotTable(out, allocator, effect_table);
+    try emitProtocolDescriptorStorage(out, allocator, effect_table);
 
     try emitWordNameStrings(out, allocator, manifest);
     try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
@@ -264,6 +270,7 @@ pub fn emitImageCFromCollection(
     stats.struct_type_slot_count = @intCast(struct_plans_items.len);
     stats.tagged_slot_count = effect_table.taggedSlotCount();
     stats.mutable_map_slot_count = effect_table.mutableMapSlotCount();
+    stats.protocoldescriptor_slot_count = effect_table.protocolSlotCount();
     return stats;
 }
 
@@ -345,6 +352,12 @@ pub const StackEffectTable = struct {
     /// the same runtime pointer. Indices are 0-based with no sentinel.
     mutable_map_slots: std.ArrayListUnmanaged(*const value_mod.MutableMap) = .{},
     mutable_map_slot_index: std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32) = .{},
+    /// Distinct `*ProtocolDescriptor` pointers reached from protocol-bounded
+    /// call sites in AOT-compiled word bodies. The loader resolves each by name
+    /// from the runtime context's protocol dictionary and patches the slot.
+    /// Indices are 0-based with no sentinel.
+    protocol_slots: std.ArrayListUnmanaged(*const value_mod.ProtocolDescriptor) = .{},
+    protocol_slot_index: std.AutoHashMapUnmanaged(*const value_mod.ProtocolDescriptor, u32) = .{},
 
     fn init(allocator: Allocator) StackEffectTable {
         return .{ .allocator = allocator };
@@ -363,6 +376,8 @@ pub const StackEffectTable = struct {
         self.tagged_slot_index.deinit(self.allocator);
         self.mutable_map_slots.deinit(self.allocator);
         self.mutable_map_slot_index.deinit(self.allocator);
+        self.protocol_slots.deinit(self.allocator);
+        self.protocol_slot_index.deinit(self.allocator);
     }
 
     /// Insert if absent, returning the assigned index. The sentinel
@@ -428,6 +443,16 @@ pub const StackEffectTable = struct {
         return idx;
     }
 
+    /// Intern a `*ProtocolDescriptor` pointer. Returns the assigned
+    /// 0-based slot index; identical pointers collapse to the same slot.
+    pub fn internProtocol(self: *StackEffectTable, pd: *const value_mod.ProtocolDescriptor) Allocator.Error!u32 {
+        if (self.protocol_slot_index.get(pd)) |idx| return idx;
+        const idx: u32 = @intCast(self.protocol_slots.items.len);
+        try self.protocol_slots.append(self.allocator, pd);
+        try self.protocol_slot_index.put(self.allocator, pd, idx);
+        return idx;
+    }
+
     fn effectCount(self: *const StackEffectTable) u32 {
         // +1 for the reserved sentinel at index 0.
         return @intCast(self.effects.items.len + 1);
@@ -452,6 +477,10 @@ pub const StackEffectTable = struct {
 
     fn mutableMapSlotCount(self: *const StackEffectTable) u32 {
         return @intCast(self.mutable_map_slots.items.len);
+    }
+
+    fn protocolSlotCount(self: *const StackEffectTable) u32 {
+        return @intCast(self.protocol_slots.items.len);
     }
 
     fn lookupEffect(self: *const StackEffectTable, effect: *const StackEffect) u32 {
@@ -489,6 +518,12 @@ pub const StackEffectTable = struct {
     /// null when the pointer has not been interned.
     pub fn lookupMutableMapSlot(self: *const StackEffectTable, m: *const value_mod.MutableMap) ?u32 {
         return self.mutable_map_slot_index.get(m);
+    }
+
+    /// Look up the 0-based protocol slot index for `pd`. Returns
+    /// null when the pointer has not been interned.
+    pub fn lookupProtocolSlot(self: *const StackEffectTable, pd: *const value_mod.ProtocolDescriptor) ?u32 {
+        return self.protocol_slot_index.get(pd);
     }
 };
 
@@ -1361,6 +1396,65 @@ fn emitMutableMapDescriptionsStorage(
         try out.appendSlice(allocator, ", .entries_bytecode_len = sizeof(");
         try writeMutableMapDescBodySym(out, allocator, i);
         try out.appendSlice(allocator, ") },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_protocoldescriptor_slots[]`: one NULL pointer per
+/// distinct ProtocolDescriptor reached through protocol-bounded call sites
+/// in compiled word bodies. The loader resolves each by name from the
+/// runtime context and patches the slot. No-op when no protocol descriptors
+/// have been interned.
+fn emitProtocolDescriptorSlotTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.protocolSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "__attribute__((used)) struct onez_protocoldescriptor *onez_image_protocoldescriptor_slots[");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{table.protocolSlotCount()}) catch unreachable);
+    try out.appendSlice(allocator, "] = {\n");
+    for (table.protocol_slots.items, 0..) |pd, i| {
+        try out.appendSlice(allocator, "    NULL, /* slot ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ": protocol ");
+        try out.appendSlice(allocator, pd.name);
+        try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_protocoldescriptor_descriptions_storage[]`: one row per
+/// slot in `onez_image_protocoldescriptor_slots[]`. Each row carries the
+/// protocol's name so the loader can look it up in the runtime context's
+/// protocol registry. No-op when no protocol descriptors have been interned.
+fn emitProtocolDescriptorStorage(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.protocolSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+
+    for (table.protocol_slots.items, 0..) |pd, i| {
+        try out.appendSlice(allocator, "static const char onez_image_pd_");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, "_name[] = ");
+        try emitCStringLiteral(out, allocator, pd.name);
+        try out.appendSlice(allocator, ";\n");
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_protocoldescriptor_description_t onez_image_protocoldescriptor_descriptions_storage[] = {\n");
+    for (table.protocol_slots.items, 0..) |pd, i| {
+        try out.appendSlice(allocator, "    { .name = onez_image_pd_");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, "_name, .name_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{pd.name.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, " },\n");
     }
     try out.appendSlice(allocator, "};\n\n");
 }
@@ -2424,6 +2518,15 @@ fn emitTypeDeclarations(
         \\    uint32_t       entries_bytecode_len;
         \\} onez_image_mutable_map_description_t;
         \\
+        \\/* Per-slot description for protocol-bounded dispatch. The loader resolves  */
+        \\/* each entry by name from the runtime context's protocol registry and      */
+        \\/* patches onez_image_protocoldescriptor_slots[slot] with the pointer.     */
+        \\typedef struct onez_image_protocoldescriptor_description {
+        \\    const char *name;
+        \\    uint32_t    name_len;
+        \\    uint32_t    slot;                 /* index into onez_image_protocoldescriptor_slots */
+        \\} onez_image_protocoldescriptor_description_t;
+        \\
         \\typedef struct onez_image_header {
         \\    uint32_t format_version;
         \\    uint32_t module_count;
@@ -2437,6 +2540,7 @@ fn emitTypeDeclarations(
         \\    uint32_t parameter_slot_count;
         \\    uint32_t tagged_slot_count;
         \\    uint32_t mutable_map_slot_count;
+        \\    uint32_t protocoldescriptor_slot_count;
         \\    const struct onez_image_module *modules;
         \\    const struct onez_image_word *words;
         \\    const struct onez_image_marker *markers;
@@ -2448,6 +2552,7 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_parameter_description *parameter_descriptions;
         \\    const struct onez_image_tagged_description *tagged_descriptions;
         \\    const struct onez_image_mutable_map_description *mutable_map_descriptions;
+        \\    const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
         \\} onez_image_header_t;
         \\
         \\
@@ -2990,6 +3095,7 @@ fn emitHeader(
     const parameter_slot_count: u32 = effect_table.parameterSlotCount();
     const tagged_slot_count: u32 = effect_table.taggedSlotCount();
     const mutable_map_slot_count: u32 = effect_table.mutableMapSlotCount();
+    const protocoldescriptor_slot_count: u32 = effect_table.protocolSlotCount();
 
     const has_entries = manifest.entries.len > 0;
     const modules_ref: []const u8 = if (has_entries) "onez_image_modules_storage" else "NULL";
@@ -3003,6 +3109,7 @@ fn emitHeader(
     const parameter_descs_ref: []const u8 = if (parameter_slot_count > 0) "onez_image_parameter_descriptions_storage" else "NULL";
     const tagged_descs_ref: []const u8 = if (tagged_slot_count > 0) "onez_image_tagged_descriptions_storage" else "NULL";
     const mutable_map_descs_ref: []const u8 = if (mutable_map_slot_count > 0) "onez_image_mutable_map_descriptions_storage" else "NULL";
+    const protocoldescriptor_descs_ref: []const u8 = if (protocoldescriptor_slot_count > 0) "onez_image_protocoldescriptor_descriptions_storage" else "NULL";
 
     try out.appendSlice(allocator,
         \\__attribute__((used)) const onez_image_header_t onez_image_v1 = {
@@ -3031,6 +3138,8 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{tagged_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .mutable_map_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{mutable_map_slot_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .protocoldescriptor_slot_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{protocoldescriptor_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .modules = ");
     try out.appendSlice(allocator, modules_ref);
     try out.appendSlice(allocator, ",\n    .words = ");
@@ -3053,6 +3162,8 @@ fn emitHeader(
     try out.appendSlice(allocator, tagged_descs_ref);
     try out.appendSlice(allocator, ",\n    .mutable_map_descriptions = ");
     try out.appendSlice(allocator, mutable_map_descs_ref);
+    try out.appendSlice(allocator, ",\n    .protocoldescriptor_descriptions = ");
+    try out.appendSlice(allocator, protocoldescriptor_descs_ref);
     try out.appendSlice(allocator,
         \\,
         \\};
@@ -3098,7 +3209,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 4") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 5") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);

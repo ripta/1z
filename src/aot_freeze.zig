@@ -14,6 +14,7 @@ const dictionary_mod = @import("dictionary.zig");
 const WordDefinition = dictionary_mod.WordDefinition;
 const markers_mod = @import("primitives/markers.zig");
 const ArtifactClass = markers_mod.ArtifactClass;
+const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const pic_mod = @import("pic.zig");
 const dispatch_mod = @import("dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
@@ -1594,6 +1595,7 @@ fn buildAotDescs(
             if (def.provenance) |p| if (p.parent.len > 0) break :blk p.parent;
             break :blk null;
         };
+        const bounded = dispatch_helpers.boundedDispatchFor(&effect, def.markers, name);
         try words.append(allocator, .{
             .name = name,
             .instructions = def.action.compound,
@@ -1608,6 +1610,9 @@ fn buildAotDescs(
             .source_line = def.source_line,
             .is_generated = def.provenance != null,
             .parent = compound_parent,
+            .bounded_dispatch_id = if (bounded != null) def.dispatch_id else 0,
+            .bounded_protocol = if (bounded) |b| b.descriptor else null,
+            .bounded_arity = if (bounded) |b| b.arity else .unary,
         });
     }
 
