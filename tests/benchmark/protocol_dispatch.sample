@@ -1,0 +1,4 @@
+Name                    Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+--------------------   ------   ----------   ------------   -----------   ----------
+increment (concrete)   50,000   507.956 ms      10.159 us            17            3
+increment (bounded)    50,000   514.010 ms      10.280 us            17            3

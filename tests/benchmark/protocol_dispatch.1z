@@ -1,0 +1,34 @@
+\ Benchmark: protocol-bounded dispatch overhead
+\
+\ Compares the satisfies-and-dispatch helper path (protocol-bounded call site)
+\ against direct PIC dispatch (concrete-typed call site) in compiled code.
+\
+\ The bounded path pays the satisfies-check on every call; the concrete path
+\ goes straight to the method via PIC. A 10x order-of-magnitude floor is
+\ documented as the pass/fail threshold; the integration test enforces it.
+\ See tests/integration/jit_protocol_bounded_smoke.1z.
+
+incrementable: protocol{ increment: } ;
+step-count: virtual{ fixnum } ;
+
+increment: generic ( x: incrementable -- y ) [ drop 0 >step-count ] ;
+increment: method{ step-count } [ unmake-step-count 1 + >step-count ] ;
+
+\ Concrete-typed call site: JIT uses a PIC, no protocol check.
+call-concrete: ( x: step-count -- y ) [ increment ] ;
+call-concrete: compile!
+
+\ Protocol-bounded call site: JIT emits the satisfies-and-dispatch helper.
+call-bounded: ( x: incrementable -- y ) [ increment ] ;
+call-bounded: compile!
+
+iters: const [ 50000 ] ;
+
+\ Warm up both paths before measuring.
+0 >step-count call-concrete drop
+0 >step-count call-bounded drop
+
+[
+  "increment (concrete)" iters [ 0 >step-count call-concrete drop ] benchmark-n
+  "increment (bounded)" iters [ 0 >step-count call-bounded drop ] benchmark-n
+] run-benchmarks

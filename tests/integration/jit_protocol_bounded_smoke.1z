@@ -1,0 +1,37 @@
+use "testing" ;
+
+\ Smoke test: protocol-bounded dispatch overhead at a compiled call site.
+\
+\ Verifies that a compiled protocol-bounded call site (satisfies-and-dispatch
+\ helper) is within 10x of the same call site annotated with a concrete type
+\ (PIC dispatch). This catches order-of-magnitude regressions introduced by
+\ changes to the helper or the JIT emission path.
+
+incrementable: protocol{ increment: } ;
+step-count: virtual{ fixnum } ;
+
+increment: generic ( x: incrementable -- y ) [ drop 0 >step-count ] ;
+increment: method{ step-count } [ unmake-step-count 1 + >step-count ] ;
+
+\ Concrete-typed call site: JIT uses a PIC, no protocol check.
+call-concrete: ( x: step-count -- y ) [ increment ] ;
+call-concrete: compile!
+
+\ Protocol-bounded call site: JIT emits the satisfies-and-dispatch helper.
+call-bounded: ( x: incrementable -- y ) [ increment ] ;
+call-bounded: compile!
+
+iters: const [ 5000 ] ;
+
+\ Warm up both paths before measuring.
+0 >step-count call-concrete drop
+0 >step-count call-bounded drop
+
+check-overhead: ( -- ) [
+  [ iters [ 0 >step-count call-concrete drop ] times ] benchmark "elapsed_ns" @get
+  [ iters [ 0 >step-count call-bounded drop ] times ] benchmark "elapsed_ns" @get
+  swap 10 * <=
+  "protocol-bounded overhead within 10x of concrete" assert-true
+] ;
+
+check-overhead
