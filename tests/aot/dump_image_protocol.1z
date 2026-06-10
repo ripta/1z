@@ -1,0 +1,5 @@
+\ Build-only test: --dump-aot-image-c on a module with a protocol-bounded
+\ word. The dumped image must carry the protocol descriptor slot table
+\ and full description rows (name, methods with optional effect indices,
+\ protocol_id) so the loader can reconstruct the descriptor at startup.
+use "fixtures/dump_image_protocol_dep.1z" ;

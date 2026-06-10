@@ -223,13 +223,26 @@ pub const MutableMapDescription = extern struct {
     entries_bytecode_len: u32,
 };
 
+/// Zig mirror of `onez_image_protocol_method_t`. One required method of a
+/// protocol; `stack_effect_idx` indexes the image's stack-effect table and
+/// 0 means the method has no declared effect.
+pub const ProtocolMethod = extern struct {
+    name: [*]const u8,
+    name_len: u32,
+    stack_effect_idx: u32,
+};
+
 /// Zig mirror of `onez_image_protocoldescriptor_description_t`. One row per
-/// slot in `onez_image_protocoldescriptor_slots[]`. The loader looks up the
-/// protocol by name in the runtime context and patches the slot.
+/// slot in `onez_image_protocoldescriptor_slots[]`. The loader reuses a
+/// same-named protocol from the runtime context when one exists, otherwise
+/// reconstructs the descriptor from these fields, and patches the slot.
 pub const ProtocolDescriptorDescription = extern struct {
     name: [*]const u8,
     name_len: u32,
     slot: u32,
+    protocol_id: u32,
+    method_count: u32,
+    methods: ?[*]const ProtocolMethod,
 };
 
 pub const Header = extern struct {
@@ -302,9 +315,10 @@ pub const TaggedSlotTable = [*]?*const value_mod.Value;
 pub const MutableMapSlotTable = [*]?*value_mod.MutableMap;
 
 /// Slot table for `*ProtocolDescriptor` pointers at protocol-bounded call
-/// sites. Each slot is populated by the loader from the runtime context's
-/// protocol registry via name lookup. Null when no bounded sites were
-/// emitted (zero-slot count).
+/// sites. Each slot is populated by the loader: a same-named protocol from
+/// the runtime context's registry when one exists, a descriptor
+/// reconstructed from the description row otherwise. Null when no bounded
+/// sites were emitted (zero-slot count).
 pub const ProtocolDescriptorSlotTable = [*]?*const value_mod.ProtocolDescriptor;
 
 /// All loader-populated slot tables, passed together so the
@@ -1297,11 +1311,15 @@ fn replaceWordBodyWithTypeValuePush(
 // -- Protocol descriptor slot population --------------------------------
 
 /// Walk the protocol descriptor description table and patch
-/// `onez_image_protocoldescriptor_slots[]`. For each row, look up the
-/// protocol by name in `ctx.protocol_descriptors`. If found, patch the
-/// slot. If not found (interpreter-free mode where protocol definitions
-/// have not been replayed), the slot stays null; the trampoline handles
-/// the null case at runtime.
+/// `onez_image_protocoldescriptor_slots[]`. For each row, a same-named
+/// protocol already registered in `ctx.protocol_descriptors` is reused so
+/// identity stays single-sourced, mirroring the TypeValue reuse in
+/// `populateTypeValueSlots`. Otherwise the descriptor is reconstructed
+/// from the row's serialized fields (name, methods with optional declared
+/// effects, protocol_id) and registered, so the slot pointer is the same
+/// pointer the satisfies-memo and introspection see. The build-time
+/// `protocol_id` is preserved and `next_protocol_id` advanced past it so
+/// later runtime-created protocols cannot collide.
 fn populateProtocolDescriptorSlots(
     ctx: *Context,
     header: *const Header,
@@ -1315,13 +1333,50 @@ fn populateProtocolDescriptorSlots(
         const row = descs[i];
         if (row.slot >= header.protocoldescriptor_slot_count) return LoaderError.BadSlotIndex;
         const name = nameSlice(row.name, row.name_len);
-        for (ctx.protocol_descriptors.items) |pd| {
-            if (std.mem.eql(u8, pd.name, name)) {
-                slot_table[row.slot] = pd;
-                break;
+        const existing: ?*value_mod.ProtocolDescriptor = blk: {
+            for (ctx.protocol_descriptors.items) |pd| {
+                if (std.mem.eql(u8, pd.name, name)) break :blk pd;
+            }
+            break :blk null;
+        };
+        const pd = existing orelse try reconstructProtocolDescriptor(ctx, header, row);
+        slot_table[row.slot] = pd;
+    }
+}
+
+/// Allocate a runtime ProtocolDescriptor from a description row. Method
+/// rows decode into the flat symbol/effect Value sequence the
+/// satisfies-check walks: one `.symbol` per method, followed by a
+/// `.stack_effect` when the row carries a non-zero effect index. Method
+/// name slices point directly at the binary's static C data.
+fn reconstructProtocolDescriptor(
+    ctx: *Context,
+    header: *const Header,
+    row: ProtocolDescriptorDescription,
+) LoaderError!*value_mod.ProtocolDescriptor {
+    const arena = ctx.quotationAllocator();
+    var methods: std.ArrayListUnmanaged(value_mod.Value) = .{};
+    defer methods.deinit(arena);
+    if (row.method_count > 0) {
+        const method_rows = row.methods orelse return LoaderError.BadStackEffectIndex;
+        var m: u32 = 0;
+        while (m < row.method_count) : (m += 1) {
+            const method = method_rows[m];
+            methods.append(arena, .{ .symbol = nameSlice(method.name, method.name_len) }) catch
+                return LoaderError.OutOfMemory;
+            if (method.stack_effect_idx != 0) {
+                const effect = (try decodeStackEffect(arena, header, method.stack_effect_idx)) orelse
+                    return LoaderError.BadStackEffectIndex;
+                methods.append(arena, .{ .stack_effect = effect }) catch
+                    return LoaderError.OutOfMemory;
             }
         }
     }
+    const pd = ctx.createProtocolDescriptor(nameSlice(row.name, row.name_len), methods.items) catch
+        return LoaderError.OutOfMemory;
+    pd.protocol_id = row.protocol_id;
+    _ = ctx.next_protocol_id.fetchMax(row.protocol_id + 1, .monotonic);
+    return pd;
 }
 
 // -- PIC relocation walk -----------------------------------------------
@@ -2252,4 +2307,131 @@ test "loadIntoContext: absent diagnostic metadata leaves ModuleWord fields null"
     try testing.expectEqual(@as(usize, 0), mw.source_line);
     try testing.expectEqual(@as(usize, 0), mw.source_column);
     try testing.expect(mw.provenance == null);
+}
+
+fn paramRow(name: []const u8) StackEffectParam {
+    return .{
+        .name = name.ptr,
+        .name_len = @intCast(name.len),
+        .is_row_variable = 0,
+        .has_type_annotation = 0,
+        .has_quotation_effect = 0,
+        ._pad = 0,
+        .typevalue_slot = 0,
+        .quotation_effect_idx = 0,
+    };
+}
+
+test "loadIntoContext: protocol descriptor slot reconstructs from description row" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Effect index 1 for the cmp method: ( a b -- r ).
+    const cmp_inputs = [_]StackEffectParam{ paramRow("a"), paramRow("b") };
+    const cmp_outputs = [_]StackEffectParam{paramRow("r")};
+    const effects = [_]StackEffect{
+        .{ .inputs = null, .input_count = 0, .outputs = null, .output_count = 0 },
+        .{ .inputs = &cmp_inputs, .input_count = 2, .outputs = &cmp_outputs, .output_count = 1 },
+    };
+
+    const pd_name = "orderly";
+    const method_rows = [_]ProtocolMethod{
+        .{ .name = "cmp", .name_len = 3, .stack_effect_idx = 1 },
+        .{ .name = "show", .name_len = 4, .stack_effect_idx = 0 },
+    };
+    const descs = [_]ProtocolDescriptorDescription{.{
+        .name = pd_name.ptr,
+        .name_len = pd_name.len,
+        .slot = 0,
+        .protocol_id = 7,
+        .method_count = 2,
+        .methods = &method_rows,
+    }};
+
+    var header = emptyHeader();
+    header.stack_effect_count = 2;
+    header.stack_effects = &effects;
+    header.protocoldescriptor_slot_count = 1;
+    header.protocoldescriptor_descriptions = &descs;
+
+    var slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    try loadIntoContext(&ctx, &header, .{ .protocol_descriptors = &slots }, null);
+
+    const pd = slots[0] orelse return error.TestExpectedDescriptor;
+    try testing.expectEqualStrings("orderly", pd.name);
+    try testing.expectEqual(@as(u32, 7), pd.protocol_id);
+
+    // Flat symbol/effect sequence: cmp + its effect, then bare show.
+    try testing.expectEqual(@as(usize, 3), pd.methods.len);
+    try testing.expectEqualStrings("cmp", pd.methods[0].symbol);
+    try testing.expect(pd.methods[1] == .stack_effect);
+    try testing.expectEqual(@as(usize, 2), pd.methods[1].stack_effect.inputs.len);
+    try testing.expectEqual(@as(usize, 1), pd.methods[1].stack_effect.outputs.len);
+    try testing.expectEqualStrings("show", pd.methods[2].symbol);
+
+    // The slot pointer is the registered descriptor: identity is
+    // single-sourced for the satisfies-memo and introspection.
+    try testing.expectEqual(@as(usize, 1), ctx.protocol_descriptors.items.len);
+    try testing.expectEqual(@as(*const value_mod.ProtocolDescriptor, ctx.protocol_descriptors.items[0]), pd);
+
+    // next_protocol_id advanced past the serialized id.
+    try testing.expect(ctx.next_protocol_id.load(.monotonic) >= 8);
+}
+
+test "loadIntoContext: protocol descriptor slot reuses same-named runtime descriptor" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const existing = try ctx.createProtocolDescriptor("orderly", &.{.{ .symbol = "cmp" }});
+
+    const pd_name = "orderly";
+    const descs = [_]ProtocolDescriptorDescription{.{
+        .name = pd_name.ptr,
+        .name_len = pd_name.len,
+        .slot = 0,
+        .protocol_id = 9,
+        .method_count = 0,
+        .methods = null,
+    }};
+
+    var header = emptyHeader();
+    header.protocoldescriptor_slot_count = 1;
+    header.protocoldescriptor_descriptions = &descs;
+
+    var slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    try loadIntoContext(&ctx, &header, .{ .protocol_descriptors = &slots }, null);
+
+    // The slot points at the pre-existing descriptor; nothing new was
+    // registered and the serialized fields were ignored.
+    try testing.expectEqual(@as(?*const value_mod.ProtocolDescriptor, existing), slots[0]);
+    try testing.expectEqual(@as(usize, 1), ctx.protocol_descriptors.items.len);
+    try testing.expect(existing.protocol_id != 9);
+}
+
+test "loadIntoContext: protocol method with out-of-range effect index errors" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const pd_name = "orderly";
+    const method_rows = [_]ProtocolMethod{
+        .{ .name = "cmp", .name_len = 3, .stack_effect_idx = 9 },
+    };
+    const descs = [_]ProtocolDescriptorDescription{.{
+        .name = pd_name.ptr,
+        .name_len = pd_name.len,
+        .slot = 0,
+        .protocol_id = 1,
+        .method_count = 1,
+        .methods = &method_rows,
+    }};
+
+    var header = emptyHeader();
+    header.protocoldescriptor_slot_count = 1;
+    header.protocoldescriptor_descriptions = &descs;
+
+    var slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    try testing.expectError(
+        LoaderError.BadStackEffectIndex,
+        loadIntoContext(&ctx, &header, .{ .protocol_descriptors = &slots }, null),
+    );
 }

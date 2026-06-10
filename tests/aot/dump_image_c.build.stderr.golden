@@ -192,13 +192,26 @@ typedef struct onez_image_mutable_map_description {
     uint32_t       entries_bytecode_len;
 } onez_image_mutable_map_description_t;
 
-/* Per-slot description for protocol-bounded dispatch. The loader resolves  */
-/* each entry by name from the runtime context's protocol registry and      */
-/* patches onez_image_protocoldescriptor_slots[slot] with the pointer.     */
+/* One required method of a protocol. The effect index points into       */
+/* onez_image_stack_effects_storage[]; 0 means no declared effect.        */
+typedef struct onez_image_protocol_method {
+    const char *name;
+    uint32_t    name_len;
+    uint32_t    stack_effect_idx;     /* 0 = no declared effect */
+} onez_image_protocol_method_t;
+
+/* Per-slot description for protocol-bounded dispatch. The loader reuses  */
+/* a same-named descriptor from the runtime context's protocol registry   */
+/* when one exists; otherwise it reconstructs the descriptor from these   */
+/* fields. Either way it patches                                          */
+/* onez_image_protocoldescriptor_slots[slot] with the pointer.            */
 typedef struct onez_image_protocoldescriptor_description {
     const char *name;
     uint32_t    name_len;
     uint32_t    slot;                 /* index into onez_image_protocoldescriptor_slots */
+    uint32_t    protocol_id;          /* build-time intern key; preserved at load */
+    uint32_t    method_count;
+    const struct onez_image_protocol_method *methods;
 } onez_image_protocoldescriptor_description_t;
 
 typedef struct onez_image_header {
@@ -1198,7 +1211,7 @@ static const onez_image_module_t onez_image_modules_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 5,
+    .format_version = 6,
     .module_count = 1,
     .word_count = 8,
     .marker_pool_count = 4,

@@ -51,7 +51,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 5;
+pub const format_version: u32 = 6;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -227,6 +227,16 @@ pub fn emitImageCFromCollection(
 ) ImageEmitError!ImageEmissionStats {
     var stats: ImageEmissionStats = .{};
 
+    // Protocol descriptors may have been interned after the collection
+    // walk (bounded call sites come from the post-freeze word list), so
+    // their method effects join the tables here, before any emission
+    // reads them. The cross-ref re-run picks up TypeValues reached only
+    // through those method effects; both walks dedupe, so re-running is
+    // idempotent. Appending after body codegen is safe because slot and
+    // effect indices are append-only.
+    try registerProtocolMethodEffects(&collection.effect_table);
+    try collectDescriptorCrossRefs(&collection.struct_plans, &collection.struct_index, &collection.effect_table);
+
     try emitTypeDeclarations(out, allocator);
 
     const effect_table = &collection.effect_table;
@@ -353,9 +363,11 @@ pub const StackEffectTable = struct {
     mutable_map_slots: std.ArrayListUnmanaged(*const value_mod.MutableMap) = .{},
     mutable_map_slot_index: std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32) = .{},
     /// Distinct `*ProtocolDescriptor` pointers reached from protocol-bounded
-    /// call sites in AOT-compiled word bodies. The loader resolves each by name
-    /// from the runtime context's protocol dictionary and patches the slot.
-    /// Indices are 0-based with no sentinel.
+    /// call sites in AOT-compiled word bodies or from `.protocol` annotations
+    /// in serialized stack effects. The loader reuses a same-named descriptor
+    /// from the runtime context when one exists, reconstructs it from the
+    /// description row otherwise, and patches the slot. Indices are 0-based
+    /// with no sentinel.
     protocol_slots: std.ArrayListUnmanaged(*const value_mod.ProtocolDescriptor) = .{},
     protocol_slot_index: std.AutoHashMapUnmanaged(*const value_mod.ProtocolDescriptor, u32) = .{},
 
@@ -866,15 +878,37 @@ fn registerParam(
             .type => |tv| {
                 _ = try table.internType(tv);
             },
-            // Protocol descriptor serialization is not yet wired through the
-            // AOT slot tables; skip interning for now so a binary with a
-            // protocol-bound signature builds without crashing. The slot
-            // emitted at the use site reads as "no annotation".
-            .protocol => {},
+            // The descriptor joins the protocol slot table so the loader can
+            // reconstruct it at startup. The param row itself still reads as
+            // "no annotation"; the slot reference lands with the startup-
+            // loader integration work.
+            .protocol => |pd| {
+                _ = try table.internProtocol(pd);
+            },
         }
     }
     if (param.quotation_effect) |nested| {
         try registerStackEffect(table, nested);
+    }
+}
+
+/// Intern the per-method stack effects of every interned protocol
+/// descriptor so the description rows can reference them by index.
+/// Fixed-point walk: registering a method effect interns its param
+/// annotations, and a `.protocol` annotation may append a new
+/// descriptor to `protocol_slots`, whose methods then get walked in a
+/// later iteration. Runs at emission time so it covers descriptors
+/// interned after the collection walk (bounded call sites are interned
+/// from the post-freeze word list).
+fn registerProtocolMethodEffects(table: *StackEffectTable) Allocator.Error!void {
+    var cursor: usize = 0;
+    while (cursor < table.protocol_slots.items.len) : (cursor += 1) {
+        const pd = table.protocol_slots.items[cursor];
+        for (pd.methods) |*entry| {
+            if (entry.* == .stack_effect) {
+                try registerStackEffect(table, &entry.stack_effect);
+            }
+        }
     }
 }
 
@@ -1402,9 +1436,10 @@ fn emitMutableMapDescriptionsStorage(
 
 /// Emit `onez_image_protocoldescriptor_slots[]`: one NULL pointer per
 /// distinct ProtocolDescriptor reached through protocol-bounded call sites
-/// in compiled word bodies. The loader resolves each by name from the
-/// runtime context and patches the slot. No-op when no protocol descriptors
-/// have been interned.
+/// in compiled word bodies or `.protocol` annotations in serialized stack
+/// effects. The loader patches each slot with the runtime descriptor
+/// (reused by name or reconstructed from the description row). No-op when
+/// no protocol descriptors have been interned.
 fn emitProtocolDescriptorSlotTable(
     out: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
@@ -1427,8 +1462,9 @@ fn emitProtocolDescriptorSlotTable(
 
 /// Emit `onez_image_protocoldescriptor_descriptions_storage[]`: one row per
 /// slot in `onez_image_protocoldescriptor_slots[]`. Each row carries the
-/// protocol's name so the loader can look it up in the runtime context's
-/// protocol registry. No-op when no protocol descriptors have been interned.
+/// full descriptor fields (name, methods, protocol_id) so the loader can
+/// reconstruct the descriptor when no same-named protocol exists in the
+/// runtime context. No-op when no protocol descriptors have been interned.
 fn emitProtocolDescriptorStorage(
     out: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
@@ -1443,20 +1479,101 @@ fn emitProtocolDescriptorStorage(
         try out.appendSlice(allocator, "_name[] = ");
         try emitCStringLiteral(out, allocator, pd.name);
         try out.appendSlice(allocator, ";\n");
+
+        var mi: usize = 0;
+        var m: u32 = 0;
+        while (mi < pd.methods.len) : (mi += 1) {
+            const entry = pd.methods[mi];
+            if (entry != .symbol) continue;
+            try out.appendSlice(allocator, "static const char ");
+            try writeProtocolMethodNameSym(out, allocator, i, m);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, entry.symbol);
+            try out.appendSlice(allocator, ";\n");
+            m += 1;
+        }
+
+        if (m > 0) {
+            try out.appendSlice(allocator, "static const onez_image_protocol_method_t ");
+            try writeProtocolMethodsSym(out, allocator, i);
+            try out.appendSlice(allocator, "[] = {\n");
+            mi = 0;
+            m = 0;
+            while (mi < pd.methods.len) : (mi += 1) {
+                if (pd.methods[mi] != .symbol) continue;
+                const method_name = pd.methods[mi].symbol;
+                // A `.stack_effect` immediately following the symbol is the
+                // method's declared effect, mirroring the satisfies-check
+                // walk in primitives/protocols.zig.
+                const effect_idx: u32 = if (mi + 1 < pd.methods.len and pd.methods[mi + 1] == .stack_effect)
+                    table.lookupEffect(&pd.methods[mi + 1].stack_effect)
+                else
+                    0;
+                try out.appendSlice(allocator, "    { .name = ");
+                try writeProtocolMethodNameSym(out, allocator, i, m);
+                try out.appendSlice(allocator, ", .name_len = ");
+                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{method_name.len}) catch unreachable);
+                try out.appendSlice(allocator, ", .stack_effect_idx = ");
+                try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{effect_idx}) catch unreachable);
+                try out.appendSlice(allocator, " },\n");
+                m += 1;
+            }
+            try out.appendSlice(allocator, "};\n");
+        }
     }
     try out.append(allocator, '\n');
 
     try out.appendSlice(allocator, "static const onez_image_protocoldescriptor_description_t onez_image_protocoldescriptor_descriptions_storage[] = {\n");
     for (table.protocol_slots.items, 0..) |pd, i| {
+        const method_count = countProtocolMethods(pd);
         try out.appendSlice(allocator, "    { .name = onez_image_pd_");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
         try out.appendSlice(allocator, "_name, .name_len = ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{pd.name.len}) catch unreachable);
         try out.appendSlice(allocator, ", .slot = ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ", .protocol_id = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{pd.protocol_id}) catch unreachable);
+        try out.appendSlice(allocator, ", .method_count = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{method_count}) catch unreachable);
+        try out.appendSlice(allocator, ", .methods = ");
+        if (method_count > 0) {
+            try writeProtocolMethodsSym(out, allocator, i);
+        } else {
+            try out.appendSlice(allocator, "NULL");
+        }
         try out.appendSlice(allocator, " },\n");
     }
     try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Count the method rows of a descriptor: one per `.symbol` entry in the
+/// flat symbol/effect sequence.
+fn countProtocolMethods(pd: *const value_mod.ProtocolDescriptor) u32 {
+    var n: u32 = 0;
+    for (pd.methods) |entry| {
+        if (entry == .symbol) n += 1;
+    }
+    return n;
+}
+
+fn writeProtocolMethodNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    pd_idx: usize,
+    method_idx: u32,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_pd_{d}_m{d}_name", .{ pd_idx, method_idx }) catch unreachable);
+}
+
+fn writeProtocolMethodsSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    pd_idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_pd_{d}_methods", .{pd_idx}) catch unreachable);
 }
 
 /// Emit the per-effect param arrays plus the `onez_image_stack_effects_storage[]`
@@ -2183,9 +2300,10 @@ fn emitEffectParamArray(
     try writeEffectParamArraySym(out, allocator, eff_idx, is_input);
     try out.appendSlice(allocator, "[] = {\n");
     for (params, 0..) |param, i| {
-        // Protocol-bound annotations are serialized as "no annotation" for
-        // now; the parallel slot table for descriptors lands with later AOT
-        // work. Drop them at emission so the binary still builds.
+        // Protocol-bound annotations still serialize as "no annotation":
+        // the descriptor itself travels in the protocol slot table, but the
+        // param row gains its slot reference with the startup-loader
+        // integration work.
         const has_concrete_type = if (param.type_annotation) |ann| ann == .type else false;
         const has_type: u8 = if (has_concrete_type) 1 else 0;
         const has_quot: u8 = if (param.quotation_effect != null) 1 else 0;
@@ -2518,13 +2636,26 @@ fn emitTypeDeclarations(
         \\    uint32_t       entries_bytecode_len;
         \\} onez_image_mutable_map_description_t;
         \\
-        \\/* Per-slot description for protocol-bounded dispatch. The loader resolves  */
-        \\/* each entry by name from the runtime context's protocol registry and      */
-        \\/* patches onez_image_protocoldescriptor_slots[slot] with the pointer.     */
+        \\/* One required method of a protocol. The effect index points into       */
+        \\/* onez_image_stack_effects_storage[]; 0 means no declared effect.        */
+        \\typedef struct onez_image_protocol_method {
+        \\    const char *name;
+        \\    uint32_t    name_len;
+        \\    uint32_t    stack_effect_idx;     /* 0 = no declared effect */
+        \\} onez_image_protocol_method_t;
+        \\
+        \\/* Per-slot description for protocol-bounded dispatch. The loader reuses  */
+        \\/* a same-named descriptor from the runtime context's protocol registry   */
+        \\/* when one exists; otherwise it reconstructs the descriptor from these   */
+        \\/* fields. Either way it patches                                          */
+        \\/* onez_image_protocoldescriptor_slots[slot] with the pointer.            */
         \\typedef struct onez_image_protocoldescriptor_description {
         \\    const char *name;
         \\    uint32_t    name_len;
         \\    uint32_t    slot;                 /* index into onez_image_protocoldescriptor_slots */
+        \\    uint32_t    protocol_id;          /* build-time intern key; preserved at load */
+        \\    uint32_t    method_count;
+        \\    const struct onez_image_protocol_method *methods;
         \\} onez_image_protocoldescriptor_description_t;
         \\
         \\typedef struct onez_image_header {
@@ -3209,7 +3340,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 5") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 6") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
@@ -4771,4 +4902,140 @@ test "emitImageC: dispatch entry quotation body interns referenced types" {
     // land in the slot table.
     try testing.expect(std.mem.indexOf(u8, out.items, "method-body-ref") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "dispatch-key-type") != null);
+}
+
+test "emitImageC: protocol annotation interns descriptor and emits full description row" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // A protocol with one effect-carrying method and one bare method.
+    const cmp_inputs = try arena.dupe(StackEffectParam, &.{
+        .{ .name = "a" },
+        .{ .name = "b" },
+    });
+    const cmp_outputs = try arena.dupe(StackEffectParam, &.{
+        .{ .name = "r" },
+    });
+    const methods = [_]value_mod.Value{
+        .{ .symbol = "cmp" },
+        .{ .stack_effect = .{ .inputs = cmp_inputs, .outputs = cmp_outputs } },
+        .{ .symbol = "show" },
+    };
+    const pd = try ctx.createProtocolDescriptor("orderly", &methods);
+
+    // A word whose stack effect carries the protocol bound. The
+    // collection walk reaches the descriptor through registerParam.
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    const eff_inputs = try arena.dupe(StackEffectParam, &.{
+        .{ .name = "x", .type_annotation = .{ .protocol = pd } },
+    });
+    const eff_outputs = try arena.dupe(StackEffectParam, &.{});
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "bounded", .{
+        .action = .{ .compound = instrs },
+        .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
+    });
+    {
+        const cache_alloc = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "demo"), .{ .module = m });
+    }
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
+
+    try testing.expectEqual(@as(u32, 1), stats.protocoldescriptor_slot_count);
+    // Sentinel + the word's effect + the cmp method's effect.
+    try testing.expectEqual(@as(u32, 3), stats.stack_effect_count);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_protocoldescriptor_slots[1]") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_pd_0_name[] = \"orderly\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_pd_0_m0_name[] = \"cmp\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_pd_0_m1_name[] = \"show\"") != null);
+
+    // The method array: cmp carries the interned effect index, show none.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".name = onez_image_pd_0_m0_name, .name_len = 3, .stack_effect_idx = 2 }") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".name = onez_image_pd_0_m1_name, .name_len = 4, .stack_effect_idx = 0 }") != null);
+
+    // The description row carries the full reconstruction surface.
+    var row_buf: [128]u8 = undefined;
+    const row = std.fmt.bufPrint(
+        &row_buf,
+        ".slot = 0, .protocol_id = {d}, .method_count = 2, .methods = onez_image_pd_0_methods",
+        .{pd.protocol_id},
+    ) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, row) != null);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, ".protocoldescriptor_slot_count = 1") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".protocoldescriptor_descriptions = onez_image_protocoldescriptor_descriptions_storage") != null);
+}
+
+test "registerProtocolMethodEffects reaches protocols and TypeValues through method effects" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+    const baseline = try baselineSlotCounts(&ctx);
+
+    // Protocol Q, reachable only through P's method-effect annotation.
+    const q = try ctx.createProtocolDescriptor("quaffable", &.{.{ .symbol = "quaff" }});
+
+    // A TypeValue reachable only through P's method-effect annotation.
+    const desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "goblet", .descriptor = desc };
+
+    const sip_inputs = try arena.dupe(StackEffectParam, &.{
+        .{ .name = "x", .type_annotation = .{ .protocol = q } },
+        .{ .name = "y", .type_annotation = .{ .type = tv } },
+    });
+    const sip_outputs = try arena.dupe(StackEffectParam, &.{});
+    const p_methods = [_]value_mod.Value{
+        .{ .symbol = "sip" },
+        .{ .stack_effect = .{ .inputs = sip_inputs, .outputs = sip_outputs } },
+    };
+    const p = try ctx.createProtocolDescriptor("sippable", &p_methods);
+
+    // Only P is annotated on a word; Q and the TypeValue must arrive
+    // through the fixed-point method-effect walk.
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    const eff_inputs = try arena.dupe(StackEffectParam, &.{
+        .{ .name = "x", .type_annotation = .{ .protocol = p } },
+    });
+    const eff_outputs = try arena.dupe(StackEffectParam, &.{});
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "bounded", .{
+        .action = .{ .compound = instrs },
+        .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
+    });
+    {
+        const cache_alloc = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "demo"), .{ .module = m });
+    }
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
+
+    try testing.expectEqual(@as(u32, 2), stats.protocoldescriptor_slot_count);
+    try testing.expectEqual(baseline.typevalue_slot_count + 1, stats.typevalue_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "\"sippable\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "\"quaffable\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "\"goblet\"") != null);
 }

@@ -134,6 +134,7 @@ const ImageHeader = extern struct {
     parameter_slot_count: u32,
     tagged_slot_count: u32,
     mutable_map_slot_count: u32,
+    protocoldescriptor_slot_count: u32,
     modules: ?*const anyopaque,
     words: ?*const anyopaque,
     markers: ?*const anyopaque,
@@ -145,6 +146,7 @@ const ImageHeader = extern struct {
     parameter_descriptions: ?[*]const ImageParameterDescription,
     tagged_descriptions: ?*const anyopaque,
     mutable_map_descriptions: ?*const anyopaque,
+    protocoldescriptor_descriptions: ?*const anyopaque,
 };
 
 const Value = union(enum) {
@@ -470,12 +472,14 @@ export fn onez_load_runtime_image(
     parameter_slots_ptr: ?*anyopaque,
     tagged_slots_ptr: ?*anyopaque,
     mutable_map_slots_ptr: ?*anyopaque,
+    protocoldescriptor_slots_ptr: ?*anyopaque,
 ) c_int {
     _ = typevalue_slots_ptr;
     _ = struct_type_slots_ptr;
     _ = marker_slots_ptr;
     _ = tagged_slots_ptr;
     _ = mutable_map_slots_ptr;
+    _ = protocoldescriptor_slots_ptr;
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     if (parameter_slots_ptr) |slots_raw| {
         const header: *const ImageHeader = @ptrCast(@alignCast(header_ptr orelse return ONEZ_ERR_LOAD_FAILED));

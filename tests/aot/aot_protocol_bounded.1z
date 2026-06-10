@@ -1,12 +1,10 @@
 \ Protocol-bounded call site in AOT runtime-image mode. The call site
-\ emits the satisfies-and-dispatch helper-call, verifying the helper
-\ emission path compiles and links.
+\ emits the satisfies-and-dispatch helper-call, and the loader
+\ reconstructs the protocol descriptor from the image's description row
+\ at startup, so the helper performs a genuine satisfies-check.
 \
-\ User-defined protocols are parse-time: the descriptor is created at
-\ build time and does not survive into the runtime context. The slot is
-\ null when the helper is first called, so the call fails and the binary
-\ exits with an error. Descriptor reconstruction from image data is
-\ deferred to a later milestone.
+\ No bump-it method is registered for fixnum, so the check fails with a
+\ protocol error and the binary exits with an error.
 
 addable: protocol{ bump-it: } ;
 bump-it: generic ( x: addable -- n ) [ drop 0 ] ;

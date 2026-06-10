@@ -1,0 +1,9 @@
+\ Fixture for tests/aot/dump_image_protocol.
+\ A protocol with one effect-carrying method and one bare method, plus a
+\ word whose stack effect carries the protocol bound. The bound makes the
+\ descriptor reachable from the image collection walk, so the dumped C
+\ shows the protocol descriptor slot table and its description rows.
+
+sortable: protocol{ cmp: ( a b -- r ) show: } ;
+
+by-cmp: ( x: sortable -- n ) [ drop 0 ] ;
