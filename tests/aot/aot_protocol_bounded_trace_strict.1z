@@ -1,0 +1,17 @@
+\ A protocol-bounded call site in an interpreter-free AOT binary names
+\ itself by its protocol in trace output. Trace emission is Zig runtime
+\ code with no interpreter involvement, so it works under the locked
+\ interpreter-free build; the lock applies to the fallback knob only,
+\ not the ONEZ_TRACE_WORDS env var set in the .env sidecar.
+\
+\ The trace event fires at helper entry, before the satisfies-check, so
+\ the unregistered-fixnum operand still produces the event and then the
+\ protocol error.
+
+addable: protocol{ bump-it: } ;
+bump-it: generic ( x: addable -- n ) [ drop 0 ] ;
+
+\ Protocol-bounded call site: compiled output emits aotSatisfiesAndDispatch.
+bounded-caller: ( x: addable -- n ) [ bump-it ] ;
+
+1 bounded-caller drop

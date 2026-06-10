@@ -1,0 +1,17 @@
+\ A protocol-bounded call site in a runtime-image AOT binary names itself
+\ by its protocol in trace output. The ONEZ_TRACE_WORDS env var (set in
+\ the .env sidecar) enables word tracing inside the compiled binary; the
+\ pattern selects the bracketed per-protocol name so the golden stays
+\ focused on the bounded site.
+\
+\ The trace event fires at helper entry, before the satisfies-check, so
+\ the unregistered-fixnum operand still produces the event and then the
+\ protocol error.
+
+addable: protocol{ bump-it: } ;
+bump-it: generic ( x: addable -- n ) [ drop 0 ] ;
+
+\ Protocol-bounded call site: compiled output emits aotSatisfiesAndDispatch.
+bounded-caller: ( x: addable -- n ) [ bump-it ] ;
+
+1 bounded-caller drop

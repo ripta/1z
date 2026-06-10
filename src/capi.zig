@@ -1544,6 +1544,32 @@ export fn onez_set_interpreter_fallback(ptr: ?*anyopaque, allowed: bool) c_int {
     return ONEZ_OK;
 }
 
+// =====================================================================
+// Tracing
+// =====================================================================
+
+/// Enable word tracing, optionally filtered by a comma-separated pattern.
+///
+/// This carries the same shape shape as the CLI's `--trace-words=` flag. A NULL or empty pattern
+/// traces every word, matching the bare flag.
+export fn onez_set_trace_words(ptr: ?*anyopaque, pattern: ?[*:0]const u8) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    handle.ctx.trace.trace_words = true;
+    if (pattern) |p| {
+        const span = std.mem.span(p);
+        if (span.len > 0) {
+            const copy = handle.ctx.quotationAllocator().dupe(u8, span) catch {
+                setLastError(handle, "allocation failure copying trace pattern", .{});
+                return ONEZ_ERR_ALLOC;
+            };
+
+            handle.ctx.trace.trace_words_pattern = copy;
+        }
+    }
+
+    return ONEZ_OK;
+}
+
 // =========================================================================
 // Debugger
 // =========================================================================

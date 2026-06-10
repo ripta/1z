@@ -1,0 +1,2 @@
+TRACE call satisfies-and-dispatch[addable] at <aot>:15 stack=[fixnum:1]
+error.user-thrown

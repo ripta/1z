@@ -7093,6 +7093,7 @@ pub fn emitProgramC(
         \\extern void onez_deinit(void *rt);
         \\extern int onez_set_static_libs(void *rt, const char **names, unsigned int count);
         \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
+        \\extern int32_t onez_set_trace_words(void *rt, const char *pattern);
         \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *protocoldescriptor_slots);
         \\
         \\
@@ -8116,6 +8117,20 @@ pub fn emitProgramC(
                 \\
             );
         }
+    }
+
+    // Word tracing. The env var mirrors the CLI's `--trace-words` flag: set
+    // but empty traces every word, a non-empty value is the comma-separated
+    // pattern filter. Freestanding builds have no getenv, so the knob is
+    // dropped there along with the fallback sniff.
+    if (!meta.freestanding) {
+        try out.appendSlice(allocator,
+            \\    {
+            \\        const char *trace_env = getenv("ONEZ_TRACE_WORDS");
+            \\        if (trace_env) onez_set_trace_words(rt, trace_env);
+            \\    }
+            \\
+        );
     }
 
     // Format dispatch table size
@@ -10540,6 +10555,8 @@ test "emitProgramC: hosted preamble contains libc includes and main shim" {
     try testing.expect(std.mem.indexOf(u8, source, "int main(int argc, char **argv)") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_set_args(rt, argc, argv)") != null);
     try testing.expect(std.mem.indexOf(u8, source, "getenv(\"ONEZ_INTERPRETER_FALLBACK\")") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "getenv(\"ONEZ_TRACE_WORDS\")") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_set_trace_words(rt, trace_env)") != null);
     try testing.expect(std.mem.indexOf(u8, source, "fprintf(stderr,") != null);
     try testing.expect(std.mem.indexOf(u8, source, "kernel_main") == null);
 }
