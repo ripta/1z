@@ -57,13 +57,21 @@ pub const Marker = extern struct {
 };
 
 pub const StackEffectParam = extern struct {
+    /// `annotation_kind` values, mirroring the C declaration.
+    pub const annotation_none: u8 = 0;
+    pub const annotation_type: u8 = 1;
+    pub const annotation_protocol: u8 = 2;
+
     name: [*]const u8,
     name_len: u32,
     is_row_variable: u8,
-    has_type_annotation: u8,
+    /// Discriminates which slot table `annotation_slot` indexes:
+    /// 0 = no annotation, 1 = typevalue slots (1-based; 0 doubles as
+    /// a lookup miss), 2 = protocol descriptor slots (0-based).
+    annotation_kind: u8,
     has_quotation_effect: u8,
-    _pad: u8,
-    typevalue_slot: u32,
+    _reserved: u8,
+    annotation_slot: u32,
     quotation_effect_idx: u32,
 };
 
@@ -382,11 +390,16 @@ pub fn loadIntoContext(
     }
 
     ctx.runtime_image_loaded = true;
-    try populateModulesAndWords(ctx, header);
+    // Protocol descriptor slots populate before word decoding so the
+    // `.protocol` annotations in word stack effects resolve through the
+    // patched table. The reverse dependency does not exist: protocol
+    // reconstruction reads only the header's effect tables and the
+    // runtime's pre-image protocol registry.
+    try populateProtocolDescriptorSlots(ctx, header, slots.protocol_descriptors);
+    try populateModulesAndWords(ctx, header, slots.protocol_descriptors);
     try populateTypeValueSlots(ctx, header, slots.typevalues, slots.struct_types);
     try populateMarkerSlots(ctx, header, slots.markers);
     try populateParameterSlots(ctx, header, slots.parameters);
-    try populateProtocolDescriptorSlots(ctx, header, slots.protocol_descriptors);
     if (pic_relocs) |relocs| {
         try resolvePicRelocations(header, slots.typevalues, relocs);
     }
@@ -424,7 +437,11 @@ pub fn loadIntoContext(
 
 // -- Module + word population ------------------------------------------
 
-fn populateModulesAndWords(ctx: *Context, header: *const Header) LoaderError!void {
+fn populateModulesAndWords(
+    ctx: *Context,
+    header: *const Header,
+    protocol_slots: ?ProtocolDescriptorSlotTable,
+) LoaderError!void {
     if (header.module_count == 0) return;
     const modules = header.modules orelse return;
     const words = header.words orelse return;
@@ -449,7 +466,7 @@ fn populateModulesAndWords(ctx: *Context, header: *const Header) LoaderError!voi
             const word_name = nameSlice(w.name, w.name_len);
 
             const markers_slice = try buildMarkerSlice(arena, w);
-            const stack_effect = try decodeStackEffect(arena, header, w.stack_effect_idx);
+            const stack_effect = try decodeStackEffect(arena, header, w.stack_effect_idx, protocol_slots);
             const body = try decodeWordBody(arena, w);
             const diag = decodeDiagnosticMetadata(w);
 
@@ -569,22 +586,25 @@ fn buildMarkerSlice(arena: Allocator, w: Word) LoaderError![]const *value_mod.Ma
 }
 
 /// Resolve a stack-effect index against the image's effect table and
-/// produce a runtime `StackEffect` allocated in the arena. Index 0 is
-/// the "no effect" sentinel; structural decoding only at M1 -- the
-/// type-annotation slot lookup yields a structural pointer if the
-/// blob loader has already filled the slot, NULL otherwise.
+/// produce a runtime `StackEffect` allocated in the arena. Protocol
+/// annotations resolve through `protocol_slots` (populated before any
+/// word decoding runs); a null table or a not-yet-patched slot leaves
+/// the annotation unrestored rather than failing the load, which
+/// covers self- and forward-references while
+/// `populateProtocolDescriptorSlots` is still patching the table.
 fn decodeStackEffect(
     arena: Allocator,
     header: *const Header,
     effect_idx: u32,
+    protocol_slots: ?ProtocolDescriptorSlotTable,
 ) LoaderError!?stack_effect_mod.StackEffect {
     if (effect_idx == 0) return null;
     if (effect_idx >= header.stack_effect_count) return LoaderError.BadStackEffectIndex;
     const effects = header.stack_effects orelse return LoaderError.BadStackEffectIndex;
     const eff = effects[effect_idx];
 
-    const inputs = try decodeStackEffectParams(arena, eff.inputs, eff.input_count);
-    const outputs = try decodeStackEffectParams(arena, eff.outputs, eff.output_count);
+    const inputs = try decodeStackEffectParams(arena, header, eff.inputs, eff.input_count, protocol_slots);
+    const outputs = try decodeStackEffectParams(arena, header, eff.outputs, eff.output_count, protocol_slots);
     return stack_effect_mod.StackEffect{
         .inputs = inputs,
         .outputs = outputs,
@@ -593,8 +613,10 @@ fn decodeStackEffect(
 
 fn decodeStackEffectParams(
     arena: Allocator,
+    header: *const Header,
     src: ?[*]const StackEffectParam,
     count: u32,
+    protocol_slots: ?ProtocolDescriptorSlotTable,
 ) LoaderError![]const stack_effect_mod.StackEffectParam {
     if (count == 0 or src == null) return &.{};
     const ptr = src.?;
@@ -603,15 +625,28 @@ fn decodeStackEffectParams(
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         const ip = ptr[i];
+        const annotation: ?stack_effect_mod.TypeAnnotation = switch (ip.annotation_kind) {
+            // TypeValue annotations are deferred to future fidelity
+            // work; the row carries the slot index, but restoring it
+            // needs the typevalue slot table patched before word
+            // decoding, which the loader does not yet guarantee.
+            StackEffectParam.annotation_type => null,
+            StackEffectParam.annotation_protocol => blk: {
+                if (ip.annotation_slot >= header.protocoldescriptor_slot_count)
+                    return LoaderError.BadSlotIndex;
+                const table = protocol_slots orelse break :blk null;
+                const pd = table[ip.annotation_slot] orelse break :blk null;
+                break :blk .{ .protocol = pd };
+            },
+            else => null,
+        };
         out[i] = .{
             .name = nameSlice(ip.name, ip.name_len),
             .is_row_variable = ip.is_row_variable != 0,
-            // Quotation effects and type annotations are deferred to
-            // future fidelity work; M1 carries names + row-variable
-            // flag only. Slot-based annotations fill in lazily once
-            // the blob path patches the slot table (task 2/3).
+            // Quotation-effect restoration is deferred to future
+            // fidelity work; the row carries the effect index only.
             .quotation_effect = null,
-            .type_annotation = null,
+            .type_annotation = annotation,
         };
     }
     return out;
@@ -1339,7 +1374,7 @@ fn populateProtocolDescriptorSlots(
             }
             break :blk null;
         };
-        const pd = existing orelse try reconstructProtocolDescriptor(ctx, header, row);
+        const pd = existing orelse try reconstructProtocolDescriptor(ctx, header, row, slots);
         slot_table[row.slot] = pd;
     }
 }
@@ -1349,10 +1384,18 @@ fn populateProtocolDescriptorSlots(
 /// satisfies-check walks: one `.symbol` per method, followed by a
 /// `.stack_effect` when the row carries a non-zero effect index. Method
 /// name slices point directly at the binary's static C data.
+///
+/// `protocol_slots` is the in-progress slot table: a method effect
+/// whose param references an already-patched slot restores its
+/// protocol annotation; a self- or forward-reference reads an
+/// unpatched slot and the annotation stays unrestored. No runtime
+/// consumer reads protocol annotations on protocol-method effects, so
+/// the partial restoration is acceptable.
 fn reconstructProtocolDescriptor(
     ctx: *Context,
     header: *const Header,
     row: ProtocolDescriptorDescription,
+    protocol_slots: ?ProtocolDescriptorSlotTable,
 ) LoaderError!*value_mod.ProtocolDescriptor {
     const arena = ctx.quotationAllocator();
     var methods: std.ArrayListUnmanaged(value_mod.Value) = .{};
@@ -1365,7 +1408,7 @@ fn reconstructProtocolDescriptor(
             methods.append(arena, .{ .symbol = nameSlice(method.name, method.name_len) }) catch
                 return LoaderError.OutOfMemory;
             if (method.stack_effect_idx != 0) {
-                const effect = (try decodeStackEffect(arena, header, method.stack_effect_idx)) orelse
+                const effect = (try decodeStackEffect(arena, header, method.stack_effect_idx, protocol_slots)) orelse
                     return LoaderError.BadStackEffectIndex;
                 methods.append(arena, .{ .stack_effect = effect }) catch
                     return LoaderError.OutOfMemory;
@@ -2314,12 +2357,19 @@ fn paramRow(name: []const u8) StackEffectParam {
         .name = name.ptr,
         .name_len = @intCast(name.len),
         .is_row_variable = 0,
-        .has_type_annotation = 0,
+        .annotation_kind = StackEffectParam.annotation_none,
         .has_quotation_effect = 0,
-        ._pad = 0,
-        .typevalue_slot = 0,
+        ._reserved = 0,
+        .annotation_slot = 0,
         .quotation_effect_idx = 0,
     };
+}
+
+fn protocolParamRow(name: []const u8, slot: u32) StackEffectParam {
+    var row = paramRow(name);
+    row.annotation_kind = StackEffectParam.annotation_protocol;
+    row.annotation_slot = slot;
+    return row;
 }
 
 test "loadIntoContext: protocol descriptor slot reconstructs from description row" {
@@ -2432,6 +2482,150 @@ test "loadIntoContext: protocol method with out-of-range effect index errors" {
     var slots = [_]?*const value_mod.ProtocolDescriptor{null};
     try testing.expectError(
         LoaderError.BadStackEffectIndex,
+        loadIntoContext(&ctx, &header, .{ .protocol_descriptors = &slots }, null),
+    );
+}
+
+test "loadIntoContext: word effect param restores protocol annotation through slot table" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Effect index 1: ( x: orderly -- ) referencing protocol slot 0.
+    const bounded_inputs = [_]StackEffectParam{protocolParamRow("x", 0)};
+    const effects = [_]StackEffect{
+        .{ .inputs = null, .input_count = 0, .outputs = null, .output_count = 0 },
+        .{ .inputs = &bounded_inputs, .input_count = 1, .outputs = null, .output_count = 0 },
+    };
+
+    const pd_name = "orderly";
+    const descs = [_]ProtocolDescriptorDescription{.{
+        .name = pd_name.ptr,
+        .name_len = pd_name.len,
+        .slot = 0,
+        .protocol_id = 3,
+        .method_count = 0,
+        .methods = null,
+    }};
+
+    const w_name = "bounded";
+    const m_name = "demo";
+    var w = wordRow(w_name, 1, 0);
+    w.stack_effect_idx = 1;
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.stack_effect_count = 2;
+    header.stack_effects = &effects;
+    header.protocoldescriptor_slot_count = 1;
+    header.protocoldescriptor_descriptions = &descs;
+
+    var slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    try loadIntoContext(&ctx, &header, .{ .protocol_descriptors = &slots }, null);
+
+    const pd = slots[0] orelse return error.TestExpectedDescriptor;
+    const entry = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
+    const mw = entry.module.words.get(w_name) orelse return error.TestExpectedWord;
+    const effect = mw.stack_effect orelse return error.TestExpectedEffect;
+    try testing.expectEqual(@as(usize, 1), effect.inputs.len);
+    const annotation = effect.inputs[0].type_annotation orelse return error.TestExpectedAnnotation;
+    // Pointer identity into the slot table: the annotation is the same
+    // descriptor the satisfies-memo and the dispatch helper see.
+    try testing.expect(annotation == .protocol);
+    try testing.expectEqual(pd, annotation.protocol);
+}
+
+test "loadIntoContext: protocol method effect referencing its own slot loads" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Effect index 1: ( a: orderly -- ) where slot 0 is the protocol
+    // being reconstructed -- a self-reference read while the slot is
+    // still unpatched.
+    const cmp_inputs = [_]StackEffectParam{protocolParamRow("a", 0)};
+    const effects = [_]StackEffect{
+        .{ .inputs = null, .input_count = 0, .outputs = null, .output_count = 0 },
+        .{ .inputs = &cmp_inputs, .input_count = 1, .outputs = null, .output_count = 0 },
+    };
+
+    const pd_name = "orderly";
+    const method_rows = [_]ProtocolMethod{
+        .{ .name = "cmp", .name_len = 3, .stack_effect_idx = 1 },
+    };
+    const descs = [_]ProtocolDescriptorDescription{.{
+        .name = pd_name.ptr,
+        .name_len = pd_name.len,
+        .slot = 0,
+        .protocol_id = 4,
+        .method_count = 1,
+        .methods = &method_rows,
+    }};
+
+    var header = emptyHeader();
+    header.stack_effect_count = 2;
+    header.stack_effects = &effects;
+    header.protocoldescriptor_slot_count = 1;
+    header.protocoldescriptor_descriptions = &descs;
+
+    var slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    try loadIntoContext(&ctx, &header, .{ .protocol_descriptors = &slots }, null);
+
+    const pd = slots[0] orelse return error.TestExpectedDescriptor;
+    try testing.expectEqualStrings("orderly", pd.name);
+    // The self-referencing method param stays unrestored.
+    try testing.expectEqual(@as(usize, 2), pd.methods.len);
+    try testing.expect(pd.methods[1] == .stack_effect);
+    try testing.expect(pd.methods[1].stack_effect.inputs[0].type_annotation == null);
+}
+
+test "loadIntoContext: word effect param with out-of-range protocol slot errors" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const bounded_inputs = [_]StackEffectParam{protocolParamRow("x", 5)};
+    const effects = [_]StackEffect{
+        .{ .inputs = null, .input_count = 0, .outputs = null, .output_count = 0 },
+        .{ .inputs = &bounded_inputs, .input_count = 1, .outputs = null, .output_count = 0 },
+    };
+
+    const pd_name = "orderly";
+    const descs = [_]ProtocolDescriptorDescription{.{
+        .name = pd_name.ptr,
+        .name_len = pd_name.len,
+        .slot = 0,
+        .protocol_id = 5,
+        .method_count = 0,
+        .methods = null,
+    }};
+
+    const w_name = "bounded";
+    const m_name = "demo";
+    var w = wordRow(w_name, 1, 0);
+    w.stack_effect_idx = 1;
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.stack_effect_count = 2;
+    header.stack_effects = &effects;
+    header.protocoldescriptor_slot_count = 1;
+    header.protocoldescriptor_descriptions = &descs;
+
+    var slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    try testing.expectError(
+        LoaderError.BadSlotIndex,
         loadIntoContext(&ctx, &header, .{ .protocol_descriptors = &slots }, null),
     );
 }

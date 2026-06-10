@@ -51,7 +51,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 6;
+pub const format_version: u32 = 7;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -879,9 +879,8 @@ fn registerParam(
                 _ = try table.internType(tv);
             },
             // The descriptor joins the protocol slot table so the loader can
-            // reconstruct it at startup. The param row itself still reads as
-            // "no annotation"; the slot reference lands with the startup-
-            // loader integration work.
+            // reconstruct it at startup; the param row references it through
+            // `annotation_slot` with kind 2.
             .protocol => |pd| {
                 _ = try table.internProtocol(pd);
             },
@@ -2300,18 +2299,21 @@ fn emitEffectParamArray(
     try writeEffectParamArraySym(out, allocator, eff_idx, is_input);
     try out.appendSlice(allocator, "[] = {\n");
     for (params, 0..) |param, i| {
-        // Protocol-bound annotations still serialize as "no annotation":
-        // the descriptor itself travels in the protocol slot table, but the
-        // param row gains its slot reference with the startup-loader
-        // integration work.
-        const has_concrete_type = if (param.type_annotation) |ann| ann == .type else false;
-        const has_type: u8 = if (has_concrete_type) 1 else 0;
+        // `annotation_kind` discriminates which slot table
+        // `annotation_slot` indexes: 1 = typevalue slots (1-based, 0
+        // doubles as a lookup miss), 2 = protocol descriptor slots
+        // (0-based). A protocol pointer missing from the intern table
+        // degrades to "no annotation" rather than emitting a dangling
+        // index.
+        const annotation: struct { kind: u8, slot: u32 } = if (param.type_annotation) |ann| switch (ann) {
+            .type => |tv| .{ .kind = 1, .slot = table.type_slot_index.get(tv) orelse 0 },
+            .protocol => |pd| if (table.lookupProtocolSlot(pd)) |slot|
+                .{ .kind = 2, .slot = slot }
+            else
+                .{ .kind = 0, .slot = 0 },
+        } else .{ .kind = 0, .slot = 0 };
         const has_quot: u8 = if (param.quotation_effect != null) 1 else 0;
         const is_row: u8 = if (param.is_row_variable) 1 else 0;
-        const type_slot: u32 = if (param.type_annotation) |ann| switch (ann) {
-            .type => |tv| table.type_slot_index.get(tv) orelse 0,
-            .protocol => 0,
-        } else 0;
         const quot_idx: u32 = if (param.quotation_effect) |nested|
             table.lookupEffect(nested)
         else
@@ -2322,12 +2324,12 @@ fn emitEffectParamArray(
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{param.name.len}) catch unreachable);
         try out.appendSlice(allocator, ", .is_row_variable = ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{is_row}) catch unreachable);
-        try out.appendSlice(allocator, ", .has_type_annotation = ");
-        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{has_type}) catch unreachable);
+        try out.appendSlice(allocator, ", .annotation_kind = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{annotation.kind}) catch unreachable);
         try out.appendSlice(allocator, ", .has_quotation_effect = ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{has_quot}) catch unreachable);
-        try out.appendSlice(allocator, ", ._pad = 0, .typevalue_slot = ");
-        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{type_slot}) catch unreachable);
+        try out.appendSlice(allocator, ", ._reserved = 0, .annotation_slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{annotation.slot}) catch unreachable);
         try out.appendSlice(allocator, ", .quotation_effect_idx = ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{quot_idx}) catch unreachable);
         try out.appendSlice(allocator, " },\n");
@@ -2464,10 +2466,14 @@ fn emitTypeDeclarations(
         \\    const char *name;
         \\    uint32_t name_len;
         \\    uint8_t  is_row_variable;
-        \\    uint8_t  has_type_annotation;
+        \\    uint8_t  annotation_kind;       /* 0 = none, 1 = type, 2 = protocol */
         \\    uint8_t  has_quotation_effect;
-        \\    uint8_t  _pad;
-        \\    uint32_t typevalue_slot;
+        \\    uint8_t  _reserved;
+        \\    uint32_t annotation_slot;       /* kind 1: index into onez_image_typevalue_slots   */
+        \\                                    /*         (1-based; 0 doubles as a lookup miss).  */
+        \\                                    /* kind 2: index into                              */
+        \\                                    /*         onez_image_protocoldescriptor_slots     */
+        \\                                    /*         (0-based; kind discriminates).         */
         \\    uint32_t quotation_effect_idx;
         \\} onez_image_stack_effect_param_t;
         \\
@@ -3340,7 +3346,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 6") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 7") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
@@ -3619,6 +3625,11 @@ test "emitImageC: stack-effect table dedupes type slots and emits sentinel index
 
     // The nested-quotation param should reference an effect index >= 1.
     try testing.expect(std.mem.indexOf(u8, out.items, ".has_quotation_effect = 1") != null);
+
+    // Type-annotated params carry kind 1 with a 1-based slot; a kind-1
+    // row with slot 0 would mean the annotation lost its slot lookup.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".annotation_kind = 1") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".annotation_kind = 1, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0,") == null);
 
     // Dedup is implied by the slot-count check above (baseline + 2);
     // tv_a appearing twice in the inputs would push the count to
@@ -4977,6 +4988,11 @@ test "emitImageC: protocol annotation interns descriptor and emits full descript
 
     try testing.expect(std.mem.indexOf(u8, out.items, ".protocoldescriptor_slot_count = 1") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".protocoldescriptor_descriptions = onez_image_protocoldescriptor_descriptions_storage") != null);
+
+    // The bounded param row references the descriptor's slot with kind 2;
+    // the cmp method's bare params carry kind 0.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".annotation_kind = 2, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0,") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".annotation_kind = 0") != null);
 }
 
 test "registerProtocolMethodEffects reaches protocols and TypeValues through method effects" {

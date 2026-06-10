@@ -1,0 +1,19 @@
+\ Protocol annotation fidelity through the metadata-only image (the
+\ default AOT build, without --emit-runtime-image). The metadata-only
+\ image carries the same stack-effect slot references and protocol
+\ descriptor slot table as the runtime image, so the loader restores
+\ the bound identically in both image shapes.
+\
+\ The fixture module is the only entry in the rehydrated module cache;
+\ `native.>word` reads the word's stack effect straight from it. The
+\ raw introspection record is indexed directly: element 1 is the
+\ stack-effect record { inputs outputs }, a param is { name row? quot
+\ annotation }, and `native.>protocol-info` renders the annotation as
+\ { name methods protocol_id }.
+
+use "fixtures/aot_protocol_annotation_dep.1z" ;
+
+module-cache get @values #first
+bounded-caller: native.>word
+1 #nth 0 #nth 0 #nth 3 #nth
+native.>protocol-info 0 #nth print-line

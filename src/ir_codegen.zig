@@ -14069,3 +14069,62 @@ test "verifyAotFallbackInventory counts call sites without an extern" {
     try testing.expectEqual(@as(u32, 1), check.observed_jit_interpreted_calls);
     try testing.expectEqual(@as(u32, 0), check.expected_jit_interpreted_calls);
 }
+
+test "aotSatisfiesAndDispatch dispatches through a populated slot table" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    try ctx.defineWord("describe", .{ .name = "describe", .action = .{ .compound = &[_]Instruction{} } });
+    const did = ctx.resolveDispatchId("describe").?;
+
+    const body = &[_]Instruction{
+        .{ .op = .{ .call_word = "inspect" }, .line = 0 },
+    };
+    try ctx.registerDispatch(
+        .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
+    var slots = [_]?*const value_mod.ProtocolDescriptor{descriptor};
+    ctx.image_protocoldescriptor_slots = &slots;
+    ctx.image_protocoldescriptor_slot_count = 1;
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+    const rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), did, 0, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0);
+    try testing.expectEqual(@as(i32, 0), rc);
+    try testing.expectEqualStrings("42", (try ctx.stack.pop()).string);
+}
+
+test "aotSatisfiesAndDispatch rejects an out-of-range slot index" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const descriptor = try ctx.createProtocolDescriptor("describable", &[_]Value{.{ .symbol = "describe" }});
+    var slots = [_]?*const value_mod.ProtocolDescriptor{descriptor};
+    ctx.image_protocoldescriptor_slots = &slots;
+    ctx.image_protocoldescriptor_slot_count = 1;
+
+    const rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), 0, 5, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0);
+    try testing.expectEqual(@as(i32, 2), rc);
+    try testing.expectEqual(error.UserThrown, ctx.jit_pending_error.?);
+}
+
+test "aotSatisfiesAndDispatch rejects a null slot entry and a missing table" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Missing table: the loader never populated the slots.
+    var rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), 0, 0, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0);
+    try testing.expectEqual(@as(i32, 2), rc);
+
+    // Present table, unpatched slot.
+    var slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    ctx.image_protocoldescriptor_slots = &slots;
+    ctx.image_protocoldescriptor_slot_count = 1;
+    rc = aotSatisfiesAndDispatch(@intFromPtr(&ctx), 0, 0, @intFromEnum(dispatch_helpers.ProtocolArity.unary), 0);
+    try testing.expectEqual(@as(i32, 2), rc);
+    try testing.expectEqual(error.UserThrown, ctx.jit_pending_error.?);
+}

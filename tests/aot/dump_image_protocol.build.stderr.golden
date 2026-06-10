@@ -20,10 +20,14 @@ typedef struct onez_image_stack_effect_param {
     const char *name;
     uint32_t name_len;
     uint8_t  is_row_variable;
-    uint8_t  has_type_annotation;
+    uint8_t  annotation_kind;       /* 0 = none, 1 = type, 2 = protocol */
     uint8_t  has_quotation_effect;
-    uint8_t  _pad;
-    uint32_t typevalue_slot;
+    uint8_t  _reserved;
+    uint32_t annotation_slot;       /* kind 1: index into onez_image_typevalue_slots   */
+                                    /*         (1-based; 0 doubles as a lookup miss).  */
+                                    /* kind 2: index into                              */
+                                    /*         onez_image_protocoldescriptor_slots     */
+                                    /*         (0-based; kind discriminates).         */
     uint32_t quotation_effect_idx;
 } onez_image_stack_effect_param_t;
 
@@ -389,20 +393,20 @@ __attribute__((used)) struct onez_struct_type *onez_image_struct_type_slots[12] 
 static const char onez_image_se_1_i0_name[] = "x";
 static const char onez_image_se_1_o0_name[] = "n";
 static const onez_image_stack_effect_param_t onez_image_se_1_in[] = {
-    { .name = onez_image_se_1_i0_name, .name_len = 1, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+    { .name = onez_image_se_1_i0_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 2, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
 };
 static const onez_image_stack_effect_param_t onez_image_se_1_out[] = {
-    { .name = onez_image_se_1_o0_name, .name_len = 1, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+    { .name = onez_image_se_1_o0_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 0, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
 };
 static const char onez_image_se_2_i0_name[] = "a";
 static const char onez_image_se_2_i1_name[] = "b";
 static const char onez_image_se_2_o0_name[] = "r";
 static const onez_image_stack_effect_param_t onez_image_se_2_in[] = {
-    { .name = onez_image_se_2_i0_name, .name_len = 1, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
-    { .name = onez_image_se_2_i1_name, .name_len = 1, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+    { .name = onez_image_se_2_i0_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 0, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
+    { .name = onez_image_se_2_i1_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 0, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
 };
 static const onez_image_stack_effect_param_t onez_image_se_2_out[] = {
-    { .name = onez_image_se_2_o0_name, .name_len = 1, .is_row_variable = 0, .has_type_annotation = 0, .has_quotation_effect = 0, ._pad = 0, .typevalue_slot = 0, .quotation_effect_idx = 0 },
+    { .name = onez_image_se_2_o0_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 0, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
 };
 
 static const onez_image_stack_effect_t onez_image_stack_effects_storage[] = {
@@ -937,7 +941,7 @@ static const onez_image_module_t onez_image_modules_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 6,
+    .format_version = 7,
     .module_count = 1,
     .word_count = 2,
     .marker_pool_count = 2,

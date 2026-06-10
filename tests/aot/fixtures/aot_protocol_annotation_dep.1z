@@ -1,0 +1,9 @@
+\ Fixture for tests/aot/aot_protocol_annotation and its strict sibling.
+\ A protocol plus a word whose stack effect carries the protocol bound.
+\ Living in a module puts the word in the image manifest, so the loader
+\ rehydrates its stack effect and introspection can read the restored
+\ annotation at runtime.
+
+addable: protocol{ bump-it: } ;
+
+bounded-caller: ( x: addable -- n ) [ drop 0 ] ;

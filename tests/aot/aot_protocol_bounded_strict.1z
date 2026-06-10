@@ -1,0 +1,18 @@
+\ Protocol-bounded call site in interpreter-free AOT mode. The metadata-
+\ only image still carries the protocol descriptor slot table, so the
+\ satisfies-and-dispatch helper resolves the descriptor through the
+\ slot table exactly as the runtime-image binary does -- with no
+\ interpreter linked into the binary at all.
+\
+\ No bump-it method is registered for fixnum, so the check fails with a
+\ protocol error and the binary exits with an error. The result is
+\ dropped rather than printed: printing words still need interpreter
+\ fallback, which the locked interpreter-free build rejects.
+
+addable: protocol{ bump-it: } ;
+bump-it: generic ( x: addable -- n ) [ drop 0 ] ;
+
+\ Protocol-bounded call site: compiled output emits aotSatisfiesAndDispatch.
+bounded-caller: ( x: addable -- n ) [ bump-it ] ;
+
+1 bounded-caller drop
