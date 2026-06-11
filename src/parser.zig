@@ -692,6 +692,7 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
 fn isTypeAnnotationCandidate(token: []const u8) bool {
     if (token.len == 0) return false;
     if (std.mem.eql(u8, token, "|") or
+        std.mem.eql(u8, token, "&") or
         std.mem.eql(u8, token, "--") or
         std.mem.eql(u8, token, ";") or
         std.mem.eql(u8, token, "(") or
@@ -702,17 +703,19 @@ fn isTypeAnnotationCandidate(token: []const u8) bool {
         std.mem.eql(u8, token, "}")) return false;
 
     if (token[token.len - 1] == ':') return false;
-    if (std.mem.indexOfAny(u8, token, "{}[];|")) |_| return false;
+    if (std.mem.indexOfAny(u8, token, "{}[];|&")) |_| return false;
     return true;
 }
 
-/// Result of resolving a token in stack-effect annotation position. Either
-/// a concrete `TypeValue` (the existing path -- includes the `self` and
-/// `any` marker sentinels) or a `ProtocolDescriptor` produced by a
-/// constraint-pushing protocol word.
+/// Result of resolving a constraint in stack-effect annotation position: a
+/// concrete `TypeValue` (the existing path -- includes the `self` and `any`
+/// marker sentinels and pure type unions), a `ProtocolDescriptor` produced by a
+/// constraint-pushing protocol word, or a `ConstraintCombinator` built from an
+/// `&` / `|` constraint expression.
 const ResolvedAnnotation = union(enum) {
     type: *const value_mod.TypeValue,
     protocol: *const value_mod.ProtocolDescriptor,
+    combination: *const value_mod.ConstraintCombinator,
 };
 
 /// Resolve a type annotation token by looking up the word in the context
@@ -785,7 +788,7 @@ fn parseTypeUnionTail(
         };
         const member_type = switch (resolved) {
             .type => |t| t,
-            .protocol => return invalidTypeUnion(ctx, allocator, "protocol '{s}' cannot appear in a type union; protocol composition with '|' is not yet supported", .{member_tok.text}),
+            .protocol, .combination => return invalidTypeUnion(ctx, allocator, "protocol '{s}' cannot appear in a type union; protocol composition with '|' is not yet supported", .{member_tok.text}),
         };
         members.append(allocator, member_type) catch return ParseError.OutOfMemory;
 
@@ -798,28 +801,149 @@ fn parseTypeUnionTail(
     }
 }
 
-/// Parse a type annotation token, greedily consuming a trailing `|` union
-/// continuation when the head is a concrete type. A protocol head followed
-/// by `|` raises an `InvalidTypeUnion` diagnostic; protocol composition
-/// with `|` is not yet supported.
-fn parseTypeAnnotationToken(
+/// Raise a parse-time diagnostic for a malformed `&` / `|` constraint
+/// expression.
+fn invalidConstraint(ctx: ?*Context, allocator: Allocator, comptime fmt: []const u8, args: anytype) ParseError {
+    if (ctx) |c| {
+        c.parse_diagnostics = .{
+            .error_type = "InvalidConstraint",
+            .message = std.fmt.allocPrint(allocator, fmt, args) catch null,
+        };
+        return ParseError.ParseTimeExecutionError;
+    }
+    return ParseError.OutOfMemory;
+}
+
+/// Resolve a single constraint atom token into a combinator element. Returns
+/// null when the token does not resolve to a type or constraint.
+fn resolveAtomElement(ctx: ?*Context, token: []const u8) ?value_mod.ConstraintCombinator.Element {
+    const resolved = resolveTypeAnnotation(ctx, token) orelse return null;
+    return switch (resolved) {
+        .type => |t| .{ .type = t },
+        .protocol => |p| .{ .protocol = p },
+        // A single token resolves to a named combinator once the named
+        // top-level constraint form lands; it does not today, but the mapping
+        // keeps the arm exhaustive.
+        .combination => |c| .{ .combinator = c },
+    };
+}
+
+/// Parse one conjunction: an atom followed by a greedy run of `& atom`. `&`
+/// binds tighter than `|`, so a conjunction is the inner term of the
+/// disjunction-of-conjunctions normal form. A single atom returns its element
+/// directly; multiple atoms intern an intersection combinator. Returns null
+/// only when the head atom does not resolve (the caller decides whether that is
+/// a silent drop or an error).
+fn parseConjunction(
+    allocator: Allocator,
+    tokenizer: *Tokenizer,
+    ctx: ?*Context,
+    head_token: []const u8,
+) ParseError!?value_mod.ConstraintCombinator.Element {
+    const head = resolveAtomElement(ctx, head_token) orelse return null;
+    const c = ctx orelse return head;
+
+    var atoms = std.ArrayListUnmanaged(value_mod.ConstraintCombinator.Element){};
+    defer atoms.deinit(allocator);
+    atoms.append(allocator, head) catch return ParseError.OutOfMemory;
+
+    while (true) {
+        const next_tok = nextTokenOrYield(tokenizer) orelse break;
+        if (!std.mem.eql(u8, next_tok.text, "&")) {
+            tokenizer.peeked = next_tok;
+            break;
+        }
+        const atom_tok = nextTokenOrYield(tokenizer) orelse {
+            return invalidConstraint(ctx, allocator, "expected a constraint after '&'", .{});
+        };
+        if (std.mem.eql(u8, atom_tok.text, "&") or std.mem.eql(u8, atom_tok.text, "|")) {
+            return invalidConstraint(ctx, allocator, "expected a constraint after '&', found '{s}'", .{atom_tok.text});
+        }
+        const atom = resolveAtomElement(ctx, atom_tok.text) orelse {
+            return invalidConstraint(ctx, allocator, "'{s}' is not a known type or constraint", .{atom_tok.text});
+        };
+        atoms.append(allocator, atom) catch return ParseError.OutOfMemory;
+    }
+
+    if (atoms.items.len == 1) return atoms.items[0];
+    const cc = c.createConstraintCombinator(.intersection, atoms.items) catch return ParseError.OutOfMemory;
+    return .{ .combinator = cc };
+}
+
+/// Convert a resolved combinator element into the annotation stored on a
+/// stack-effect parameter.
+fn elementToAnnotation(element: value_mod.ConstraintCombinator.Element) ResolvedAnnotation {
+    return switch (element) {
+        .type => |t| .{ .type = t },
+        .protocol => |p| .{ .protocol = p },
+        .combinator => |c| .{ .combination = c },
+    };
+}
+
+/// Parse a constraint expression in stack-effect annotation position. Handles a
+/// bare type or protocol, a pure type union (`fixnum | bignum`, kept as a
+/// `TypeValue`), an intersection (`comparable & stringable`), and a mixed union
+/// (`fixnum | comparable`). `&` binds tighter than `|`; both are greedy
+/// continuation markers. Leading `&` / `|` and adjacent doubles are errors. A
+/// head that does not resolve returns null, leaving the parameter unannotated,
+/// matching the prior behavior for unknown annotation tokens.
+fn parseConstraintAnnotation(
     allocator: Allocator,
     tokenizer: *Tokenizer,
     ctx: ?*Context,
     token: []const u8,
 ) ParseError!?ResolvedAnnotation {
-    const first = resolveTypeAnnotation(ctx, token) orelse return null;
-    const next_tok = nextTokenOrYield(tokenizer) orelse return first;
-    if (!std.mem.eql(u8, next_tok.text, "|")) {
-        tokenizer.peeked = next_tok;
-        return first;
+    if (std.mem.eql(u8, token, "&") or std.mem.eql(u8, token, "|")) {
+        return invalidConstraint(ctx, allocator, "constraint expression cannot begin with '{s}'", .{token});
     }
-    const first_type = switch (first) {
-        .type => |t| t,
-        .protocol => return invalidTypeUnion(ctx, allocator, "protocol '{s}' cannot appear in a type union; protocol composition with '|' is not yet supported", .{token}),
-    };
-    const union_type = try parseTypeUnionTail(allocator, tokenizer, ctx, first_type);
-    return .{ .type = union_type };
+
+    const first = (try parseConjunction(allocator, tokenizer, ctx, token)) orelse return null;
+    const c = ctx orelse return elementToAnnotation(first);
+
+    var disjuncts = std.ArrayListUnmanaged(value_mod.ConstraintCombinator.Element){};
+    defer disjuncts.deinit(allocator);
+    disjuncts.append(allocator, first) catch return ParseError.OutOfMemory;
+
+    while (true) {
+        const next_tok = nextTokenOrYield(tokenizer) orelse break;
+        if (!std.mem.eql(u8, next_tok.text, "|")) {
+            tokenizer.peeked = next_tok;
+            break;
+        }
+        const conj_tok = nextTokenOrYield(tokenizer) orelse {
+            return invalidConstraint(ctx, allocator, "expected a constraint after '|'", .{});
+        };
+        if (std.mem.eql(u8, conj_tok.text, "&") or std.mem.eql(u8, conj_tok.text, "|")) {
+            return invalidConstraint(ctx, allocator, "expected a constraint after '|', found '{s}'", .{conj_tok.text});
+        }
+        const conj = (try parseConjunction(allocator, tokenizer, ctx, conj_tok.text)) orelse {
+            return invalidConstraint(ctx, allocator, "'{s}' is not a known type or constraint", .{conj_tok.text});
+        };
+        disjuncts.append(allocator, conj) catch return ParseError.OutOfMemory;
+    }
+
+    if (disjuncts.items.len == 1) return elementToAnnotation(disjuncts.items[0]);
+
+    // A union whose every disjunct is a concrete type stays a pure type union on
+    // TypeValue.member_types; as soon as a protocol or intersection joins, the
+    // union becomes a ConstraintCombinator.
+    var all_types = true;
+    for (disjuncts.items) |d| {
+        if (d != .type) {
+            all_types = false;
+            break;
+        }
+    }
+    if (all_types) {
+        var members = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
+        defer members.deinit(allocator);
+        for (disjuncts.items) |d| members.append(allocator, d.type) catch return ParseError.OutOfMemory;
+        const union_type = c.getOrCreateAnonymousUnionTypeValue(members.items) catch return ParseError.OutOfMemory;
+        return .{ .type = union_type };
+    }
+
+    const cc = c.createConstraintCombinator(.@"union", disjuncts.items) catch return ParseError.OutOfMemory;
+    return .{ .combination = cc };
 }
 
 /// Try to interpret an otherwise-unrecognized token as the start of an
@@ -839,7 +963,7 @@ pub fn maybeParseTypeUnionToken(
     const first = resolveTypeAnnotation(ctx, token) orelse return null;
     const first_type = switch (first) {
         .type => |t| t,
-        .protocol => return null,
+        .protocol, .combination => return null,
     };
     // Consume the `|` we already verified is there.
     _ = nextTokenOrYield(tokenizer);
@@ -929,10 +1053,11 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
             current_list = &outputs;
         } else if (pending_param_name) |name| {
             if (pending_is_annotated) {
-                const resolved = try parseTypeAnnotationToken(allocator, tokenizer, ctx, token);
+                const resolved = try parseConstraintAnnotation(allocator, tokenizer, ctx, token);
                 const ann: ?stack_effect_mod.TypeAnnotation = if (resolved) |r| switch (r) {
                     .type => |tv| .{ .type = tv },
                     .protocol => |pd| .{ .protocol = pd },
+                    .combination => |cc| .{ .combination = cc },
                 } else null;
                 current_list.append(allocator, .{
                     .name = name,
@@ -1640,5 +1765,123 @@ test "struct field annotations accept anonymous unions" {
             try std.testing.expectEqualStrings("bignum|fixnum", field_types[0].?.name);
         },
         .native, .host_callback => try std.testing.expect(false),
+    }
+}
+
+test "parse stack effect intersection constraint" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("x: comparable & stringable -- )");
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, &ctx, 0);
+
+    try std.testing.expectEqual(@as(usize, 1), effect.inputs.len);
+    const ann = effect.inputs[0].type_annotation orelse return error.TestExpectedAnnotation;
+    try std.testing.expect(ann == .combination);
+    const cc = ann.combination;
+    try std.testing.expectEqual(value_mod.ConstraintCombinator.Kind.intersection, cc.kind);
+    try std.testing.expectEqual(@as(usize, 2), cc.elements.len);
+    try std.testing.expect(cc.elements[0] == .protocol);
+    try std.testing.expect(cc.elements[1] == .protocol);
+    try std.testing.expectEqualStrings("comparable", cc.elements[0].protocol.name);
+    try std.testing.expectEqualStrings("stringable", cc.elements[1].protocol.name);
+}
+
+test "parse stack effect mixed union constraint" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("x: fixnum | comparable -- )");
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, &ctx, 0);
+
+    const ann = effect.inputs[0].type_annotation orelse return error.TestExpectedAnnotation;
+    try std.testing.expect(ann == .combination);
+    const cc = ann.combination;
+    try std.testing.expectEqual(value_mod.ConstraintCombinator.Kind.@"union", cc.kind);
+    try std.testing.expectEqual(@as(usize, 2), cc.elements.len);
+    try std.testing.expect(cc.elements[0] == .type);
+    try std.testing.expectEqualStrings("fixnum", cc.elements[0].type.name);
+    try std.testing.expect(cc.elements[1] == .protocol);
+    try std.testing.expectEqualStrings("comparable", cc.elements[1].protocol.name);
+}
+
+test "parse stack effect constraint precedence: & binds tighter than |" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // comparable & stringable | inspectable  ==>  (comparable & stringable) | inspectable
+    var tokenizer = Tokenizer.init("x: comparable & stringable | inspectable -- )");
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, &ctx, 0);
+
+    const ann = effect.inputs[0].type_annotation orelse return error.TestExpectedAnnotation;
+    try std.testing.expect(ann == .combination);
+    const cc = ann.combination;
+    try std.testing.expectEqual(value_mod.ConstraintCombinator.Kind.@"union", cc.kind);
+    try std.testing.expectEqual(@as(usize, 2), cc.elements.len);
+
+    // First disjunct is the nested intersection (comparable & stringable).
+    try std.testing.expect(cc.elements[0] == .combinator);
+    const inner = cc.elements[0].combinator;
+    try std.testing.expectEqual(value_mod.ConstraintCombinator.Kind.intersection, inner.kind);
+    try std.testing.expectEqual(@as(usize, 2), inner.elements.len);
+    try std.testing.expectEqualStrings("comparable", inner.elements[0].protocol.name);
+    try std.testing.expectEqualStrings("stringable", inner.elements[1].protocol.name);
+
+    // Second disjunct is the bare protocol.
+    try std.testing.expect(cc.elements[1] == .protocol);
+    try std.testing.expectEqualStrings("inspectable", cc.elements[1].protocol.name);
+}
+
+test "parse stack effect pure type union stays a TypeValue" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var tokenizer = Tokenizer.init("x: fixnum | bignum -- )");
+    const effect = try parseStackEffect(arena.allocator(), &tokenizer, &ctx, 0);
+
+    const ann = effect.inputs[0].type_annotation orelse return error.TestExpectedAnnotation;
+    try std.testing.expect(ann == .type);
+    try std.testing.expect(ann.type.member_types != null);
+    try std.testing.expectEqual(@as(usize, 2), ann.type.member_types.?.len);
+    try std.testing.expectEqualStrings("bignum|fixnum", ann.type.name);
+}
+
+test "parse stack effect rejects leading constraint marker" {
+    for ([_][]const u8{ "x: & comparable -- )", "x: | comparable -- )" }) |src| {
+        var ctx = Context.initWithPrelude(std.testing.allocator);
+        defer ctx.deinit();
+
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        var tokenizer = Tokenizer.init(src);
+        try std.testing.expectError(ParseError.ParseTimeExecutionError, parseStackEffect(arena.allocator(), &tokenizer, &ctx, 0));
+        try std.testing.expectEqualStrings("InvalidConstraint", ctx.parse_diagnostics.?.error_type.?);
+    }
+}
+
+test "parse stack effect rejects adjacent constraint markers" {
+    for ([_][]const u8{ "x: comparable & & stringable -- )", "x: fixnum | | comparable -- )" }) |src| {
+        var ctx = Context.initWithPrelude(std.testing.allocator);
+        defer ctx.deinit();
+
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        var tokenizer = Tokenizer.init(src);
+        try std.testing.expectError(ParseError.ParseTimeExecutionError, parseStackEffect(arena.allocator(), &tokenizer, &ctx, 0));
+        try std.testing.expectEqualStrings("InvalidConstraint", ctx.parse_diagnostics.?.error_type.?);
     }
 }

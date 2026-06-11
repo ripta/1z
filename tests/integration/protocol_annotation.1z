@@ -45,6 +45,11 @@ name>> "doubleable" "protocol-info>> works symmetrically on outputs" assert=
 typed-fn: >word-info stack-effect>> inputs>> #first protocol-info>>
 f "protocol-info>> is f on a type-bound input" assert=
 
-"`|` continuation after a protocol fails parsing" test-section
-[ "bad: ( x: doubleable | fixnum -- ) [ ] ;" eval-string ]
-"protocol bounds cannot be unioned" assert-error
+"`|` mixing a protocol and a type parses as a constraint combination" test-section
+mixed-fn: ( x: doubleable | fixnum -- ) [ ] ;
+mixed-fn: >word-info f = f "mixed union annotation parses and defines a word" assert=
+
+"`&` intersection of two protocols parses" test-section
+showable: protocol{ show: } ;
+both-fn: ( x: doubleable & showable -- ) [ ] ;
+both-fn: >word-info f = f "intersection annotation parses and defines a word" assert=

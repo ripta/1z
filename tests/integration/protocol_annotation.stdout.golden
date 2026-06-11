@@ -50,8 +50,14 @@ Stack: [ ]
 Stack: [ f ]
 PASS: protocol-info>> is f on a type-bound input
 Stack: [ ]
-=== `|` continuation after a protocol fails parsing ===
+=== `|` mixing a protocol and a type parses as a constraint combination ===
 Stack: [ ]
-Stack: [ [ "bad: ( x: doubleable | fixnum -- ) [ ] ;" eval-string ] ]
-PASS: protocol bounds cannot be unioned
+Stack: [ ]
+PASS: mixed union annotation parses and defines a word
+Stack: [ ]
+=== `&` intersection of two protocols parses ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: intersection annotation parses and defines a word
 Stack: [ ]
