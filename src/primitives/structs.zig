@@ -11,6 +11,7 @@ const dispatch_mod = @import("../dispatch.zig");
 const container_backing = @import("../container_backing.zig");
 
 const helpers = @import("helpers.zig");
+const protocols = @import("protocols.zig");
 const struct_field_spec = @import("struct_field_spec.zig");
 const virtual = @import("virtual.zig");
 
@@ -216,10 +217,10 @@ fn makeStructInstanceHelper(ctx: *Context) anyerror!void {
         field_values[i] = try ctx.stack.pop();
         lowest = i;
         if (st.field_types.len != 0) {
-            const expected_tv = st.field_types[i] orelse unreachable;
-            if (!helpers.valueMatchesType(ctx, field_values[i], expected_tv)) {
+            const expected = st.field_types[i] orelse unreachable;
+            if (!try protocols.valueMatchesElement(ctx, field_values[i], expected)) {
                 const actual_tv = helpers.resolveValueTypeValue(ctx, field_values[i]) orelse unreachable;
-                helpers.setErrorContext(ctx, "make-{s}: field '{s}' expects {s}, got {s}", .{ st.name, st.fields[i], expected_tv.name, actual_tv.name });
+                helpers.setErrorContext(ctx, "make-{s}: field '{s}' expects {s}, got {s}", .{ st.name, st.fields[i], fieldConstraintName(expected), actual_tv.name });
                 return error.TypeError;
             }
         }
@@ -256,10 +257,10 @@ fn hashToStructHelper(ctx: *Context) anyerror!void {
     for (st.fields, 0..) |field, i| {
         if (hash.get(field)) |val| {
             if (st.field_types.len != 0) {
-                const expected_tv = st.field_types[i] orelse unreachable;
-                if (!helpers.valueMatchesType(ctx, val, expected_tv)) {
+                const expected = st.field_types[i] orelse unreachable;
+                if (!try protocols.valueMatchesElement(ctx, val, expected)) {
                     const actual_tv = helpers.resolveValueTypeValue(ctx, val) orelse unreachable;
-                    helpers.setErrorContext(ctx, ">{s}: field '{s}' expects {s}, got {s}", .{ st.name, field, expected_tv.name, actual_tv.name });
+                    helpers.setErrorContext(ctx, ">{s}: field '{s}' expects {s}, got {s}", .{ st.name, field, fieldConstraintName(expected), actual_tv.name });
                     return error.TypeError;
                 }
             }
@@ -339,10 +340,10 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
         }
 
         if (st.field_types.len != 0) {
-            const expected_tv = st.field_types[idx] orelse unreachable;
-            if (!helpers.valueMatchesType(ctx, new_val, expected_tv)) {
+            const expected = st.field_types[idx] orelse unreachable;
+            if (!try protocols.valueMatchesElement(ctx, new_val, expected)) {
                 const actual_tv = helpers.resolveValueTypeValue(ctx, new_val) orelse unreachable;
-                helpers.setErrorContext(ctx, ">>{s}: field '{s}' expects {s}, got {s}", .{ st.fields[idx], st.fields[idx], expected_tv.name, actual_tv.name });
+                helpers.setErrorContext(ctx, ">>{s}: field '{s}' expects {s}, got {s}", .{ st.fields[idx], st.fields[idx], fieldConstraintName(expected), actual_tv.name });
                 return error.TypeError;
             }
         }
@@ -600,8 +601,21 @@ pub fn getStructTypeFromMaker(ctx: *const Context, maker_name: []const u8) ?*con
 
 fn fieldAnnotation(struct_type: *const StructType, field_index: usize) ?stack_effect_mod.TypeAnnotation {
     if (struct_type.field_types.len == 0) return null;
-    const tv = struct_type.field_types[field_index] orelse return null;
-    return .{ .type = tv };
+    const element = struct_type.field_types[field_index] orelse return null;
+    return switch (element) {
+        .type => |tv| .{ .type = tv },
+        .protocol => |pd| .{ .protocol = pd },
+        .combinator => |cc| .{ .combination = cc },
+    };
+}
+
+/// Human-readable name of a field constraint for error messages.
+fn fieldConstraintName(element: value_mod.ConstraintCombinator.Element) []const u8 {
+    return switch (element) {
+        .type => |tv| tv.name,
+        .protocol => |pd| pd.name,
+        .combinator => "<constraint>",
+    };
 }
 
 fn typeValAnnotation(struct_type: *const StructType) ?stack_effect_mod.TypeAnnotation {

@@ -1,0 +1,44 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== concrete-typed struct field still validates ===
+Stack: [ ]
+Stack: [ ]
+PASS: concrete field constructs and reads back
+Stack: [ ]
+PASS: concrete field rejects a wrong type
+Stack: [ ]
+=== protocol-bound struct field accepts a satisfying value ===
+Stack: [ ]
+Stack: [ ]
+PASS: protocol field accepts a satisfying fixnum
+Stack: [ ]
+=== protocol-bound struct field rejects a non-satisfying value ===
+Stack: [ ]
+PASS: protocol field rejects a non-satisfying string
+Stack: [ ]
+=== intersection-bound struct field accepts a value satisfying both ===
+Stack: [ ]
+Stack: [ ]
+PASS: intersection field accepts a fixnum satisfying both
+Stack: [ ]
+=== intersection-bound struct field rejects a value missing one protocol ===
+Stack: [ ]
+PASS: intersection field rejects a string
+Stack: [ ]
+=== mixed-union struct field accepts either branch ===
+Stack: [ ]
+Stack: [ ]
+PASS: mixed-union field accepts a fixnum via the protocol branch
+Stack: [ ]
+PASS: mixed-union field accepts a string via the type branch
+Stack: [ ]
+=== struct field introspection round-trips a concrete field ===
+Stack: [ ]
+Stack: [ { <type:fixnum> <type:fixnum> } ]
+Stack: [ { "fixnum" "fixnum" } ]
+PASS: concrete field types introspected
+Stack: [ ]

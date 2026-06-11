@@ -251,6 +251,7 @@ pub fn valueTypeName(val: Value) []const u8 {
         .type_val => "type",
         .type_descriptor => "type-descriptor",
         .protocol_descriptor => "constraint",
+        .constraint_combinator => "constraint",
         .sandbox_spec => "sandbox-spec",
         .unit => "unit",
     };
@@ -324,6 +325,11 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
             allocator,
             "<protocol-descriptor:{s}>",
             .{desc.name},
+        ),
+        .constraint_combinator => |cc| std.fmt.allocPrint(
+            allocator,
+            "<constraint-combinator:{d}>",
+            .{cc.combinator_id},
         ),
         .sandbox_spec => allocator.dupe(u8, "<sandbox-spec>"),
         .unit => allocator.dupe(u8, "unit"),

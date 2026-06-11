@@ -416,7 +416,16 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 var doc_val: ?[]const u8 = null;
                 var collected_markers = std.ArrayListUnmanaged(*Marker){};
                 defer collected_markers.deinit(alloc);
-                const is_named_union_type = top_val == .type_val and top_val.type_val.member_types != null;
+                // A definition whose body resolves to a single constraint value
+                // becomes a parse-time const that pushes it, so the name is
+                // usable in annotation positions. This covers named composed
+                // protocols and mixed unions (constraint combinators), bare
+                // protocol aliases, and the existing named type-union case.
+                // Bare concrete-type aliases (a plain type-val without member
+                // types) keep their prior runtime-word behavior.
+                const is_named_constraint = top_val == .constraint_combinator or
+                    top_val == .protocol_descriptor or
+                    (top_val == .type_val and top_val.type_val.member_types != null);
 
                 // Extract stack effect from the quotation's .effect field if present
                 if (top_val == .quotation) {
@@ -458,7 +467,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     if (mk == @as(*const Marker, &markers_mod.parse_time_only_marker)) break true;
                 } else false;
 
-                try enforceRequireDoc(ctx, name, doc_val != null, has_parse_time or has_parse_time_only, is_named_union_type, false);
+                try enforceRequireDoc(ctx, name, doc_val != null, has_parse_time or has_parse_time_only, is_named_constraint, false);
 
                 const name_copy = try alloc.dupe(u8, name);
 
@@ -473,7 +482,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 var markers_slice = try alloc.dupe(*Marker, collected_markers.items);
 
-                if (is_named_union_type) {
+                if (is_named_constraint) {
                     const has_parse_time_marker = for (markers_slice) |mk| {
                         if (mk == @as(*const Marker, &markers_mod.parse_time_marker)) break true;
                     } else false;
@@ -527,7 +536,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 try ctx.defineWord(name_copy, WordDefinition{
                     .name = name_copy,
-                    .parse_time = has_parse_time or has_parse_time_only or is_named_union_type,
+                    .parse_time = has_parse_time or has_parse_time_only or is_named_constraint,
                     .parse_time_only = has_parse_time_only,
                     .stack_effect = stack_effect_val,
                     .markers = markers_slice,

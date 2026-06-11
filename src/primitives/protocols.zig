@@ -226,6 +226,55 @@ pub fn satisfiesByDescriptor(
     }
 }
 
+/// Check whether a resolved type satisfies a constraint element: a concrete
+/// type, a protocol bound, or a combinator. Intersection requires every
+/// element to be satisfied; union requires any one; nested combinators recurse.
+/// Reuses the memoized protocol satisfies-check for the protocol case and the
+/// anonymous-union-aware type match for the type case. Never raises
+/// `protocol-error`; programming errors (e.g. a malformed descriptor) propagate.
+pub fn typeSatisfiesConstraint(
+    ctx: *Context,
+    type_tv: *const value_mod.TypeValue,
+    element: value_mod.ConstraintCombinator.Element,
+) anyerror!bool {
+    return switch (element) {
+        .type => |expected| helpers.typeMatchesConstraint(type_tv, expected),
+        .protocol => |descriptor| try satisfiesByDescriptor(ctx, type_tv, descriptor),
+        .combinator => |cc| switch (cc.kind) {
+            .intersection => {
+                for (cc.elements) |sub| {
+                    if (!try typeSatisfiesConstraint(ctx, type_tv, sub)) return false;
+                }
+                return true;
+            },
+            .@"union" => {
+                for (cc.elements) |sub| {
+                    if (try typeSatisfiesConstraint(ctx, type_tv, sub)) return true;
+                }
+                return false;
+            },
+        },
+    };
+}
+
+/// Check whether a value satisfies a struct-field constraint element. Concrete
+/// types route through `valueMatchesType` so the `any` sentinel, anonymous
+/// unions, and tagged parent/base relationships are honored; protocol and
+/// combinator elements check the value's resolved type against the constraint.
+pub fn valueMatchesElement(
+    ctx: *Context,
+    val: Value,
+    element: value_mod.ConstraintCombinator.Element,
+) anyerror!bool {
+    return switch (element) {
+        .type => |tv| helpers.valueMatchesType(ctx, val, tv),
+        .protocol, .combinator => blk: {
+            const type_tv = helpers.resolveValueTypeValue(ctx, val) orelse break :blk false;
+            break :blk try typeSatisfiesConstraint(ctx, type_tv, element);
+        },
+    };
+}
+
 /// Parse-time satisfies check that only verifies same-type methods.
 /// Cross-type methods (those with `any` annotations or non-self concrete
 /// annotations) are skipped because the contributing modules may not have
@@ -599,4 +648,39 @@ fn throwProtocolError(ctx: *Context, type_name: []const u8, method_name: []const
         .error_type = "protocol-error",
         .message = msg,
     }) catch null;
+}
+
+const testing = std.testing;
+
+test "typeSatisfiesConstraint over concrete-type combinators" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    const boolean_tv = ctx.lookupBuiltinTypeValue("boolean").?;
+
+    const fixnum_el: value_mod.ConstraintCombinator.Element = .{ .type = fixnum_tv };
+    const string_el: value_mod.ConstraintCombinator.Element = .{ .type = string_tv };
+
+    // Bare type element.
+    try testing.expect(try typeSatisfiesConstraint(&ctx, fixnum_tv, fixnum_el));
+    try testing.expect(!try typeSatisfiesConstraint(&ctx, boolean_tv, fixnum_el));
+
+    // Union: fixnum | string.
+    const union_cc = try ctx.createConstraintCombinator(.@"union", &.{ fixnum_el, string_el });
+    try testing.expect(try typeSatisfiesConstraint(&ctx, fixnum_tv, .{ .combinator = union_cc }));
+    try testing.expect(try typeSatisfiesConstraint(&ctx, string_tv, .{ .combinator = union_cc }));
+    try testing.expect(!try typeSatisfiesConstraint(&ctx, boolean_tv, .{ .combinator = union_cc }));
+
+    // Intersection: fixnum & fixnum (inhabited) vs fixnum & string (empty).
+    const inter_ok = try ctx.createConstraintCombinator(.intersection, &.{ fixnum_el, fixnum_el });
+    try testing.expect(try typeSatisfiesConstraint(&ctx, fixnum_tv, .{ .combinator = inter_ok }));
+    const inter_empty = try ctx.createConstraintCombinator(.intersection, &.{ fixnum_el, string_el });
+    try testing.expect(!try typeSatisfiesConstraint(&ctx, fixnum_tv, .{ .combinator = inter_empty }));
+
+    // Nested: (fixnum | string) & fixnum.
+    const nested = try ctx.createConstraintCombinator(.intersection, &.{ .{ .combinator = union_cc }, fixnum_el });
+    try testing.expect(try typeSatisfiesConstraint(&ctx, fixnum_tv, .{ .combinator = nested }));
+    try testing.expect(!try typeSatisfiesConstraint(&ctx, string_tv, .{ .combinator = nested }));
 }

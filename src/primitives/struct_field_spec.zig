@@ -9,7 +9,7 @@ const markers_mod = @import("markers.zig");
 
 pub const ParsedStructFields = struct {
     names: []const []const u8,
-    types: []const ?*const value_mod.TypeValue = &.{},
+    types: []const ?value_mod.ConstraintCombinator.Element = &.{},
 };
 
 pub fn parse(
@@ -21,7 +21,7 @@ pub fn parse(
     var field_names = std.ArrayListUnmanaged([]const u8){};
     errdefer field_names.deinit(allocator);
 
-    var field_types = std.ArrayListUnmanaged(?*const value_mod.TypeValue){};
+    var field_types = std.ArrayListUnmanaged(?value_mod.ConstraintCombinator.Element){};
     errdefer field_types.deinit(allocator);
 
     var saw_typed = false;
@@ -48,15 +48,17 @@ pub fn parse(
                 helpers.setErrorContext(ctx, "{s} field '{s}' is missing a type annotation", .{ owner, raw });
                 return error.ParseError;
             }
-            const type_val = switch (values[i + 1]) {
-                .type_val => |tv| tv,
+            const element: value_mod.ConstraintCombinator.Element = switch (values[i + 1]) {
+                .type_val => |tv| .{ .type = tv },
+                .protocol_descriptor => |pd| .{ .protocol = pd },
+                .constraint_combinator => |cc| .{ .combinator = cc },
                 .marker => |mk| blk: {
-                    if (markers_mod.isAnyMarker(mk)) break :blk ctx.getAnyTypeSentinel();
+                    if (markers_mod.isAnyMarker(mk)) break :blk .{ .type = ctx.getAnyTypeSentinel() };
                     helpers.setErrorContext(ctx, "{s} field '{s}' only allows the `any` marker in type position", .{ owner, raw });
                     return error.InvalidArgument;
                 },
                 else => {
-                    helpers.setErrorContext(ctx, "{s} field '{s}' expects a type value after ':', got {s}", .{ owner, raw, helpers.valueTypeName(values[i + 1]) });
+                    helpers.setErrorContext(ctx, "{s} field '{s}' expects a type or constraint after ':', got {s}", .{ owner, raw, helpers.valueTypeName(values[i + 1]) });
                     return error.TypeMismatch;
                 },
             };
@@ -66,7 +68,7 @@ pub fn parse(
             }
             saw_typed = true;
             try field_names.append(allocator, if (values[i] == .symbol) raw else raw[0 .. raw.len - 1]);
-            try field_types.append(allocator, type_val);
+            try field_types.append(allocator, element);
             i += 2;
             continue;
         }

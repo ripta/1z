@@ -51,6 +51,7 @@ const VirtualType = opaque {};
 const TypeValue = opaque {};
 const TypeDescriptor = opaque {};
 const ProtocolDescriptor = opaque {};
+const ConstraintCombinator = opaque {};
 const BenchmarkReportHandle = opaque {};
 const ErrorObject = opaque {};
 const Task = opaque {};
@@ -182,6 +183,7 @@ const Value = union(enum) {
     type_val: *TypeValue,
     type_descriptor: *const TypeDescriptor,
     protocol_descriptor: *const ProtocolDescriptor,
+    constraint_combinator: *const ConstraintCombinator,
     sandbox_spec: *SandboxSpec,
     unit: void,
 };

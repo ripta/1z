@@ -1160,7 +1160,7 @@ fn decodeKindData(
         2 => .{
             .struct_ = .{
                 .fields = try decodeFieldNames(arena, drow.field_names, drow.field_name_lens, drow.field_count),
-                .field_types = try decodeOptionalTypeValuePointers(
+                .field_types = try decodeOptionalTypeElements(
                     arena,
                     slots,
                     header.typevalue_slot_count,
@@ -1279,6 +1279,30 @@ fn decodeOptionalTypeValuePointers(
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         out[i] = try lookupSlot(slots, slot_count, sp[i]);
+    }
+    return out;
+}
+
+/// Decode struct field constraints. The AOT image currently serializes only
+/// concrete-type field constraints, so each decoded slot wraps into a `.type`
+/// combinator element; a null slot is an unannotated field.
+fn decodeOptionalTypeElements(
+    arena: Allocator,
+    slots: ?SlotTable,
+    slot_count: u32,
+    slot_array: ?[*]const u32,
+    count: u32,
+) LoaderError![]const ?value_mod.ConstraintCombinator.Element {
+    if (count == 0 or slot_array == null) return &.{};
+    const sp = slot_array.?;
+    const out = arena.alloc(?value_mod.ConstraintCombinator.Element, count) catch
+        return LoaderError.OutOfMemory;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        out[i] = if (try lookupSlot(slots, slot_count, sp[i])) |tv|
+            .{ .type = tv }
+        else
+            null;
     }
     return out;
 }
@@ -1796,7 +1820,8 @@ test "loadIntoContext: struct TypeDescriptor with field-types resolves cross-ref
     const b_kind = tv_b.descriptor.?.kind;
     try testing.expect(b_kind == .struct_);
     try testing.expectEqual(@as(usize, 1), b_kind.struct_.field_types.len);
-    try testing.expectEqual(@as(?*const value_mod.TypeValue, tv_a), b_kind.struct_.field_types[0]);
+    try testing.expect(b_kind.struct_.field_types[0].? == .type);
+    try testing.expectEqual(@as(*const value_mod.TypeValue, tv_a), b_kind.struct_.field_types[0].?.type);
 }
 
 test "loadIntoContext: enum descriptor decodes variants and cross-references" {

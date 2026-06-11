@@ -272,6 +272,7 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
         .type_val,
         .type_descriptor,
         .protocol_descriptor,
+        .constraint_combinator,
         .resource,
         .task,
         .iterator,
@@ -494,8 +495,10 @@ pub const StructType = struct {
     name: []const u8,
     // Field names in order, e.g., ["x", "y"]
     fields: []const []const u8,
-    // Optional field type annotations for validation
-    field_types: []const ?*const TypeValue = &.{},
+    // Optional per-field constraint annotations for validation. Each element is
+    // a concrete type, a protocol bound, or a combinator, mirroring a
+    // stack-effect parameter's annotation.
+    field_types: []const ?ConstraintCombinator.Element = &.{},
     // First-class type value for this struct type, set during type registration
     type_val: ?*TypeValue = null,
 };
@@ -621,7 +624,7 @@ pub const ConstraintCombinator = struct {
 /// StructData carries the metadata of a struct-defined type.
 pub const StructData = struct {
     fields: []const []const u8 = &.{},
-    field_types: []const ?*const TypeValue = &.{},
+    field_types: []const ?ConstraintCombinator.Element = &.{},
 };
 
 /// VirtualData carries the metadata of a virtual-defined type.
@@ -999,6 +1002,7 @@ pub const Value = union(enum) {
     type_val: *TypeValue,
     type_descriptor: *const TypeDescriptor,
     protocol_descriptor: *const ProtocolDescriptor,
+    constraint_combinator: *const ConstraintCombinator,
     sandbox_spec: *SandboxSpec,
     unit: void,
 
@@ -1185,6 +1189,7 @@ pub const Value = union(enum) {
             .type_val => |tv| try writer.print("<type:{s}>", .{tv.name}),
             .type_descriptor => |desc| try writer.print("<type-descriptor:{s}>", .{typeKindSymbol(desc.kind)}),
             .protocol_descriptor => |desc| try writer.print("<protocol-descriptor:{s}>", .{desc.name}),
+            .constraint_combinator => |cc| try writer.print("<constraint-combinator:{d}>", .{cc.combinator_id}),
             .sandbox_spec => |spec| try spec.writeGranted(writer),
             .unit => try writer.writeAll("unit"),
         }
@@ -1322,6 +1327,7 @@ pub const Value = union(enum) {
             },
             .type_descriptor => |a| a == other.type_descriptor,
             .protocol_descriptor => |a| a == other.protocol_descriptor,
+            .constraint_combinator => |a| a == other.constraint_combinator,
             .sandbox_spec => |a| a == other.sandbox_spec,
             .unit => true,
         };
@@ -1518,6 +1524,10 @@ pub const Value = union(enum) {
             },
             .protocol_descriptor => |desc| {
                 const ptr_val = @intFromPtr(desc);
+                hasher.update(std.mem.asBytes(&ptr_val));
+            },
+            .constraint_combinator => |cc| {
+                const ptr_val = @intFromPtr(cc);
                 hasher.update(std.mem.asBytes(&ptr_val));
             },
             .sandbox_spec => |spec| {

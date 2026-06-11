@@ -334,26 +334,50 @@ fn nativeDescriptorFieldsRaw(ctx: *Context) anyerror!void {
 fn nativeDescriptorFieldTypesRaw(ctx: *Context) anyerror!void {
     const desc = try popDescriptor(ctx);
     const alloc = ctx.quotationAllocator();
-    const field_types: []const ?*const value_mod.TypeValue = switch (desc.kind) {
+
+    // Struct and struct-backed virtual field types carry full constraint
+    // elements; FFI struct fields are concrete C types.
+    const element_types: ?[]const ?value_mod.ConstraintCombinator.Element = switch (desc.kind) {
         .struct_ => |sd| sd.field_types,
-        .ffi_struct => |fsd| fsd.field_types,
-        .virtual => |vd| if (vd.anon_struct) |st| st.field_types else {
-            setKindMismatch(ctx, "struct, ffi-struct, or struct-backed virtual", desc);
-            return error.TypeMismatch;
-        },
-        else => {
-            setKindMismatch(ctx, "struct, ffi-struct, or struct-backed virtual", desc);
-            return error.TypeMismatch;
-        },
+        .virtual => |vd| if (vd.anon_struct) |st| st.field_types else null,
+        else => null,
     };
-    if (field_types.len == 0) {
-        helpers.setErrorContext(ctx, "descriptor has no field-type annotations", .{});
-        return error.TypeMismatch;
-    }
-    const arr = try alloc.alloc(value_mod.Value, field_types.len);
-    for (field_types, 0..) |t, i| {
-        arr[i] = if (t) |tv| .{ .type_val = @constCast(tv) } else .{ .boolean = false };
-    }
+
+    const arr: []value_mod.Value = blk: {
+        if (element_types) |elements| {
+            if (elements.len == 0) {
+                helpers.setErrorContext(ctx, "descriptor has no field-type annotations", .{});
+                return error.TypeMismatch;
+            }
+            const out = try alloc.alloc(value_mod.Value, elements.len);
+            for (elements, 0..) |element, i| {
+                out[i] = if (element) |e| switch (e) {
+                    .type => |tv| .{ .type_val = @constCast(tv) },
+                    .protocol => |pd| .{ .protocol_descriptor = pd },
+                    .combinator => |cc| .{ .constraint_combinator = cc },
+                } else .{ .boolean = false };
+            }
+            break :blk out;
+        }
+
+        const fsd = switch (desc.kind) {
+            .ffi_struct => |f| f,
+            else => {
+                setKindMismatch(ctx, "struct, ffi-struct, or struct-backed virtual", desc);
+                return error.TypeMismatch;
+            },
+        };
+        if (fsd.field_types.len == 0) {
+            helpers.setErrorContext(ctx, "descriptor has no field-type annotations", .{});
+            return error.TypeMismatch;
+        }
+        const out = try alloc.alloc(value_mod.Value, fsd.field_types.len);
+        for (fsd.field_types, 0..) |t, i| {
+            out[i] = if (t) |tv| .{ .type_val = @constCast(tv) } else .{ .boolean = false };
+        }
+        break :blk out;
+    };
+
     try ctx.stack.push(.{ .array = arr });
 }
 
@@ -520,7 +544,7 @@ test "descriptor-fields-raw returns struct field names" {
     try ctx.loadPrelude(null);
 
     const fields = [_][]const u8{ "x", "y" };
-    const no_ft: []const ?*const value_mod.TypeValue = &.{};
+    const no_ft: []const ?value_mod.ConstraintCombinator.Element = &.{};
     const desc = try ctx.getOrCreateStructDescriptor(&fields, no_ft, false);
 
     try ctx.stack.push(.{ .type_descriptor = desc });
@@ -548,7 +572,7 @@ test "descriptor-field-types-raw throws on untyped struct" {
     try ctx.loadPrelude(null);
 
     const fields = [_][]const u8{ "x", "y" };
-    const no_ft: []const ?*const value_mod.TypeValue = &.{};
+    const no_ft: []const ?value_mod.ConstraintCombinator.Element = &.{};
     const desc = try ctx.getOrCreateStructDescriptor(&fields, no_ft, false);
 
     try ctx.stack.push(.{ .type_descriptor = desc });
@@ -563,7 +587,7 @@ test "descriptor-field-types-raw returns typed struct field types" {
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
     const string_tv = ctx.lookupBuiltinTypeValue("string").?;
     const fields = [_][]const u8{ "x", "y" };
-    const ft = [_]?*const value_mod.TypeValue{ fixnum_tv, string_tv };
+    const ft = [_]?value_mod.ConstraintCombinator.Element{ .{ .type = fixnum_tv }, .{ .type = string_tv } };
     const desc = try ctx.getOrCreateStructDescriptor(&fields, &ft, false);
 
     try ctx.stack.push(.{ .type_descriptor = desc });
@@ -587,7 +611,7 @@ test "descriptor-inner-type-raw throws on builtin and on struct" {
     try testing.expectError(error.TypeMismatch, nativeDescriptorInnerTypeRaw(&ctx));
 
     const fields = [_][]const u8{"x"};
-    const no_ft: []const ?*const value_mod.TypeValue = &.{};
+    const no_ft: []const ?value_mod.ConstraintCombinator.Element = &.{};
     const struct_desc = try ctx.getOrCreateStructDescriptor(&fields, no_ft, false);
     try ctx.stack.push(.{ .type_descriptor = struct_desc });
     try testing.expectError(error.TypeMismatch, nativeDescriptorInnerTypeRaw(&ctx));

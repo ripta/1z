@@ -594,7 +594,9 @@ fn internDescriptorCrossRefs(
         .builtin, .sentinel, .union_, .resource => {},
         .struct_ => |sd| {
             for (sd.field_types) |maybe| {
-                if (maybe) |tv| _ = try effect_table.internType(tv);
+                if (maybe) |element| {
+                    if (element == .type) _ = try effect_table.internType(element.type);
+                }
             }
         },
         .virtual => |vd| {
@@ -632,7 +634,9 @@ fn internStructType(
     try struct_plans.append(effect_table.allocator, .{ .struct_type = st });
     try struct_index.put(effect_table.allocator, st, idx);
     for (st.field_types) |maybe| {
-        if (maybe) |tv| _ = try effect_table.internType(tv);
+        if (maybe) |element| {
+            if (element == .type) _ = try effect_table.internType(element.type);
+        }
     }
     // Intern the owning TypeValue alongside the StructType so the loader
     // can rehydrate `StructType.type_val` from the matching runtime
@@ -1807,9 +1811,13 @@ fn emitStructTypeStrings(
         try out.appendSlice(allocator, "static const uint32_t ");
         try writeStructFieldTypeSlotsSym(out, allocator, idx);
         try out.appendSlice(allocator, "[] = {");
-        for (st.field_types, 0..) |maybe_tv, fi| {
+        for (st.field_types, 0..) |element, fi| {
             if (fi > 0) try out.append(allocator, ',');
             try out.append(allocator, ' ');
+            const maybe_tv: ?*const value_mod.TypeValue = if (element) |e| switch (e) {
+                .type => |tv| tv,
+                .protocol, .combinator => null,
+            } else null;
             const slot = lookupTypeSlot(effect_table, maybe_tv);
             try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{slot}) catch unreachable);
         }
@@ -1877,7 +1885,11 @@ fn emitTypeDescriptorStrings(
     const desc = tv.descriptor orelse return;
     switch (desc.kind) {
         .builtin, .sentinel, .union_ => {},
-        .struct_ => |sd| try emitFieldArrays(out, allocator, idx, sd.fields, sd.field_types, effect_table),
+        .struct_ => |sd| {
+            const tvs = try structFieldTypeValues(allocator, sd.field_types);
+            defer if (tvs.len > 0) allocator.free(tvs);
+            try emitFieldArrays(out, allocator, idx, sd.fields, tvs, effect_table);
+        },
         .ffi_struct => |fsd| try emitFieldArrays(out, allocator, idx, fsd.fields, fsd.field_types, effect_table),
         .virtual => |vd| {
             if (vd.type_params.len > 0) {
@@ -1927,6 +1939,24 @@ fn emitTypeDescriptorStrings(
             try out.appendSlice(allocator, ";\n");
         },
     }
+}
+
+/// AOT serialization currently encodes only concrete-type field constraints;
+/// protocol- and combinator-bound struct fields are serialized as unannotated
+/// pending dedicated combinator serialization. Concrete-type fields round-trip.
+fn structFieldTypeValues(
+    allocator: Allocator,
+    field_types: []const ?value_mod.ConstraintCombinator.Element,
+) Allocator.Error![]const ?*const value_mod.TypeValue {
+    if (field_types.len == 0) return &.{};
+    const out = try allocator.alloc(?*const value_mod.TypeValue, field_types.len);
+    for (field_types, 0..) |element, i| {
+        out[i] = if (element) |e| switch (e) {
+            .type => |tv| tv,
+            .protocol, .combinator => null,
+        } else null;
+    }
+    return out;
 }
 
 fn emitFieldArrays(
@@ -3873,9 +3903,9 @@ test "collectDescriptorCrossRefs interns struct field_types into the slot table"
     tv_str.* = .{ .name = "string", .descriptor = null };
 
     const fields = try arena.dupe([]const u8, &.{ "x", "y" });
-    const field_types = try arena.alloc(?*const value_mod.TypeValue, 2);
-    field_types[0] = tv_fix;
-    field_types[1] = tv_str;
+    const field_types = try arena.alloc(?value_mod.ConstraintCombinator.Element, 2);
+    field_types[0] = .{ .type = tv_fix };
+    field_types[1] = .{ .type = tv_str };
     const desc = try value_mod.createTypeDescriptor(arena, .{
         .struct_ = .{ .fields = fields, .field_types = field_types },
     }, .{});
@@ -4019,8 +4049,8 @@ test "emitTypeValueData emits typevalue/descriptor tables with slot-indexed cros
     tv_fix.* = .{ .name = "fixnum", .descriptor = null };
 
     const fields = try arena.dupe([]const u8, &.{"x"});
-    const field_types = try arena.alloc(?*const value_mod.TypeValue, 1);
-    field_types[0] = tv_fix;
+    const field_types = try arena.alloc(?value_mod.ConstraintCombinator.Element, 1);
+    field_types[0] = .{ .type = tv_fix };
     const desc = try value_mod.createTypeDescriptor(arena, .{
         .struct_ = .{ .fields = fields, .field_types = field_types },
     }, .{});
@@ -4116,8 +4146,8 @@ test "emitTypeValueData emits struct-type table for virtual anon_struct" {
     tv_int.* = .{ .name = "int", .descriptor = null };
 
     const st_fields = try arena.dupe([]const u8, &.{"n"});
-    const st_field_types = try arena.alloc(?*const value_mod.TypeValue, 1);
-    st_field_types[0] = tv_int;
+    const st_field_types = try arena.alloc(?value_mod.ConstraintCombinator.Element, 1);
+    st_field_types[0] = .{ .type = tv_int };
     const st = try arena.create(value_mod.StructType);
     st.* = .{
         .name = "wrap-inner",
@@ -4170,8 +4200,8 @@ test "collectDescriptorCrossRefs collects virtual anon_struct and its field type
     tv_int.* = .{ .name = "int", .descriptor = null };
 
     const st_fields = try arena.dupe([]const u8, &.{"n"});
-    const st_field_types = try arena.alloc(?*const value_mod.TypeValue, 1);
-    st_field_types[0] = tv_int;
+    const st_field_types = try arena.alloc(?value_mod.ConstraintCombinator.Element, 1);
+    st_field_types[0] = .{ .type = tv_int };
     const st = try arena.create(value_mod.StructType);
     st.* = .{
         .name = "wrapper-inner",

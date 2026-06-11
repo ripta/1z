@@ -151,6 +151,19 @@ pub const Tokenizer = struct {
         self.line_start = 0;
     }
 
+    /// Rewind the scan position to the start of `tok` and clear any peeked
+    /// token, so the next `next()` (or `nextOrYield()`) re-reads `tok`. Used
+    /// when a delimited parse helper over-read one token and must hand it back
+    /// to a `next()`-based caller that does not consult `peeked`. `tok.text`
+    /// must be a slice into this tokenizer's current `input`.
+    pub fn rewindTo(self: *Tokenizer, tok: Token) void {
+        const offset = @intFromPtr(tok.text.ptr) - @intFromPtr(self.input.ptr);
+        self.pos = offset;
+        self.line = tok.line;
+        self.line_start = offset + 1 - tok.column;
+        self.peeked = null;
+    }
+
     /// Like `next`, but yields to the parser coroutine when input is
     /// exhausted instead of returning null. Returns null only on true
     /// EOF (no coroutine, or coroutine flush with no new input).

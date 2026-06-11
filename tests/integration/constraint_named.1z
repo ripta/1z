@@ -1,0 +1,34 @@
+use "testing" ;
+
+\ Named composed protocols, named mixed unions, and bare protocol aliases via
+\ the bare top-level definition form. The prelude protocols `comparable` and
+\ `stringable` provide the constraints to compose.
+
+"named intersection defines a constraint" test-section
+ordered-stringable: comparable & stringable ;
+ordered-stringable type-of native.type-name
+"constraint" "type-of a named intersection is constraint" assert=
+
+"named mixed union defines a constraint" test-section
+widget: fixnum | comparable ;
+widget type-of native.type-name
+"constraint" "type-of a named mixed union is constraint" assert=
+
+"bare protocol alias defines a constraint" test-section
+nameable: comparable ;
+nameable type-of native.type-name
+"constraint" "type-of a bare protocol alias is constraint" assert=
+
+"a named constraint resolves in an annotation position" test-section
+ordered-check: ( x: ordered-stringable -- ) [ drop ] ;
+ordered-check: >word-info stack-effect>> inputs>> #first type-annotation>>
+ordered-stringable "annotation is the named combinator" assert=
+
+"a bare protocol alias resolves to its underlying protocol in an annotation" test-section
+named-check: ( x: nameable -- ) [ drop ] ;
+named-check: >word-info stack-effect>> inputs>> #first type-annotation>>
+comparable "alias annotation is the aliased protocol descriptor" assert=
+
+"a mixed-union annotation parses and defines a word" test-section
+widget-check: ( x: widget -- ) [ drop ] ;
+widget-check: >word-info f = f "mixed-union annotation word is defined" assert=

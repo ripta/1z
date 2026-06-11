@@ -151,9 +151,21 @@ pub const ParameterizedTypeKeyContext = struct {
 
 pub const StructDescriptorKey = struct {
     fields: []const []const u8,
-    field_types: []const ?*const value_mod.TypeValue = &.{},
+    field_types: []const ?value_mod.ConstraintCombinator.Element = &.{},
     mutable: bool,
 };
+
+/// Pointer carried by a constraint element, tagged by kind, so a field
+/// annotation can be hashed and compared by pointer identity. A null element
+/// (untyped field) hashes to 0/0.
+fn elementIdentity(element: ?value_mod.ConstraintCombinator.Element) struct { tag: u8, ptr: usize } {
+    const e = element orelse return .{ .tag = 0, .ptr = 0 };
+    return switch (e) {
+        .type => |tv| .{ .tag = 1, .ptr = @intFromPtr(tv) },
+        .protocol => |pd| .{ .tag = 2, .ptr = @intFromPtr(pd) },
+        .combinator => |cc| .{ .tag = 3, .ptr = @intFromPtr(cc) },
+    };
+}
 
 pub const StructDescriptorKeyContext = struct {
     pub fn hash(_: @This(), key: StructDescriptorKey) u64 {
@@ -166,8 +178,9 @@ pub const StructDescriptorKeyContext = struct {
         }
         h.update(std.mem.asBytes(&key.field_types.len));
         for (key.field_types) |field_type| {
-            const ptr_value: usize = if (field_type) |tv| @intFromPtr(tv) else 0;
-            h.update(std.mem.asBytes(&ptr_value));
+            const id = elementIdentity(field_type);
+            h.update(&[_]u8{id.tag});
+            h.update(std.mem.asBytes(&id.ptr));
         }
         return h.final();
     }
@@ -178,7 +191,9 @@ pub const StructDescriptorKeyContext = struct {
             if (!std.mem.eql(u8, a_field, b_field)) return false;
         }
         for (a.field_types, b.field_types) |a_field_type, b_field_type| {
-            if (a_field_type != b_field_type) return false;
+            const ai = elementIdentity(a_field_type);
+            const bi = elementIdentity(b_field_type);
+            if (ai.tag != bi.tag or ai.ptr != bi.ptr) return false;
         }
         return true;
     }
@@ -2439,7 +2454,7 @@ pub const Context = struct {
     pub fn lookupStructDescriptor(
         self: *const Context,
         fields: []const []const u8,
-        field_types: []const ?*const value_mod.TypeValue,
+        field_types: []const ?value_mod.ConstraintCombinator.Element,
         mutable: bool,
     ) ?*value_mod.TypeDescriptor {
         self.acquireSharedRead();
@@ -2450,7 +2465,7 @@ pub const Context = struct {
     fn lookupStructDescriptorLocked(
         self: *const Context,
         fields: []const []const u8,
-        field_types: []const ?*const value_mod.TypeValue,
+        field_types: []const ?value_mod.ConstraintCombinator.Element,
         mutable: bool,
     ) ?*value_mod.TypeDescriptor {
         const key = StructDescriptorKey{ .fields = fields, .field_types = field_types, .mutable = mutable };
@@ -2644,7 +2659,7 @@ pub const Context = struct {
     pub fn getOrCreateStructDescriptor(
         self: *Context,
         fields: []const []const u8,
-        field_types: []const ?*const value_mod.TypeValue,
+        field_types: []const ?value_mod.ConstraintCombinator.Element,
         mutable: bool,
     ) !*value_mod.TypeDescriptor {
         self.acquireSharedWrite();
@@ -2657,8 +2672,8 @@ pub const Context = struct {
         // outlives the caller's transient slice.
         const owned_fields = try alloc.alloc([]const u8, fields.len);
         for (fields, 0..) |field, i| owned_fields[i] = field;
-        const owned_field_types: []const ?*const value_mod.TypeValue = if (field_types.len != 0) blk: {
-            const buf = try alloc.alloc(?*const value_mod.TypeValue, field_types.len);
+        const owned_field_types: []const ?value_mod.ConstraintCombinator.Element = if (field_types.len != 0) blk: {
+            const buf = try alloc.alloc(?value_mod.ConstraintCombinator.Element, field_types.len);
             for (field_types, 0..) |ft, i| buf[i] = ft;
             break :blk buf;
         } else &.{};
@@ -5194,11 +5209,11 @@ test "struct descriptor interning reuses descriptor for same shape" {
 
     const fields_xy = [_][]const u8{ "x", "y" };
     const fields_yx = [_][]const u8{ "y", "x" };
-    const no_field_types = [_]?*const value_mod.TypeValue{};
+    const no_field_types = [_]?value_mod.ConstraintCombinator.Element{};
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
     const string_tv = ctx.lookupBuiltinTypeValue("string").?;
-    const typed_fixnum_fixnum = [_]?*const value_mod.TypeValue{ fixnum_tv, fixnum_tv };
-    const typed_fixnum_string = [_]?*const value_mod.TypeValue{ fixnum_tv, string_tv };
+    const typed_fixnum_fixnum = [_]?value_mod.ConstraintCombinator.Element{ .{ .type = fixnum_tv }, .{ .type = fixnum_tv } };
+    const typed_fixnum_string = [_]?value_mod.ConstraintCombinator.Element{ .{ .type = fixnum_tv }, .{ .type = string_tv } };
 
     const desc1 = try ctx.getOrCreateStructDescriptor(&fields_xy, &no_field_types, false);
     const desc2 = try ctx.getOrCreateStructDescriptor(&fields_xy, &no_field_types, false);
@@ -5671,6 +5686,18 @@ test "lookupBuiltinTypeValueByTag returns same pointer as name lookup" {
         try std.testing.expect(by_name != null);
         try std.testing.expect(by_tag.? == by_name.?);
     }
+}
+
+test "constraint_combinator and protocol_descriptor share the constraint TypeValue" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const cc_tv = ctx.lookupBuiltinTypeValueByTag(.constraint_combinator);
+    const pd_tv = ctx.lookupBuiltinTypeValueByTag(.protocol_descriptor);
+    try std.testing.expect(cc_tv != null);
+    try std.testing.expect(pd_tv != null);
+    try std.testing.expect(cc_tv.? == pd_tv.?);
+    try std.testing.expectEqualStrings("constraint", cc_tv.?.name);
 }
 
 test "initBuiltinTypeValues creates TypeValues with normalized descriptors" {

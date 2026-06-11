@@ -1,0 +1,42 @@
+use "testing" ;
+
+\ Struct fields may carry protocol and combinator constraints, validated when an
+\ instance is constructed. Define protocols with explicit fixnum methods so the
+\ satisfaction relationships are unambiguous.
+
+showable: protocol{ show: } ;
+show:     generic ( x -- s ) [ drop "?" ] ;
+show:     method{ fixnum } [ drop "shown" ] ;
+
+namable: protocol{ label: } ;
+label:   generic ( x -- s ) [ drop "?" ] ;
+label:   method{ fixnum } [ drop "labeled" ] ;
+
+"concrete-typed struct field still validates" test-section
+point: struct{ x: fixnum y: fixnum } ;
+3 4 make-point x>> 3 "concrete field constructs and reads back" assert=
+[ "no" 4 make-point ] "concrete field rejects a wrong type" assert-error
+
+"protocol-bound struct field accepts a satisfying value" test-section
+boxed: struct{ item: showable } ;
+5 make-boxed item>> 5 "protocol field accepts a satisfying fixnum" assert=
+
+"protocol-bound struct field rejects a non-satisfying value" test-section
+[ "nope" make-boxed ] "protocol field rejects a non-satisfying string" assert-error
+
+"intersection-bound struct field accepts a value satisfying both" test-section
+dual: struct{ both: showable & namable } ;
+9 make-dual both>> 9 "intersection field accepts a fixnum satisfying both" assert=
+
+"intersection-bound struct field rejects a value missing one protocol" test-section
+[ "nope" make-dual ] "intersection field rejects a string" assert-error
+
+"mixed-union struct field accepts either branch" test-section
+flexible: struct{ slot: string | showable } ;
+7 make-flexible slot>> 7 "mixed-union field accepts a fixnum via the protocol branch" assert=
+"hi" make-flexible slot>> "hi" "mixed-union field accepts a string via the type branch" assert=
+
+"struct field introspection round-trips a concrete field" test-section
+point: native.type-descriptor descriptor-field-types? unwrap-or-throw
+[ native.type-name ] #map #collect
+{ "fixnum" "fixnum" } "concrete field types introspected" assert=

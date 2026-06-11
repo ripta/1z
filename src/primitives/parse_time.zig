@@ -51,8 +51,8 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
         }
 
         if (mode == .evaluate_parse_time or mode == .evaluate_parse_time_strict) {
-            if (try parser.maybeParseTypeUnionToken(alloc, tokenizer, ctx, token)) |union_type| {
-                try tokens.append(alloc, .{ .type_val = @constCast(union_type) });
+            if (try parser.maybeParseConstraintExpression(alloc, tokenizer, ctx, token)) |constraint_val| {
+                try tokens.append(alloc, constraint_val);
                 continue;
             }
 

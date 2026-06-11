@@ -1,0 +1,35 @@
+=== named intersection defines a constraint ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "constraint" ]
+PASS: type-of a named intersection is constraint
+Stack: [ ]
+=== named mixed union defines a constraint ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "constraint" ]
+PASS: type-of a named mixed union is constraint
+Stack: [ ]
+=== bare protocol alias defines a constraint ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "constraint" ]
+PASS: type-of a bare protocol alias is constraint
+Stack: [ ]
+=== a named constraint resolves in an annotation position ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <constraint-combinator:0> ]
+PASS: annotation is the named combinator
+Stack: [ ]
+=== a bare protocol alias resolves to its underlying protocol in an annotation ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <protocol-descriptor:comparable> ]
+PASS: alias annotation is the aliased protocol descriptor
+Stack: [ ]
+=== a mixed-union annotation parses and defines a word ===
+Stack: [ ]
+Stack: [ ]
+PASS: mixed-union annotation word is defined
+Stack: [ ]

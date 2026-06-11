@@ -207,6 +207,10 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
             "<protocol-descriptor:{s}>",
             .{desc.name},
         ),
+        .constraint_combinator => |cc| try writer.print(
+            "<constraint-combinator:{d}>",
+            .{cc.combinator_id},
+        ),
         .sandbox_spec => try writer.writeAll("<sandbox-spec>"),
         .unit => try writer.writeAll("unit"),
     }

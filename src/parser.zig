@@ -467,8 +467,8 @@ pub fn parseTopLevel(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context
                 },
                 .unrecognized => {
                     if (ctx != null) {
-                        if (try maybeParseTypeUnionToken(allocator, tokenizer, ctx, token)) |union_type| {
-                            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .type_val = @constCast(union_type) } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                        if (try maybeParseConstraintExpression(allocator, tokenizer, ctx, token)) |constraint_val| {
+                            instructions.append(allocator, .{ .op = .{ .push_literal = constraint_val }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
                             if (has_pending_docs) {
                                 doc_lines.clearRetainingCapacity();
                                 doc_first_line = 0;
@@ -616,9 +616,9 @@ pub fn parseQuotationUntil(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*C
                 },
                 .unrecognized => {
                     if (ctx != null) {
-                        if (try maybeParseTypeUnionToken(allocator, tokenizer, ctx, token)) |union_type| {
+                        if (try maybeParseConstraintExpression(allocator, tokenizer, ctx, token)) |constraint_val| {
                             is_first_token = false;
-                            instructions.append(allocator, .{ .op = .{ .push_literal = .{ .type_val = @constCast(union_type) } }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
+                            instructions.append(allocator, .{ .op = .{ .push_literal = constraint_val }, .line = line, .column = column }) catch return ParseError.OutOfMemory;
                             if (has_pending_docs) {
                                 doc_lines.clearRetainingCapacity();
                                 doc_first_line = 0;
@@ -742,6 +742,7 @@ fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?ResolvedAnnotation 
                 const val = c.stack.pop() catch return null;
                 if (val == .type_val) return .{ .type = val.type_val };
                 if (val == .protocol_descriptor) return .{ .protocol = val.protocol_descriptor };
+                if (val == .constraint_combinator) return .{ .combination = val.constraint_combinator };
                 if (val == .marker) {
                     if (markers_mod.isSelfMarker(val.marker)) return .{ .type = c.getSelfTypeSentinel() };
                     if (markers_mod.isAnyMarker(val.marker)) return .{ .type = c.getAnyTypeSentinel() };
@@ -751,54 +752,6 @@ fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?ResolvedAnnotation 
     }
 
     return null;
-}
-
-/// Raise a parse-time diagnostic for malformed inline type unions.
-fn invalidTypeUnion(ctx: ?*Context, allocator: Allocator, comptime fmt: []const u8, args: anytype) ParseError {
-    if (ctx) |c| {
-        c.parse_diagnostics = .{
-            .error_type = "InvalidTypeUnion",
-            .message = std.fmt.allocPrint(allocator, fmt, args) catch null,
-        };
-        return ParseError.ParseTimeExecutionError;
-    }
-    return ParseError.OutOfMemory;
-}
-
-/// Parse the remaining `| T | U ...` tail after the first type token has
-/// already been resolved. Produces the canonical anonymous union type.
-fn parseTypeUnionTail(
-    allocator: Allocator,
-    tokenizer: *Tokenizer,
-    ctx: ?*Context,
-    first_type: *const value_mod.TypeValue,
-) ParseError!*const value_mod.TypeValue {
-    const c = ctx orelse return first_type;
-
-    var members = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
-    defer members.deinit(allocator);
-    members.append(allocator, first_type) catch return ParseError.OutOfMemory;
-
-    while (true) {
-        const member_tok = nextTokenOrYield(tokenizer) orelse {
-            return invalidTypeUnion(ctx, allocator, "expected a type after '|'", .{});
-        };
-        const resolved = resolveTypeAnnotation(ctx, member_tok.text) orelse {
-            return invalidTypeUnion(ctx, allocator, "'{s}' is not a known type in union position", .{member_tok.text});
-        };
-        const member_type = switch (resolved) {
-            .type => |t| t,
-            .protocol, .combination => return invalidTypeUnion(ctx, allocator, "protocol '{s}' cannot appear in a type union; protocol composition with '|' is not yet supported", .{member_tok.text}),
-        };
-        members.append(allocator, member_type) catch return ParseError.OutOfMemory;
-
-        const next_tok = nextTokenOrYield(tokenizer) orelse {
-            return c.getOrCreateAnonymousUnionTypeValue(members.items) catch return ParseError.OutOfMemory;
-        };
-        if (std.mem.eql(u8, next_tok.text, "|")) continue;
-        tokenizer.peeked = next_tok;
-        return c.getOrCreateAnonymousUnionTypeValue(members.items) catch return ParseError.OutOfMemory;
-    }
 }
 
 /// Raise a parse-time diagnostic for a malformed `&` / `|` constraint
@@ -946,40 +899,54 @@ fn parseConstraintAnnotation(
     return .{ .combination = cc };
 }
 
-/// Try to interpret an otherwise-unrecognized token as the start of an
-/// anonymous type union in general parse-time value contexts.
-pub fn maybeParseTypeUnionToken(
+/// Try to interpret an otherwise-unrecognized token as the start of a
+/// constraint expression (a type union, an intersection, or a mixed union) in
+/// general parse-time value contexts. Returns the value to push: a `type_val`
+/// for a pure type union, a `protocol_descriptor`, or a `constraint_combinator`
+/// for an intersection or mixed union. Returns null when the token is not a
+/// constraint candidate or is not followed by a `&` / `|` continuation, leaving
+/// the caller's existing single-token handling in charge.
+pub fn maybeParseConstraintExpression(
     allocator: Allocator,
     tokenizer: *Tokenizer,
     ctx: ?*Context,
     token: []const u8,
-) ParseError!?*const value_mod.TypeValue {
+) ParseError!?Value {
     if (!isTypeAnnotationCandidate(token)) return null;
 
-    // Quick peek at the raw input to check for a `|` continuation without
-    // consuming any tokens or mutating tokenizer state.
-    if (!peekNextTokenIsPipe(tokenizer)) return null;
+    // Quick peek at the raw input to check for a `&` / `|` continuation without
+    // consuming any tokens or mutating tokenizer state. A bare type or protocol
+    // with no continuation is left to the caller's normal handling.
+    if (!peekNextTokenIsConstraintOp(tokenizer)) return null;
 
-    const first = resolveTypeAnnotation(ctx, token) orelse return null;
-    const first_type = switch (first) {
-        .type => |t| t,
-        .protocol, .combination => return null,
+    const resolved = (try parseConstraintAnnotation(allocator, tokenizer, ctx, token)) orelse return null;
+
+    // The shared grammar over-reads the first non-constraint token and hands it
+    // back via `peeked`, which serves the stack-effect caller's `nextOrYield`
+    // loop. The top-level / array body loops here read via `next()`, which does
+    // not consult `peeked`, so rewind the scan position to that token instead.
+    if (tokenizer.peeked) |tok| tokenizer.rewindTo(tok);
+
+    return switch (resolved) {
+        .type => |t| .{ .type_val = @constCast(t) },
+        .protocol => |p| .{ .protocol_descriptor = p },
+        .combination => |cc| .{ .constraint_combinator = cc },
     };
-    // Consume the `|` we already verified is there.
-    _ = nextTokenOrYield(tokenizer);
-    return parseTypeUnionTail(allocator, tokenizer, ctx, first_type);
 }
 
-/// Check whether the next non-whitespace, non-comment token in the raw input
-/// is the single-character `|` token, without advancing the tokenizer state.
-fn peekNextTokenIsPipe(tokenizer: *const Tokenizer) bool {
-    if (tokenizer.peeked) |tok| return std.mem.eql(u8, tok.text, "|");
+/// Check whether the next non-whitespace, non-comment token in the raw input is
+/// a single-character `&` or `|` constraint-combinator operator, without
+/// advancing the tokenizer state.
+fn peekNextTokenIsConstraintOp(tokenizer: *const Tokenizer) bool {
+    if (tokenizer.peeked) |tok| {
+        return std.mem.eql(u8, tok.text, "|") or std.mem.eql(u8, tok.text, "&");
+    }
     var pos = tokenizer.pos;
     while (pos < tokenizer.input.len) : (pos += 1) {
         const c = tokenizer.input[pos];
         if (c == ' ' or c == '\t' or c == '\r' or c == '\n') continue;
         if (c == '\\') return false; // comment, so stop scanning
-        return c == '|' and (pos + 1 >= tokenizer.input.len or isWhitespace(tokenizer.input[pos + 1]));
+        return (c == '|' or c == '&') and (pos + 1 >= tokenizer.input.len or isWhitespace(tokenizer.input[pos + 1]));
     }
     return false;
 }
@@ -1722,12 +1689,64 @@ test "named union definition parses anonymous union before semicolon" {
     var tokenizer = Tokenizer.init("number: fixnum | bignum | float ;");
     const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
 
-    try std.testing.expectEqual(@as(usize, 2), instrs.len);
+    // The trailing `;` is retained as a call that defines `number` at runtime.
+    try std.testing.expectEqual(@as(usize, 3), instrs.len);
     try std.testing.expectEqualStrings("number", instrs[0].op.push_literal.symbol);
     try std.testing.expect(instrs[1].op.push_literal == .type_val);
     try std.testing.expect(instrs[1].op.push_literal.type_val.member_types != null);
     try std.testing.expectEqual(@as(usize, 3), instrs[1].op.push_literal.type_val.member_types.?.len);
     try std.testing.expectEqualStrings("bignum|fixnum|float", instrs[1].op.push_literal.type_val.name);
+    try std.testing.expect(instrs[2].op != .push_literal);
+}
+
+test "named intersection definition parses a combinator before semicolon" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    var tokenizer = Tokenizer.init("ordered-stringable: comparable & stringable ;");
+    const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
+
+    try std.testing.expectEqual(@as(usize, 3), instrs.len);
+    try std.testing.expectEqualStrings("ordered-stringable", instrs[0].op.push_literal.symbol);
+    try std.testing.expect(instrs[1].op.push_literal == .constraint_combinator);
+    try std.testing.expect(instrs[2].op != .push_literal);
+    const cc = instrs[1].op.push_literal.constraint_combinator;
+    try std.testing.expectEqual(value_mod.ConstraintCombinator.Kind.intersection, cc.kind);
+    try std.testing.expectEqual(@as(usize, 2), cc.elements.len);
+    try std.testing.expect(cc.elements[0] == .protocol);
+    try std.testing.expect(cc.elements[1] == .protocol);
+}
+
+test "named mixed union definition parses a combinator before semicolon" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    var tokenizer = Tokenizer.init("widget: fixnum | comparable ;");
+    const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
+
+    try std.testing.expectEqual(@as(usize, 3), instrs.len);
+    try std.testing.expectEqualStrings("widget", instrs[0].op.push_literal.symbol);
+    try std.testing.expect(instrs[1].op.push_literal == .constraint_combinator);
+    try std.testing.expect(instrs[2].op != .push_literal);
+    const cc = instrs[1].op.push_literal.constraint_combinator;
+    try std.testing.expectEqual(value_mod.ConstraintCombinator.Kind.@"union", cc.kind);
+    try std.testing.expectEqual(@as(usize, 2), cc.elements.len);
+    try std.testing.expect(cc.elements[0] == .type);
+    try std.testing.expect(cc.elements[1] == .protocol);
+}
+
+test "bare protocol with no constraint operator is not a combinator" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    var tokenizer = Tokenizer.init("comparable");
+    const instrs = try parseTopLevel(alloc, &tokenizer, &ctx);
+
+    try std.testing.expectEqual(@as(usize, 1), instrs.len);
+    try std.testing.expect(instrs[0].op.push_literal == .protocol_descriptor);
 }
 
 test "struct field annotations accept anonymous unions" {
@@ -1760,9 +1779,10 @@ test "struct field annotations accept anonymous unions" {
             const field_types = sd.field_types;
 
             try std.testing.expectEqual(@as(usize, 2), field_types.len);
-            try std.testing.expect(field_types[0].?.member_types != null);
-            try std.testing.expect(field_types[0].? == field_types[1].?);
-            try std.testing.expectEqualStrings("bignum|fixnum", field_types[0].?.name);
+            try std.testing.expect(field_types[0].? == .type);
+            try std.testing.expect(field_types[0].?.type.member_types != null);
+            try std.testing.expect(field_types[0].?.type == field_types[1].?.type);
+            try std.testing.expectEqualStrings("bignum|fixnum", field_types[0].?.type.name);
         },
         .native, .host_callback => try std.testing.expect(false),
     }

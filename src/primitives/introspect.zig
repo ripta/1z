@@ -59,9 +59,10 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
     fields[3] = if (param.type_annotation) |ann| switch (ann) {
         .type => |tv| Value{ .type_val = @constCast(tv) },
         .protocol => |pd| Value{ .protocol_descriptor = pd },
-        // Structured introspection of combinators is not yet implemented;
-        // report a combinator-annotated parameter as unannotated for now.
-        .combination => .{ .boolean = false },
+        // Surface the combinator value itself, mirroring how a protocol-bound
+        // parameter surfaces its descriptor. Structured breakdown of the
+        // combinator's elements is a separate introspection surface.
+        .combination => |cc| Value{ .constraint_combinator = cc },
     } else .{ .boolean = false };
     return .{ .array = fields };
 }
