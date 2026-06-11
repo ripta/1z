@@ -544,7 +544,7 @@ pub fn boundedDispatchFor(
         const ann = param.type_annotation orelse return null;
         const pd = switch (ann) {
             .protocol => |p| p,
-            .type => return null,
+            .type, .combination => return null,
         };
         if (descriptor) |d| {
             if (d != pd) return null;

@@ -884,6 +884,9 @@ fn registerParam(
             .protocol => |pd| {
                 _ = try table.internProtocol(pd);
             },
+            // Combinator serialization (a parallel slot table) is not yet
+            // implemented; nothing to intern for now.
+            .combination => {},
         }
     }
     if (param.quotation_effect) |nested| {
@@ -2311,6 +2314,9 @@ fn emitEffectParamArray(
                 .{ .kind = 2, .slot = slot }
             else
                 .{ .kind = 0, .slot = 0 },
+            // Combinator serialization is not yet implemented; emit as "no
+            // annotation" until the parallel slot table lands.
+            .combination => .{ .kind = 0, .slot = 0 },
         } else .{ .kind = 0, .slot = 0 };
         const has_quot: u8 = if (param.quotation_effect != null) 1 else 0;
         const is_row: u8 = if (param.is_row_variable) 1 else 0;

@@ -410,6 +410,9 @@ pub const Context = struct {
     /// Monotonic counter for assigning unique IDs to protocol descriptors.
     /// Atomic for future thread-safety requirements (M:N scheduler).
     next_protocol_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Monotonic counter for assigning unique IDs to constraint combinators.
+    /// Atomic for future thread-safety requirements (M:N scheduler).
+    next_combinator_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// Dispatch table for user-defined operator/method dispatch.
     dispatch: DispatchTable,
     /// JIT dispatch table mapping word IDs to compiled code pointers.
@@ -533,6 +536,11 @@ pub const Context = struct {
     /// descriptor; the list keeps stable pointers for the lifetime of the
     /// Context and lets deinit release the list header.
     protocol_descriptors: std.ArrayListUnmanaged(*value_mod.ProtocolDescriptor) = .{},
+    /// Owned storage for ConstraintCombinator records allocated via
+    /// createConstraintCombinator. Each combinator expression produces a fresh
+    /// descriptor; the list keeps stable pointers for the lifetime of the
+    /// Context and lets deinit release the list header.
+    constraint_combinators: std.ArrayListUnmanaged(*value_mod.ConstraintCombinator) = .{},
     /// Memo of protocol satisfies-check results keyed on the
     /// (implementing type descriptor, protocol descriptor) pointer pair.
     /// Populated lazily on first check, and coarsely invalidated on any
@@ -1003,6 +1011,7 @@ pub const Context = struct {
         self.struct_descriptors.deinit(self.allocator);
         self.anonymous_union_type_values.deinit(self.allocator);
         self.protocol_descriptors.deinit(self.allocator);
+        self.constraint_combinators.deinit(self.allocator);
         self.protocol_satisfies_cache.deinit(self.allocator);
         self.bounded_dispatch_trace_names.deinit(self.allocator);
         self.dispatch.deinit();
@@ -2542,6 +2551,32 @@ pub const Context = struct {
         return desc;
     }
 
+    /// Allocate a fresh ConstraintCombinator owned by this Context. Each call
+    /// produces a distinct descriptor with a unique monotonic combinator_id;
+    /// there is no structural interning, mirroring createProtocolDescriptor.
+    /// The element list is copied into the quotation arena. The list header is
+    /// freed by deinit.
+    pub fn createConstraintCombinator(
+        self: *Context,
+        kind: value_mod.ConstraintCombinator.Kind,
+        elements: []const value_mod.ConstraintCombinator.Element,
+    ) !*value_mod.ConstraintCombinator {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+
+        const alloc = self.quotationAllocator();
+        const desc = try alloc.create(value_mod.ConstraintCombinator);
+        const elements_dup = try alloc.alloc(value_mod.ConstraintCombinator.Element, elements.len);
+        @memcpy(elements_dup, elements);
+        desc.* = .{
+            .kind = kind,
+            .elements = elements_dup,
+            .combinator_id = self.next_combinator_id.fetchAdd(1, .monotonic),
+        };
+        try self.constraint_combinators.append(self.allocator, desc);
+        return desc;
+    }
+
     /// Return the diagnostic identity for a protocol-bounded dispatch site
     /// bound by `descriptor`: `satisfies-and-dispatch[<protocol>]`. Composed
     /// once per protocol with the program-lifetime quotation allocator and
@@ -3801,6 +3836,9 @@ pub const Context = struct {
                         return protocols_mod.raiseProtocolError(self, msg);
                     }
                 },
+                // Runtime combinator validation is not yet implemented; skip
+                // combinator-annotated parameters for now.
+                .combination => {},
             }
         }
     }
@@ -5242,6 +5280,71 @@ test "createProtocolDescriptor assigns monotonic protocol_id" {
     try std.testing.expectEqual(@as(u32, 0), desc0.protocol_id);
     try std.testing.expectEqual(@as(u32, 1), desc1.protocol_id);
     try std.testing.expectEqual(@as(u32, 2), desc2.protocol_id);
+}
+
+test "createConstraintCombinator returns stable distinct pointers" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const proto = try ctx.createProtocolDescriptor("comparable", &methods);
+
+    const elements = [_]value_mod.ConstraintCombinator.Element{
+        .{ .type = fixnum_tv },
+        .{ .protocol = proto },
+    };
+
+    const cc1 = try ctx.createConstraintCombinator(.@"union", &elements);
+    const cc2 = try ctx.createConstraintCombinator(.intersection, &elements);
+    try std.testing.expect(cc1 != cc2);
+
+    // Same kind and elements still produce a distinct descriptor; there is no
+    // structural interning.
+    const cc3 = try ctx.createConstraintCombinator(.@"union", &elements);
+    try std.testing.expect(cc1 != cc3);
+}
+
+test "createConstraintCombinator populates kind and elements" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const methods = [_]value_mod.Value{.{ .symbol = "cmp" }};
+    const proto = try ctx.createProtocolDescriptor("comparable", &methods);
+
+    const elements = [_]value_mod.ConstraintCombinator.Element{
+        .{ .type = fixnum_tv },
+        .{ .protocol = proto },
+    };
+    const cc = try ctx.createConstraintCombinator(.intersection, &elements);
+
+    try std.testing.expectEqual(value_mod.ConstraintCombinator.Kind.intersection, cc.kind);
+    try std.testing.expectEqual(@as(usize, 2), cc.elements.len);
+    try std.testing.expectEqual(fixnum_tv, cc.elements[0].type);
+    try std.testing.expectEqual(proto, cc.elements[1].protocol);
+
+    // A nested combinator element composes recursively.
+    const nested_elements = [_]value_mod.ConstraintCombinator.Element{.{ .combinator = cc }};
+    const outer = try ctx.createConstraintCombinator(.@"union", &nested_elements);
+    try std.testing.expectEqual(value_mod.ConstraintCombinator.Kind.@"union", outer.kind);
+    try std.testing.expectEqual(cc, outer.elements[0].combinator);
+}
+
+test "createConstraintCombinator assigns monotonic combinator_id" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const elements = [_]value_mod.ConstraintCombinator.Element{.{ .type = fixnum_tv }};
+
+    const cc0 = try ctx.createConstraintCombinator(.intersection, &elements);
+    const cc1 = try ctx.createConstraintCombinator(.intersection, &elements);
+    const cc2 = try ctx.createConstraintCombinator(.@"union", &elements);
+
+    try std.testing.expectEqual(@as(u32, 0), cc0.combinator_id);
+    try std.testing.expectEqual(@as(u32, 1), cc1.combinator_id);
+    try std.testing.expectEqual(@as(u32, 2), cc2.combinator_id);
 }
 
 test "protocol satisfies cache returns stored hits" {

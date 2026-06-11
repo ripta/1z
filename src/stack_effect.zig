@@ -2,21 +2,29 @@ const std = @import("std");
 const value_mod = @import("value.zig");
 const TypeValue = value_mod.TypeValue;
 const ProtocolDescriptor = value_mod.ProtocolDescriptor;
+const ConstraintCombinator = value_mod.ConstraintCombinator;
 
-/// A type annotation on a stack-effect parameter. Carries either a concrete
-/// type (the existing `( x: fixnum -- ... )` case) or a protocol bound
-/// (`( x: comparable -- ... )`). The two arms stay distinct because
-/// `TypeValue` describes value inhabitants while `ProtocolDescriptor`
-/// describes a constraint on types -- collapsing them would force every
-/// consumer to learn a runtime flag-check.
+/// A type annotation on a stack-effect parameter. Carries a concrete type (the
+/// `( x: fixnum -- ... )` case), a protocol bound (`( x: comparable -- ... )`),
+/// or a constraint combinator (`( x: comparable & stringable -- ... )` or a
+/// mixed union `fixnum | comparable`). The arms stay distinct because
+/// `TypeValue` describes value inhabitants, `ProtocolDescriptor` describes a
+/// constraint on types, and `ConstraintCombinator` describes an algebraic
+/// combination over constraints -- collapsing them would force every consumer
+/// to learn a runtime flag-check.
 pub const TypeAnnotation = union(enum) {
     type: *const TypeValue,
     protocol: *const ProtocolDescriptor,
+    combination: *const ConstraintCombinator,
 
     pub fn name(self: TypeAnnotation) []const u8 {
         return switch (self) {
             .type => |tv| tv.name,
             .protocol => |pd| pd.name,
+            // Combinators have no stored name and rendering the element list
+            // requires allocation this accessor cannot do; structural
+            // rendering belongs to the printer.
+            .combination => "<constraint>",
         };
     }
 
@@ -24,11 +32,15 @@ pub const TypeAnnotation = union(enum) {
         return switch (self) {
             .type => |a| switch (other) {
                 .type => |b| a == b,
-                .protocol => false,
+                .protocol, .combination => false,
             },
             .protocol => |a| switch (other) {
-                .type => false,
                 .protocol => |b| a == b,
+                .type, .combination => false,
+            },
+            .combination => |a| switch (other) {
+                .combination => |b| a == b,
+                .type, .protocol => false,
             },
         };
     }
@@ -592,4 +604,34 @@ test "type_annotation protocol equality" {
     try std.testing.expect(!a.eql(c));
     try std.testing.expect(!a.eql(d));
     try std.testing.expect(!d.eql(a));
+}
+
+test "type_annotation combination write format" {
+    const cc = ConstraintCombinator{ .kind = .intersection, .elements = &.{}, .combinator_id = 0 };
+    const param = StackEffectParam{ .name = "n", .type_annotation = .{ .combination = &cc } };
+
+    var buf: [128]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    try param.write(fbs.writer());
+    try std.testing.expectEqualStrings("n: <constraint>", fbs.getWritten());
+}
+
+test "type_annotation combination equality" {
+    const cc_a = ConstraintCombinator{ .kind = .intersection, .elements = &.{}, .combinator_id = 0 };
+    const cc_b = ConstraintCombinator{ .kind = .@"union", .elements = &.{}, .combinator_id = 1 };
+    const pd = ProtocolDescriptor{ .name = "comparable", .methods = &.{}, .protocol_id = 0 };
+    var tv = TypeValue{ .name = "fixnum", .descriptor = null };
+
+    const a = StackEffectParam{ .name = "n", .type_annotation = .{ .combination = &cc_a } };
+    const b = StackEffectParam{ .name = "n", .type_annotation = .{ .combination = &cc_a } };
+    const c = StackEffectParam{ .name = "n", .type_annotation = .{ .combination = &cc_b } };
+    const d = StackEffectParam{ .name = "n", .type_annotation = .{ .protocol = &pd } };
+    const e = StackEffectParam{ .name = "n", .type_annotation = .{ .type = &tv } };
+
+    try std.testing.expect(a.eql(b));
+    try std.testing.expect(!a.eql(c));
+    try std.testing.expect(!a.eql(d));
+    try std.testing.expect(!d.eql(a));
+    try std.testing.expect(!a.eql(e));
+    try std.testing.expect(!e.eql(a));
 }

@@ -436,7 +436,7 @@ fn isCrossTypeMethod(ctx: *Context, effect: StackEffect) bool {
                     if (tv == ctx.getAnyTypeSentinel()) return true;
                     if (tv != ctx.getSelfTypeSentinel()) return true;
                 },
-                .protocol => return true,
+                .protocol, .combination => return true,
             }
         }
     }
@@ -481,11 +481,11 @@ fn validateTypedMethod(
                         concrete_types[pos] = tv;
                     }
                 },
-                // A protocol-bound input describes the set of types that
-                // satisfy the protocol, not a single dispatch type. Treat it
-                // as the implementing type for validation purposes; the
-                // runtime check carries the real enforcement.
-                .protocol => concrete_types[pos] = type_tv,
+                // A protocol-bound or combinator-bound input describes a set of
+                // types that satisfy the constraint, not a single dispatch
+                // type. Treat it as the implementing type for validation
+                // purposes; the runtime check carries the real enforcement.
+                .protocol, .combination => concrete_types[pos] = type_tv,
             }
         } else {
             // Unannotated input -- treat as `self`

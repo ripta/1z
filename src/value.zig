@@ -595,6 +595,29 @@ pub const ProtocolDescriptor = struct {
     protocol_id: u32,
 };
 
+/// ConstraintCombinator carries an algebraic combination over constraints: an
+/// intersection (`&`) or a union (`|`) of element constraints. Each element is
+/// itself a concrete type, a protocol bound, or a nested combinator, so
+/// combinators compose recursively. A monotonic combinator_id assigned by
+/// Context parallels ProtocolDescriptor's protocol_id; each combinator
+/// allocates its own descriptor and identity is the pointer.
+pub const ConstraintCombinator = struct {
+    pub const Kind = enum { intersection, @"union" };
+
+    /// One element of a combinator. The `union` keyword forces the field name
+    /// `combinator` for the recursive arm rather than the more natural
+    /// `combination`; the three arms mirror TypeAnnotation's tagged variants.
+    pub const Element = union(enum) {
+        type: *const TypeValue,
+        protocol: *const ProtocolDescriptor,
+        combinator: *const ConstraintCombinator,
+    };
+
+    kind: Kind,
+    elements: []const Element,
+    combinator_id: u32,
+};
+
 /// StructData carries the metadata of a struct-defined type.
 pub const StructData = struct {
     fields: []const []const u8 = &.{},

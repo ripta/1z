@@ -59,6 +59,9 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
     fields[3] = if (param.type_annotation) |ann| switch (ann) {
         .type => |tv| Value{ .type_val = @constCast(tv) },
         .protocol => |pd| Value{ .protocol_descriptor = pd },
+        // Structured introspection of combinators is not yet implemented;
+        // report a combinator-annotated parameter as unannotated for now.
+        .combination => .{ .boolean = false },
     } else .{ .boolean = false };
     return .{ .array = fields };
 }

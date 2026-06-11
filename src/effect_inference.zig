@@ -388,6 +388,7 @@ pub const InferenceEngine = struct {
                         out_types[i] = if (param.type_annotation) |ann| switch (ann) {
                             .type => |tv| StackEntry{ .typed = .{ .tv = tv } },
                             .protocol => |desc| StackEntry{ .protocol_bounded = desc },
+                            .combination => .other,
                         } else .other;
                     }
                     try self.type_cache.put(self.allocator, name, out_types);
@@ -420,6 +421,7 @@ pub const InferenceEngine = struct {
                                 out_types[i] = if (param.type_annotation) |ann| switch (ann) {
                                     .type => |tv| StackEntry{ .typed = .{ .tv = tv } },
                                     .protocol => |desc| StackEntry{ .protocol_bounded = desc },
+                                    .combination => .other,
                                 } else .other;
                             }
                             try self.type_cache.put(self.allocator, name, out_types);
@@ -1407,6 +1409,9 @@ pub const InferenceEngine = struct {
                         });
                     }
                 },
+                // Combinator output checking is not yet implemented; treat a
+                // combinator-annotated output as unconstrained for now.
+                .combination => {},
             }
         }
     }
@@ -1508,6 +1513,7 @@ pub const InferenceEngine = struct {
                 switch (ann) {
                     .type => |tv| try stack_model.append(self.allocator, .{ .typed = .{ .tv = tv } }),
                     .protocol => |desc| try stack_model.append(self.allocator, .{ .protocol_bounded = desc }),
+                    .combination => try stack_model.append(self.allocator, .other),
                 }
             } else {
                 try stack_model.append(self.allocator, .other);
