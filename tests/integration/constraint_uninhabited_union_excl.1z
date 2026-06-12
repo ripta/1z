@@ -1,0 +1,3 @@
+\ A concrete type intersected with a type union that excludes it is uninhabited.
+sb: string | boolean ;
+foo: ( x: fixnum & sb -- ) [ drop ] ;

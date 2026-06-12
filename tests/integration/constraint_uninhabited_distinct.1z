@@ -1,0 +1,2 @@
+\ Distinct concrete types under & describe a constraint no value can satisfy.
+foo: ( x: fixnum & string -- ) [ drop ] ;

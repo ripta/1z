@@ -1,0 +1,7 @@
+use "testing" ;
+
+\ The allow-uninhabited-constraint pragma demotes the fatal uninhabited error to
+\ a warning, so an otherwise-impossible constraint parses and the word defines.
+pragma{ allow-uninhabited-constraint: t }
+escaped: ( x: fixnum & string -- ) [ drop ] ;
+escaped: >word-info f = f "pragma demotes uninhabited to a warning; word defines" assert=

@@ -1,0 +1,12 @@
+use "testing" ;
+
+\ Redundant-but-inhabited intersections warn rather than fail. A repeated
+\ concrete type and a type that already satisfies a protocol both define a word.
+
+"same concrete type repeated under &" test-section
+same-type: ( x: fixnum & fixnum -- ) [ drop ] ;
+same-type: >word-info f = f "redundant same-type word still defines" assert=
+
+"concrete type already satisfying a protocol" test-section
+sat-proto: ( x: fixnum & stringable -- ) [ drop ] ;
+sat-proto: >word-info f = f "redundant satisfied-protocol word still defines" assert=

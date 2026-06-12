@@ -915,6 +915,37 @@ pub const Context = struct {
         return self.parent_context.?.getAnyTypeSentinel();
     }
 
+    /// Whether `type_tv` satisfies a constraint element. Thin wrapper over the
+    /// protocol satisfies-check so the parser's constraint analysis never has to
+    /// import the protocols primitive directly.
+    pub fn constraintTypeSatisfies(
+        self: *Context,
+        type_tv: *const value_mod.TypeValue,
+        element: value_mod.ConstraintCombinator.Element,
+    ) anyerror!bool {
+        return protocols_mod.typeSatisfiesConstraint(self, type_tv, element);
+    }
+
+    /// Whether the `allow-uninhabited-constraint` pragma is set and truthy in
+    /// the current scope. When true, the constraint analyzer demotes its
+    /// fatal uninhabited-constraint errors to warnings.
+    pub fn pragmaAllowsUninhabited(self: *const Context) bool {
+        const v = self.getPragma("allow-uninhabited-constraint") orelse return false;
+        return switch (v) {
+            .boolean => |b| b,
+            else => true,
+        };
+    }
+
+    /// Emit a non-fatal constraint diagnostic to stderr. Matches the
+    /// redefinition / type-check warning convention: an immediate `warning:`
+    /// line rather than a collected diagnostic.
+    pub fn emitConstraintWarning(self: *const Context, msg: []const u8) void {
+        _ = self;
+        var tw = trace_mod.TraceWriter.init();
+        tw.print("warning: {s}\n", .{msg});
+    }
+
     /// Load the prelude source. When external_source is non-null, it is used
     /// instead of the compiled-in embedded prelude.
     pub fn loadPrelude(self: *Context, external_source: ?[]const u8) !void {
@@ -955,6 +986,8 @@ pub const Context = struct {
         try self.pragma_registry.put(self.allocator, "callsite-arity-mismatch", .{
             .native_validator = &control.nativeCallsiteArityMismatchValidator,
         });
+
+        try self.pragma_registry.put(self.allocator, "allow-uninhabited-constraint", .{});
 
         // Split prelude into lines and process incrementally
         const source = external_source orelse prelude_source;

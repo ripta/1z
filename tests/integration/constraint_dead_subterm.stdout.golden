@@ -1,0 +1,4 @@
+Stack: [ ]
+Stack: [ <protocol-descriptor:comparable> ]
+PASS: dead subterm drops; annotation reduces to comparable
+Stack: [ ]

@@ -1,0 +1,7 @@
+use "testing" ;
+
+\ Two protocols under & cannot be decided at parse time: no future type is ruled
+\ out, so the constraint is accepted with no diagnostic.
+both-proto: ( x: comparable & stringable -- ) [ drop ] ;
+both-proto: >word-info stack-effect>> inputs>> #first type-annotation>> type-of native.type-name
+"constraint" "two-protocol intersection annotation is a constraint" assert=

@@ -21,6 +21,7 @@ const StackEffectParam = stack_effect_mod.StackEffectParam;
 const Context = @import("context.zig").Context;
 const markers_mod = @import("primitives/markers.zig");
 const Marker = value_mod.Marker;
+const constraint_analysis = @import("constraint_analysis.zig");
 
 /// Process escape sequences in a string and allocate the result; supports
 /// Zig-compatible escape sequences: \n, \r, \t, \\, \", \', \xHH, \u{HHHH}
@@ -767,6 +768,31 @@ fn invalidConstraint(ctx: ?*Context, allocator: Allocator, comptime fmt: []const
     return ParseError.OutOfMemory;
 }
 
+/// Raise an uninhabited-constraint diagnostic for a well-formed but
+/// unsatisfiable constraint. When the `allow-uninhabited-constraint` pragma is
+/// set, demote to a warning and return the annotation unchanged so parsing
+/// continues.
+fn raiseUninhabited(
+    ctx: *Context,
+    allocator: Allocator,
+    annotation: ResolvedAnnotation,
+    reason: ?[]const u8,
+) ParseError!ResolvedAnnotation {
+    const detail = reason orelse "no value can satisfy all bounds";
+    if (ctx.pragmaAllowsUninhabited()) {
+        if (std.fmt.allocPrint(allocator, "uninhabited constraint: {s}", .{detail})) |msg| {
+            defer allocator.free(msg);
+            ctx.emitConstraintWarning(msg);
+        } else |_| {}
+        return annotation;
+    }
+    ctx.parse_diagnostics = .{
+        .error_type = "UninhabitedConstraint",
+        .message = std.fmt.allocPrint(allocator, "uninhabited constraint: {s}", .{detail}) catch null,
+    };
+    return ParseError.ParseTimeExecutionError;
+}
+
 /// Resolve a single constraint atom token into a combinator element. Returns
 /// null when the token does not resolve to a type or constraint.
 fn resolveAtomElement(ctx: ?*Context, token: []const u8) ?value_mod.ConstraintCombinator.Element {
@@ -875,13 +901,47 @@ fn parseConstraintAnnotation(
         disjuncts.append(allocator, conj) catch return ParseError.OutOfMemory;
     }
 
-    if (disjuncts.items.len == 1) return elementToAnnotation(disjuncts.items[0]);
+    // A single conjunction is the whole annotation: an uninhabited intersection
+    // here is fatal (subject to the pragma escape).
+    if (disjuncts.items.len == 1) {
+        const only = disjuncts.items[0];
+        if (only == .combinator and only.combinator.kind == .intersection) {
+            const res = constraint_analysis.analyzeIntersection(c, allocator, only.combinator.elements) catch return ParseError.OutOfMemory;
+            if (res.verdict == .uninhabited) {
+                return try raiseUninhabited(c, allocator, elementToAnnotation(only), res.reason);
+            }
+        }
+        return elementToAnnotation(only);
+    }
 
-    // A union whose every disjunct is a concrete type stays a pure type union on
-    // TypeValue.member_types; as soon as a protocol or intersection joins, the
-    // union becomes a ConstraintCombinator.
-    var all_types = true;
+    // Union with two or more disjuncts: an uninhabited intersection disjunct is a
+    // dead subterm -- warn and drop it, letting the outer constraint reduce.
+    var live = std.ArrayListUnmanaged(value_mod.ConstraintCombinator.Element){};
+    defer live.deinit(allocator);
     for (disjuncts.items) |d| {
+        if (d == .combinator and d.combinator.kind == .intersection) {
+            const res = constraint_analysis.analyzeIntersection(c, allocator, d.combinator.elements) catch return ParseError.OutOfMemory;
+            if (res.verdict == .uninhabited) {
+                if (std.fmt.allocPrint(allocator, "dead subterm in union: {s}", .{res.reason orelse "uninhabited"})) |msg| {
+                    defer allocator.free(msg);
+                    c.emitConstraintWarning(msg);
+                } else |_| {}
+                continue;
+            }
+        }
+        live.append(allocator, d) catch return ParseError.OutOfMemory;
+    }
+
+    if (live.items.len == 0) {
+        return try raiseUninhabited(c, allocator, elementToAnnotation(disjuncts.items[0]), null);
+    }
+    if (live.items.len == 1) return elementToAnnotation(live.items[0]);
+
+    // A union whose every surviving disjunct is a concrete type stays a pure type
+    // union on TypeValue.member_types; as soon as a protocol or intersection
+    // joins, the union becomes a ConstraintCombinator.
+    var all_types = true;
+    for (live.items) |d| {
         if (d != .type) {
             all_types = false;
             break;
@@ -890,12 +950,12 @@ fn parseConstraintAnnotation(
     if (all_types) {
         var members = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
         defer members.deinit(allocator);
-        for (disjuncts.items) |d| members.append(allocator, d.type) catch return ParseError.OutOfMemory;
+        for (live.items) |d| members.append(allocator, d.type) catch return ParseError.OutOfMemory;
         const union_type = c.getOrCreateAnonymousUnionTypeValue(members.items) catch return ParseError.OutOfMemory;
         return .{ .type = union_type };
     }
 
-    const cc = c.createConstraintCombinator(.@"union", disjuncts.items) catch return ParseError.OutOfMemory;
+    const cc = c.createConstraintCombinator(.@"union", live.items) catch return ParseError.OutOfMemory;
     return .{ .combination = cc };
 }
 

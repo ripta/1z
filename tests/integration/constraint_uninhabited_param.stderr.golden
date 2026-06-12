@@ -1,0 +1,1 @@
+tests/integration/constraint_uninhabited_param.1z:5: error 'uninhabited-constraint' uninhabited constraint: no value is both 'array(fixnum)' and 'array(string)'

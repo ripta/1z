@@ -1,0 +1,5 @@
+\ Two parameterized types with conflicting element types are distinct concrete
+\ types; their intersection is uninhabited.
+array(fixnum): M{ inner-type: array element-type: fixnum define: [ define-parameterized-type ] } ;
+array(string): M{ inner-type: array element-type: string define: [ define-parameterized-type ] } ;
+foo: ( x: array(fixnum) & array(string) -- ) [ drop ] ;

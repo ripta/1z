@@ -1,0 +1,8 @@
+use "testing" ;
+
+\ Under |, an uninhabited intersection disjunct is a dead subterm: it warns and
+\ drops, and the outer union reduces to the surviving disjunct. Because & binds
+\ tighter than |, `fixnum & string | comparable` is `(fixnum & string) | comparable`.
+reduced: ( x: fixnum & string | comparable -- ) [ drop ] ;
+reduced: >word-info stack-effect>> inputs>> #first type-annotation>>
+comparable "dead subterm drops; annotation reduces to comparable" assert=

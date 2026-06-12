@@ -1,0 +1,10 @@
+=== same concrete type repeated under & ===
+Stack: [ ]
+Stack: [ ]
+PASS: redundant same-type word still defines
+Stack: [ ]
+=== concrete type already satisfying a protocol ===
+Stack: [ ]
+Stack: [ ]
+PASS: redundant satisfied-protocol word still defines
+Stack: [ ]

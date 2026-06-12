@@ -1,0 +1,3 @@
+\ A concrete type intersected with a protocol it cannot satisfy is uninhabited.
+no-method: protocol{ no-such: } ;
+foo: ( x: fixnum & no-method -- ) [ drop ] ;

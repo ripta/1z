@@ -1,0 +1,2 @@
+warning: redundant constraint: 'fixnum' and 'fixnum' overlap in the intersection; the narrower bound suffices
+warning: redundant constraint: 'fixnum' already satisfies 'stringable'

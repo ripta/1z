@@ -1,0 +1,4 @@
+Stack: [ ]
+Stack: [ "constraint" ]
+PASS: two-protocol intersection annotation is a constraint
+Stack: [ ]
