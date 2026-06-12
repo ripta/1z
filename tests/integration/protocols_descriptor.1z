@@ -47,21 +47,24 @@ test-comparable-protocol-info: ( -- ) [
   comparable: >word-info protocol>>
   dup f = f "comparable has a protocol field" assert=
   dup name>> "comparable" "comparable protocol name" assert=
+  dup kind>> protocol: "comparable kind is protocol" assert=
   dup methods>> #len 0 > t "comparable methods is non-empty" assert=
   dup methods>> #first cmp: "comparable first method symbol" assert=
-  protocol_id>> fixnum? t "comparable protocol_id is a fixnum" assert=
+  id>> fixnum? t "comparable id is a fixnum" assert=
 ] ;
 
 test-inspectable-protocol-info: ( -- ) [
   inspectable: >word-info protocol>>
   dup name>> "inspectable" "inspectable protocol name" assert=
-  protocol_id>> fixnum? t "inspectable protocol_id is a fixnum" assert=
+  dup kind>> protocol: "inspectable kind is protocol" assert=
+  id>> fixnum? t "inspectable id is a fixnum" assert=
 ] ;
 
 test-stringable-protocol-info: ( -- ) [
   stringable: >word-info protocol>>
   dup name>> "stringable" "stringable protocol name" assert=
-  protocol_id>> fixnum? t "stringable protocol_id is a fixnum" assert=
+  dup kind>> protocol: "stringable kind is protocol" assert=
+  id>> fixnum? t "stringable id is a fixnum" assert=
 ] ;
 
 test-protocol-redefinition-rejected: ( -- ) [

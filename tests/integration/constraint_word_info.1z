@@ -1,0 +1,70 @@
+use "testing" ;
+
+\ `>word-info`'s protocol field surfaces the full constraint structure of a
+\ constraint word: a protocol-kind record for base protocols, and
+\ intersection/union records for combinators whose elements are recursively
+\ introspectable. Type leaves stay first-class raw type values; protocol and
+\ nested-combinator leaves are constraint-info records.
+
+showable: protocol{ show: } ;
+namable:  protocol{ label: } ;
+show:     generic ( x -- y ) [ drop "shown" ] ;
+label:    generic ( x -- y ) [ drop "labeled" ] ;
+
+\ Named combinators over the protocols above.
+both: showable & namable ;
+either: showable | namable ;
+num-or-show: fixnum | showable ;
+nested: num-or-show & namable ;
+
+"a protocol word surfaces a protocol-kind record" test-section
+comparable: >word-info protocol>>
+dup f = f "comparable has a constraint record" assert=
+dup name>> "comparable" "comparable name" assert=
+dup kind>> protocol: "comparable kind is protocol" assert=
+dup methods>> #len 0 > t "comparable methods non-empty" assert=
+dup elements>> f "a protocol record has no elements" assert=
+id>> fixnum? t "comparable id is a fixnum" assert=
+
+"a named intersection surfaces an intersection-kind record" test-section
+both: >word-info protocol>>
+dup name>> "both" "intersection name is the defining word" assert=
+dup kind>> intersection: "kind is intersection" assert=
+dup methods>> f "a combinator record has no methods" assert=
+dup elements>> #len 2 "intersection has two elements" assert=
+id>> fixnum? t "intersection id is a fixnum" assert=
+
+"a named union surfaces a union-kind record" test-section
+either: >word-info protocol>> dup kind>> union: "kind is union" assert=
+elements>> #len 2 "union has two elements" assert=
+
+"intersection elements are protocol-kind records carrying their names" test-section
+both: >word-info protocol>> elements>>
+dup 0 #nth kind>> protocol: "first element is a protocol" assert=
+dup 0 #nth name>> "showable" "first element name" assert=
+1 #nth name>> "namable" "second element name" assert=
+
+"a nested mixed combinator round-trips its structure" test-section
+\ nested = (fixnum | showable) & namable
+nested: >word-info protocol>> kind>> intersection: "nested top kind is intersection" assert=
+nested: >word-info protocol>> elements>> #len 2 "nested has two elements" assert=
+nested: >word-info protocol>> elements>> 0 #nth kind>> union: "nested first element is a union" assert=
+nested: >word-info protocol>> elements>> 0 #nth name>> f "a nested combinator element is anonymous" assert=
+nested: >word-info protocol>> elements>> 0 #nth elements>> 0 #nth type-of type =
+"the union's type leaf is a raw type value" assert-true
+nested: >word-info protocol>> elements>> 0 #nth elements>> 0 #nth native.type-name
+"fixnum" "the type leaf is fixnum" assert=
+nested: >word-info protocol>> elements>> 0 #nth elements>> 1 #nth kind>> protocol:
+"the union's protocol leaf is a protocol record" assert=
+nested: >word-info protocol>> elements>> 0 #nth elements>> 1 #nth name>> "showable"
+"the protocol leaf is showable" assert=
+nested: >word-info protocol>> elements>> 1 #nth name>> "namable"
+"nested second element is namable" assert=
+
+"constraint-element-name normalizes heterogeneous leaves" test-section
+num-or-show: >word-info protocol>> elements>>
+dup 0 #nth constraint-element-name "fixnum" "element-name on a type leaf" assert=
+1 #nth constraint-element-name "showable" "element-name on a protocol leaf" assert=
+
+"a non-constraint word has no constraint record" test-section
+dup: >word-info protocol>> f "native word has no constraint record" assert=

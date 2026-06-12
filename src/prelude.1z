@@ -953,25 +953,61 @@ dispatch-provenance: struct{ generator: string parent: string role: string field
 \\ A single method entry: the dispatch type signature and optional provenance.
 method-info: struct{ types: array provenance: any } ;
 
-\\ Descriptor of a protocol word: the protocol name, its required methods,
-\\ and the monotonic protocol_id assigned by the runtime. The methods array
-\\ is the flat shape the descriptor carries internally: symbols interleaved
-\\ with optional stack-effects.
-protocol-info: struct{ name: string methods: array protocol_id: fixnum } ;
+\\ Structured view of a constraint node, which descibes a base protocol, an intersection, or a union.
+\\
+\\ - `kind` is one of `protocol:`, `intersection:`, or `union:`. Protocol and combinator nodes carry
+\\   `methods` and `f` elements.
+\\ - `id` is the monotonic protocol_id or combinator_id.
+\\ - `name` is the descriptor name for a protocol, the defining word's name for a top-level combinator,
+\\    or `f` for an anonymous (i.e., nested or bare-value) combinator.
+\\ - `elements` depends on the type:
+\\    - on a concrete type, it's the raw type value; while
+\\    - on a protocol and nested-combinator, they're themselves constraint-info records.
+constraint-info: struct{
+  name:     any
+  kind:     symbol
+  methods:  any
+  elements: any
+  id: any
+} ;
 
-\\ True when the parameter carries a protocol bound.
+\\ Convert a raw 5-field record `{name kind methods elements id}` from
+\\ native.>constraint-info (or `>word-info`'s protocol field) into a
+\\ constraint-info struct, recursing into combinator elements. A raw type-value
+\\ element is left first-class; a raw record element is wrapped recursively.
+\\ `f` passes through unchanged.
+(raw>constraint-info): stack-recursive [
+  dup f = [ ] [
+    dup 0 #nth
+    over 1 #nth
+    2 pick-n 2 #nth
+    3 pick-n 3 #nth dup f = [ ] [
+      [ dup type-of type = [ ] [ (raw>constraint-info) ] if ] #map #collect
+    ] if
+    4 pick-n 4 #nth
+    make-constraint-info nip
+  ] if
+] ;
+
+\\ Display name of one combinator element, whether it is a raw type value or a
+\\ constraint-info record. Lets consumers walk heterogeneous `elements` without
+\\ special-casing the source at each call site.
+constraint-element-name: ( element -- string ) [
+  dup type-of type = [ native.type-name ] [ name>> ] if
+] ;
+
+\\ True when the parameter carries a protocol or combinator bound.
 protocol-bound?: ( stack-effect-param -- ? ) [ type-annotation>> type-of constraint = ] ;
 
 \\ True when the parameter carries a concrete-type annotation.
 type-bound?: ( stack-effect-param -- ? ) [ type-annotation>> type-of type = ] ;
 
-\\ The bound protocol as a protocol-info struct, or f if the parameter has
-\\ no protocol bound. Mirrors the shape of `>word-info protocol>>` so
+\\ The bound constraint as a constraint-info struct, or f if the parameter has
+\\ no constraint bound. Mirrors the shape of `>word-info protocol>>` so
 \\ consumers do not need to special-case the source.
-protocol-info>>: ( stack-effect-param -- protocol-info ) [
+constraint-info>>: ( stack-effect-param -- constraint-info ) [
   dup protocol-bound? [
-    type-annotation>> native.>protocol-info
-    dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-protocol-info nip
+    type-annotation>> native.>constraint-info (raw>constraint-info)
   ] [ drop f ] if
 ] ;
 
@@ -998,7 +1034,6 @@ word-info: struct{ name: string stack-effect: any doc: any markers: array native
   >provenance:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
   >dispatch-prov: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
   >method-info:   [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
-  >protocol-info: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-protocol-info nip ] if ] ;
 
   dup 0 #nth
   over 1 #nth >stack-effect-info
@@ -1011,7 +1046,7 @@ word-info: struct{ name: string stack-effect: any doc: any markers: array native
   8 pick-n 8 #nth
   9 pick-n 9 #nth >provenance
   10 pick-n 10 #nth
-  11 pick-n 11 #nth >protocol-info
+  11 pick-n 11 #nth (raw>constraint-info)
   make-word-info nip
 ] ;
 

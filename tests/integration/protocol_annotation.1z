@@ -32,18 +32,19 @@ typed-fn: >word-info stack-effect>> inputs>> #first
 dup type-bound? t "type-bound input is type-bound?" assert=
 protocol-bound? f "type-bound input is not protocol-bound?" assert=
 
-"protocol-info>> yields the same shape as `>word-info protocol>>`" test-section
-dbl: >word-info stack-effect>> inputs>> #first protocol-info>>
-dup f = f "protocol-info>> returns a struct on a protocol-bound input" assert=
-dup name>> "doubleable" "protocol-info>> name is doubleable" assert=
-protocol_id>> fixnum? t "protocol-info>> protocol_id is a fixnum" assert=
+"constraint-info>> yields the same shape as `>word-info protocol>>`" test-section
+dbl: >word-info stack-effect>> inputs>> #first constraint-info>>
+dup f = f "constraint-info>> returns a struct on a protocol-bound input" assert=
+dup name>> "doubleable" "constraint-info>> name is doubleable" assert=
+dup kind>> protocol: "constraint-info>> kind is protocol" assert=
+id>> fixnum? t "constraint-info>> id is a fixnum" assert=
 
-dbl: >word-info stack-effect>> outputs>> #first protocol-info>>
-name>> "doubleable" "protocol-info>> works symmetrically on outputs" assert=
+dbl: >word-info stack-effect>> outputs>> #first constraint-info>>
+name>> "doubleable" "constraint-info>> works symmetrically on outputs" assert=
 
-"protocol-info>> is f on a concrete-typed parameter" test-section
-typed-fn: >word-info stack-effect>> inputs>> #first protocol-info>>
-f "protocol-info>> is f on a type-bound input" assert=
+"constraint-info>> is f on a concrete-typed parameter" test-section
+typed-fn: >word-info stack-effect>> inputs>> #first constraint-info>>
+f "constraint-info>> is f on a type-bound input" assert=
 
 "`|` mixing a protocol and a type parses as a constraint combination" test-section
 mixed-fn: ( x: doubleable | fixnum -- ) [ ] ;

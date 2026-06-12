@@ -33,15 +33,18 @@ PASS: doubleable validates twin
 Stack: [ ]
 PASS: comparable has a protocol field
 PASS: comparable protocol name
+PASS: comparable kind is protocol
 PASS: comparable methods is non-empty
 PASS: comparable first method symbol
-PASS: comparable protocol_id is a fixnum
+PASS: comparable id is a fixnum
 Stack: [ ]
 PASS: inspectable protocol name
-PASS: inspectable protocol_id is a fixnum
+PASS: inspectable kind is protocol
+PASS: inspectable id is a fixnum
 Stack: [ ]
 PASS: stringable protocol name
-PASS: stringable protocol_id is a fixnum
+PASS: stringable kind is protocol
+PASS: stringable id is a fixnum
 Stack: [ ]
 PASS: re-defining a protocol word throws cannot-redefine-const
 Stack: [ ]

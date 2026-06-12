@@ -8,12 +8,12 @@
 \ `native.>word` reads the word's stack effect straight from it. The
 \ raw introspection record is indexed directly: element 1 is the
 \ stack-effect record { inputs outputs }, a param is { name row? quot
-\ annotation }, and `native.>protocol-info` renders the annotation as
-\ { name methods protocol_id }.
+\ annotation }, and `native.>constraint-info` renders the annotation as
+\ { name kind methods elements id }.
 
 use "fixtures/aot_protocol_annotation_dep.1z" ;
 
 module-cache get @values #first
 bounded-caller: native.>word
 1 #nth 0 #nth 0 #nth 3 #nth
-native.>protocol-info 0 #nth print-line
+native.>constraint-info 0 #nth print-line

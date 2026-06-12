@@ -14,6 +14,7 @@ const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
 const MutableMap = value_mod.MutableMap;
 const ProtocolDescriptor = value_mod.ProtocolDescriptor;
+const ConstraintCombinator = value_mod.ConstraintCombinator;
 
 const StackEffect = @import("../stack_effect.zig").StackEffect;
 
@@ -32,7 +33,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "all-words", .func = nativeAllWords, .stack_effect = "-- array" },
     .{ .name = "current-scope", .func = nativeCurrentScope, .stack_effect = "-- module" },
     .{ .name = "local-scope", .func = nativeLocalScope, .stack_effect = "-- module" },
-    .{ .name = ">protocol-info", .func = nativeProtocolDescriptorToInfo, .stack_effect = "constraint -- array" },
+    .{ .name = ">constraint-info", .func = nativeConstraintToInfo, .stack_effect = "constraint -- array" },
     .{ .name = "dead-definitions", .func = nativeDeadDefinitions },
     .{ .name = "defined?", .func = nativeDefined, .stack_effect = "module name -- ?" },
     .{ .name = "locally-defined?", .func = nativeLocallyDefined },
@@ -67,40 +68,81 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
     return .{ .array = fields };
 }
 
-/// Build a 3-element raw record `{name methods protocol_id}` from a protocol
-/// descriptor. The prelude wraps this into the `protocol-info` struct.
-fn buildProtocolDescriptorRecord(alloc: Allocator, descriptor: *const ProtocolDescriptor) Allocator.Error!Value {
-    const methods_arr = try alloc.alloc(Value, descriptor.methods.len);
-    @memcpy(methods_arr, descriptor.methods);
+/// The backing of a constraint node: a base protocol or a combinator. Type
+/// leaves are not records and never reach here -- they are surfaced as raw type
+/// values inside a combinator's element list.
+const ConstraintBacking = union(enum) {
+    protocol: *const ProtocolDescriptor,
+    combinator: *const ConstraintCombinator,
+};
 
-    const fields = try alloc.alloc(Value, 3);
-    fields[0] = .{ .string = descriptor.name };
-    fields[1] = .{ .array = methods_arr };
-    fields[2] = .{ .fixnum = @intCast(descriptor.protocol_id) };
+fn constraintKindSymbol(kind: ConstraintCombinator.Kind) []const u8 {
+    return switch (kind) {
+        .intersection => "intersection",
+        .@"union" => "union",
+    };
+}
+
+/// Build the raw 5-field constraint-info record `{name kind methods elements id}`
+/// from a constraint backing. The prelude wraps this into the `constraint-info`
+/// struct. `name_override` supplies the top-level name for a combinator, which
+/// carries no stored name; pass `null` for nested elements and bare-value entry
+/// points so anonymous combinators report `f`.
+///
+/// A combinator's element list is heterogeneous: a `type` element is the raw
+/// type value (first-class, full fidelity), while `protocol` and `combinator`
+/// elements recurse into nested records (their raw values are opaque pointers).
+fn buildConstraintRecord(alloc: Allocator, backing: ConstraintBacking, name_override: ?[]const u8) Allocator.Error!Value {
+    const fields = try alloc.alloc(Value, 5);
+    switch (backing) {
+        .protocol => |descriptor| {
+            const methods_arr = try alloc.alloc(Value, descriptor.methods.len);
+            @memcpy(methods_arr, descriptor.methods);
+            fields[0] = .{ .string = name_override orelse descriptor.name };
+            fields[1] = .{ .symbol = "protocol" };
+            fields[2] = .{ .array = methods_arr };
+            fields[3] = .{ .boolean = false };
+            fields[4] = .{ .fixnum = @intCast(descriptor.protocol_id) };
+        },
+        .combinator => |cc| {
+            const elements_arr = try alloc.alloc(Value, cc.elements.len);
+            for (cc.elements, 0..) |el, i| {
+                elements_arr[i] = switch (el) {
+                    .type => |tv| Value{ .type_val = @constCast(tv) },
+                    .protocol => |pd| try buildConstraintRecord(alloc, .{ .protocol = pd }, null),
+                    .combinator => |nested| try buildConstraintRecord(alloc, .{ .combinator = nested }, null),
+                };
+            }
+            fields[0] = if (name_override) |n| Value{ .string = n } else Value{ .boolean = false };
+            fields[1] = .{ .symbol = constraintKindSymbol(cc.kind) };
+            fields[2] = .{ .boolean = false };
+            fields[3] = .{ .array = elements_arr };
+            fields[4] = .{ .fixnum = @intCast(cc.combinator_id) };
+        },
+    }
     return .{ .array = fields };
 }
 
-/// Recognize a protocol word and return a 3-element raw record
-/// `{name methods protocol_id}`. A word is a protocol word iff its body is
-/// the single-instruction shape that `nativeDefineProtocol` emits: a
-/// `push_literal` of a `protocol_descriptor`. Returns `f` for any other
-/// shape.
-fn buildProtocolInfo(alloc: Allocator, word: WordDefinition) Allocator.Error!Value {
+/// Recognize a constraint word and return the raw constraint-info record, or `f`
+/// for any other shape. A constraint word's body is the single-instruction shape
+/// that protocol and combinator definitions emit: a `push_literal` of a
+/// `protocol_descriptor` or a `constraint_combinator`. The word name becomes the
+/// top-level record's name.
+fn buildConstraintInfo(alloc: Allocator, name: []const u8, word: WordDefinition) Allocator.Error!Value {
     const instrs = switch (word.action) {
         .compound => |body| body,
         .native, .host_callback => return .{ .boolean = false },
     };
     if (instrs.len != 1) return .{ .boolean = false };
 
-    const descriptor: *const ProtocolDescriptor = switch (instrs[0].op) {
+    return switch (instrs[0].op) {
         .push_literal => |lit| switch (lit) {
-            .protocol_descriptor => |d| d,
-            else => return .{ .boolean = false },
+            .protocol_descriptor => |d| try buildConstraintRecord(alloc, .{ .protocol = d }, name),
+            .constraint_combinator => |cc| try buildConstraintRecord(alloc, .{ .combinator = cc }, name),
+            else => .{ .boolean = false },
         },
-        else => return .{ .boolean = false },
+        else => .{ .boolean = false },
     };
-
-    return buildProtocolDescriptorRecord(alloc, descriptor);
 }
 
 fn buildStackEffectValue(alloc: Allocator, effect: *const StackEffect) Allocator.Error!Value {
@@ -203,7 +245,7 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
         break :blk false;
     };
 
-    const protocol_val = try buildProtocolInfo(alloc, word);
+    const protocol_val = try buildConstraintInfo(alloc, name, word);
 
     // Raw array: name stack-effect doc markers native? body methods source-loc module provenance compiled? protocol
     const wi_fields = try alloc.alloc(Value, 12);
@@ -602,21 +644,24 @@ fn nativeToWord(ctx: *Context) anyerror!void {
     try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
 }
 
-/// >protocol-info ( constraint -- array ) - Convert a protocol descriptor value into the same
-/// 3-element raw record `{name methods protocol_id}` that `>word-info`'s `protocol` field carries.
+/// >constraint-info ( constraint -- array ) - Convert a constraint value into the same
+/// raw constraint-info record `{name kind methods elements id}` that `>word-info`'s
+/// `protocol` field carries. Accepts both protocol-descriptor and combinator backings;
+/// a bare value carries no name, so combinators report `f`.
 ///
-/// The prelude wraps the result into the `protocol-info` struct.
-fn nativeProtocolDescriptorToInfo(ctx: *Context) anyerror!void {
+/// The prelude wraps the result into the `constraint-info` struct.
+fn nativeConstraintToInfo(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const val = try ctx.stack.pop();
-    const descriptor = switch (val) {
-        .protocol_descriptor => |d| d,
+    const backing: ConstraintBacking = switch (val) {
+        .protocol_descriptor => |d| .{ .protocol = d },
+        .constraint_combinator => |cc| .{ .combinator = cc },
         else => {
             helpers.setTypeMismatchError(ctx, "constraint", val);
             return error.TypeMismatch;
         },
     };
-    try ctx.stack.push(try buildProtocolDescriptorRecord(alloc, descriptor));
+    try ctx.stack.push(try buildConstraintRecord(alloc, backing, null));
 }
 
 /// type-descriptor ( symbol|type -- type-descriptor ) - Look up a type descriptor by name or type value.

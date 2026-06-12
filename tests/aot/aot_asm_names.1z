@@ -26,9 +26,11 @@ pick-quot: ( ? -- ) [
 flip: ( ? -- ) [ [ "lo" print-line ] [ "hi" print-line ] if ] ;
 
 \ A struct with a uniquely-named field exercises the devirtualized field-accessor path: the dispatch
-\ table holds a single method for `id>>`, so AOT compiles the accessor body into its own C function
-\ whose symbol is qualified with the struct name (`person/id>>`).
-person: struct{ id } ;
+\ table holds a single method for `serial>>`, so AOT compiles the accessor body into its own C function
+\ whose symbol is qualified with the struct name (`person/serial>>`). The field name must stay unique
+\ across the always-loaded prelude; `id` would collide with the prelude's `constraint-info` record and
+\ make `serial>>`'s generic polymorphic, forcing the not-yet-supported AOT runtime-dispatch path.
+person: struct{ serial } ;
 
 \ An enum exercises the word-level provenance path: the aggregate predicate `status?` is emitted as
 \ `status/status?` so it does not collide with other aggregate predicates spelled `status?`.
@@ -43,5 +45,5 @@ t pick-quot
 f pick-quot
 t flip
 f flip
-42 make-person id>> .
+42 make-person serial>> .
 status:active status? .
