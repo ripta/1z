@@ -122,13 +122,6 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
 /// - Otherwise, bare `method` (backward compat) checking unary or same-type binary dispatch.
 fn protocolCheckHelper(ctx: *Context) anyerror!void {
     const desc_val = try ctx.stack.pop();
-    const descriptor = switch (desc_val) {
-        .protocol_descriptor => |d| d,
-        else => {
-            helpers.setTypeMismatchError(ctx, "constraint", desc_val);
-            return error.TypeMismatch;
-        },
-    };
     const type_name = switch (try ctx.stack.pop()) {
         .symbol => |s| s,
         else => {
@@ -137,15 +130,32 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
         },
     };
 
-    if (ctx.in_module_load) {
-        try ctx.protocol_obligations.append(ctx.allocator, .{
-            .type_name = type_name,
-            .descriptor = descriptor,
-        });
-        return;
+    switch (desc_val) {
+        .protocol_descriptor => |descriptor| {
+            if (ctx.in_module_load) {
+                try ctx.protocol_obligations.append(ctx.allocator, .{
+                    .type_name = type_name,
+                    .constraint = .{ .protocol = descriptor },
+                });
+                return;
+            }
+            try validateProtocolObligation(ctx, type_name, descriptor);
+        },
+        .constraint_combinator => |cc| {
+            if (ctx.in_module_load) {
+                try ctx.protocol_obligations.append(ctx.allocator, .{
+                    .type_name = type_name,
+                    .constraint = .{ .combination = cc },
+                });
+                return;
+            }
+            try validateCombinatorObligation(ctx, type_name, cc);
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "constraint", desc_val);
+            return error.TypeMismatch;
+        },
     }
-
-    try validateProtocolObligation(ctx, type_name, descriptor);
 }
 
 /// satisfies? ( type-sym constraint -- ? )
@@ -155,13 +165,6 @@ fn protocolCheckHelper(ctx: *Context) anyerror!void {
 /// steady-state path is a single hash lookup either way.
 fn nativeSatisfies(ctx: *Context) anyerror!void {
     const desc_val = try ctx.stack.pop();
-    const descriptor = switch (desc_val) {
-        .protocol_descriptor => |d| d,
-        else => {
-            helpers.setTypeMismatchError(ctx, "constraint", desc_val);
-            return error.TypeMismatch;
-        },
-    };
     const type_name = switch (try ctx.stack.pop()) {
         .symbol => |s| s,
         else => {
@@ -170,8 +173,30 @@ fn nativeSatisfies(ctx: *Context) anyerror!void {
         },
     };
 
-    const result = try checkProtocolObligation(ctx, type_name, descriptor);
+    const result = try constraintSatisfied(ctx, type_name, desc_val);
     try ctx.stack.push(.{ .boolean = result });
+}
+
+/// Full satisfies-check for a popped constraint value against a named type,
+/// covering both a bare `ProtocolDescriptor` and a `ConstraintCombinator`.
+/// Cross-type methods are checked immediately; never raises `protocol-error`.
+/// A non-constraint value or unknown type name is a programming error and
+/// propagates as `TypeMismatch`.
+fn constraintSatisfied(ctx: *Context, type_name: []const u8, desc_val: Value) !bool {
+    switch (desc_val) {
+        .protocol_descriptor => |descriptor| return checkProtocolObligation(ctx, type_name, descriptor),
+        .constraint_combinator => |cc| {
+            const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
+                helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
+                return error.TypeMismatch;
+            };
+            return typeSatisfiesConstraint(ctx, type_tv, .{ .combinator = cc });
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "constraint", desc_val);
+            return error.TypeMismatch;
+        },
+    }
 }
 
 /// Predicate-shaped variant of `validateProtocolObligation`. Returns true if the
@@ -255,6 +280,82 @@ pub fn typeSatisfiesConstraint(
             },
         },
     };
+}
+
+/// Same-type-only counterpart to `typeSatisfiesConstraint`, used by the
+/// module-load deferral. Protocol elements route through
+/// `satisfiesByDescriptorSameTypeOnly`, which skips cross-type (`any`-marked)
+/// methods and leaves them to the runtime call-site check; type elements and
+/// combinator recursion behave exactly as in the full check. This keeps a
+/// top-level combinator `assert-satisfies` consistent with how a bare-protocol
+/// `assert-satisfies` already treats cross-type methods at load time.
+pub fn typeSatisfiesConstraintSameTypeOnly(
+    ctx: *Context,
+    type_tv: *const value_mod.TypeValue,
+    element: value_mod.ConstraintCombinator.Element,
+) anyerror!bool {
+    return switch (element) {
+        .type => |expected| helpers.typeMatchesConstraint(type_tv, expected),
+        .protocol => |descriptor| try satisfiesByDescriptorSameTypeOnly(ctx, type_tv, descriptor),
+        .combinator => |cc| switch (cc.kind) {
+            .intersection => {
+                for (cc.elements) |sub| {
+                    if (!try typeSatisfiesConstraintSameTypeOnly(ctx, type_tv, sub)) return false;
+                }
+                return true;
+            },
+            .@"union" => {
+                for (cc.elements) |sub| {
+                    if (try typeSatisfiesConstraintSameTypeOnly(ctx, type_tv, sub)) return true;
+                }
+                return false;
+            },
+        },
+    };
+}
+
+/// Runtime validation of a combinator obligation: full check, raising
+/// `protocol-error` if the type does not satisfy the combinator.
+fn validateCombinatorObligation(
+    ctx: *Context,
+    type_name: []const u8,
+    cc: *const value_mod.ConstraintCombinator,
+) !void {
+    const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
+        helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
+        return error.TypeMismatch;
+    };
+    if (!try typeSatisfiesConstraint(ctx, type_tv, .{ .combinator = cc })) {
+        return raiseCombinatorError(ctx, type_name);
+    }
+}
+
+/// Module-load validation of a deferred combinator obligation: same-type-only,
+/// skipping cross-type methods inside protocol elements.
+fn validateCombinatorObligationSameTypeOnly(
+    ctx: *Context,
+    type_name: []const u8,
+    cc: *const value_mod.ConstraintCombinator,
+) !void {
+    const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
+        helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
+        return error.TypeMismatch;
+    };
+    if (!try typeSatisfiesConstraintSameTypeOnly(ctx, type_tv, .{ .combinator = cc })) {
+        return raiseCombinatorError(ctx, type_name);
+    }
+}
+
+/// Raise a `protocol-error` for a type that fails a combinator constraint. The
+/// combinator is anonymous from the descriptor's view, so the message names the
+/// type rather than a single protocol.
+fn raiseCombinatorError(ctx: *Context, type_name: []const u8) error{UserThrown} {
+    const msg = std.fmt.allocPrint(
+        ctx.arena.allocator(),
+        "type '{s}' does not satisfy the required constraint",
+        .{type_name},
+    ) catch "protocol validation failed";
+    return raiseProtocolError(ctx, msg);
 }
 
 /// Check whether a value satisfies a struct-field constraint element. Concrete
@@ -415,11 +516,18 @@ fn validateProtocolObligationUncached(
 /// Validate deferred protocol obligations.
 pub fn validateObligationsSameType(ctx: *Context) !void {
     for (ctx.protocol_obligations.items) |obligation| {
-        try validateObligationSameTypeOnly(
-            ctx,
-            obligation.type_name,
-            obligation.descriptor,
-        );
+        switch (obligation.constraint) {
+            .protocol => |descriptor| try validateObligationSameTypeOnly(
+                ctx,
+                obligation.type_name,
+                descriptor,
+            ),
+            .combination => |cc| try validateCombinatorObligationSameTypeOnly(
+                ctx,
+                obligation.type_name,
+                cc,
+            ),
+        }
     }
 
     ctx.protocol_obligations.clearRetainingCapacity();
@@ -683,4 +791,43 @@ test "typeSatisfiesConstraint over concrete-type combinators" {
     const nested = try ctx.createConstraintCombinator(.intersection, &.{ .{ .combinator = union_cc }, fixnum_el });
     try testing.expect(try typeSatisfiesConstraint(&ctx, fixnum_tv, .{ .combinator = nested }));
     try testing.expect(!try typeSatisfiesConstraint(&ctx, string_tv, .{ .combinator = nested }));
+}
+
+test "typeSatisfiesConstraintSameTypeOnly skips cross-type methods at load time" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+
+    // A protocol whose only method is cross-type (`b: any`). No dispatch entry
+    // is ever registered, so the full check rejects it while the same-type-only
+    // check skips it and defers to the runtime call-site check.
+    const inputs = [_]stack_effect_mod.StackEffectParam{
+        .{ .name = "a", .type_annotation = .{ .type = ctx.getSelfTypeSentinel() } },
+        .{ .name = "b", .type_annotation = .{ .type = ctx.getAnyTypeSentinel() } },
+    };
+    const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "result" }};
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+    const methods = [_]Value{ .{ .symbol = "scale-by" }, .{ .stack_effect = effect } };
+    const scaleable = try ctx.createProtocolDescriptor("scaleable", &methods);
+
+    const proto_el: value_mod.ConstraintCombinator.Element = .{ .protocol = scaleable };
+
+    // The bare protocol element: full rejects, same-type-only accepts.
+    try testing.expect(!try typeSatisfiesConstraint(&ctx, fixnum_tv, proto_el));
+    try testing.expect(try typeSatisfiesConstraintSameTypeOnly(&ctx, fixnum_tv, proto_el));
+
+    // The skip propagates through intersection recursion: a satisfiable type
+    // element alongside the deferred protocol passes under same-type-only.
+    const fixnum_el: value_mod.ConstraintCombinator.Element = .{ .type = fixnum_tv };
+    const inter = try ctx.createConstraintCombinator(.intersection, &.{ proto_el, fixnum_el });
+    try testing.expect(try typeSatisfiesConstraintSameTypeOnly(&ctx, fixnum_tv, .{ .combinator = inter }));
+    try testing.expect(!try typeSatisfiesConstraint(&ctx, fixnum_tv, .{ .combinator = inter }));
+
+    // A type element the type genuinely fails still fails under same-type-only,
+    // so the deferral does not mask non-protocol mismatches.
+    const string_el: value_mod.ConstraintCombinator.Element = .{ .type = string_tv };
+    const inter_fail = try ctx.createConstraintCombinator(.intersection, &.{ proto_el, string_el });
+    try testing.expect(!try typeSatisfiesConstraintSameTypeOnly(&ctx, fixnum_tv, .{ .combinator = inter_fail }));
 }

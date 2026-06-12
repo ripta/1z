@@ -1,0 +1,120 @@
+use "testing" ;
+
+\ satisfies? and assert-satisfies over constraint combinators: intersection,
+\ union, mixed unions, and a nested combinator. Two single-method protocols are
+\ composed by name; virtual types implement neither, one, or both methods.
+
+showable: protocol{ show: } ;
+namable: protocol{ label: } ;
+
+show: generic ( x -- y ) [ drop "shown" ] ;
+label: generic ( x -- y ) [ drop "labeled" ] ;
+
+\ widget implements both show and label.
+widget: virtual{ string } ;
+show:   method{ widget } [ unmake-widget ] ;
+label:  method{ widget } [ unmake-widget ] ;
+
+\ icon implements only show.
+icon: virtual{ string } ;
+show: method{ icon } [ unmake-icon ] ;
+
+\ blob implements neither.
+blob: virtual{ string } ;
+
+\ Named combinators over the protocols above.
+both: showable & namable ;
+either: showable | namable ;
+num-or-show: fixnum | showable ;
+nested: num-or-show & namable ;
+
+\ -- Intersection: every element must be satisfied --
+
+test-intersection-all: ( -- ) [
+  widget: both satisfies?
+  "widget satisfies showable & namable" assert-true
+] ;
+
+test-intersection-partial: ( -- ) [
+  icon: both satisfies?
+  f "icon satisfies only showable, not the intersection" assert=
+] ;
+
+test-intersection-none: ( -- ) [
+  blob: both satisfies?
+  f "blob satisfies neither half of the intersection" assert=
+] ;
+
+\ -- Union: any element suffices --
+
+test-union-both: ( -- ) [
+  widget: either satisfies?
+  "widget satisfies showable | namable" assert-true
+] ;
+
+test-union-one: ( -- ) [
+  icon: either satisfies?
+  "icon satisfies the union via showable alone" assert-true
+] ;
+
+test-union-none: ( -- ) [
+  blob: either satisfies?
+  f "blob satisfies neither half of the union" assert=
+] ;
+
+\ -- Mixed union: the concrete-type branch and the protocol branch each match --
+
+test-mixed-type-branch: ( -- ) [
+  fixnum: num-or-show satisfies?
+  "fixnum matches the type branch of fixnum | showable" assert-true
+] ;
+
+test-mixed-protocol-branch: ( -- ) [
+  icon: num-or-show satisfies?
+  "icon matches the protocol branch of fixnum | showable" assert-true
+] ;
+
+test-mixed-neither: ( -- ) [
+  blob: num-or-show satisfies?
+  f "blob is neither fixnum nor showable" assert=
+] ;
+
+\ -- Nested combinator: (fixnum | showable) & namable --
+
+test-nested-true: ( -- ) [
+  widget: nested satisfies?
+  "widget satisfies the nested combinator" assert-true
+] ;
+
+test-nested-false: ( -- ) [
+  icon: nested satisfies?
+  f "icon fails the namable half of the nested intersection" assert=
+] ;
+
+\ -- assert-satisfies: silent on success, throws protocol-error on failure --
+
+test-assert-success: ( -- ) [
+  widget: both assert-satisfies
+  t "assert-satisfies succeeds on a satisfying type" assert-true
+] ;
+
+test-assert-throws: ( -- ) [
+  [ icon: both assert-satisfies ]
+  protocol-error: "assert-satisfies throws on a non-satisfying type" assert-error-type
+] ;
+
+\ -- Run all tests --
+
+test-intersection-all
+test-intersection-partial
+test-intersection-none
+test-union-both
+test-union-one
+test-union-none
+test-mixed-type-branch
+test-mixed-protocol-branch
+test-mixed-neither
+test-nested-true
+test-nested-false
+test-assert-success
+test-assert-throws

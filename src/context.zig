@@ -229,11 +229,17 @@ pub const AnonymousUnionKeyContext = struct {
 ///
 /// Validated after all definitions in the module have been processed.
 ///
-/// The descriptor pointer is the durable handle to the protocol's methods and name; resolving the
-/// type's `TypeValue` happens at validation time.
+/// The constraint pointer is the durable handle to the obligation; resolving the type's `TypeValue`
+/// happens at validation time. A bare protocol bound carries a `ProtocolDescriptor`; a combinator
+/// bound (`comparable & stringable`, `fixnum | comparable`) carries a `ConstraintCombinator`.
 pub const ProtocolObligation = struct {
     type_name: []const u8,
-    descriptor: *const value_mod.ProtocolDescriptor,
+    constraint: Constraint,
+
+    pub const Constraint = union(enum) {
+        protocol: *const value_mod.ProtocolDescriptor,
+        combination: *const value_mod.ConstraintCombinator,
+    };
 };
 
 /// Key for the per-context protocol satisfies-check memo.

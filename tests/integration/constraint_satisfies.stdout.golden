@@ -1,0 +1,53 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: widget satisfies showable & namable
+Stack: [ ]
+PASS: icon satisfies only showable, not the intersection
+Stack: [ ]
+PASS: blob satisfies neither half of the intersection
+Stack: [ ]
+PASS: widget satisfies showable | namable
+Stack: [ ]
+PASS: icon satisfies the union via showable alone
+Stack: [ ]
+PASS: blob satisfies neither half of the union
+Stack: [ ]
+PASS: fixnum matches the type branch of fixnum | showable
+Stack: [ ]
+PASS: icon matches the protocol branch of fixnum | showable
+Stack: [ ]
+PASS: blob is neither fixnum nor showable
+Stack: [ ]
+PASS: widget satisfies the nested combinator
+Stack: [ ]
+PASS: icon fails the namable half of the nested intersection
+Stack: [ ]
+PASS: assert-satisfies succeeds on a satisfying type
+Stack: [ ]
+PASS: assert-satisfies throws on a non-satisfying type
+Stack: [ ]
