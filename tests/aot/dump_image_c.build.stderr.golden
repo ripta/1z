@@ -218,6 +218,26 @@ typedef struct onez_image_protocoldescriptor_description {
     const struct onez_image_protocol_method *methods;
 } onez_image_protocoldescriptor_description_t;
 
+/* One element of a constraint combinator. The kind discriminant picks    */
+/* the slot-numbering convention: kind 1 indexes the 1-based typevalue     */
+/* slot table, kind 2 the 0-based protocol descriptor slots, kind 3 the    */
+/* 0-based combinator slots (a nested combinator at a lower index).        */
+typedef struct onez_image_combinator_element {
+    uint32_t kind;   /* 1 = type, 2 = protocol, 3 = combinator */
+    uint32_t slot;
+} onez_image_combinator_element_t;
+
+/* Per-slot description for a constraint combinator. The loader rebuilds   */
+/* the descriptor from the kind, element list, and combinator_id, then     */
+/* patches onez_image_constraintcombinator_slots[slot] with the pointer.   */
+typedef struct onez_image_constraintcombinator_description {
+    uint32_t    slot;            /* index into onez_image_constraintcombinator_slots */
+    uint32_t    combinator_id;   /* build-time intern key; preserved at load */
+    uint32_t    kind;            /* 0 = intersection, 1 = union */
+    uint32_t    element_count;
+    const struct onez_image_combinator_element *elements;
+} onez_image_constraintcombinator_description_t;
+
 typedef struct onez_image_header {
     uint32_t format_version;
     uint32_t module_count;
@@ -232,6 +252,7 @@ typedef struct onez_image_header {
     uint32_t tagged_slot_count;
     uint32_t mutable_map_slot_count;
     uint32_t protocoldescriptor_slot_count;
+    uint32_t constraintcombinator_slot_count;
     const struct onez_image_module *modules;
     const struct onez_image_word *words;
     const struct onez_image_marker *markers;
@@ -244,6 +265,7 @@ typedef struct onez_image_header {
     const struct onez_image_tagged_description *tagged_descriptions;
     const struct onez_image_mutable_map_description *mutable_map_descriptions;
     const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
+    const struct onez_image_constraintcombinator_description *constraintcombinator_descriptions;
 } onez_image_header_t;
 
 static const char onez_image_mk_0_name[] = "generic";
@@ -1219,7 +1241,7 @@ static const onez_image_module_t onez_image_modules_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 7,
+    .format_version = 8,
     .module_count = 1,
     .word_count = 8,
     .marker_pool_count = 4,
@@ -1232,6 +1254,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .tagged_slot_count = 10,
     .mutable_map_slot_count = 0,
     .protocoldescriptor_slot_count = 0,
+    .constraintcombinator_slot_count = 0,
     .modules = onez_image_modules_storage,
     .words = onez_image_words_storage,
     .markers = onez_image_markers_storage,
@@ -1244,5 +1267,6 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .tagged_descriptions = onez_image_tagged_descriptions_storage,
     .mutable_map_descriptions = NULL,
     .protocoldescriptor_descriptions = NULL,
+    .constraintcombinator_descriptions = NULL,
 };
 

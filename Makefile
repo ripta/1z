@@ -177,8 +177,8 @@ aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides
 		echo "FAIL: missing asm-name for compiled quotation flip/quot@26:38 (same-line sibling)"; \
 		grep -E '^int32_t onez_q_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
-	if ! grep -qE 'int32_t onez_w_id_G_G\(uintptr_t jit_ctx\) asm\("person/id>>"\);' "$$saved"; then \
-		echo "FAIL: missing asm-name clause for struct field accessor 'person/id>>'"; \
+	if ! grep -qE 'int32_t onez_w_serial_G_G\(uintptr_t jit_ctx\) asm\("person/serial>>"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name clause for struct field accessor 'person/serial>>'"; \
 		grep -E '^int32_t onez_w_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
 	if ! grep -qE 'int32_t onez_w_status_Q\(uintptr_t jit_ctx\) asm\("status/status\?"\);' "$$saved"; then \
@@ -205,8 +205,8 @@ aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides
 		echo "FAIL: nm did not report 'flip/quot@26:38' as a linker symbol"; \
 		nm $(_bin) | grep -E ' T (pick-quot|flip)/quot@' || true; exit 1; \
 	fi; \
-	if ! nm $(_bin) | grep -qE ' T person/id>>$$'; then \
-		echo "FAIL: nm did not report 'person/id>>' as a linker symbol (struct field accessor)"; \
+	if ! nm $(_bin) | grep -qE ' T person/serial>>$$'; then \
+		echo "FAIL: nm did not report 'person/serial>>' as a linker symbol (struct field accessor)"; \
 		nm $(_bin) | grep -E ' T (person|status)/' || true; exit 1; \
 	fi; \
 	if ! nm $(_bin) | grep -qE ' T status/status\?$$'; then \

@@ -270,33 +270,35 @@ typedef struct onez_image_header {
 
 static const char onez_image_mk_0_name[] = "parse-time";
 static const char onez_image_mk_1_name[] = "const";
+static const char onez_image_mk_2_name[] = "typed";
 
 static const onez_image_marker_t onez_image_markers_storage[] = {
     { .name = onez_image_mk_0_name, .name_len = 10 },
     { .name = onez_image_mk_1_name, .name_len = 5 },
+    { .name = onez_image_mk_2_name, .name_len = 5 },
 };
 
 __attribute__((used)) const struct onez_typevalue *onez_image_typevalue_slots[63] = {
     NULL, /* slot 0: "no annotation" sentinel. */
-    NULL, /* slot 1: string (filled by the loader). */
-    NULL, /* slot 2: provenance (filled by the loader). */
-    NULL, /* slot 3: array (filled by the loader). */
-    NULL, /* slot 4: marker (filled by the loader). */
-    NULL, /* slot 5: quotation (filled by the loader). */
-    NULL, /* slot 6: symbol (filled by the loader). */
-    NULL, /* slot 7: type (filled by the loader). */
-    NULL, /* slot 8: descriptor-variant (filled by the loader). */
-    NULL, /* slot 9: iterator (filled by the loader). */
-    NULL, /* slot 10: dispatch-provenance (filled by the loader). */
-    NULL, /* slot 11: option:some (filled by the loader). */
-    NULL, /* slot 12: stack-effect (filled by the loader). */
-    NULL, /* slot 13: tagged (filled by the loader). */
-    NULL, /* slot 14: result (filled by the loader). */
-    NULL, /* slot 15: stack-effect-info (filled by the loader). */
-    NULL, /* slot 16: any (filled by the loader). */
-    NULL, /* slot 17: method-info (filled by the loader). */
-    NULL, /* slot 18: on (filled by the loader). */
-    NULL, /* slot 19: fixnum (filled by the loader). */
+    NULL, /* slot 1: fixnum (filled by the loader). */
+    NULL, /* slot 2: string (filled by the loader). */
+    NULL, /* slot 3: provenance (filled by the loader). */
+    NULL, /* slot 4: array (filled by the loader). */
+    NULL, /* slot 5: marker (filled by the loader). */
+    NULL, /* slot 6: quotation (filled by the loader). */
+    NULL, /* slot 7: symbol (filled by the loader). */
+    NULL, /* slot 8: type (filled by the loader). */
+    NULL, /* slot 9: descriptor-variant (filled by the loader). */
+    NULL, /* slot 10: iterator (filled by the loader). */
+    NULL, /* slot 11: dispatch-provenance (filled by the loader). */
+    NULL, /* slot 12: option:some (filled by the loader). */
+    NULL, /* slot 13: stack-effect (filled by the loader). */
+    NULL, /* slot 14: tagged (filled by the loader). */
+    NULL, /* slot 15: result (filled by the loader). */
+    NULL, /* slot 16: stack-effect-info (filled by the loader). */
+    NULL, /* slot 17: any (filled by the loader). */
+    NULL, /* slot 18: method-info (filled by the loader). */
+    NULL, /* slot 19: on (filled by the loader). */
     NULL, /* slot 20: module (filled by the loader). */
     NULL, /* slot 21: source-loc (filled by the loader). */
     NULL, /* slot 22: result:err (filled by the loader). */
@@ -415,17 +417,15 @@ __attribute__((used)) struct onez_struct_type *onez_image_struct_type_slots[12] 
 static const char onez_image_se_1_i0_name[] = "x";
 static const char onez_image_se_1_o0_name[] = "n";
 static const onez_image_stack_effect_param_t onez_image_se_1_in[] = {
-    { .name = onez_image_se_1_i0_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 2, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
+    { .name = onez_image_se_1_i0_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 3, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
 };
 static const onez_image_stack_effect_param_t onez_image_se_1_out[] = {
     { .name = onez_image_se_1_o0_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 0, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
 };
-static const char onez_image_se_2_i0_name[] = "a";
-static const char onez_image_se_2_i1_name[] = "b";
-static const char onez_image_se_2_o0_name[] = "r";
+static const char onez_image_se_2_i0_name[] = "x";
+static const char onez_image_se_2_o0_name[] = "n";
 static const onez_image_stack_effect_param_t onez_image_se_2_in[] = {
-    { .name = onez_image_se_2_i0_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 0, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
-    { .name = onez_image_se_2_i1_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 0, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
+    { .name = onez_image_se_2_i0_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 3, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 1, .quotation_effect_idx = 0 },
 };
 static const onez_image_stack_effect_param_t onez_image_se_2_out[] = {
     { .name = onez_image_se_2_o0_name, .name_len = 1, .is_row_variable = 0, .annotation_kind = 0, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0, .quotation_effect_idx = 0 },
@@ -434,7 +434,7 @@ static const onez_image_stack_effect_param_t onez_image_se_2_out[] = {
 static const onez_image_stack_effect_t onez_image_stack_effects_storage[] = {
     { NULL, 0, NULL, 0 }, /* index 0: "no effect" sentinel. */
     { .inputs = onez_image_se_1_in, .input_count = 1, .outputs = onez_image_se_1_out, .output_count = 1 },
-    { .inputs = onez_image_se_2_in, .input_count = 2, .outputs = onez_image_se_2_out, .output_count = 1 },
+    { .inputs = onez_image_se_2_in, .input_count = 1, .outputs = onez_image_se_2_out, .output_count = 1 },
 };
 
 static const char onez_image_st_0_name[] = "provenance";
@@ -443,13 +443,13 @@ static const char onez_image_st_0_f1_name[] = "parent";
 static const char onez_image_st_0_f2_name[] = "role";
 static const char *const onez_image_st_0_field_names[] = { onez_image_st_0_f0_name, onez_image_st_0_f1_name, onez_image_st_0_f2_name };
 static const uint32_t onez_image_st_0_field_name_lens[] = { 9, 6, 4 };
-static const uint32_t onez_image_st_0_field_type_slots[] = { 1, 1, 1 };
+static const uint32_t onez_image_st_0_field_type_slots[] = { 2, 2, 2 };
 static const char onez_image_st_1_name[] = "descriptor-variant";
 static const char onez_image_st_1_f0_name[] = "name";
 static const char onez_image_st_1_f1_name[] = "type";
 static const char *const onez_image_st_1_field_names[] = { onez_image_st_1_f0_name, onez_image_st_1_f1_name };
 static const uint32_t onez_image_st_1_field_name_lens[] = { 4, 4 };
-static const uint32_t onez_image_st_1_field_type_slots[] = { 6, 7 };
+static const uint32_t onez_image_st_1_field_type_slots[] = { 7, 8 };
 static const char onez_image_st_2_name[] = "dispatch-provenance";
 static const char onez_image_st_2_f0_name[] = "generator";
 static const char onez_image_st_2_f1_name[] = "parent";
@@ -457,20 +457,20 @@ static const char onez_image_st_2_f2_name[] = "role";
 static const char onez_image_st_2_f3_name[] = "field";
 static const char *const onez_image_st_2_field_names[] = { onez_image_st_2_f0_name, onez_image_st_2_f1_name, onez_image_st_2_f2_name, onez_image_st_2_f3_name };
 static const uint32_t onez_image_st_2_field_name_lens[] = { 9, 6, 4, 5 };
-static const uint32_t onez_image_st_2_field_type_slots[] = { 1, 1, 1, 1 };
+static const uint32_t onez_image_st_2_field_type_slots[] = { 2, 2, 2, 2 };
 static const char onez_image_st_3_name[] = "method-info";
 static const char onez_image_st_3_f0_name[] = "types";
 static const char onez_image_st_3_f1_name[] = "provenance";
 static const char *const onez_image_st_3_field_names[] = { onez_image_st_3_f0_name, onez_image_st_3_f1_name };
 static const uint32_t onez_image_st_3_field_name_lens[] = { 5, 10 };
-static const uint32_t onez_image_st_3_field_type_slots[] = { 3, 16 };
+static const uint32_t onez_image_st_3_field_type_slots[] = { 4, 17 };
 static const char onez_image_st_4_name[] = "source-loc";
 static const char onez_image_st_4_f0_name[] = "file";
 static const char onez_image_st_4_f1_name[] = "line";
 static const char onez_image_st_4_f2_name[] = "column";
 static const char *const onez_image_st_4_field_names[] = { onez_image_st_4_f0_name, onez_image_st_4_f1_name, onez_image_st_4_f2_name };
 static const uint32_t onez_image_st_4_field_name_lens[] = { 4, 4, 6 };
-static const uint32_t onez_image_st_4_field_type_slots[] = { 1, 19, 19 };
+static const uint32_t onez_image_st_4_field_type_slots[] = { 2, 1, 1 };
 static const char onez_image_st_5_name[] = "constraint-info";
 static const char onez_image_st_5_f0_name[] = "name";
 static const char onez_image_st_5_f1_name[] = "kind";
@@ -479,7 +479,7 @@ static const char onez_image_st_5_f3_name[] = "elements";
 static const char onez_image_st_5_f4_name[] = "id";
 static const char *const onez_image_st_5_field_names[] = { onez_image_st_5_f0_name, onez_image_st_5_f1_name, onez_image_st_5_f2_name, onez_image_st_5_f3_name, onez_image_st_5_f4_name };
 static const uint32_t onez_image_st_5_field_name_lens[] = { 4, 4, 7, 8, 2 };
-static const uint32_t onez_image_st_5_field_type_slots[] = { 16, 6, 16, 16, 16 };
+static const uint32_t onez_image_st_5_field_type_slots[] = { 17, 7, 17, 17, 17 };
 static const char onez_image_st_6_name[] = "result-error";
 static const char onez_image_st_6_f0_name[] = "error";
 static const char *const onez_image_st_6_field_names[] = { onez_image_st_6_f0_name };
@@ -489,7 +489,7 @@ static const char onez_image_st_7_f0_name[] = "inputs";
 static const char onez_image_st_7_f1_name[] = "outputs";
 static const char *const onez_image_st_7_field_names[] = { onez_image_st_7_f0_name, onez_image_st_7_f1_name };
 static const uint32_t onez_image_st_7_field_name_lens[] = { 6, 7 };
-static const uint32_t onez_image_st_7_field_type_slots[] = { 3, 3 };
+static const uint32_t onez_image_st_7_field_type_slots[] = { 4, 4 };
 static const char onez_image_st_8_name[] = "word-info";
 static const char onez_image_st_8_f0_name[] = "name";
 static const char onez_image_st_8_f1_name[] = "stack-effect";
@@ -505,7 +505,7 @@ static const char onez_image_st_8_f10_name[] = "compiled?";
 static const char onez_image_st_8_f11_name[] = "protocol";
 static const char *const onez_image_st_8_field_names[] = { onez_image_st_8_f0_name, onez_image_st_8_f1_name, onez_image_st_8_f2_name, onez_image_st_8_f3_name, onez_image_st_8_f4_name, onez_image_st_8_f5_name, onez_image_st_8_f6_name, onez_image_st_8_f7_name, onez_image_st_8_f8_name, onez_image_st_8_f9_name, onez_image_st_8_f10_name, onez_image_st_8_f11_name };
 static const uint32_t onez_image_st_8_field_name_lens[] = { 4, 12, 3, 7, 7, 4, 7, 10, 6, 10, 9, 8 };
-static const uint32_t onez_image_st_8_field_type_slots[] = { 1, 16, 16, 3, 35, 16, 3, 16, 16, 16, 35, 16 };
+static const uint32_t onez_image_st_8_field_type_slots[] = { 2, 17, 17, 4, 35, 17, 4, 17, 17, 17, 35, 17 };
 static const char onez_image_st_9_name[] = "stack-effect-param";
 static const char onez_image_st_9_f0_name[] = "name";
 static const char onez_image_st_9_f1_name[] = "row-variable?";
@@ -513,7 +513,7 @@ static const char onez_image_st_9_f2_name[] = "nested-effect";
 static const char onez_image_st_9_f3_name[] = "type-annotation";
 static const char *const onez_image_st_9_field_names[] = { onez_image_st_9_f0_name, onez_image_st_9_f1_name, onez_image_st_9_f2_name, onez_image_st_9_f3_name };
 static const uint32_t onez_image_st_9_field_name_lens[] = { 4, 13, 13, 15 };
-static const uint32_t onez_image_st_9_field_type_slots[] = { 1, 35, 16, 16 };
+static const uint32_t onez_image_st_9_field_type_slots[] = { 2, 35, 17, 17 };
 static const char onez_image_st_10_name[] = "option-payload";
 static const char onez_image_st_10_f0_name[] = "value";
 static const char *const onez_image_st_10_field_names[] = { onez_image_st_10_f0_name };
@@ -538,56 +538,56 @@ __attribute__((used)) static const onez_image_struct_type_t onez_image_struct_ty
     { .name = onez_image_st_11_name, .name_len = 12, .field_names = onez_image_st_11_field_names, .field_name_lens = onez_image_st_11_field_name_lens, .field_count = 1, .field_type_slots = NULL, .field_type_count = 0 },
 };
 
-static const char onez_image_td_1_f0_name[] = "generator";
-static const char onez_image_td_1_f1_name[] = "parent";
-static const char onez_image_td_1_f2_name[] = "role";
-static const char *const onez_image_td_1_field_names[] = { onez_image_td_1_f0_name, onez_image_td_1_f1_name, onez_image_td_1_f2_name };
-static const uint32_t onez_image_td_1_field_name_lens[] = { 9, 6, 4 };
-static const uint32_t onez_image_td_1_field_type_slots[] = { 1, 1, 1 };
-static const char onez_image_td_7_f0_name[] = "name";
-static const char onez_image_td_7_f1_name[] = "type";
-static const char *const onez_image_td_7_field_names[] = { onez_image_td_7_f0_name, onez_image_td_7_f1_name };
-static const uint32_t onez_image_td_7_field_name_lens[] = { 4, 4 };
-static const uint32_t onez_image_td_7_field_type_slots[] = { 6, 7 };
-static const char onez_image_td_9_f0_name[] = "generator";
-static const char onez_image_td_9_f1_name[] = "parent";
-static const char onez_image_td_9_f2_name[] = "role";
-static const char onez_image_td_9_f3_name[] = "field";
-static const char *const onez_image_td_9_field_names[] = { onez_image_td_9_f0_name, onez_image_td_9_f1_name, onez_image_td_9_f2_name, onez_image_td_9_f3_name };
-static const uint32_t onez_image_td_9_field_name_lens[] = { 9, 6, 4, 5 };
-static const uint32_t onez_image_td_9_field_type_slots[] = { 1, 1, 1, 1 };
-static const char onez_image_td_13_v0_name[] = "ok";
-static const char onez_image_td_13_v1_name[] = "err";
-static const onez_image_enum_variant_t onez_image_td_13_variants[] = {
-    { .name = onez_image_td_13_v0_name, .name_len = 2, .type_slot = 54 },
-    { .name = onez_image_td_13_v1_name, .name_len = 3, .type_slot = 30 },
+static const char onez_image_td_2_f0_name[] = "generator";
+static const char onez_image_td_2_f1_name[] = "parent";
+static const char onez_image_td_2_f2_name[] = "role";
+static const char *const onez_image_td_2_field_names[] = { onez_image_td_2_f0_name, onez_image_td_2_f1_name, onez_image_td_2_f2_name };
+static const uint32_t onez_image_td_2_field_name_lens[] = { 9, 6, 4 };
+static const uint32_t onez_image_td_2_field_type_slots[] = { 2, 2, 2 };
+static const char onez_image_td_8_f0_name[] = "name";
+static const char onez_image_td_8_f1_name[] = "type";
+static const char *const onez_image_td_8_field_names[] = { onez_image_td_8_f0_name, onez_image_td_8_f1_name };
+static const uint32_t onez_image_td_8_field_name_lens[] = { 4, 4 };
+static const uint32_t onez_image_td_8_field_type_slots[] = { 7, 8 };
+static const char onez_image_td_10_f0_name[] = "generator";
+static const char onez_image_td_10_f1_name[] = "parent";
+static const char onez_image_td_10_f2_name[] = "role";
+static const char onez_image_td_10_f3_name[] = "field";
+static const char *const onez_image_td_10_field_names[] = { onez_image_td_10_f0_name, onez_image_td_10_f1_name, onez_image_td_10_f2_name, onez_image_td_10_f3_name };
+static const uint32_t onez_image_td_10_field_name_lens[] = { 9, 6, 4, 5 };
+static const uint32_t onez_image_td_10_field_type_slots[] = { 2, 2, 2, 2 };
+static const char onez_image_td_14_v0_name[] = "ok";
+static const char onez_image_td_14_v1_name[] = "err";
+static const onez_image_enum_variant_t onez_image_td_14_variants[] = {
+    { .name = onez_image_td_14_v0_name, .name_len = 2, .type_slot = 54 },
+    { .name = onez_image_td_14_v1_name, .name_len = 3, .type_slot = 30 },
 };
-static const char onez_image_td_14_f0_name[] = "inputs";
-static const char onez_image_td_14_f1_name[] = "outputs";
-static const char *const onez_image_td_14_field_names[] = { onez_image_td_14_f0_name, onez_image_td_14_f1_name };
-static const uint32_t onez_image_td_14_field_name_lens[] = { 6, 7 };
-static const uint32_t onez_image_td_14_field_type_slots[] = { 3, 3 };
-static const char onez_image_td_16_f0_name[] = "types";
-static const char onez_image_td_16_f1_name[] = "provenance";
-static const char *const onez_image_td_16_field_names[] = { onez_image_td_16_f0_name, onez_image_td_16_f1_name };
-static const uint32_t onez_image_td_16_field_name_lens[] = { 5, 10 };
-static const uint32_t onez_image_td_16_field_type_slots[] = { 3, 16 };
-static const char onez_image_td_17_v0_name[] = "exit";
-static const char onez_image_td_17_v1_name[] = "unhandled-error";
-static const char onez_image_td_17_v2_name[] = "word-defined";
-static const char onez_image_td_17_v3_name[] = "module-loaded";
-static const onez_image_enum_variant_t onez_image_td_17_variants[] = {
-    { .name = onez_image_td_17_v0_name, .name_len = 4, .type_slot = 51 },
-    { .name = onez_image_td_17_v1_name, .name_len = 15, .type_slot = 51 },
-    { .name = onez_image_td_17_v2_name, .name_len = 12, .type_slot = 51 },
-    { .name = onez_image_td_17_v3_name, .name_len = 13, .type_slot = 51 },
+static const char onez_image_td_15_f0_name[] = "inputs";
+static const char onez_image_td_15_f1_name[] = "outputs";
+static const char *const onez_image_td_15_field_names[] = { onez_image_td_15_f0_name, onez_image_td_15_f1_name };
+static const uint32_t onez_image_td_15_field_name_lens[] = { 6, 7 };
+static const uint32_t onez_image_td_15_field_type_slots[] = { 4, 4 };
+static const char onez_image_td_17_f0_name[] = "types";
+static const char onez_image_td_17_f1_name[] = "provenance";
+static const char *const onez_image_td_17_field_names[] = { onez_image_td_17_f0_name, onez_image_td_17_f1_name };
+static const uint32_t onez_image_td_17_field_name_lens[] = { 5, 10 };
+static const uint32_t onez_image_td_17_field_type_slots[] = { 4, 17 };
+static const char onez_image_td_18_v0_name[] = "exit";
+static const char onez_image_td_18_v1_name[] = "unhandled-error";
+static const char onez_image_td_18_v2_name[] = "word-defined";
+static const char onez_image_td_18_v3_name[] = "module-loaded";
+static const onez_image_enum_variant_t onez_image_td_18_variants[] = {
+    { .name = onez_image_td_18_v0_name, .name_len = 4, .type_slot = 51 },
+    { .name = onez_image_td_18_v1_name, .name_len = 15, .type_slot = 51 },
+    { .name = onez_image_td_18_v2_name, .name_len = 12, .type_slot = 51 },
+    { .name = onez_image_td_18_v3_name, .name_len = 13, .type_slot = 51 },
 };
 static const char onez_image_td_20_f0_name[] = "file";
 static const char onez_image_td_20_f1_name[] = "line";
 static const char onez_image_td_20_f2_name[] = "column";
 static const char *const onez_image_td_20_field_names[] = { onez_image_td_20_f0_name, onez_image_td_20_f1_name, onez_image_td_20_f2_name };
 static const uint32_t onez_image_td_20_field_name_lens[] = { 4, 4, 6 };
-static const uint32_t onez_image_td_20_field_type_slots[] = { 1, 19, 19 };
+static const uint32_t onez_image_td_20_field_type_slots[] = { 2, 1, 1 };
 static const char onez_image_td_22_f0_name[] = "name";
 static const char onez_image_td_22_f1_name[] = "kind";
 static const char onez_image_td_22_f2_name[] = "methods";
@@ -595,7 +595,7 @@ static const char onez_image_td_22_f3_name[] = "elements";
 static const char onez_image_td_22_f4_name[] = "id";
 static const char *const onez_image_td_22_field_names[] = { onez_image_td_22_f0_name, onez_image_td_22_f1_name, onez_image_td_22_f2_name, onez_image_td_22_f3_name, onez_image_td_22_f4_name };
 static const uint32_t onez_image_td_22_field_name_lens[] = { 4, 4, 7, 8, 2 };
-static const uint32_t onez_image_td_22_field_type_slots[] = { 16, 6, 16, 16, 16 };
+static const uint32_t onez_image_td_22_field_type_slots[] = { 17, 7, 17, 17, 17 };
 static const char onez_image_td_23_v0_name[] = "lt";
 static const char onez_image_td_23_v1_name[] = "eq";
 static const char onez_image_td_23_v2_name[] = "gt";
@@ -627,14 +627,14 @@ static const char onez_image_td_35_f10_name[] = "compiled?";
 static const char onez_image_td_35_f11_name[] = "protocol";
 static const char *const onez_image_td_35_field_names[] = { onez_image_td_35_f0_name, onez_image_td_35_f1_name, onez_image_td_35_f2_name, onez_image_td_35_f3_name, onez_image_td_35_f4_name, onez_image_td_35_f5_name, onez_image_td_35_f6_name, onez_image_td_35_f7_name, onez_image_td_35_f8_name, onez_image_td_35_f9_name, onez_image_td_35_f10_name, onez_image_td_35_f11_name };
 static const uint32_t onez_image_td_35_field_name_lens[] = { 4, 12, 3, 7, 7, 4, 7, 10, 6, 10, 9, 8 };
-static const uint32_t onez_image_td_35_field_type_slots[] = { 1, 16, 16, 3, 35, 16, 3, 16, 16, 16, 35, 16 };
+static const uint32_t onez_image_td_35_field_type_slots[] = { 2, 17, 17, 4, 35, 17, 4, 17, 17, 17, 35, 17 };
 static const char onez_image_td_37_f0_name[] = "name";
 static const char onez_image_td_37_f1_name[] = "row-variable?";
 static const char onez_image_td_37_f2_name[] = "nested-effect";
 static const char onez_image_td_37_f3_name[] = "type-annotation";
 static const char *const onez_image_td_37_field_names[] = { onez_image_td_37_f0_name, onez_image_td_37_f1_name, onez_image_td_37_f2_name, onez_image_td_37_f3_name };
 static const uint32_t onez_image_td_37_field_name_lens[] = { 4, 13, 13, 15 };
-static const uint32_t onez_image_td_37_field_type_slots[] = { 1, 35, 16, 16 };
+static const uint32_t onez_image_td_37_field_type_slots[] = { 2, 35, 17, 17 };
 static const char onez_image_td_46_f0_name[] = "value";
 static const char *const onez_image_td_46_field_names[] = { onez_image_td_46_f0_name };
 static const uint32_t onez_image_td_46_field_name_lens[] = { 5 };
@@ -643,28 +643,28 @@ static const char *const onez_image_td_53_field_names[] = { onez_image_td_53_f0_
 static const uint32_t onez_image_td_53_field_name_lens[] = { 5 };
 
 __attribute__((used)) static const onez_image_typedescriptor_t onez_image_typedescriptors_storage[] = {
+    { .numeric = 1, .exact = 1, .integer = 1, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_1_field_names, .field_name_lens = onez_image_td_1_field_name_lens, .field_count = 3, .field_type_slots = onez_image_td_1_field_type_slots, .field_type_count = 3, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_2_field_names, .field_name_lens = onez_image_td_2_field_name_lens, .field_count = 3, .field_type_slots = onez_image_td_2_field_type_slots, .field_type_count = 3, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_7_field_names, .field_name_lens = onez_image_td_7_field_name_lens, .field_count = 2, .field_type_slots = onez_image_td_7_field_type_slots, .field_type_count = 2, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_9_field_names, .field_name_lens = onez_image_td_9_field_name_lens, .field_count = 4, .field_type_slots = onez_image_td_9_field_type_slots, .field_type_count = 4, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_8_field_names, .field_name_lens = onez_image_td_8_field_name_lens, .field_count = 2, .field_type_slots = onez_image_td_8_field_type_slots, .field_type_count = 2, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_10_field_names, .field_name_lens = onez_image_td_10_field_name_lens, .field_count = 4, .field_type_slots = onez_image_td_10_field_type_slots, .field_type_count = 4, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 47, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 27, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 4, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = onez_image_td_13_variants, .variant_count = 2, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_14_field_names, .field_name_lens = onez_image_td_14_field_name_lens, .field_count = 2, .field_type_slots = onez_image_td_14_field_type_slots, .field_type_count = 2, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 4, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = onez_image_td_14_variants, .variant_count = 2, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_15_field_names, .field_name_lens = onez_image_td_15_field_name_lens, .field_count = 2, .field_type_slots = onez_image_td_15_field_type_slots, .field_type_count = 2, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 1, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_16_field_names, .field_name_lens = onez_image_td_16_field_name_lens, .field_count = 2, .field_type_slots = onez_image_td_16_field_type_slots, .field_type_count = 2, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 4, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = onez_image_td_17_variants, .variant_count = 4, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 1, .exact = 1, .integer = 1, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_17_field_names, .field_name_lens = onez_image_td_17_field_name_lens, .field_count = 2, .field_type_slots = onez_image_td_17_field_type_slots, .field_type_count = 2, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 4, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = onez_image_td_18_variants, .variant_count = 4, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_20_field_names, .field_name_lens = onez_image_td_20_field_name_lens, .field_count = 3, .field_type_slots = onez_image_td_20_field_type_slots, .field_type_count = 3, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 30, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 14, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 30, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 15, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_22_field_names, .field_name_lens = onez_image_td_22_field_name_lens, .field_count = 5, .field_type_slots = onez_image_td_22_field_type_slots, .field_type_count = 5, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 4, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = onez_image_td_23_variants, .variant_count = 3, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
@@ -676,12 +676,12 @@ __attribute__((used)) static const onez_image_typedescriptor_t onez_image_typede
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 1, .exact = 1, .integer = 1, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 54, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 14, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 54, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 15, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_35_field_names, .field_name_lens = onez_image_td_35_field_name_lens, .field_count = 12, .field_type_slots = onez_image_td_35_field_type_slots, .field_type_count = 12, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 51, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 18, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 51, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 19, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_37_field_names, .field_name_lens = onez_image_td_37_field_name_lens, .field_count = 4, .field_type_slots = onez_image_td_37_field_type_slots, .field_type_count = 4, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 51, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 18, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 51, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 19, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
@@ -691,10 +691,10 @@ __attribute__((used)) static const onez_image_typedescriptor_t onez_image_typede
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_46_field_names, .field_name_lens = onez_image_td_46_field_name_lens, .field_count = 1, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 1, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 51, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 18, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 51, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 19, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 51, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 24, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
-    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 51, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 18, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
+    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 5, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 51, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 19, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 2, ._pad = {0,0,0}, .field_names = onez_image_td_53_field_names, .field_name_lens = onez_image_td_53_field_name_lens, .field_count = 1, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 1, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
@@ -707,25 +707,25 @@ __attribute__((used)) static const onez_image_typedescriptor_t onez_image_typede
     { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0u },
 };
 
-static const char onez_image_tv_0_name[] = "string";
-static const char onez_image_tv_1_name[] = "provenance";
-static const char onez_image_tv_2_name[] = "array";
-static const char onez_image_tv_3_name[] = "marker";
-static const char onez_image_tv_4_name[] = "quotation";
-static const char onez_image_tv_5_name[] = "symbol";
-static const char onez_image_tv_6_name[] = "type";
-static const char onez_image_tv_7_name[] = "descriptor-variant";
-static const char onez_image_tv_8_name[] = "iterator";
-static const char onez_image_tv_9_name[] = "dispatch-provenance";
-static const char onez_image_tv_10_name[] = "option:some";
-static const char onez_image_tv_11_name[] = "stack-effect";
-static const char onez_image_tv_12_name[] = "tagged";
-static const char onez_image_tv_13_name[] = "result";
-static const char onez_image_tv_14_name[] = "stack-effect-info";
-static const char onez_image_tv_15_name[] = "any";
-static const char onez_image_tv_16_name[] = "method-info";
-static const char onez_image_tv_17_name[] = "on";
-static const char onez_image_tv_18_name[] = "fixnum";
+static const char onez_image_tv_0_name[] = "fixnum";
+static const char onez_image_tv_1_name[] = "string";
+static const char onez_image_tv_2_name[] = "provenance";
+static const char onez_image_tv_3_name[] = "array";
+static const char onez_image_tv_4_name[] = "marker";
+static const char onez_image_tv_5_name[] = "quotation";
+static const char onez_image_tv_6_name[] = "symbol";
+static const char onez_image_tv_7_name[] = "type";
+static const char onez_image_tv_8_name[] = "descriptor-variant";
+static const char onez_image_tv_9_name[] = "iterator";
+static const char onez_image_tv_10_name[] = "dispatch-provenance";
+static const char onez_image_tv_11_name[] = "option:some";
+static const char onez_image_tv_12_name[] = "stack-effect";
+static const char onez_image_tv_13_name[] = "tagged";
+static const char onez_image_tv_14_name[] = "result";
+static const char onez_image_tv_15_name[] = "stack-effect-info";
+static const char onez_image_tv_16_name[] = "any";
+static const char onez_image_tv_17_name[] = "method-info";
+static const char onez_image_tv_18_name[] = "on";
 static const char onez_image_tv_19_name[] = "module";
 static const char onez_image_tv_20_name[] = "source-loc";
 static const char onez_image_tv_21_name[] = "result:err";
@@ -772,24 +772,24 @@ static const char onez_image_tv_61_name[] = "benchmark-report";
 
 __attribute__((used)) static const onez_image_typevalue_t onez_image_typevalues_storage[] = {
     { .name = onez_image_tv_0_name, .name_len = 6, .slot = 1, .descriptor = &onez_image_typedescriptors_storage[0], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_1_name, .name_len = 10, .slot = 2, .descriptor = &onez_image_typedescriptors_storage[1], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_2_name, .name_len = 5, .slot = 3, .descriptor = &onez_image_typedescriptors_storage[2], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_3_name, .name_len = 6, .slot = 4, .descriptor = &onez_image_typedescriptors_storage[3], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_4_name, .name_len = 9, .slot = 5, .descriptor = &onez_image_typedescriptors_storage[4], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_5_name, .name_len = 6, .slot = 6, .descriptor = &onez_image_typedescriptors_storage[5], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_6_name, .name_len = 4, .slot = 7, .descriptor = &onez_image_typedescriptors_storage[6], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_7_name, .name_len = 18, .slot = 8, .descriptor = &onez_image_typedescriptors_storage[7], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_8_name, .name_len = 8, .slot = 9, .descriptor = &onez_image_typedescriptors_storage[8], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_9_name, .name_len = 19, .slot = 10, .descriptor = &onez_image_typedescriptors_storage[9], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_10_name, .name_len = 11, .slot = 11, .descriptor = &onez_image_typedescriptors_storage[10], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_11_name, .name_len = 12, .slot = 12, .descriptor = &onez_image_typedescriptors_storage[11], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_12_name, .name_len = 6, .slot = 13, .descriptor = &onez_image_typedescriptors_storage[12], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_1_name, .name_len = 6, .slot = 2, .descriptor = &onez_image_typedescriptors_storage[1], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_2_name, .name_len = 10, .slot = 3, .descriptor = &onez_image_typedescriptors_storage[2], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_3_name, .name_len = 5, .slot = 4, .descriptor = &onez_image_typedescriptors_storage[3], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_4_name, .name_len = 6, .slot = 5, .descriptor = &onez_image_typedescriptors_storage[4], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_5_name, .name_len = 9, .slot = 6, .descriptor = &onez_image_typedescriptors_storage[5], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_6_name, .name_len = 6, .slot = 7, .descriptor = &onez_image_typedescriptors_storage[6], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_7_name, .name_len = 4, .slot = 8, .descriptor = &onez_image_typedescriptors_storage[7], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_8_name, .name_len = 18, .slot = 9, .descriptor = &onez_image_typedescriptors_storage[8], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_9_name, .name_len = 8, .slot = 10, .descriptor = &onez_image_typedescriptors_storage[9], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_10_name, .name_len = 19, .slot = 11, .descriptor = &onez_image_typedescriptors_storage[10], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_11_name, .name_len = 11, .slot = 12, .descriptor = &onez_image_typedescriptors_storage[11], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_12_name, .name_len = 12, .slot = 13, .descriptor = &onez_image_typedescriptors_storage[12], .member_type_slots = NULL, .member_type_count = 0 },
     { .name = onez_image_tv_13_name, .name_len = 6, .slot = 14, .descriptor = &onez_image_typedescriptors_storage[13], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_14_name, .name_len = 17, .slot = 15, .descriptor = &onez_image_typedescriptors_storage[14], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_15_name, .name_len = 3, .slot = 16, .descriptor = &onez_image_typedescriptors_storage[15], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_16_name, .name_len = 11, .slot = 17, .descriptor = &onez_image_typedescriptors_storage[16], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_17_name, .name_len = 2, .slot = 18, .descriptor = &onez_image_typedescriptors_storage[17], .member_type_slots = NULL, .member_type_count = 0 },
-    { .name = onez_image_tv_18_name, .name_len = 6, .slot = 19, .descriptor = &onez_image_typedescriptors_storage[18], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_14_name, .name_len = 6, .slot = 15, .descriptor = &onez_image_typedescriptors_storage[14], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_15_name, .name_len = 17, .slot = 16, .descriptor = &onez_image_typedescriptors_storage[15], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_16_name, .name_len = 3, .slot = 17, .descriptor = &onez_image_typedescriptors_storage[16], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_17_name, .name_len = 11, .slot = 18, .descriptor = &onez_image_typedescriptors_storage[17], .member_type_slots = NULL, .member_type_count = 0 },
+    { .name = onez_image_tv_18_name, .name_len = 2, .slot = 19, .descriptor = &onez_image_typedescriptors_storage[18], .member_type_slots = NULL, .member_type_count = 0 },
     { .name = onez_image_tv_19_name, .name_len = 6, .slot = 20, .descriptor = &onez_image_typedescriptors_storage[19], .member_type_slots = NULL, .member_type_count = 0 },
     { .name = onez_image_tv_20_name, .name_len = 10, .slot = 21, .descriptor = &onez_image_typedescriptors_storage[20], .member_type_slots = NULL, .member_type_count = 0 },
     { .name = onez_image_tv_21_name, .name_len = 10, .slot = 22, .descriptor = &onez_image_typedescriptors_storage[21], .member_type_slots = NULL, .member_type_count = 0 },
@@ -863,44 +863,69 @@ static const onez_image_tagged_description_t onez_image_tagged_descriptions_stor
     { .name = onez_image_tagged_desc_7_name, .name_len = 11, .slot = 7, .tag_typevalue_slot = 58, .inner_bytecode = onez_image_tagged_desc_7_inner, .inner_bytecode_len = sizeof(onez_image_tagged_desc_7_inner) },
 };
 
-__attribute__((used)) struct onez_protocoldescriptor *onez_image_protocoldescriptor_slots[1] = {
-    NULL, /* slot 0: protocol sortable (filled by the loader). */
+__attribute__((used)) struct onez_protocoldescriptor *onez_image_protocoldescriptor_slots[2] = {
+    NULL, /* slot 0: protocol comparable (filled by the loader). */
+    NULL, /* slot 1: protocol stringable (filled by the loader). */
 };
 
-static const char onez_image_pd_0_name[] = "sortable";
+static const char onez_image_pd_0_name[] = "comparable";
 static const char onez_image_pd_0_m0_name[] = "cmp";
-static const char onez_image_pd_0_m1_name[] = "show";
 static const onez_image_protocol_method_t onez_image_pd_0_methods[] = {
-    { .name = onez_image_pd_0_m0_name, .name_len = 3, .stack_effect_idx = 2 },
-    { .name = onez_image_pd_0_m1_name, .name_len = 4, .stack_effect_idx = 0 },
+    { .name = onez_image_pd_0_m0_name, .name_len = 3, .stack_effect_idx = 0 },
+};
+static const char onez_image_pd_1_name[] = "stringable";
+static const char onez_image_pd_1_m0_name[] = ">string";
+static const onez_image_protocol_method_t onez_image_pd_1_methods[] = {
+    { .name = onez_image_pd_1_m0_name, .name_len = 7, .stack_effect_idx = 0 },
 };
 
 static const onez_image_protocoldescriptor_description_t onez_image_protocoldescriptor_descriptions_storage[] = {
-    { .name = onez_image_pd_0_name, .name_len = 8, .slot = 0, .protocol_id = 3, .method_count = 2, .methods = onez_image_pd_0_methods },
+    { .name = onez_image_pd_0_name, .name_len = 10, .slot = 0, .protocol_id = 0, .method_count = 1, .methods = onez_image_pd_0_methods },
+    { .name = onez_image_pd_1_name, .name_len = 10, .slot = 1, .protocol_id = 2, .method_count = 1, .methods = onez_image_pd_1_methods },
 };
 
-static const char onez_image_w_0_name[] = "by-cmp";
-static const char onez_image_w_1_name[] = "sortable";
+__attribute__((used)) struct onez_constraintcombinator *onez_image_constraintcombinator_slots[2] = {
+    NULL, /* slot 0: intersection (filled by the loader). */
+    NULL, /* slot 1: union (filled by the loader). */
+};
 
-static const char onez_image_w_0_sf[] = "fixtures/dump_image_protocol_dep.1z";
-static const char onez_image_w_1_sf[] = "fixtures/dump_image_protocol_dep.1z";
-static const char onez_image_w_1_pg[] = "protocol";
-static const char onez_image_w_1_pp[] = "sortable";
-static const char onez_image_w_1_pr[] = "constraint";
+static const onez_image_combinator_element_t onez_image_cc_0_elements[] = {
+    { .kind = 2, .slot = 0 },
+    { .kind = 2, .slot = 1 },
+};
+static const onez_image_combinator_element_t onez_image_cc_1_elements[] = {
+    { .kind = 1, .slot = 1 },
+    { .kind = 2, .slot = 0 },
+};
 
-static const uint8_t onez_image_w_0_body[] = {2,0,0,0,9,0,0,0,32,0,0,0,1,4,0,0,0,100,114,111,112,9,0,0,0,37,0,0,0,0,0,0,0,0,0,0,0,0,0};
+static const onez_image_constraintcombinator_description_t onez_image_constraintcombinator_descriptions_storage[] = {
+    { .slot = 0, .combinator_id = 0, .kind = 0, .element_count = 2, .elements = onez_image_cc_0_elements },
+    { .slot = 1, .combinator_id = 1, .kind = 1, .element_count = 2, .elements = onez_image_cc_1_elements },
+};
 
-static const onez_image_marker_t *const onez_image_w_1_markers[] = {
+static const char onez_image_w_0_name[] = "by-both";
+static const char onez_image_w_1_name[] = "by-mixed";
+static const char onez_image_w_2_name[] = "ordered-stringable";
+
+static const char onez_image_w_0_sf[] = "fixtures/dump_image_combinator_dep.1z";
+static const char onez_image_w_1_sf[] = "fixtures/dump_image_combinator_dep.1z";
+static const char onez_image_w_2_sf[] = "fixtures/dump_image_combinator_dep.1z";
+
+static const uint8_t onez_image_w_0_body[] = {2,0,0,0,10,0,0,0,43,0,0,0,1,4,0,0,0,100,114,111,112,10,0,0,0,48,0,0,0,0,0,0,0,0,0,0,0,0,0};
+static const uint8_t onez_image_w_1_body[] = {2,0,0,0,11,0,0,0,45,0,0,0,1,4,0,0,0,100,114,111,112,11,0,0,0,50,0,0,0,0,0,0,0,0,0,0,0,0,0};
+
+static const onez_image_marker_t *const onez_image_w_2_markers[] = {
     &onez_image_markers_storage[0],
     &onez_image_markers_storage[1],
+    &onez_image_markers_storage[2],
 };
 
-static const char onez_image_m_0_name[] = "fixtures/dump_image_protocol_dep.1z";
+static const char onez_image_m_0_name[] = "fixtures/dump_image_combinator_dep.1z";
 
 static const onez_image_word_t onez_image_words_storage[] = {
     {
         .name = onez_image_w_0_name,
-        .name_len = 6,
+        .name_len = 7,
         .word_id = 0xFFFFFFFFu,
         .module_idx = 0,
         .classification = 0,
@@ -919,9 +944,9 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .doc = NULL,
         .doc_len = 0,
         .source_file = onez_image_w_0_sf,
-        .source_file_len = 35,
-        .source_line = 9u,
-        .source_column = 41u,
+        .source_file_len = 37,
+        .source_line = 10u,
+        .source_column = 52u,
         .provenance_generator = NULL,
         .provenance_generator_len = 0,
         .provenance_parent = NULL,
@@ -934,6 +959,37 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .name_len = 8,
         .word_id = 0xFFFFFFFFu,
         .module_idx = 0,
+        .classification = 0,
+        .blob_reason = 0,
+        .flags = 8,
+        ._reserved = 0,
+        .input_count = 1,
+        .output_count = 1,
+        ._pad = 0,
+        .stack_effect_idx = 2,
+        .markers = NULL,
+        .marker_count = 0,
+        .body_bytecode = onez_image_w_1_body,
+        .body_bytecode_len = 39,
+        .typevalue_slot = 0u,
+        .doc = NULL,
+        .doc_len = 0,
+        .source_file = onez_image_w_1_sf,
+        .source_file_len = 37,
+        .source_line = 11u,
+        .source_column = 54u,
+        .provenance_generator = NULL,
+        .provenance_generator_len = 0,
+        .provenance_parent = NULL,
+        .provenance_parent_len = 0,
+        .provenance_role = NULL,
+        .provenance_role_len = 0,
+    },
+    {
+        .name = onez_image_w_2_name,
+        .name_len = 18,
+        .word_id = 0xFFFFFFFFu,
+        .module_idx = 0,
         .classification = 1,
         .blob_reason = 6,
         .flags = 0,
@@ -942,35 +998,35 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .output_count = 0,
         ._pad = 0,
         .stack_effect_idx = 0,
-        .markers = onez_image_w_1_markers,
-        .marker_count = 2,
+        .markers = onez_image_w_2_markers,
+        .marker_count = 3,
         .body_bytecode = NULL,
         .body_bytecode_len = 0,
         .typevalue_slot = 0u,
         .doc = NULL,
         .doc_len = 0,
-        .source_file = onez_image_w_1_sf,
-        .source_file_len = 35,
-        .source_line = 175u,
-        .source_column = 11u,
-        .provenance_generator = onez_image_w_1_pg,
-        .provenance_generator_len = 8,
-        .provenance_parent = onez_image_w_1_pp,
-        .provenance_parent_len = 8,
-        .provenance_role = onez_image_w_1_pr,
-        .provenance_role_len = 10,
+        .source_file = onez_image_w_2_sf,
+        .source_file_len = 37,
+        .source_line = 8u,
+        .source_column = 45u,
+        .provenance_generator = NULL,
+        .provenance_generator_len = 0,
+        .provenance_parent = NULL,
+        .provenance_parent_len = 0,
+        .provenance_role = NULL,
+        .provenance_role_len = 0,
     },
 };
 
 static const onez_image_module_t onez_image_modules_storage[] = {
-    { .name = onez_image_m_0_name, .name_len = 35, .word_start_idx = 0, .word_count = 2 },
+    { .name = onez_image_m_0_name, .name_len = 37, .word_start_idx = 0, .word_count = 3 },
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .format_version = 8,
     .module_count = 1,
-    .word_count = 2,
-    .marker_pool_count = 2,
+    .word_count = 3,
+    .marker_pool_count = 3,
     .typevalue_slot_count = 63,
     .stack_effect_count = 3,
     .typevalue_count = 62,
@@ -979,8 +1035,8 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .parameter_slot_count = 6,
     .tagged_slot_count = 8,
     .mutable_map_slot_count = 0,
-    .protocoldescriptor_slot_count = 1,
-    .constraintcombinator_slot_count = 0,
+    .protocoldescriptor_slot_count = 2,
+    .constraintcombinator_slot_count = 2,
     .modules = onez_image_modules_storage,
     .words = onez_image_words_storage,
     .markers = onez_image_markers_storage,
@@ -993,6 +1049,6 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .tagged_descriptions = onez_image_tagged_descriptions_storage,
     .mutable_map_descriptions = NULL,
     .protocoldescriptor_descriptions = onez_image_protocoldescriptor_descriptions_storage,
-    .constraintcombinator_descriptions = NULL,
+    .constraintcombinator_descriptions = onez_image_constraintcombinator_descriptions_storage,
 };
 

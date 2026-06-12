@@ -6999,6 +6999,7 @@ pub const AotMetadata = struct {
     runtime_image_tagged_slot_count: u32 = 0,
     runtime_image_mutable_map_slot_count: u32 = 0,
     runtime_image_protocoldescriptor_slot_count: u32 = 0,
+    runtime_image_constraintcombinator_slot_count: u32 = 0,
     /// Optional toolchain provenance. An empty slice means the field
     /// was unavailable at build time and must not appear in the
     /// embedded metadata or in `1z inspect` output.
@@ -7094,7 +7095,7 @@ pub fn emitProgramC(
         \\extern int onez_set_static_libs(void *rt, const char **names, unsigned int count);
         \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
         \\extern int32_t onez_set_trace_words(void *rt, const char *pattern);
-        \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *protocoldescriptor_slots);
+        \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *protocoldescriptor_slots, void *constraintcombinator_slots);
         \\
         \\
     );
@@ -7859,6 +7860,7 @@ pub fn emitProgramC(
         meta.runtime_image_marker_slot_count = stats.marker_slot_count;
         meta.runtime_image_mutable_map_slot_count = stats.mutable_map_slot_count;
         meta.runtime_image_protocoldescriptor_slot_count = stats.protocoldescriptor_slot_count;
+        meta.runtime_image_constraintcombinator_slot_count = stats.constraintcombinator_slot_count;
         meta.runtime_image_parameter_slot_count = stats.parameter_slot_count;
         meta.runtime_image_tagged_slot_count = stats.tagged_slot_count;
     }
@@ -8010,6 +8012,12 @@ pub fn emitProgramC(
                 \\
             );
         }
+        if (meta.runtime_image_constraintcombinator_slot_count > 0) {
+            try out.appendSlice(allocator,
+                \\    extern struct onez_constraintcombinator *onez_image_constraintcombinator_slots[];
+                \\
+            );
+        }
 
         try out.appendSlice(allocator, "    if (onez_load_runtime_image(rt, &onez_image_v1, onez_image_typevalue_slots, ");
         try out.appendSlice(allocator, if (meta.runtime_image_struct_type_slot_count > 0)
@@ -8033,7 +8041,11 @@ pub fn emitProgramC(
         else
             "NULL, ");
         try out.appendSlice(allocator, if (meta.runtime_image_protocoldescriptor_slot_count > 0)
-            "onez_image_protocoldescriptor_slots"
+            "onez_image_protocoldescriptor_slots, "
+        else
+            "NULL, ");
+        try out.appendSlice(allocator, if (meta.runtime_image_constraintcombinator_slot_count > 0)
+            "onez_image_constraintcombinator_slots"
         else
             "NULL");
         try out.appendSlice(allocator,

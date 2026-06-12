@@ -51,7 +51,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 7;
+pub const format_version: u32 = 8;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -101,6 +101,10 @@ pub const ImageEmissionStats = struct {
     /// call sites. Emitted as `onez_image_protocoldescriptor_slots[]` and
     /// patched at load time by name lookup in the runtime context.
     protocoldescriptor_slot_count: u32 = 0,
+    /// Number of distinct `*ConstraintCombinator` pointers reached from `.combination` annotations.
+    /// Emitted as `onez_image_constraintcombinator_slots[]` and patched at load time by
+    /// reconstructing each combinator from its description row.
+    constraintcombinator_slot_count: u32 = 0,
 };
 
 /// Knobs for `emitImageC`. The default (`metadata_only = false`) emits
@@ -264,6 +268,8 @@ pub fn emitImageCFromCollection(
     try emitMutableMapDescriptionsStorage(out, allocator, effect_table, struct_index);
     try emitProtocolDescriptorSlotTable(out, allocator, effect_table);
     try emitProtocolDescriptorStorage(out, allocator, effect_table);
+    try emitConstraintCombinatorSlotTable(out, allocator, effect_table);
+    try emitConstraintCombinatorStorage(out, allocator, effect_table);
 
     try emitWordNameStrings(out, allocator, manifest);
     try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
@@ -281,6 +287,7 @@ pub fn emitImageCFromCollection(
     stats.tagged_slot_count = effect_table.taggedSlotCount();
     stats.mutable_map_slot_count = effect_table.mutableMapSlotCount();
     stats.protocoldescriptor_slot_count = effect_table.protocolSlotCount();
+    stats.constraintcombinator_slot_count = effect_table.combinatorSlotCount();
     return stats;
 }
 
@@ -362,14 +369,26 @@ pub const StackEffectTable = struct {
     /// the same runtime pointer. Indices are 0-based with no sentinel.
     mutable_map_slots: std.ArrayListUnmanaged(*const value_mod.MutableMap) = .{},
     mutable_map_slot_index: std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32) = .{},
-    /// Distinct `*ProtocolDescriptor` pointers reached from protocol-bounded
-    /// call sites in AOT-compiled word bodies or from `.protocol` annotations
-    /// in serialized stack effects. The loader reuses a same-named descriptor
-    /// from the runtime context when one exists, reconstructs it from the
-    /// description row otherwise, and patches the slot. Indices are 0-based
-    /// with no sentinel.
+    /// Distinct `*ProtocolDescriptor` pointers reached from protocol-bounded call sites in
+    /// AOT-compiled word bodies or from `.protocol` annotations in serialized stack effects.
+    ///
+    /// The loader reuses a same-named descriptor from the runtime context when one exists,
+    /// reconstructs it from the description row otherwise, and patches the slot.
+    ///
+    /// Indices are 0-based with no sentinel.
     protocol_slots: std.ArrayListUnmanaged(*const value_mod.ProtocolDescriptor) = .{},
     protocol_slot_index: std.AutoHashMapUnmanaged(*const value_mod.ProtocolDescriptor, u32) = .{},
+    /// Distinct `*ConstraintCombinator` pointers reached from `.combination` annotations in
+    /// serialized stack effects.
+    ///
+    /// Interned post-order: a combinator's nested-combinator elements are interned before the
+    /// combinator itself, so that children carry lower indices than parents and the loader can
+    /// reconstruct in ascending slot order. This allows every nested reference to already be
+    /// resolved.
+    ///
+    /// Indices are 0-based with no sentinel.
+    combinator_slots: std.ArrayListUnmanaged(*const value_mod.ConstraintCombinator) = .{},
+    combinator_slot_index: std.AutoHashMapUnmanaged(*const value_mod.ConstraintCombinator, u32) = .{},
 
     fn init(allocator: Allocator) StackEffectTable {
         return .{ .allocator = allocator };
@@ -390,6 +409,8 @@ pub const StackEffectTable = struct {
         self.mutable_map_slot_index.deinit(self.allocator);
         self.protocol_slots.deinit(self.allocator);
         self.protocol_slot_index.deinit(self.allocator);
+        self.combinator_slots.deinit(self.allocator);
+        self.combinator_slot_index.deinit(self.allocator);
     }
 
     /// Insert if absent, returning the assigned index. The sentinel
@@ -465,6 +486,26 @@ pub const StackEffectTable = struct {
         return idx;
     }
 
+    /// Intern a `*ConstraintCombinator` pointer post-order. Each element is
+    /// interned first -- `.type` into the typevalue slots, `.protocol` into the
+    /// protocol slots, `.combinator` recursively -- so a nested combinator lands
+    /// at a lower index than the combinator that references it. Returns the
+    /// assigned 0-based slot index; identical pointers collapse to the same slot.
+    pub fn internCombinator(self: *StackEffectTable, cc: *const value_mod.ConstraintCombinator) Allocator.Error!u32 {
+        if (self.combinator_slot_index.get(cc)) |idx| return idx;
+        for (cc.elements) |element| {
+            switch (element) {
+                .type => |tv| _ = try self.internType(tv),
+                .protocol => |pd| _ = try self.internProtocol(pd),
+                .combinator => |nested| _ = try self.internCombinator(nested),
+            }
+        }
+        const idx: u32 = @intCast(self.combinator_slots.items.len);
+        try self.combinator_slots.append(self.allocator, cc);
+        try self.combinator_slot_index.put(self.allocator, cc, idx);
+        return idx;
+    }
+
     fn effectCount(self: *const StackEffectTable) u32 {
         // +1 for the reserved sentinel at index 0.
         return @intCast(self.effects.items.len + 1);
@@ -493,6 +534,10 @@ pub const StackEffectTable = struct {
 
     fn protocolSlotCount(self: *const StackEffectTable) u32 {
         return @intCast(self.protocol_slots.items.len);
+    }
+
+    fn combinatorSlotCount(self: *const StackEffectTable) u32 {
+        return @intCast(self.combinator_slots.items.len);
     }
 
     fn lookupEffect(self: *const StackEffectTable, effect: *const StackEffect) u32 {
@@ -536,6 +581,12 @@ pub const StackEffectTable = struct {
     /// null when the pointer has not been interned.
     pub fn lookupProtocolSlot(self: *const StackEffectTable, pd: *const value_mod.ProtocolDescriptor) ?u32 {
         return self.protocol_slot_index.get(pd);
+    }
+
+    /// Look up the 0-based combinator slot index for `cc`. Returns
+    /// null when the pointer has not been interned.
+    pub fn lookupCombinatorSlot(self: *const StackEffectTable, cc: *const value_mod.ConstraintCombinator) ?u32 {
+        return self.combinator_slot_index.get(cc);
     }
 };
 
@@ -888,9 +939,12 @@ fn registerParam(
             .protocol => |pd| {
                 _ = try table.internProtocol(pd);
             },
-            // Combinator serialization (a parallel slot table) is not yet
-            // implemented; nothing to intern for now.
-            .combination => {},
+            // The combinator and its element types, protocols, and nested
+            // combinators join the parallel slot tables; the param row
+            // references it through `annotation_slot` with kind 3.
+            .combination => |cc| {
+                _ = try table.internCombinator(cc);
+            },
         }
     }
     if (param.quotation_effect) |nested| {
@@ -1551,6 +1605,104 @@ fn emitProtocolDescriptorStorage(
         try out.appendSlice(allocator, " },\n");
     }
     try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_constraintcombinator_slots[]`: one NULL pointer per
+/// distinct ConstraintCombinator reached through `.combination` annotations
+/// in serialized stack effects. The loader patches each slot with a
+/// reconstructed descriptor. No-op when no combinators have been interned.
+fn emitConstraintCombinatorSlotTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.combinatorSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "__attribute__((used)) struct onez_constraintcombinator *onez_image_constraintcombinator_slots[");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{table.combinatorSlotCount()}) catch unreachable);
+    try out.appendSlice(allocator, "] = {\n");
+    for (table.combinator_slots.items, 0..) |cc, i| {
+        try out.appendSlice(allocator, "    NULL, /* slot ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ": ");
+        try out.appendSlice(allocator, @tagName(cc.kind));
+        try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_constraintcombinator_descriptions_storage[]`: one row per
+/// slot in `onez_image_constraintcombinator_slots[]`. Each row carries the
+/// combinator's kind, build-time `combinator_id`, and element list so the
+/// loader can reconstruct the descriptor. Each element is a tagged variant:
+/// a 1-based typevalue slot, a 0-based protocol slot, or a 0-based combinator
+/// slot. No-op when no combinators have been interned.
+fn emitConstraintCombinatorStorage(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.combinatorSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+
+    for (table.combinator_slots.items, 0..) |cc, i| {
+        if (cc.elements.len == 0) continue;
+        try out.appendSlice(allocator, "static const onez_image_combinator_element_t ");
+        try writeCombinatorElementsSym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = {\n");
+        for (cc.elements) |element| {
+            const encoded: struct { kind: u32, slot: u32 } = switch (element) {
+                // `.type` carries the 1-based typevalue slot directly; slot 0
+                // is the table sentinel, so a present element is always > 0.
+                .type => |tv| .{ .kind = 1, .slot = table.type_slot_index.get(tv) orelse 0 },
+                .protocol => |pd| .{ .kind = 2, .slot = table.lookupProtocolSlot(pd) orelse 0 },
+                // Post-order interning guarantees a nested combinator already
+                // holds a slot at a lower index than its parent.
+                .combinator => |nested| .{ .kind = 3, .slot = table.lookupCombinatorSlot(nested) orelse 0 },
+            };
+            try out.appendSlice(allocator, "    { .kind = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{encoded.kind}) catch unreachable);
+            try out.appendSlice(allocator, ", .slot = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{encoded.slot}) catch unreachable);
+            try out.appendSlice(allocator, " },\n");
+        }
+        try out.appendSlice(allocator, "};\n");
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_constraintcombinator_description_t onez_image_constraintcombinator_descriptions_storage[] = {\n");
+    for (table.combinator_slots.items, 0..) |cc, i| {
+        // 0 = intersection, 1 = union, matching the loader's kind decode.
+        const kind: u32 = switch (cc.kind) {
+            .intersection => 0,
+            .@"union" => 1,
+        };
+        try out.appendSlice(allocator, "    { .slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ", .combinator_id = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{cc.combinator_id}) catch unreachable);
+        try out.appendSlice(allocator, ", .kind = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{kind}) catch unreachable);
+        try out.appendSlice(allocator, ", .element_count = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{cc.elements.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .elements = ");
+        if (cc.elements.len > 0) {
+            try writeCombinatorElementsSym(out, allocator, i);
+        } else {
+            try out.appendSlice(allocator, "NULL");
+        }
+        try out.appendSlice(allocator, " },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+fn writeCombinatorElementsSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    cc_idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_cc_{d}_elements", .{cc_idx}) catch unreachable);
 }
 
 /// Count the method rows of a descriptor: one per `.symbol` entry in the
@@ -2335,18 +2487,19 @@ fn emitEffectParamArray(
         // `annotation_kind` discriminates which slot table
         // `annotation_slot` indexes: 1 = typevalue slots (1-based, 0
         // doubles as a lookup miss), 2 = protocol descriptor slots
-        // (0-based). A protocol pointer missing from the intern table
-        // degrades to "no annotation" rather than emitting a dangling
-        // index.
+        // (0-based), 3 = constraint combinator slots (0-based). A
+        // descriptor pointer missing from its intern table degrades to "no
+        // annotation" rather than emitting a dangling index.
         const annotation: struct { kind: u8, slot: u32 } = if (param.type_annotation) |ann| switch (ann) {
             .type => |tv| .{ .kind = 1, .slot = table.type_slot_index.get(tv) orelse 0 },
             .protocol => |pd| if (table.lookupProtocolSlot(pd)) |slot|
                 .{ .kind = 2, .slot = slot }
             else
                 .{ .kind = 0, .slot = 0 },
-            // Combinator serialization is not yet implemented; emit as "no
-            // annotation" until the parallel slot table lands.
-            .combination => .{ .kind = 0, .slot = 0 },
+            .combination => |cc| if (table.lookupCombinatorSlot(cc)) |slot|
+                .{ .kind = 3, .slot = slot }
+            else
+                .{ .kind = 0, .slot = 0 },
         } else .{ .kind = 0, .slot = 0 };
         const has_quot: u8 = if (param.quotation_effect != null) 1 else 0;
         const is_row: u8 = if (param.is_row_variable) 1 else 0;
@@ -2700,6 +2853,26 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_protocol_method *methods;
         \\} onez_image_protocoldescriptor_description_t;
         \\
+        \\/* One element of a constraint combinator. The kind discriminant picks    */
+        \\/* the slot-numbering convention: kind 1 indexes the 1-based typevalue     */
+        \\/* slot table, kind 2 the 0-based protocol descriptor slots, kind 3 the    */
+        \\/* 0-based combinator slots (a nested combinator at a lower index).        */
+        \\typedef struct onez_image_combinator_element {
+        \\    uint32_t kind;   /* 1 = type, 2 = protocol, 3 = combinator */
+        \\    uint32_t slot;
+        \\} onez_image_combinator_element_t;
+        \\
+        \\/* Per-slot description for a constraint combinator. The loader rebuilds   */
+        \\/* the descriptor from the kind, element list, and combinator_id, then     */
+        \\/* patches onez_image_constraintcombinator_slots[slot] with the pointer.   */
+        \\typedef struct onez_image_constraintcombinator_description {
+        \\    uint32_t    slot;            /* index into onez_image_constraintcombinator_slots */
+        \\    uint32_t    combinator_id;   /* build-time intern key; preserved at load */
+        \\    uint32_t    kind;            /* 0 = intersection, 1 = union */
+        \\    uint32_t    element_count;
+        \\    const struct onez_image_combinator_element *elements;
+        \\} onez_image_constraintcombinator_description_t;
+        \\
         \\typedef struct onez_image_header {
         \\    uint32_t format_version;
         \\    uint32_t module_count;
@@ -2714,6 +2887,7 @@ fn emitTypeDeclarations(
         \\    uint32_t tagged_slot_count;
         \\    uint32_t mutable_map_slot_count;
         \\    uint32_t protocoldescriptor_slot_count;
+        \\    uint32_t constraintcombinator_slot_count;
         \\    const struct onez_image_module *modules;
         \\    const struct onez_image_word *words;
         \\    const struct onez_image_marker *markers;
@@ -2726,6 +2900,7 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_tagged_description *tagged_descriptions;
         \\    const struct onez_image_mutable_map_description *mutable_map_descriptions;
         \\    const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
+        \\    const struct onez_image_constraintcombinator_description *constraintcombinator_descriptions;
         \\} onez_image_header_t;
         \\
         \\
@@ -3269,6 +3444,7 @@ fn emitHeader(
     const tagged_slot_count: u32 = effect_table.taggedSlotCount();
     const mutable_map_slot_count: u32 = effect_table.mutableMapSlotCount();
     const protocoldescriptor_slot_count: u32 = effect_table.protocolSlotCount();
+    const constraintcombinator_slot_count: u32 = effect_table.combinatorSlotCount();
 
     const has_entries = manifest.entries.len > 0;
     const modules_ref: []const u8 = if (has_entries) "onez_image_modules_storage" else "NULL";
@@ -3283,6 +3459,7 @@ fn emitHeader(
     const tagged_descs_ref: []const u8 = if (tagged_slot_count > 0) "onez_image_tagged_descriptions_storage" else "NULL";
     const mutable_map_descs_ref: []const u8 = if (mutable_map_slot_count > 0) "onez_image_mutable_map_descriptions_storage" else "NULL";
     const protocoldescriptor_descs_ref: []const u8 = if (protocoldescriptor_slot_count > 0) "onez_image_protocoldescriptor_descriptions_storage" else "NULL";
+    const constraintcombinator_descs_ref: []const u8 = if (constraintcombinator_slot_count > 0) "onez_image_constraintcombinator_descriptions_storage" else "NULL";
 
     try out.appendSlice(allocator,
         \\__attribute__((used)) const onez_image_header_t onez_image_v1 = {
@@ -3313,6 +3490,8 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{mutable_map_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .protocoldescriptor_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{protocoldescriptor_slot_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .constraintcombinator_slot_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{constraintcombinator_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .modules = ");
     try out.appendSlice(allocator, modules_ref);
     try out.appendSlice(allocator, ",\n    .words = ");
@@ -3337,6 +3516,8 @@ fn emitHeader(
     try out.appendSlice(allocator, mutable_map_descs_ref);
     try out.appendSlice(allocator, ",\n    .protocoldescriptor_descriptions = ");
     try out.appendSlice(allocator, protocoldescriptor_descs_ref);
+    try out.appendSlice(allocator, ",\n    .constraintcombinator_descriptions = ");
+    try out.appendSlice(allocator, constraintcombinator_descs_ref);
     try out.appendSlice(allocator,
         \\,
         \\};
@@ -3382,7 +3563,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 7") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 8") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
@@ -5029,6 +5210,103 @@ test "emitImageC: protocol annotation interns descriptor and emits full descript
     // the cmp method's bare params carry kind 0.
     try testing.expect(std.mem.indexOf(u8, out.items, ".annotation_kind = 2, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 0,") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".annotation_kind = 0") != null);
+}
+
+test "emitImageC: combinator annotation interns descriptors across all three element kinds" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // Two protocols and a TypeValue, the three element-leaf kinds.
+    const pd = try ctx.createProtocolDescriptor("cmp-able", &.{.{ .symbol = "cmp" }});
+    const pd2 = try ctx.createProtocolDescriptor("show-able", &.{.{ .symbol = "show" }});
+    const tv_desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "smallint", .descriptor = tv_desc };
+
+    // A nested intersection and an outer union referencing it, so the walk
+    // exercises a kind-3 (nested combinator) element. Post-order interning
+    // lands the nested combinator at slot 0 and the outer at slot 1.
+    const inner_elems = try arena.dupe(value_mod.ConstraintCombinator.Element, &.{
+        .{ .protocol = pd2 },
+    });
+    const inner = try ctx.createConstraintCombinator(.intersection, inner_elems);
+    const outer_elems = try arena.dupe(value_mod.ConstraintCombinator.Element, &.{
+        .{ .type = tv },
+        .{ .protocol = pd },
+        .{ .combinator = inner },
+    });
+    const outer = try ctx.createConstraintCombinator(.@"union", outer_elems);
+
+    // A word whose stack effect carries the outer combinator bound.
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    const eff_inputs = try arena.dupe(StackEffectParam, &.{
+        .{ .name = "x", .type_annotation = .{ .combination = outer } },
+    });
+    const eff_outputs = try arena.dupe(StackEffectParam, &.{});
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "bounded", .{
+        .action = .{ .compound = instrs },
+        .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
+    });
+    {
+        const cache_alloc = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "demo"), .{ .module = m });
+    }
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
+
+    // Inner (slot 0) and outer (slot 1) -- plus the two protocols those
+    // elements reference, interned post-order.
+    try testing.expectEqual(@as(u32, 2), stats.constraintcombinator_slot_count);
+    try testing.expectEqual(@as(u32, 2), stats.protocoldescriptor_slot_count);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_constraintcombinator_slots[2]") != null);
+
+    // The outer's element array carries one row per leaf kind: a type leaf
+    // (1-based typevalue slot), a protocol leaf (pd at protocol slot 0), and
+    // a nested-combinator leaf (inner at combinator slot 0).
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_cc_1_elements[] = {") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "{ .kind = 1, .slot = ") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "{ .kind = 2, .slot = 0 }") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "{ .kind = 3, .slot = 0 }") != null);
+    // The inner's element array carries its single protocol leaf (pd2 at
+    // protocol slot 1).
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_cc_0_elements[] = {") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "{ .kind = 2, .slot = 1 }") != null);
+
+    // The description rows: inner is an intersection (kind 0) of one element;
+    // outer is a union (kind 1) of three elements. Both preserve combinator_id.
+    var row_buf: [160]u8 = undefined;
+    const inner_row = std.fmt.bufPrint(
+        &row_buf,
+        ".slot = 0, .combinator_id = {d}, .kind = 0, .element_count = 1, .elements = onez_image_cc_0_elements",
+        .{inner.combinator_id},
+    ) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, inner_row) != null);
+    var row_buf2: [160]u8 = undefined;
+    const outer_row = std.fmt.bufPrint(
+        &row_buf2,
+        ".slot = 1, .combinator_id = {d}, .kind = 1, .element_count = 3, .elements = onez_image_cc_1_elements",
+        .{outer.combinator_id},
+    ) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, outer_row) != null);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, ".constraintcombinator_slot_count = 2") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".constraintcombinator_descriptions = onez_image_constraintcombinator_descriptions_storage") != null);
+
+    // The bounded param row references the outer combinator's slot with kind 3.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".annotation_kind = 3, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 1,") != null);
 }
 
 test "registerProtocolMethodEffects reaches protocols and TypeValues through method effects" {

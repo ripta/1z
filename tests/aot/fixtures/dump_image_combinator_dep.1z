@@ -1,0 +1,11 @@
+\ Fixture for tests/aot/dump_image_combinator.
+\ A named intersection combinator plus an anonymous mixed type-and-protocol
+\ union, each carried as a stack-effect bound. The bounds make the combinators
+\ reachable from the image collection walk, so the dumped C shows the
+\ constraint combinator slot table, its per-combinator element arrays, and its
+\ description rows.
+
+ordered-stringable: comparable & stringable ;
+
+by-both: ( x: ordered-stringable -- n ) [ drop 0 ] ;
+by-mixed: ( x: fixnum | comparable -- n ) [ drop 0 ] ;

@@ -320,7 +320,7 @@ export fn onez_load_prelude(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
 /// between `onez_init` and `onez_set_args`.
 ///
 /// `header_ptr` points at the embedded `onez_image_v1` symbol; the
-/// six slot-table pointers point at the first element of the
+/// slot-table pointers point at the first element of the
 /// corresponding `onez_image_*_slots[]` arrays. All pointers must
 /// remain valid for the lifetime of the runtime. Any slot-table
 /// pointer may be NULL when its table was not emitted (zero slots).
@@ -334,6 +334,7 @@ export fn onez_load_runtime_image(
     tagged_slots_ptr: ?*anyopaque,
     mutable_map_slots_ptr: ?*anyopaque,
     protocoldescriptor_slots_ptr: ?*anyopaque,
+    constraintcombinator_slots_ptr: ?*anyopaque,
 ) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
@@ -372,6 +373,10 @@ export fn onez_load_runtime_image(
         @ptrCast(@alignCast(sp))
     else
         null;
+    const constraintcombinator_slots: ?aot_image_loader.ConstraintCombinatorSlotTable = if (constraintcombinator_slots_ptr) |sp|
+        @ptrCast(@alignCast(sp))
+    else
+        null;
 
     aot_image_loader.loadIntoContext(ctx, header, .{
         .typevalues = typevalue_slots,
@@ -381,6 +386,7 @@ export fn onez_load_runtime_image(
         .tagged = tagged_slots,
         .mutable_maps = mutable_map_slots,
         .protocol_descriptors = protocoldescriptor_slots,
+        .constraint_combinators = constraintcombinator_slots,
     }, null) catch |err| {
         captureError(handle, err);
         return ONEZ_ERR_LOAD_FAILED;

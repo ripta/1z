@@ -1,0 +1,6 @@
+\ Build-only test: --dump-aot-image-c on a module with constraint-combinator
+\ bounds. The dumped image must carry the constraint combinator slot table and
+\ full description rows (kind, combinator_id, element list spanning type,
+\ protocol, and nested-combinator leaves) so the loader can reconstruct each
+\ combinator at startup.
+use "fixtures/dump_image_combinator_dep.1z" ;

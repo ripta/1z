@@ -61,13 +61,15 @@ pub const StackEffectParam = extern struct {
     pub const annotation_none: u8 = 0;
     pub const annotation_type: u8 = 1;
     pub const annotation_protocol: u8 = 2;
+    pub const annotation_combinator: u8 = 3;
 
     name: [*]const u8,
     name_len: u32,
     is_row_variable: u8,
     /// Discriminates which slot table `annotation_slot` indexes:
     /// 0 = no annotation, 1 = typevalue slots (1-based; 0 doubles as
-    /// a lookup miss), 2 = protocol descriptor slots (0-based).
+    /// a lookup miss), 2 = protocol descriptor slots (0-based),
+    /// 3 = constraint combinator slots (0-based).
     annotation_kind: u8,
     has_quotation_effect: u8,
     _reserved: u8,
@@ -253,6 +255,27 @@ pub const ProtocolDescriptorDescription = extern struct {
     methods: ?[*]const ProtocolMethod,
 };
 
+/// Zig mirror of `onez_image_combinator_element_t`. One element of a
+/// constraint combinator. `kind` picks the slot-numbering convention for
+/// `slot`: 1 = 1-based typevalue slot, 2 = 0-based protocol descriptor slot,
+/// 3 = 0-based combinator slot.
+pub const CombinatorElement = extern struct {
+    kind: u32,
+    slot: u32,
+};
+
+/// Zig mirror of `onez_image_constraintcombinator_description_t`. One row per
+/// slot in `onez_image_constraintcombinator_slots[]`. The loader rebuilds the
+/// descriptor from `kind` (0 = intersection, 1 = union), the element list, and
+/// the preserved `combinator_id`, then patches the slot.
+pub const ConstraintCombinatorDescription = extern struct {
+    slot: u32,
+    combinator_id: u32,
+    kind: u32,
+    element_count: u32,
+    elements: ?[*]const CombinatorElement,
+};
+
 pub const Header = extern struct {
     format_version: u32,
     module_count: u32,
@@ -267,6 +290,7 @@ pub const Header = extern struct {
     tagged_slot_count: u32,
     mutable_map_slot_count: u32,
     protocoldescriptor_slot_count: u32,
+    constraintcombinator_slot_count: u32,
     modules: ?[*]const Module,
     words: ?[*]const Word,
     markers: ?[*]const Marker,
@@ -279,6 +303,7 @@ pub const Header = extern struct {
     tagged_descriptions: ?[*]const TaggedDescription,
     mutable_map_descriptions: ?[*]const MutableMapDescription,
     protocoldescriptor_descriptions: ?[*]const ProtocolDescriptorDescription,
+    constraintcombinator_descriptions: ?[*]const ConstraintCombinatorDescription,
 };
 
 /// Slot table type matching the C declaration:
@@ -329,6 +354,12 @@ pub const MutableMapSlotTable = [*]?*value_mod.MutableMap;
 /// sites were emitted (zero-slot count).
 pub const ProtocolDescriptorSlotTable = [*]?*const value_mod.ProtocolDescriptor;
 
+/// Slot table for `*ConstraintCombinator` pointers reached from `.combination`
+/// annotations. Each slot is populated by the loader with a combinator
+/// reconstructed from its description row. Null when no combinators were
+/// emitted (zero-slot count).
+pub const ConstraintCombinatorSlotTable = [*]?*const value_mod.ConstraintCombinator;
+
 /// All loader-populated slot tables, passed together so the
 /// `loadIntoContext` signature stays compact as new tables land. Any
 /// individual field may be null when its corresponding C symbol was
@@ -341,6 +372,7 @@ pub const SlotTables = struct {
     tagged: ?TaggedSlotTable = null,
     mutable_maps: ?MutableMapSlotTable = null,
     protocol_descriptors: ?ProtocolDescriptorSlotTable = null,
+    constraint_combinators: ?ConstraintCombinatorSlotTable = null,
 };
 
 /// PIC snapshot relocation entry. Each entry says "rewrite this
@@ -422,6 +454,15 @@ pub fn loadIntoContext(
     ctx.image_mutable_map_slot_count = header.mutable_map_slot_count;
     ctx.image_protocoldescriptor_slots = slots.protocol_descriptors;
     ctx.image_protocoldescriptor_slot_count = header.protocoldescriptor_slot_count;
+    ctx.image_constraintcombinator_slots = slots.constraint_combinators;
+    ctx.image_constraintcombinator_slot_count = header.constraintcombinator_slot_count;
+
+    // Combinator slots populate after both protocol and typevalue slots are
+    // patched: a `.type` element indexes the typevalue slot table, a
+    // `.protocol` element indexes the protocol slot table, and a nested
+    // combinator (interned post-order, so always a lower index) indexes a slot
+    // already filled this pass.
+    try populateConstraintCombinatorSlots(ctx, header, slots);
 
     // Mutable_map slots populate before tagged slots so a tagged
     // inner value carrying a `.mutable_map` resolves correctly.
@@ -637,6 +678,16 @@ fn decodeStackEffectParams(
                 const table = protocol_slots orelse break :blk null;
                 const pd = table[ip.annotation_slot] orelse break :blk null;
                 break :blk .{ .protocol = pd };
+            },
+            // Combinator annotations are deferred to future fidelity work:
+            // the combinator slot table populates after typevalue slots, which
+            // are themselves patched after word decoding, so the descriptor is
+            // not yet available here. The row carries the slot index; the slot
+            // table is still populated for the dispatch helper to consult.
+            StackEffectParam.annotation_combinator => blk: {
+                if (ip.annotation_slot >= header.constraintcombinator_slot_count)
+                    return LoaderError.BadSlotIndex;
+                break :blk null;
             },
             else => null,
         };
@@ -1446,6 +1497,87 @@ fn reconstructProtocolDescriptor(
     return pd;
 }
 
+// -- Constraint combinator slot population ------------------------------
+
+/// Walk the constraint combinator description table and patch
+/// `onez_image_constraintcombinator_slots[]`. Rows are processed in ascending
+/// slot order; because combinators are interned post-order at freeze time, a
+/// row's nested-combinator elements live at lower slots already patched this
+/// pass. Combinators are anonymous, so there is no reuse-by-name -- each row is
+/// reconstructed and registered. The build-time `combinator_id` is preserved
+/// and `next_combinator_id` advanced past it so later runtime-created
+/// combinators cannot collide.
+fn populateConstraintCombinatorSlots(
+    ctx: *Context,
+    header: *const Header,
+    slots: SlotTables,
+) LoaderError!void {
+    if (header.constraintcombinator_slot_count == 0) return;
+    const descs = header.constraintcombinator_descriptions orelse return;
+    const slot_table = slots.constraint_combinators orelse return;
+    var i: u32 = 0;
+    while (i < header.constraintcombinator_slot_count) : (i += 1) {
+        const row = descs[i];
+        if (row.slot >= header.constraintcombinator_slot_count) return LoaderError.BadSlotIndex;
+        const cc = try reconstructConstraintCombinator(ctx, header, row, slots);
+        slot_table[row.slot] = cc;
+    }
+}
+
+/// Allocate a runtime ConstraintCombinator from a description row. Each element
+/// resolves through its slot table by kind: kind 1 reads the 1-based typevalue
+/// slot, kind 2 the 0-based protocol slot, kind 3 the 0-based combinator slot
+/// (a lower index already patched). The per-kind bounds checks reject a row
+/// that references a slot outside its table.
+fn reconstructConstraintCombinator(
+    ctx: *Context,
+    header: *const Header,
+    row: ConstraintCombinatorDescription,
+    slots: SlotTables,
+) LoaderError!*value_mod.ConstraintCombinator {
+    const arena = ctx.quotationAllocator();
+    const elements = arena.alloc(value_mod.ConstraintCombinator.Element, row.element_count) catch
+        return LoaderError.OutOfMemory;
+    if (row.element_count > 0) {
+        const element_rows = row.elements orelse return LoaderError.BadSlotIndex;
+        var e: u32 = 0;
+        while (e < row.element_count) : (e += 1) {
+            const er = element_rows[e];
+            elements[e] = switch (er.kind) {
+                1 => blk: {
+                    const table = slots.typevalues orelse return LoaderError.BadSlotIndex;
+                    if (er.slot == 0 or er.slot >= header.typevalue_slot_count) return LoaderError.BadSlotIndex;
+                    const tv = table[er.slot] orelse return LoaderError.BadSlotIndex;
+                    break :blk .{ .type = tv };
+                },
+                2 => blk: {
+                    const table = slots.protocol_descriptors orelse return LoaderError.BadSlotIndex;
+                    if (er.slot >= header.protocoldescriptor_slot_count) return LoaderError.BadSlotIndex;
+                    const pd = table[er.slot] orelse return LoaderError.BadSlotIndex;
+                    break :blk .{ .protocol = pd };
+                },
+                3 => blk: {
+                    const table = slots.constraint_combinators orelse return LoaderError.BadSlotIndex;
+                    if (er.slot >= header.constraintcombinator_slot_count) return LoaderError.BadSlotIndex;
+                    const nested = table[er.slot] orelse return LoaderError.BadSlotIndex;
+                    break :blk .{ .combinator = nested };
+                },
+                else => return LoaderError.BadSlotIndex,
+            };
+        }
+    }
+    const kind: value_mod.ConstraintCombinator.Kind = switch (row.kind) {
+        0 => .intersection,
+        1 => .@"union",
+        else => return LoaderError.BadSlotIndex,
+    };
+    const cc = ctx.createConstraintCombinator(kind, elements) catch
+        return LoaderError.OutOfMemory;
+    cc.combinator_id = row.combinator_id;
+    _ = ctx.next_combinator_id.fetchMax(row.combinator_id + 1, .monotonic);
+    return cc;
+}
+
 // -- PIC relocation walk -----------------------------------------------
 
 fn resolvePicRelocations(
@@ -1551,6 +1683,8 @@ fn emptyHeader() Header {
         .mutable_map_descriptions = null,
         .protocoldescriptor_slot_count = 0,
         .protocoldescriptor_descriptions = null,
+        .constraintcombinator_slot_count = 0,
+        .constraintcombinator_descriptions = null,
     };
 }
 
@@ -2652,5 +2786,112 @@ test "loadIntoContext: word effect param with out-of-range protocol slot errors"
     try testing.expectError(
         LoaderError.BadSlotIndex,
         loadIntoContext(&ctx, &header, .{ .protocol_descriptors = &slots }, null),
+    );
+}
+
+test "loadIntoContext: combinator slot reconstructs across all three element kinds" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // A TypeValue pre-filled into the typevalue slot table at slot 1. With
+    // zero typevalue rows, `populateTypeValueSlots` leaves the table untouched,
+    // so the combinator's `.type` element resolves to this pointer.
+    const tv_desc = try value_mod.createBuiltinTypeDescriptor(arena, .{});
+    const tv = try arena.create(value_mod.TypeValue);
+    tv.* = .{ .name = "smallint", .descriptor = tv_desc };
+    var typevalue_slots = [_]?*const value_mod.TypeValue{ null, tv };
+
+    // Two protocols reconstructed into protocol slots 0 and 1.
+    const pd_name = "cmp-able";
+    const pd2_name = "show-able";
+    const pd_descs = [_]ProtocolDescriptorDescription{
+        .{ .name = pd_name.ptr, .name_len = pd_name.len, .slot = 0, .protocol_id = 1, .method_count = 0, .methods = null },
+        .{ .name = pd2_name.ptr, .name_len = pd2_name.len, .slot = 1, .protocol_id = 2, .method_count = 0, .methods = null },
+    };
+    var protocol_slots = [_]?*const value_mod.ProtocolDescriptor{ null, null };
+
+    // Inner intersection of one protocol (pd2 at slot 1); outer union of a
+    // type leaf, a protocol leaf (pd at slot 0), and the inner combinator.
+    const inner_elements = [_]CombinatorElement{
+        .{ .kind = 2, .slot = 1 },
+    };
+    const outer_elements = [_]CombinatorElement{
+        .{ .kind = 1, .slot = 1 },
+        .{ .kind = 2, .slot = 0 },
+        .{ .kind = 3, .slot = 0 },
+    };
+    const cc_descs = [_]ConstraintCombinatorDescription{
+        .{ .slot = 0, .combinator_id = 5, .kind = 0, .element_count = 1, .elements = &inner_elements },
+        .{ .slot = 1, .combinator_id = 6, .kind = 1, .element_count = 3, .elements = &outer_elements },
+    };
+    var combinator_slots = [_]?*const value_mod.ConstraintCombinator{ null, null };
+
+    var header = emptyHeader();
+    header.typevalue_slot_count = 2;
+    header.protocoldescriptor_slot_count = 2;
+    header.protocoldescriptor_descriptions = &pd_descs;
+    header.constraintcombinator_slot_count = 2;
+    header.constraintcombinator_descriptions = &cc_descs;
+
+    try loadIntoContext(&ctx, &header, .{
+        .typevalues = &typevalue_slots,
+        .protocol_descriptors = &protocol_slots,
+        .constraint_combinators = &combinator_slots,
+    }, null);
+
+    const inner = combinator_slots[0] orelse return error.TestExpectedCombinator;
+    const outer = combinator_slots[1] orelse return error.TestExpectedCombinator;
+
+    // Inner: an intersection of the single protocol leaf at protocol slot 1.
+    try testing.expect(inner.kind == .intersection);
+    try testing.expectEqual(@as(usize, 1), inner.elements.len);
+    try testing.expect(inner.elements[0] == .protocol);
+    try testing.expectEqual(protocol_slots[1].?, inner.elements[0].protocol);
+    try testing.expectEqual(@as(u32, 5), inner.combinator_id);
+
+    // Outer: a union whose three elements span all leaf kinds and whose nested
+    // combinator points back at the reconstructed inner.
+    try testing.expect(outer.kind == .@"union");
+    try testing.expectEqual(@as(usize, 3), outer.elements.len);
+    try testing.expect(outer.elements[0] == .type);
+    try testing.expectEqual(@as(*const value_mod.TypeValue, tv), outer.elements[0].type);
+    try testing.expect(outer.elements[1] == .protocol);
+    try testing.expectEqual(protocol_slots[0].?, outer.elements[1].protocol);
+    try testing.expect(outer.elements[2] == .combinator);
+    try testing.expectEqual(inner, outer.elements[2].combinator);
+    try testing.expectEqual(@as(u32, 6), outer.combinator_id);
+
+    // Both descriptors registered on the context, cached on the slot table,
+    // and next_combinator_id advanced past the serialized ids.
+    try testing.expectEqual(@as(usize, 2), ctx.constraint_combinators.items.len);
+    try testing.expectEqual(@as(u32, 2), ctx.image_constraintcombinator_slot_count);
+    try testing.expect(ctx.next_combinator_id.load(.monotonic) >= 7);
+}
+
+test "loadIntoContext: combinator element with out-of-range type slot errors" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const elements = [_]CombinatorElement{
+        .{ .kind = 1, .slot = 4 },
+    };
+    const cc_descs = [_]ConstraintCombinatorDescription{
+        .{ .slot = 0, .combinator_id = 1, .kind = 0, .element_count = 1, .elements = &elements },
+    };
+    var combinator_slots = [_]?*const value_mod.ConstraintCombinator{null};
+    var typevalue_slots = [_]?*const value_mod.TypeValue{null};
+
+    var header = emptyHeader();
+    header.typevalue_slot_count = 1;
+    header.constraintcombinator_slot_count = 1;
+    header.constraintcombinator_descriptions = &cc_descs;
+
+    try testing.expectError(
+        LoaderError.BadSlotIndex,
+        loadIntoContext(&ctx, &header, .{
+            .typevalues = &typevalue_slots,
+            .constraint_combinators = &combinator_slots,
+        }, null),
     );
 }

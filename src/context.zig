@@ -454,6 +454,7 @@ pub const Context = struct {
     image_tagged_slots: ?[*]?*const value_mod.Value = null,
     image_mutable_map_slots: ?[*]?*value_mod.MutableMap = null,
     image_protocoldescriptor_slots: ?[*]?*const value_mod.ProtocolDescriptor = null,
+    image_constraintcombinator_slots: ?[*]?*const value_mod.ConstraintCombinator = null,
     image_typevalue_slot_count: u32 = 0,
     image_struct_type_slot_count: u32 = 0,
     image_marker_slot_count: u32 = 0,
@@ -461,6 +462,7 @@ pub const Context = struct {
     image_tagged_slot_count: u32 = 0,
     image_mutable_map_slot_count: u32 = 0,
     image_protocoldescriptor_slot_count: u32 = 0,
+    image_constraintcombinator_slot_count: u32 = 0,
     /// Set true when `aot_image_loader.loadIntoContext` has populated
     /// this context from an AOT runtime image. Gates the module-cache
     /// fallback in `lookupWordForExecution` so the fallback only fires
