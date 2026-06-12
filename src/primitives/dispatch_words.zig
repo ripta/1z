@@ -152,6 +152,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     };
     const entry = DispatchEntry{
         .body = .{ .quotation = body.instructions },
+        .source_module = ctx.loading_module,
     };
 
     ctx.registerDispatch(key, entry, allow_overwrite) catch |err| {
@@ -288,4 +289,98 @@ fn resolveModuleLiteral(ctx: *Context, module_path: []const u8) ?*const value_mo
         },
         else => null,
     };
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+const testing = std.testing;
+const Value = value_mod.Value;
+const Instruction = value_mod.Instruction;
+
+fn noopNative(_: *Context) anyerror!void {}
+
+/// Drive `nativeDefineMethod` for a unary method on a freshly-defined native
+/// generic word keyed by `tv`, with `ctx.loading_module` set to `loading` for
+/// the duration of the registration. Returns the registered entry.
+fn registerUnaryMethod(
+    ctx: *Context,
+    word_name: []const u8,
+    tv: *value_mod.TypeValue,
+    loading: ?*const value_mod.Module,
+) !?DispatchEntry {
+    // A native target word skips the `generic` marker requirement, keeping the
+    // test focused on the defining-module capture rather than marker plumbing.
+    try ctx.defineWord(word_name, .{ .name = word_name, .action = .{ .native = noopNative } });
+
+    const desc_map = try value_mod.MutableMap.create(testing.allocator);
+    var types_arr = [_]Value{.{ .type_val = tv }};
+    try desc_map.map.put(testing.allocator, try testing.allocator.dupe(u8, "types"), .{ .array = &types_arr });
+    const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 }};
+    try desc_map.map.put(testing.allocator, try testing.allocator.dupe(u8, "body"), .{ .quotation = .{ .instructions = body } });
+
+    // Stack order: name, descriptor, markers (popped in reverse). The map's
+    // sole owning reference moves to the stack via pushMoved, so the eventual
+    // release inside nativeDefineMethod destroys it exactly once.
+    try ctx.stack.push(.{ .symbol = word_name });
+    try ctx.stack.pushMoved(.{ .mutable_map = desc_map });
+    try ctx.stack.push(.{ .array = &[_]Value{} });
+
+    const saved = ctx.loading_module;
+    ctx.loading_module = loading;
+    defer ctx.loading_module = saved;
+    try nativeDefineMethod(ctx);
+
+    const dispatch_id = ctx.lookupWord(word_name).?.dispatch_id;
+    const key = DispatchKey{
+        .dispatch_id = dispatch_id,
+        .type_a = tv.descriptor.?,
+        .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
+    };
+    return ctx.getDispatchEntry(key);
+}
+
+test "method entry carries its defining module after registration" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const desc = try value_mod.createBuiltinTypeDescriptor(testing.allocator, .{});
+    defer value_mod.destroyTypeDescriptor(testing.allocator, desc);
+    var tv = value_mod.TypeValue{ .name = "widget", .descriptor = desc };
+
+    var defining = value_mod.Module{ .name = "widgets", .words = .{} };
+
+    const entry = (try registerUnaryMethod(&ctx, "render", &tv, &defining)).?;
+    try testing.expectEqual(@as(?*const value_mod.Module, &defining), entry.source_module);
+}
+
+test "cross-module method records the defining module, not the type's module" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // The type conceptually belongs to module N; the method body is written in
+    // module M (the loading module). The entry must record M.
+    const desc = try value_mod.createBuiltinTypeDescriptor(testing.allocator, .{});
+    defer value_mod.destroyTypeDescriptor(testing.allocator, desc);
+    var tv = value_mod.TypeValue{ .name = "color", .descriptor = desc };
+
+    var type_module = value_mod.Module{ .name = "palette", .words = .{} };
+    var body_module = value_mod.Module{ .name = "renderer", .words = .{} };
+
+    const entry = (try registerUnaryMethod(&ctx, "inspect", &tv, &body_module)).?;
+    try testing.expectEqual(@as(?*const value_mod.Module, &body_module), entry.source_module);
+    try testing.expect(entry.source_module != &type_module);
+}
+
+test "method registered outside a module load has no defining module" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const desc = try value_mod.createBuiltinTypeDescriptor(testing.allocator, .{});
+    defer value_mod.destroyTypeDescriptor(testing.allocator, desc);
+    var tv = value_mod.TypeValue{ .name = "gadget", .descriptor = desc };
+
+    const entry = (try registerUnaryMethod(&ctx, "describe", &tv, null)).?;
+    try testing.expectEqual(@as(?*const value_mod.Module, null), entry.source_module);
 }

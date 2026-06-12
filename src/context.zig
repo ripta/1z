@@ -382,6 +382,11 @@ pub const Context = struct {
     /// the correct import source, even after execution-source tracking updates
     /// current_source to their own defining file.
     load_file_source: ?[]const u8 = null,
+    /// The module currently being assembled by nativeLoadImpl, available while
+    /// its file body executes so method registrations can record their defining
+    /// module. Set and restored via save-restore in nativeLoadImpl. Null outside
+    /// a module load (top-level script, REPL).
+    loading_module: ?*const value_mod.Module = null,
     /// Offset to convert tokenizer-relative line numbers to file-relative.
     /// The tokenizer restarts at line 1 for each statement. This offset is
     /// the file line where the current statement starts minus 1.

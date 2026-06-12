@@ -367,6 +367,21 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     ctx.in_module_load = true;
     defer ctx.in_module_load = was_in_module_load;
 
+    // Create the module before executing the file body so method registrations
+    // running during the body (via the `;` finalizer calling define-method) can
+    // record their defining module. Its words/deps are filled from the frame
+    // after the body completes; the pointer is stable across that fill because
+    // modules are arena-allocated.
+    const module = try alloc.create(Module);
+    module.* = .{
+        .name = try alloc.dupe(u8, filename),
+        .words = .{},
+    };
+
+    const old_loading_module = ctx.loading_module;
+    ctx.loading_module = module;
+    defer ctx.loading_module = old_loading_module;
+
     const saved_obligations = ctx.protocol_obligations;
     ctx.protocol_obligations = .{};
     defer {
@@ -415,13 +430,6 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     // Capture definitions from the frame before popping
     const frame_index = ctx.local_frames.items.len - 1;
     const frame = &ctx.local_frames.items[frame_index];
-
-    // Create module
-    const module = try alloc.create(Module);
-    module.* = .{
-        .name = try alloc.dupe(u8, filename),
-        .words = .{},
-    };
 
     // Copy definitions from frame to module.
     // Both compound and native words are captured. Native words occur in

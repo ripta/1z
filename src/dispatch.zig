@@ -189,6 +189,11 @@ pub const DispatchBody = union(enum) {
 pub const DispatchEntry = struct {
     body: DispatchBody,
     provenance: ?DispatchProvenance = null,
+    /// The module whose source the body was written in. Borrowed; valid for
+    /// the life of the dispatch table because modules are arena-allocated and
+    /// live for the whole Context. Null for native and host-callback bodies,
+    /// and for methods registered outside any module load.
+    source_module: ?*const value_mod.Module = null,
 };
 
 /// Dispatch table mapping (dispatch_id, type_a, type_b) to method bodies.
