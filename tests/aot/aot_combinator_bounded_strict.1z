@@ -1,0 +1,22 @@
+\ Combinator-bounded call site in interpreter-free AOT mode. The metadata-
+\ only image still carries the combinator slot table, so the combinator
+\ satisfies-and-dispatch helper resolves the descriptor through the slot
+\ table exactly as the runtime-image binary does -- with no interpreter
+\ linked into the binary at all.
+\
+\ The intersection's addable element requires bump-it, so the combinator
+\ provably guarantees the generic's method and the call site is bounded. No
+\ bump-it method is registered for fixnum, so the check fails with a protocol
+\ error and the binary exits with an error. The result is dropped rather than
+\ printed: printing words still need interpreter fallback, which the locked
+\ interpreter-free build rejects.
+
+addable:   protocol{ bump-it: } ;
+printable: protocol{ show-it: } ;
+bump-it:   generic ( x: addable & printable -- n ) [ drop 0 ] ;
+
+\ Combinator-bounded call site: compiled output emits the combinator
+\ satisfies-and-dispatch helper.
+bounded-caller: ( x: addable & printable -- n ) [ bump-it ] ;
+
+1 bounded-caller drop

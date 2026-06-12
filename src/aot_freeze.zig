@@ -1611,7 +1611,7 @@ fn buildAotDescs(
             .is_generated = def.provenance != null,
             .parent = compound_parent,
             .bounded_dispatch_id = if (bounded != null) def.dispatch_id else 0,
-            .bounded_protocol = if (bounded) |b| b.descriptor else null,
+            .bounded_constraint = if (bounded) |b| b.constraint else null,
             .bounded_arity = if (bounded) |b| b.arity else .unary,
         });
     }

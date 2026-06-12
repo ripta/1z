@@ -349,7 +349,7 @@ fn validateCombinatorObligationSameTypeOnly(
 /// Raise a `protocol-error` for a type that fails a combinator constraint. The
 /// combinator is anonymous from the descriptor's view, so the message names the
 /// type rather than a single protocol.
-fn raiseCombinatorError(ctx: *Context, type_name: []const u8) error{UserThrown} {
+pub fn raiseCombinatorError(ctx: *Context, type_name: []const u8) error{UserThrown} {
     const msg = std.fmt.allocPrint(
         ctx.arena.allocator(),
         "type '{s}' does not satisfy the required constraint",

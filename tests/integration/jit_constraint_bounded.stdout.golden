@@ -1,0 +1,15 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== combinator-bounded compiled dispatch ===
+Stack: [ ]
+PASS: compiled site dispatches a satisfying operand
+Stack: [ ]
+PASS: compiled site rejects a non-satisfying operand
+Stack: [ ]

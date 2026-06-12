@@ -1,0 +1,23 @@
+use "testing" ;
+
+\ Combinator-bounded dispatch at a compiled call site. The bounded caller is
+\ JIT-compiled, so the call to the combinator-bounded generic emits the
+\ combinator satisfies-and-dispatch helper rather than installing a PIC.
+
+incrementable: protocol{ bump: } ;
+showable: protocol{ show: } ;
+
+widget: virtual{ fixnum } ;
+bump:   generic ( x: incrementable & showable -- y ) [ drop 0 ] ;
+bump:   method{ widget } [ unmake-widget 1 + >widget ] ;
+show:   generic ( x -- y ) [ drop "s" ] ;
+show:   method{ widget } [ drop "shown" ] ;
+
+call-bump: ( x: incrementable & showable -- y ) [ bump ] ;
+call-bump: compile!
+
+"combinator-bounded compiled dispatch" test-section
+
+5 >widget call-bump unmake-widget 6 "compiled site dispatches a satisfying operand" assert=
+
+[ 5 call-bump ] protocol-error: "compiled site rejects a non-satisfying operand" assert-error-type

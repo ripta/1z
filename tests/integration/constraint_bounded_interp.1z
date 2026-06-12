@@ -1,0 +1,24 @@
+use "testing" ;
+
+\ Combinator-bounded generic dispatch in the plain interpreter. The parameter is
+\ bound by an intersection (incrementable & showable); the interpreter
+\ satisfies-checks the operand against the combinator before dispatch, the same
+\ way it does for a single protocol bound.
+
+incrementable: protocol{ bump: } ;
+showable: protocol{ show: } ;
+
+\ widget implements both bump and show, so it satisfies the intersection.
+widget: virtual{ fixnum } ;
+bump:   generic ( x: incrementable & showable -- y ) [ drop 0 ] ;
+bump:   method{ widget } [ unmake-widget 1 + >widget ] ;
+show:   generic ( x -- y ) [ drop "s" ] ;
+show:   method{ widget } [ drop "shown" ] ;
+
+call-bump: ( x: incrementable & showable -- y ) [ bump ] ;
+
+"combinator-bounded interpreter dispatch" test-section
+
+5 >widget call-bump unmake-widget 6 "widget satisfies the bound and dispatches" assert=
+
+[ 5 call-bump ] protocol-error: "fixnum fails the combinator bound" assert-error-type

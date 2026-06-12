@@ -515,14 +515,15 @@ pub const AotWordDesc = struct {
     /// AOT codegen uses this to format the qualified asm-name override as `<parent>/<name>`;
     /// a null or empty parent falls back to a bare-name asm-name.
     parent: ?[]const u8 = null,
-    /// Dispatch ID for protocol-bounded call sites. Zero when the word is not a
-    /// protocol-bounded generic.
+    /// Dispatch ID for bounded call sites. Zero when the word is not a
+    /// bounded generic.
     bounded_dispatch_id: u32 = 0,
-    /// When non-null, this word is a protocol-bounded generic. AOT codegen emits
-    /// the satisfies-and-dispatch helper at call sites, referencing the descriptor
-    /// via a slot-table index instead of a process-local pointer.
-    bounded_protocol: ?*const value_mod.ProtocolDescriptor = null,
-    /// Arity for the bounded dispatch. Meaningful only when `bounded_protocol` is non-null.
+    /// When non-null, this word is a bounded generic (protocol- or
+    /// combinator-bound). AOT codegen emits the satisfies-and-dispatch helper at
+    /// call sites, referencing the descriptor via a slot-table index instead of a
+    /// process-local pointer.
+    bounded_constraint: ?dispatch_helpers.BoundedConstraint = null,
+    /// Arity for the bounded dispatch. Meaningful only when `bounded_constraint` is non-null.
     bounded_arity: dispatch_helpers.ProtocolArity = .unary,
 };
 
@@ -874,14 +875,14 @@ pub const ResolvedWord = struct {
     /// Monotonic dispatch ID of the callee, used by the protocol-bounded
     /// dispatch helper to resolve the concrete-type method.
     dispatch_id: u32 = 0,
-    /// When non-null, this call is a protocol-bounded generic dispatch site:
-    /// the compiler emits `satisfiesAndDispatch` instead of installing a PIC
-    /// or an ordinary dispatch. Carries the bound protocol and arity.
-    bounded_protocol: ?*const value_mod.ProtocolDescriptor = null,
+    /// When non-null, this call is a bounded generic dispatch site (protocol- or
+    /// combinator-bound): the compiler emits `satisfiesAndDispatch` instead of
+    /// installing a PIC or an ordinary dispatch. Carries the bound and arity.
+    bounded_constraint: ?dispatch_helpers.BoundedConstraint = null,
     bounded_arity: dispatch_helpers.ProtocolArity = .unary,
-    /// Diagnostic identity (`satisfies-and-dispatch[<protocol>]`) baked into
+    /// Diagnostic identity (`satisfies-and-dispatch[<name>]`) baked into
     /// the helper call so word traces, scheduler dumps, and error backtraces
-    /// name the bounded site by its protocol. Set whenever `bounded_protocol`
+    /// name the bounded site by its constraint. Set whenever `bounded_constraint`
     /// is set.
     bounded_trace_name: ?[]const u8 = null,
 };
@@ -1754,6 +1755,7 @@ pub const AotImageSlotMaps = struct {
     tagged_slot_index: *const std.AutoHashMapUnmanaged(ibc.TaggedKey, u32),
     mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32),
     protocol_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.ProtocolDescriptor, u32),
+    combinator_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.ConstraintCombinator, u32),
 };
 
 /// Resolution result for a typed-literal slot lookup. Carries the
@@ -1869,6 +1871,10 @@ const CompileState = struct {
     /// Function ref for `aotSatisfiesAndDispatch`, emitted at protocol-bounded
     /// generic dispatch sites in AOT mode. JIT mode uses satisfies_dispatch_fn.
     aot_satisfies_dispatch_fn: c.ir_ref = c.IR_UNUSED,
+    /// Companions of the above for combinator-bounded dispatch sites, calling
+    /// the `*SatisfiesAndDispatchCombinator` exports.
+    satisfies_dispatch_combinator_fn: c.ir_ref = c.IR_UNUSED,
+    aot_satisfies_dispatch_combinator_fn: c.ir_ref = c.IR_UNUSED,
     interp_ctx: ?*const Context = null,
     /// Interpreter PIC table for the word being compiled. Each instruction
     /// index maps to a PolymorphicCache recording observed type pairs.
@@ -5410,20 +5416,24 @@ fn compileInstructions(
                                 resetStackToPhysical(stack, sp.*);
                             }
                         }
-                    } else if (state.aot_mode and resolved.bounded_protocol != null and state.aot_slot_maps != null) {
-                        // AOT protocol-bounded generic dispatch: emit the
-                        // slot-indexed helper that satisfies-checks the
-                        // operand(s) and dispatches the concrete-type method.
-                        // Uses slot-table index instead of a process-local
-                        // descriptor pointer so the AOT binary works across
-                        // process boundaries.
+                    } else if (state.aot_mode and resolved.bounded_constraint != null and state.aot_slot_maps != null) {
+                        // AOT bounded generic dispatch: emit the slot-indexed
+                        // helper that satisfies-checks the operand(s) and
+                        // dispatches the concrete-type method. Uses slot-table
+                        // index instead of a process-local descriptor pointer so
+                        // the AOT binary works across process boundaries. The
+                        // protocol and combinator bounds use parallel slot
+                        // tables and helper exports.
                         if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
                         try materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
                         _ = emitCallbackPreamble(state, sp.*);
 
-                        emitAotSatisfiesAndDispatch(state, resolved.dispatch_id, resolved.bounded_protocol.?, resolved.bounded_arity, instr.line);
+                        switch (resolved.bounded_constraint.?) {
+                            .protocol => |pd| emitAotSatisfiesAndDispatch(state, resolved.dispatch_id, pd, resolved.bounded_arity, instr.line),
+                            .combinator => |cc| emitAotSatisfiesAndDispatchCombinator(state, resolved.dispatch_id, cc, resolved.bounded_arity, instr.line),
+                        }
 
                         if (exitFallsThrough(state.exit_kind)) {
                             const had_row = sp.* > 0 and stack[0].isRowRegion();
@@ -5459,13 +5469,13 @@ fn compileInstructions(
                                 resetStackToPhysical(stack, sp.*);
                             }
                         }
-                    } else if (resolved.bounded_protocol != null) {
-                        // Protocol-bounded generic dispatch: emit the helper that
+                    } else if (resolved.bounded_constraint != null) {
+                        // Bounded generic dispatch: emit the helper that
                         // satisfies-checks the operand(s) and dispatches the
                         // concrete-type method in one call. No PIC is installed,
-                        // and the protocol bound is checked exactly once (by the
-                        // helper) rather than re-validated. The emission predicate
-                        // guarantees the bound protocol requires this generic, so a
+                        // and the bound is checked exactly once (by the helper)
+                        // rather than re-validated. The emission predicate
+                        // guarantees the bound requires this generic, so a
                         // satisfying operand always resolves a method -- the helper
                         // never reaches its raise-on-miss path, matching the
                         // interpreter's behavior.
@@ -5475,7 +5485,10 @@ fn compileInstructions(
                         flushToPhysicalStack(state, stack, sp.*);
                         _ = emitCallbackPreamble(state, sp.*);
 
-                        emitSatisfiesAndDispatch(state, resolved.dispatch_id, @intFromPtr(resolved.bounded_protocol.?), resolved.bounded_arity, resolved.bounded_trace_name orelse name, instr.line);
+                        switch (resolved.bounded_constraint.?) {
+                            .protocol => |pd| emitSatisfiesAndDispatch(state, resolved.dispatch_id, @intFromPtr(pd), resolved.bounded_arity, resolved.bounded_trace_name orelse name, instr.line),
+                            .combinator => |cc| emitSatisfiesAndDispatchCombinator(state, resolved.dispatch_id, @intFromPtr(cc), resolved.bounded_arity, resolved.bounded_trace_name orelse name, instr.line),
+                        }
 
                         if (exitFallsThrough(state.exit_kind)) {
                             const had_row = sp.* > 0 and stack[0].isRowRegion();
@@ -5749,7 +5762,7 @@ fn preScanInstructions(
                             if (resolved.stack_effect_ptr != null) {
                                 flags.needs_param_validation = true;
                             }
-                            if (resolved.bounded_protocol != null) {
+                            if (resolved.bounded_constraint != null) {
                                 flags.needs_satisfies_dispatch = true;
                             }
                         } else if (!in_quotation) {
@@ -5932,6 +5945,11 @@ fn compileWordPass(
     else
         c.IR_UNUSED;
 
+    const satisfies_dispatch_combinator_fn = if (scan_flags.needs_satisfies_dispatch)
+        c.ir_const_addr(&ctx, @intFromPtr(&jitSatisfiesAndDispatchCombinator))
+    else
+        c.IR_UNUSED;
+
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
     const error_propagate_status = c.ir_const_i32(&ctx, 2);
@@ -6038,6 +6056,7 @@ fn compileWordPass(
         .release_slot_fn = release_slot_fn,
         .validate_params_fn = validate_params_fn,
         .satisfies_dispatch_fn = satisfies_dispatch_fn,
+        .satisfies_dispatch_combinator_fn = satisfies_dispatch_combinator_fn,
         .interp_ctx = interp_ctx,
         .pic_table = pic_table,
         .error_propagate_status = error_propagate_status,
@@ -6523,6 +6542,11 @@ fn emitWordCAotPass(
     else
         c.IR_UNUSED;
 
+    const aot_satisfies_dispatch_combinator_fn = if (scan_flags.needs_satisfies_dispatch)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "aotSatisfiesAndDispatchCombinator"), proto_5arg)
+    else
+        c.IR_UNUSED;
+
     const pic_dispatch_fn = if (scan_flags.needs_native_call or interp_ctx_param != null)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicDispatch"), proto_4arg)
     else
@@ -6664,6 +6688,7 @@ fn emitWordCAotPass(
         .release_slot_fn = release_slot_fn,
         .validate_params_fn = validate_params_fn,
         .aot_satisfies_dispatch_fn = aot_satisfies_dispatch_fn,
+        .aot_satisfies_dispatch_combinator_fn = aot_satisfies_dispatch_combinator_fn,
         .pic_table = pic_table,
         .pic_stats = pic_stats_out,
         .aot_fallback_emit_count = aot_fallback_emit_count_out,
@@ -7121,7 +7146,7 @@ pub fn emitProgramC(
                 .is_native = entry.is_native,
                 .native_fn_ptr = entry.native_fn_ptr,
                 .dispatch_id = entry.bounded_dispatch_id,
-                .bounded_protocol = entry.bounded_protocol,
+                .bounded_constraint = entry.bounded_constraint,
                 .bounded_arity = entry.bounded_arity,
             };
             if (entry.stack_effect) |*eff| {
@@ -7183,11 +7208,15 @@ pub fn emitProgramC(
             .{ .metadata_only = false },
             extra_bodies.items,
         );
-        // Intern every protocol-bounded descriptor from the word list so
-        // the slot table covers all bounded call sites in this build.
+        // Intern every bounded descriptor from the word list so the slot
+        // tables cover all bounded call sites in this build. Protocol bounds
+        // land in the protocol slot table; combinator bounds in the combinator
+        // slot table.
         for (words) |w| {
-            if (w.bounded_protocol) |pd|
-                _ = try image_collection.?.effect_table.internProtocol(pd);
+            if (w.bounded_constraint) |bc| switch (bc) {
+                .protocol => |pd| _ = try image_collection.?.effect_table.internProtocol(pd),
+                .combinator => |cc| _ = try image_collection.?.effect_table.internCombinator(cc),
+            };
         }
         image_slot_maps = .{
             .typevalue_slot_index = &image_collection.?.effect_table.type_slot_index,
@@ -7197,6 +7226,7 @@ pub fn emitProgramC(
             .tagged_slot_index = &image_collection.?.effect_table.tagged_slot_index,
             .mutable_map_slot_index = &image_collection.?.effect_table.mutable_map_slot_index,
             .protocol_slot_index = &image_collection.?.effect_table.protocol_slot_index,
+            .combinator_slot_index = &image_collection.?.effect_table.combinator_slot_index,
         };
     }
     const slot_maps_ptr: ?*const AotImageSlotMaps = if (image_slot_maps) |*m| m else null;
@@ -7660,6 +7690,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitPushMutableMapSlot(uintptr_t ctx, uintptr_t slot);\n");
     try out.appendSlice(allocator, "static inline int32_t onez_push_mutable_map_slot(uintptr_t ctx, uintptr_t slot) { return jitPushMutableMapSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatch(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatchCombinator(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
     try out.appendSlice(allocator, "\n");
 
     // 4a. Forward declarations (only for successfully compiled words)
@@ -8985,6 +9016,65 @@ fn emitAotSatisfiesAndDispatch(
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 }
 
+/// Combinator-bounded counterpart of emitSatisfiesAndDispatch. Same JIT-only
+/// shape, calling `jitSatisfiesAndDispatchCombinator` with a process-local
+/// combinator pointer.
+fn emitSatisfiesAndDispatchCombinator(
+    state: *CompileState,
+    dispatch_id: u32,
+    combinator_ptr: usize,
+    arity: dispatch_helpers.ProtocolArity,
+    trace_name: []const u8,
+    line: usize,
+) void {
+    if (state.satisfies_dispatch_combinator_fn == c.IR_UNUSED) return;
+    if (state.aot_mode) return;
+    const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+        state.preloaded_ctx_val
+    else blk: {
+        JitContextLayout.ensureInit();
+        const ctx_off = c.ir_const_addr(state.ctx, JitContextLayout.ctx_offset);
+        const ctx_addr = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+        break :blk c._ir_LOAD(state.ctx, c.IR_ADDR, ctx_addr);
+    };
+    var args = [_]c.ir_ref{
+        ctx_val,
+        c.ir_const_addr(state.ctx, dispatch_id),
+        c.ir_const_addr(state.ctx, combinator_ptr),
+        c.ir_const_addr(state.ctx, @intFromEnum(arity)),
+        c.ir_const_addr(state.ctx, @intFromPtr(trace_name.ptr)),
+        c.ir_const_addr(state.ctx, trace_name.len),
+        c.ir_const_addr(state.ctx, line),
+    };
+    const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.satisfies_dispatch_combinator_fn, args.len, &args);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+}
+
+/// Combinator-bounded counterpart of emitAotSatisfiesAndDispatch. Looks up the
+/// combinator's slot index in the parallel combinator slot table and emits a
+/// 5-arg call to `aotSatisfiesAndDispatchCombinator`.
+fn emitAotSatisfiesAndDispatchCombinator(
+    state: *CompileState,
+    dispatch_id: u32,
+    combinator: *const value_mod.ConstraintCombinator,
+    arity: dispatch_helpers.ProtocolArity,
+    line: usize,
+) void {
+    if (state.aot_satisfies_dispatch_combinator_fn == c.IR_UNUSED) return;
+    const maps = state.aot_slot_maps orelse return;
+    const slot_idx = maps.combinator_slot_index.get(combinator) orelse return;
+    const ctx_val = state.preloaded_ctx_val;
+    var args = [_]c.ir_ref{
+        ctx_val,
+        c.ir_const_addr(state.ctx, dispatch_id),
+        c.ir_const_addr(state.ctx, slot_idx),
+        c.ir_const_addr(state.ctx, @intFromEnum(arity)),
+        c.ir_const_addr(state.ctx, line),
+    };
+    const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.aot_satisfies_dispatch_combinator_fn, args.len, &args);
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+}
+
 // =============================================================================
 // Trampoline
 // =============================================================================
@@ -9094,7 +9184,7 @@ export fn jitSatisfiesAndDispatch(
         @as([*]const u8, @ptrFromInt(name_ptr_raw))[0..name_len_raw]
     else
         "satisfies-and-dispatch";
-    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), descriptor, arity, trace_name, @intCast(line_raw)) catch |err| {
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .protocol = descriptor }, arity, trace_name, @intCast(line_raw)) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -9131,7 +9221,70 @@ export fn aotSatisfiesAndDispatch(
     };
     var trace_buf: [128]u8 = undefined;
     const trace_name = std.fmt.bufPrint(&trace_buf, "satisfies-and-dispatch[{s}]", .{descriptor.name}) catch "satisfies-and-dispatch";
-    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), descriptor, arity, trace_name, @intCast(line_raw)) catch |err| {
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .protocol = descriptor }, arity, trace_name, @intCast(line_raw)) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// Combinator-bounded counterpart of jitSatisfiesAndDispatch. Satisfies-checks
+/// the dispatched operand(s) against the process-local combinator descriptor and
+/// dispatches the concrete-type method by `dispatch_id`.
+export fn jitSatisfiesAndDispatchCombinator(
+    ctx_raw: usize,
+    dispatch_id_raw: usize,
+    combinator_ptr_raw: usize,
+    arity_raw: usize,
+    name_ptr_raw: usize,
+    name_len_raw: usize,
+    line_raw: usize,
+) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const combinator: *const value_mod.ConstraintCombinator = @ptrFromInt(combinator_ptr_raw);
+    const arity = std.meta.intToEnum(dispatch_helpers.ProtocolArity, arity_raw) catch return 1;
+    const trace_name: []const u8 = if (name_len_raw > 0 and name_ptr_raw != 0)
+        @as([*]const u8, @ptrFromInt(name_ptr_raw))[0..name_len_raw]
+    else
+        "satisfies-and-dispatch";
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .combinator = combinator }, arity, trace_name, @intCast(line_raw)) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// Combinator-bounded counterpart of aotSatisfiesAndDispatch. Resolves the
+/// combinator descriptor through the runtime-image combinator slot table and
+/// dispatches the concrete-type method. Slot-indexed so the AOT binary does not
+/// bake process-local pointers.
+export fn aotSatisfiesAndDispatchCombinator(
+    ctx_raw: usize,
+    dispatch_id_raw: usize,
+    slot_idx_raw: usize,
+    arity_raw: usize,
+    line_raw: usize,
+) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const slots = ctx.image_constraintcombinator_slots orelse {
+        ctx.jit_pending_error = error.UserThrown;
+        return 2;
+    };
+    if (slot_idx_raw >= ctx.image_constraintcombinator_slot_count) {
+        ctx.jit_pending_error = error.UserThrown;
+        return 2;
+    }
+    const combinator = slots[slot_idx_raw] orelse {
+        ctx.jit_pending_error = error.UserThrown;
+        return 2;
+    };
+    const arity = std.meta.intToEnum(dispatch_helpers.ProtocolArity, arity_raw) catch {
+        ctx.jit_pending_error = error.UserThrown;
+        return 2;
+    };
+    dispatch_helpers.satisfiesAndDispatch(ctx, @intCast(dispatch_id_raw), .{ .combinator = combinator }, arity, "satisfies-and-dispatch[constraint]", @intCast(line_raw)) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };

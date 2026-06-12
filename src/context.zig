@@ -585,6 +585,13 @@ pub const Context = struct {
         *const value_mod.ProtocolDescriptor,
         []const u8,
     ) = .{},
+    /// Companion of `bounded_dispatch_trace_names` for combinator-bounded sites,
+    /// keyed by combinator descriptor. Combinators are anonymous, so the shared
+    /// string names the constraint generically.
+    bounded_dispatch_combinator_trace_names: std.AutoHashMapUnmanaged(
+        *const value_mod.ConstraintCombinator,
+        []const u8,
+    ) = .{},
     /// Registry of known pragma keys and their validation rules.
     pragma_registry: std.StringHashMapUnmanaged(PragmaRegistration) = .{},
     /// Stack of pragma frames for file-scoped pragma values.
@@ -1070,6 +1077,7 @@ pub const Context = struct {
         self.constraint_combinators.deinit(self.allocator);
         self.protocol_satisfies_cache.deinit(self.allocator);
         self.bounded_dispatch_trace_names.deinit(self.allocator);
+        self.bounded_dispatch_combinator_trace_names.deinit(self.allocator);
         self.dispatch.deinit();
         self.jit_dispatch.deinit();
         var pic_iter = self.pic_cache.iterator();
@@ -2653,6 +2661,31 @@ pub const Context = struct {
         return name;
     }
 
+    /// Diagnostic identity for a combinator-bounded dispatch site:
+    /// `satisfies-and-dispatch[constraint]`. Combinators have no stored name, so
+    /// the identity is generic; composed once per combinator and memoized.
+    pub fn boundedCombinatorTraceName(
+        self: *Context,
+        cc: *const value_mod.ConstraintCombinator,
+    ) []const u8 {
+        if (self.bounded_dispatch_combinator_trace_names.get(cc)) |name| return name;
+        const name = "satisfies-and-dispatch[constraint]";
+        self.bounded_dispatch_combinator_trace_names.put(self.allocator, cc, name) catch return name;
+        return name;
+    }
+
+    /// Diagnostic identity for a bounded dispatch site, dispatching on whether the
+    /// bound is a protocol or a constraint combinator.
+    pub fn boundedConstraintTraceName(
+        self: *Context,
+        constraint: dispatch_helpers.BoundedConstraint,
+    ) []const u8 {
+        return switch (constraint) {
+            .protocol => |pd| self.boundedDispatchTraceName(pd),
+            .combinator => |cc| self.boundedCombinatorTraceName(cc),
+        };
+    }
+
     /// Look up a cached satisfies-check result for `(type_desc, protocol_desc)`.
     /// Returns `null` if no entry exists yet or the cache was invalidated
     /// since the last write. The lock-free read pattern matches `pic_cache`.
@@ -3892,9 +3925,30 @@ pub const Context = struct {
                         return protocols_mod.raiseProtocolError(self, msg);
                     }
                 },
-                // Runtime combinator validation is not yet implemented; skip
-                // combinator-annotated parameters for now.
-                .combination => {},
+                .combination => |cc| {
+                    if (scope == .except_protocols) continue;
+
+                    const val_tv = helpers.resolveValueTypeValue(self, val) orelse continue;
+                    if (val_tv.descriptor == null) continue;
+
+                    const satisfies = try protocols_mod.typeSatisfiesConstraint(self, val_tv, .{ .combinator = cc });
+                    if (satisfies) continue;
+
+                    const actual_name = val_tv.name;
+                    const msg = std.fmt.allocPrint(self.arena.allocator(), "parameter '{s}': type '{s}' does not satisfy the required constraint", .{ param.name, actual_name }) catch "constraint mismatch";
+
+                    const is_warning = if (self.getPragma("type-check")) |pv2| switch (pv2) {
+                        .string => |s| std.mem.eql(u8, s, "warning"),
+                        else => false,
+                    } else false;
+
+                    if (is_warning) {
+                        var tw = trace_mod.TraceWriter.init();
+                        tw.print("warning: {s}\n", .{msg});
+                    } else {
+                        return protocols_mod.raiseProtocolError(self, msg);
+                    }
+                },
             }
         }
     }
@@ -4828,9 +4882,9 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .output_count = @intCast(effect.outputs.len),
         .never_returns = hasNeverReturnsMarker(callee.markers),
         .dispatch_id = callee.dispatch_id,
-        .bounded_protocol = if (bounded) |b| b.descriptor else null,
+        .bounded_constraint = if (bounded) |b| b.constraint else null,
         .bounded_arity = if (bounded) |b| b.arity else .unary,
-        .bounded_trace_name = if (bounded) |b| ctx.boundedDispatchTraceName(b.descriptor) else null,
+        .bounded_trace_name = if (bounded) |b| ctx.boundedConstraintTraceName(b.constraint) else null,
     };
     if (stack_effect_mod.hasAnyRowVariable(effect)) {
         result.callee_effect = ctx.lookupWordStackEffectPtr(name);

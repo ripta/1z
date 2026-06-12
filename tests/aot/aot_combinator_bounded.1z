@@ -1,0 +1,21 @@
+\ Combinator-bounded call site in AOT runtime-image mode. The generic's
+\ parameter is bound by an intersection combinator (addable & printable);
+\ the call site emits the combinator satisfies-and-dispatch helper-call, and
+\ the loader reconstructs the combinator descriptor from the image's
+\ combinator slot table at startup, so the helper performs a genuine
+\ satisfies-check.
+\
+\ The intersection's addable element requires bump-it, so the combinator
+\ provably guarantees the generic's method and the call site is bounded. No
+\ bump-it method is registered for fixnum, so fixnum fails the addable element
+\ of the intersection and the check raises a protocol error.
+
+addable:   protocol{ bump-it: } ;
+printable: protocol{ show-it: } ;
+bump-it:   generic ( x: addable & printable -- n ) [ drop 0 ] ;
+
+\ Combinator-bounded call site: compiled output emits the combinator
+\ satisfies-and-dispatch helper.
+bounded-caller: ( x: addable & printable -- n ) [ bump-it ] ;
+
+1 bounded-caller .

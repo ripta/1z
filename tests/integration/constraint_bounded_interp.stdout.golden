@@ -1,0 +1,14 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== combinator-bounded interpreter dispatch ===
+Stack: [ ]
+PASS: widget satisfies the bound and dispatches
+Stack: [ ]
+PASS: fixnum fails the combinator bound
+Stack: [ ]
