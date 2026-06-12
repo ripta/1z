@@ -178,6 +178,16 @@ protocol{: parse-time [
 \\ Protocol for types that support three-way comparison via cmp.
 comparable: protocol{ cmp: } ;
 
+\\ Register `cmp` for the built-in comparable types so they satisfy
+\\ `comparable`. The raw comparison lives in `native.cmp`; these wrappers turn
+\\ its result into an `ordering`, because a native primitive cannot construct
+\\ the 1z-defined `ordering` enum itself.
+cmp: method{ fixnum fixnum } [ native.cmp dup 0 < [ drop ordering:lt ] [ 0 > [ ordering:gt ] [ ordering:eq ] if ] if ] ;
+cmp: method{ float float } [ native.cmp dup 0 < [ drop ordering:lt ] [ 0 > [ ordering:gt ] [ ordering:eq ] if ] if ] ;
+cmp: method{ bignum bignum } [ native.cmp dup 0 < [ drop ordering:lt ] [ 0 > [ ordering:gt ] [ ordering:eq ] if ] if ] ;
+cmp: method{ string string } [ native.cmp dup 0 < [ drop ordering:lt ] [ 0 > [ ordering:gt ] [ ordering:eq ] if ] if ] ;
+cmp: method{ byte-array byte-array } [ native.cmp dup 0 < [ drop ordering:lt ] [ 0 > [ ordering:gt ] [ ordering:eq ] if ] if ] ;
+
 \\ Protocol for types that support roundtrippable inspection via inspect.
 inspectable: protocol{ inspect: } ;
 

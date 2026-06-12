@@ -111,6 +111,20 @@ t "temperature satisfies comparable" assert-true
 weight: comparable assert-satisfies
 t "weight satisfies comparable" assert-true
 
+"builtin types satisfy comparable" test-section
+fixnum: comparable satisfies? t "fixnum satisfies comparable" assert=
+float: comparable satisfies? t "float satisfies comparable" assert=
+bignum: comparable satisfies? t "bignum satisfies comparable" assert=
+string: comparable satisfies? t "string satisfies comparable" assert=
+byte-array: comparable satisfies? t "byte-array satisfies comparable" assert=
+boolean: comparable satisfies? f "boolean does not satisfy comparable" assert=
+
+"equality on comparable builtins stays native, not cmp-derived" test-section
+nan nan = f "nan = nan is false rather than a cmp throw" assert=
+2.0 2.0 = t "2.0 = 2.0" assert=
+1 1 = t "1 = 1" assert=
+"a" "a" = t "string equality" assert=
+
 "cmp match on result" test-section
 3 5 cmp {
   ordering:lt: [ "less" ]

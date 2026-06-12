@@ -596,14 +596,22 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
         }
     }
 
-    // = : 6 cross-type entries only
+    // = : 6 cross-type numeric entries, plus same-type entries for every
+    // comparable builtin. The same-type entries keep `=` on native value
+    // equality instead of deriving it from `cmp` (which throws on NaN) once the
+    // comparable builtins gained `cmp` methods.
     const eq_did = ctx.resolveDispatchId("=").?;
     inline for (num_types) |ta| {
         inline for (num_types) |tb| {
             if (ta != tb) {
                 try dispatch.registerNative(eq_did, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], makeEqCrossTypeEntry(ta, tb));
+            } else {
+                try dispatch.registerNative(eq_did, num_tvs[@intFromEnum(ta)], num_tvs[@intFromEnum(tb)], nativeEqSameType);
             }
         }
+    }
+    inline for (byte_types) |t| {
+        try dispatch.registerNative(eq_did, byte_tvs[@intFromEnum(t)], byte_tvs[@intFromEnum(t)], nativeEqSameType);
     }
 
     // < : 9 entries
@@ -734,6 +742,18 @@ pub fn nativeMulWrap(ctx: *Context) anyerror!void {
 pub fn nativeEq(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "=")) return;
     if (try dispatch_helpers.tryDispatchBinaryViaCmp(ctx, .eq)) return;
+    const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
+    const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
+    try ctx.stack.push(.{ .boolean = a.eql(b) });
+}
+
+/// = same-type dispatch entry for the builtin comparable types. Uses native
+/// value equality directly, so `=` does not derive from `cmp` via
+/// `tryDispatchBinaryViaCmp` for these types -- `cmp` throws on NaN, whereas
+/// `=` must report NaN as unequal rather than raise.
+fn nativeEqSameType(ctx: *Context) anyerror!void {
     const b = try ctx.stack.pop();
     defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
@@ -1028,13 +1048,12 @@ fn nativeGcd(ctx: *Context) anyerror!void {
     }
 }
 
-/// cmp ( a b -- fixnum ) - Three-way comparison returning -1, 0, or 1.
+/// cmp ( a b -- fixnum ) - Raw three-way comparison returning -1, 0, or 1.
 ///
-/// Dispatches to user types first, then handles native numeric pairs.
-/// NaN on either operand produces NotComparable.
+/// Handles the built-in comparable types directly. Polymorphic dispatch to
+/// user types is the job of the `cmp` generic, so this primitive does not
+/// dispatch itself. NaN on either operand produces NotComparable.
 fn nativeCmp(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchBinary(ctx, "cmp")) return;
-
     const alloc = ctx.arena.allocator();
 
     const b = try ctx.stack.pop();
