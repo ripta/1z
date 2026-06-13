@@ -141,9 +141,9 @@ pub const UnresolvedReason = enum {
 ///   separately (built-in or user-authored with the `generic` marker).
 ///   `define-method` registers a dispatch table entry through
 ///   `ctx.registerDispatch`; no new dictionary word is created. Freeze
-///   resolves the dispatcher directly and walks single-method tables via
-///   `walkSingleMethodDispatch`, so reachable bodies behave like nested
-///   quotation literals during BFS.
+///   resolves the dispatcher directly and walks every registered method
+///   body via `walkDispatchMethodBodies`, so reachable bodies behave like
+///   nested quotation literals during BFS.
 ///
 /// Implication: today the BFS never emits a `GeneratedKind` row, and
 /// `unresolved` rows never name a known-generator output. If a future
@@ -175,12 +175,13 @@ pub const ResolvedCallee = union(enum) {
 /// the quotation at index 5 of the caller's body has
 /// `instruction_index = 5` and `quotation_path = .{ 2 }`.
 ///
-/// For calls discovered by walking a single-method `method{` dispatch
-/// entry on a dispatch-only generic, `caller_word_id` is the polymorphic
-/// word's id, `instruction_index` is 0, and `quotation_path` begins with
-/// `DISPATCH_PATH_SENTINEL`. The polymorphic word's compound body is
-/// empty by construction, so this encoding cannot collide with any real
-/// quotation literal path.
+/// For calls discovered by walking a `method{` dispatch entry on a
+/// generic, `caller_word_id` is the polymorphic word's id,
+/// `instruction_index` is 0, and `quotation_path` begins with
+/// `DISPATCH_PATH_SENTINEL`. The sentinel value (`maxInt(u32)`) is never a
+/// real quotation-literal index, so this encoding cannot collide with any
+/// real quotation literal path, whether or not the polymorphic word's body
+/// is empty.
 pub const CallTargetEntry = struct {
     caller_word_id: u32,
     instruction_index: u32,
@@ -189,10 +190,10 @@ pub const CallTargetEntry = struct {
 };
 
 /// Sentinel placed at the head of `CallTargetEntry.quotation_path` for
-/// entries discovered by walking a single-method dispatch entry on a
-/// dispatch-only generic. The polymorphic caller's compound body is
-/// empty, so consumers can rely on this value to distinguish
-/// dispatch-walked rows from direct quotation-literal rows.
+/// entries discovered by walking a `method{` dispatch entry on a generic.
+/// The value (`maxInt(u32)`) is never a real quotation-literal index, so
+/// consumers can rely on it to distinguish dispatch-walked rows from
+/// direct quotation-literal rows.
 pub const DISPATCH_PATH_SENTINEL: u32 = std.math.maxInt(u32);
 
 pub const FreezeFeatureUse = struct {
@@ -405,7 +406,7 @@ pub fn freezeModuleGraphOpts(
             //
             // Inspect that body too so its native calls, typically `native.struct-field-get` et al., land in
             // the resolver's discovered set even when the word arrived htrough `--compile-all-prelude`,
-            // and never went through the BFS, which would have called `walkSingleMethodDispatch`.
+            // and never went through the BFS, which would have called `walkDispatchMethodBodies`.
             const instrs_list: [2][]const Instruction = blk: {
                 if (try devirtualizeSingleMethod(ctx, def, temp_allocator)) |devirt| {
                     break :blk .{ compound_instrs, devirt.body };
@@ -722,7 +723,7 @@ fn discoverReachableWords(
                             result.pending_call_targets.deinit(temp_allocator);
                             return err;
                         };
-                        walkSingleMethodDispatch(ctx, qualified_def, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
+                        walkDispatchMethodBodies(ctx, qualified_def, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
                             freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
                             result.names.deinit(temp_allocator);
                             result.defs.deinit(temp_allocator);
@@ -767,9 +768,10 @@ fn discoverReachableWords(
             return err;
         };
 
-        // Walk single-method dispatch entries for dispatch-only generics.
-        // For non-generics or multi-method tables, this is a noop.
-        walkSingleMethodDispatch(ctx, word, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
+        // Walk every method body registered for this word's dispatch_id so
+        // reached generics' methods enter the compilation manifest. For
+        // non-generics this is a noop.
+        walkDispatchMethodBodies(ctx, word, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
             freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
             result.names.deinit(temp_allocator);
             result.defs.deinit(temp_allocator);
@@ -920,34 +922,36 @@ fn collectCallWords(
     }
 }
 
-/// Walk a single-method `method{` dispatch entry as if it were a nested
-/// quotation literal inside the polymorphic word. This is the indirect
-/// call-coverage extension for monomorphic dispatch: a banned native
-/// reachable only through such a method body is flagged with the same
-/// diagnostic as a direct `call_word`.
+/// Walk every user `method{` dispatch entry registered for a generic word,
+/// treating each method body as if it were a nested quotation literal inside
+/// the polymorphic word. This serves two purposes:
+///
+/// - It adds every reached generic's method bodies to the freeze-time
+///   quotation-compilation manifest, so they compile at build time and can be
+///   serialized and replayed into the runtime dispatch table.
+/// - It extends indirect call-coverage to those bodies: a banned native
+///   reachable only through a method body is flagged with the same diagnostic
+///   as a direct `call_word`.
 ///
 /// Scope and limits:
 ///
-/// - Only compound dispatch-only generics participate (the
-///   `isDispatchOnlyGeneric` shape: empty compound body plus the
-///   `generic` marker). Native polymorphic primitives like `+` keep
-///   their existing direct-call treatment; this helper does not extend
-///   to them.
-/// - Only single-method tables are walked. Multi-method tables fall
-///   through to construction-site detection of non-constant
-///   `>quotation` arguments; mixing markers across entries would
-///   require either a stricter union check or reachability analysis.
-/// - Only `.quotation` bodies are walked. `.native_fn` and
-///   `.host_callback` entries carry no marker set on the dispatch
-///   entry, and mapping a `NativeFn` pointer back to a `WordDefinition`
-///   would require a dictionary scan that is a deliberate later step.
+/// - Only words carrying the `generic` marker participate. Native polymorphic
+///   primitives like `+` keep their existing direct-call treatment; the BFS
+///   records them in `native_defs` and never reaches this helper. Generics with
+///   a non-empty default body participate too; their default body is collected
+///   separately by `collectCallWords` on the word body, and this helper adds the
+///   method bodies on top.
+/// - All entries for the generic's `dispatch_id` are walked, regardless of how
+///   many methods are registered.
+/// - Only `.quotation` bodies are walked. `.native_fn` and `.host_callback`
+///   entries are skipped: native dispatch is already present at runtime, and
+///   function-pointer bodies have no serializable instruction stream.
 ///
-/// The empty-body precondition on dispatch-only generics is what makes
-/// the synthetic `quotation_path = [ DISPATCH_PATH_SENTINEL, ... ]`
-/// encoding unambiguous: any path beginning with that sentinel
-/// originated from this helper, since the polymorphic word's own body
-/// holds no quotation literal at any index.
-fn walkSingleMethodDispatch(
+/// The synthetic `quotation_path = [ DISPATCH_PATH_SENTINEL, ... ]` encoding
+/// stays unambiguous because `DISPATCH_PATH_SENTINEL` is `maxInt(u32)`, never a
+/// real quotation-literal index; this holds whether or not the polymorphic
+/// word's own body is empty.
+fn walkDispatchMethodBodies(
     ctx: *const Context,
     def: WordDefinition,
     polymorphic_name: []const u8,
@@ -961,45 +965,45 @@ fn walkSingleMethodDispatch(
     allocator: Allocator,
     path_allocator: Allocator,
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
-    if (!isDispatchOnlyGeneric(def)) return;
+    if (!hasGenericMarker(def)) return;
 
     const pairs = try ctx.dispatchEntriesForId(def.dispatch_id, allocator);
     defer allocator.free(pairs);
-    if (pairs.len != 1) return;
 
-    const body = pairs[0].entry.body;
-    const q_instrs = switch (body) {
-        .quotation => |q| q,
-        .native_fn, .host_callback => return,
-    };
+    for (pairs) |pair| {
+        const q_instrs = switch (pair.entry.body) {
+            .quotation => |q| q,
+            .native_fn, .host_callback => continue,
+        };
 
-    // Dedup the method body the same way collectCallWords dedups
-    // nested quotations, so a re-entry through the polymorphic word's
-    // worklist hit does not redo the walk.
-    const ptr_key = @intFromPtr(q_instrs.ptr);
-    const qgop = try quotation_seen.getOrPut(allocator, ptr_key);
-    if (qgop.found_existing) return;
-    try quotation_bodies.append(allocator, q_instrs);
+        // Dedup the method body the same way collectCallWords dedups
+        // nested quotations, so a re-entry through the polymorphic word's
+        // worklist hit does not redo the walk.
+        const ptr_key = @intFromPtr(q_instrs.ptr);
+        const qgop = try quotation_seen.getOrPut(allocator, ptr_key);
+        if (qgop.found_existing) continue;
+        try quotation_bodies.append(allocator, q_instrs);
 
-    var synth_path = std.ArrayListUnmanaged(u32){};
-    defer synth_path.deinit(allocator);
-    try synth_path.append(allocator, DISPATCH_PATH_SENTINEL);
+        var synth_path = std.ArrayListUnmanaged(u32){};
+        defer synth_path.deinit(allocator);
+        try synth_path.append(allocator, DISPATCH_PATH_SENTINEL);
 
-    try collectCallWords(
-        ctx,
-        q_instrs,
-        polymorphic_name,
-        worklist,
-        seen,
-        quotation_bodies,
-        quotation_seen,
-        pending_call_targets,
-        &synth_path,
-        diagnostics,
-        artifact_class,
-        allocator,
-        path_allocator,
-    );
+        try collectCallWords(
+            ctx,
+            q_instrs,
+            polymorphic_name,
+            worklist,
+            seen,
+            quotation_bodies,
+            quotation_seen,
+            pending_call_targets,
+            &synth_path,
+            diagnostics,
+            artifact_class,
+            allocator,
+            path_allocator,
+        );
+    }
 }
 
 /// Returns true if `name` resolves to a native (or host-callback) word
@@ -3453,8 +3457,8 @@ test "method dispatcher resolves through buildAotDescs as a compound call" {
     // compound carrying the `generic` marker. The dispatch table holds
     // the actual method bodies; freeze BFS resolves the dispatcher word
     // itself directly. The synthetic dispatch path
-    // (`walkSingleMethodDispatch`) is exercised by integration tests
-    // since it requires a populated `Context.dispatch_table`.
+    // (`walkDispatchMethodBodies`) is exercised by the dedicated tests
+    // below that populate `Context.dispatch`.
     const allocator = testing.allocator;
     const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
         .{ .op = .{ .call_word = "area" }, .line = 1 },
@@ -3566,6 +3570,149 @@ test "DisallowedDynamicFeature surfaces unresolved-callee hint for parse-time-on
     try testing.expectEqualStrings("caller", hint.caller_name);
     try testing.expectEqualStrings("hidden-evaller", hint.callee_name);
     try testing.expectEqual(UnresolvedReason.skipped_parse_time_only, hint.reason);
+}
+
+/// True if any slice in `bodies` aliases `needle`'s backing storage.
+fn quotationBodiesContain(bodies: []const []const Instruction, needle: []const Instruction) bool {
+    for (bodies) |body| {
+        if (body.ptr == needle.ptr) return true;
+    }
+    return false;
+}
+
+test "walkDispatchMethodBodies adds every quotation method body and skips native ones" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Three method bodies on one generic: two user quotations and one native.
+    // Distinct heap allocations guarantee distinct pointers so the pointer
+    // dedup in the walk does not collapse them.
+    const body_a = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+    });
+    defer allocator.free(body_a);
+    const body_b = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+    });
+    defer allocator.free(body_b);
+
+    // Distinct type-descriptor pointers serve as dispatch keys; their
+    // contents are irrelevant to the walk, which collects by dispatch_id.
+    const td_a = try allocator.create(value_mod.TypeDescriptor);
+    defer allocator.destroy(td_a);
+    td_a.* = .{ .kind = .builtin };
+    const td_b = try allocator.create(value_mod.TypeDescriptor);
+    defer allocator.destroy(td_b);
+    td_b.* = .{ .kind = .builtin };
+    const td_c = try allocator.create(value_mod.TypeDescriptor);
+    defer allocator.destroy(td_c);
+    td_c.* = .{ .kind = .builtin };
+    const td_sentinel = try allocator.create(value_mod.TypeDescriptor);
+    defer allocator.destroy(td_sentinel);
+    td_sentinel.* = .{ .kind = .sentinel };
+
+    const Stub = struct {
+        fn noop(_: *Context) anyerror!void {}
+    };
+
+    const did: u32 = 7;
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = td_a, .type_b = td_sentinel }, .{ .body = .{ .quotation = body_a } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = td_b, .type_b = td_sentinel }, .{ .body = .{ .quotation = body_b } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = td_c, .type_b = td_sentinel }, .{ .body = .{ .native_fn = Stub.noop } }, false);
+
+    const def = WordDefinition{
+        .name = "shape-area",
+        .action = .{ .compound = &.{} },
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
+        .dispatch_id = did,
+    };
+
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try walkDispatchMethodBodies(&ctx, def, "shape-area", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &diagnostics, .runtime_image_aot, allocator, allocator);
+
+    try testing.expectEqual(@as(usize, 2), quotation_bodies.items.len);
+    try testing.expect(quotationBodiesContain(quotation_bodies.items, body_a));
+    try testing.expect(quotationBodiesContain(quotation_bodies.items, body_b));
+}
+
+test "discoverReachableWords includes reached generic's method bodies and excludes unreached" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Reached generic `area` has two method bodies; unreached generic
+    // `volume` has one. Only `area` is called from the entry instructions.
+    const area_body_a = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+    });
+    defer allocator.free(area_body_a);
+    const area_body_b = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+    });
+    defer allocator.free(area_body_b);
+    const volume_body = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+    });
+    defer allocator.free(volume_body);
+
+    const td_a = try allocator.create(value_mod.TypeDescriptor);
+    defer allocator.destroy(td_a);
+    td_a.* = .{ .kind = .builtin };
+    const td_b = try allocator.create(value_mod.TypeDescriptor);
+    defer allocator.destroy(td_b);
+    td_b.* = .{ .kind = .builtin };
+    const td_v = try allocator.create(value_mod.TypeDescriptor);
+    defer allocator.destroy(td_v);
+    td_v.* = .{ .kind = .builtin };
+    const td_sentinel = try allocator.create(value_mod.TypeDescriptor);
+    defer allocator.destroy(td_sentinel);
+    td_sentinel.* = .{ .kind = .sentinel };
+
+    const area_id: u32 = 11;
+    const volume_id: u32 = 12;
+    try ctx.registerDispatch(.{ .dispatch_id = area_id, .type_a = td_a, .type_b = td_sentinel }, .{ .body = .{ .quotation = area_body_a } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = area_id, .type_a = td_b, .type_b = td_sentinel }, .{ .body = .{ .quotation = area_body_b } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = volume_id, .type_a = td_v, .type_b = td_sentinel }, .{ .body = .{ .quotation = volume_body } }, false);
+
+    const generic_markers: []const *value_mod.Marker = &.{@constCast(&markers_mod.generic_marker)};
+    try ctx.dictionary.put("area", .{
+        .name = "area",
+        .action = .{ .compound = &.{} },
+        .markers = generic_markers,
+        .dispatch_id = area_id,
+    });
+    try ctx.dictionary.put("volume", .{
+        .name = "volume",
+        .action = .{ .compound = &.{} },
+        .markers = generic_markers,
+        .dispatch_id = volume_id,
+    });
+
+    const entry_instrs = try allocator.dupe(Instruction, &[_]Instruction{
+        .{ .op = .{ .call_word = "area" }, .line = 1 },
+    });
+    defer allocator.free(entry_instrs);
+
+    var diagnostics: FreezeDiagnostics = .{};
+    var result = try discoverReachableWords(&ctx, entry_instrs, &diagnostics, .runtime_image_aot, allocator);
+    defer freePendingCallTargetPaths(&result.pending_call_targets, allocator);
+
+    try testing.expect(quotationBodiesContain(result.quotation_bodies.items, area_body_a));
+    try testing.expect(quotationBodiesContain(result.quotation_bodies.items, area_body_b));
+    try testing.expect(!quotationBodiesContain(result.quotation_bodies.items, volume_body));
 }
 
 test "DisallowedDynamicFeature leaves unresolved-callee hint null for resolved native" {
