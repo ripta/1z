@@ -82,10 +82,10 @@ embed-stdlib-test: ## Run unit tests with -Dembed-stdlib=true
 
 unit-coverage: ## Measure unit-test coverage with kcov (report under $(COVERAGE_DIR)/unit)
 	zig build unit-test-bin --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
-	rm -rf $(COVERAGE_DIR)/unit
+	rm -rf $(COVERAGE_DIR)/unit $(COVERAGE_DIR)/combined
 	mkdir -p $(COVERAGE_DIR)/unit
 	$(KCOV) $(KCOV_ARGS) $(COVERAGE_DIR)/unit ./$(ZIG_PREFIX)/test/1z-unit-test
-	@echo "Unit coverage report: $(COVERAGE_DIR)/unit/index.html"
+	@pct=$$(grep -o '"percent_covered": "[0-9.]*"' $(COVERAGE_DIR)/unit/1z-unit-test/coverage.json | tail -1 | grep -o '[0-9.]*'); echo "Unit coverage: $${pct:-?}%, report at $(COVERAGE_DIR)/unit/index.html"
 
 integration-coverage: build ## Measure integration-test coverage with kcov (report under $(COVERAGE_DIR)/integration; honors TEST_FILTER)
 	ONEZ=./$(ZIG_PREFIX)/bin/1z KCOV='$(KCOV)' KCOV_ARGS='$(KCOV_ARGS)' COVERAGE_DIR='$(COVERAGE_DIR)' JOBS=$(COVERAGE_JOBS) TEST_CASE_TIMEOUT=$(TEST_CASE_TIMEOUT) TEST_FILTER='$(TEST_FILTER)' scripts/coverage-integration.sh
@@ -93,7 +93,7 @@ integration-coverage: build ## Measure integration-test coverage with kcov (repo
 coverage: unit-coverage integration-coverage ## Measure combined unit + integration coverage (report under $(COVERAGE_DIR)/combined)
 	rm -rf $(COVERAGE_DIR)/combined
 	$(KCOV) --merge $(COVERAGE_DIR)/combined $(COVERAGE_DIR)/unit $(COVERAGE_DIR)/integration
-	@echo "Combined coverage report: $(COVERAGE_DIR)/combined/index.html"
+	@pct=$$(grep -o '"percent_covered": "[0-9.]*"' $(COVERAGE_DIR)/combined/kcov-merged/coverage.json | tail -1 | grep -o '[0-9.]*'); echo "Combined coverage (union of both): $${pct:-?}%, report at $(COVERAGE_DIR)/combined/index.html"
 
 integration-test: ## Run integration tests
 	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)

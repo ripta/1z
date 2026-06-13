@@ -51,7 +51,10 @@ NETWORK_EXCLUDE_RE='^(sockets|tls-|udp|http_|net_http|deadlock|task_|cooperative
 out_dir="$COVERAGE_DIR/integration"
 work_dir="$COVERAGE_DIR/.integration-shards"
 failures_file="$work_dir/failures.tsv"
-rm -rf "$out_dir" "$work_dir"
+# Drop any combined report: it is a union of this dir and the unit dir, so
+# regenerating integration coverage leaves it stale. Only `make coverage`
+# rebuilds it.
+rm -rf "$out_dir" "$work_dir" "$COVERAGE_DIR/combined"
 mkdir -p "$out_dir" "$work_dir"
 : > "$failures_file"
 
@@ -230,4 +233,6 @@ if [[ ${#still_failed[@]} -gt 0 ]]; then
 fi
 
 rm -rf "$work_dir"
-echo "Integration coverage report: $out_dir/index.html"
+
+pct=$(grep -o '"percent_covered": "[0-9.]*"' "$out_dir/kcov-merged/coverage.json" | tail -1 | grep -o '[0-9.]*')
+echo "Integration coverage: ${pct:-?}% — $out_dir/index.html"
