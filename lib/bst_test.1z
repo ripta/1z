@@ -1,0 +1,188 @@
+\ Unit tests for lib/bst.1z.
+
+use "testing" ;
+use "bst" ;
+
+\ --- Empty tree ---
+
+test-empty-is-empty: ( -- ) [
+  [ cmp ] <bst> tree-empty? t "new bst is empty" assert=
+] ;
+
+test-empty-size: ( -- ) [
+  [ cmp ] <bst> tree-size 0 "size of empty tree is 0" assert=
+] ;
+
+test-empty-contains: ( -- ) [
+  [ cmp ] <bst> 42 tree-contains? f "empty tree contains nothing" assert=
+] ;
+
+test-empty-lookup: ( -- ) [
+  [ cmp ] <bst> 42 tree-lookup option:none? t "lookup on empty tree is none" assert=
+] ;
+
+test-empty-array: ( -- ) [
+  [ cmp ] <bst> tree>array { } "tree>array of empty tree is empty" assert=
+] ;
+
+test-empty-min: ( -- ) [
+  [ cmp ] <bst> tree-min option:none? t "min of empty tree is none" assert=
+] ;
+
+test-empty-max: ( -- ) [
+  [ cmp ] <bst> tree-max option:none? t "max of empty tree is none" assert=
+] ;
+
+\ --- Single insert ---
+
+test-single-not-empty: ( -- ) [
+  [ cmp ] <bst> 42 tree-insert tree-empty? f "tree with one element is not empty" assert=
+] ;
+
+test-single-contains: ( -- ) [
+  [ cmp ] <bst> 42 tree-insert 42 tree-contains? t "contains the inserted element" assert=
+] ;
+
+test-single-absent: ( -- ) [
+  [ cmp ] <bst> 42 tree-insert 99 tree-contains? f "does not contain an absent element" assert=
+] ;
+
+test-single-size: ( -- ) [
+  [ cmp ] <bst> 42 tree-insert tree-size 1 "size after one insert is 1" assert=
+] ;
+
+test-single-lookup: ( -- ) [
+  [ cmp ] <bst> 42 tree-insert 42 tree-lookup option:some> 42 "lookup finds the inserted element" assert=
+] ;
+
+\ --- Multiple inserts and sorted in-order output ---
+
+test-multi-sorted-array: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst tree>array
+  { 1 3 4 5 8 } "tree>array yields sorted in-order output" assert=
+] ;
+
+test-multi-reverse-input-sorted: ( -- ) [
+  { 10 9 8 7 6 5 4 3 2 1 } [ cmp ] >bst tree>array
+  { 1 2 3 4 5 6 7 8 9 10 } "reverse-sorted input yields sorted output" assert=
+] ;
+
+test-multi-size: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst tree-size 5 "size of five-element tree is 5" assert=
+] ;
+
+test-multi-min: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst tree-min option:some> 1 "min of tree is 1" assert=
+] ;
+
+test-multi-max: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst tree-max option:some> 8 "max of tree is 8" assert=
+] ;
+
+\ --- Lookup and contains, present and absent ---
+
+test-lookup-present: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst 3 tree-lookup option:some> 3 "lookup of present key found" assert=
+] ;
+
+test-lookup-absent: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst 6 tree-lookup option:none? t "lookup of absent key is none" assert=
+] ;
+
+test-contains-present: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst 8 tree-contains? t "contains a present key" assert=
+] ;
+
+test-contains-absent: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst 0 tree-contains? f "does not contain an absent key" assert=
+] ;
+
+\ --- Duplicate-key handling ---
+
+test-duplicate-still-contains: ( -- ) [
+  [ cmp ] <bst> 42 tree-insert 42 tree-insert
+  42 tree-contains? t "still contains key after duplicate insert" assert=
+] ;
+
+test-duplicate-no-size-growth: ( -- ) [
+  { 5 5 5 } [ cmp ] >bst tree-size 1 "duplicate inserts do not increase size" assert=
+] ;
+
+\ --- Fold and each ---
+
+test-fold-sum: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst 0 [ + ] tree-fold
+  21 "tree-fold sums the elements" assert=
+] ;
+
+test-fold-empty: ( -- ) [
+  [ cmp ] <bst> 0 [ + ] tree-fold
+  0 "tree-fold on empty tree returns init" assert=
+] ;
+
+\ --- Delete ---
+
+test-delete-empty-noop: ( -- ) [
+  [ cmp ] <bst> 42 tree-delete tree-empty? t "delete from empty tree is a no-op" assert=
+] ;
+
+test-delete-only-element: ( -- ) [
+  [ cmp ] <bst> 42 tree-insert 42 tree-delete tree-empty? t "tree empty after deleting only element" assert=
+] ;
+
+test-delete-leaf: ( -- ) [
+  { 5 3 8 } [ cmp ] >bst 3 tree-delete tree>array
+  { 5 8 } "delete a leaf removes only that key" assert=
+] ;
+
+test-delete-root-two-children: ( -- ) [
+  { 2 1 3 } [ cmp ] >bst 2 tree-delete tree>array
+  { 1 3 } "delete root with two children keeps the rest sorted" assert=
+] ;
+
+test-delete-size: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst 3 tree-delete tree-size
+  4 "size decreases by one after a delete" assert=
+] ;
+
+test-delete-absent-noop: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst 99 tree-delete tree-size
+  5 "delete of absent key does not change size" assert=
+] ;
+
+test-delete-all: ( -- ) [
+  { 5 3 8 1 4 } [ cmp ] >bst
+  5 tree-delete 3 tree-delete 8 tree-delete 1 tree-delete 4 tree-delete
+  tree-empty? t "tree empty after deleting every element" assert=
+] ;
+
+\ --- bst-map ---
+
+test-map-empty: ( -- ) [
+  [ cmp ] <bst-map> map-empty? t "new bst-map is empty" assert=
+] ;
+
+test-map-insert-lookup: ( -- ) [
+  [ cmp ] <bst-map> "a" 1 map-insert "b" 2 map-insert
+  "b" map-lookup option:some> 2 "map-lookup finds an inserted value" assert=
+] ;
+
+test-map-lookup-absent: ( -- ) [
+  [ cmp ] <bst-map> "a" 1 map-insert
+  "z" map-lookup option:none? t "map-lookup of absent key is none" assert=
+] ;
+
+test-map-duplicate-overwrites: ( -- ) [
+  [ cmp ] <bst-map> "x" 1 map-insert "x" 99 map-insert
+  "x" map-lookup option:some> 99 "duplicate map-insert overwrites the value" assert=
+] ;
+
+test-map-size: ( -- ) [
+  [ cmp ] <bst-map> "a" 1 map-insert "b" 2 map-insert "c" 3 map-insert
+  map-size 3 "bst-map size counts distinct keys" assert=
+] ;
+
+test-map-delete: ( -- ) [
+  [ cmp ] <bst-map> "a" 1 map-insert "b" 2 map-insert "b" map-delete
+  "b" map-lookup option:none? t "map-delete removes the key" assert=
+] ;

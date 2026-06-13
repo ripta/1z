@@ -1,0 +1,133 @@
+\ Unit tests for lib/data/base64.1z.
+
+use "testing" ;
+use "data/base64" ;
+
+\ RFC 4648 standard encode vectors.
+
+test-encode-empty: ( -- ) [
+  "encode vectors" test-section
+  "" "" encode "encode empty string" assert=
+] ;
+
+test-encode-f: ( -- ) [
+  "Zg==" "f" encode "encode f" assert=
+] ;
+
+test-encode-fo: ( -- ) [
+  "Zm8=" "fo" encode "encode fo" assert=
+] ;
+
+test-encode-foo: ( -- ) [
+  "Zm9v" "foo" encode "encode foo" assert=
+] ;
+
+test-encode-foob: ( -- ) [
+  "Zm9vYg==" "foob" encode "encode foob" assert=
+] ;
+
+test-encode-fooba: ( -- ) [
+  "Zm9vYmE=" "fooba" encode "encode fooba" assert=
+] ;
+
+test-encode-foobar: ( -- ) [
+  "Zm9vYmFy" "foobar" encode "encode foobar" assert=
+] ;
+
+\ RFC 4648 standard decode vectors via decode>string.
+
+test-decode-empty: ( -- ) [
+  "decode vectors" test-section
+  "" "" decode>string "decode empty string" assert=
+] ;
+
+test-decode-f: ( -- ) [
+  "f" "Zg==" decode>string "decode Zg==" assert=
+] ;
+
+test-decode-fo: ( -- ) [
+  "fo" "Zm8=" decode>string "decode Zm8=" assert=
+] ;
+
+test-decode-foo: ( -- ) [
+  "foo" "Zm9v" decode>string "decode Zm9v" assert=
+] ;
+
+test-decode-foob: ( -- ) [
+  "foob" "Zm9vYg==" decode>string "decode Zm9vYg==" assert=
+] ;
+
+test-decode-fooba: ( -- ) [
+  "fooba" "Zm9vYmE=" decode>string "decode Zm9vYmE=" assert=
+] ;
+
+test-decode-foobar: ( -- ) [
+  "foobar" "Zm9vYmFy" decode>string "decode Zm9vYmFy" assert=
+] ;
+
+\ Round-trips through encode then decode>string.
+
+test-roundtrip-hello: ( -- ) [
+  "round-trips" test-section
+  "hello, world" "hello, world" encode decode>string "round-trip hello, world" assert=
+] ;
+
+test-roundtrip-empty: ( -- ) [
+  "" "" encode decode>string "round-trip empty" assert=
+] ;
+
+test-roundtrip-single: ( -- ) [
+  "x" "x" encode decode>string "round-trip single char" assert=
+] ;
+
+\ Unpadded decode is accepted.
+
+test-decode-unpadded-f: ( -- ) [
+  "padding" test-section
+  "f" "Zg" decode>string "decode unpadded Zg" assert=
+] ;
+
+test-decode-unpadded-fo: ( -- ) [
+  "fo" "Zm8" decode>string "decode unpadded Zm8" assert=
+] ;
+
+test-encode-no-pad-f: ( -- ) [
+  "Zg" "f" encode(no-pad) "encode(no-pad) f" assert=
+] ;
+
+test-encode-no-pad-fo: ( -- ) [
+  "Zm8" "fo" encode(no-pad) "encode(no-pad) fo" assert=
+] ;
+
+test-encode-no-pad-foo: ( -- ) [
+  "Zm9v" "foo" encode(no-pad) "encode(no-pad) foo" assert=
+] ;
+
+\ URL-safe alphabet.
+
+test-encode-url-foobar: ( -- ) [
+  "url-safe" test-section
+  "Zm9vYmFy" "foobar" encode(url) "encode(url) foobar" assert=
+] ;
+
+test-roundtrip-url: ( -- ) [
+  "hello, world" "hello, world" encode(url) decode>string(url) "round-trip url hello, world" assert=
+] ;
+
+test-encode-url-no-pad-f: ( -- ) [
+  "Zg" "f" encode(url-no-pad) "encode(url-no-pad) f" assert=
+] ;
+
+\ High bytes that map to + and / under the standard alphabet become - and _
+\ under the URL-safe alphabet.
+test-encode-url-substitutes: ( -- ) [
+  "-__-" B{ 0xFB 0xFF 0xFE } encode(url) "encode(url) substitutes - and _" assert=
+] ;
+
+test-encode-standard-plus-slash: ( -- ) [
+  "+//+" B{ 0xFB 0xFF 0xFE } encode "encode keeps + and /" assert=
+] ;
+
+test-roundtrip-url-high-bytes: ( -- ) [
+  "-__-" "-__-" decode(url) encode(url) "round-trip url high bytes" assert=
+] ;

@@ -1,0 +1,87 @@
+\ Unit tests for lib/math/complex.1z.
+
+use "testing" ;
+use "math/complex" ;
+
+test-construction-real: ( -- ) [
+  "construction" test-section
+  C{ 3.0 4.0 } real-part 3.0 "real-part extracts the real component" assert=
+] ;
+
+test-construction-imag: ( -- ) [
+  C{ 3.0 4.0 } imaginary-part 4.0 "imaginary-part extracts the imaginary component" assert=
+] ;
+
+test-add-real: ( -- ) [
+  "addition" test-section
+  C{ 1.0 2.0 } C{ 3.0 4.0 } + real-part 4.0 "sum of real parts" assert=
+] ;
+
+test-add-imag: ( -- ) [
+  C{ 1.0 2.0 } C{ 3.0 4.0 } + imaginary-part 6.0 "sum of imaginary parts" assert=
+] ;
+
+test-sub-real: ( -- ) [
+  "subtraction" test-section
+  C{ 5.0 7.0 } C{ 3.0 2.0 } - real-part 2.0 "difference of real parts" assert=
+] ;
+
+test-sub-imag: ( -- ) [
+  C{ 5.0 7.0 } C{ 3.0 2.0 } - imaginary-part 5.0 "difference of imaginary parts" assert=
+] ;
+
+test-mul-real: ( -- ) [
+  "multiplication" test-section
+  \ (1+2i)(3+4i) = (3-8) + (4+6)i = -5 + 10i
+  C{ 1.0 2.0 } C{ 3.0 4.0 } * real-part -5.0 "product real part" assert=
+] ;
+
+test-mul-imag: ( -- ) [
+  C{ 1.0 2.0 } C{ 3.0 4.0 } * imaginary-part 10.0 "product imaginary part" assert=
+] ;
+
+test-mul-i-squared-real: ( -- ) [
+  \ i*i = -1, so real part is -1 and imaginary part is 0
+  C{ 0.0 1.0 } C{ 0.0 1.0 } * real-part -1.0 "i times i has real part -1" assert=
+] ;
+
+test-mul-i-squared-imag: ( -- ) [
+  C{ 0.0 1.0 } C{ 0.0 1.0 } * imaginary-part 0.0 "i times i has imaginary part 0" assert=
+] ;
+
+test-div-even-real: ( -- ) [
+  "division" test-section
+  \ (-5+10i)/(1+2i) = 3+4i, since (1+2i)(3+4i) = -5+10i
+  C{ -5.0 10.0 } C{ 1.0 2.0 } / real-part 3.0 "even division real part" assert=
+] ;
+
+test-div-even-imag: ( -- ) [
+  C{ -5.0 10.0 } C{ 1.0 2.0 } / imaginary-part 4.0 "even division imaginary part" assert=
+] ;
+
+test-conjugate-real: ( -- ) [
+  "conjugate" test-section
+  C{ 3.0 4.0 } conjugate real-part 3.0 "conjugate keeps the real part" assert=
+] ;
+
+test-conjugate-imag: ( -- ) [
+  C{ 3.0 4.0 } conjugate imaginary-part -4.0 "conjugate negates the imaginary part" assert=
+] ;
+
+test-magnitude-pythagorean: ( -- ) [
+  "magnitude" test-section
+  C{ 3.0 4.0 } magnitude 5.0 "3+4i has magnitude 5" assert=
+] ;
+
+test-magnitude-real-axis: ( -- ) [
+  C{ 5.0 0.0 } magnitude 5.0 "real-only magnitude is the real part" assert=
+] ;
+
+test-equality-true: ( -- ) [
+  "equality" test-section
+  C{ 1.0 2.0 } C{ 1.0 2.0 } = "equal complex numbers compare equal" assert-true
+] ;
+
+test-equality-false: ( -- ) [
+  C{ 1.0 2.0 } C{ 1.0 3.0 } = "differing complex numbers compare unequal" assert-false
+] ;

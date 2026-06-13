@@ -1,0 +1,118 @@
+\ Unit tests for lib/data/url.1z.
+
+use "testing" ;
+use "data/url" ;
+
+"encode unreserved characters" test-section
+
+test-encode-unreserved-passthrough: ( -- ) [
+  "a-b_c.d~e" "a-b_c.d~e" encode "unreserved chars pass through unchanged" assert=
+] ;
+
+test-encode-empty: ( -- ) [
+  "" "" encode "encoding the empty string yields the empty string" assert=
+] ;
+
+"encode reserved and special characters" test-section
+
+test-encode-space: ( -- ) [
+  "%20" " " encode "space encodes to %20" assert=
+] ;
+
+test-encode-slash: ( -- ) [
+  "%2F" "/" encode "slash encodes to %2F" assert=
+] ;
+
+test-encode-question: ( -- ) [
+  "%3F" "?" encode "question mark encodes to %3F" assert=
+] ;
+
+test-encode-ampersand: ( -- ) [
+  "%26" "&" encode "ampersand encodes to %26" assert=
+] ;
+
+test-encode-equals: ( -- ) [
+  "%3D" "=" encode "equals encodes to %3D" assert=
+] ;
+
+test-encode-hash: ( -- ) [
+  "%23" "#" encode "hash encodes to %23" assert=
+] ;
+
+test-encode-percent: ( -- ) [
+  "%25" "%" encode "percent encodes to %25" assert=
+] ;
+
+test-encode-uppercase-hex: ( -- ) [
+  "a%20b%2Fc%3Fd%26e%3Df%23g%25h" "a b/c?d&e=f#g%h" encode
+  "mixed reserved characters use uppercase hex" assert=
+] ;
+
+test-encode-utf8: ( -- ) [
+  "%C3%A9" "é" encode "non-ASCII UTF-8 byte sequence is percent-encoded" assert=
+] ;
+
+"form encoding" test-section
+
+test-encode-form-space-plus: ( -- ) [
+  "a+b" "a b" encode(form) "form encoding turns space into +" assert=
+] ;
+
+test-encode-form-literal-plus: ( -- ) [
+  "a%2Bb" "a+b" encode(form) "form encoding percent-encodes a literal +" assert=
+] ;
+
+"decode" test-section
+
+test-decode-passthrough: ( -- ) [
+  "a-b_c.d~e" "a-b_c.d~e" decode "unreserved chars decode unchanged" assert=
+] ;
+
+test-decode-empty: ( -- ) [
+  "" "" decode "decoding the empty string yields the empty string" assert=
+] ;
+
+test-decode-uppercase-hex: ( -- ) [
+  "/" "%2F" decode "uppercase hex %2F decodes to slash" assert=
+] ;
+
+test-decode-lowercase-hex: ( -- ) [
+  "/" "%2f" decode "lowercase hex %2f decodes to slash" assert=
+] ;
+
+test-decode-space: ( -- ) [
+  "a b" "a%20b" decode "%20 decodes to space" assert=
+] ;
+
+test-decode-form-plus: ( -- ) [
+  "a b" "a+b" decode(form) "form decoding turns + into space" assert=
+] ;
+
+test-decode-form-literal-plus: ( -- ) [
+  "a+b" "a%2Bb" decode(form) "form decoding leaves %2B as a literal +" assert=
+] ;
+
+test-decode-truncated-error: ( -- ) [
+  [ "a%2" decode ] "truncated percent sequence throws" assert-error
+] ;
+
+test-decode-invalid-hex-error: ( -- ) [
+  [ "%2g" decode ] "invalid hex digit throws" assert-error
+] ;
+
+"round trip" test-section
+
+test-round-trip: ( -- ) [
+  "a b/c?d&e=f#g%h" "a b/c?d&e=f#g%h" encode decode
+  "decode reverses encode" assert=
+] ;
+
+test-round-trip-utf8: ( -- ) [
+  "héllo wörld" "héllo wörld" encode decode
+  "round trip preserves UTF-8 text" assert=
+] ;
+
+test-round-trip-form: ( -- ) [
+  "a b+c" "a b+c" encode(form) decode(form)
+  "form decode reverses form encode" assert=
+] ;

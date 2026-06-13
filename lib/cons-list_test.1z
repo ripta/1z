@@ -1,0 +1,185 @@
+\ Unit tests for lib/cons-list.1z.
+
+use "testing" ;
+use "cons-list" ;
+
+\ --- Constructors and predicates ---
+
+test-nil-is-nil: ( -- ) [
+  "nil section" test-section
+  nil nil? "nil is nil" assert-true
+  nil cons? "nil is not a cons" assert-false
+] ;
+
+test-cons-is-cons: ( -- ) [
+  1 nil cons cons? "cons produces a cons cell" assert-true
+  1 nil cons nil? "a cons cell is not nil" assert-false
+] ;
+
+\ --- head and tail ---
+
+test-head-single: ( -- ) [
+  "head and tail" test-section
+  1 1 nil cons head "head of single-element list" assert=
+] ;
+
+test-head-multi: ( -- ) [
+  3 3 2 1 nil cons cons cons head "head returns the first element" assert=
+] ;
+
+test-tail-single: ( -- ) [
+  { } 1 nil cons tail cons-list>array "tail of single-element list is empty" assert=
+] ;
+
+test-tail-multi: ( -- ) [
+  { 2 1 } 3 2 1 nil cons cons cons tail cons-list>array "tail drops the head" assert=
+] ;
+
+test-head-empty-throws: ( -- ) [
+  [ nil head ] "head of empty list throws" assert-error
+] ;
+
+test-tail-empty-throws: ( -- ) [
+  [ nil tail ] "tail of empty list throws" assert-error
+] ;
+
+\ --- Array conversion ---
+
+test-array-empty: ( -- ) [
+  "array conversion" test-section
+  { } nil cons-list>array "empty list converts to empty array" assert=
+] ;
+
+test-array-order: ( -- ) [
+  { 1 2 3 } 1 2 3 nil cons cons cons cons-list>array "cons order is preserved in array" assert=
+] ;
+
+\ --- Length ---
+
+test-len-empty: ( -- ) [
+  "length" test-section
+  0 nil list-len "length of empty list is zero" assert=
+] ;
+
+test-len-three: ( -- ) [
+  3 1 2 3 nil cons cons cons list-len "length counts all elements" assert=
+] ;
+
+\ --- nth ---
+
+test-nth-first: ( -- ) [
+  "nth" test-section
+  1 1 2 3 nil cons cons cons 0 list-nth "nth 0 returns the head" assert=
+] ;
+
+test-nth-middle: ( -- ) [
+  2 1 2 3 nil cons cons cons 1 list-nth "nth 1 returns the second element" assert=
+] ;
+
+test-nth-last: ( -- ) [
+  3 1 2 3 nil cons cons cons 2 list-nth "nth 2 returns the last element" assert=
+] ;
+
+test-nth-out-of-range-throws: ( -- ) [
+  [ 1 2 3 nil cons cons cons 5 list-nth ] "nth past the end throws" assert-error
+] ;
+
+test-nth-empty-throws: ( -- ) [
+  [ nil 0 list-nth ] "nth on empty list throws" assert-error
+] ;
+
+\ --- reverse ---
+
+test-reverse-empty: ( -- ) [
+  "reverse" test-section
+  { } nil list-reverse cons-list>array "reverse of empty list is empty" assert=
+] ;
+
+test-reverse-three: ( -- ) [
+  { 3 2 1 } 1 2 3 nil cons cons cons list-reverse cons-list>array "reverse flips element order" assert=
+] ;
+
+\ --- append ---
+
+test-append-both-empty: ( -- ) [
+  "append" test-section
+  { } nil nil list-append cons-list>array "appending two empty lists is empty" assert=
+] ;
+
+test-append-empty-left: ( -- ) [
+  { 1 2 } nil 1 2 nil cons cons list-append cons-list>array "appending onto an empty left list" assert=
+] ;
+
+test-append-empty-right: ( -- ) [
+  { 1 2 } 1 2 nil cons cons nil list-append cons-list>array "appending an empty right list" assert=
+] ;
+
+test-append-two: ( -- ) [
+  { 1 2 3 4 } 1 2 nil cons cons 3 4 nil cons cons list-append cons-list>array "appending two non-empty lists" assert=
+] ;
+
+\ --- each ---
+
+test-each-empty: ( -- ) [
+  "each" test-section
+  { } { } nil [ #suffix ] list-each "each over empty list runs zero times" assert=
+] ;
+
+test-each-order: ( -- ) [
+  { 1 2 3 } { } 1 2 3 nil cons cons cons [ #suffix ] list-each "each visits elements head to tail" assert=
+] ;
+
+\ --- map ---
+
+test-map-empty: ( -- ) [
+  "map" test-section
+  { } nil [ 2 * ] list-map cons-list>array "map over empty list is empty" assert=
+] ;
+
+test-map-double: ( -- ) [
+  { 2 4 6 } 1 2 3 nil cons cons cons [ 2 * ] list-map cons-list>array "map applies the quotation to each element" assert=
+] ;
+
+\ --- filter ---
+
+test-filter-empty: ( -- ) [
+  "filter" test-section
+  { } nil [ 2 > ] list-filter cons-list>array "filter over empty list is empty" assert=
+] ;
+
+test-filter-keeps-matching: ( -- ) [
+  { 3 4 } 1 2 3 4 nil cons cons cons cons [ 2 > ] list-filter cons-list>array "filter keeps only matching elements" assert=
+] ;
+
+test-filter-keeps-none: ( -- ) [
+  { } 1 2 3 nil cons cons cons [ 100 > ] list-filter cons-list>array "filter keeping nothing yields empty" assert=
+] ;
+
+\ --- foldl ---
+
+test-foldl-empty: ( -- ) [
+  "foldl" test-section
+  100 nil 100 [ - ] list-foldl "foldl over empty list returns the accumulator" assert=
+] ;
+
+test-foldl-subtract: ( -- ) [
+  94 1 2 3 nil cons cons cons 100 [ - ] list-foldl "foldl folds left, head to tail" assert=
+] ;
+
+\ --- fold (alias for foldl) ---
+
+test-fold-alias: ( -- ) [
+  "fold alias" test-section
+  94 1 2 3 nil cons cons cons 100 [ - ] list-fold "fold is an alias for foldl" assert=
+] ;
+
+\ --- foldr ---
+
+test-foldr-empty: ( -- ) [
+  "foldr" test-section
+  0 nil 0 [ - ] list-foldr "foldr over empty list returns the init" assert=
+] ;
+
+test-foldr-subtract: ( -- ) [
+  2 1 2 3 nil cons cons cons 0 [ - ] list-foldr "foldr folds right, tail to head" assert=
+] ;

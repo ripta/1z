@@ -1,0 +1,83 @@
+\ Unit tests for lib/bytes.1z.
+
+use "testing" ;
+use "bytes" ;
+
+\ --- #peek8 / #poke8! ---
+
+test-peek8-first: ( -- ) [
+  B{ 0x01 0x02 0x03 0x04 } 0 #peek8 1 "peek8 reads the byte at offset 0" assert=
+] ;
+
+test-peek8-offset: ( -- ) [
+  B{ 0x01 0x02 0x03 0x04 } 1 #peek8 2 "peek8 reads the byte at a non-zero offset" assert=
+] ;
+
+test-peek8-last: ( -- ) [
+  B{ 0x10 0x20 0x30 } 2 #peek8 48 "peek8 reads the last byte" assert=
+] ;
+
+test-poke8-roundtrip: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 } 1 0xAB #poke8! 1 #peek8 171 "poke8 then peek8 round-trips" assert=
+] ;
+
+test-poke8-returns-array: ( -- ) [
+  B{ 0x00 0x00 } 0 9 #poke8! B{ 0x09 0x00 } "poke8 mutates and returns the byte array" assert=
+] ;
+
+\ --- #peek16 / #poke16! (little-endian) ---
+
+test-peek16-little-endian: ( -- ) [
+  B{ 0x01 0x02 0x03 0x04 } 0 #peek16 513 "peek16 reads two bytes little-endian" assert=
+] ;
+
+test-peek16-offset: ( -- ) [
+  B{ 0x01 0x02 0x03 0x04 } 1 #peek16 770 "peek16 honors a non-zero offset" assert=
+] ;
+
+test-poke16-roundtrip: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 } 0 513 #poke16! 0 #peek16 513 "poke16 then peek16 round-trips" assert=
+] ;
+
+test-poke16-byte-order: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 } 0 513 #poke16! B{ 0x01 0x02 0x00 0x00 } "poke16 writes least-significant byte first" assert=
+] ;
+
+\ --- #peek32 / #poke32! (little-endian) ---
+
+test-peek32-little-endian: ( -- ) [
+  B{ 0x01 0x02 0x03 0x04 } 0 #peek32 67305985 "peek32 reads four bytes little-endian" assert=
+] ;
+
+test-poke32-roundtrip: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 } 0 67305985 #poke32! 0 #peek32 67305985 "poke32 then peek32 round-trips" assert=
+] ;
+
+test-poke32-byte-order: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 } 0 67305985 #poke32! B{ 0x01 0x02 0x03 0x04 } "poke32 writes bytes least-significant first" assert=
+] ;
+
+\ --- #peek64 / #poke64! (little-endian) ---
+
+test-peek64-little-endian: ( -- ) [
+  B{ 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08 } 0 #peek64 578437695752307201 "peek64 reads eight bytes little-endian" assert=
+] ;
+
+test-poke64-roundtrip: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 } 0 578437695752307201 #poke64! 0 #peek64 578437695752307201 "poke64 then peek64 round-trips" assert=
+] ;
+
+test-poke64-byte-order: ( -- ) [
+  B{ 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 } 0 578437695752307201 #poke64!
+  B{ 0x01 0x02 0x03 0x04 0x05 0x06 0x07 0x08 } "poke64 writes bytes least-significant first" assert=
+] ;
+
+\ --- cross-width consistency ---
+
+test-poke8-peek16: ( -- ) [
+  B{ 0x00 0x00 } 0 0x01 #poke8! 1 0x02 #poke8! 0 #peek16 513 "two poke8 writes read back as one peek16" assert=
+] ;
+
+test-zero-roundtrip: ( -- ) [
+  B{ 0xFF 0xFF 0xFF 0xFF } 0 0 #poke32! 0 #peek32 0 "writing zero clears the width" assert=
+] ;

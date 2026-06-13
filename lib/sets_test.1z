@@ -1,0 +1,97 @@
+\ Unit tests for lib/sets.1z.
+
+use "testing" ;
+use "sets" ;
+
+\ --- @subset? ---
+
+test-subset-proper: ( -- ) [
+  "@subset?" test-section
+  S{ 1 2 } S{ 1 2 3 } @subset? "proper subset is a subset" assert-true
+] ;
+
+test-subset-equal: ( -- ) [
+  S{ 1 2 3 } S{ 1 2 3 } @subset? "a set is a subset of itself" assert-true
+] ;
+
+test-subset-false: ( -- ) [
+  S{ 1 2 3 } S{ 1 2 } @subset? "superset is not a subset" assert-false
+] ;
+
+test-subset-empty-of-any: ( -- ) [
+  S{ } S{ 1 2 } @subset? "empty set is a subset of any set" assert-true
+] ;
+
+test-subset-empty-of-empty: ( -- ) [
+  S{ } S{ } @subset? "empty set is a subset of the empty set" assert-true
+] ;
+
+test-subset-disjoint-false: ( -- ) [
+  S{ 1 2 } S{ 3 4 } @subset? "disjoint set is not a subset" assert-false
+] ;
+
+\ --- @superset? ---
+
+test-superset-proper: ( -- ) [
+  "@superset?" test-section
+  S{ 1 2 3 } S{ 1 2 } @superset? "proper superset is a superset" assert-true
+] ;
+
+test-superset-equal: ( -- ) [
+  S{ 1 2 3 } S{ 1 2 3 } @superset? "a set is a superset of itself" assert-true
+] ;
+
+test-superset-false: ( -- ) [
+  S{ 1 2 } S{ 1 2 3 } @superset? "subset is not a superset" assert-false
+] ;
+
+test-superset-of-empty: ( -- ) [
+  S{ 1 2 } S{ } @superset? "any set is a superset of the empty set" assert-true
+] ;
+
+\ --- @disjoint? ---
+
+test-disjoint-true: ( -- ) [
+  "@disjoint?" test-section
+  S{ 1 2 } S{ 3 4 } @disjoint? "sets with no common elements are disjoint" assert-true
+] ;
+
+test-disjoint-false: ( -- ) [
+  S{ 1 2 } S{ 2 3 } @disjoint? "sets sharing an element are not disjoint" assert-false
+] ;
+
+test-disjoint-empty: ( -- ) [
+  S{ } S{ 1 2 } @disjoint? "empty set is disjoint from any set" assert-true
+] ;
+
+test-disjoint-both-empty: ( -- ) [
+  S{ } S{ } @disjoint? "two empty sets are disjoint" assert-true
+] ;
+
+\ --- @symmetric-difference ---
+
+test-symmetric-difference-overlap: ( -- ) [
+  "@symmetric-difference" test-section
+  S{ 1 2 } S{ 2 3 } @symmetric-difference S{ 1 3 }
+  "symmetric difference keeps elements in exactly one set" assert=
+] ;
+
+test-symmetric-difference-equal: ( -- ) [
+  S{ 1 2 } S{ 1 2 } @symmetric-difference S{ }
+  "symmetric difference of equal sets is empty" assert=
+] ;
+
+test-symmetric-difference-disjoint: ( -- ) [
+  S{ 1 2 } S{ 3 4 } @symmetric-difference S{ 1 2 3 4 }
+  "symmetric difference of disjoint sets is their union" assert=
+] ;
+
+test-symmetric-difference-with-empty: ( -- ) [
+  S{ 1 2 } S{ } @symmetric-difference S{ 1 2 }
+  "symmetric difference with the empty set is the other set" assert=
+] ;
+
+test-symmetric-difference-both-empty: ( -- ) [
+  S{ } S{ } @symmetric-difference S{ }
+  "symmetric difference of two empty sets is empty" assert=
+] ;
