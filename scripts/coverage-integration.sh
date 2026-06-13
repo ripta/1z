@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 #
-# Measure integration-test coverage of the Zig interpreter sources under src/.
+# Measure coverage of the Zig interpreter sources under src/ from the file-driven
+# test corpora that all run the real `1z` binary: the integration tests, the
+# formatter inputs, and the lib/ unit tests. These reach interpreter paths the
+# unit suite never touches, and since they share one binary their coverage
+# merges into a single report.
 #
-# Each integration test runs the real `1z` interpreter over a tests/integration
-# *.1z file, so coverage here captures interpreter paths the unit suite never
-# touches. This script replays the sidecar handling from configureIntegrationRun
+# Integration entries replay the sidecar handling from configureIntegrationRun
 # in build.zig (subcommand detection, flag forwarding, @raw mode with the {file}
-# token, .args, .stdin, .env) and runs each file under kcov, sharding across
-# $JOBS workers and merging the shards into one report at the end.
+# token, .args, .stdin, .env). Formatter entries run `fmt --stdout`; lib entries
+# run the `test` subcommand. Everything is run under kcov, sharded across $JOBS
+# workers and merged at the end.
 #
 # Coverage only needs lines to execute, not output to match a golden, so this
 # script does not compare against golden files. kcov also masks the child exit
@@ -67,9 +70,29 @@ is_subcommand() {
   esac
 }
 
-# Replay one integration test under kcov into a shard directory.
+# Run one corpus entry under kcov into a shard dir. Entry is "kind<TAB>token":
+# int = integration test (sidecar replay), fmt = formatter input run through
+# `fmt --stdout`, lib = a lib/ unit test run through `test`. All three exercise
+# the same interpreter binary, so their coverage merges into one report.
 run_one() {
-  local name="$1" shard_dir="$2"
+  local entry="$1" shard_dir="$2"
+  local kind="${entry%%$'\t'*}" token="${entry#*$'\t'}"
+
+  case "$kind" in
+    fmt)
+      timeout "$COVERAGE_TIMEOUT" "$KCOV" $KCOV_ARGS "$shard_dir" "$ONEZ" \
+        fmt --stdout "$token" > /dev/null 2>&1
+      return $?
+      ;;
+    lib)
+      timeout "$COVERAGE_TIMEOUT" "$KCOV" $KCOV_ARGS "$shard_dir" "$ONEZ" \
+        test "--stdlib-path=$STDLIB" "--test-timeout=$TEST_CASE_TIMEOUT" --threads=1 "$token" > /dev/null 2>&1
+      return $?
+      ;;
+  esac
+
+  # kind == int: replay the integration sidecars for tests/integration/<token>.
+  local name="$token"
   local base="$TESTDIR/$name" file="$TESTDIR/$name.1z"
   local flags_file="$base.flags"
   local raw=0 subcommand="" show_stack=1 has_test_timeout=0 has_threads=0
@@ -146,9 +169,14 @@ run_one() {
   return $rc
 }
 
-# Build the eligible test list.
+# Build the eligible entry list across three corpora that all drive the same
+# interpreter binary: integration tests (with sidecar replay), formatter inputs,
+# and lib/ unit tests. TEST_FILTER scopes every corpus by name.
 declare -a eligible=()
 skipped_network=0 skipped_direct=0
+count_int=0 count_fmt=0 count_lib=0
+
+# Integration corpus.
 while IFS= read -r path; do
   name="$(basename "$path" .1z)"
   if [[ -n "$TEST_FILTER" ]]; then
@@ -161,16 +189,34 @@ while IFS= read -r path; do
   if [[ -z "$TEST_FILTER" && "$name" =~ $NETWORK_EXCLUDE_RE ]]; then
     skipped_network=$((skipped_network + 1)); continue
   fi
-  eligible+=( "$name" )
+  eligible+=( "int"$'\t'"$name" ); count_int=$((count_int + 1))
 done < <(rg --files -g '*.1z' "$TESTDIR" | sort)
 
+# Formatter corpus: each input is reformatted via `fmt --stdout`.
+while IFS= read -r path; do
+  name="$(basename "$path" .txt)"
+  if [[ -n "$TEST_FILTER" ]]; then
+    case "$name" in *"$TEST_FILTER"*) ;; *) continue ;; esac
+  fi
+  eligible+=( "fmt"$'\t'"$path" ); count_fmt=$((count_fmt + 1))
+done < <(rg --files -g '*.txt' tests/formatting | sort)
+
+# Lib unit-test corpus: each file is run via the `test` subcommand.
+while IFS= read -r path; do
+  name="$(basename "$path" .1z)"
+  if [[ -n "$TEST_FILTER" ]]; then
+    case "$name" in *"$TEST_FILTER"*) ;; *) continue ;; esac
+  fi
+  eligible+=( "lib"$'\t'"$path" ); count_lib=$((count_lib + 1))
+done < <(rg --files -g '*_test.1z' lib | sort)
+
 if [[ ${#eligible[@]} -eq 0 ]]; then
-  echo "No eligible integration tests (filter='$TEST_FILTER')." >&2
+  echo "No eligible coverage entries (filter='$TEST_FILTER')." >&2
   exit 1
 fi
 
-echo "Integration coverage: ${#eligible[@]} files across $JOBS workers" \
-     "(skipped $skipped_network network, $skipped_direct direct_run)"
+echo "Interpreter coverage: $count_int integration + $count_fmt formatter + $count_lib lib" \
+     "across $JOBS workers (skipped $skipped_network network, $skipped_direct direct_run)"
 
 # Round-robin shard the eligible files across JOBS background workers. Each
 # worker accumulates into its own shard dir (kcov merges serial runs to the
@@ -199,15 +245,15 @@ for pid in "${pids[@]}"; do wait "$pid"; done
 declare -a still_failed=()
 retry_dir="$work_dir/retry"
 if [[ -s "$failures_file" ]]; then
-  mapfile -t failed_names < <(sort -u "$failures_file")
-  echo "Retrying ${#failed_names[@]} crashed file(s) serially (up to $MAX_RETRIES attempts each)..."
+  mapfile -t failed_entries < <(sort -u "$failures_file")
+  echo "Retrying ${#failed_entries[@]} crashed entry(ies) serially (up to $MAX_RETRIES attempts each)..."
   mkdir -p "$retry_dir"
-  for name in "${failed_names[@]}"; do
+  for entry in "${failed_entries[@]}"; do
     ok=0
     for ((attempt = 1; attempt <= MAX_RETRIES; attempt++)); do
-      if ( run_one "$name" "$retry_dir" ) 2>/dev/null; then ok=1; break; fi
+      if ( run_one "$entry" "$retry_dir" ) 2>/dev/null; then ok=1; break; fi
     done
-    [[ $ok -eq 0 ]] && still_failed+=( "$name" )
+    [[ $ok -eq 0 ]] && still_failed+=( "$entry" )
   done
 fi
 
@@ -235,4 +281,4 @@ fi
 rm -rf "$work_dir"
 
 pct=$(grep -o '"percent_covered": "[0-9.]*"' "$out_dir/kcov-merged/coverage.json" | tail -1 | grep -o '[0-9.]*')
-echo "Integration coverage: ${pct:-?}% — $out_dir/index.html"
+echo "Integration coverage (integration + formatter + lib): ${pct:-?}%, report at $out_dir/index.html"

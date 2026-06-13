@@ -87,7 +87,7 @@ unit-coverage: ## Measure unit-test coverage with kcov (report under $(COVERAGE_
 	$(KCOV) $(KCOV_ARGS) $(COVERAGE_DIR)/unit ./$(ZIG_PREFIX)/test/1z-unit-test
 	@pct=$$(grep -o '"percent_covered": "[0-9.]*"' $(COVERAGE_DIR)/unit/1z-unit-test/coverage.json | tail -1 | grep -o '[0-9.]*'); echo "Unit coverage: $${pct:-?}%, report at $(COVERAGE_DIR)/unit/index.html"
 
-integration-coverage: build ## Measure integration-test coverage with kcov (report under $(COVERAGE_DIR)/integration; honors TEST_FILTER)
+integration-coverage: build ## Measure integration + formatter + lib coverage with kcov (report under $(COVERAGE_DIR)/integration; honors TEST_FILTER)
 	ONEZ=./$(ZIG_PREFIX)/bin/1z KCOV='$(KCOV)' KCOV_ARGS='$(KCOV_ARGS)' COVERAGE_DIR='$(COVERAGE_DIR)' JOBS=$(COVERAGE_JOBS) TEST_CASE_TIMEOUT=$(TEST_CASE_TIMEOUT) TEST_FILTER='$(TEST_FILTER)' scripts/coverage-integration.sh
 
 coverage: unit-coverage integration-coverage ## Measure combined unit + integration coverage (report under $(COVERAGE_DIR)/combined)
