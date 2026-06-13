@@ -443,7 +443,7 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
         .dispatch_id = ctx.lookupWord(name).?.dispatch_id,
         .type_a = hash_tv.descriptor.?,
         .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
-    }, .{ .body = .{ .quotation = instrs } }, true);
+    }, .{ .body = .{ .quotation = .{ .instructions = instrs } } }, true);
 }
 
 /// unmake-NAME: ( instance -- field1 field2 ... ) - positional destructor
@@ -533,7 +533,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         .type_a = type_tv.descriptor.?,
         .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
     }, .{
-        .body = .{ .quotation = instrs },
+        .body = .{ .quotation = .{ .instructions = instrs } },
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "getter", .field = field },
     }, true);
 }
@@ -576,7 +576,7 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
         .type_a = type_tv.descriptor.?,
         .type_b = ctx.getDispatchAnySentinel().descriptor.?,
     }, .{
-        .body = .{ .quotation = instrs },
+        .body = .{ .quotation = .{ .instructions = instrs } },
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "setter", .field = field },
     }, true);
 }

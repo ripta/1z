@@ -59,7 +59,7 @@ fn buildEntry(_: []const u8, word_def: *const WordDefinition, dispatch_table: *c
                 defer allocator.free(dispatch_entries);
                 for (dispatch_entries) |pair| {
                     switch (pair.entry.body) {
-                        .quotation => |instrs| try collectCallees(instrs, &callee_set, &has_opaque, allocator),
+                        .quotation => |q| try collectCallees(q.instructions, &callee_set, &has_opaque, allocator),
                         .native_fn, .host_callback => {},
                     }
                 }
@@ -571,7 +571,7 @@ test "generic word includes dispatch entry callees" {
     defer value_mod.destroyTypeDescriptor(std.testing.allocator, unary_desc);
     try dispatch.register(
         .{ .dispatch_id = 42, .type_a = duration_desc, .type_b = unary_desc },
-        .{ .body = .{ .quotation = dispatch_body } },
+        .{ .body = .{ .quotation = .{ .instructions = dispatch_body } } },
         false,
     );
 

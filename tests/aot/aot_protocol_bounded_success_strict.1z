@@ -1,0 +1,13 @@
+\ Protocol-bounded dispatch on a satisfying operand under interpreter-free
+\ AOT. A `bump-it` method is registered on the built-in `fixnum`, so fixnum
+\ satisfies the `addable` protocol and the bounded call site dispatches to the
+\ method. The method replays across the freeze->runtime boundary; if it did
+\ not, the generic default body divides by zero and the binary exits non-zero.
+\ A clean exit proves the replayed method ran. No virtual types or printing,
+\ so the binary links no interpreter.
+
+addable: protocol{ bump-it: } ;
+bump-it: generic ( x: addable -- n ) [ 0 / ] ;
+bump-it: method{ fixnum } [ 1 + ] ;
+
+5 bump-it drop

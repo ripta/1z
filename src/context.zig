@@ -468,6 +468,19 @@ pub const Context = struct {
     image_mutable_map_slot_count: u32 = 0,
     image_protocoldescriptor_slot_count: u32 = 0,
     image_constraintcombinator_slot_count: u32 = 0,
+    /// AOT method-dispatch replay table, stashed by `loadIntoContext` and
+    /// consumed by `aot_image_loader.replayMethodDispatch` after the
+    /// quotation-function table is registered. Stored opaquely to avoid an
+    /// import cycle; the loader casts it to `[*]const DispatchEntryDescription`.
+    image_dispatch_entry_descriptions: ?*const anyopaque = null,
+    image_dispatch_entry_count: u32 = 0,
+    /// name -> dispatch_id for user generic words, replayed from the AOT image
+    /// dispatch-entry table at startup. The AOT runtime keeps user generics
+    /// only in compiled form, so `resolveDispatchId` consults this to resolve a
+    /// generic by name (e.g. the protocol satisfies-check on a user type).
+    /// Keys borrow the image's static strings. Populated only on the context
+    /// the loader runs on; reads walk the parent chain.
+    aot_generic_dispatch_ids: std.StringHashMapUnmanaged(u32) = .{},
     /// Set true when `aot_image_loader.loadIntoContext` has populated
     /// this context from an AOT runtime image. Gates the module-cache
     /// fallback in `lookupWordForExecution` so the fallback only fires
@@ -1046,6 +1059,7 @@ pub const Context = struct {
 
     /// Free all resources used by the context.
     pub fn deinit(self: *Context) void {
+        self.aot_generic_dispatch_ids.deinit(self.allocator);
         for (self.parameter_env.items) |*frame| {
             self.deinitParameterFrame(frame);
         }
@@ -2201,6 +2215,11 @@ pub const Context = struct {
     /// Resolve a word name to its dispatch ID by looking up the word definition.
     pub fn resolveDispatchId(self: *const Context, word_name: []const u8) ?u32 {
         if (self.lookupWord(word_name)) |def| return def.dispatch_id;
+        var c: ?*const Context = self;
+        while (c) |cur| {
+            if (cur.aot_generic_dispatch_ids.get(word_name)) |did| return did;
+            c = cur.parent_context;
+        }
         return null;
     }
 
@@ -5562,7 +5581,7 @@ test "protocol satisfies cache invalidated by method registration" {
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 }};
     try ctx.registerDispatch(
         .{ .dispatch_id = 7777, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -5660,7 +5679,7 @@ test "dispatch frame push/pop with lookup visibility" {
     // Register in base dispatch table
     try ctx.dispatch.register(
         .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -5671,7 +5690,7 @@ test "dispatch frame push/pop with lookup visibility" {
     const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try ctx.registerDispatch(
         .{ .dispatch_id = did, .type_a = string_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body2 } },
+        .{ .body = .{ .quotation = .{ .instructions = body2 } } },
         false,
     );
 
@@ -5699,7 +5718,7 @@ test "dispatch frame shadowing" {
     // Register in base table
     try ctx.dispatch.register(
         .{ .dispatch_id = did, .type_a = duration_tv.descriptor.?, .type_b = duration_tv.descriptor.? },
-        .{ .body = .{ .quotation = body1 } },
+        .{ .body = .{ .quotation = .{ .instructions = body1 } } },
         false,
     );
 
@@ -5707,18 +5726,18 @@ test "dispatch frame shadowing" {
     try ctx.pushDispatchFrame();
     try ctx.registerDispatch(
         .{ .dispatch_id = did, .type_a = duration_tv.descriptor.?, .type_b = duration_tv.descriptor.? },
-        .{ .body = .{ .quotation = body2 } },
+        .{ .body = .{ .quotation = .{ .instructions = body2 } } },
         false,
     );
 
     // Inner should win
     const entry = ctx.lookupBinaryDispatch(did, duration_tv.descriptor.?, duration_tv.descriptor.?).?;
-    try std.testing.expectEqual(@as(i64, 2), entry.body.quotation[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), entry.body.quotation.instructions[0].op.push_literal.fixnum);
 
     // Pop; outer visible again
     ctx.popDispatchFrame();
     const entry2 = ctx.lookupBinaryDispatch(did, duration_tv.descriptor.?, duration_tv.descriptor.?).?;
-    try std.testing.expectEqual(@as(i64, 1), entry2.body.quotation[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 1), entry2.body.quotation.instructions[0].op.push_literal.fixnum);
 }
 
 test "dispatch generation bumped on frame pop" {
@@ -5742,7 +5761,7 @@ test "base behavior with no extra frames matches original" {
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0 }};
     try ctx.registerDispatch(
         .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 

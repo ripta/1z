@@ -233,6 +233,7 @@ pub fn emitImageCFromCollection(
     collection: *ImageCollection,
     options: ImageEmitOptions,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
+    dispatch_id_names: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
 ) ImageEmitError!ImageEmissionStats {
     var stats: ImageEmissionStats = .{};
 
@@ -275,7 +276,7 @@ pub fn emitImageCFromCollection(
     try emitProtocolDescriptorStorage(out, allocator, effect_table);
     try emitConstraintCombinatorSlotTable(out, allocator, effect_table);
     try emitConstraintCombinatorStorage(out, allocator, effect_table);
-    stats.dispatch_entry_slot_count = try emitDispatchEntryTable(out, allocator, ctx, effect_table, quotation_id_map);
+    stats.dispatch_entry_slot_count = try emitDispatchEntryTable(out, allocator, ctx, effect_table, quotation_id_map, dispatch_id_names);
 
     try emitWordNameStrings(out, allocator, manifest);
     try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
@@ -320,7 +321,7 @@ pub fn emitImageC(
 ) ImageEmitError!ImageEmissionStats {
     var collection = try collectImageSlots(allocator, ctx, manifest, options, &.{});
     defer collection.deinit();
-    return emitImageCFromCollection(out, allocator, ctx, manifest, word_id_lookup, &collection, options, null);
+    return emitImageCFromCollection(out, allocator, ctx, manifest, word_id_lookup, &collection, options, null, null);
 }
 
 /// Combined table for stack effects, the params they reference, and
@@ -862,11 +863,11 @@ fn internDispatchTableLiterals(
 
             const entry = slot.value_ptr.*;
             switch (entry.body) {
-                .quotation => |instrs| try internInstructionTypeLiterals(
+                .quotation => |q| try internInstructionTypeLiterals(
                     struct_plans,
                     struct_index,
                     effect_table,
-                    instrs,
+                    q.instructions,
                 ),
                 .native_fn, .host_callback => {},
             }
@@ -1725,6 +1726,7 @@ const DispatchEntryRow = struct {
     type_b_slot: u32,
     quotation_id: u32,
     module_name: ?[]const u8,
+    generic_name: ?[]const u8,
 
     fn lessThan(_: void, a: DispatchEntryRow, b: DispatchEntryRow) bool {
         if (a.dispatch_id != b.dispatch_id) return a.dispatch_id < b.dispatch_id;
@@ -1773,12 +1775,24 @@ fn emitDispatchEntryTable(
     ctx: *const Context,
     table: *const StackEffectTable,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
+    dispatch_id_names: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
 ) Allocator.Error!u32 {
     const map = quotation_id_map orelse return 0;
 
     var desc_index: std.AutoHashMapUnmanaged(*const value_mod.TypeDescriptor, *const value_mod.TypeValue) = .{};
     defer desc_index.deinit(allocator);
     try indexKnownTypeValues(&desc_index, allocator, ctx);
+    // `indexKnownTypeValues` covers built-in, resource, union, and enum types
+    // but not user-defined `virtual{` / `struct{` types. A method dispatched on
+    // such a type would otherwise resolve to slot 0 (unresolved) and be dropped
+    // by the loader. Every TypeValue already interned in the slot table has a
+    // real slot, so index those descriptors too -- this is the canonical
+    // TypeValue the dispatch key references, so pointer identity holds.
+    var slot_iter = table.type_slot_index.iterator();
+    while (slot_iter.next()) |slot| {
+        const tv = slot.key_ptr.*;
+        if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
+    }
 
     var rows: std.ArrayListUnmanaged(DispatchEntryRow) = .{};
     defer rows.deinit(allocator);
@@ -1787,7 +1801,7 @@ fn emitDispatchEntryTable(
     while (iter.next()) |slot| {
         const entry = slot.value_ptr.*;
         const body = switch (entry.body) {
-            .quotation => |instrs| instrs,
+            .quotation => |q| q.instructions,
             .native_fn, .host_callback => continue,
         };
         const quotation_id = map.get(@intFromPtr(body.ptr)) orelse continue;
@@ -1798,6 +1812,7 @@ fn emitDispatchEntryTable(
             .type_b_slot = dispatchTypeSlot(ctx, table, &desc_index, key.type_b),
             .quotation_id = quotation_id,
             .module_name = if (entry.source_module) |m| m.name else null,
+            .generic_name = if (dispatch_id_names) |m| m.get(key.dispatch_id) else null,
         });
     }
 
@@ -1823,6 +1838,14 @@ fn emitDispatchEntryTable(
             try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{name.len}) catch unreachable);
         } else {
             try out.appendSlice(allocator, "NULL, .module_name_len = 0");
+        }
+        try out.appendSlice(allocator, ", .generic_name = ");
+        if (row.generic_name) |name| {
+            try emitCStringLiteral(out, allocator, name);
+            try out.appendSlice(allocator, ", .generic_name_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{name.len}) catch unreachable);
+        } else {
+            try out.appendSlice(allocator, "NULL, .generic_name_len = 0");
         }
         try out.appendSlice(allocator, " },\n");
     }
@@ -3019,6 +3042,8 @@ fn emitTypeDeclarations(
         \\    uint32_t    quotation_id;    /* index into onez_quotation_table */
         \\    const char *module_name;     /* defining module name, or NULL */
         \\    uint32_t    module_name_len;
+        \\    const char *generic_name;    /* generic word name for name->dispatch_id replay, or NULL */
+        \\    uint32_t    generic_name_len;
         \\} onez_image_dispatch_entry_description_t;
         \\
         \\typedef struct onez_image_header {
@@ -5262,7 +5287,7 @@ test "emitImageC: dispatch entry quotation body interns referenced types" {
         .type_b = sentinel_desc,
     };
     const entry: dispatch_mod.DispatchEntry = .{
-        .body = .{ .quotation = body_instrs },
+        .body = .{ .quotation = .{ .instructions = body_instrs } },
     };
     try ctx.dispatch.entries.put(ctx.allocator, key, entry);
 
@@ -5488,12 +5513,12 @@ test "emitDispatchEntryTable: one row per reachable user quotation entry, types 
 
     try ctx.registerDispatch(
         .{ .dispatch_id = 7, .type_a = fixnum_tv.descriptor.?, .type_b = string_tv.descriptor.? },
-        .{ .body = .{ .quotation = body_bin }, .source_module = m },
+        .{ .body = .{ .quotation = .{ .instructions = body_bin } }, .source_module = m },
         false,
     );
     try ctx.registerDispatch(
         .{ .dispatch_id = 7, .type_a = fixnum_tv.descriptor.?, .type_b = unary },
-        .{ .body = .{ .quotation = body_un }, .source_module = m },
+        .{ .body = .{ .quotation = .{ .instructions = body_un } }, .source_module = m },
         false,
     );
     // A native entry on a reached generic must be excluded: native dispatch
@@ -5520,7 +5545,7 @@ test "emitDispatchEntryTable: one row per reachable user quotation entry, types 
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap);
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null);
 
     try testing.expectEqual(@as(u32, 2), stats.dispatch_entry_slot_count);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_entry_descriptions_storage[] = {") != null);
@@ -5565,7 +5590,7 @@ test "emitDispatchEntryTable: an unreachable entry body produces no row" {
     });
     try ctx.registerDispatch(
         .{ .dispatch_id = 3, .type_a = fixnum_tv.descriptor.?, .type_b = unary },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -5584,7 +5609,7 @@ test "emitDispatchEntryTable: an unreachable entry body produces no row" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap);
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null);
 
     try testing.expectEqual(@as(u32, 0), stats.dispatch_entry_slot_count);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_entry_descriptions_storage") == null);
@@ -5605,7 +5630,7 @@ test "emitDispatchEntryTable: wildcard type_a emits the reserved ANY sentinel" {
     });
     try ctx.registerDispatch(
         .{ .dispatch_id = 4, .type_a = any, .type_b = unary },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -5624,7 +5649,7 @@ test "emitDispatchEntryTable: wildcard type_a emits the reserved ANY sentinel" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap);
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null);
 
     try testing.expectEqual(@as(u32, 1), stats.dispatch_entry_slot_count);
     // type_a = ANY (4294967294), type_b = UNARY (4294967295).
@@ -5650,7 +5675,7 @@ test "emitDispatchEntryTable: rows are emitted in deterministic sorted order" {
         });
         try ctx.registerDispatch(
             .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = unary },
-            .{ .body = .{ .quotation = body } },
+            .{ .body = .{ .quotation = .{ .instructions = body } } },
             false,
         );
         try qmap.put(testing.allocator, @intFromPtr(body.ptr), @intCast(i));
@@ -5667,7 +5692,7 @@ test "emitDispatchEntryTable: rows are emitted in deterministic sorted order" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap);
+    _ = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null);
 
     const pos3 = std.mem.indexOf(u8, out.items, ".dispatch_id = 3, ").?;
     const pos4 = std.mem.indexOf(u8, out.items, ".dispatch_id = 4, ").?;

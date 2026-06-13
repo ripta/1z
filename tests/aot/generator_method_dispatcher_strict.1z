@@ -1,6 +1,6 @@
 \ Strict (interpreter-free) variant of generator_method_dispatcher.1z.
-\ Same caveat: until user `method{` registrations replay across the
-\ freeze→AOT boundary, the generic fallback runs at runtime.
+\ The registered method replays across the freeze→AOT boundary and the
+\ generic call site dispatches to it.
 
 shape: virtual{ fixnum } ;
 

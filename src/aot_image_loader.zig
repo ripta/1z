@@ -21,6 +21,7 @@ const aot_image_emit = @import("aot_image_emit.zig");
 const instruction_bytecode = @import("instruction_bytecode.zig");
 const container_backing = @import("container_backing.zig");
 const Context = @import("context.zig").Context;
+const dispatch_mod = @import("dispatch.zig");
 const dictionary_mod = @import("dictionary.zig");
 const WordProvenance = dictionary_mod.WordProvenance;
 const markers_mod = @import("primitives/markers.zig");
@@ -296,6 +297,8 @@ pub const DispatchEntryDescription = extern struct {
     quotation_id: u32,
     module_name: ?[*]const u8,
     module_name_len: u32,
+    generic_name: ?[*]const u8,
+    generic_name_len: u32,
 };
 
 pub const Header = extern struct {
@@ -480,6 +483,12 @@ pub fn loadIntoContext(
     ctx.image_protocoldescriptor_slot_count = header.protocoldescriptor_slot_count;
     ctx.image_constraintcombinator_slots = slots.constraint_combinators;
     ctx.image_constraintcombinator_slot_count = header.constraintcombinator_slot_count;
+
+    // Stash the method-dispatch replay table; the actual replay runs in
+    // `replayMethodDispatch` after the quotation-function table is
+    // registered, which happens after this loader pass.
+    ctx.image_dispatch_entry_descriptions = @ptrCast(header.dispatch_entry_descriptions);
+    ctx.image_dispatch_entry_count = header.dispatch_entry_slot_count;
 
     // Combinator slots populate after both protocol and typevalue slots are
     // patched: a `.type` element indexes the typevalue slot table, a
@@ -1413,6 +1422,89 @@ fn lookupSlot(
     if (slot_index >= slot_count) return LoaderError.BadSlotIndex;
     const slot_table = slots orelse return null;
     return slot_table[slot_index];
+}
+
+/// Resolve a serialized dispatch type-slot value to the
+/// `*const TypeDescriptor` the dispatch key needs. The reserved sentinels
+/// map to the dispatch table's synthetic unary/wildcard descriptors; a
+/// 1-based slot resolves through the typevalue slot table; 0 or a missing
+/// slot yields null so the caller skips the row rather than registering a
+/// malformed key.
+fn resolveDispatchTypeDescriptor(
+    ctx: *Context,
+    slots: ?SlotTable,
+    slot_count: u32,
+    slot: u32,
+) LoaderError!?*const value_mod.TypeDescriptor {
+    if (slot == dispatch_type_unary) return ctx.getDispatchUnarySentinel().descriptor.?;
+    if (slot == dispatch_type_any) return ctx.getDispatchAnySentinel().descriptor.?;
+    const tv = (try lookupSlot(slots, slot_count, slot)) orelse return null;
+    return tv.descriptor;
+}
+
+/// Replay the freeze-time method dispatch entries into `ctx.dispatch`.
+///
+/// Runs after `loadIntoContext` stashed the table and populated the
+/// typevalue slots and module surface, and after the quotation-function
+/// table is registered, so each row's body resolves to its compiled
+/// function pointer. Each row keys `registerDispatch` on its serialized
+/// `dispatch_id` verbatim -- the same id compiled call sites bake -- so a
+/// replayed method resolves at exactly the dispatch key a compiled call
+/// site uses. A row whose types, body, or defining module fails to resolve
+/// is skipped rather than aborting the whole replay.
+pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
+    const count = ctx.image_dispatch_entry_count;
+    if (count == 0) return;
+    const rows_raw = ctx.image_dispatch_entry_descriptions orelse return;
+    const fns = ctx.aot_quotation_fns orelse return;
+    const rows: [*]const DispatchEntryDescription = @ptrCast(@alignCast(rows_raw));
+
+    const slots = ctx.image_typevalue_slots;
+    const slot_count = ctx.image_typevalue_slot_count;
+
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const row = rows[i];
+
+        const type_a = (try resolveDispatchTypeDescriptor(ctx, slots, slot_count, row.type_a_slot)) orelse continue;
+        const type_b = (try resolveDispatchTypeDescriptor(ctx, slots, slot_count, row.type_b_slot)) orelse continue;
+
+        if (row.quotation_id >= fns.size) continue;
+        const code_ptr = fns.table[row.quotation_id] orelse continue;
+
+        const module: ?*const value_mod.Module = if (row.module_name) |name_ptr| blk: {
+            const name = nameSlice(name_ptr, row.module_name_len);
+            const cached = ctx.module_cache_value.map.get(name) orelse break :blk null;
+            break :blk switch (cached) {
+                .module => |m| m,
+                else => null,
+            };
+        } else null;
+
+        if (row.generic_name) |gname_ptr| {
+            const gname = nameSlice(gname_ptr, row.generic_name_len);
+            ctx.aot_generic_dispatch_ids.put(ctx.allocator, gname, row.dispatch_id) catch
+                return LoaderError.OutOfMemory;
+        }
+
+        const key = dispatch_mod.DispatchKey{
+            .dispatch_id = row.dispatch_id,
+            .type_a = type_a,
+            .type_b = type_b,
+        };
+        const entry = dispatch_mod.DispatchEntry{
+            .body = .{ .quotation = .{ .instructions = &.{}, .code_ptr = code_ptr } },
+            .source_module = module,
+        };
+        // Fill gaps only: in interpreter-linked AOT the prelude reload already
+        // registers its methods (with working bytecode bodies), so replay must
+        // not clobber them with a compiled code_ptr body. A duplicate key means
+        // the method is already live; keep it.
+        ctx.registerDispatch(key, entry, false) catch |err| switch (err) {
+            error.DuplicateMethod => {},
+            else => return LoaderError.OutOfMemory,
+        };
+    }
 }
 
 fn replaceWordBodyWithTypeValuePush(

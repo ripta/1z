@@ -151,7 +151,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
         .type_b = type_b.descriptor.?,
     };
     const entry = DispatchEntry{
-        .body = .{ .quotation = body.instructions },
+        .body = .{ .quotation = .{ .instructions = body.instructions } },
         .source_module = ctx.loading_module,
     };
 

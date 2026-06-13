@@ -423,7 +423,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             .dispatch_id = did,
             .type_a = symbol_tv.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
-        }, .{ .body = .{ .quotation = convert_instrs } }, true);
+        }, .{ .body = .{ .quotation = .{ .instructions = convert_instrs } } }, true);
     }
 
     try generated_words.append(alloc, .{ .string = agg_pred_name });

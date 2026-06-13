@@ -328,7 +328,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
             .type_a = vtype.type_val.?.descriptor.?,
             .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
         }, .{
-            .body = .{ .quotation = getter_instrs },
+            .body = .{ .quotation = .{ .instructions = getter_instrs } },
             .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "getter", .field = field.name },
         }, true);
     }
@@ -374,7 +374,7 @@ fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
                 .type_a = vtype.type_val.?.descriptor.?,
                 .type_b = ctx.getDispatchAnySentinel().descriptor.?,
             }, .{
-                .body = .{ .quotation = setter_instrs },
+                .body = .{ .quotation = .{ .instructions = setter_instrs } },
                 .provenance = .{ .generator = "ffi-struct", .parent = name, .role = "setter", .field = field.name },
             }, true);
         }

@@ -972,7 +972,7 @@ fn walkDispatchMethodBodies(
 
     for (pairs) |pair| {
         const q_instrs = switch (pair.entry.body) {
-            .quotation => |q| q,
+            .quotation => |q| q.instructions,
             .native_fn, .host_callback => continue,
         };
 
@@ -1398,7 +1398,7 @@ fn devirtualizeSingleMethod(
     defer allocator.free(pairs);
     if (pairs.len != 1) return null;
     return switch (pairs[0].entry.body) {
-        .quotation => |q| .{ .body = q, .provenance = pairs[0].entry.provenance },
+        .quotation => |q| .{ .body = q.instructions, .provenance = pairs[0].entry.provenance },
         .native_fn, .host_callback => null,
     };
 }
@@ -1614,6 +1614,8 @@ fn buildAotDescs(
             .source_line = def.source_line,
             .is_generated = def.provenance != null,
             .parent = compound_parent,
+            .dispatch_id = def.dispatch_id,
+            .is_generic = hasGenericMarker(def),
             .bounded_dispatch_id = if (bounded != null) def.dispatch_id else 0,
             .bounded_constraint = if (bounded) |b| b.constraint else null,
             .bounded_arity = if (bounded) |b| b.arity else .unary,
@@ -3617,8 +3619,8 @@ test "walkDispatchMethodBodies adds every quotation method body and skips native
     };
 
     const did: u32 = 7;
-    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = td_a, .type_b = td_sentinel }, .{ .body = .{ .quotation = body_a } }, false);
-    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = td_b, .type_b = td_sentinel }, .{ .body = .{ .quotation = body_b } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = td_a, .type_b = td_sentinel }, .{ .body = .{ .quotation = .{ .instructions = body_a } } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = td_b, .type_b = td_sentinel }, .{ .body = .{ .quotation = .{ .instructions = body_b } } }, false);
     try ctx.registerDispatch(.{ .dispatch_id = did, .type_a = td_c, .type_b = td_sentinel }, .{ .body = .{ .native_fn = Stub.noop } }, false);
 
     const def = WordDefinition{
@@ -3683,9 +3685,9 @@ test "discoverReachableWords includes reached generic's method bodies and exclud
 
     const area_id: u32 = 11;
     const volume_id: u32 = 12;
-    try ctx.registerDispatch(.{ .dispatch_id = area_id, .type_a = td_a, .type_b = td_sentinel }, .{ .body = .{ .quotation = area_body_a } }, false);
-    try ctx.registerDispatch(.{ .dispatch_id = area_id, .type_a = td_b, .type_b = td_sentinel }, .{ .body = .{ .quotation = area_body_b } }, false);
-    try ctx.registerDispatch(.{ .dispatch_id = volume_id, .type_a = td_v, .type_b = td_sentinel }, .{ .body = .{ .quotation = volume_body } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = area_id, .type_a = td_a, .type_b = td_sentinel }, .{ .body = .{ .quotation = .{ .instructions = area_body_a } } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = area_id, .type_a = td_b, .type_b = td_sentinel }, .{ .body = .{ .quotation = .{ .instructions = area_body_b } } }, false);
+    try ctx.registerDispatch(.{ .dispatch_id = volume_id, .type_a = td_v, .type_b = td_sentinel }, .{ .body = .{ .quotation = .{ .instructions = volume_body } } }, false);
 
     const generic_markers: []const *value_mod.Marker = &.{@constCast(&markers_mod.generic_marker)};
     try ctx.dictionary.put("area", .{

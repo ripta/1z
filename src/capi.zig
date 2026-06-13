@@ -2000,6 +2000,20 @@ export fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*c
     return ONEZ_OK;
 }
 
+/// Replay the AOT image's freeze-time method dispatch entries into the
+/// runtime dispatch table. Must run after `onez_load_runtime_image` (which
+/// stashes the entry table and populates the typevalue slots and module
+/// surface) and after `onez_runtime_register_quotations` (which registers
+/// the compiled bodies each entry references by id).
+export fn onez_replay_method_dispatch(ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    aot_image_loader.replayMethodDispatch(handle.ctx) catch |err| {
+        captureError(handle, err);
+        return ONEZ_ERR_LOAD_FAILED;
+    };
+    return ONEZ_OK;
+}
+
 export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     const handle = castHandle(ptr) orelse return 1;
     const ctx = handle.ctx;

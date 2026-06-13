@@ -1,0 +1,13 @@
+\ End-to-end exercise of a protocol-bounded generic dispatching to a
+\ method on a satisfying type under runtime-image AOT. The registered
+\ `step-count` method replays across the freeze->runtime boundary, so the
+\ bounded call site resolves the method and returns 1, matching the
+\ interpreter.
+
+incrementable: protocol{ increment: } ;
+step-count: virtual{ fixnum } ;
+
+increment: generic ( x: incrementable -- y ) [ drop 0 >step-count ] ;
+increment: method{ step-count } [ unmake-step-count 1 + >step-count ] ;
+
+0 >step-count increment unmake-step-count .

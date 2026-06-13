@@ -1,9 +1,9 @@
 \ Exercises method{ on a user-defined virtual type under runtime-image
 \ AOT. The dispatch entry is registered at freeze time keyed on the
 \ shape TypeValue's descriptor; the runtime push of that TypeValue
-\ goes through the slot table. The test currently demonstrates that
-\ the generic fallback runs at runtime when the user-registered
-\ dispatch entry is not yet replayed into the runtime dispatch table.
+\ goes through the slot table. The registered method replays into the
+\ runtime dispatch table and the generic call site dispatches to it, so
+\ `double` runs the method rather than the generic fallback.
 
 shape: virtual{ fixnum } ;
 

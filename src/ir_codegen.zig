@@ -474,6 +474,14 @@ pub const AotWordDesc = struct {
     input_count: u8,
     output_count: u8,
     word_id: u32,
+    /// Monotonic dispatch id of this word, used to build the runtime
+    /// name -> dispatch_id map the AOT loader replays for the protocol
+    /// satisfies-check. Zero when the word carries no dispatch id.
+    dispatch_id: u32 = 0,
+    /// True when the word carries the `generic` marker. AOT codegen emits a
+    /// dispatch helper at its call sites so a registered method runs, falling
+    /// to the word's default body on a miss.
+    is_generic: bool = false,
     /// Prelude words are available in the AOT runtime dictionary. In
     /// permissive AOT a codegen failure here falls through to
     /// `jitInterpretedCall`; strict AOT rejects the build via
@@ -880,6 +888,9 @@ pub const ResolvedWord = struct {
     /// installing a PIC or an ordinary dispatch. Carries the bound and arity.
     bounded_constraint: ?dispatch_helpers.BoundedConstraint = null,
     bounded_arity: dispatch_helpers.ProtocolArity = .unary,
+    /// True when the callee carries the `generic` marker but is not bounded.
+    /// AOT codegen emits the plain-generic dispatch helper at the call site.
+    is_generic: bool = false,
     /// Diagnostic identity (`satisfies-and-dispatch[<name>]`) baked into
     /// the helper call so word traces, scheduler dumps, and error backtraces
     /// name the bounded site by its constraint. Set whenever `bounded_constraint`
@@ -1875,6 +1886,10 @@ const CompileState = struct {
     /// the `*SatisfiesAndDispatchCombinator` exports.
     satisfies_dispatch_combinator_fn: c.ir_ref = c.IR_UNUSED,
     aot_satisfies_dispatch_combinator_fn: c.ir_ref = c.IR_UNUSED,
+    /// Function ref for `aotTryDispatchGenericOrCall`, emitted at plain
+    /// (non-bounded) generic call sites in AOT mode so a user generic
+    /// dispatches by operand type, falling to its default body on a miss.
+    aot_generic_dispatch_fn: c.ir_ref = c.IR_UNUSED,
     interp_ctx: ?*const Context = null,
     /// Interpreter PIC table for the word being compiled. Each instruction
     /// index maps to a PolymorphicCache recording observed type pairs.
@@ -5446,7 +5461,10 @@ fn compileInstructions(
                             }
                         }
                     } else if (state.aot_mode) {
-                        // AOT mode: direct call by name or interpreter fallback
+                        // AOT mode: direct call by name or interpreter fallback.
+                        // A plain (non-bounded) generic instead routes through the
+                        // dispatch helper so a registered method runs, falling to
+                        // the word's default body on a miss.
                         if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
                         try materializeQuotations(state, stack, sp.*);
@@ -5457,7 +5475,11 @@ fn compileInstructions(
                             emitParamValidation(state, eff_ptr);
                         }
 
-                        emitAotWordCall(state, ctx_val, name, resolved, instr.line);
+                        if (resolved.is_generic) {
+                            emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, instr.line);
+                        } else {
+                            emitAotWordCall(state, ctx_val, name, resolved, instr.line);
+                        }
 
                         if (exitFallsThrough(state.exit_kind)) {
                             const had_row = sp.* > 0 and stack[0].isRowRegion();
@@ -6547,6 +6569,11 @@ fn emitWordCAotPass(
     else
         c.IR_UNUSED;
 
+    // Always declared: the two-pass codegen may reach a plain generic call
+    // site the pre-scan didn't predict, and an unset reference would let
+    // ir_emit_c emit a phantom LOAD. Cheap when unused.
+    const aot_generic_dispatch_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "aotTryDispatchGenericOrCall"), proto_3arg);
+
     const pic_dispatch_fn = if (scan_flags.needs_native_call or interp_ctx_param != null)
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicDispatch"), proto_4arg)
     else
@@ -6689,6 +6716,7 @@ fn emitWordCAotPass(
         .validate_params_fn = validate_params_fn,
         .aot_satisfies_dispatch_fn = aot_satisfies_dispatch_fn,
         .aot_satisfies_dispatch_combinator_fn = aot_satisfies_dispatch_combinator_fn,
+        .aot_generic_dispatch_fn = aot_generic_dispatch_fn,
         .pic_table = pic_table,
         .pic_stats = pic_stats_out,
         .aot_fallback_emit_count = aot_fallback_emit_count_out,
@@ -7121,6 +7149,7 @@ pub fn emitProgramC(
         \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
         \\extern int32_t onez_set_trace_words(void *rt, const char *pattern);
         \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *protocoldescriptor_slots, void *constraintcombinator_slots);
+        \\extern int onez_replay_method_dispatch(void *rt);
         \\
         \\
     );
@@ -7145,9 +7174,10 @@ pub fn emitProgramC(
                 .never_returns = entry.never_returns,
                 .is_native = entry.is_native,
                 .native_fn_ptr = entry.native_fn_ptr,
-                .dispatch_id = entry.bounded_dispatch_id,
+                .dispatch_id = if (entry.bounded_constraint != null) entry.bounded_dispatch_id else entry.dispatch_id,
                 .bounded_constraint = entry.bounded_constraint,
                 .bounded_arity = entry.bounded_arity,
+                .is_generic = entry.is_generic,
             };
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
@@ -7691,6 +7721,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static inline int32_t onez_push_mutable_map_slot(uintptr_t ctx, uintptr_t slot) { return jitPushMutableMapSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatch(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatchCombinator(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
+    try out.appendSlice(allocator, "extern int32_t aotTryDispatchGenericOrCall(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t word_id);\n");
     try out.appendSlice(allocator, "\n");
 
     // 4a. Forward declarations (only for successfully compiled words)
@@ -7855,6 +7886,16 @@ pub fn emitProgramC(
         const manifest = image_manifest orelse return IrCodegenError.CompilationFailed;
         const collection = if (image_collection) |*coll| coll else return IrCodegenError.CompilationFailed;
 
+        // Map each word's dispatch id to its name so the image's dispatch-entry
+        // rows can carry the generic word name; the loader replays it into the
+        // runtime name -> dispatch_id map. Built from the post-freeze word list
+        // because user generics are no longer in the dictionary at this point.
+        var dispatch_id_names: std.AutoHashMapUnmanaged(u32, []const u8) = .{};
+        defer dispatch_id_names.deinit(allocator);
+        for (words) |w| {
+            if (w.dispatch_id != 0) try dispatch_id_names.put(allocator, w.dispatch_id, w.name);
+        }
+
         const stats = aot_image_emit_mod.emitImageCFromCollection(
             &out,
             allocator,
@@ -7864,6 +7905,7 @@ pub fn emitProgramC(
             collection,
             .{ .metadata_only = want_metadata_only },
             &quotation_id_map,
+            &dispatch_id_names,
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // The freeze classifier already concluded each
@@ -8196,6 +8238,21 @@ pub fn emitProgramC(
         try out.appendSlice(allocator, "    onez_runtime_register_quotations(rt, onez_quotation_table, ");
         try out.appendSlice(allocator, q_size_str);
         try out.appendSlice(allocator, ");\n");
+    }
+
+    // Replay the image's method dispatch entries now that both the image
+    // surfaces (modules, typevalue slots) and the quotation-function table
+    // are in place. Each entry's compiled body resolves through the
+    // just-registered quotation table.
+    if ((meta.runtime_image_present or meta.metadata_image_present) and quotations.len > 0) {
+        try out.appendSlice(allocator,
+            \\    if (onez_replay_method_dispatch(rt) != 0) {
+            \\        onez_print_error(rt);
+            \\        onez_deinit(rt);
+            \\        return 1;
+            \\    }
+            \\
+        );
     }
 
     var id_buf: [20]u8 = undefined;
@@ -8991,6 +9048,28 @@ fn emitSatisfiesAndDispatch(
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
 }
 
+/// Emit the plain-generic dispatch helper at an AOT call site: try the
+/// dispatch table for `dispatch_id` against the operand type(s), and on a miss
+/// run the generic's default body (the compiled word registered under
+/// `word_id`). One call, no call-site branch -- the helper handles both paths.
+fn emitAotGenericDispatch(
+    state: *CompileState,
+    dispatch_id: u32,
+    word_id: u32,
+    name: []const u8,
+    line: usize,
+) void {
+    if (state.aot_generic_dispatch_fn == c.IR_UNUSED) return;
+    const ctx_val = state.preloaded_ctx_val;
+    var args = [_]c.ir_ref{
+        ctx_val,
+        c.ir_const_addr(state.ctx, dispatch_id),
+        c.ir_const_addr(state.ctx, word_id),
+    };
+    const call_result = c._ir_CALL_N(state.ctx, c.IR_I32, state.aot_generic_dispatch_fn, args.len, &args);
+    emitCallbackPostCheck(state, call_result, call_result, null, .{ .named = .{ .name = name, .line = line } });
+}
+
 /// AOT counterpart of emitSatisfiesAndDispatch. Looks up the protocol
 /// descriptor's slot index and emits a 5-arg call to `aotSatisfiesAndDispatch`,
 /// which dereferences the slot at runtime to get the descriptor. This avoids
@@ -9195,6 +9274,40 @@ export fn jitSatisfiesAndDispatch(
 /// AOT counterpart of jitSatisfiesAndDispatch. Looks up the protocol descriptor
 /// through the runtime-image slot table and dispatches the concrete-type method.
 /// Slot-indexed so the AOT binary does not bake process-local pointers.
+/// Plain (non-bounded) generic dispatch in compiled code. Tries the dispatch
+/// table for a method matching the operand type(s); on a hit it runs the
+/// method and returns ok. On a miss it runs the generic's own default body --
+/// the compiled function registered under `word_id_raw` -- mirroring the
+/// interpreter's "dispatch, else fall through to the body" behavior for a word
+/// carrying the `generic` marker. Keeps user generics dispatching under AOT
+/// where the call site would otherwise call the default body directly.
+export fn aotTryDispatchGenericOrCall(
+    ctx_raw: usize,
+    dispatch_id_raw: usize,
+    word_id_raw: usize,
+) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const dispatched = dispatch_helpers.tryDispatchGenericById(ctx, @intCast(dispatch_id_raw), null) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    if (dispatched) return 0;
+
+    // Dispatch missed: run the generic's default body, the compiled function
+    // registered under its word_id.
+    const entry = ctx.jit_dispatch.get(@intCast(word_id_raw)) orelse return 1;
+    const code_ptr = entry.code_ptr orelse return 1;
+    const func: CompiledFn = @ptrCast(@alignCast(code_ptr));
+    var jit_ctx = JitContext{
+        .items_ptr = ctx.stack.items.items.ptr,
+        .sp_ptr = &ctx.stack.items.items.len,
+        .capacity = ctx.stack.items.capacity,
+        .ctx = ctx,
+    };
+    return func(&jit_ctx);
+}
+
 export fn aotSatisfiesAndDispatch(
     ctx_raw: usize,
     dispatch_id_raw: usize,
@@ -14266,7 +14379,7 @@ test "aotSatisfiesAndDispatch dispatches through a populated slot table" {
     };
     try ctx.registerDispatch(
         .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 

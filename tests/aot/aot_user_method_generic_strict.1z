@@ -1,0 +1,11 @@
+\ Plain (non-protocol) generic dispatch in interpreter-free AOT. A method is
+\ registered on the built-in `fixnum`; the call site routes through the
+\ generic dispatch helper, which finds the replayed method and runs it. If the
+\ method did not replay, the generic's default body divides by zero and the
+\ binary exits non-zero. A clean exit proves the method dispatched. No virtual
+\ types or printing, so the binary links no interpreter.
+
+bump: generic ( x -- n ) [ 0 / ] ;
+bump: method{ fixnum } [ 1 + ] ;
+
+5 bump drop

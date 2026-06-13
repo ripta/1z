@@ -30,13 +30,13 @@ const trace_mod = @import("../trace.zig");
 /// opaque functions.
 pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !void {
     switch (entry.body) {
-        .quotation => |instrs| {
+        .quotation => |q| {
             if (entry.source_module) |mod| {
                 try ctx.pushModuleDepsFrame(mod);
                 defer ctx.popModuleDepsFrameTraced(mod);
-                try ctx.executeQuotation(.{ .instructions = instrs });
+                try runDispatchQuotation(ctx, q);
             } else {
-                try ctx.executeQuotation(.{ .instructions = instrs });
+                try runDispatchQuotation(ctx, q);
             }
         },
         .native_fn => |func| try func(ctx),
@@ -44,6 +44,20 @@ pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
             const rc = host.callback(host.handle, host.user_data);
             if (rc != 0) return error.HostCallbackFailed;
         },
+    }
+}
+
+/// Run a dispatch-entry quotation body. An interpreter-registered method
+/// carries no compiled code pointer and runs its instructions on the current
+/// frame, exactly as it always has. An AOT-replayed method body carries a
+/// compiled `code_ptr` and an empty instruction slice; it runs through the
+/// compiled-call path. Gating on `code_ptr` keeps the interpreter dispatch
+/// path free of the extra local frame `executeQuotationWithFrame` pushes.
+fn runDispatchQuotation(ctx: *Context, q: value_mod.Quotation) !void {
+    if (q.code_ptr != null) {
+        try ctx.executeQuotationWithFrame(q);
+    } else {
+        try ctx.executeQuotation(.{ .instructions = q.instructions });
     }
 }
 
@@ -720,7 +734,7 @@ test "tryDispatchGeneric dispatches unary method for native type" {
     const dispatch_id: u32 = 1;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -752,12 +766,12 @@ test "tryDispatchGeneric tries binary before unary" {
     const dispatch_id: u32 = 2;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
-        .{ .body = .{ .quotation = binary_body } },
+        .{ .body = .{ .quotation = .{ .instructions = binary_body } } },
         false,
     );
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = unary_body } },
+        .{ .body = .{ .quotation = .{ .instructions = unary_body } } },
         false,
     );
 
@@ -786,7 +800,7 @@ test "tryDispatchGenericWithPic populates cache on miss" {
     const dispatch_id: u32 = 3;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -818,7 +832,7 @@ test "tryDispatchGenericWithPic hits cache on matching types" {
     const dispatch_id: u32 = 3;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -850,7 +864,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
     const add_id: u32 = 3;
     try ctx.dispatch.register(
         .{ .dispatch_id = add_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -870,7 +884,7 @@ test "tryDispatchGenericWithPic invalidates on generation change" {
     };
     try ctx.dispatch.register(
         .{ .dispatch_id = 4, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body2 } },
+        .{ .body = .{ .quotation = .{ .instructions = body2 } } },
         false,
     );
 
@@ -899,7 +913,7 @@ test "tryDispatchGenericWithPic with null pic_entry falls back to full lookup" {
     const dispatch_id: u32 = 3;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -923,7 +937,7 @@ test "tryDispatchGenericWithPic caches unary dispatch" {
     const dispatch_id: u32 = 4;
     try ctx.dispatch.register(
         .{ .dispatch_id = dispatch_id, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -959,7 +973,7 @@ test "satisfiesAndDispatch dispatches a satisfying type" {
     };
     try ctx.registerDispatch(
         .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -989,7 +1003,7 @@ test "satisfiesAndDispatch raises protocol-error for a non-satisfying type" {
     };
     try ctx.registerDispatch(
         .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -1027,7 +1041,7 @@ test "satisfiesAndDispatch reaches a method registered after a failed check" {
     };
     try ctx.registerDispatch(
         .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = ctx.getDispatchUnarySentinel().descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
@@ -1048,7 +1062,7 @@ test "satisfiesAndDispatch handles a binary satisfying pair" {
     };
     try ctx.registerDispatch(
         .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = fixnum_tv.descriptor.? },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 

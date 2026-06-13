@@ -238,7 +238,7 @@ pub fn satisfiesByDescriptor(
     }
 
     const saved_thrown = ctx.thrown_error;
-    if (validateProtocolObligationUncached(ctx, type_tv.name, descriptor)) |_| {
+    if (validateProtocolObligationUncached(ctx, type_tv, descriptor)) |_| {
         ctx.storeProtocolSatisfies(key, true);
         return true;
     } else |err| {
@@ -460,7 +460,7 @@ pub fn validateProtocolObligation(
         // Cached failure: re-walk to throw a method-specific protocol error.
     }
 
-    validateProtocolObligationUncached(ctx, type_name, descriptor) catch |err| {
+    validateProtocolObligationUncached(ctx, type_tv, descriptor) catch |err| {
         ctx.storeProtocolSatisfies(key, false);
         return err;
     };
@@ -472,11 +472,12 @@ pub fn validateProtocolObligation(
 /// (they enumerate dispatch entries).
 fn validateProtocolObligationUncached(
     ctx: *Context,
-    type_name: []const u8,
+    type_tv: *const value_mod.TypeValue,
     descriptor: *const ProtocolDescriptor,
 ) !void {
     const methods_array = descriptor.methods;
     const protocol_name = descriptor.name;
+    const type_name = type_tv.name;
     var i: usize = 0;
     while (i < methods_array.len) {
         const method_val = methods_array[i];
@@ -493,12 +494,8 @@ fn validateProtocolObligationUncached(
             const effect = methods_array[i].stack_effect;
             i += 1;
 
-            try validateTypedMethod(ctx, method_name, effect, type_name, protocol_name);
+            try validateTypedMethod(ctx, method_name, effect, type_tv, protocol_name);
         } else {
-            const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
-                helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
-                return error.TypeMismatch;
-            };
             const has_method = if (ctx.resolveDispatchId(method_name)) |did|
                 ctx.lookupUnaryDispatch(did, type_tv.descriptor.?) != null or
                     ctx.lookupBinaryDispatch(did, type_tv.descriptor.?, type_tv.descriptor.?) != null
@@ -542,6 +539,10 @@ fn validateObligationSameTypeOnly(
 ) !void {
     const methods_array = descriptor.methods;
     const protocol_name = descriptor.name;
+    const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
+        helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
+        return error.TypeMismatch;
+    };
     var i: usize = 0;
     while (i < methods_array.len) {
         const method_val = methods_array[i];
@@ -560,12 +561,8 @@ fn validateObligationSameTypeOnly(
 
             if (isCrossTypeMethod(ctx, effect)) continue;
 
-            try validateTypedMethod(ctx, method_name, effect, type_name, protocol_name);
+            try validateTypedMethod(ctx, method_name, effect, type_tv, protocol_name);
         } else {
-            const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
-                helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
-                return error.TypeMismatch;
-            };
             const has_method = if (ctx.resolveDispatchId(method_name)) |did|
                 ctx.lookupUnaryDispatch(did, type_tv.descriptor.?) != null or
                     ctx.lookupBinaryDispatch(did, type_tv.descriptor.?, type_tv.descriptor.?) != null
@@ -607,16 +604,11 @@ fn validateTypedMethod(
     ctx: *Context,
     method_name: []const u8,
     effect: StackEffect,
-    type_name: []const u8,
+    type_tv: *const value_mod.TypeValue,
     protocol_name: []const u8,
 ) !void {
     const inputs = effect.inputs;
-
-    // Look up the TypeValue for the implementing type
-    const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
-        helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
-        return error.TypeMismatch;
-    };
+    const type_name = type_tv.name;
 
     // Determine concrete TypeValues for each input position, substituting sentinels
     var has_any = false;

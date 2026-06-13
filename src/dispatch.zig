@@ -179,8 +179,14 @@ pub const DispatchProvenance = struct {
 
 /// Tagged union for dispatch entry bodies: either a user-defined quotation
 /// or a native function pointer.
+///
+/// The `quotation` body carries a full `Quotation` rather than a bare
+/// instruction slice so an AOT-replayed method body can ride its compiled
+/// `code_ptr` through dispatch. Interpreter-registered methods leave
+/// `code_ptr` null and run their instructions; AOT replay attaches the
+/// compiled function pointer with an empty instruction slice.
 pub const DispatchBody = union(enum) {
-    quotation: []const Instruction,
+    quotation: value_mod.Quotation,
     native_fn: NativeFn,
     host_callback: HostCallback,
 };
@@ -499,13 +505,13 @@ test "register and lookupBinary exact match" {
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
     try table.register(
         .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
     const result = table.lookupBinary(1, duration_desc, duration_desc, any_desc);
     try std.testing.expect(result != null);
-    try std.testing.expectEqual(@as(usize, 1), result.?.body.quotation.len);
+    try std.testing.expectEqual(@as(usize, 1), result.?.body.quotation.instructions.len);
 }
 
 test "lookupBinary returns null when no match" {
@@ -542,40 +548,40 @@ test "lookupBinary wildcard precedence" {
     // Register in reverse precedence order to ensure lookup logic is correct
     try table.register(
         .{ .dispatch_id = 1, .type_a = any_desc, .type_b = any_desc },
-        .{ .body = .{ .quotation = wild_both_body } },
+        .{ .body = .{ .quotation = .{ .instructions = wild_both_body } } },
         false,
     );
     try table.register(
         .{ .dispatch_id = 1, .type_a = any_desc, .type_b = fixnum_desc },
-        .{ .body = .{ .quotation = wild_a_body } },
+        .{ .body = .{ .quotation = .{ .instructions = wild_a_body } } },
         false,
     );
     try table.register(
         .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = any_desc },
-        .{ .body = .{ .quotation = wild_b_body } },
+        .{ .body = .{ .quotation = .{ .instructions = wild_b_body } } },
         false,
     );
     try table.register(
         .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
-        .{ .body = .{ .quotation = exact_body } },
+        .{ .body = .{ .quotation = .{ .instructions = exact_body } } },
         false,
     );
 
     // Exact match should win
     const r1 = table.lookupBinary(1, duration_desc, duration_desc, any_desc).?;
-    try std.testing.expectEqual(@as(i64, 1), r1.body.quotation[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 1), r1.body.quotation.instructions[0].op.push_literal.fixnum);
 
     // Wildcard on second: (duration, fixnum) matches (duration, *)
     const r2 = table.lookupBinary(1, duration_desc, fixnum_desc, any_desc).?;
-    try std.testing.expectEqual(@as(i64, 2), r2.body.quotation[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), r2.body.quotation.instructions[0].op.push_literal.fixnum);
 
     // Wildcard on first: (string, fixnum) matches (*, fixnum)
     const r3 = table.lookupBinary(1, string_desc, fixnum_desc, any_desc).?;
-    try std.testing.expectEqual(@as(i64, 3), r3.body.quotation[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 3), r3.body.quotation.instructions[0].op.push_literal.fixnum);
 
     // Both wildcards: (string, string) matches (*, *)
     const r4 = table.lookupBinary(1, string_desc, string_desc, any_desc).?;
-    try std.testing.expectEqual(@as(i64, 4), r4.body.quotation[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 4), r4.body.quotation.instructions[0].op.push_literal.fixnum);
 }
 
 test "lookupUnary exact and wildcard" {
@@ -596,22 +602,22 @@ test "lookupUnary exact and wildcard" {
 
     try table.register(
         .{ .dispatch_id = 2, .type_a = duration_desc, .type_b = unary_desc },
-        .{ .body = .{ .quotation = exact_body } },
+        .{ .body = .{ .quotation = .{ .instructions = exact_body } } },
         false,
     );
     try table.register(
         .{ .dispatch_id = 2, .type_a = any_desc, .type_b = unary_desc },
-        .{ .body = .{ .quotation = wild_body } },
+        .{ .body = .{ .quotation = .{ .instructions = wild_body } } },
         false,
     );
 
     // Exact match
     const r1 = table.lookupUnary(2, duration_desc, any_desc, unary_desc).?;
-    try std.testing.expectEqual(@as(i64, 10), r1.body.quotation[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 10), r1.body.quotation.instructions[0].op.push_literal.fixnum);
 
     // Wildcard fallback
     const r2 = table.lookupUnary(2, point_desc, any_desc, unary_desc).?;
-    try std.testing.expectEqual(@as(i64, 20), r2.body.quotation[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 20), r2.body.quotation.instructions[0].op.push_literal.fixnum);
 
     // No match for different word
     try std.testing.expect(table.lookupUnary(99, duration_desc, any_desc, unary_desc) == null);
@@ -627,13 +633,13 @@ test "register duplicate key errors without allow_overwrite" {
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     try table.register(
         .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
 
     const result = table.register(
         .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
     try std.testing.expectError(error.DuplicateMethod, result);
@@ -653,18 +659,18 @@ test "register duplicate key succeeds with allow_overwrite" {
 
     try table.register(
         .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
-        .{ .body = .{ .quotation = body1 } },
+        .{ .body = .{ .quotation = .{ .instructions = body1 } } },
         false,
     );
     try table.register(
         .{ .dispatch_id = 1, .type_a = duration_desc, .type_b = duration_desc },
-        .{ .body = .{ .quotation = body2 } },
+        .{ .body = .{ .quotation = .{ .instructions = body2 } } },
         true,
     );
 
     // Shoulda gotten the overwritten body
     const result = table.lookupBinary(1, duration_desc, duration_desc, any_desc).?;
-    try std.testing.expectEqual(@as(i64, 2), result.body.quotation[0].op.push_literal.fixnum);
+    try std.testing.expectEqual(@as(i64, 2), result.body.quotation.instructions[0].op.push_literal.fixnum);
 }
 
 test "registerNative creates retrievable entry with native_fn body" {
@@ -726,14 +732,14 @@ test "register increments generation counter" {
     const body = &[_]value_mod.Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
     try table.register(
         .{ .dispatch_id = 1, .type_a = fixnum_desc, .type_b = fixnum_desc },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         false,
     );
     try std.testing.expectEqual(@as(u32, 1), table.generation);
 
     try table.register(
         .{ .dispatch_id = 1, .type_a = fixnum_desc, .type_b = fixnum_desc },
-        .{ .body = .{ .quotation = body } },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
         true,
     );
     try std.testing.expectEqual(@as(u32, 2), table.generation);

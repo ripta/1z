@@ -1226,7 +1226,7 @@ pub const InferenceEngine = struct {
 
         for (dispatch_entries) |pair| {
             const entry_instrs = switch (pair.entry.body) {
-                .quotation => |instrs| instrs,
+                .quotation => |q| q.instructions,
                 .native_fn, .host_callback => continue,
             };
             var entry_out: std.ArrayListUnmanaged(StackEntry) = .{};
@@ -2040,7 +2040,7 @@ test "generic word with agreeing dispatch entries" {
             .type_a = duration_desc,
             .type_b = unary_desc,
         },
-        .{ .body = .{ .quotation = dispatch_body } },
+        .{ .body = .{ .quotation = .{ .instructions = dispatch_body } } },
         false,
     );
 
@@ -2085,7 +2085,7 @@ test "generic word with disagreeing dispatch entries emits diagnostic" {
             .type_a = duration_desc2,
             .type_b = unary_desc2,
         },
-        .{ .body = .{ .quotation = dispatch_body } },
+        .{ .body = .{ .quotation = .{ .instructions = dispatch_body } } },
         false,
     );
 
