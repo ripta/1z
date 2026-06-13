@@ -276,6 +276,28 @@ pub const ConstraintCombinatorDescription = extern struct {
     elements: ?[*]const CombinatorElement,
 };
 
+/// Reserved type-slot sentinels in a dispatch-entry row, mirroring the
+/// `ONEZ_DISPATCH_TYPE_*` C macros. A real type references the 1-based
+/// typevalue slot table; these stand in for the dispatch keys'
+/// synthetic sentinel descriptors, which carry no typevalue slot.
+pub const dispatch_type_unary: u32 = 0xFFFFFFFF;
+pub const dispatch_type_any: u32 = 0xFFFFFFFE;
+
+/// Zig mirror of `onez_image_dispatch_entry_description_t`. One row per
+/// reachable user `.quotation` method dispatch entry. The loader
+/// resolves `type_a_slot` / `type_b_slot` through the typevalue slot
+/// table (or the reserved sentinels above), the body through the
+/// quotation-function table by `quotation_id`, and the defining module
+/// by name, then replays the entry into `ctx.dispatch`.
+pub const DispatchEntryDescription = extern struct {
+    dispatch_id: u32,
+    type_a_slot: u32,
+    type_b_slot: u32,
+    quotation_id: u32,
+    module_name: ?[*]const u8,
+    module_name_len: u32,
+};
+
 pub const Header = extern struct {
     format_version: u32,
     module_count: u32,
@@ -291,6 +313,7 @@ pub const Header = extern struct {
     mutable_map_slot_count: u32,
     protocoldescriptor_slot_count: u32,
     constraintcombinator_slot_count: u32,
+    dispatch_entry_slot_count: u32,
     modules: ?[*]const Module,
     words: ?[*]const Word,
     markers: ?[*]const Marker,
@@ -304,6 +327,7 @@ pub const Header = extern struct {
     mutable_map_descriptions: ?[*]const MutableMapDescription,
     protocoldescriptor_descriptions: ?[*]const ProtocolDescriptorDescription,
     constraintcombinator_descriptions: ?[*]const ConstraintCombinatorDescription,
+    dispatch_entry_descriptions: ?[*]const DispatchEntryDescription,
 };
 
 /// Slot table type matching the C declaration:
@@ -1685,6 +1709,8 @@ fn emptyHeader() Header {
         .protocoldescriptor_descriptions = null,
         .constraintcombinator_slot_count = 0,
         .constraintcombinator_descriptions = null,
+        .dispatch_entry_slot_count = 0,
+        .dispatch_entry_descriptions = null,
     };
 }
 

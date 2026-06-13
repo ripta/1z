@@ -7863,6 +7863,7 @@ pub fn emitProgramC(
             &image_word_lookup,
             collection,
             .{ .metadata_only = want_metadata_only },
+            &quotation_id_map,
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // The freeze classifier already concluded each

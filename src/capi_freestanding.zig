@@ -137,6 +137,7 @@ const ImageHeader = extern struct {
     mutable_map_slot_count: u32,
     protocoldescriptor_slot_count: u32,
     constraintcombinator_slot_count: u32,
+    dispatch_entry_slot_count: u32,
     modules: ?*const anyopaque,
     words: ?*const anyopaque,
     markers: ?*const anyopaque,
@@ -150,6 +151,7 @@ const ImageHeader = extern struct {
     mutable_map_descriptions: ?*const anyopaque,
     protocoldescriptor_descriptions: ?*const anyopaque,
     constraintcombinator_descriptions: ?*const anyopaque,
+    dispatch_entry_descriptions: ?*const anyopaque,
 };
 
 const Value = union(enum) {

@@ -51,7 +51,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 8;
+pub const format_version: u32 = 9;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -105,6 +105,10 @@ pub const ImageEmissionStats = struct {
     /// Emitted as `onez_image_constraintcombinator_slots[]` and patched at load time by
     /// reconstructing each combinator from its description row.
     constraintcombinator_slot_count: u32 = 0,
+    /// Number of reachable user `.quotation` method dispatch entries
+    /// serialized into `onez_image_dispatch_entry_descriptions_storage[]`.
+    /// The loader replays each row into `ctx.dispatch` at startup.
+    dispatch_entry_slot_count: u32 = 0,
 };
 
 /// Knobs for `emitImageC`. The default (`metadata_only = false`) emits
@@ -228,6 +232,7 @@ pub fn emitImageCFromCollection(
     word_id_lookup: *const std.StringHashMapUnmanaged(u32),
     collection: *ImageCollection,
     options: ImageEmitOptions,
+    quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
 ) ImageEmitError!ImageEmissionStats {
     var stats: ImageEmissionStats = .{};
 
@@ -270,6 +275,7 @@ pub fn emitImageCFromCollection(
     try emitProtocolDescriptorStorage(out, allocator, effect_table);
     try emitConstraintCombinatorSlotTable(out, allocator, effect_table);
     try emitConstraintCombinatorStorage(out, allocator, effect_table);
+    stats.dispatch_entry_slot_count = try emitDispatchEntryTable(out, allocator, ctx, effect_table, quotation_id_map);
 
     try emitWordNameStrings(out, allocator, manifest);
     try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
@@ -314,7 +320,7 @@ pub fn emitImageC(
 ) ImageEmitError!ImageEmissionStats {
     var collection = try collectImageSlots(allocator, ctx, manifest, options, &.{});
     defer collection.deinit();
-    return emitImageCFromCollection(out, allocator, ctx, manifest, word_id_lookup, &collection, options);
+    return emitImageCFromCollection(out, allocator, ctx, manifest, word_id_lookup, &collection, options, null);
 }
 
 /// Combined table for stack effects, the params they reference, and
@@ -1705,6 +1711,126 @@ fn writeCombinatorElementsSym(
     try out.appendSlice(allocator, std.fmt.bufPrint(&buf, "onez_image_cc_{d}_elements", .{cc_idx}) catch unreachable);
 }
 
+/// Reserved type-slot sentinels in a dispatch-entry row, kept in sync
+/// with the `ONEZ_DISPATCH_TYPE_*` C macros.
+const dispatch_type_unary: u32 = 0xFFFFFFFF;
+const dispatch_type_any: u32 = 0xFFFFFFFE;
+
+/// One serialized dispatch-entry row, collected before emission so the
+/// rows can be sorted into a deterministic order independent of the
+/// dispatch HashMap's iteration order.
+const DispatchEntryRow = struct {
+    dispatch_id: u32,
+    type_a_slot: u32,
+    type_b_slot: u32,
+    quotation_id: u32,
+    module_name: ?[]const u8,
+
+    fn lessThan(_: void, a: DispatchEntryRow, b: DispatchEntryRow) bool {
+        if (a.dispatch_id != b.dispatch_id) return a.dispatch_id < b.dispatch_id;
+        if (a.type_a_slot != b.type_a_slot) return a.type_a_slot < b.type_a_slot;
+        if (a.type_b_slot != b.type_b_slot) return a.type_b_slot < b.type_b_slot;
+        return a.quotation_id < b.quotation_id;
+    }
+};
+
+/// Resolve a dispatch key's `*const TypeDescriptor` to the value the
+/// serialized row carries: the unary or wildcard sentinel when the
+/// descriptor is one of the dispatch table's synthetic sentinels, the
+/// 1-based typevalue slot otherwise, or 0 when no live TypeValue
+/// reaches it.
+fn dispatchTypeSlot(
+    ctx: *const Context,
+    table: *const StackEffectTable,
+    desc_index: *const std.AutoHashMapUnmanaged(*const value_mod.TypeDescriptor, *const value_mod.TypeValue),
+    descriptor: *const value_mod.TypeDescriptor,
+) u32 {
+    if (ctx.dispatch_unary_sentinel) |sentinel| {
+        if (sentinel.descriptor == descriptor) return dispatch_type_unary;
+    }
+    if (ctx.dispatch_any_sentinel) |sentinel| {
+        if (sentinel.descriptor == descriptor) return dispatch_type_any;
+    }
+    if (desc_index.get(descriptor)) |tv| {
+        return table.type_slot_index.get(tv) orelse 0;
+    }
+    return 0;
+}
+
+/// Emit `onez_image_dispatch_entry_descriptions_storage[]`: one row per
+/// reachable user `.quotation` method dispatch entry. An entry is
+/// reachable when its body pointer appears in `quotation_id_map`, the
+/// freeze-time quotation-compilation manifest; that key set is the
+/// dispatch_id-granular reachable set since 308.1 adds every reached
+/// generic's method bodies to it. Native and host-callback entries are
+/// skipped: native dispatch is already present at runtime and
+/// function-pointer bodies are not serializable. Returns the row count.
+/// No-op (returns 0, emits nothing) when the map is null or no entry
+/// qualifies.
+fn emitDispatchEntryTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    ctx: *const Context,
+    table: *const StackEffectTable,
+    quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
+) Allocator.Error!u32 {
+    const map = quotation_id_map orelse return 0;
+
+    var desc_index: std.AutoHashMapUnmanaged(*const value_mod.TypeDescriptor, *const value_mod.TypeValue) = .{};
+    defer desc_index.deinit(allocator);
+    try indexKnownTypeValues(&desc_index, allocator, ctx);
+
+    var rows: std.ArrayListUnmanaged(DispatchEntryRow) = .{};
+    defer rows.deinit(allocator);
+
+    var iter = ctx.dispatch.entries.iterator();
+    while (iter.next()) |slot| {
+        const entry = slot.value_ptr.*;
+        const body = switch (entry.body) {
+            .quotation => |instrs| instrs,
+            .native_fn, .host_callback => continue,
+        };
+        const quotation_id = map.get(@intFromPtr(body.ptr)) orelse continue;
+        const key = slot.key_ptr.*;
+        try rows.append(allocator, .{
+            .dispatch_id = key.dispatch_id,
+            .type_a_slot = dispatchTypeSlot(ctx, table, &desc_index, key.type_a),
+            .type_b_slot = dispatchTypeSlot(ctx, table, &desc_index, key.type_b),
+            .quotation_id = quotation_id,
+            .module_name = if (entry.source_module) |m| m.name else null,
+        });
+    }
+
+    if (rows.items.len == 0) return 0;
+
+    std.mem.sort(DispatchEntryRow, rows.items, {}, DispatchEntryRow.lessThan);
+
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "static const onez_image_dispatch_entry_description_t onez_image_dispatch_entry_descriptions_storage[] = {\n");
+    for (rows.items) |row| {
+        try out.appendSlice(allocator, "    { .dispatch_id = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.dispatch_id}) catch unreachable);
+        try out.appendSlice(allocator, ", .type_a_slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.type_a_slot}) catch unreachable);
+        try out.appendSlice(allocator, ", .type_b_slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.type_b_slot}) catch unreachable);
+        try out.appendSlice(allocator, ", .quotation_id = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.quotation_id}) catch unreachable);
+        try out.appendSlice(allocator, ", .module_name = ");
+        if (row.module_name) |name| {
+            try emitCStringLiteral(out, allocator, name);
+            try out.appendSlice(allocator, ", .module_name_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{name.len}) catch unreachable);
+        } else {
+            try out.appendSlice(allocator, "NULL, .module_name_len = 0");
+        }
+        try out.appendSlice(allocator, " },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+
+    return @intCast(rows.items.len);
+}
+
 /// Count the method rows of a descriptor: one per `.symbol` entry in the
 /// flat symbol/effect sequence.
 fn countProtocolMethods(pd: *const value_mod.ProtocolDescriptor) u32 {
@@ -2873,6 +2999,28 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_combinator_element *elements;
         \\} onez_image_constraintcombinator_description_t;
         \\
+        \\/* Reserved type-slot values in a dispatch-entry row. A real type     */
+        \\/* references the 1-based typevalue slot table; these sentinels stand  */
+        \\/* in for the dispatch keys' synthetic sentinel descriptors, which     */
+        \\/* carry no typevalue slot. The loader maps them back to the runtime   */
+        \\/* unary and wildcard sentinel descriptors.                            */
+        \\#define ONEZ_DISPATCH_TYPE_UNARY 0xFFFFFFFFu  /* type_b for unary dispatch */
+        \\#define ONEZ_DISPATCH_TYPE_ANY   0xFFFFFFFEu  /* wildcard `*` type_a       */
+        \\
+        \\/* One reachable user method dispatch entry. The loader resolves       */
+        \\/* type_a / type_b through the typevalue slot table (or the reserved   */
+        \\/* sentinels above), the body through onez_quotation_table by          */
+        \\/* quotation_id, and the defining module by name, then replays the     */
+        \\/* entry into the runtime dispatch table via registerDispatch.         */
+        \\typedef struct onez_image_dispatch_entry_description {
+        \\    uint32_t    dispatch_id;     /* freeze-time generic-word id, verbatim */
+        \\    uint32_t    type_a_slot;     /* 1-based typevalue slot, or a reserved sentinel */
+        \\    uint32_t    type_b_slot;     /* 1-based typevalue slot, or a reserved sentinel */
+        \\    uint32_t    quotation_id;    /* index into onez_quotation_table */
+        \\    const char *module_name;     /* defining module name, or NULL */
+        \\    uint32_t    module_name_len;
+        \\} onez_image_dispatch_entry_description_t;
+        \\
         \\typedef struct onez_image_header {
         \\    uint32_t format_version;
         \\    uint32_t module_count;
@@ -2888,6 +3036,7 @@ fn emitTypeDeclarations(
         \\    uint32_t mutable_map_slot_count;
         \\    uint32_t protocoldescriptor_slot_count;
         \\    uint32_t constraintcombinator_slot_count;
+        \\    uint32_t dispatch_entry_slot_count;
         \\    const struct onez_image_module *modules;
         \\    const struct onez_image_word *words;
         \\    const struct onez_image_marker *markers;
@@ -2901,6 +3050,7 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_mutable_map_description *mutable_map_descriptions;
         \\    const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
         \\    const struct onez_image_constraintcombinator_description *constraintcombinator_descriptions;
+        \\    const struct onez_image_dispatch_entry_description *dispatch_entry_descriptions;
         \\} onez_image_header_t;
         \\
         \\
@@ -3460,6 +3610,7 @@ fn emitHeader(
     const mutable_map_descs_ref: []const u8 = if (mutable_map_slot_count > 0) "onez_image_mutable_map_descriptions_storage" else "NULL";
     const protocoldescriptor_descs_ref: []const u8 = if (protocoldescriptor_slot_count > 0) "onez_image_protocoldescriptor_descriptions_storage" else "NULL";
     const constraintcombinator_descs_ref: []const u8 = if (constraintcombinator_slot_count > 0) "onez_image_constraintcombinator_descriptions_storage" else "NULL";
+    const dispatch_entry_descs_ref: []const u8 = if (stats.dispatch_entry_slot_count > 0) "onez_image_dispatch_entry_descriptions_storage" else "NULL";
 
     try out.appendSlice(allocator,
         \\__attribute__((used)) const onez_image_header_t onez_image_v1 = {
@@ -3492,6 +3643,8 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{protocoldescriptor_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .constraintcombinator_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{constraintcombinator_slot_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .dispatch_entry_slot_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{stats.dispatch_entry_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .modules = ");
     try out.appendSlice(allocator, modules_ref);
     try out.appendSlice(allocator, ",\n    .words = ");
@@ -3518,6 +3671,8 @@ fn emitHeader(
     try out.appendSlice(allocator, protocoldescriptor_descs_ref);
     try out.appendSlice(allocator, ",\n    .constraintcombinator_descriptions = ");
     try out.appendSlice(allocator, constraintcombinator_descs_ref);
+    try out.appendSlice(allocator, ",\n    .dispatch_entry_descriptions = ");
+    try out.appendSlice(allocator, dispatch_entry_descs_ref);
     try out.appendSlice(allocator,
         \\,
         \\};
@@ -3563,7 +3718,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 8") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 9") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
@@ -5307,6 +5462,218 @@ test "emitImageC: combinator annotation interns descriptors across all three ele
 
     // The bounded param row references the outer combinator's slot with kind 3.
     try testing.expect(std.mem.indexOf(u8, out.items, ".annotation_kind = 3, .has_quotation_effect = 0, ._reserved = 0, .annotation_slot = 1,") != null);
+}
+
+fn dispatchEntryTestNativeFn(_: *Context) anyerror!void {}
+
+test "emitDispatchEntryTable: one row per reachable user quotation entry, types and module preserved" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const fixnum_tv = ctx.builtin_type_values.get("fixnum").?;
+    const string_tv = ctx.builtin_type_values.get("string").?;
+    const unary = ctx.dispatch_unary_sentinel.?.descriptor.?;
+
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+
+    // Distinct allocations so the two bodies have distinct pointers.
+    const body_bin = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    const body_un = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0, .column = 0 },
+    });
+
+    try ctx.registerDispatch(
+        .{ .dispatch_id = 7, .type_a = fixnum_tv.descriptor.?, .type_b = string_tv.descriptor.? },
+        .{ .body = .{ .quotation = body_bin }, .source_module = m },
+        false,
+    );
+    try ctx.registerDispatch(
+        .{ .dispatch_id = 7, .type_a = fixnum_tv.descriptor.?, .type_b = unary },
+        .{ .body = .{ .quotation = body_un }, .source_module = m },
+        false,
+    );
+    // A native entry on a reached generic must be excluded: native dispatch
+    // is already present at runtime and a function pointer is not serializable.
+    try ctx.registerDispatch(
+        .{ .dispatch_id = 9, .type_a = fixnum_tv.descriptor.?, .type_b = unary },
+        .{ .body = .{ .native_fn = dispatchEntryTestNativeFn } },
+        false,
+    );
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var qmap: std.AutoHashMapUnmanaged(usize, u32) = .{};
+    defer qmap.deinit(testing.allocator);
+    try qmap.put(testing.allocator, @intFromPtr(body_bin.ptr), 0);
+    try qmap.put(testing.allocator, @intFromPtr(body_un.ptr), 1);
+
+    var collection = try collectImageSlots(testing.allocator, &ctx, manifest, .{}, &.{});
+    defer collection.deinit();
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap);
+
+    try testing.expectEqual(@as(u32, 2), stats.dispatch_entry_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_entry_descriptions_storage[] = {") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_entry_slot_count = 2") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_entry_descriptions = onez_image_dispatch_entry_descriptions_storage") != null);
+
+    // The binary row resolves both key types to the same typevalue slots the
+    // slot table assigns those exact TypeValue pointers (pointer identity).
+    const a_slot = collection.effect_table.type_slot_index.get(fixnum_tv).?;
+    const b_slot = collection.effect_table.type_slot_index.get(string_tv).?;
+    var rb: [224]u8 = undefined;
+    const bin_row = std.fmt.bufPrint(
+        &rb,
+        ".dispatch_id = 7, .type_a_slot = {d}, .type_b_slot = {d}, .quotation_id = 0, .module_name = \"demo\", .module_name_len = 4",
+        .{ a_slot, b_slot },
+    ) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, bin_row) != null);
+
+    // The unary row carries the reserved unary sentinel in type_b.
+    var ru: [224]u8 = undefined;
+    const un_row = std.fmt.bufPrint(
+        &ru,
+        ".dispatch_id = 7, .type_a_slot = {d}, .type_b_slot = 4294967295, .quotation_id = 1, .module_name = \"demo\", .module_name_len = 4",
+        .{a_slot},
+    ) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, un_row) != null);
+
+    // The native entry on dispatch_id 9 produces no row.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_id = 9") == null);
+}
+
+test "emitDispatchEntryTable: an unreachable entry body produces no row" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const fixnum_tv = ctx.builtin_type_values.get("fixnum").?;
+    const unary = ctx.dispatch_unary_sentinel.?.descriptor.?;
+
+    const body = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    try ctx.registerDispatch(
+        .{ .dispatch_id = 3, .type_a = fixnum_tv.descriptor.?, .type_b = unary },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    // The body pointer is absent from the manifest, so the entry is unreachable.
+    var qmap: std.AutoHashMapUnmanaged(usize, u32) = .{};
+    defer qmap.deinit(testing.allocator);
+
+    var collection = try collectImageSlots(testing.allocator, &ctx, manifest, .{}, &.{});
+    defer collection.deinit();
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap);
+
+    try testing.expectEqual(@as(u32, 0), stats.dispatch_entry_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_entry_descriptions_storage") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_entry_slot_count = 0") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_entry_descriptions = NULL") != null);
+}
+
+test "emitDispatchEntryTable: wildcard type_a emits the reserved ANY sentinel" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const any = ctx.dispatch_any_sentinel.?.descriptor.?;
+    const unary = ctx.dispatch_unary_sentinel.?.descriptor.?;
+
+    const body = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    try ctx.registerDispatch(
+        .{ .dispatch_id = 4, .type_a = any, .type_b = unary },
+        .{ .body = .{ .quotation = body } },
+        false,
+    );
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var qmap: std.AutoHashMapUnmanaged(usize, u32) = .{};
+    defer qmap.deinit(testing.allocator);
+    try qmap.put(testing.allocator, @intFromPtr(body.ptr), 0);
+
+    var collection = try collectImageSlots(testing.allocator, &ctx, manifest, .{}, &.{});
+    defer collection.deinit();
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap);
+
+    try testing.expectEqual(@as(u32, 1), stats.dispatch_entry_slot_count);
+    // type_a = ANY (4294967294), type_b = UNARY (4294967295).
+    try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_id = 4, .type_a_slot = 4294967294, .type_b_slot = 4294967295, .quotation_id = 0, .module_name = NULL, .module_name_len = 0") != null);
+}
+
+test "emitDispatchEntryTable: rows are emitted in deterministic sorted order" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const fixnum_tv = ctx.builtin_type_values.get("fixnum").?;
+    const unary = ctx.dispatch_unary_sentinel.?.descriptor.?;
+
+    var qmap: std.AutoHashMapUnmanaged(usize, u32) = .{};
+    defer qmap.deinit(testing.allocator);
+
+    // Register out of order (5, 3, 4); the emitted rows must sort by dispatch_id.
+    const order = [_]u32{ 5, 3, 4 };
+    for (order, 0..) |did, i| {
+        const body = try arena.dupe(Instruction, &.{
+            .{ .op = .{ .push_literal = .{ .fixnum = @intCast(did) } }, .line = 0, .column = 0 },
+        });
+        try ctx.registerDispatch(
+            .{ .dispatch_id = did, .type_a = fixnum_tv.descriptor.?, .type_b = unary },
+            .{ .body = .{ .quotation = body } },
+            false,
+        );
+        try qmap.put(testing.allocator, @intFromPtr(body.ptr), @intCast(i));
+    }
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var collection = try collectImageSlots(testing.allocator, &ctx, manifest, .{}, &.{});
+    defer collection.deinit();
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap);
+
+    const pos3 = std.mem.indexOf(u8, out.items, ".dispatch_id = 3, ").?;
+    const pos4 = std.mem.indexOf(u8, out.items, ".dispatch_id = 4, ").?;
+    const pos5 = std.mem.indexOf(u8, out.items, ".dispatch_id = 5, ").?;
+    try testing.expect(pos3 < pos4);
+    try testing.expect(pos4 < pos5);
 }
 
 test "registerProtocolMethodEffects reaches protocols and TypeValues through method effects" {
