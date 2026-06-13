@@ -1,0 +1,6 @@
+=== method body resolves module private deps ===
+Stack: [ ]
+PASS: fixnum method reaches private helper
+Stack: [ ]
+PASS: boolean method reaches private helper
+Stack: [ ]

@@ -314,12 +314,12 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
             const mmap_peek = try ctx.stack.peekN(2);
             const a_type = dispatch_mod.dispatchDescriptor(mmap_peek, ctx);
             if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                try dispatch_helpers.executeDispatchBody(ctx, entry);
                 return;
             }
             if (dispatch_mod.dispatchEnumTypeValue(mmap_peek)) |ae| {
                 if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                    try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
             }
@@ -327,7 +327,7 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
                     ctx.stack.items.items[len - 3] = mmap_peek.tagged.inner.*;
-                    try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                    try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
             }
@@ -394,12 +394,12 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
             const mmap_peek = try ctx.stack.peekN(1);
             const a_type = dispatch_mod.dispatchDescriptor(mmap_peek, ctx);
             if (ctx.lookupUnaryDispatch(did, a_type)) |entry| {
-                try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                try dispatch_helpers.executeDispatchBody(ctx, entry);
                 return;
             }
             if (dispatch_mod.dispatchEnumTypeValue(mmap_peek)) |ae| {
                 if (ctx.lookupUnaryDispatch(did, ae.descriptor.?)) |entry| {
-                    try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                    try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
             }
@@ -407,7 +407,7 @@ pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
                 if (ctx.lookupUnaryDispatch(did, bt.descriptor.?)) |entry| {
                     const len = ctx.stack.items.items.len;
                     ctx.stack.items.items[len - 2] = mmap_peek.tagged.inner.*;
-                    try dispatch_helpers.executeDispatchBody(ctx, entry.body);
+                    try dispatch_helpers.executeDispatchBody(ctx, entry);
                     return;
                 }
             }

@@ -1,0 +1,13 @@
+\ Regression test for a method{ body resolving its defining module's private{ }
+\ helpers when dispatched from outside the module.
+
+use "testing" ;
+use "method_private_deps_lib.1z" shadow-ok ;
+
+"method body resolves module private deps" test-section
+
+\ describe is a public generic; (decorate) lives only in the library's private
+\ deps. Dispatching from here exercises the cross-module path: the method body's
+\ call to (decorate) must resolve through the defining module's deps frame.
+42 describe "int!" "fixnum method reaches private helper" assert=
+t describe "bool!" "boolean method reaches private helper" assert=

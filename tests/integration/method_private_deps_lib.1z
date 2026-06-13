@@ -1,0 +1,12 @@
+\ Library exercising method{ bodies that resolve a private{ } helper. The
+\ helper is captured into this module's private deps; the generic word and its
+\ methods are public. A method body dispatched from a consumer must still see
+\ this module's private deps, the same way a regular module word does.
+
+private{
+  (decorate): ( string -- string ) [ "!" #append ] ;
+}
+
+describe: ( value -- string ) generic [ drop "?" ] ;
+describe: method{ fixnum } [ drop "int" (decorate) ] ;
+describe: method{ boolean } [ drop "bool" (decorate) ] ;

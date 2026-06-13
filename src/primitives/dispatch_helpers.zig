@@ -22,10 +22,23 @@ const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
 const trace_mod = @import("../trace.zig");
 
-/// Execute a dispatch entry body, handling both quotation and native_fn variants.
-pub fn executeDispatchBody(ctx: *Context, body: dispatch_mod.DispatchBody) !void {
-    switch (body) {
-        .quotation => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+/// Execute a dispatch entry body, handling quotation, native_fn, and
+/// host_callback variants. When the entry carries a defining module, the
+/// module's deps frame is pushed around the quotation body so a method body
+/// resolves its module's private helpers the same way a regular module word
+/// does. Native and host-callback bodies carry no defining module and run as
+/// opaque functions.
+pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !void {
+    switch (entry.body) {
+        .quotation => |instrs| {
+            if (entry.source_module) |mod| {
+                try ctx.pushModuleDepsFrame(mod);
+                defer ctx.popModuleDepsFrameTraced(mod);
+                try ctx.executeQuotation(.{ .instructions = instrs });
+            } else {
+                try ctx.executeQuotation(.{ .instructions = instrs });
+            }
+        },
         .native_fn => |func| try func(ctx),
         .host_callback => |host| {
             const rc = host.callback(host.handle, host.user_data);
@@ -159,7 +172,7 @@ fn tryDispatchBinaryById(ctx: *Context, dispatch_id: u32) !bool {
                     if (entry.unwrap_a or entry.unwrap_b) {
                         try autoUnwrapBinaryOperands(ctx, entry.unwrap_a, entry.unwrap_b);
                     }
-                    try executeDispatchBody(ctx, entry.entry.body);
+                    try executeDispatchBody(ctx, entry.entry);
                     return true;
                 }
             }
@@ -184,7 +197,7 @@ fn tryDispatchBinaryById(ctx: *Context, dispatch_id: u32) !bool {
         if (result.unwrap_a or result.unwrap_b) {
             try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
         }
-        try executeDispatchBody(ctx, result.entry.body);
+        try executeDispatchBody(ctx, result.entry);
         return true;
     }
 
@@ -219,7 +232,7 @@ fn tryDispatchUnaryById(ctx: *Context, dispatch_id: u32) !bool {
                     if (entry.unwrap_a) {
                         try autoUnwrapTopOperand(ctx);
                     }
-                    try executeDispatchBody(ctx, entry.entry.body);
+                    try executeDispatchBody(ctx, entry.entry);
                     return true;
                 }
             }
@@ -243,7 +256,7 @@ fn tryDispatchUnaryById(ctx: *Context, dispatch_id: u32) !bool {
         if (result.unwrap_a) {
             try autoUnwrapTopOperand(ctx);
         }
-        try executeDispatchBody(ctx, result.entry.body);
+        try executeDispatchBody(ctx, result.entry);
         return true;
     }
     return false;
@@ -268,7 +281,7 @@ pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) 
         if (result.unwrap_a or result.unwrap_b) {
             try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
         }
-        try executeDispatchBody(ctx, result.entry.body);
+        try executeDispatchBody(ctx, result.entry);
         const cmp_result = try ctx.stack.pop();
         defer container_backing.releaseValue(cmp_result);
         const boolean = switch (cmp_result) {
@@ -336,7 +349,7 @@ pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*Polymorphi
                         if (entry.unwrap_a or entry.unwrap_b) {
                             try autoUnwrapBinaryOperands(ctx, entry.unwrap_a, entry.unwrap_b);
                         }
-                        try executeDispatchBody(ctx, entry.entry.body);
+                        try executeDispatchBody(ctx, entry.entry);
                         return true;
                     }
                 } else if (ctx.stack.depth() >= 1) {
@@ -346,7 +359,7 @@ pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*Polymorphi
                         if (entry.unwrap_a) {
                             try autoUnwrapTopOperand(ctx);
                         }
-                        try executeDispatchBody(ctx, entry.entry.body);
+                        try executeDispatchBody(ctx, entry.entry);
                         return true;
                     }
                 }
@@ -375,7 +388,7 @@ pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*Polymorphi
             if (result.unwrap_a or result.unwrap_b) {
                 try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
             }
-            try executeDispatchBody(ctx, result.entry.body);
+            try executeDispatchBody(ctx, result.entry);
             return true;
         }
     }
@@ -399,7 +412,7 @@ pub fn tryDispatchGenericById(ctx: *Context, dispatch_id: u32, pic: ?*Polymorphi
             if (result.unwrap_a) {
                 try autoUnwrapTopOperand(ctx);
             }
-            try executeDispatchBody(ctx, result.entry.body);
+            try executeDispatchBody(ctx, result.entry);
             return true;
         }
     }
@@ -481,7 +494,7 @@ pub fn satisfiesAndDispatch(
                 if (result.unwrap_a or result.unwrap_b) {
                     try autoUnwrapBinaryOperands(ctx, result.unwrap_a, result.unwrap_b);
                 }
-                try executeDispatchBody(ctx, result.entry.body);
+                try executeDispatchBody(ctx, result.entry);
                 return;
             }
         },
@@ -494,7 +507,7 @@ pub fn satisfiesAndDispatch(
                 if (result.unwrap_a) {
                     try autoUnwrapTopOperand(ctx);
                 }
-                try executeDispatchBody(ctx, result.entry.body);
+                try executeDispatchBody(ctx, result.entry);
                 return;
             }
         },
