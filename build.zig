@@ -155,6 +155,7 @@ pub fn build(b: *std.Build) void {
     const test_module = createCommonModule(b, target, optimize, options, b.path("src/main.zig"), embedded_stdlib_path);
 
     const lib_unit_tests = b.addTest(.{
+        .name = "1z-unit-test",
         .root_module = test_module,
         .test_runner = .{
             .path = b.path("src/unit_test_runner.zig"),
@@ -163,6 +164,15 @@ pub fn build(b: *std.Build) void {
     });
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
     run_lib_unit_tests.setName("unit tests");
+
+    // Expose the unit-test binary at a stable path so external coverage
+    // tooling such as kcov can wrap it. Installed under zig-out/test/ to keep
+    // clear of the zig-out/lib stdlib symlink.
+    const install_unit_test_bin = b.addInstallArtifact(lib_unit_tests, .{
+        .dest_dir = .{ .override = .{ .custom = "test" } },
+    });
+    const unit_test_bin_step = b.step("unit-test-bin", "Build the unit-test binary to zig-out/test/ for coverage tooling");
+    unit_test_bin_step.dependOn(&install_unit_test_bin.step);
 
     const freestanding_capi_test_module = createCommonModule(b, target, optimize, options, b.path("src/capi_freestanding.zig"), embedded_stdlib_path);
     const freestanding_capi_unit_tests = b.addTest(.{
