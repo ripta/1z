@@ -91,6 +91,7 @@ pub const NotCompilableReason = enum {
     row_binding_overflow,
     quotation_slot_overflow,
     indexed_access_into_row,
+    nested_definition,
     unknown_reason,
 
     pub fn code(self: NotCompilableReason) []const u8 {
@@ -113,6 +114,7 @@ pub const NotCompilableReason = enum {
             .quotation_slot_overflow => "NC.16",
             .indexed_access_into_row => "NC.17",
             .unknown_reason => "NC.18",
+            .nested_definition => "NC.19",
         };
     }
 
@@ -136,6 +138,7 @@ pub const NotCompilableReason = enum {
             .quotation_slot_overflow => std.fmt.comptimePrint("word has more quotation parameters with concrete effects than the compiler can track ({d})", .{max_quotation_slots}),
             .indexed_access_into_row => "indexed stack access targets the symbolic row region",
             .unknown_reason => "compilation failed without a categorized reason",
+            .nested_definition => "defines a helper word inside its body that AOT compilation cannot discover",
         };
     }
 
@@ -159,6 +162,7 @@ pub const NotCompilableReason = enum {
             .quotation_slot_overflow => "simplify the word to use fewer quotation parameters",
             .indexed_access_into_row => "only literal depths into known stack slots above the row are supported",
             .unknown_reason => "diagnostic gap; please report",
+            .nested_definition => "move the helper into a private{ } block at module scope",
         };
     }
 };
@@ -177,6 +181,11 @@ pub const QuotationFallbackWarning = struct {
 pub const UncompiledWord = struct {
     name: []const u8,
     reason: NotCompilableReason,
+    /// Set when the word fails because it defines a helper word inside its own
+    /// body that AOT compilation cannot discover. Names that helper so the
+    /// build diagnostic can point at it and recommend a `private{ }` block.
+    /// Borrows from the word's instruction stream.
+    nested_definition: ?[]const u8 = null,
 };
 
 pub const PreludeStats = struct {
@@ -5867,6 +5876,60 @@ fn preScanInstructions(
     }
 }
 
+/// Whether `target` is defined by a nested `name: [ ... ] ;` statement inside
+/// this flat body. `nativeSemicolon` pops the body quotation then the name
+/// symbol, so a nested definition reads as `push_literal symbol(name)` ...
+/// `push_literal quotation(body)` ... `call_word ";"`; the defined name is the
+/// most recent symbol literal before that `;`, since the quotation, marker, and
+/// doc pushes in between are not symbols. The pending name resets at each `;` so
+/// it never leaks across definition statements.
+fn isNestedDefinedName(instructions: []const Instruction, target: []const u8) bool {
+    var pending_name: ?[]const u8 = null;
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val == .symbol) pending_name = val.symbol;
+            },
+            .call_word, .call_word_direct => {
+                const cname = instr.op.callTargetName() orelse continue;
+                if (std.mem.eql(u8, cname, ";")) {
+                    if (pending_name) |pn| {
+                        if (std.mem.eql(u8, pn, target)) return true;
+                    }
+                    pending_name = null;
+                }
+            },
+        }
+    }
+    return false;
+}
+
+/// Find a callee in `instructions` that is defined by a nested `;` statement in
+/// the same body and is not resolvable in the AOT compilation set. Returns the
+/// helper's name, or null when the word's failure is not a nested-definition
+/// case. Drives the build diagnostic that names the helper and recommends a
+/// `private{ }` block. The returned slice borrows from the instruction stream.
+fn findUndiscoverableNestedDef(
+    instructions: []const Instruction,
+    resolver: ?WordResolver,
+) ?[]const u8 {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .call_word, .call_word_direct => {
+                const name = instr.op.callTargetName() orelse continue;
+                if (std.mem.eql(u8, name, ";")) continue;
+                if (isSupportedOp(name) or isStackOp(name)) continue;
+                if (resolver) |res| {
+                    if (res.resolve(name, res.user_data) != null) continue;
+                }
+                if (isNestedDefinedName(instructions, name)) return name;
+            },
+            .push_literal => {},
+        }
+    }
+    return null;
+}
+
 /// Compile a word's instruction sequence into native code via the ir JIT.
 /// The compiled function operates directly on the per-task Value stack.
 /// Supports push_literal of any Value variant and call_word of supported
@@ -7605,8 +7668,16 @@ pub fn emitProgramC(
         var uncompiled: std.ArrayListUnmanaged(UncompiledWord) = .{};
         for (words) |w| {
             if (!w.is_prelude and !actually_compiled.contains(w.word_id)) {
-                const reason = failure_reasons.get(w.name) orelse .unknown_reason;
-                try uncompiled.append(allocator, .{ .name = w.name, .reason = reason });
+                if (findUndiscoverableNestedDef(w.instructions, resolver)) |nested| {
+                    try uncompiled.append(allocator, .{
+                        .name = w.name,
+                        .reason = .nested_definition,
+                        .nested_definition = nested,
+                    });
+                } else {
+                    const reason = failure_reasons.get(w.name) orelse .unknown_reason;
+                    try uncompiled.append(allocator, .{ .name = w.name, .reason = reason });
+                }
             }
         }
         if (uncompiled.items.len > 0) {

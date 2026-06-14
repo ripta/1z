@@ -2786,6 +2786,17 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 .{ items.len, if (items.len == 1) @as([]const u8, "") else "s" },
             ) catch {};
             for (items) |entry| {
+                if (entry.nested_definition) |helper| {
+                    err_writer.print(
+                        "  word '{s}': {s}: defines nested helper '{s}', which AOT compilation cannot discover\n",
+                        .{ entry.name, entry.reason.code(), helper },
+                    ) catch {};
+                    err_writer.print(
+                        "      hint: move '{s}' into a private{{ }} block at module scope\n",
+                        .{helper},
+                    ) catch {};
+                    continue;
+                }
                 err_writer.print("  word '{s}': {s}: {s}\n", .{
                     entry.name,
                     entry.reason.code(),

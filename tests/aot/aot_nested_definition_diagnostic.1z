@@ -1,0 +1,7 @@
+\ A word that defines a helper inside its own body cannot be AOT-compiled: the
+\ nested definition is a runtime side effect, so freeze discovery never sees it.
+\ The build now names the helper and recommends a private{ } block instead of
+\ failing with a generic message. Pins that diagnostic.
+outer: ( -- ) [ helper: ( -- n ) [ 42 ] ;
+  helper drop ] ;
+outer
