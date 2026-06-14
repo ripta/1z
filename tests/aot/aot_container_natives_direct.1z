@@ -1,0 +1,12 @@
+\ Mutable-map construction, in-place mutation, and access compile to direct
+\ native calls under interpreter-free AOT with the interpreter setting locked
+\ off. Building previously failed because `make-mutable-map`, `@set!`, and
+\ `@get` each emitted a `jitNativeWordCall` fallback, which the zero-fallback
+\ class rejects; a clean build and exit prove the direct-call codegen carries
+\ no fallback. `make-vector` is exercised the same way. No printing or
+\ arithmetic on the results, so the binary links no interpreter. Result
+\ correctness is checked separately under runtime-image AOT, where output can
+\ be printed.
+M{ } "k" 1 @set! "k" @get drop
+
+V{ 10 20 30 } drop

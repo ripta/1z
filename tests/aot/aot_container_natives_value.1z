@@ -1,0 +1,10 @@
+\ Container construction, mutation, and access produce the same values through
+\ the direct-call codegen as the interpreter. Under runtime-image AOT the word
+\ bodies are compiled, so the printed results come from the direct native calls
+\ for `make-mutable-map`, `make-vector`, `@set!`, `@set`, and `@get`. The
+\ values match the interpreter: a mutated mutable-map reads back its value, a
+\ vector indexes its second element, and an immutable `@set` on a hash reads
+\ back through `@get`.
+M{ } "k" 1 @set! "k" @get .
+V{ 10 20 30 } 1 #nth .
+H{ } "key" 2 @set "key" @get .
