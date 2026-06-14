@@ -943,7 +943,7 @@ fn nativeTruncRem(ctx: *Context) anyerror!void {
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "float-approx-ratio", .func = nativeFloatApproxRatio },
-    .{ .name = "cmp", .func = nativeCmp },
+    .{ .name = "cmp", .stack_effect = "a b -- n", .func = nativeCmp },
 };
 
 /// float-approx-ratio ( f -- numer denom ) - Continued fraction approximation

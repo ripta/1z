@@ -293,7 +293,7 @@ type-members: ( type -- array/f ) [ native.type-members ] ;
 type-union?: ( type -- ? ) [ type-members f = not ] ;
 
 \\ Throw a type-mismatch error with expected/got/value context.
-throw-type-error: ( value expected-str -- * ) [
+throw-type-error: never-returns ( value expected-str -- * ) [
   over type-name
   H{ } swap got: swap @set swap expected: swap @set swap value: swap @set
   dup expected: @get over got: @get

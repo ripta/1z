@@ -1,4 +1,4 @@
-Prelude compilation: 372/394 words compiled (94.4%)
+Prelude compilation: 374/394 words compiled (94.9%)
   word '#all' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -38,9 +38,6 @@ Prelude compilation: 372/394 words compiled (94.4%)
   word 'loop' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-  word 'cmp' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
   word '#any' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -59,16 +56,13 @@ Prelude compilation: 372/394 words compiled (94.4%)
   word 'case' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-  word 'acquire' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
   word 'add-hook' cannot be compiled
       NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
 Quotation bodies compiled: 0
 Inline PIC sites: 0/38 generic call sites preseeded
-AOT interpreter fallbacks: 301 total
-  native: 289
+AOT interpreter fallbacks: 302 total
+  native: 290
   compound-uncompiled: 4
   quotation: 8
   sites:
@@ -88,8 +82,8 @@ AOT interpreter fallbacks: 301 total
     native: >iterator -> curry (line 866)
     native: >iterator -> native.make-callback-iter (line 867)
     native: >iterator -> native.>iterator (line 869)
-    ... 285 more
-  static-check: jitInterpretedCall=4/4 jitNativeWordCall=289/289 jitCallQuotation=8/8 (matches build-time inventory)
+    ... 286 more
+  static-check: jitInterpretedCall=4/4 jitNativeWordCall=290/290 jitCallQuotation=8/8 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
