@@ -613,13 +613,17 @@ decl>ffi-binding: ( decl -- str ) [
   "\n\n" #join
 ] ;
 
+private{
+  \ Carries lib-name through generate-bindings' section builders. Bound fresh
+  \ per call via with-parameter so state does not leak across invocations.
+  gb-lib-name: parameter{ [ "" ] } ;
+}
+
 \\ Generate a complete .1z binding file from a C header.
 \\ opts is a hash with optional keys:
 \\   flags: -- array of extra CLI flags for zig translate-c (default { })
 \\   strip-prefix: -- string prefix to strip from C function names (default f)
 generate-bindings: ( header-path lib-name opts -- str ) [
-  gb-lib-name: parameter{ [ "" ] } ;
-
   \ Extract options
   dup flags: @has? [ dup flags: @get ] [ { } ] if
   swap dup strip-prefix: @has? [ strip-prefix: @get ] [ drop f ] if

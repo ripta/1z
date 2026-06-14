@@ -673,6 +673,9 @@ fn internDescriptorCrossRefs(
         .enum_variant => |evd| {
             if (evd.parent) |tv| _ = try effect_table.internType(tv);
             if (evd.inner_type) |tv| _ = try effect_table.internType(tv);
+            if (evd.anon_struct) |st| {
+                _ = try internStructType(struct_plans, struct_index, effect_table, st);
+            }
         },
         .ffi_struct => |fsd| {
             for (fsd.field_types) |maybe| {
@@ -2501,6 +2504,11 @@ fn emitTypeDescriptorRow(
     var anon_idx_buf: [32]u8 = undefined;
     switch (desc.kind) {
         .virtual => |vd| if (vd.anon_struct) |st| {
+            if (struct_index.get(st)) |i| {
+                anon_idx_str = std.fmt.bufPrint(&anon_idx_buf, "{d}u", .{i}) catch unreachable;
+            }
+        },
+        .enum_variant => |evd| if (evd.anon_struct) |st| {
             if (struct_index.get(st)) |i| {
                 anon_idx_str = std.fmt.bufPrint(&anon_idx_buf, "{d}u", .{i}) catch unreachable;
             }

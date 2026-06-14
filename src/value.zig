@@ -658,6 +658,10 @@ pub const Variant = struct {
 pub const EnumVariantData = struct {
     parent: ?*const TypeValue = null,
     inner_type: ?*const TypeValue = null,
+    /// For data-carrying variants, the struct backing the payload. Mirrors
+    /// `VirtualType.anon_struct` so descriptor-only readers (AOT emit/load)
+    /// can reach the struct shape the variant's wrap constructor needs.
+    anon_struct: ?*const StructType = null,
 };
 
 /// ResourceData carries the metadata of a resource type.

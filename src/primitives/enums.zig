@@ -342,7 +342,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             const variant_tv = try alloc.create(value_mod.TypeValue);
             const variant_desc = try value_mod.createTypeDescriptor(
                 alloc,
-                .{ .enum_variant = .{ .parent = enum_tv, .inner_type = tv } },
+                .{ .enum_variant = .{ .parent = enum_tv, .inner_type = tv, .anon_struct = struct_type } },
                 .{},
             );
             variant_tv.* = .{ .name = full_name, .descriptor = variant_desc };

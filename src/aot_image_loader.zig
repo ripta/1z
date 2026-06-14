@@ -959,26 +959,64 @@ fn populateTypeValueSlots(
                 .enum_variant => |evdata| {
                     const vt = arena.create(value_mod.VirtualType) catch
                         return LoaderError.OutOfMemory;
-                    const inner_name: []const u8 = if (evdata.inner_type) |it| it.name else "";
-                    const anon_struct: ?*const value_mod.StructType = blk: {
-                        const inner_tv = evdata.inner_type orelse break :blk null;
-                        const inner_desc = inner_tv.descriptor orelse break :blk null;
-                        break :blk switch (inner_desc.kind) {
-                            .struct_ => null,
-                            else => null,
-                        };
-                    };
+                    const inner_name: []const u8 = if (evdata.anon_struct != null)
+                        tv.name
+                    else if (evdata.inner_type) |it|
+                        it.name
+                    else
+                        "";
                     vt.* = .{
                         .name = tv.name,
                         .inner_type = inner_name,
-                        .anon_struct = anon_struct,
+                        .anon_struct = evdata.anon_struct,
                         .parent_type = evdata.parent,
                         .type_val = tv,
                     };
                     tv.virtual_type = vt;
+                    // Unlike a struct-backed virtual's anonymous struct, an
+                    // enum variant's payload is a named struct with its own
+                    // TypeValue; the `.struct_` pass already links its
+                    // `type_val`, so do not overwrite it here.
                 },
                 else => {},
             }
+        }
+    }
+
+    // Pass 3.6: rebuild the enum -> variant registry so `match` /
+    // `unchecked-match` can resolve user enums at runtime. The interpreter
+    // populates this when the enum is defined; AOT never runs the definition.
+    // The enum descriptor's variant list points at each variant's payload
+    // type, not the variant TypeValue, so reconstruct the registry by grouping
+    // the `enum_variant` TypeValues by their parent enum, using the
+    // `virtual_type` back-references set in Pass 3.5.
+    {
+        var groups = std.AutoHashMapUnmanaged(
+            *const value_mod.TypeValue,
+            std.ArrayListUnmanaged(*const value_mod.VirtualType),
+        ){};
+        var i: u32 = 0;
+        while (i < tv_count) : (i += 1) {
+            if (tv_reused[i]) continue;
+            const tv = tv_out[i];
+            const desc = tv.descriptor orelse continue;
+            switch (desc.kind) {
+                .enum_variant => |evd| {
+                    const parent = evd.parent orelse continue;
+                    const vt = tv.virtual_type orelse continue;
+                    const gop = groups.getOrPut(arena, parent) catch
+                        return LoaderError.OutOfMemory;
+                    if (!gop.found_existing) gop.value_ptr.* = .{};
+                    gop.value_ptr.append(arena, vt) catch
+                        return LoaderError.OutOfMemory;
+                },
+                else => {},
+            }
+        }
+        var it = groups.iterator();
+        while (it.next()) |entry| {
+            ctx.registerEnumVariants(entry.key_ptr.*, entry.value_ptr.items) catch
+                return LoaderError.OutOfMemory;
         }
     }
 
@@ -1289,11 +1327,20 @@ fn decodeKindData(
             );
             break :blk .{ .enum_ = .{ .variants = variants } };
         },
-        5 => .{
-            .enum_variant = .{
-                .parent = try lookupSlot(slots, header.typevalue_slot_count, drow.parent_type_slot),
-                .inner_type = try lookupSlot(slots, header.typevalue_slot_count, drow.inner_type_slot),
-            },
+        5 => blk: {
+            const anon_struct: ?*value_mod.StructType = if (drow.anon_struct_idx == anon_struct_absent)
+                null
+            else if (drow.anon_struct_idx < struct_types_out.len)
+                struct_types_out[drow.anon_struct_idx]
+            else
+                return LoaderError.BadStructTypeIndex;
+            break :blk .{
+                .enum_variant = .{
+                    .parent = try lookupSlot(slots, header.typevalue_slot_count, drow.parent_type_slot),
+                    .inner_type = try lookupSlot(slots, header.typevalue_slot_count, drow.inner_type_slot),
+                    .anon_struct = anon_struct,
+                },
+            };
         },
         6 => .{
             .resource = .{

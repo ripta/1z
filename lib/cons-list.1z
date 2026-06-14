@@ -53,15 +53,17 @@ list-len: ( cons-list -- n ) [
   drop
 ] ;
 
-\ Reverse a list, O(n).
-list-reverse: ( cons-list -- cons-list ) [
+private{
   list-reverse-acc: ( acc list -- cons-list ) [
     {
       cons-list:cons: [ [ swap cons ] dip list-reverse-acc ]
       cons-list:nil: [ ]
     } unchecked-match
   ] ;
+}
 
+\ Reverse a list, O(n).
+list-reverse: ( cons-list -- cons-list ) [
   nil swap list-reverse-acc
 ] ;
 
