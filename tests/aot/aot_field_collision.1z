@@ -1,0 +1,13 @@
+\ A generated struct field getter made polymorphic by a field-name collision
+\ with the always-loaded prelude, dispatched under AOT. The prelude's
+\ `constraint-info` record carries an `id` field, so defining a user struct with
+\ the same field name gives the `id>>` generic two methods: the prelude's
+\ accessor and this struct's. A polymorphic getter routes through the dispatch
+\ helper rather than devirtualizing, so it depends on the method dispatch
+\ entries replaying across the freeze->runtime boundary. Without that replay the
+\ `id>>` call on a `thing` instance misses and raises, so a correct printed
+\ value proves the replayed method dispatched.
+
+thing: struct{ id } ;
+
+5 make-thing id>> .
