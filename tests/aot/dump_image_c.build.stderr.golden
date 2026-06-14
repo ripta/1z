@@ -260,6 +260,8 @@ typedef struct onez_image_dispatch_entry_description {
     uint32_t    module_name_len;
     const char *generic_name;    /* generic word name for name->dispatch_id replay, or NULL */
     uint32_t    generic_name_len;
+    const uint8_t *body_bytecode; /* interpreter-run method body bytecode, or NULL when compiled */
+    uint32_t    body_bytecode_len;
 } onez_image_dispatch_entry_description_t;
 
 typedef struct onez_image_header {

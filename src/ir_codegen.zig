@@ -181,9 +181,27 @@ pub const PreludeStats = struct {
     uncompiled: []const UncompiledWord = &.{},
 };
 
+/// Why a reachable `method{` dispatch body that the IR codegen could not
+/// compile to native code is a hard build error rather than being served by
+/// the interpreter-run fallback. Drives the build diagnostic's hint.
+pub const MethodBodyUncompilableReason = enum {
+    /// No runtime image to carry the body's bytecode; rebuild with
+    /// `--emit-runtime-image`.
+    needs_runtime_image,
+    /// `--emit-runtime-image` is set, but the interpreter is locked off, so
+    /// there is nothing to run the body.
+    interpreter_locked,
+    /// The body embeds a value that cannot be serialized into the image.
+    non_serializable,
+};
+
 pub const UncompiledQuotation = struct {
     quotation_id: u32,
     c_name: []const u8,
+    /// Set when this quotation is a `method{` dispatch body; selects the
+    /// method-body-specific diagnostic and its hint. Null for ordinary
+    /// literal quotations, which keep the generic message.
+    method_body_reason: ?MethodBodyUncompilableReason = null,
 };
 
 pub const PicStats = struct {
@@ -7053,6 +7071,10 @@ pub const AotMetadata = struct {
     runtime_image_mutable_map_slot_count: u32 = 0,
     runtime_image_protocoldescriptor_slot_count: u32 = 0,
     runtime_image_constraintcombinator_slot_count: u32 = 0,
+    /// Count of method dispatch-entry rows serialized into the image. An
+    /// informational tooling affordance; the loader sizes the table from the
+    /// image Header's `dispatch_entry_slot_count`, not from this field.
+    runtime_image_dispatch_entry_slot_count: u32 = 0,
     /// Optional toolchain provenance. An empty slice means the field
     /// was unavailable at build time and must not appear in the
     /// embedded metadata or in `1z inspect` output.
@@ -7545,14 +7567,63 @@ pub fn emitProgramC(
         uncompiled.deinit(allocator);
     }
 
+    // Serialized bytecode for reachable `method{` bodies that did not compile
+    // to native code but can run via the interpreter in a full runtime image,
+    // keyed by quotation_id. The image emitter renders these into the
+    // dispatch-entry table so the loader registers them as interpreter-run
+    // entries. Bytes are allocator-owned for the rest of this function.
+    var interpreter_run_bodies: std.AutoHashMapUnmanaged(u32, []const u8) = .{};
+    defer {
+        var it = interpreter_run_bodies.valueIterator();
+        while (it.next()) |bytes| allocator.free(bytes.*);
+        interpreter_run_bodies.deinit(allocator);
+    }
+    // Set when at least one method body is serialized for interpreter-run
+    // dispatch; forces the interpreter linked so the body has something to run
+    // it (the body would otherwise be unreachable in an interpreter-free auto
+    // build that emitted no other fallbacks).
+    var force_interpreter_linked = false;
+
     // NOTE(ripta): Strict codegen: quotation bodies with inferred effects must compile.
     //              Bodies without inferred effects (row-polymorphic, e.g., `[ call ]`
     //              inside higher-order prelude words) are not yet handled, so this makes
     //              their parent words compilable by inlining the quotation at the call
     //              site. `>quotation`-constructed quotations are not in this set at all.
+    //
+    //              A reachable `method{` body that did not compile is handled
+    //              separately: under a full runtime image with the interpreter
+    //              available it is serialized to run interpreted; otherwise the
+    //              build fails with a method-body-specific diagnostic.
     {
+        const can_link_interpreter = !(interpreter_fallback == .false and lock_interpreter_setting);
         var uncompiled_q: std.ArrayListUnmanaged(UncompiledQuotation) = .{};
+        defer uncompiled_q.deinit(allocator);
         for (quotations) |q| {
+            if (q.is_method_body) {
+                if (q.compiled) continue;
+                if (emit_runtime_image and can_link_interpreter) {
+                    const bytes = serializeQuotationInstructions(q.instructions, allocator) catch |err| switch (err) {
+                        error.OutOfMemory => return error.OutOfMemory,
+                        error.NotEncodable => {
+                            try uncompiled_q.append(allocator, .{
+                                .quotation_id = q.quotation_id,
+                                .c_name = q.c_name,
+                                .method_body_reason = .non_serializable,
+                            });
+                            continue;
+                        },
+                    };
+                    try interpreter_run_bodies.put(allocator, q.quotation_id, bytes);
+                    force_interpreter_linked = true;
+                } else {
+                    try uncompiled_q.append(allocator, .{
+                        .quotation_id = q.quotation_id,
+                        .c_name = q.c_name,
+                        .method_body_reason = if (!emit_runtime_image) .needs_runtime_image else .interpreter_locked,
+                    });
+                }
+                continue;
+            }
             if (!q.compiled and q.inferred_effect != null) {
                 try uncompiled_q.append(allocator, .{
                     .quotation_id = q.quotation_id,
@@ -7562,10 +7633,8 @@ pub fn emitProgramC(
         }
         if (uncompiled_q.items.len > 0) {
             diagnostics.uncompiled_quotations = try allocator.dupe(UncompiledQuotation, uncompiled_q.items);
-            uncompiled_q.deinit(allocator);
             return error.UncompiledQuotations;
         }
-        uncompiled_q.deinit(allocator);
     }
 
     // Collect prelude compilation stats with failure reasons.
@@ -7862,7 +7931,12 @@ pub fn emitProgramC(
     // image emission, so the image emitter can pick metadata-only vs
     // full runtime image based on the resolved class.
     const interpreter_callbacks_emitted = aot_fallback_emit_count > 0;
-    const interpreter_free = switch (interpreter_fallback) {
+    // A serialized interpreter-run method body needs the interpreter linked to
+    // execute it, so it overrides an otherwise interpreter-free auto build. It
+    // is only ever set when the interpreter can be linked (never under
+    // `--interpreter-fallback=false --lock-interpreter-setting`), so this never
+    // contradicts a locked-off setting.
+    const interpreter_free = !force_interpreter_linked and switch (interpreter_fallback) {
         .true => false,
         .false => lock_interpreter_setting,
         .auto => !interpreter_callbacks_emitted,
@@ -7906,6 +7980,7 @@ pub fn emitProgramC(
             .{ .metadata_only = want_metadata_only },
             &quotation_id_map,
             &dispatch_id_names,
+            &interpreter_run_bodies,
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // The freeze classifier already concluded each
@@ -7935,6 +8010,7 @@ pub fn emitProgramC(
         meta.runtime_image_mutable_map_slot_count = stats.mutable_map_slot_count;
         meta.runtime_image_protocoldescriptor_slot_count = stats.protocoldescriptor_slot_count;
         meta.runtime_image_constraintcombinator_slot_count = stats.constraintcombinator_slot_count;
+        meta.runtime_image_dispatch_entry_slot_count = stats.dispatch_entry_slot_count;
         meta.runtime_image_parameter_slot_count = stats.parameter_slot_count;
         meta.runtime_image_tagged_slot_count = stats.tagged_slot_count;
     }
@@ -8349,6 +8425,11 @@ fn emitAotMetadata(
         const wc_str = std.fmt.bufPrint(&num_buf, "{d}", .{meta.runtime_image_word_count}) catch unreachable;
         try out.appendSlice(allocator, "    \"runtime-image-word-count=");
         try out.appendSlice(allocator, wc_str);
+        try out.appendSlice(allocator, "\\n\"\n");
+
+        const de_str = std.fmt.bufPrint(&num_buf, "{d}", .{meta.runtime_image_dispatch_entry_slot_count}) catch unreachable;
+        try out.appendSlice(allocator, "    \"runtime-image-dispatch-entry-count=");
+        try out.appendSlice(allocator, de_str);
         try out.appendSlice(allocator, "\\n\"\n");
     }
 
@@ -14166,6 +14247,7 @@ test "emitAotMetadata renders runtime-image fields when present" {
     meta.runtime_image_format_version = 2;
     meta.runtime_image_blob_present = true;
     meta.runtime_image_word_count = 42;
+    meta.runtime_image_dispatch_entry_slot_count = 3;
 
     try emitAotMetadata(testing.allocator, &out, meta, true, classifyArtifact(true, .full_runtime));
 
@@ -14173,6 +14255,7 @@ test "emitAotMetadata renders runtime-image fields when present" {
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-format-version=2\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-blob-present=yes\\n") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-word-count=42\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-dispatch-entry-count=3\\n") != null);
 }
 
 test "emitAotMetadata omits runtime-image conditional fields when absent" {
@@ -14188,6 +14271,7 @@ test "emitAotMetadata omits runtime-image conditional fields when absent" {
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-format-version=") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-blob-present=") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-word-count=") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "runtime-image-dispatch-entry-count=") == null);
 }
 
 test "emitAotMetadata renders blob-present=no with non-zero word-count" {

@@ -1,0 +1,3 @@
+Error: method body 'onez_q_0' could not be compiled to native code
+      hint: rebuild with --emit-runtime-image to run this method body under the interpreter
+AOT interpreter fallbacks: 2 total (native=2)

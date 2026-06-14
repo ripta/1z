@@ -299,6 +299,11 @@ pub const DispatchEntryDescription = extern struct {
     module_name_len: u32,
     generic_name: ?[*]const u8,
     generic_name_len: u32,
+    /// Interpreter-run method body bytecode for a body that did not compile to
+    /// a native function, or null when the body compiled (resolved through the
+    /// quotation-function table by `quotation_id` instead).
+    body_bytecode: ?[*]const u8,
+    body_bytecode_len: u32,
 };
 
 pub const Header = extern struct {
@@ -1470,7 +1475,20 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
         const type_b = (try resolveDispatchTypeDescriptor(ctx, slots, slot_count, row.type_b_slot)) orelse continue;
 
         if (row.quotation_id >= fns.size) continue;
-        const code_ptr = fns.table[row.quotation_id] orelse continue;
+        // A body resolves either to a compiled native function (the common
+        // case) or, when it did not compile, to interpreter-run bytecode the
+        // row carries (full runtime image only). Register the bytecode with a
+        // null code_ptr so the dispatcher runs it through the interpreter. A
+        // row with neither is skipped, as before.
+        var body_instructions: []const value_mod.Instruction = &.{};
+        const code_ptr: ?*const anyopaque = fns.table[row.quotation_id] orelse blk: {
+            const bc_ptr = row.body_bytecode orelse continue;
+            if (row.body_bytecode_len == 0) continue;
+            const bytes = bc_ptr[0..row.body_bytecode_len];
+            body_instructions = instruction_bytecode.deserializeQuotationInstructions(bytes, ctx.quotationAllocator()) catch
+                return LoaderError.OutOfMemory;
+            break :blk null;
+        };
 
         const module: ?*const value_mod.Module = if (row.module_name) |name_ptr| blk: {
             const name = nameSlice(name_ptr, row.module_name_len);
@@ -1487,13 +1505,20 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
                 return LoaderError.OutOfMemory;
         }
 
+        // dispatch_id consistency invariant: the row carries the freeze-time
+        // dispatch_id verbatim and the key reuses it directly. The loader never
+        // re-runs the monotonic `next_dispatch_id` counter, so a replayed
+        // entry's dispatch_id equals the id a compiled call site bakes as a u32
+        // literal for the same generic; otherwise dispatch would silently
+        // misroute.
         const key = dispatch_mod.DispatchKey{
             .dispatch_id = row.dispatch_id,
             .type_a = type_a,
             .type_b = type_b,
         };
+        std.debug.assert(key.dispatch_id == row.dispatch_id);
         const entry = dispatch_mod.DispatchEntry{
-            .body = .{ .quotation = .{ .instructions = &.{}, .code_ptr = code_ptr } },
+            .body = .{ .quotation = .{ .instructions = body_instructions, .code_ptr = code_ptr } },
             .source_module = module,
         };
         // Fill gaps only: in interpreter-linked AOT the prelude reload already

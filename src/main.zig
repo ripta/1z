@@ -2798,10 +2798,23 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             allocator.free(items);
         } else if (err == error.UncompiledQuotations) {
             for (codegen_diagnostics.uncompiled_quotations) |q| {
-                err_writer.print(
-                    "Error: quotation body '{s}' could not be compiled\n",
-                    .{q.c_name},
-                ) catch {};
+                if (q.method_body_reason) |reason| {
+                    err_writer.print(
+                        "Error: method body '{s}' could not be compiled to native code\n",
+                        .{q.c_name},
+                    ) catch {};
+                    const h: []const u8 = switch (reason) {
+                        .needs_runtime_image => "rebuild with --emit-runtime-image to run this method body under the interpreter",
+                        .interpreter_locked => "the interpreter is locked off; drop --lock-interpreter-setting or --interpreter-fallback=false so this method body can run",
+                        .non_serializable => "the method body embeds a value that cannot be serialized into the runtime image",
+                    };
+                    err_writer.print("      hint: {s}\n", .{h}) catch {};
+                } else {
+                    err_writer.print(
+                        "Error: quotation body '{s}' could not be compiled\n",
+                        .{q.c_name},
+                    ) catch {};
+                }
             }
             allocator.free(codegen_diagnostics.uncompiled_quotations);
         } else if (err == error.InterpreterRequiredButLocked) {
@@ -3183,6 +3196,9 @@ const AotInspectFields = struct {
     runtime_image_format_version: ?[]const u8 = null,
     runtime_image_blob_present: ?[]const u8 = null,
     runtime_image_word_count: ?[]const u8 = null,
+    // Count of method dispatch-entry rows the image replays. Informational;
+    // absent on binaries built before this field was added.
+    runtime_image_dispatch_entry_count: ?[]const u8 = null,
     // Optional toolchain provenance. Present only when the build
     // environment captured the corresponding value.
     onez_git_commit: ?[]const u8 = null,
@@ -3234,6 +3250,7 @@ fn parseAotMetadata(
     var runtime_image_format_version: ?[]const u8 = null;
     var runtime_image_blob_present: ?[]const u8 = null;
     var runtime_image_word_count: ?[]const u8 = null;
+    var runtime_image_dispatch_entry_count: ?[]const u8 = null;
     var onez_git_commit: ?[]const u8 = null;
     var zig_version: ?[]const u8 = null;
     var c_compiler_id: ?[]const u8 = null;
@@ -3276,6 +3293,8 @@ fn parseAotMetadata(
             runtime_image_blob_present = value;
         } else if (std.mem.eql(u8, key, "runtime-image-word-count")) {
             runtime_image_word_count = value;
+        } else if (std.mem.eql(u8, key, "runtime-image-dispatch-entry-count")) {
+            runtime_image_dispatch_entry_count = value;
         } else if (std.mem.eql(u8, key, "onez-git-commit")) {
             onez_git_commit = value;
         } else if (std.mem.eql(u8, key, "zig-version")) {
@@ -3347,6 +3366,7 @@ fn parseAotMetadata(
         .runtime_image_format_version = runtime_image_format_version,
         .runtime_image_blob_present = runtime_image_blob_present,
         .runtime_image_word_count = runtime_image_word_count,
+        .runtime_image_dispatch_entry_count = runtime_image_dispatch_entry_count,
         .onez_git_commit = onez_git_commit,
         .zig_version = zig_version,
         .c_compiler_id = c_compiler_id,
@@ -3707,6 +3727,13 @@ fn writeInspectReport(w: anytype, fields: AotInspectFields) !void {
         );
     } else {
         try w.print("runtime-image: present={s}\n", .{fields.runtime_image_present});
+    }
+    if (fields.runtime_image_dispatch_entry_count) |v| {
+        // Informational; omitted when zero to keep the common no-method-dispatch
+        // binary's report unchanged. The blob always carries the count.
+        if (!std.mem.eql(u8, v, "0")) {
+            try w.print("dispatch-entries: {s}\n", .{v});
+        }
     }
     if (fields.dynamic_features) |v| {
         try w.print("dynamic-features: {s}\n", .{v});

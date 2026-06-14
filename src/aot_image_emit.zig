@@ -234,6 +234,7 @@ pub fn emitImageCFromCollection(
     options: ImageEmitOptions,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
     dispatch_id_names: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
+    interpreter_run_bodies: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
 ) ImageEmitError!ImageEmissionStats {
     var stats: ImageEmissionStats = .{};
 
@@ -276,7 +277,7 @@ pub fn emitImageCFromCollection(
     try emitProtocolDescriptorStorage(out, allocator, effect_table);
     try emitConstraintCombinatorSlotTable(out, allocator, effect_table);
     try emitConstraintCombinatorStorage(out, allocator, effect_table);
-    stats.dispatch_entry_slot_count = try emitDispatchEntryTable(out, allocator, ctx, effect_table, quotation_id_map, dispatch_id_names);
+    stats.dispatch_entry_slot_count = try emitDispatchEntryTable(out, allocator, ctx, effect_table, quotation_id_map, dispatch_id_names, interpreter_run_bodies);
 
     try emitWordNameStrings(out, allocator, manifest);
     try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
@@ -321,7 +322,7 @@ pub fn emitImageC(
 ) ImageEmitError!ImageEmissionStats {
     var collection = try collectImageSlots(allocator, ctx, manifest, options, &.{});
     defer collection.deinit();
-    return emitImageCFromCollection(out, allocator, ctx, manifest, word_id_lookup, &collection, options, null, null);
+    return emitImageCFromCollection(out, allocator, ctx, manifest, word_id_lookup, &collection, options, null, null, null);
 }
 
 /// Combined table for stack effects, the params they reference, and
@@ -1727,6 +1728,11 @@ const DispatchEntryRow = struct {
     quotation_id: u32,
     module_name: ?[]const u8,
     generic_name: ?[]const u8,
+    /// Serialized body bytecode for a method body that did not compile to a native function but
+    /// runs interpreted in a full runtime image. Null when the body compiled, since the loader
+    /// resolves it through the quotation-function table by `quotation_id` instead). Borrowed from
+    /// the codegen's interpreter-run-bodies map.
+    body_bytecode: ?[]const u8 = null,
 
     fn lessThan(_: void, a: DispatchEntryRow, b: DispatchEntryRow) bool {
         if (a.dispatch_id != b.dispatch_id) return a.dispatch_id < b.dispatch_id;
@@ -1776,6 +1782,7 @@ fn emitDispatchEntryTable(
     table: *const StackEffectTable,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
     dispatch_id_names: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
+    interpreter_run_bodies: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
 ) Allocator.Error!u32 {
     const map = quotation_id_map orelse return 0;
 
@@ -1813,6 +1820,7 @@ fn emitDispatchEntryTable(
             .quotation_id = quotation_id,
             .module_name = if (entry.source_module) |m| m.name else null,
             .generic_name = if (dispatch_id_names) |m| m.get(key.dispatch_id) else null,
+            .body_bytecode = if (interpreter_run_bodies) |m| m.get(quotation_id) else null,
         });
     }
 
@@ -1821,6 +1829,22 @@ fn emitDispatchEntryTable(
     std.mem.sort(DispatchEntryRow, rows.items, {}, DispatchEntryRow.lessThan);
 
     var num_buf: [32]u8 = undefined;
+
+    // Per-row body bytecode arrays for interpreter-run method bodies, emitted
+    // before the row storage so each row can reference its array. Keyed by
+    // quotation_id, which is unique per row.
+    for (rows.items) |row| {
+        const bytes = row.body_bytecode orelse continue;
+        try out.appendSlice(allocator, "static const uint8_t onez_image_dispatch_q_");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.quotation_id}) catch unreachable);
+        try out.appendSlice(allocator, "_body[] = {");
+        for (bytes, 0..) |byte, bi| {
+            if (bi > 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{byte}) catch unreachable);
+        }
+        try out.appendSlice(allocator, "};\n");
+    }
+
     try out.appendSlice(allocator, "static const onez_image_dispatch_entry_description_t onez_image_dispatch_entry_descriptions_storage[] = {\n");
     for (rows.items) |row| {
         try out.appendSlice(allocator, "    { .dispatch_id = ");
@@ -1846,6 +1870,15 @@ fn emitDispatchEntryTable(
             try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{name.len}) catch unreachable);
         } else {
             try out.appendSlice(allocator, "NULL, .generic_name_len = 0");
+        }
+        try out.appendSlice(allocator, ", .body_bytecode = ");
+        if (row.body_bytecode) |bytes| {
+            try out.appendSlice(allocator, "onez_image_dispatch_q_");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.quotation_id}) catch unreachable);
+            try out.appendSlice(allocator, "_body, .body_bytecode_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{bytes.len}) catch unreachable);
+        } else {
+            try out.appendSlice(allocator, "NULL, .body_bytecode_len = 0");
         }
         try out.appendSlice(allocator, " },\n");
     }
@@ -3044,6 +3077,8 @@ fn emitTypeDeclarations(
         \\    uint32_t    module_name_len;
         \\    const char *generic_name;    /* generic word name for name->dispatch_id replay, or NULL */
         \\    uint32_t    generic_name_len;
+        \\    const uint8_t *body_bytecode; /* interpreter-run method body bytecode, or NULL when compiled */
+        \\    uint32_t    body_bytecode_len;
         \\} onez_image_dispatch_entry_description_t;
         \\
         \\typedef struct onez_image_header {
@@ -5545,11 +5580,15 @@ test "emitDispatchEntryTable: one row per reachable user quotation entry, types 
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null);
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null);
 
     try testing.expectEqual(@as(u32, 2), stats.dispatch_entry_slot_count);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_entry_descriptions_storage[] = {") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_entry_slot_count = 2") != null);
+    // dispatch_id consistency invariant: the emitted rows carry the freeze-time
+    // dispatch_id (7) verbatim, the same id a compiled call site bakes.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_id = 7,") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_id = 6,") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_entry_descriptions = onez_image_dispatch_entry_descriptions_storage") != null);
 
     // The binary row resolves both key types to the same typevalue slots the
@@ -5575,6 +5614,60 @@ test "emitDispatchEntryTable: one row per reachable user quotation entry, types 
 
     // The native entry on dispatch_id 9 produces no row.
     try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_id = 9") == null);
+
+    // With no interpreter-run-bodies map, compiled rows carry no body bytecode.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL, .body_bytecode_len = 0") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_q_0_body[]") == null);
+}
+
+test "emitDispatchEntryTable: an interpreter-run method body carries its bytecode" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const fixnum_tv = ctx.builtin_type_values.get("fixnum").?;
+    const unary = ctx.dispatch_unary_sentinel.?.descriptor.?;
+
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+
+    const body = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
+    });
+    try ctx.registerDispatch(
+        .{ .dispatch_id = 5, .type_a = fixnum_tv.descriptor.?, .type_b = unary },
+        .{ .body = .{ .quotation = .{ .instructions = body } }, .source_module = m },
+        false,
+    );
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var qmap: std.AutoHashMapUnmanaged(usize, u32) = .{};
+    defer qmap.deinit(testing.allocator);
+    try qmap.put(testing.allocator, @intFromPtr(body.ptr), 0);
+
+    // The body did not compile, so it appears in the interpreter-run-bodies map
+    // keyed by quotation_id with its serialized bytecode.
+    var run_bodies: std.AutoHashMapUnmanaged(u32, []const u8) = .{};
+    defer run_bodies.deinit(testing.allocator);
+    const bytes = [_]u8{ 1, 2, 3 };
+    try run_bodies.put(testing.allocator, 0, &bytes);
+
+    var collection = try collectImageSlots(testing.allocator, &ctx, manifest, .{}, &.{});
+    defer collection.deinit();
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, &run_bodies);
+
+    try testing.expectEqual(@as(u32, 1), stats.dispatch_entry_slot_count);
+    // The per-row bytecode array is emitted and the row references it.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_q_0_body[] = {1,2,3}") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = onez_image_dispatch_q_0_body, .body_bytecode_len = 3") != null);
 }
 
 test "emitDispatchEntryTable: an unreachable entry body produces no row" {
@@ -5609,7 +5702,7 @@ test "emitDispatchEntryTable: an unreachable entry body produces no row" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null);
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null);
 
     try testing.expectEqual(@as(u32, 0), stats.dispatch_entry_slot_count);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_entry_descriptions_storage") == null);
@@ -5649,7 +5742,7 @@ test "emitDispatchEntryTable: wildcard type_a emits the reserved ANY sentinel" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null);
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null);
 
     try testing.expectEqual(@as(u32, 1), stats.dispatch_entry_slot_count);
     // type_a = ANY (4294967294), type_b = UNARY (4294967295).
@@ -5692,7 +5785,7 @@ test "emitDispatchEntryTable: rows are emitted in deterministic sorted order" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null);
+    _ = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null);
 
     const pos3 = std.mem.indexOf(u8, out.items, ".dispatch_id = 3, ").?;
     const pos4 = std.mem.indexOf(u8, out.items, ".dispatch_id = 4, ").?;

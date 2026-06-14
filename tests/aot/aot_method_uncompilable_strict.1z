@@ -1,0 +1,9 @@
+\ The same uncompilable method{ body under strict interpreter-free AOT. With no
+\ interpreter to run the body and no runtime image to carry it, the build fails
+\ with a method-body diagnostic that points at --emit-runtime-image.
+
+counter: virtual{ fixnum } ;
+bump:    generic ( c -- n ) [ drop -1 ] ;
+bump:    method{ counter } [ drop [ 7 ] ] ;
+
+0 >counter bump drop

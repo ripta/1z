@@ -43,6 +43,10 @@ pub const AotQuotationDesc = struct {
     /// Null when unknown. Used by AOT C emission to format the
     /// asm-name override as `<defining-word>/quot@<line>:<col>`.
     defining_word: ?[]const u8 = null,
+    /// True when this quotation is the body of a `method{` dispatch entry discovered by walking a
+    /// reached generic. Distinguishes method bodies from literal quotations so the codegen can
+    /// apply the interpreter-run fallback and the method-body-specific build diagnostic to them.
+    is_method_body: bool = false,
 };
 
 pub const FreezeResult = struct {
@@ -333,6 +337,7 @@ pub fn freezeModuleGraphOpts(
         };
     };
     defer discovered.names.deinit(ctx.quotationAllocator());
+    defer discovered.method_body_ptrs.deinit(ctx.quotationAllocator());
     defer discovered.defs.deinit(ctx.quotationAllocator());
     defer discovered.native_names.deinit(ctx.quotationAllocator());
     defer discovered.native_defs.deinit(ctx.quotationAllocator());
@@ -599,6 +604,9 @@ const DiscoveredWords = struct {
     native_names: std.ArrayListUnmanaged([]const u8),
     native_defs: std.ArrayListUnmanaged(WordDefinition),
     quotation_bodies: std.ArrayListUnmanaged([]const Instruction),
+    /// Instruction-slice pointers of the quotation bodies that are `method{` dispatch bodies, used
+    /// to set `AotQuotationDesc.is_method_body` at manifest-build time.
+    method_body_ptrs: std.AutoHashMapUnmanaged(usize, void) = .{},
     /// One entry per reachable `call_word` instruction encountered during
     /// BFS. Caller is recorded by name here; buildAotDescs remaps to the
     /// assigned word id when producing FreezeResult.call_targets. The
@@ -723,7 +731,7 @@ fn discoverReachableWords(
                             result.pending_call_targets.deinit(temp_allocator);
                             return err;
                         };
-                        walkDispatchMethodBodies(ctx, qualified_def, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
+                        walkDispatchMethodBodies(ctx, qualified_def, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.method_body_ptrs, &result.pending_call_targets, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
                             freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
                             result.names.deinit(temp_allocator);
                             result.defs.deinit(temp_allocator);
@@ -771,7 +779,7 @@ fn discoverReachableWords(
         // Walk every method body registered for this word's dispatch_id so
         // reached generics' methods enter the compilation manifest. For
         // non-generics this is a noop.
-        walkDispatchMethodBodies(ctx, word, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
+        walkDispatchMethodBodies(ctx, word, name, &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.method_body_ptrs, &result.pending_call_targets, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
             freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
             result.names.deinit(temp_allocator);
             result.defs.deinit(temp_allocator);
@@ -959,6 +967,7 @@ fn walkDispatchMethodBodies(
     seen: *std.StringHashMapUnmanaged(void),
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    method_body_ptrs: *std.AutoHashMapUnmanaged(usize, void),
     pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
     diagnostics: *FreezeDiagnostics,
     artifact_class: ArtifactClass,
@@ -983,6 +992,7 @@ fn walkDispatchMethodBodies(
         const qgop = try quotation_seen.getOrPut(allocator, ptr_key);
         if (qgop.found_existing) continue;
         try quotation_bodies.append(allocator, q_instrs);
+        try method_body_ptrs.put(allocator, ptr_key, {});
 
         var synth_path = std.ArrayListUnmanaged(u32){};
         defer synth_path.deinit(allocator);
@@ -1794,6 +1804,7 @@ fn buildAotDescs(
             .source_line = if (entry) |e| e.line else 0,
             .source_column = if (entry) |e| e.column else 0,
             .defining_word = if (entry) |e| e.defining_word else null,
+            .is_method_body = discovered.method_body_ptrs.contains(@intFromPtr(body.ptr)),
         });
     }
     const max_quotation_id = if (next_q_id > 0) next_q_id - 1 else 0;
@@ -3638,16 +3649,20 @@ test "walkDispatchMethodBodies adds every quotation method body and skips native
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var method_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer method_body_ptrs.deinit(allocator);
     var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
     defer pending_call_targets.deinit(allocator);
     defer freePendingCallTargetPaths(&pending_call_targets, allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try walkDispatchMethodBodies(&ctx, def, "shape-area", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &diagnostics, .runtime_image_aot, allocator, allocator);
+    try walkDispatchMethodBodies(&ctx, def, "shape-area", &worklist, &seen, &quotation_bodies, &quotation_seen, &method_body_ptrs, &pending_call_targets, &diagnostics, .runtime_image_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 2), quotation_bodies.items.len);
     try testing.expect(quotationBodiesContain(quotation_bodies.items, body_a));
     try testing.expect(quotationBodiesContain(quotation_bodies.items, body_b));
+    try testing.expect(method_body_ptrs.contains(@intFromPtr(body_a.ptr)));
+    try testing.expect(method_body_ptrs.contains(@intFromPtr(body_b.ptr)));
 }
 
 test "discoverReachableWords includes reached generic's method bodies and excludes unreached" {
