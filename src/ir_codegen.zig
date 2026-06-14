@@ -48,6 +48,7 @@ const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const markers_mod = @import("primitives/markers.zig");
 const data_structures = @import("primitives/data_structures.zig");
 const associative = @import("primitives/associative.zig");
+const stack_prims = @import("primitives/stack.zig");
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 const NativeFn = @import("dictionary.zig").NativeFn;
 const AotQuotationDesc = @import("aot_freeze.zig").AotQuotationDesc;
@@ -4329,17 +4330,27 @@ fn compileInstructions(
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "drop")) {
                     if (sp.* < 1) return IrCodegenError.StackUnderflow;
-                    // Discarding an owning slot: release its backing. Scalars
-                    // tracked as typed refs never alias a backing.
-                    if (stack[sp.* - 1] == .raw_at_slot) {
-                        emitReleaseSlot(state, stack[sp.* - 1].raw_at_slot);
-                    } else if (stack[sp.* - 1] == .row_region) {
-                        // The row's top is the live physical top, so release it
-                        // here rather than leaking its backing; the abstract
-                        // position maps through liveSlotAddr to that slot.
-                        emitReleaseSlot(state, sp.* - 1);
+                    if (stack[sp.* - 1] == .row_region and state.resolver != null) {
+                        // The row stands for an unknown number of live values
+                        // and its top is the live physical top. Pop exactly one
+                        // through the native and keep the row, rather than
+                        // discarding the whole region -- which would leave a
+                        // following drop with nothing and underflow the word.
+                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
+                    } else {
+                        // Discarding an owning slot: release its backing. Scalars
+                        // tracked as typed refs never alias a backing.
+                        if (stack[sp.* - 1] == .raw_at_slot) {
+                            emitReleaseSlot(state, stack[sp.* - 1].raw_at_slot);
+                        } else if (stack[sp.* - 1] == .row_region) {
+                            // The row's top is the live physical top, so release
+                            // it here rather than leaking its backing; the
+                            // abstract position maps through liveSlotAddr to that
+                            // slot.
+                            emitReleaseSlot(state, sp.* - 1);
+                        }
+                        sp.* -= 1;
                     }
-                    sp.* -= 1;
                 } else if (std.mem.eql(u8, name, "swap")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     const top = stack[sp.* - 1];
@@ -9655,10 +9666,10 @@ export fn jitPicTopTagsMatch(ctx_raw: usize, tag_a_raw: usize, tag_b_raw: usize)
 /// `jitNativeWordCall`. The wrapper calls the same native the interpreter
 /// uses, so the emitted call carries no interpreter fallback and survives the
 /// zero-fallback interpreter-free class, where the dispatch table the word_id
-/// lookup needs is stripped from the binary. Scoped to the concrete-arity
-/// container construction, mutation, and access natives; each is a plain
-/// native that does its own internal type handling, so a direct call is
-/// complete on its own.
+/// lookup needs is stripped from the binary. Covers the concrete-arity
+/// container construction, mutation, and access natives plus the runtime-depth
+/// indexed stack ops; each is a plain native that does its own internal type
+/// handling and bounds checking, so a direct call is complete on its own.
 const AotDirectNative = struct {
     name: []const u8,
     symbol: []const u8,
@@ -9671,6 +9682,15 @@ const aot_direct_natives = [_]AotDirectNative{
     .{ .name = "@set!", .symbol = "onez_native_at_set_mut", .func = data_structures.nativeAtSetMut },
     .{ .name = "@set", .symbol = "onez_native_at_set", .func = associative.nativeAtSet },
     .{ .name = "@get", .symbol = "onez_native_at_get", .func = associative.nativeAtGet },
+    // `drop` over an opaque row region pops one live value through the native
+    // and keeps the row, so the call must link without a fallback too.
+    .{ .name = "drop", .symbol = "onez_native_drop", .func = stack_prims.nativeDrop },
+    // Runtime-depth indexed stack ops: codegen emits these against the live
+    // stack when the depth is not a folded literal (e.g. `drop-at` -> `<rot-n`).
+    .{ .name = "<rot-n", .symbol = "onez_native_rot_up", .func = stack_prims.nativeRotUp },
+    .{ .name = "rot-n>", .symbol = "onez_native_rot_down", .func = stack_prims.nativeRotDown },
+    .{ .name = "pick-n", .symbol = "onez_native_pick_n", .func = stack_prims.nativePickN },
+    .{ .name = "nip-n", .symbol = "onez_native_nip_n", .func = stack_prims.nativeNipN },
 };
 
 /// The AOT-direct wrapper symbol for `name`, or null if the word is not in the

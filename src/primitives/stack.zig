@@ -77,7 +77,7 @@ pub fn nativeWipe(ctx: *Context) anyerror!void {
 /// - dup: 0 pick-n
 /// - over: 1 pick-n
 /// - pick: 2 pick-n
-fn nativePickN(ctx: *Context) anyerror!void {
+pub fn nativePickN(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;
 
@@ -92,7 +92,7 @@ fn nativePickN(ctx: *Context) anyerror!void {
 /// <rot-n ( n -- ) - Pull item at depth n to top, shifting items above it down.
 ///
 /// Equivalencies: 0 is no-op, 1 is swap, 2 is <rot-.
-fn nativeRotUp(ctx: *Context) anyerror!void {
+pub fn nativeRotUp(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;
     const depth: usize = @intCast(n);
@@ -111,7 +111,7 @@ fn nativeRotUp(ctx: *Context) anyerror!void {
 /// rot-n> ( n -- ) - Push top item to depth n, shifting items above it up.
 ///
 /// Equivalencies: 0 is no-op, 1 is swap, 2 is -rot>.
-fn nativeRotDown(ctx: *Context) anyerror!void {
+pub fn nativeRotDown(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;
     const depth: usize = @intCast(n);
@@ -164,7 +164,7 @@ fn nativeDropN(ctx: *Context) anyerror!void {
 }
 
 /// nip-n ( ...x1..xn y n -- y ) - Drop n items beneath the top value.
-fn nativeNipN(ctx: *Context) anyerror!void {
+pub fn nativeNipN(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;
 

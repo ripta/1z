@@ -1,0 +1,23 @@
+\ Mutation, mutable-container construction and access, a runtime-depth indexed
+\ drop, and a value-producing dynamic-variable binding all compile fallback-free
+\ under interpreter-free AOT with the interpreter setting locked off. Each
+\ construct previously emitted a fallback the zero-fallback class rejects, or
+\ relied on a body the interpreter would run: container natives routed through
+\ `jitNativeWordCall`, `drop-at`'s runtime-depth `<rot-n` routed through it too,
+\ and `with-parameter`'s body had to be compiled to a code pointer rather than
+\ executed by the interpreter. A clean build and a run that exits without
+\ output prove all of them carry no fallback of any kind. Results are dropped
+\ rather than printed because polymorphic display words would themselves emit
+\ fallbacks; correctness is checked separately under runtime-image AOT.
+M{ } "k" 1 @set! "k" @get drop
+V{ 10 20 30 } drop
+H{ } "key" 2 @set "key" @get drop
+
+\ `drop-at` indexes the stack at a depth supplied at runtime, so its `<rot-n`
+\ has no literal depth to fold and compiles as a direct native call.
+1 2 3 4 2 drop-at drop drop drop
+
+\ A value-producing `with-parameter` body compiles to a code pointer; the
+\ binding is exercised and its result dropped.
+wp: parameter{ [ 0 ] } ;
+99 wp [ wp get ] with-parameter drop
