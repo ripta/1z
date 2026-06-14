@@ -1,0 +1,14 @@
+\ `drop-at` indexes the stack at a depth supplied at runtime, so its body's
+\ `<rot-n` has no literal depth to fold and compiles as a native call against the
+\ live stack that collapses the abstract stack to a row region. Under runtime-image
+\ AOT the word body is compiled, so these results come from the compiled path and
+\ match the interpreter: a mid-stack drop, a depth-0 drop of the top, a depth-1
+\ drop one below the top, and an out-of-range depth raising the same
+\ `stack-underflow` the interpreter does, caught with `recover`.
+1 2 3 4 2 drop-at . . .
+"---" print-line
+1 2 3 0 drop-at . .
+"---" print-line
+1 2 3 4 5 1 drop-at . . . .
+"---" print-line
+[ 1 2 10 drop-at ] [ "error-type" @get inspect print-line ] recover

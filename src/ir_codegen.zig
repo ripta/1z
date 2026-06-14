@@ -3253,6 +3253,38 @@ fn emitResolvedNativeCallback(
     }
 }
 
+/// Emit a word call whose effect on the abstract stack cannot be modeled, as an
+/// opaque dynamic call: flush the abstract stack to physical memory, emit the
+/// call, then collapse the abstract stack to a fresh `row_region` so subsequent
+/// instructions above the region keep compiling. Used both for native callees
+/// with unresolved row-variable effects and for runtime-depth indexed stack ops.
+/// Returns true when compilation should `continue` (the call falls through) and
+/// false when it diverged and the caller should `break`.
+fn emitDynamicRowFallback(
+    state: *CompileState,
+    stack: []StackEntry,
+    sp: *usize,
+    name: []const u8,
+    resolved: ResolvedWord,
+    line: usize,
+) IrCodegenError!bool {
+    try materializeQuotations(state, stack, sp.*);
+    flushToPhysicalStack(state, stack, sp.*);
+    const ctx_val = emitCallbackPreamble(state, sp.*);
+    if (resolved.is_native) {
+        emitNativeWordCall(state, ctx_val, name, resolved, line);
+    } else {
+        emitAotWordCall(state, ctx_val, name, resolved, line);
+    }
+    if (exitFallsThrough(state.exit_kind)) {
+        reloadBaseAfterDynamicCall(state);
+        sp.* = 1;
+        stack[0] = .{ .row_region = state.nextRowId() };
+        return true;
+    }
+    return false;
+}
+
 /// Emit a polymorphic struct native call (make-struct-instance,
 /// struct-instance-destructure, virtual-struct-wrap, or
 /// virtual-struct-unwrap). Derives input/output counts from the struct
@@ -4277,6 +4309,11 @@ fn compileInstructions(
                     // tracked as typed refs never alias a backing.
                     if (stack[sp.* - 1] == .raw_at_slot) {
                         emitReleaseSlot(state, stack[sp.* - 1].raw_at_slot);
+                    } else if (stack[sp.* - 1] == .row_region) {
+                        // The row's top is the live physical top, so release it
+                        // here rather than leaking its backing; the abstract
+                        // position maps through liveSlotAddr to that slot.
+                        emitReleaseSlot(state, sp.* - 1);
                     }
                     sp.* -= 1;
                 } else if (std.mem.eql(u8, name, "swap")) {
@@ -5333,30 +5370,43 @@ fn compileInstructions(
                         return IrCodegenError.NotCompilable;
                     };
 
-                    // Indexed stack ops: reject when the literal depth targets the symbolic row interior.
-                    // When a row_region exists and the access is legal, do a compile-time symbolic rewrite
-                    // instead of the native callback, which would lose the row_region.
+                    // Indexed stack ops: a literal depth either rewrites the
+                    // abstract stack in place over a row, or rejects when it
+                    // targets the row interior. A runtime depth has no literal to
+                    // inspect, so emit the native op against the live stack and
+                    // collapse to a row_region: the native addresses the slot from
+                    // the runtime `n`, performs the shuffle, and raises the same
+                    // out-of-range error the interpreter does.
                     if (isIndexedStackOp(name)) {
-                        const depth = extractPrecedingLiteralDepth(instructions, idx) orelse {
-                            state.not_compilable_reason = .indexed_access_into_row;
-                            return IrCodegenError.NotCompilable;
-                        };
-                        // The depth argument is on top of the abstract stack.
-                        // After popping it, the deepest position the operation
-                        // can touch is sp - 2 - depth (0-indexed from bottom).
-                        if (sp.* >= 2 and depth <= sp.* - 2) {
-                            const target = sp.* - 2 - depth;
-                            if (findRowRegionIndex(stack, sp.*)) |row_idx| {
-                                if (target <= row_idx) {
-                                    state.not_compilable_reason = .indexed_access_into_row;
-                                    return IrCodegenError.NotCompilable;
+                        if (extractPrecedingLiteralDepth(instructions, idx)) |depth| {
+                            // The depth argument is on top of the abstract stack.
+                            // After popping it, the deepest position the operation
+                            // can touch is sp - 2 - depth (0-indexed from bottom).
+                            if (sp.* >= 2 and depth <= sp.* - 2) {
+                                const target = sp.* - 2 - depth;
+                                if (findRowRegionIndex(stack, sp.*)) |row_idx| {
+                                    if (target <= row_idx) {
+                                        state.not_compilable_reason = .indexed_access_into_row;
+                                        return IrCodegenError.NotCompilable;
+                                    }
+                                    // Row exists but access targets known slots.
+                                    // Rewrite the StackEntry array directly
+                                    // instead of calling the native function.
+                                    try rewriteIndexedStackOp(state, name, stack, sp, depth);
+                                    continue;
                                 }
-                                // Row exists but access targets known slots.
-                                // Rewrite the StackEntry array directly
-                                // instead of calling the native function.
-                                try rewriteIndexedStackOp(state, name, stack, sp, depth);
+                            }
+                            // Literal depth with no row: fall through to the
+                            // general native emission, which resets the abstract
+                            // stack to mirror the physically-rearranged stack.
+                        } else if (state.aot_mode) {
+                            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) {
                                 continue;
                             }
+                            break;
+                        } else {
+                            state.not_compilable_reason = .indexed_access_into_row;
+                            return IrCodegenError.NotCompilable;
                         }
                     }
 
@@ -5393,18 +5443,7 @@ fn compileInstructions(
                             // `compound_uncompiled` is non-zero. The static cross-check in
                             // `AotFallbackStaticCheck` guards the classification contract by
                             // comparing the build-time inventory against the assembled C.
-                            try materializeQuotations(state, stack, sp.*);
-                            flushToPhysicalStack(state, stack, sp.*);
-                            const ctx_val = emitCallbackPreamble(state, sp.*);
-                            if (resolved.is_native) {
-                                emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
-                            } else {
-                                emitAotWordCall(state, ctx_val, name, resolved, instr.line);
-                            }
-                            if (exitFallsThrough(state.exit_kind)) {
-                                reloadBaseAfterDynamicCall(state);
-                                sp.* = 1;
-                                stack[0] = .{ .row_region = state.nextRowId() };
+                            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) {
                                 continue;
                             }
                             break;

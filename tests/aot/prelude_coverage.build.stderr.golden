@@ -1,4 +1,4 @@
-Prelude compilation: 374/394 words compiled (94.9%)
+Prelude compilation: 375/394 words compiled (95.2%)
   word '#all' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -50,9 +50,6 @@ Prelude compilation: 374/394 words compiled (94.9%)
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-  word 'drop-at' cannot be compiled
-      NC.17: indexed stack access targets the symbolic row region
-      hint: only literal depths into known stack slots above the row are supported
   word 'case' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
@@ -61,8 +58,8 @@ Prelude compilation: 374/394 words compiled (94.9%)
       hint: blocked until the AOT resolver includes this word
 Quotation bodies compiled: 0
 Inline PIC sites: 0/38 generic call sites preseeded
-AOT interpreter fallbacks: 294 total
-  native: 282
+AOT interpreter fallbacks: 295 total
+  native: 283
   compound-uncompiled: 4
   quotation: 8
   sites:
@@ -82,8 +79,8 @@ AOT interpreter fallbacks: 294 total
     native: >iterator -> curry (line 866)
     native: >iterator -> native.make-callback-iter (line 867)
     native: >iterator -> native.>iterator (line 869)
-    ... 278 more
-  static-check: jitInterpretedCall=4/4 jitNativeWordCall=282/282 jitCallQuotation=8/8 (matches build-time inventory)
+    ... 279 more
+  static-check: jitInterpretedCall=4/4 jitNativeWordCall=283/283 jitCallQuotation=8/8 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
