@@ -2937,6 +2937,32 @@ fn resetStackToPhysicalPreservingRows(stack: []StackEntry, sp: usize) void {
     }
 }
 
+/// Settle the abstract stack after a concrete-arity op (i.e., consuming `inputs`,
+/// producing `outputs`) that may sit above or reach into a row_region at slot 0.
+///
+/// With no row present this is a plain reset to physical layout.
+///
+/// With a row at slot 0 and an op that consumes only the concrete entries above it,
+/// the row is preserved so subsequent ops keep compiling against it. When the op
+/// reaches into the row, it consumes at least as many entries as sit above the row,
+/// and its effect on the opaque region cannot be modeled. The abstract stack resyncs
+/// to the live runtime stack with a fresh row, matching how a row-introducing call
+/// collapses the stack.
+fn settleRowAwareStack(state: *CompileState, stack: []StackEntry, sp: *usize, inputs: usize, outputs: usize) void {
+    const sp_before = sp.*;
+    const had_row = sp_before > 0 and stack[0].isRowRegion();
+    const reaches_row = had_row and inputs >= sp_before;
+    sp.* = sp_before - inputs + outputs;
+    if (reaches_row) {
+        reloadBaseAfterDynamicCall(state);
+        sp.* = 1;
+    } else if (had_row) {
+        resetStackToPhysicalPreservingRows(stack, sp.*);
+    } else {
+        resetStackToPhysical(stack, sp.*);
+    }
+}
+
 /// Compare symbolic shapes of two stack states after flushToPhysicalStack.
 /// Returns true iff both have the same depth AND every position that is a
 /// row_region in either stack is a row_region with the same RowId in the
@@ -3244,8 +3270,7 @@ fn emitResolvedNativeCallback(
         emitNativeWordCall(state, ctx_val, name, resolved, line);
 
         if (exitFallsThrough(state.exit_kind)) {
-            sp.* = sp.* - resolved.input_count + resolved.output_count;
-            resetStackToPhysical(stack, sp.*);
+            settleRowAwareStack(state, stack, sp, resolved.input_count, resolved.output_count);
         }
     } else {
         state.not_compilable_reason = .unresolvable_word;
@@ -3363,8 +3388,7 @@ fn emitStructNativeCall(
     emitNativeWordCall(state, ctx_val, name, resolved, line);
 
     if (exitFallsThrough(state.exit_kind)) {
-        sp.* = sp.* - effective_in + effective_out;
-        resetStackToPhysical(stack, sp.*);
+        settleRowAwareStack(state, stack, sp, effective_in, effective_out);
     }
 }
 
@@ -5200,11 +5224,17 @@ fn compileInstructions(
 
                     if (is_get) {
                         // get: pops 1 param, pushes 1 value (net 0)
-                        resetStackToPhysical(stack, sp.*);
+                        settleRowAwareStack(state, stack, sp, 1, 1);
                     } else {
-                        // with-parameter: body quotation has unknown stack effects
-                        sp.* -= 3;
-                        state.dynamic_call_emitted = true;
+                        // NOTE(ripta): with-parameter: The body quotation's row-variable output
+                        //              makes the stack opaque after the call. Collapse to a fresh
+                        //              row_region so instructions that consume the body's result
+                        //              keep compiling above it.
+                        if (exitFallsThrough(state.exit_kind)) {
+                            reloadBaseAfterDynamicCall(state);
+                            sp.* = 1;
+                            stack[0] = .{ .row_region = state.nextRowId() };
+                        }
                     }
                 } else if (isIteratorOp(name)) {
                     const opcode = iteratorOpcodeFromName(name).?;
@@ -5227,8 +5257,7 @@ fn compileInstructions(
                     const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.iterator_fn, ctx_val, opcode_const);
                     emitCallbackPostCheck(state, call_result, call_result, null, .none);
 
-                    sp.* = sp.* - effects.inputs + effects.outputs;
-                    resetStackToPhysical(stack, sp.*);
+                    settleRowAwareStack(state, stack, sp, effects.inputs, effects.outputs);
                 } else if (
                 // oh, yuck
                 state.self_name != null and
@@ -5479,17 +5508,7 @@ fn compileInstructions(
 
                         if (exitFallsThrough(state.exit_kind)) {
                             // Adjust abstract stack by specialized effect
-                            const had_row = sp.* > 0 and stack[0].isRowRegion();
-                            sp.* = sp.* - effective_in + effective_out;
-                            if (had_row and sp.* == 0) {
-                                // The call consumed all known entries above
-                                // the row_region. Reload physical sp and
-                                // keep the row_region for subsequent code.
-                                reloadBaseAfterDynamicCall(state);
-                                sp.* = 1;
-                            } else {
-                                resetStackToPhysical(stack, sp.*);
-                            }
+                            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
                         }
                     } else if (state.aot_mode and resolved.bounded_constraint != null and state.aot_slot_maps != null) {
                         // AOT bounded generic dispatch: emit the slot-indexed
@@ -5511,14 +5530,7 @@ fn compileInstructions(
                         }
 
                         if (exitFallsThrough(state.exit_kind)) {
-                            const had_row = sp.* > 0 and stack[0].isRowRegion();
-                            sp.* = sp.* - effective_in + effective_out;
-                            if (had_row and sp.* == 0) {
-                                reloadBaseAfterDynamicCall(state);
-                                sp.* = 1;
-                            } else {
-                                resetStackToPhysical(stack, sp.*);
-                            }
+                            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
                         }
                     } else if (state.aot_mode) {
                         // AOT mode: direct call by name or interpreter fallback.
@@ -5542,14 +5554,7 @@ fn compileInstructions(
                         }
 
                         if (exitFallsThrough(state.exit_kind)) {
-                            const had_row = sp.* > 0 and stack[0].isRowRegion();
-                            sp.* = sp.* - effective_in + effective_out;
-                            if (had_row and sp.* == 0) {
-                                reloadBaseAfterDynamicCall(state);
-                                sp.* = 1;
-                            } else {
-                                resetStackToPhysical(stack, sp.*);
-                            }
+                            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
                         }
                     } else if (resolved.bounded_constraint != null) {
                         // Bounded generic dispatch: emit the helper that
@@ -5573,14 +5578,7 @@ fn compileInstructions(
                         }
 
                         if (exitFallsThrough(state.exit_kind)) {
-                            const had_row = sp.* > 0 and stack[0].isRowRegion();
-                            sp.* = sp.* - effective_in + effective_out;
-                            if (had_row and sp.* == 0) {
-                                reloadBaseAfterDynamicCall(state);
-                                sp.* = 1;
-                            } else {
-                                resetStackToPhysical(stack, sp.*);
-                            }
+                            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
                         }
                     } else {
                         // Compound word: dispatch table indirect call
@@ -5648,8 +5646,7 @@ fn compileInstructions(
                             }
 
                             // Adjust abstract stack based on specialized effect
-                            sp.* = sp.* - effective_in + effective_out;
-                            resetStackToPhysical(stack, sp.*);
+                            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
                         }
                     }
                 }
@@ -13819,6 +13816,7 @@ test "row_region is distinct from other StackEntry variants" {
 
 test "call with no concrete effect inserts row_region and compiles" {
     // ( x quot -- )  body: call
+    //
     // No stack effect annotation, so quotation_slots is empty. The call
     // inserts row_region instead of setting dynamic_call_emitted, and the
     // word compiles successfully via the row_region finalization path.
@@ -13829,6 +13827,7 @@ test "call with no concrete effect inserts row_region and compiles" {
 
 test "push after row_region compiles successfully" {
     // ( x quot -- )  body: call 42
+    //
     // After call inserts row_region, the push_literal for 42 succeeds
     // because it operates above the opaque region.
     const instrs = makeInstructions(.{ "call", @as(i64, 42) });
@@ -13838,6 +13837,7 @@ test "push after row_region compiles successfully" {
 
 test "row_region with row-variable quotation effect compiles" {
     // ( ..a quot: ( ..x -- ..y ) -- )  body: call
+    //
     // Row-variable effect means buildQuotationSlotMap produces no entry;
     // call inserts row_region and the word compiles.
     const nested = StackEffect{
@@ -13858,6 +13858,7 @@ test "row_region with row-variable quotation effect compiles" {
 
 test "push after row_region then drop compiles" {
     // ( x quot -- )  body: call 42 drop
+    //
     // After call inserts row_region, push 42 adds above it, then drop
     // removes it. The row_region remains but sp is back to 1.
     const instrs = makeInstructions(.{ "call", @as(i64, 42), "drop" });
@@ -13867,6 +13868,7 @@ test "push after row_region then drop compiles" {
 
 test "multiple pushes above row_region compile" {
     // ( x quot -- )  body: call 1 2 3
+    //
     // Stacking values above the row_region succeeds.
     const instrs = makeInstructions(.{ "call", @as(i64, 1), @as(i64, 2), @as(i64, 3) });
     const result = try compileWord(&instrs, 2, 0, null, null, null, null, null);
@@ -13875,10 +13877,43 @@ test "multiple pushes above row_region compile" {
 
 test "dup on row_region entry returns NotCompilable" {
     // ( x quot -- )  body: call dup
+    //
     // After call inserts row_region at slot 0 with sp=1, dup tries to
     // copy slot 0 (the row_region) which returns NotCompilable.
     const instrs = makeInstructions(.{ "call", "dup" });
     const result = compileWord(&instrs, 2, 0, null, null, null, null, null);
+    try testing.expectError(IrCodegenError.NotCompilable, result);
+}
+
+test "with-parameter value-producing body inserts row_region and compiles" {
+    // ( value param quot -- )  body: with-parameter 42
+    //
+    // with-parameter's body has a row-variable output, so the call collapses
+    // the abstract stack to a row_region instead of abandoning compilation.
+    // The trailing push then compiles above the region, where it previously
+    // failed NC.5 (post_dynamic_call).
+    const instrs = makeInstructions(.{ "with-parameter", @as(i64, 42) });
+    const result = try compileWord(&instrs, 3, 0, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+}
+
+test "push above row_region after with-parameter then drop compiles" {
+    // ( value param quot -- )  body: with-parameter 42 drop
+    //
+    // Stacking a value above the row_region the with-parameter left and then
+    // dropping it back compiles.
+    const instrs = makeInstructions(.{ "with-parameter", @as(i64, 42), "drop" });
+    const result = try compileWord(&instrs, 3, 0, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+}
+
+test "dup on row_region entry left by with-parameter returns NotCompilable" {
+    // ( value param quot -- )  body: with-parameter dup
+    //
+    // After with-parameter inserts row_region at slot 0 with sp=1, dup tries
+    // to copy the row_region entry itself, which returns NotCompilable.
+    const instrs = makeInstructions(.{ "with-parameter", "dup" });
+    const result = compileWord(&instrs, 3, 0, null, null, null, null, null);
     try testing.expectError(IrCodegenError.NotCompilable, result);
 }
 

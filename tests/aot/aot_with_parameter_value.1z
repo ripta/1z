@@ -1,0 +1,29 @@
+\ A `with-parameter` whose body produces a value consumed by a following
+\ instruction compiles under runtime-image AOT: the body's row-variable output
+\ collapses the abstract stack to a row region, so the consumer compiles above
+\ it instead of failing NC.5 the way it did when with-parameter abandoned
+\ compilation. These results come from the compiled path and match the
+\ interpreter: a value-producing body printed after the binding ends, nested
+\ bindings that restore the outer value and then the default, and fresh
+\ per-invocation state across two calls to the same word.
+wp: parameter{ [ 0 ] } ;
+
+\ Bind wp to 99; the body reads it and produces it; the `.` after with-parameter
+\ consumes the produced value.
+99 wp [ wp get ] with-parameter .
+"---" print-line
+
+\ Nested dynamic scope: the inner binding is active inside, the outer value is
+\ restored after the inner binding ends, and the default returns once both end.
+1 wp [
+  2 wp [ wp get ] with-parameter .
+  wp get .
+] with-parameter
+wp get .
+"---" print-line
+
+\ Fresh per-invocation state: the same binding-and-producing word called twice
+\ with different values yields independent results.
+bind-show: ( n -- ) [ wp [ wp get 1 + ] with-parameter . ] ;
+5 bind-show
+10 bind-show
