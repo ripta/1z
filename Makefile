@@ -1,4 +1,4 @@
-.PHONY: all build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -32,10 +32,17 @@ COVERAGE_JOBS ?= 4
 
 all: build test
 
-build: ## Build the project (default)
+branch-info: ## Print branch, HEAD, and describe before building/testing
+	@if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		echo "[git] $$(git rev-parse --abbrev-ref HEAD) @ $$(git rev-parse --short HEAD) ($$(git describe --tags --always --dirty))"; \
+	else \
+		echo "[git] not in a git repository"; \
+	fi
+
+build: branch-info ## Build the project (default)
 	zig build --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 
-release: ## Build with optimizations
+release: branch-info ## Build with optimizations
 	zig build --release=fast --prefix $(ZIG_PREFIX) $(ZIG_CPU_ARG)
 
 run: build ## Build and run the 1z interpreter
@@ -45,7 +52,7 @@ fmt: build ## Format zig and 1z source files
 	timeout $(TARGET_TIMEOUT) zig fmt src/ build.zig
 	timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z fmt $$(find . \( -path './.zig-cache' -o -path './$(ZIG_PREFIX)' \) -prune -o -name '*.1z' -print)
 
-test: leak-goldens-check test-threads-1 test-threads-auto ## Run all tests under both --threads=1 and --threads=auto
+test: branch-info leak-goldens-check test-threads-1 test-threads-auto ## Run all tests under both --threads=1 and --threads=auto
 
 leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 	@if grep -rl 'error(gpa)' tests/ --include='*.golden'; then \
