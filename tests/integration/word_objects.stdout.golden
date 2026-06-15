@@ -4,6 +4,8 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 === native.>word returns raw array for native word ===
 Stack: [ ]
 Stack: [ { "dup" { { { "a" f f f } } { { "a" f f f } { "a" f f f } } } "Duplicate top of stack." { } t f { } f f f f f } ]
@@ -182,6 +184,18 @@ Stack: [ ]
 === words-with-marker finds parse-time words ===
 Stack: [ ]
 PASS: words-with-marker finds parse-time words
+Stack: [ ]
+=== words-with-marker finds a word by marker identity ===
+Stack: [ ]
+Stack: [ { word-info{ name: "wm-tagged-word" stack-effect: f doc: f markers: { <marker:wm-marker> } native?: f body: [ 99 ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 9 column: 39 } module: f provenance: f compiled?: f protocol: f } } ]
+Stack: [ { word-info{ name: "wm-tagged-word" stack-effect: f doc: f markers: { <marker:wm-marker> } native?: f body: [ 99 ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 9 column: 39 } module: f provenance: f compiled?: f protocol: f } } 1 ]
+PASS: words-with-marker finds the word tagged with the marker
+Stack: [ { word-info{ name: "wm-tagged-word" stack-effect: f doc: f markers: { <marker:wm-marker> } native?: f body: [ 99 ] methods: { } source-loc: source-loc{ file: "tests/integration/word_objects.1z" line: 9 column: 39 } module: f provenance: f compiled?: f protocol: f } } ]
+PASS: words-with-marker returns exactly the tagged word, matching by identity
+Stack: [ ]
+=== words-with-marker rejects a non-marker argument ===
+Stack: [ ]
+PASS: words-with-marker errors on a string argument
 Stack: [ ]
 === format-word-info includes name ===
 Stack: [ ]

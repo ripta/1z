@@ -134,13 +134,11 @@ help: ( symbol -- ) [
   if print flush
 ] ;
 
-\ Find words whose markers include the given marker name.
-\ Accepts a symbol or string: parse-time: words-with-marker
-\ Compares against the "<marker:NAME>" display form of each marker.
-words-with-marker: ( name -- array ) [
-  >string "<marker:" swap #append ">" #append
+\ Find words whose markers include the given marker. Compares by marker
+\ identity, so pass the marker value itself (e.g. parse-time words-with-marker).
+words-with-marker: ( m: marker -- array ) [
   all-words >iterator swap
-  [ swap markers>> >iterator [ inspect ] #map #collect swap #in? ] curry #filter
+  [ swap markers>> swap #in? ] curry #filter
   #collect
 ] ;
 

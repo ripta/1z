@@ -3,5 +3,6 @@
 \ The build now names the helper and recommends a private{ } block instead of
 \ failing with a generic message. Pins that diagnostic.
 outer: ( -- ) [ helper: ( -- n ) [ 42 ] ;
-  helper drop ] ;
+  helper drop
+] ;
 outer

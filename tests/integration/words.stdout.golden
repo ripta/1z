@@ -734,7 +734,7 @@ word-source ( symbol -- option )
 words ( -- )
 words-matching ( str -- array )
 words-with-arity ( n -- array )
-words-with-marker ( name -- array )
+words-with-marker ( m: marker -- array )
 xor ( ? ? -- ? )
 zero? ( x -- ? )
 Stack: [ ]

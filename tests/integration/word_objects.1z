@@ -5,6 +5,8 @@ use "testing" ;
 my-test-word: ( x -- y ) [ 1 + ] ;
 helper-word:         [ 42 ] ;
 no-effect-word:      [ 1 ] ;
+wm-marker:           make-marker ;
+wm-tagged-word:      wm-marker [ 99 ] ;
 all-words-array?:    [ all-words array? ] ;
 all-words-dup-count: [ all-words >iterator [ name>> "dup" = ] #filter #count ] ;
 all-words-first-name-string?: [ all-words #first name>> string? ] ;
@@ -132,7 +134,16 @@ nonexistent-xyz: word-source option:none? t "word-source returns none for unknow
 dup: word-source unwrap-or-throw f "word-source returns f source-loc for native" assert=
 
 "words-with-marker finds parse-time words" test-section
-parse-time: words-with-marker #len 0 > t "words-with-marker finds parse-time words" assert=
+parse-time words-with-marker #len 0 > t "words-with-marker finds parse-time words" assert=
+
+"words-with-marker finds a word by marker identity" test-section
+wm-marker words-with-marker
+dup >iterator [ name>> "wm-tagged-word" = ] #filter #count
+1 "words-with-marker finds the word tagged with the marker" assert=
+#len 1 "words-with-marker returns exactly the tagged word, matching by identity" assert=
+
+"words-with-marker rejects a non-marker argument" test-section
+[ "wm-marker" words-with-marker ] type-error: "words-with-marker errors on a string argument" assert-error-type
 
 "format-word-info includes name" test-section
 dup: >word-info format-word-info "dup" #in? t "format-word-info includes word name" assert=
