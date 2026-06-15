@@ -35,7 +35,7 @@ test-normalize-positive-denominator: ( -- ) [
 ] ;
 
 test-normalize-division-by-zero: ( -- ) [
-  [ 1 0 normalize-ratio ] "zero denominator throws" assert-error
+  [ 1 0 normalize-ratio ] division-by-zero: "zero denominator throws" assert-error-type
 ] ;
 
 \ --- make-ratio (raw, no reduction) ---

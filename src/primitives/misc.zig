@@ -458,6 +458,10 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
             try module.deps.put(alloc, entry.key_ptr.*, mod_word);
         } else {
             try module.words.put(alloc, entry.key_ptr.*, mod_word);
+            switch (word_def.action) {
+                .compound => |instrs| try ctx.stampQuotationBodies(instrs, module),
+                else => {},
+            }
             if (ctx.trace.trace_modules.define) {
                 var tw = trace_mod.TraceWriter.init();
                 trace_mod.traceModuleDefine(&tw, filename, entry.key_ptr.*, mod_word);

@@ -505,6 +505,11 @@ pub const Context = struct {
     /// PIC cache mapping instruction slice pointers to their PIC tables.
     /// Lazily populated on first generic dispatch through a compound word body.
     pic_cache: std.AutoHashMapUnmanaged(usize, *PicTable) = .{},
+    /// Maps a quotation/word body instruction-slice pointer to the module it was
+    /// written in, so a `use`-imported word called inside the body resolves even
+    /// when the defining module's deps frame is no longer on the frame stack.
+    /// Populated at module finalization; consulted only on the unknown-word path.
+    quotation_defining_module: std.AutoHashMapUnmanaged(usize, *const value_mod.Module) = .{},
     /// PIC entry for the current instruction, threaded through so native
     /// operators (arithmetic, comparison) can use it without signature changes.
     current_pic_entry: ?*PolymorphicCache = null,
@@ -1105,6 +1110,7 @@ pub const Context = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.pic_cache.deinit(self.allocator);
+        self.quotation_defining_module.deinit(self.allocator);
         // thrown_error, error_value boxes, bignum boxes (header and limbs),
         // and task error_obj boxes are all arena-allocated; they are
         // reclaimed by arena.deinit. The refcounted backing carried in an
@@ -1297,6 +1303,26 @@ pub const Context = struct {
             const last_idx = self.local_frames.items.len - 1;
             self.local_frames.items[last_idx].deinit(self.allocator);
             self.local_frames.items.len -= 1;
+        }
+    }
+
+    /// Record `module` as the defining module of this body and every quotation
+    /// literal nested inside it, keyed by the body's instruction-slice pointer.
+    /// Called at module finalization so a `use`-imported word called inside the
+    /// body can be re-resolved against the defining module's deps even after the
+    /// frame stack has moved on. Empty slices share a sentinel pointer and have
+    /// no words to resolve, so they are skipped.
+    pub fn stampQuotationBodies(self: *Context, instructions: []const Instruction, module: *const value_mod.Module) !void {
+        if (instructions.len == 0) return;
+        try self.quotation_defining_module.put(self.allocator, @intFromPtr(instructions.ptr), module);
+        for (instructions) |instr| {
+            switch (instr.op) {
+                .push_literal => |val| switch (val) {
+                    .quotation => |q| try self.stampQuotationBodies(q.instructions, module),
+                    else => {},
+                },
+                else => {},
+            }
         }
     }
 
@@ -4724,6 +4750,10 @@ pub const Context = struct {
     /// Supports tail call optimization: i.e., when the last instruction is a
     /// compound `call_word`, sets `tail_call_instructions` instead of recursing.
     fn executeInstructions(self: *Context, instructions: []const Instruction, pic_table: ?*PicTable) anyerror!void {
+        // Holds the defining module's deps frame after a lazy re-resolution of a
+        // `use`-imported word inside this body; popped on every exit from the body.
+        var lazy_deps_module: ?*const value_mod.Module = null;
+        defer if (lazy_deps_module) |mod| self.popModuleDepsFrameTraced(mod);
         for (instructions, 0..) |instr, idx| {
             if (self.debugger) |dbg| {
                 if (try dbg.shouldPause(instr, self)) {
@@ -4772,7 +4802,26 @@ pub const Context = struct {
                         if (self.benchmark) |b| {
                             b.updatePeakStackDepth(self.stack.depth());
                         }
-                    } else {
+                    } else lazy_resolve: {
+                        // The executing body may belong to a module whose deps
+                        // frame is no longer active (e.g. a quotation called
+                        // after a cross-module tail call popped it). Push its
+                        // deps frame once and re-resolve the failed word in
+                        // place; hold the frame for the rest of the body.
+                        // One-shot per body.
+                        if (lazy_deps_module == null) {
+                            if (self.quotation_defining_module.get(@intFromPtr(instructions.ptr))) |mod| {
+                                try self.pushModuleDepsFrame(mod);
+                                lazy_deps_module = mod;
+                                if (self.lookupWordForExecution(name)) |word| {
+                                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                                        .proceed => {},
+                                        .tail_call_set => return,
+                                    }
+                                    break :lazy_resolve;
+                                }
+                            }
+                        }
                         if (self.trace.trace_resolve and trace_mod.matchesPattern(name, self.trace.trace_resolve_pattern)) {
                             var tw = trace_mod.TraceWriter.init();
                             trace_mod.traceResolve(&tw, name, .not_found);

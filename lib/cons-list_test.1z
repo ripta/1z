@@ -36,11 +36,11 @@ test-tail-multi: ( -- ) [
 ] ;
 
 test-head-empty-throws: ( -- ) [
-  [ nil head ] "head of empty list throws" assert-error
+  [ nil head ] index-out-of-bounds: "head of empty list throws" assert-error-type
 ] ;
 
 test-tail-empty-throws: ( -- ) [
-  [ nil tail ] "tail of empty list throws" assert-error
+  [ nil tail ] index-out-of-bounds: "tail of empty list throws" assert-error-type
 ] ;
 
 \ --- Array conversion ---
@@ -81,11 +81,11 @@ test-nth-last: ( -- ) [
 ] ;
 
 test-nth-out-of-range-throws: ( -- ) [
-  [ 1 2 3 nil cons cons cons 5 list-nth ] "nth past the end throws" assert-error
+  [ 1 2 3 nil cons cons cons 5 list-nth ] index-out-of-bounds: "nth past the end throws" assert-error-type
 ] ;
 
 test-nth-empty-throws: ( -- ) [
-  [ nil 0 list-nth ] "nth on empty list throws" assert-error
+  [ nil 0 list-nth ] index-out-of-bounds: "nth on empty list throws" assert-error-type
 ] ;
 
 \ --- reverse ---
@@ -182,4 +182,31 @@ test-foldr-empty: ( -- ) [
 
 test-foldr-subtract: ( -- ) [
   2 1 2 3 nil cons cons cons 0 [ - ] list-foldr "foldr folds right, tail to head" assert=
+] ;
+
+\ --- imported-word resolution inside a quotation across a module boundary ---
+\ assert-error-type tail-calls into the testing module, which pops this test
+\ module's deps frame. A quotation handed to it must still resolve `head` and
+\ the other cons-list words it was written with, rather than throwing
+\ unknown-word.
+
+test-imported-word-error-type: ( -- ) [
+  "imported-word deps across module boundary" test-section
+  [ nil head ] index-out-of-bounds: "head of empty list reports its real error type" assert-error-type
+] ;
+
+test-imported-word-any-error: ( -- ) [
+  [ nil head ] "head of empty list throws some error" assert-error
+] ;
+
+test-imported-word-via-recover: ( -- ) [
+  index-out-of-bounds: [ nil head ] [ error-type: @get ] recover "recover sees the real error type" assert=
+] ;
+
+test-prelude-word-error-type: ( -- ) [
+  [ 1 0 / ] division-by-zero: "prelude word quotation is unaffected" assert-error-type
+] ;
+
+test-nested-quotation-imported-word: ( -- ) [
+  [ [ nil head ] call ] index-out-of-bounds: "nested quotation resolves the imported word" assert-error-type
 ] ;
