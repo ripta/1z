@@ -2,10 +2,17 @@
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-Stack: [ H{ name: "Alice" help: f } ]
+Stack: [ ]
+Stack: [ H{ verbose: f name: "Alice" help: f } ]
 PASS: positional arg parsed
-Stack: [ H{ name: "Alice" help: f } ]
+Stack: [ H{ verbose: f name: "Alice" help: f } ]
 PASS: help defaults to false
+Stack: [ ]
+Stack: [ H{ verbose: t name: "Alice" help: f } ]
+PASS: long flag --verbose sets value
+Stack: [ ]
+Stack: [ H{ verbose: f name: "Bob" help: f } ]
+PASS: second call positional starts fresh
 Stack: [ ]
 All flags tests complete!
 Stack: [ ]

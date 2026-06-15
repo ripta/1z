@@ -19,7 +19,12 @@ required: make-marker ;
 positional: make-marker ;
 
 \ Shared state
-flag-registry: M{ } ;
+flag-registry: ( -- registry: mutable-map ) M{ } ;
+
+\ Monotonic counter assigning each registered flag a definition order. Shared
+\ across define-flag calls, so it lives at module scope rather than nested inside
+\ define-flag's body where AOT discovery could not see it.
+flag-order: ( -- order: mutable-map ) M{ n: 0 } ;
 
 \ flag{
 \
@@ -35,8 +40,6 @@ flag{: parse-time [
 \
 \ Registers the flag in the global registry.
 define-flag: ( name fields markers -- ) [
-  flag-order: M{ n: 0 } ;
-
   [ ] make-mutable-map
   swap markers: swap @set!
   swap descriptor: swap @set!
@@ -50,22 +53,25 @@ define-flag: ( name fields markers -- ) [
   flag-order swap n: swap @set! drop
 ] ;
 
-\ Parses command-line arguments according to registered flags.
-parse-flags: ( args description -- result-hash ) [
-  sym-to-str: [ >string dup #len 1 - 0 swap #slice ] ;
+\ Private local scope for parse-flags: helpers, dynamic parameters, and the
+\ per-call positional state. Hoisted to module scope so the toolchain can
+\ discover them; pf-pos-state is a parameter bound fresh per call rather than a
+\ shared map, so positional indexing does not leak across invocations.
+private{
+  sym-to-str: ( name: symbol -- string ) [ >string dup #len 1 - 0 swap #slice ] ;
 
-  is-positional-flag: ( name -- ? ) [
+  is-positional-flag: ( name: symbol -- ? ) [
     flag-registry swap @get
     "markers" @get
     positional [ = ] curry #filter #count 0 >
   ] ;
 
-  positional-names: [
+  positional-names: ( -- names: array ) [
     flag-registry @keys
     [ is-positional-flag ] #filter #collect
   ] ;
 
-  find-flag-by-short: [
+  find-flag-by-short: ( short: string -- name ) [
     flag-registry @keys
     f swap
     [
@@ -88,7 +94,7 @@ parse-flags: ( args description -- result-hash ) [
     nip
   ] ;
 
-  print-flag-help: ( name -- ) [
+  print-flag-help: ( name: symbol -- ) [
     dup flag-registry swap @get
     dup "markers" @get
     swap "descriptor" @get
@@ -126,7 +132,7 @@ parse-flags: ( args description -- result-hash ) [
     stderr "\n" >bytes stream-write drop
   ] ;
 
-  print-help: [
+  print-help: ( description: string -- ) [
     "Usage: " swap #append
     stderr swap stream-write-string drop
     stderr "\n" >bytes stream-write drop
@@ -136,11 +142,11 @@ parse-flags: ( args description -- result-hash ) [
   ] ;
 
   mth-src: parameter{ [ [ ] make-mutable-map ] } ;
-  mth-copy-key: ( hash key -- hash' ) [
+  mth-copy-key: ( hash: hash key -- hash' ) [
     dup mth-src get swap @get
     @set
   ] ;
-  mmap-to-hash: [
+  mmap-to-hash: ( m: mutable-map -- result: hash ) [
     dup mth-src [
       @keys
       H{ }
@@ -148,32 +154,32 @@ parse-flags: ( args description -- result-hash ) [
     ] with-parameter
   ] ;
 
-  process-named-flag: [
+  process-named-flag: ( name: string -- ) [
     dup flag-registry swap @has?
-    [ pf-result get swap t swap @set! drop ]
+    [ pf-result get swap t @set! drop ]
     [ drop ]
     if
   ] ;
 
-  process-short-flag: [
+  process-short-flag: ( short: string -- ) [
     find-flag-by-short
     dup f =
     [ drop ]
-    [ pf-result get swap t swap @set! drop ]
+    [ pf-result get swap t @set! drop ]
     if
   ] ;
 
-  process-positional: [
+  process-positional: ( arg: string -- ) [
     positional-names
-    pf-pos-state "idx" @get
+    pf-pos-state get "idx" @get
     over #len over <=
     [ 2drop drop ]
     [
       swap over #nth
       nip
       pf-result get -rot> swap @set! drop
-      pf-pos-state "idx" @get 1 +
-      pf-pos-state swap idx: swap @set! drop
+      pf-pos-state get "idx" @get 1 +
+      pf-pos-state get swap idx: swap @set! drop
     ]
     if
   ] ;
@@ -198,7 +204,7 @@ parse-flags: ( args description -- result-hash ) [
     if
   ] ;
 
-  check-required: [
+  check-required: ( -- ) [
     flag-registry @keys
     [
       dup flag-registry swap @get
@@ -221,7 +227,7 @@ parse-flags: ( args description -- result-hash ) [
     ] #each
   ] ;
 
-  apply-conversions: [
+  apply-conversions: ( -- ) [
     pf-result get @keys
     [
       dup flag-registry swap @has?
@@ -250,7 +256,7 @@ parse-flags: ( args description -- result-hash ) [
     ] #each
   ] ;
 
-  set-defaults: [
+  set-defaults: ( -- ) [
     flag-registry @keys
     [
       dup pf-result get swap @has?
@@ -269,33 +275,33 @@ parse-flags: ( args description -- result-hash ) [
 
   pf-result:    parameter{ [ [ ] make-mutable-map ] } ;
   pf-desc:      parameter{ [ "" ] } ;
-  pf-pos-state: M{ idx: 0 } ;
+  pf-pos-state: parameter{ [ [ ] make-mutable-map idx: 0 @set! ] } ;
+}
 
-  \
-  \ === Main ===
-  \
-
-  pf-pos-state 0 idx: swap @set! drop
-
+\ Parses command-line arguments according to registered flags.
+parse-flags: ( args: array description: string -- result: hash ) [
   swap
   [ ] make-mutable-map
 
   pf-result [
     swap pf-desc [
+      [ ] make-mutable-map idx: 0 @set!
+      pf-pos-state [
 
-      dup { "--help" } = over { "-h" } = or
-      [
-        drop pf-desc get print-help 0 sys-exit
-      ] when
+        dup { "--help" } = over { "-h" } = or
+        [
+          drop pf-desc get print-help 0 sys-exit
+        ] when
 
-      [ process-arg ] #each
+        [ process-arg ] #each
 
-      check-required
-      apply-conversions
-      set-defaults
+        check-required
+        apply-conversions
+        set-defaults
 
-      pf-result get mmap-to-hash
+        pf-result get mmap-to-hash
 
+      ] with-parameter
     ] with-parameter
   ] with-parameter
 ] ;

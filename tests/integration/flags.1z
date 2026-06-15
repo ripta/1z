@@ -6,10 +6,20 @@ use "flags" ;
 "flag parsing" test-section
 
 help: flag{ description: "Show help" short: "h" } ;
+verbose: flag{ description: "Verbose mode" short: "v" } ;
 name: required positional flag{ type: string: description: "Your name" } ;
 
 { "Alice" } "Test program" parse-flags
 dup "name" @get "Alice" "positional arg parsed" assert=
 "help" @get f "help defaults to false" assert=
+
+\ A long-form named flag sets its value to true.
+{ "Alice" "--verbose" } "Test program" parse-flags
+"verbose" @get t "long flag --verbose sets value" assert=
+
+\ A second call must resolve its positional at index 0, not continue from the
+\ first call's index, confirming per-call state is fresh.
+{ "Bob" } "Test program" parse-flags
+"name" @get "Bob" "second call positional starts fresh" assert=
 
 "All flags tests complete!" print-line
