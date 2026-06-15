@@ -1,0 +1,4 @@
+protocol-bounded dispatch benchmark (runtime-image AOT)
+  iterations per path: 2000
+  concrete elapsed_ns: 2164844000
+  bounded  elapsed_ns: 2073560000

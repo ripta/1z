@@ -1,0 +1,45 @@
+\ Benchmark: protocol-bounded dispatch overhead under runtime-image AOT.
+\
+\ Companion to tests/benchmark/protocol_dispatch.1z, sharing the protocol
+\ setup but built to run under AOT (`--emit-runtime-image`). Compares the
+\ AOT-compiled satisfies-and-dispatch helper path (protocol-bounded call
+\ site) against direct PIC dispatch (concrete-typed call site).
+\
+\ Two differences from the JIT bench, both forced by AOT constraints:
+\   - No `compile!`: runtime code compilation is banned in every AOT
+\     artifact class; freeze compiles the call sites at build time instead.
+\   - Single-shot `benchmark` plus a concrete-arity labeled report instead
+\     of `run-benchmarks` / `print-benchmark-report`. The report formatters
+\     have a variable-arity (row-variable) effect that the AOT compiler
+\     cannot model, so a word that calls them underflows the abstract stack
+\     and fails to compile. Reading `elapsed_ns` off the benchmark hash and
+\     printing it keeps every word concrete-arity.
+
+incrementable: protocol{ increment: } ;
+step-count: virtual{ fixnum } ;
+
+increment: generic ( x: incrementable -- y ) [ drop 0 >step-count ] ;
+increment: method{ step-count } [ unmake-step-count 1 + >step-count ] ;
+
+\ Concrete-typed call site: AOT compiles a direct PIC dispatch, no protocol check.
+call-concrete: ( x: step-count -- y ) [ increment ] ;
+
+\ Protocol-bounded call site: AOT compiles the satisfies-and-dispatch helper.
+call-bounded: ( x: incrementable -- y ) [ increment ] ;
+
+iters: ( -- fixnum ) const [ 2000 ] ;
+
+\ Warm up both paths before measuring.
+0 >step-count call-concrete drop
+0 >step-count call-bounded drop
+
+report-dispatch: ( -- ) [
+  "protocol-bounded dispatch benchmark (runtime-image AOT)" print-line
+  "  iterations per path: " print iters .
+  "  concrete elapsed_ns: " print
+  [ iters [ 0 >step-count call-concrete drop ] times ] benchmark "elapsed_ns" @get .
+  "  bounded  elapsed_ns: " print
+  [ iters [ 0 >step-count call-bounded drop ] times ] benchmark "elapsed_ns" @get .
+] ;
+
+report-dispatch

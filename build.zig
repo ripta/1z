@@ -1146,6 +1146,8 @@ const AotTestEntry = struct {
     build_flags_path: []const u8,
     env_entries: []const AotEnvEntry,
     env_path: []const u8,
+    flags_lines: ?[]const u8,
+    flags_path: []const u8,
 };
 
 fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEntry {
@@ -1290,6 +1292,16 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             }
         } else |_| {}
 
+        // The `.flags` sidecar is parsed only for `--test-timeout=N`, which
+        // raises this test's run-wrapper timeout. The flags are not passed to
+        // the standalone binary, which takes no such argument.
+        var flags_lines: ?[]const u8 = null;
+        const flags_path = b.fmt("tests/aot/{s}.flags", .{name_without_ext});
+        if (aot_dir.openFile(b.fmt("{s}.flags", .{name_without_ext}), .{})) |file| {
+            defer file.close();
+            flags_lines = file.readToEndAlloc(b.allocator, 1024 * 1024) catch null;
+        } else |_| {}
+
         entries.append(b.allocator, .{
             .name_without_ext = name_without_ext,
             .file_path = file_path,
@@ -1319,6 +1331,8 @@ fn collectAotTestEntries(b: *std.Build, aot_dir: *std.fs.Dir) ![]const AotTestEn
             .build_flags_path = build_flags_path,
             .env_entries = env_entries.items,
             .env_path = env_path,
+            .flags_lines = flags_lines,
+            .flags_path = flags_path,
         }) catch return error.OutOfMemory;
     }
 
@@ -1548,13 +1562,17 @@ fn addAotTests(
         const chmod = b.addSystemCommand(&.{ "chmod", "+x" });
         chmod.addFileArg(aot_binary);
 
-        // Execute the compiled binary
+        // Execute the compiled binary. A `.flags` sidecar may raise this
+        // test's run-wrapper timeout via `--test-timeout=N` (wrapper gets the
+        // +1 buffer that the integration harness uses); absent a sidecar the
+        // global per-case timeout is unchanged.
+        const run_timeout_secs = if (testTimeoutSeconds(te.flags_lines)) |t| t +| 1 else timeout_secs;
         const exec_label = b.fmt("aot run: {s}", .{te.name_without_ext});
         const exec_run = addWrappedCommand(
             b,
             helper,
             exec_label,
-            timeout_secs,
+            run_timeout_secs,
             verbose_test_reporting,
             slow_test_threshold_ms,
             null,
@@ -1567,6 +1585,7 @@ fn addAotTests(
         exec_run.expectExitCode(expected_exit);
         for (te.env_entries) |env| exec_run.setEnvironmentVariable(env.key, env.value);
         if (te.env_entries.len > 0) exec_run.addFileInput(b.path(te.env_path));
+        if (te.flags_lines != null) exec_run.addFileInput(b.path(te.flags_path));
 
         if (has_diff) {
             addGoldenDiff(b, test_step, exec_run.captureStdOut(), if (te.has_stdout_golden) te.stdout_golden_path else null, te.file_path);
@@ -1690,6 +1709,15 @@ fn configureIntegrationRun(
                 const trimmed = std.mem.trim(u8, flag, " \t\r");
                 if (trimmed.len == 0) continue;
                 if (std.mem.eql(u8, trimmed, "@raw")) continue;
+                // A valid `--test-timeout=N` only drives the wrapper timeout
+                // (computed separately via testTimeoutSeconds); it is not a
+                // flag the raw subcommand accepts, so keep it out of the
+                // assembled argv. An invalid value is left in place so a test
+                // can verify that 1z itself rejects it.
+                if (std.mem.startsWith(u8, trimmed, "--test-timeout=")) {
+                    const parsed = std.fmt.parseInt(u32, trimmed["--test-timeout=".len..], 10) catch null;
+                    if (parsed != null) continue;
+                }
                 if (std.mem.eql(u8, trimmed, "{file}")) {
                     run.addFileArg(b.path(te.file_path));
                 } else {

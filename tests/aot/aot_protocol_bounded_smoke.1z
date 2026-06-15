@@ -1,0 +1,42 @@
+use "testing" ;
+
+\ Smoke benchmark: protocol-bounded dispatch overhead under runtime-image AOT.
+\
+\ Verifies that an AOT-compiled protocol-bounded call site
+\ (satisfies-and-dispatch helper) is within 10x of the same call site
+\ annotated with a concrete type (PIC dispatch). This catches
+\ order-of-magnitude regressions in the AOT helper or the freeze emission
+\ path. Shares its protocol setup with tests/benchmark/protocol_dispatch.1z
+\ and mirrors tests/integration/jit_protocol_bounded_smoke.1z one mode over.
+\
+\ Built --emit-runtime-image: the bounded call site still compiles to the
+\ helper, while the interpreter stays linked for the benchmark machinery.
+\ The JIT bench's `compile!` lines are dropped because runtime code
+\ compilation is banned in every AOT artifact class.
+
+incrementable: protocol{ increment: } ;
+step-count: virtual{ fixnum } ;
+
+increment: generic ( x: incrementable -- y ) [ drop 0 >step-count ] ;
+increment: method{ step-count } [ unmake-step-count 1 + >step-count ] ;
+
+\ Concrete-typed call site: AOT compiles a direct PIC dispatch, no protocol check.
+call-concrete: ( x: step-count -- y ) [ increment ] ;
+
+\ Protocol-bounded call site: AOT compiles the satisfies-and-dispatch helper.
+call-bounded: ( x: incrementable -- y ) [ increment ] ;
+
+iters: ( -- fixnum ) const [ 5000 ] ;
+
+\ Warm up both paths before measuring.
+0 >step-count call-concrete drop
+0 >step-count call-bounded drop
+
+check-overhead: ( -- ) [
+  [ iters [ 0 >step-count call-concrete drop ] times ] benchmark "elapsed_ns" @get
+  [ iters [ 0 >step-count call-bounded drop ] times ] benchmark "elapsed_ns" @get
+  swap 10 * <=
+  "protocol-bounded overhead within 10x of concrete" assert-true
+] ;
+
+check-overhead

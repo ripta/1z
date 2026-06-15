@@ -1,4 +1,5 @@
 @raw
+--test-timeout=30
 lint
 --stdlib-path=lib
 tests/fixtures/lint/deep-nesting.1z

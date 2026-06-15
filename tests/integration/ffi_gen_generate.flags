@@ -1,1 +1,2 @@
 --no-show-stack
+--test-timeout=30

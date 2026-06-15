@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -410,6 +410,10 @@ benchmark-scanner: build ## Run scanner vs direct benchmark across interpreter m
 
 benchmark-word-resolution: build ## Run word-resolution benchmark across interpreter modes
 	@scripts/benchmark-word-resolution.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/word_resolution.1z
+
+benchmark-protocol-dispatch: build ## Build and run the protocol-bounded dispatch benchmark under runtime-image AOT
+	./$(ZIG_PREFIX)/bin/1z build --emit-runtime-image tests/benchmark/protocol_dispatch_aot.1z -o tests/benchmark/protocol_dispatch_aot.aot
+	./tests/benchmark/protocol_dispatch_aot.aot > tests/benchmark/protocol_dispatch_aot.aot.sample
 
 # NOTE(ripta): The focused split-based, index-based, flat (struct-free), and `while`-driven harnesses
 #              build successfully with `--emit-runtime-image`. Their AOT runtime currently errors at
