@@ -5,9 +5,9 @@ use "flags" ;
 
 "flag parsing" test-section
 
-help: flag{ description: "Show help" short: "h" } ;
+help:    flag{ description: "Show help" short: "h" } ;
 verbose: flag{ description: "Verbose mode" short: "v" } ;
-name: required positional flag{ type: string: description: "Your name" } ;
+name:    required positional flag{ type: string: description: "Your name" } ;
 
 { "Alice" } "Test program" parse-flags
 dup "name" @get "Alice" "positional arg parsed" assert=

@@ -1,0 +1,23 @@
+\ Defining a command-line flag builds a chain of mutable_map literals that
+\ reference each other -- flag-registry holds the flag name keyed to a
+\ registry entry, whose "descriptor" key holds the flag descriptor. In the
+\ runtime image these become mutable_map slots that reference each other as
+\ forward slot indices (a lower slot referencing a higher one). The loader
+\ populated those slots in a single pass, allocating and filling each slot's
+\ entries before moving on, so a forward reference resolved through a
+\ still-null table cell and the AOT binary aborted before main ran with a
+\ bare "unknown runtime error". Allocating every slot's map before decoding
+\ any entries lets the chain resolve in either direction.
+\
+\ This exercises flag definition and parse-flags end to end under
+\ interpreter-free AOT: two flags are registered and a literal argument list
+\ is parsed, so the set flag reads t and the unset flag reads f.
+
+use "flags" ;
+
+verbose: flag{ description: "Verbose output" short: "v" } ;
+name: flag{ description: "A name" } ;
+
+{ "--verbose" } "Test program" parse-flags
+dup "verbose" @get .
+"name" @get .

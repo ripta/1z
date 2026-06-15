@@ -1106,19 +1106,21 @@ fn populateParameterSlots(
 }
 
 /// Walk the mutable_map description table and patch
-/// `onez_image_mutable_map_slots[]`. For each row: allocate a fresh
-/// `*MutableMap` via `MutableMap.create(ctx.allocator)`, decode the
-/// entries blob (u32 entry_count followed by u32 key_len + key bytes +
-/// image-mode serialized Value per entry), and put each key/value pair
-/// into the map. The map's initial refcount of 1 is donated to the slot;
-/// the slot holds a strong reference for the process lifetime. Entry
-/// values are retained before storage so the map's destroy path remains
-/// ownership-balanced even though it never fires in practice.
+/// `onez_image_mutable_map_slots[]`. A first pass allocates a fresh
+/// `*MutableMap` via `MutableMap.create(ctx.allocator)` for every slot and
+/// patches the slot table; a second pass decodes each row's entries blob
+/// (u32 entry_count followed by u32 key_len + key bytes + image-mode
+/// serialized Value per entry) and puts each key/value pair into the map.
+/// The two passes let an entry reference any other mutable_map slot in
+/// either direction -- the flag descriptor chain
+/// `flag-registry -> registry-entry -> descriptor` is a forward reference
+/// from a lower slot to a higher one. Each map's initial refcount of 1 is
+/// donated to the slot, which holds a strong reference for the process
+/// lifetime.
 ///
 /// Runs before `populateTaggedSlots` so a tagged-inner value carrying a
-/// `.mutable_map` resolves correctly; entries that themselves reference
-/// later mutable_map slots or any tagged slot are not supported by the
-/// single-pass ordering, which matches the existing constraint on
+/// `.mutable_map` resolves correctly; an entry that references a tagged
+/// slot is still unsupported, matching the existing constraint on
 /// tagged-slot self-references.
 fn populateMutableMapSlots(
     ctx: *Context,
@@ -1155,17 +1157,29 @@ fn populateMutableMapSlots(
         .mutable_map_slot_count = ctx.image_mutable_map_slot_count,
     };
 
+    // Pass 1: allocate every slot's map and patch the slot table before
+    // any entry is decoded. A map entry may reference another mutable_map
+    // slot in either direction -- the flag descriptor chain
+    // `flag-registry -> registry-entry -> descriptor` is a forward
+    // reference from a lower slot to a higher one -- so every slot must
+    // hold a live map before deserialization runs, or the forward
+    // reference resolves through a still-null table cell. Each map's
+    // initial refcount of 1 is donated to the slot.
     var i: u32 = 0;
     while (i < header.mutable_map_slot_count) : (i += 1) {
         const row = descs[i];
         if (row.slot >= header.mutable_map_slot_count) return LoaderError.BadSlotIndex;
-
         const mmap = value_mod.MutableMap.create(arena) catch return LoaderError.OutOfMemory;
-
-        // Patch the slot now so any entry whose value resolves through
-        // this same slot table (e.g., recursive references) sees the
-        // allocated map. Initial refcount is 1; the slot owns it.
         slot_table[row.slot] = mmap;
+    }
+
+    // Pass 2: decode each slot's entries. Every mutable_map slot is now
+    // populated, so a `value_tag_mutable_map_slot` reference resolves to a
+    // live map regardless of slot ordering.
+    i = 0;
+    while (i < header.mutable_map_slot_count) : (i += 1) {
+        const row = descs[i];
+        const mmap = slot_table[row.slot] orelse return LoaderError.BadSlotIndex;
 
         const bytes = if (row.entries_bytecode) |p|
             if (row.entries_bytecode_len > 0) p[0..row.entries_bytecode_len] else &[_]u8{}
@@ -2486,6 +2500,88 @@ test "loadIntoContext: tagged slot reconstructs Value via VirtualType back-refer
     try testing.expectEqualStrings("color:red", tagged_ptr.tagged.tag.name);
     try testing.expect(tagged_ptr.tagged.inner.* == .symbol);
     try testing.expectEqualStrings("red", tagged_ptr.tagged.inner.symbol);
+}
+
+test "populateMutableMapSlots: lower slot forward-references a higher slot" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // A dummy MutableMap used only as the encoding key that maps to slot
+    // index 1; released after encoding. The loader allocates its own maps.
+    const key_map = try value_mod.MutableMap.create(testing.allocator);
+    defer key_map.header.release();
+
+    var mm_index: std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32) = .{};
+    defer mm_index.deinit(testing.allocator);
+    try mm_index.put(testing.allocator, key_map, 1);
+
+    var tv_index: std.AutoHashMapUnmanaged(*const value_mod.TypeValue, u32) = .{};
+    defer tv_index.deinit(testing.allocator);
+    var st_index: std.AutoHashMapUnmanaged(*const value_mod.StructType, u32) = .{};
+    defer st_index.deinit(testing.allocator);
+    var mk_index: std.AutoHashMapUnmanaged(*const value_mod.Marker, u32) = .{};
+    defer mk_index.deinit(testing.allocator);
+    var pm_index: std.AutoHashMapUnmanaged(*const value_mod.Parameter, u32) = .{};
+    defer pm_index.deinit(testing.allocator);
+    var tg_index: std.AutoHashMapUnmanaged(instruction_bytecode.TaggedKey, u32) = .{};
+    defer tg_index.deinit(testing.allocator);
+
+    const enc_maps = instruction_bytecode.SlotEncodingMaps{
+        .typevalue_slot_index = &tv_index,
+        .struct_type_slot_index = &st_index,
+        .marker_slot_index = &mk_index,
+        .parameter_slot_index = &pm_index,
+        .tagged_slot_index = &tg_index,
+        .mutable_map_slot_index = &mm_index,
+    };
+
+    const one: u32 = 1;
+
+    // Slot 0: one entry "ref" -> mutable_map_slot 1, a forward reference to
+    // a higher-numbered slot that the single-pass loader had not yet
+    // allocated when it decoded this slot's entries.
+    var enc0: std.ArrayListUnmanaged(u8) = .{};
+    defer enc0.deinit(testing.allocator);
+    try enc0.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    const klen0: u32 = 3;
+    try enc0.appendSlice(testing.allocator, std.mem.asBytes(&klen0));
+    try enc0.appendSlice(testing.allocator, "ref");
+    try instruction_bytecode.serializeValueIntoForImage(&enc0, .{ .mutable_map = key_map }, testing.allocator, &enc_maps);
+
+    // Slot 1: one entry "v" -> fixnum 42.
+    var enc1: std.ArrayListUnmanaged(u8) = .{};
+    defer enc1.deinit(testing.allocator);
+    try enc1.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    const klen1: u32 = 1;
+    try enc1.appendSlice(testing.allocator, std.mem.asBytes(&klen1));
+    try enc1.appendSlice(testing.allocator, "v");
+    try instruction_bytecode.serializeValueIntoForImage(&enc1, .{ .fixnum = 42 }, testing.allocator, &enc_maps);
+
+    const descs = [_]MutableMapDescription{
+        .{ .slot = 0, .entries_bytecode = enc0.items.ptr, .entries_bytecode_len = @intCast(enc0.items.len) },
+        .{ .slot = 1, .entries_bytecode = enc1.items.ptr, .entries_bytecode_len = @intCast(enc1.items.len) },
+    };
+
+    var mm_storage: [2]?*value_mod.MutableMap = .{ null, null };
+
+    var header = emptyHeader();
+    header.mutable_map_slot_count = 2;
+    header.mutable_map_descriptions = &descs;
+
+    try loadIntoContext(&ctx, &header, .{ .mutable_maps = &mm_storage }, null);
+
+    const slot0 = mm_storage[0] orelse return error.TestUnexpectedResult;
+    const slot1 = mm_storage[1] orelse return error.TestUnexpectedResult;
+
+    const ref = slot0.map.get("ref") orelse return error.TestUnexpectedResult;
+    try testing.expect(ref == .mutable_map);
+    // The forward reference resolves to the very map the loader allocated
+    // for slot 1, not a fresh or null one.
+    try testing.expect(ref.mutable_map == slot1);
+
+    const v = slot1.map.get("v") orelse return error.TestUnexpectedResult;
+    try testing.expect(v == .fixnum);
+    try testing.expectEqual(@as(i64, 42), v.fixnum);
 }
 
 test "loadIntoContext: bytecode body decodes into compound action" {
