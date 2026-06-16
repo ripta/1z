@@ -1,0 +1,6 @@
+\ Library exporting one cleanly-compilable arithmetic word, imported by
+\ quot_doubler with `use`. Used by aot_strict_quotation_imported_word to check
+\ that strict interpreter-free AOT freeze resolves a quotation body's
+\ use-imported word against its defining module.
+
+double: ( n -- n ) [ 2 * ] ;

@@ -1,0 +1,7 @@
+\ Imports double with `use` and writes a first-class quotation that calls it.
+\ Under strict interpreter-free AOT, freeze must resolve `double` against this
+\ module's deps to compile the [ 5 double ] body instead of falling back.
+
+use "./imported_double.1z" ;
+
+run-doubler: ( -- fixnum ) [ [ 5 double ] call ] ;

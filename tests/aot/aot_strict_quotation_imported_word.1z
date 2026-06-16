@@ -1,0 +1,9 @@
+\ Regression: under interpreter-free AOT, a quotation body that calls a word
+\ brought in with `use` compiles instead of being rejected. quot_doubler writes
+\ [ 5 double ] after `use`-importing double; freeze pushes every loaded module's
+\ deps frame during discovery, so `double` resolves against quot_doubler and the
+\ body bakes a direct call. The printed 10 confirms the resolved word executed.
+
+use "./support/quot_doubler.1z" ;
+
+run-doubler .
