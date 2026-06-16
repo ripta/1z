@@ -1,3 +1,4 @@
 \ A quotation-local definition that is never referenced should warn.
 outer: ( -- n ) [ helper: [ 1 2 + ] ;
-  42 ] ;
+  42
+] ;

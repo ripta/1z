@@ -99,6 +99,48 @@ fn recoverLocalName(instructions: []const Instruction, semi_index: usize) ?Local
     return null;
 }
 
+/// A quotation-local definition encountered while walking a body, together with
+/// whether it has been referenced. Scoped to a single body walk, so combinator
+/// arms get their own fresh set.
+const LocalDef = struct { name: []const u8, line: usize, referenced: bool };
+
+/// Mark a local as referenced when a nested quotation literal within the body
+/// calls it. A reference at any nesting depth counts, since a closure over an
+/// outer local is an intentional pattern. Only nested quotations are descended;
+/// top-level references are handled inline during the body walk, so that path's
+/// behavior is left untouched. Run after the full walk records every local, so
+/// a forward reference where a quotation literal precedes the local's `;`
+/// definition still counts.
+fn markNestedLocalReferences(locals: []LocalDef, instructions: []const Instruction) void {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| if (val == .quotation) {
+                markLocalReferencesDeep(locals, val.quotation.instructions);
+            },
+            else => {},
+        }
+    }
+}
+
+fn markLocalReferencesDeep(locals: []LocalDef, instructions: []const Instruction) void {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .call_word, .call_word_direct => {
+                const name = instr.op.callTargetName() orelse continue;
+                for (locals) |*ld| {
+                    if (!ld.referenced and std.mem.eql(u8, ld.name, name)) {
+                        ld.referenced = true;
+                        break;
+                    }
+                }
+            },
+            .push_literal => |val| if (val == .quotation) {
+                markLocalReferencesDeep(locals, val.quotation.instructions);
+            },
+        }
+    }
+}
+
 /// Derived settings that control how `InferenceEngine` runs a static-analysis
 /// pass. Produced by `readCheckPragmas` from the current pragma stack so that
 /// both the CLI `--check` path and the `onez_check` C API honor pragmas
@@ -624,9 +666,9 @@ pub const InferenceEngine = struct {
         var dead_code_cause: ?DeadCodeCause = null;
 
         // Quotation-local definitions encountered while walking this body, with
-        // whether each is referenced by a direct call in the same body. Scoped
-        // to this invocation, so combinator arms get their own fresh set.
-        const LocalDef = struct { name: []const u8, line: usize, referenced: bool };
+        // whether each is referenced by a direct call in the same body or by a
+        // call inside a nested quotation literal. Scoped to this invocation, so
+        // combinator arms get their own fresh set.
         var locals: std.ArrayListUnmanaged(LocalDef) = .{};
         defer locals.deinit(self.allocator);
 
@@ -869,7 +911,10 @@ pub const InferenceEngine = struct {
         }
 
         // The body walked cleanly to completion, so a local with no recorded
-        // reference is genuinely unused in this quotation.
+        // reference is genuinely unused in this quotation. A reference inside a
+        // nested quotation literal counts as usage, so scan those now that every
+        // local is known.
+        if (locals.items.len > 0) markNestedLocalReferences(locals.items, instructions);
         for (locals.items) |ld| {
             if (ld.referenced) continue;
             try self.emitDiagnostic(.{

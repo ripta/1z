@@ -1,0 +1,4 @@
+\ A quotation-local referenced only inside a returned nested quotation is used.
+make-it: ( -- quot ) [ step: [ 1 + ] ;
+  [ step ]
+] ;

@@ -1,0 +1,4 @@
+\ A quotation-local captured by a closure nested two levels deep is used.
+build: ( -- quot ) [ tag: [ "x" ] ;
+  [ [ tag ] ]
+] ;
