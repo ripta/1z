@@ -1,0 +1,5 @@
+\ Receives a quotation written in another module and runs it here, where that
+\ module's deps frame is no longer active. Catches whatever it raises and prints
+\ the error type, so the caller observes which word the quotation resolved to.
+
+report-error: ( 'a -- ) [ [ call ] [ error-type: @get . ] recover ] ;

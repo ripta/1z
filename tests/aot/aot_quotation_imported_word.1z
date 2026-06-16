@@ -1,0 +1,11 @@
+\ Regression: a code_ptr-less first-class quotation written in qmod calls
+\ `head`, a word qmod imported with `use "cons-list"`. qmod-run tail-calls
+\ report-error in another module, popping qmod's deps frame, and report-error
+\ runs the quotation there. Under --emit-runtime-image the quotation stays
+\ code_ptr-less and runs through the interpreter, which resolves `head` against
+\ the loaded runtime image, so the quotation raises the real index-out-of-bounds:
+\ of `head` on an empty list rather than failing with unknown-word.
+
+use "./support/qmod.1z" ;
+
+qmod-run

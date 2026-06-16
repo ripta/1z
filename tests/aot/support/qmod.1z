@@ -1,0 +1,10 @@
+\ Companion module for aot_quotation_imported_word. It imports `head` from
+\ cons-list and writes a quotation that calls it, then tail-calls report-error
+\ in another module. The tail call pops this module's deps frame, so resolving
+\ `head` inside the quotation when report-error finally runs it depends on the
+\ defining-module side table.
+
+use "cons-list" ;
+use "./runner.1z" ;
+
+qmod-run: ( -- ) [ [ nil head ] report-error ] ;

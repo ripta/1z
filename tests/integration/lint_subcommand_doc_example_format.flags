@@ -1,4 +1,5 @@
 @raw
 lint
 --stdlib-path=lib
+--test-timeout=60
 tests/fixtures/lint/doc-example-format.1z
