@@ -34,9 +34,14 @@ t "reuseaddr set-sockopt did not error" assert-true
 [
   "224.0.0.251" 39801 make-addr:udp udp-bind
   dup 1 make-sockopt:reuseaddr set-sockopt
-  dup "224.0.0.251" parse-ipv4 join-multicast
+  \ Join on the loopback interface so delivery matches the sender's loopback
+  \ egress below, rather than the host's default multicast interface.
+  dup "224.0.0.251" parse-ipv4 "127.0.0.1" parse-ipv4 join-multicast-on
 
   udp-open
+  \ Direct the outgoing multicast onto loopback so the send doesn't depend on the
+  \ host's default multicast route, which could point at a non-loopback interface
+  dup "127.0.0.1" parse-ipv4 make-sockopt:multicast-if set-sockopt
 
   \ Spawn receiver
   over unmake-udp-socket drop [

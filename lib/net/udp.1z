@@ -34,7 +34,8 @@ udp-connect: ( udp-socket addr -- connected-udp-socket ) [
 \ -- sockopt enum and multicast support --
 
 sockopt-membership: struct{ group iface } ;
-sockopt-value: struct{ value } ;
+sockopt-value:      struct{ value } ;
+sockopt-iface:      struct{ iface: ip } ;
 sockopt: enum{
   add-membership:  sockopt-membership
   drop-membership: sockopt-membership
@@ -42,6 +43,7 @@ sockopt: enum{
   broadcast:       sockopt-value
   multicast-loop:  sockopt-value
   multicast-ttl:   sockopt-value
+  multicast-if:    sockopt-iface
 } ;
 
 \\ Build an ip_mreq byte array from group and iface ip values.
@@ -80,6 +82,12 @@ set-sockopt: ( udp-socket sockopt -- ) [
     ]
     sockopt:multicast-ttl: [
       [ "IPPROTO_IP" sock-const "IP_MULTICAST_TTL" sock-const ] dip
+      native.setsockopt
+    ]
+    sockopt:multicast-if: [
+      \ fd iface-ip
+      unmake-ip
+      [ "IPPROTO_IP" sock-const "IP_MULTICAST_IF" sock-const ] dip
       native.setsockopt
     ]
   }

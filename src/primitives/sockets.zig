@@ -695,6 +695,8 @@ fn nativeSockConst(ctx: *Context) anyerror!void {
         ip_multicast_loop
     else if (std.mem.eql(u8, name, "IP_MULTICAST_TTL"))
         ip_multicast_ttl
+    else if (std.mem.eql(u8, name, "IP_MULTICAST_IF"))
+        ip_multicast_if
     else {
         helpers.setErrorContext(ctx, "unknown socket constant: {s}", .{name});
         return error.InvalidArgument;
@@ -736,6 +738,14 @@ const ip_multicast_ttl: i64 = switch (native_os) {
     .freebsd, .netbsd, .openbsd, .dragonfly => 10,
     .freestanding => 0,
     else => @compileError("unsupported OS for IP_MULTICAST_TTL"),
+};
+
+const ip_multicast_if: i64 = switch (native_os) {
+    .macos, .ios, .tvos, .watchos, .visionos => 9,
+    .linux => 32,
+    .freebsd, .netbsd, .openbsd, .dragonfly => 9,
+    .freestanding => 0,
+    else => @compileError("unsupported OS for IP_MULTICAST_IF"),
 };
 
 // =============================================================================
