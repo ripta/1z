@@ -1,0 +1,1 @@
+tests/integration/check_used_local.1z:3: warning: outer: cannot verify outer: callee helper has unknown effect

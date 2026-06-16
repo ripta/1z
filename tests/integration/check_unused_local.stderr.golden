@@ -1,0 +1,1 @@
+tests/integration/check_unused_local.1z:2: warning: outer: unused quotation-local definition 'helper'

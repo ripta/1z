@@ -70,6 +70,35 @@ pub const Diagnostic = struct {
     message: []const u8,
 };
 
+/// A quotation-local definition (`name: [ body ] ;`) compiles to an instruction
+/// sequence: the name symbol (deepest), optional metadata producers, the body
+/// quotation, then a `;` call. Given the index of the `;` call, recover the
+/// defined name by scanning backward over the body and its metadata. Returns
+/// null for any shape that is not a `name: [ body ] ;` definition, so detection
+/// stays conservative and only fires on the quotation-body form.
+const LocalDefName = struct { name: []const u8, line: usize };
+fn recoverLocalName(instructions: []const Instruction, semi_index: usize) ?LocalDefName {
+    if (semi_index == 0) return null;
+    var i = semi_index - 1; // the body/value item the `;` consumes from the top
+    switch (instructions[i].op) {
+        .push_literal => |val| if (val != .quotation) return null,
+        else => return null,
+    }
+    while (i > 0) {
+        i -= 1;
+        switch (instructions[i].op) {
+            .push_literal => |val| switch (val) {
+                .doc_string, .stack_effect => continue,
+                .symbol => |s| return .{ .name = s, .line = instructions[i].line },
+                else => return null,
+            },
+            // A marker (or `const`) before the body is produced by a word call.
+            .call_word, .call_word_direct => continue,
+        }
+    }
+    return null;
+}
+
 /// Derived settings that control how `InferenceEngine` runs a static-analysis
 /// pass. Produced by `readCheckPragmas` from the current pragma stack so that
 /// both the CLI `--check` path and the `onez_check` C API honor pragmas
@@ -594,7 +623,14 @@ pub const InferenceEngine = struct {
         const DeadCodeCause = union(enum) { underflow, terminal_call: []const u8, terminal_branch };
         var dead_code_cause: ?DeadCodeCause = null;
 
-        for (instructions) |instr| {
+        // Quotation-local definitions encountered while walking this body, with
+        // whether each is referenced by a direct call in the same body. Scoped
+        // to this invocation, so combinator arms get their own fresh set.
+        const LocalDef = struct { name: []const u8, line: usize, referenced: bool };
+        var locals: std.ArrayListUnmanaged(LocalDef) = .{};
+        defer locals.deinit(self.allocator);
+
+        for (instructions, 0..) |instr, idx| {
             if (dead_code) {
                 if (!dead_code_warned) {
                     const message = switch (dead_code_cause orelse .underflow) {
@@ -632,8 +668,24 @@ pub const InferenceEngine = struct {
                 },
                 .call_word, .call_word_direct => {
                     const name = instr.op.callTargetName().?;
+
+                    // A `;` call defines a quotation-local; record it (still let
+                    // `;` fall through to normal handling below as a native).
+                    if (std.mem.eql(u8, name, ";")) {
+                        if (recoverLocalName(instructions, idx)) |def| {
+                            try locals.append(self.allocator, .{ .name = def.name, .line = def.line, .referenced = false });
+                        }
+                    }
+
                     const word_def = self.lookupWord(name);
                     if (word_def == null) {
+                        // A reference to one of this body's quotation-locals.
+                        for (locals.items) |*ld| {
+                            if (std.mem.eql(u8, ld.name, name)) {
+                                ld.referenced = true;
+                                break;
+                            }
+                        }
                         if (std.mem.indexOfScalar(u8, name, '.') != null) {
                             if (self.resolveQualifiedName(name)) |mod_word| {
                                 if (mod_word.polymorphic) {
@@ -814,6 +866,23 @@ pub const InferenceEngine = struct {
                 self.last_unknown_is_polymorphic = uncertain_is_polymorphic;
             }
             return .unknown;
+        }
+
+        // The body walked cleanly to completion, so a local with no recorded
+        // reference is genuinely unused in this quotation.
+        for (locals.items) |ld| {
+            if (ld.referenced) continue;
+            try self.emitDiagnostic(.{
+                .word_name = caller.word_name,
+                .source_file = caller.source_file,
+                .source_line = ld.line,
+                .severity = .warning,
+                .message = try std.fmt.allocPrint(
+                    self.allocator,
+                    "unused quotation-local definition '{s}'",
+                    .{ld.name},
+                ),
+            });
         }
 
         if (out_stack) |os| {
