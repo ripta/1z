@@ -1,0 +1,16 @@
+\ IDN host transformation tests (ICU FFI bindings)
+
+use "testing" ;
+use "i18n/idn" ;
+
+"idn ASCII pass-through" test-section
+
+\ (name-to-ascii) returns ( string errors ); assert the errors bitmask first,
+\ which consumes it and leaves the converted string for the next assertion.
+"example.com" (name-to-ascii)
+0 "ASCII encode errors clear" assert=
+"example.com" "ASCII encode unchanged" assert=
+
+"example.com" (name-to-unicode)
+0 "ASCII decode errors clear" assert=
+"example.com" "ASCII decode unchanged" assert=

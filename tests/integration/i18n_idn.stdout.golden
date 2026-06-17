@@ -1,0 +1,12 @@
+=== idn ASCII pass-through ===
+Stack: [ ]
+Stack: [ "example.com" 0 ]
+PASS: ASCII encode errors clear
+Stack: [ "example.com" ]
+PASS: ASCII encode unchanged
+Stack: [ ]
+Stack: [ "example.com" 0 ]
+PASS: ASCII decode errors clear
+Stack: [ "example.com" ]
+PASS: ASCII decode unchanged
+Stack: [ ]

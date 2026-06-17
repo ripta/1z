@@ -1,0 +1,109 @@
+\ lib/i18n/idn.1z - Internationalized domain (IDN) host transformation
+\
+\ UTS #46 (IDNA 2008 compatibility processing) host transformation,
+\ delegating to ICU's uidna_* family via FFI. Encodes Unicode hostnames to
+\ their ASCII-compatible (ACE / Punycode) form and back.
+\
+\ The UTS #46 instance is opened once at module load with the browser-default
+\ nontransitional flag set and shared across all calls.
+\
+\ macOS exports uidna_nameToASCII_UTF8 but not uidna_nameToUnicode_UTF8, so the
+\ decode direction uses the UTF-16 uidna_nameToUnicode and rides on the shared
+\ UChar conversion helpers in i18n/icu.
+
+use "ffi" ;
+use "i18n/icu" ;
+use "bytes" ;
+
+\ --- Library loading and FFI bindings ---
+
+\ uidna_* lives in the ICU common library: libicucore on macOS, libicuuc
+\ elsewhere. Both export unsuffixed symbol names.
+
+sys-info "os" @get "macos" = [
+  "icucore" lib-open
+] [
+  "icuuc" lib-open
+] if
+
+ffi-def{
+  (uidna-open-uts46):      "uidna_openUTS46" ffi{ u32 inout-i32 -> ptr }
+  (uidna-close):           "uidna_close" ffi{ ptr -> void }
+  (uidna-name-to-ascii):   "uidna_nameToASCII_UTF8" ffi{ ptr ptr i32 ptr i32 ptr inout-i32 -> i32 }
+  (uidna-name-to-unicode): "uidna_nameToUnicode" ffi{ ptr ptr i32 ptr i32 ptr inout-i32 -> i32 }
+} call "icu-idn-raw" swap >module reexport
+
+\ --- UTS #46 instance ---
+
+\\ Browser-default nontransitional flag set:
+\\ NONTRANSITIONAL_TO_ASCII(0x10) | NONTRANSITIONAL_TO_UNICODE(0x20)
+\\ | USE_STD3_RULES(0x02) | CHECK_BIDI(0x04) | CHECK_CONTEXTJ(0x08) = 0x3E.
+(uts46-flags): const [ 62 ] ;
+
+\\ The shared UTS #46 instance, opened once at module load.
+(uts46): const [
+  (uts46-flags) 0 (uidna-open-uts46)
+  swap (icu-check)
+] ;
+
+\ --- UIDNAInfo struct ---
+
+\ UIDNAInfo is 16 bytes: int16 size at offset 0, uint32 errors at offset 4.
+\ ICU requires size be pre-set to sizeof(UIDNAInfo)=16 before each call.
+
+\\ Allocate a zeroed UIDNAInfo buffer with its size field initialized.
+\\ Returns the byte-array and its raw FFI pointer.
+(uidna-info-buf): ( -- byte-array ptr ) [
+  16 bytes-alloc 0 16 #poke16!
+  dup bytes>ffi-ptr+len drop
+] ;
+
+\ --- Conversion cores ---
+
+\\ Encode a Unicode hostname to its ASCII-compatible (ACE) form via UTS #46.
+\\ Returns the ASCII string and the UIDNAInfo.errors bitmask (0 = clean).
+(name-to-ascii): ( string -- string errors ) [
+  >bytes
+  dup #len 4 * 64 + bytes-alloc
+  (uidna-info-buf) drop
+  \ Stack: ib(2) db(1) infob(0)
+  (uts46)
+  3 pick-n bytes>ffi-ptr+len drop
+  4 pick-n #len
+  4 pick-n bytes>ffi-ptr+len drop
+  1 pick-n 4 * 64 +
+  5 pick-n bytes>ffi-ptr+len drop
+  0
+  (uidna-name-to-ascii)
+  \ Stack: ib db infob status retlen
+  swap (icu-check)
+  \ Stack: ib db infob retlen
+  2 pick-n swap bytes-resize! bytes>
+  \ Stack: ib db infob str
+  over 4 #peek32
+  [ nip nip nip ] dip
+] ;
+
+\\ Decode an ASCII-compatible (ACE) hostname back to Unicode via UTS #46.
+\\ Returns the Unicode string and the UIDNAInfo.errors bitmask (0 = clean).
+(name-to-unicode): ( string -- string errors ) [
+  utf8>uchar
+  dup 32 + 2 * bytes-alloc
+  (uidna-info-buf) drop
+  \ Stack: ub(3) ulen(2) db(1) infob(0)
+  (uts46)
+  4 pick-n bytes>ffi-ptr+len drop
+  4 pick-n
+  4 pick-n bytes>ffi-ptr+len drop
+  6 pick-n 32 +
+  5 pick-n bytes>ffi-ptr+len drop
+  0
+  (uidna-name-to-unicode)
+  \ Stack: ub ulen db infob status retlen
+  swap (icu-check)
+  \ Stack: ub ulen db infob retlen
+  2 pick-n swap uchar>utf8
+  \ Stack: ub ulen db infob str
+  over 4 #peek32
+  [ nip nip nip nip ] dip
+] ;
