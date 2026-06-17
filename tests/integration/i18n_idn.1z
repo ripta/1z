@@ -14,3 +14,46 @@ use "i18n/idn" ;
 "example.com" (name-to-unicode)
 0 "ASCII decode errors clear" assert=
 "example.com" "ASCII decode unchanged" assert=
+
+"idn host encoding" test-section
+
+"例え.jp" encode-host "xn--r8jz45g.jp" "CJK host to ACE" assert=
+"пример.рф" encode-host "xn--e1afmkfd.xn--p1ai" "Cyrillic host to ACE" assert=
+"münchen.de" encode-host "xn--mnchen-3ya.de" "mixed-script host to ACE" assert=
+
+"idn host decoding" test-section
+
+"xn--r8jz45g.jp" decode-host "例え.jp" "ACE host to Unicode" assert=
+
+"idn host round-trip" test-section
+
+"例え.jp" encode-host decode-host "例え.jp" "CJK round-trip" assert=
+"пример.рф" encode-host decode-host "пример.рф" "Cyrillic round-trip" assert=
+
+"idn STD3 rejection" test-section
+
+[ "a_b.com" encode-host ] idn-error: "underscore host rejected" assert-error-type
+
+"idn error carries bitmask" test-section
+
+[ "a_b.com" encode-host ] [
+  "data" @get
+  dup fixnum? "bitmask is a fixnum" assert-true
+  0 /= "bitmask is non-zero" assert-true
+] recover
+
+"idn option-returning encode" test-section
+
+"例え.jp" encode-host?
+dup option:some? "encode-host? some on valid" assert-true
+option:some> "xn--r8jz45g.jp" "encode-host? unwraps to ACE" assert=
+
+"a_b.com" encode-host? option:none? "encode-host? none on STD3 rejection" assert-true
+
+"idn option-returning decode" test-section
+
+"xn--r8jz45g.jp" decode-host?
+dup option:some? "decode-host? some on valid" assert-true
+option:some> "例え.jp" "decode-host? unwraps to Unicode" assert=
+
+"xn--" decode-host? option:none? "decode-host? none on malformed ACE" assert-true

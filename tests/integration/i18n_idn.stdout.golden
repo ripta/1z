@@ -10,3 +10,48 @@ PASS: ASCII decode errors clear
 Stack: [ "example.com" ]
 PASS: ASCII decode unchanged
 Stack: [ ]
+=== idn host encoding ===
+Stack: [ ]
+PASS: CJK host to ACE
+Stack: [ ]
+PASS: Cyrillic host to ACE
+Stack: [ ]
+PASS: mixed-script host to ACE
+Stack: [ ]
+=== idn host decoding ===
+Stack: [ ]
+PASS: ACE host to Unicode
+Stack: [ ]
+=== idn host round-trip ===
+Stack: [ ]
+PASS: CJK round-trip
+Stack: [ ]
+PASS: Cyrillic round-trip
+Stack: [ ]
+=== idn STD3 rejection ===
+Stack: [ ]
+PASS: underscore host rejected
+Stack: [ ]
+=== idn error carries bitmask ===
+Stack: [ ]
+PASS: bitmask is a fixnum
+PASS: bitmask is non-zero
+Stack: [ ]
+=== idn option-returning encode ===
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: "xn--r8jz45g.jp" }> ]
+PASS: encode-host? some on valid
+Stack: [ <option:some option-payload{ value: "xn--r8jz45g.jp" }> ]
+PASS: encode-host? unwraps to ACE
+Stack: [ ]
+PASS: encode-host? none on STD3 rejection
+Stack: [ ]
+=== idn option-returning decode ===
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: "例え.jp" }> ]
+PASS: decode-host? some on valid
+Stack: [ <option:some option-payload{ value: "例え.jp" }> ]
+PASS: decode-host? unwraps to Unicode
+Stack: [ ]
+PASS: decode-host? none on malformed ACE
+Stack: [ ]

@@ -58,6 +58,12 @@ ffi-def{
   dup bytes>ffi-ptr+len drop
 ] ;
 
+\ --- Error handling ---
+
+\\ IDN error marker for make-error. Raised when the UTS #46 UIDNAInfo.errors
+\\ bitmask is non-zero; the bitmask is carried as the error's data field.
+EIDNError: [ idn-error: ] ;
+
 \ --- Conversion cores ---
 
 \\ Encode a Unicode hostname to its ASCII-compatible (ACE) form via UTS #46.
@@ -106,4 +112,42 @@ ffi-def{
   \ Stack: ub ulen db infob str
   over 4 #peek32
   [ nip nip nip nip ] dip
+] ;
+
+\ --- Public host transformation words ---
+
+\\ Encode a Unicode hostname to its ASCII-compatible (ACE / Punycode) form via
+\\ UTS #46 nontransitional processing. Throws EIDNError carrying the
+\\ UIDNAInfo.errors bitmask on malformed input.
+encode-host: ( string -- string ) [
+  (name-to-ascii)
+  dup 0 = [ drop ] [
+    nip "IDNA host encoding failed" EIDNError make-error throw
+  ] if
+] ;
+
+\\ Decode an ASCII-compatible (ACE) hostname back to Unicode via UTS #46
+\\ nontransitional processing. Throws EIDNError carrying the UIDNAInfo.errors
+\\ bitmask on malformed input.
+decode-host: ( string -- string ) [
+  (name-to-unicode)
+  dup 0 = [ drop ] [
+    nip "IDNA host decoding failed" EIDNError make-error throw
+  ] if
+] ;
+
+\\ Option-returning form of encode-host. Returns option:some wrapping the
+\\ ACE form on success, or option:none on malformed input.
+encode-host?: ( string -- option ) [
+  [ encode-host >option:some ]
+  [ drop option:none ]
+  recover
+] ;
+
+\\ Option-returning form of decode-host. Returns option:some wrapping the
+\\ Unicode form on success, or option:none on malformed input.
+decode-host?: ( string -- option ) [
+  [ decode-host >option:some ]
+  [ drop option:none ]
+  recover
 ] ;
