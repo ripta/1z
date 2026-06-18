@@ -4196,21 +4196,24 @@ fn compileInstructions(
                 } else if (val == .boolean) {
                     stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, val.boolean) };
                     sp.* += 1;
-                } else if (state.aot_mode and val == .string and state.aot_string_literals != null) {
-                    // Construct the string-literal Value directly at its
-                    // destination slot: write the tag, the slice pointer, and
-                    // the length via ValueLayout offsets. The slice payload
+                } else if (state.aot_mode and (val == .string or val == .symbol) and state.aot_string_literals != null) {
+                    // Construct the string- or symbol-literal Value directly at
+                    // its destination slot: write the tag, the slice pointer,
+                    // and the length via ValueLayout offsets. The slice payload
                     // points at the `onez_lit_N` static const char[] emitted in
                     // the C preamble, so there is no boundary crossing and no
                     // per-literal allocation -- the body lives in the binary's
                     // read-only section. This shifts ownership: the literal's
                     // backing memory now outlives its containing context rather
                     // than living in the per-context arena. That is safe because
-                    // strings are immutable and any operation needing an owned
-                    // mutable copy already round-trips through an explicit
-                    // conversion; nothing frees a string Value's slice.
+                    // strings and symbols are both immutable and any operation
+                    // needing an owned mutable copy already round-trips through
+                    // an explicit conversion; nothing frees a string or symbol
+                    // Value's slice. A symbol Value is structurally identical to
+                    // a string Value -- same slice payload at the same offsets,
+                    // only the tag differs -- so the same construction applies.
                     const lits = state.aot_string_literals.?;
-                    const str_data = val.string;
+                    const str_data = if (val == .string) val.string else val.symbol;
                     const lit_id = lits.items.len;
 
                     // The slice pointer is stored into a `uintptr_t` slot, and
@@ -4242,7 +4245,7 @@ fn compileInstructions(
                         state.tag_offset_const,
                         state.payload_offset_const,
                         slice_len_offset_const,
-                        emitTagConst(ctx, .string),
+                        if (val == .string) emitTagConst(ctx, .string) else emitTagConst(ctx, .symbol),
                         sym_ref,
                         len_const,
                     );
@@ -4250,7 +4253,7 @@ fn compileInstructions(
                     // Record the literal so the C preamble emits its static array.
                     lits.append(std.heap.page_allocator, .{
                         .data = str_data,
-                        .is_symbol = false,
+                        .is_symbol = val == .symbol,
                     }) catch {};
 
                     stack[sp.*] = .{ .raw_at_slot = sp.* };

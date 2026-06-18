@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -127,7 +127,7 @@ aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
 	chmod +x $(_aot_tmp) && \
 	timeout $(AOT_TIMEOUT) $(_aot_tmp)
 
-aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check ## Run AOT build integration tests
+aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check ## Run AOT build integration tests
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directives at word and quotation function entries
@@ -266,6 +266,27 @@ aot-string-literal-direct-check: build ## Verify AOT string literals are constru
 		grep -E 'onez_push_string\(' "$$saved" || true; exit 1; \
 	fi; \
 	echo "PASS: AOT string literals are constructed inline via ValueLayout offsets with no jitPushString trampoline"
+
+aot-symbol-literal-direct-check: build ## Verify AOT symbol literals are constructed inline with no jitPushSymbol trampoline or allocation
+	$(eval _bin := $(shell mktemp /tmp/1z-symbol-literal-XXXXXX))
+	$(eval _stderr := $(shell mktemp /tmp/1z-symbol-literal-stderr-XXXXXX))
+	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
+	./$(ZIG_PREFIX)/bin/1z build --save-temps -o $(_bin) tests/aot/aot_symbol_literal_direct.1z 2>$(_stderr); \
+	saved=$$(grep -m1 '^Saved: ' $(_stderr) | sed 's/^Saved: //'); \
+	if [ -z "$$saved" ]; then \
+		echo "FAIL: build did not report a saved C file (missing --save-temps output)"; \
+		cat $(_stderr); exit 1; \
+	fi; \
+	trap "rm -f $(_bin) $(_stderr) $$saved" EXIT; \
+	if ! grep -qE '\*\(\(uintptr_t\*\)d_[0-9]+\) = \(uintptr_t\)onez_lit_[0-9]+;' "$$saved"; then \
+		echo "FAIL: emitted C does not construct a symbol literal slice pointer inline"; \
+		grep -E 'onez_lit_[0-9]+;' "$$saved" || true; exit 1; \
+	fi; \
+	if grep -E 'onez_push_symbol\(' "$$saved" | grep -vq '^static int32_t onez_push_symbol'; then \
+		echo "FAIL: emitted C still calls the onez_push_symbol trampoline for a symbol literal"; \
+		grep -E 'onez_push_symbol\(' "$$saved" || true; exit 1; \
+	fi; \
+	echo "PASS: AOT symbol literals are constructed inline via ValueLayout offsets with no jitPushSymbol trampoline"
 
 aot-symbol-verify: build ## Verify nm + samply + perf consume verbatim 1z names from AOT binaries
 	$(eval _bin := $(shell mktemp /tmp/1z-symbol-verify-XXXXXX))

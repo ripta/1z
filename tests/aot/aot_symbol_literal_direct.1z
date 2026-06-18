@@ -1,0 +1,13 @@
+\ Symbol literals are constructed directly at their stack slot in AOT mode:
+\ the Value's tag, slice pointer, and length are written via ValueLayout
+\ offsets, with the slice pointing at the binary's static const char[]. No
+\ jitPushSymbol trampoline crossing and no per-literal allocation. A symbol
+\ Value is structurally identical to a string Value -- same slice payload,
+\ only the tag differs. Correct output proves the directly-constructed symbol
+\ behaves identically to the interpreter across printing, inspect, equality,
+\ inequality, and use as a hash key.
+foo: .
+foo: inspect print-line
+foo: foo: = .
+foo: bar: = .
+H{ } foo: 1 @set bar: 2 @set foo: @get .
