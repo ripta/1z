@@ -185,6 +185,23 @@ pub fn build(b: *std.Build) void {
     const run_freestanding_capi_unit_tests = b.addRunArtifact(freestanding_capi_unit_tests);
     run_freestanding_capi_unit_tests.setName("freestanding capi unit tests");
 
+    // Hosted C-API (embedding library) unit tests. Exposed under its own
+    // `capi-test` step rather than `test` because several tests load stdlib
+    // modules and need -Dembed-stdlib=true to resolve them without a disk
+    // stdlib symlink relative to the test binary.
+    const hosted_capi_test_module = createCommonModule(b, target, optimize, options, b.path("src/capi.zig"), embedded_stdlib_path);
+    const hosted_capi_unit_tests = b.addTest(.{
+        .root_module = hosted_capi_test_module,
+        .test_runner = .{
+            .path = b.path("src/unit_test_runner.zig"),
+            .mode = .simple,
+        },
+    });
+    const run_hosted_capi_unit_tests = b.addRunArtifact(hosted_capi_unit_tests);
+    run_hosted_capi_unit_tests.setName("hosted capi unit tests");
+    const capi_test_step = b.step("capi-test", "Run hosted C-API embedding-library unit tests");
+    capi_test_step.dependOn(&run_hosted_capi_unit_tests.step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_freestanding_capi_unit_tests.step);

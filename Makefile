@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -83,6 +83,14 @@ test-threads-auto: ## Run all tests with default --threads=auto for integration 
 
 unit-test: ## Run unit tests
 	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
+
+capi-test: ## Run hosted C-API embedding-library unit tests
+	timeout $(TARGET_TIMEOUT) zig build capi-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true
+
+capi-release-run: ## Build the embedding example against a ReleaseFast lib1z and run it
+	zig build --release=fast --prefix $(ZIG_PREFIX)/release $(ZIG_CPU_ARG)
+	zig cc -o $(ZIG_PREFIX)/release/embed examples/embed.c -Iinclude $(ZIG_PREFIX)/release/clib/lib1z.a -lffi
+	./$(ZIG_PREFIX)/release/embed
 
 embed-stdlib-test: ## Run unit tests with -Dembed-stdlib=true
 	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dembed-stdlib=true
