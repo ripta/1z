@@ -1,0 +1,14 @@
+\ String literals are constructed directly at their stack slot in AOT mode:
+\ the Value's tag, slice pointer, and length are written via ValueLayout
+\ offsets, with the slice pointing at the binary's static const char[]. No
+\ jitPushString trampoline crossing and no per-literal allocation. Correct
+\ output proves the directly-constructed Value behaves identically to the
+\ interpreter across printing, concatenation, length, slicing, the empty
+\ string, and a literal carrying an embedded quote and escape.
+"hello" print-line
+"hello" " " #append "world" #append print-line
+"test" #len .
+"abcdef" 1 3 #slice print-line
+"" #len .
+"" print-line
+"a\"b\\c" print-line

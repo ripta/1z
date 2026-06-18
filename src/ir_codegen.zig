@@ -1145,6 +1145,26 @@ fn emitBoxPayload(
     c._ir_STORE(ctx, payload_addr, val);
 }
 
+/// Store a tag and a slice (ptr + len) payload into a Value at dest_addr.
+/// Used to construct string/symbol literal Values inline from a static
+/// pointer and length, with no heap allocation.
+fn emitBoxSlice(
+    ctx: *c.ir_ctx,
+    dest_addr: c.ir_ref,
+    tag_offset_const: c.ir_ref,
+    payload_offset_const: c.ir_ref,
+    slice_len_offset_const: c.ir_ref,
+    tag_const: c.ir_ref,
+    ptr_val: c.ir_ref,
+    len_val: c.ir_ref,
+) void {
+    emitBoxTag(ctx, dest_addr, tag_offset_const, tag_const);
+    const ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_addr, payload_offset_const);
+    c._ir_STORE(ctx, ptr_addr, ptr_val);
+    const len_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dest_addr, slice_len_offset_const);
+    c._ir_STORE(ctx, len_addr, len_val);
+}
+
 /// Result of numeric tag validation: the loaded tag and per-type booleans.
 const NumericValidation = struct {
     is_fixnum: c.ir_ref,
@@ -4175,6 +4195,65 @@ fn compileInstructions(
                     sp.* += 1;
                 } else if (val == .boolean) {
                     stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, val.boolean) };
+                    sp.* += 1;
+                } else if (state.aot_mode and val == .string and state.aot_string_literals != null) {
+                    // Construct the string-literal Value directly at its
+                    // destination slot: write the tag, the slice pointer, and
+                    // the length via ValueLayout offsets. The slice payload
+                    // points at the `onez_lit_N` static const char[] emitted in
+                    // the C preamble, so there is no boundary crossing and no
+                    // per-literal allocation -- the body lives in the binary's
+                    // read-only section. This shifts ownership: the literal's
+                    // backing memory now outlives its containing context rather
+                    // than living in the per-context arena. That is safe because
+                    // strings are immutable and any operation needing an owned
+                    // mutable copy already round-trips through an explicit
+                    // conversion; nothing frees a string Value's slice.
+                    const lits = state.aot_string_literals.?;
+                    const str_data = val.string;
+                    const lit_id = lits.items.len;
+
+                    // The slice pointer is stored into a `uintptr_t` slot, and
+                    // the C backend never casts a stored value. Build the symbol
+                    // reference as the C expression `(uintptr_t)onez_lit_N` so
+                    // the emitted store carries an explicit cast and the array
+                    // (`const char[]`) does not trip `-Wint-conversion`. The C
+                    // emitter prints a func const's name verbatim, which is how
+                    // the bare `onez_lit_N` reference works elsewhere.
+                    var sym_buf: [48]u8 = undefined;
+                    const sym_name = std.fmt.bufPrint(&sym_buf, "(uintptr_t)onez_lit_{d}", .{lit_id}) catch unreachable;
+                    const sym_ref = c.ir_const_func(ctx, c.ir_strl(ctx, &sym_buf, sym_name.len), 0);
+                    const len_const = c.ir_const_addr(ctx, str_data.len);
+
+                    // Derive the destination from a fresh items_ptr load rather
+                    // than the cached base. A compiled loop body that contains a
+                    // reallocating call is emitted once but re-entered after the
+                    // back-edge refreshes the stack pointer; the cached base is
+                    // the pre-loop value and would be stale on the second
+                    // iteration. The fresh load is not CSE'd across the
+                    // back-edge call barrier, so each iteration writes to the
+                    // live buffer.
+                    const dest_off = c.ir_const_addr(ctx, sp.* * ValueLayout.value_size);
+                    const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), liveBaseAddr(state).base_addr, dest_off);
+                    const slice_len_offset_const = c.ir_const_addr(ctx, ValueLayout.slice_len_offset);
+                    emitBoxSlice(
+                        ctx,
+                        dest_addr,
+                        state.tag_offset_const,
+                        state.payload_offset_const,
+                        slice_len_offset_const,
+                        emitTagConst(ctx, .string),
+                        sym_ref,
+                        len_const,
+                    );
+
+                    // Record the literal so the C preamble emits its static array.
+                    lits.append(std.heap.page_allocator, .{
+                        .data = str_data,
+                        .is_symbol = false,
+                    }) catch {};
+
+                    stack[sp.*] = .{ .raw_at_slot = sp.* };
                     sp.* += 1;
                 } else if (state.aot_mode and (val == .string or val == .symbol)) {
                     // In AOT mode, string/symbol literals can't be baked as
@@ -10654,6 +10733,31 @@ test "flush planner: cycle mixed with a dependent box" {
         .{ .raw_at_slot = 2 },
     };
     try checkFlushPlan(&stack, 4);
+}
+
+test "ValueLayout slice offsets reconstruct a string Value" {
+    // The direct string-literal codegen writes a tag, slice pointer, and slice
+    // length at the discovered ValueLayout offsets. Mirror that here against a
+    // raw byte buffer and confirm it reads back as the intended string. Guards
+    // the offsets the codegen depends on and the fixed 40-byte layout.
+    try testing.expectEqual(@as(usize, 40), @sizeOf(Value));
+    ValueLayout.ensureInit();
+
+    const body = "hello";
+    var buf: [@sizeOf(Value)]u8 = undefined;
+
+    const tag_int: u8 = @intFromEnum(@as(ValueLayout.TagType, .string));
+    @memcpy(buf[ValueLayout.tag_offset .. ValueLayout.tag_offset + ValueLayout.tag_size], std.mem.asBytes(&tag_int)[0..ValueLayout.tag_size]);
+
+    const ptr_int: usize = @intFromPtr(body.ptr);
+    @memcpy(buf[ValueLayout.payload_offset .. ValueLayout.payload_offset + @sizeOf(usize)], std.mem.asBytes(&ptr_int));
+
+    const len_val: usize = body.len;
+    @memcpy(buf[ValueLayout.slice_len_offset .. ValueLayout.slice_len_offset + @sizeOf(usize)], std.mem.asBytes(&len_val));
+
+    const reconstructed: *align(1) const Value = @ptrCast(&buf);
+    try testing.expect(reconstructed.* == .string);
+    try testing.expectEqualStrings("hello", reconstructed.string);
 }
 
 fn makeInstructions(comptime ops: anytype) [ops.len]Instruction {
