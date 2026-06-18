@@ -1,0 +1,10 @@
+\ Regression for AOT direct native wrappers.
+\ Non-generic natives (dup, swap, drop) compile to their generated onez_n_
+\ wrapper symbols instead of jitNativeWordCall, while a generic native (+, -)
+\ keeps routing through jitNativeWordCall so generic dispatch still fires.
+\ Correct output proves both paths run together under AOT.
+
+3 dup + .       \ 6
+1 2 swap - .    \ 1
+4 5 6 drop + .  \ 9
+2.5 dup + .     \ 5.0

@@ -11,20 +11,29 @@ const std = @import("std");
 
 const Context = @import("context.zig").Context;
 const NativeFn = @import("dictionary.zig").NativeFn;
+const Marker = @import("value.zig").Marker;
 
-const data_structures = @import("primitives/data_structures.zig");
-const associative = @import("primitives/associative.zig");
-const stack_prims = @import("primitives/stack.zig");
+const markers_mod = @import("primitives/markers.zig");
 
+const extracted_primitives = @import("primitives/mod.zig").extracted_primitives;
 const extracted_registry_entries = @import("primitives/mod.zig").extracted_registry_entries;
 
-/// Build the wrapper body for one native. Mirrors `jitNativeCall`.
-pub fn AotDirectWrapper(comptime func: NativeFn) type {
+/// Build the wrapper body for one native. Mirrors `jitNativeWordCall` minus the runtime
+/// dispatch-table lookup and generic dispatch: it pushes the native's call frame, invokes the
+/// native, and runs the same success / error cleanup. Preserving the frame and cleanup keeps the
+/// word name and stack effect on an error so AOT diagnostics match the interpreter; `line_raw` is
+/// the call-site line, used for the frame.
+pub fn AotDirectWrapper(comptime func: NativeFn, comptime word_name: []const u8) type {
     return struct {
-        fn call(ctx_raw: usize) callconv(.c) i32 {
+        fn call(ctx_raw: usize, line_raw: usize) callconv(.c) i32 {
             if (ctx_raw == 0) return 1;
             const ctx: *Context = @ptrFromInt(ctx_raw);
+            ctx.pushCallFrame(word_name, ctx.current_source, line_raw, 0);
             func(ctx) catch |err| {
+                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                return 2;
+            };
+            ctx.wordSuccessCleanup(word_name, null) catch |err| {
                 ctx.jit_pending_error = err;
                 return 2;
             };
@@ -32,64 +41,6 @@ pub fn AotDirectWrapper(comptime func: NativeFn) type {
         }
     };
 }
-
-/// A native word that AOT codegen invokes through a directly-linked `callconv(.c)` wrapper rather
-/// than the runtime-resolving `jitNativeWordCall`.
-///
-/// The wrapper calls the same native the interpreter uses, so the emitted call carries no
-/// interpreter fallback and survives the zero-fallback interpreter-free class, where the dispatch
-/// table the word_id lookup needs is stripped from the binary.
-///
-/// Covers the concrete-arity container construction, mutation, and access natives plus the runtime-
-/// depth indexed stack ops; each is a plain native that does its own internal type handling and
-/// bounds checking, so a direct call is complete on its own.
-const AotDirectNative = struct {
-    name: []const u8,
-    symbol: []const u8,
-    func: NativeFn,
-};
-
-const aot_direct_natives = [_]AotDirectNative{
-    .{ .name = "make-mutable-map", .symbol = "onez_native_make_mutable_map", .func = data_structures.nativeMakeMutableMap },
-    .{ .name = "make-vector", .symbol = "onez_native_make_vector", .func = data_structures.nativeMakeVector },
-    .{ .name = "@set!", .symbol = "onez_native_at_set_mut", .func = data_structures.nativeAtSetMut },
-    .{ .name = "@set", .symbol = "onez_native_at_set", .func = associative.nativeAtSet },
-    .{ .name = "@get", .symbol = "onez_native_at_get", .func = associative.nativeAtGet },
-    // `drop` over an opaque row region pops one live value through the native
-    // and keeps the row, so the call must link without a fallback too.
-    .{ .name = "drop", .symbol = "onez_native_drop", .func = stack_prims.nativeDrop },
-    // Runtime-depth indexed stack ops: codegen emits these against the live
-    // stack when the depth is not a folded literal (e.g. `drop-at` -> `<rot-n`).
-    .{ .name = "<rot-n", .symbol = "onez_native_rot_up", .func = stack_prims.nativeRotUp },
-    .{ .name = "rot-n>", .symbol = "onez_native_rot_down", .func = stack_prims.nativeRotDown },
-    .{ .name = "pick-n", .symbol = "onez_native_pick_n", .func = stack_prims.nativePickN },
-    .{ .name = "nip-n", .symbol = "onez_native_nip_n", .func = stack_prims.nativeNipN },
-};
-
-/// The AOT-direct wrapper symbol for `name`, or null if the word is not in the directly-linked set
-/// and must route through `jitNativeWordCall`.
-pub fn aotDirectWrapperSymbol(name: []const u8) ?[]const u8 {
-    for (aot_direct_natives) |entry| {
-        if (std.mem.eql(u8, entry.name, name)) return entry.symbol;
-    }
-    return null;
-}
-
-comptime {
-    for (aot_direct_natives) |entry| {
-        @export(&AotDirectWrapper(entry.func).call, .{ .name = entry.symbol });
-    }
-}
-
-/// `extern` declarations for the curated AOT-direct wrapper symbols, emitted into the generated C
-/// preamble so direct calls to them resolve at link time.
-pub const aot_direct_native_externs = blk: {
-    var s: []const u8 = "";
-    for (aot_direct_natives) |entry| {
-        s = s ++ "extern int32_t " ++ entry.symbol ++ "(uintptr_t ctx);\n";
-    }
-    break :blk s;
-};
 
 /// Convert a 1z word name to the C symbol of its generated native wrapper.
 ///
@@ -123,26 +74,89 @@ pub fn wrapperSymbolName(comptime name: []const u8) []const u8 {
     };
 }
 
-comptime {
-    @setEvalBranchQuota(2_000_000);
-    const entries = extracted_registry_entries;
-    var symbols: [entries.len][]const u8 = undefined;
-    for (entries, 0..) |entry, i| symbols[i] = wrapperSymbolName(entry.name);
+/// A native word paired with the C symbol of its generated wrapper. The symbol is
+/// sentinel-terminated so it can be handed straight to `ir_str` as a C string.
+const NativeWrapper = struct {
+    name: []const u8,
+    func: NativeFn,
+    symbol: [:0]const u8,
+};
 
-    // Guard against two distinct registry names mangling to the same symbol (the `-`/`_` ambiguity).
-    // If this ever trips, disambiguate the colliding name with a registry-index suffix.
-    for (symbols, 0..) |a, i| {
-        for (symbols[i + 1 ..]) |b| {
-            if (std.mem.eql(u8, a, b)) {
-                @compileError("native wrapper symbol collision: '" ++ entries[i].name ++ "' collides on " ++ a);
+/// True when a primitive carries the generic marker, so its dictionary word dispatches to
+/// registered methods. Such a native must keep routing through `jitNativeWordCall`, whose
+/// generic dispatch the thin wrapper does not replicate, so it is excluded from the direct set.
+fn primitiveIsGeneric(comptime mks: []const *Marker) bool {
+    for (mks) |mk| {
+        if (markers_mod.isGenericMarker(mk)) return true;
+    }
+    return false;
+}
+
+const wrappers_upper_bound = extracted_primitives.len + extracted_registry_entries.len;
+
+/// The non-generic native surface that AOT codegen can direct-call, drawn from both the global
+/// primitives and the `native`-module registry entries. Primitives own the bare-name semantics
+/// compiled code resolves against, so on a name collision the primitive wins and the registry
+/// entry is dropped. Registry-entry natives carry no markers in the dictionary, so none of them
+/// dispatch generically and all are eligible.
+const direct_natives_buf = blk: {
+    @setEvalBranchQuota(8_000_000);
+    var buf: [wrappers_upper_bound]NativeWrapper = undefined;
+    var n: usize = 0;
+    for (extracted_primitives) |p| {
+        if (primitiveIsGeneric(p.markers)) continue;
+        buf[n] = .{ .name = p.name, .func = p.func, .symbol = std.fmt.comptimePrint("{s}", .{wrapperSymbolName(p.name)}) };
+        n += 1;
+    }
+    registry: for (extracted_registry_entries) |e| {
+        for (buf[0..n]) |w| {
+            if (std.mem.eql(u8, w.name, e.name)) continue :registry;
+        }
+        buf[n] = .{ .name = e.name, .func = e.func, .symbol = std.fmt.comptimePrint("{s}", .{wrapperSymbolName(e.name)}) };
+        n += 1;
+    }
+
+    // Guard against two distinct names mangling to the same symbol (the `-`/`_` ambiguity).
+    // If this ever trips, disambiguate the colliding name with an index suffix.
+    for (buf[0..n], 0..) |a, i| {
+        for (buf[i + 1 .. n]) |b| {
+            if (std.mem.eql(u8, a.symbol, b.symbol)) {
+                @compileError("native wrapper symbol collision: '" ++ a.name ++ "' and '" ++ b.name ++ "' both mangle to " ++ a.symbol);
             }
         }
     }
 
-    for (entries, 0..) |entry, i| {
-        @export(&AotDirectWrapper(entry.func).call, .{ .name = symbols[i] });
+    break :blk .{ .buf = buf, .count = n };
+};
+
+const direct_natives: [direct_natives_buf.count]NativeWrapper = direct_natives_buf.buf[0..direct_natives_buf.count].*;
+
+comptime {
+    for (direct_natives) |w| {
+        @export(&AotDirectWrapper(w.func, w.name).call, .{ .name = w.symbol });
     }
 }
+
+/// The generated wrapper symbol for the non-generic native `name`, or null if `name` is generic
+/// or not a native. AOT codegen emits a direct call into the wrapper instead of the
+/// runtime-resolving `jitNativeWordCall`.
+pub fn registryWrapperSymbol(name: []const u8) ?[:0]const u8 {
+    for (direct_natives) |w| {
+        if (std.mem.eql(u8, w.name, name)) return w.symbol;
+    }
+    return null;
+}
+
+/// `extern` declarations for every generated wrapper symbol, emitted into the generated C
+/// preamble so direct calls to them resolve at link time.
+pub const registry_wrapper_externs = blk: {
+    @setEvalBranchQuota(8_000_000);
+    var s: []const u8 = "";
+    for (direct_natives) |w| {
+        s = s ++ "extern int32_t " ++ w.symbol ++ "(uintptr_t ctx, uintptr_t line);\n";
+    }
+    break :blk s;
+};
 
 // Tests
 
@@ -171,6 +185,27 @@ test "wrapper symbol generated and unique for every registry entry" {
     try testing.expectEqual(extracted_registry_entries.len, seen.count());
 }
 
+test "registryWrapperSymbol resolves non-generic natives and rejects unknown names" {
+    // A non-generic global primitive resolves to a usable, prefixed C string.
+    const flush = registryWrapperSymbol("stream-flush") orelse return error.MissingWrapper;
+    try testing.expect(std.mem.startsWith(u8, flush, "onez_n_"));
+    try testing.expectEqual(@as(u8, 0), flush.ptr[flush.len]); // sentinel terminator past the slice end
+
+    // A registry-entry native resolves too.
+    try testing.expect(registryWrapperSymbol("borrowed?") != null);
+
+    // An unknown name does not.
+    try testing.expect(registryWrapperSymbol("definitely-not-a-native-word") == null);
+}
+
+test "registryWrapperSymbol excludes generic natives so they keep generic dispatch" {
+    // Arithmetic and comparison natives carry the generic marker; they must stay on
+    // `jitNativeWordCall` and therefore have no direct wrapper.
+    try testing.expect(registryWrapperSymbol("+") == null);
+    try testing.expect(registryWrapperSymbol("=") == null);
+    try testing.expect(registryWrapperSymbol("<") == null);
+}
+
 test "wrapper symbol name mirrors mangling with onez_n_ prefix" {
     try testing.expectEqualStrings("onez_n_cmp", wrapperSymbolName("cmp"));
     try testing.expectEqualStrings("onez_n__Aset_B", wrapperSymbolName("@set!"));
@@ -185,8 +220,8 @@ test "wrapper invokes its native: borrowed? on a fixnum returns false" {
 
     try ctx.stack.push(.{ .fixnum = 7 });
 
-    const wrapper = AotDirectWrapper(registryFunc("borrowed?")).call;
-    const status = wrapper(@intFromPtr(&ctx));
+    const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?").call;
+    const status = wrapper(@intFromPtr(&ctx), 0);
 
     try testing.expectEqual(@as(i32, 0), status);
     const top = try ctx.stack.pop();
@@ -199,14 +234,14 @@ test "wrapper maps a native error to status 2 and sets the pending error" {
     defer ctx.deinit();
 
     // Empty stack: `borrowed?` pops an operand and underflows.
-    const wrapper = AotDirectWrapper(registryFunc("borrowed?")).call;
-    const status = wrapper(@intFromPtr(&ctx));
+    const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?").call;
+    const status = wrapper(@intFromPtr(&ctx), 0);
 
     try testing.expectEqual(@as(i32, 2), status);
     try testing.expect(ctx.jit_pending_error != null);
 }
 
 test "wrapper bails with status 1 on a null context" {
-    const wrapper = AotDirectWrapper(registryFunc("borrowed?")).call;
-    try testing.expectEqual(@as(i32, 1), wrapper(0));
+    const wrapper = AotDirectWrapper(registryFunc("borrowed?"), "borrowed?").call;
+    try testing.expectEqual(@as(i32, 1), wrapper(0, 0));
 }

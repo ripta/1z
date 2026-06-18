@@ -1,11 +1,8 @@
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Error: --interpreter-fallback=false --lock-interpreter-setting was set, but at least one compiled word emitted an interpreter fallback call.
       hint: drop --lock-interpreter-setting, switch to --interpreter-fallback=true, or rewrite the offending words so they compile without fallback.
-AOT interpreter fallbacks: 4 total
-  native: 4
+AOT interpreter fallbacks: 1 total
+  native: 1
   sites:
     native: . -> inspect (line 622)
-    native: flush -> stream-flush (line 616)
-    native: stream-write-string -> stream-write (line 512)
-    native: keep -> dip (line 410)
-  static-check: jitInterpretedCall=0/0 jitNativeWordCall=4/4 jitCallQuotation=0/0 (matches build-time inventory)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=1/1 jitCallQuotation=0/0 (matches build-time inventory)

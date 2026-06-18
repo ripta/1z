@@ -1,4 +1,4 @@
 Error: 1 word could not be compiled to C
   word 'not-compilable': NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
-AOT interpreter fallbacks: 3 total (native=2 compound-uncompiled=1)
+AOT interpreter fallbacks: 1 total (compound-uncompiled=1)

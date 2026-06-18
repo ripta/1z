@@ -1,5 +1,3 @@
-AOT interpreter fallbacks: 1 total (native=1)
-  static-check: jitInterpretedCall=0/0 jitNativeWordCall=1/1 jitCallQuotation=0/0 (matches build-time inventory)
 artifact: interpreter
 interpreter: linked (--interpreter-fallback=true)
 jitInterpretedCall: not linked

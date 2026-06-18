@@ -1,5 +1,5 @@
-AOT interpreter fallbacks: 3 total (native=2 quotation=1)
-  static-check: jitInterpretedCall=0/0 jitNativeWordCall=2/2 jitCallQuotation=1/1 (matches build-time inventory)
+AOT interpreter fallbacks: 1 total (quotation=1)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=0/0 jitCallQuotation=1/1 (matches build-time inventory)
 Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
 Warning: 'while' parameter 'body' has row-variable effect; quotation call falls back to interpreter
 Warning: 'loop' parameter 'pred' has row-variable effect; quotation call falls back to interpreter

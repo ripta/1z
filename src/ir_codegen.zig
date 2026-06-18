@@ -7866,7 +7866,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitPicTopTagsMatch(uintptr_t ctx, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
-    try out.appendSlice(allocator, aot_wrappers.aot_direct_native_externs);
+    try out.appendSlice(allocator, aot_wrappers.registry_wrapper_externs);
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitRetainSlot(uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitReleaseSlot(uintptr_t value_ptr);\n");
@@ -9148,12 +9148,16 @@ fn emitInlineDispatchTableCheck(
 fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord, line: usize) void {
     const ictx = state.ctx;
     if (state.aot_mode) {
-        // Concrete-arity container natives compile to a direct call into a
-        // linked wrapper symbol instead of the runtime-resolving
-        // `jitNativeWordCall`, so they emit no interpreter fallback.
-        if (aot_wrappers.aotDirectWrapperSymbol(name)) |symbol| {
-            const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, symbol.ptr), state.aot_proto_1arg);
-            const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, ctx_val);
+        // Non-generic natives compile to a direct call into their generated wrapper
+        // symbol instead of the runtime-resolving `jitNativeWordCall`, so they emit no
+        // interpreter fallback. `registryWrapperSymbol` returns null for a generic
+        // native, whose slow path must keep routing through `jitNativeWordCall` so
+        // generic dispatch fires for uncached operand types. The wrapper takes the
+        // call-site line so it can rebuild the native's call frame for error reporting.
+        if (aot_wrappers.registryWrapperSymbol(name)) |symbol| {
+            const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, symbol.ptr), state.aot_proto_2arg);
+            const line_arg = c.ir_const_addr(ictx, line);
+            const call_result = c._ir_CALL_2(ictx, c.IR_I32, callee_fn, ctx_val, line_arg);
             emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
             return;
         }

@@ -1,13 +1,7 @@
 Prelude compilation: 5/5 words compiled (100.0%)
 Quotation bodies compiled: 0
 Inline PIC sites: 0/1 generic call sites preseeded
-AOT interpreter fallbacks: 2 total
-  native: 2
-  sites:
-    native: flush -> stream-flush (line 616)
-    native: stream-write-string -> stream-write (line 512)
-  static-check: jitInterpretedCall=0/0 jitNativeWordCall=2/2 jitCallQuotation=0/0 (matches build-time inventory)
-artifact: interpreter
-interpreter: linked (auto: compiled code calls interpreter)
+artifact: interpreter-free-aot
+interpreter: not linked (auto: all reachable code compiled)
 jitInterpretedCall: not linked
 runtime-image: words=0 stack-effects=1 typevalue-slots=63 blob-present=false

@@ -1,8 +1,8 @@
 kind: aot-binary
-artifact: interpreter
+artifact: interpreter-free-aot
 target: <target>
 build-mode: <build-mode>
-interpreter: linked=yes, fallback=auto, locked=no
+interpreter: linked=no, fallback=auto, locked=no
 aot-callbacks: jit-interpreted-call=no
 runtime-image: present=no
 dynamic-features: none
