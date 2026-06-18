@@ -44,6 +44,11 @@ const build_options = @import("build_options");
 pub const version = build_options.version;
 pub const git_commit = build_options.git_commit;
 
+/// Debug builds use the safety-checked allocator for leak and use-after-free detection. Optimized
+/// builds use libc malloc, which recycles freed regions in process instead of mapping and unmapping
+/// pages from the OS per allocation.
+const root_allocator_is_debug = builtin.mode == .Debug;
+
 /// Compile-time-rendered Zig compiler version string. Format matches
 /// `<major>.<minor>.<patch>`, with `-pre.<n>` appended only when the
 /// running Zig is a pre-release build.
@@ -1079,9 +1084,16 @@ const ExecutionContext = struct {
 };
 
 pub fn main() u8 {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const gpa_allocator = gpa.allocator();
+    var debug_gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const gpa_allocator, const using_debug_gpa = alloc: {
+        break :alloc switch (builtin.mode) {
+            .Debug => .{ debug_gpa.allocator(), true },
+            else => .{ std.heap.c_allocator, false },
+        };
+    };
+    defer if (using_debug_gpa) {
+        _ = debug_gpa.deinit();
+    };
 
     const args = std.process.argsAlloc(gpa_allocator) catch return 1;
     defer std.process.argsFree(gpa_allocator, args);
@@ -4203,6 +4215,13 @@ test {
     _ = @import("aot_image_emit.zig");
     _ = @import("aot_image_loader.zig");
     _ = @import("embedded_stdlib.zig");
+}
+
+test "root allocator gate selects the debug allocator under Debug builds" {
+    try std.testing.expectEqual(builtin.mode == .Debug, root_allocator_is_debug);
+    // The unit test suite runs under Debug, so the safety-checked allocator is
+    // active and its leak / use-after-free detection covers every test.
+    try std.testing.expect(root_allocator_is_debug);
 }
 
 test "writeVersion emits '1z <version>\\n'" {
