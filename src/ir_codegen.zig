@@ -46,11 +46,9 @@ const sequences_mod = @import("primitives/sequences.zig");
 const control = @import("primitives/control.zig");
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const markers_mod = @import("primitives/markers.zig");
-const data_structures = @import("primitives/data_structures.zig");
-const associative = @import("primitives/associative.zig");
-const stack_prims = @import("primitives/stack.zig");
 const WordDefinition = @import("dictionary.zig").WordDefinition;
-const NativeFn = @import("dictionary.zig").NativeFn;
+
+const aot_wrappers = @import("aot_native_wrappers.zig");
 const AotQuotationDesc = @import("aot_freeze.zig").AotQuotationDesc;
 
 pub const IrCodegenError = error{
@@ -7868,7 +7866,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitPicTopTagsMatch(uintptr_t ctx, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
-    try out.appendSlice(allocator, aot_direct_native_externs);
+    try out.appendSlice(allocator, aot_wrappers.aot_direct_native_externs);
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitRetainSlot(uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitReleaseSlot(uintptr_t value_ptr);\n");
@@ -9153,7 +9151,7 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
         // Concrete-arity container natives compile to a direct call into a
         // linked wrapper symbol instead of the runtime-resolving
         // `jitNativeWordCall`, so they emit no interpreter fallback.
-        if (aotDirectWrapperSymbol(name)) |symbol| {
+        if (aot_wrappers.aotDirectWrapperSymbol(name)) |symbol| {
             const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, symbol.ptr), state.aot_proto_1arg);
             const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, ctx_val);
             emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
@@ -9731,80 +9729,6 @@ export fn jitPicTopTagsMatch(ctx_raw: usize, tag_a_raw: usize, tag_b_raw: usize)
     const actual_b = @intFromEnum(std.meta.activeTag(items[items.len - 1]));
     return if (actual_a == tag_a_raw and actual_b == tag_b_raw) 1 else 0;
 }
-
-/// A native word that AOT codegen invokes through a directly-linked
-/// `callconv(.c)` wrapper rather than the runtime-resolving
-/// `jitNativeWordCall`. The wrapper calls the same native the interpreter
-/// uses, so the emitted call carries no interpreter fallback and survives the
-/// zero-fallback interpreter-free class, where the dispatch table the word_id
-/// lookup needs is stripped from the binary. Covers the concrete-arity
-/// container construction, mutation, and access natives plus the runtime-depth
-/// indexed stack ops; each is a plain native that does its own internal type
-/// handling and bounds checking, so a direct call is complete on its own.
-const AotDirectNative = struct {
-    name: []const u8,
-    symbol: []const u8,
-    func: NativeFn,
-};
-
-const aot_direct_natives = [_]AotDirectNative{
-    .{ .name = "make-mutable-map", .symbol = "onez_native_make_mutable_map", .func = data_structures.nativeMakeMutableMap },
-    .{ .name = "make-vector", .symbol = "onez_native_make_vector", .func = data_structures.nativeMakeVector },
-    .{ .name = "@set!", .symbol = "onez_native_at_set_mut", .func = data_structures.nativeAtSetMut },
-    .{ .name = "@set", .symbol = "onez_native_at_set", .func = associative.nativeAtSet },
-    .{ .name = "@get", .symbol = "onez_native_at_get", .func = associative.nativeAtGet },
-    // `drop` over an opaque row region pops one live value through the native
-    // and keeps the row, so the call must link without a fallback too.
-    .{ .name = "drop", .symbol = "onez_native_drop", .func = stack_prims.nativeDrop },
-    // Runtime-depth indexed stack ops: codegen emits these against the live
-    // stack when the depth is not a folded literal (e.g. `drop-at` -> `<rot-n`).
-    .{ .name = "<rot-n", .symbol = "onez_native_rot_up", .func = stack_prims.nativeRotUp },
-    .{ .name = "rot-n>", .symbol = "onez_native_rot_down", .func = stack_prims.nativeRotDown },
-    .{ .name = "pick-n", .symbol = "onez_native_pick_n", .func = stack_prims.nativePickN },
-    .{ .name = "nip-n", .symbol = "onez_native_nip_n", .func = stack_prims.nativeNipN },
-};
-
-/// The AOT-direct wrapper symbol for `name`, or null if the word is not in the
-/// directly-linked set and must route through `jitNativeWordCall`.
-fn aotDirectWrapperSymbol(name: []const u8) ?[]const u8 {
-    for (aot_direct_natives) |entry| {
-        if (std.mem.eql(u8, entry.name, name)) return entry.symbol;
-    }
-    return null;
-}
-
-/// Build the wrapper body for one AOT-direct native. Mirrors `jitNativeCall`:
-/// cast the raw context, call the native, and map a Zig error into the
-/// standard i32 status code so `emitCallbackPostCheck` can propagate it.
-fn AotDirectWrapper(comptime func: NativeFn) type {
-    return struct {
-        fn call(ctx_raw: usize) callconv(.c) i32 {
-            if (ctx_raw == 0) return 1;
-            const ctx: *Context = @ptrFromInt(ctx_raw);
-            func(ctx) catch |err| {
-                ctx.jit_pending_error = err;
-                return 2;
-            };
-            return 0;
-        }
-    };
-}
-
-comptime {
-    for (aot_direct_natives) |entry| {
-        @export(&AotDirectWrapper(entry.func).call, .{ .name = entry.symbol });
-    }
-}
-
-/// `extern` declarations for the AOT-direct wrapper symbols, emitted into the
-/// generated C preamble so direct calls to them resolve at link time.
-const aot_direct_native_externs = blk: {
-    var s: []const u8 = "";
-    for (aot_direct_natives) |entry| {
-        s = s ++ "extern int32_t " ++ entry.symbol ++ "(uintptr_t ctx);\n";
-    }
-    break :blk s;
-};
 
 export fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
