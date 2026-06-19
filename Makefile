@@ -435,13 +435,15 @@ ir-vendor: ## Re-vendor ext/ir/ (set IR_COMMIT=<sha> to bump the pin)
 lsp-test: ## Run LSP server tests
 	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
+update-golden: update-integration-golden update-aot-golden update-lsp-golden update-fmt-golden ## Update all golden files
+
 update-aot-golden: ## Update AOT test golden files
 	timeout $(TARGET_TIMEOUT) zig build update-aot-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
 
 update-lsp-golden: ## Update LSP test golden files
 	timeout $(TARGET_TIMEOUT) zig build update-lsp-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
 
-update-golden: ## Update integration test golden files
+update-integration-golden: ## Update integration test golden files
 	timeout $(TARGET_TIMEOUT) zig build update-golden --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) $(TEST_FILTER_ARG)
 
 update-fmt-golden: ## Update formatter test golden files
