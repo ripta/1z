@@ -1,0 +1,15 @@
+\ `array-n` packs a literal number of stack values into an array. With a literal
+\ count the AOT compiler folds it to a concrete-arity array construction instead
+\ of collapsing the abstract stack to an opaque row region, so the pack and the
+\ values around it stay modeled. Under runtime-image AOT the word body is
+\ compiled, so these results come from the compiled path and match the
+\ interpreter: a plain three-value pack, a zero-count empty pack, and a pack
+\ over a preceding row region introduced by a runtime-depth `drop-at`, with the
+\ values below the row surviving the pack.
+1 2 3 3 array-n inspect print-line
+"---" print-line
+0 array-n #len .
+"---" print-line
+1 2 3 4 2 drop-at
+10 20 30 3 array-n inspect print-line
+. . .

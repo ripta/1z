@@ -5499,6 +5499,27 @@ fn compileInstructions(
                         return IrCodegenError.NotCompilable;
                     };
 
+                    // Literal-count `array-n` folds to a concrete-arity array construction: the count
+                    // names exactly how many elements the native consumes, so emit the native against
+                    // the live stack and settle the abstract stack with concrete in / out counts
+                    // instead of collapsing to an opaque row_region. A row sitting below the packed
+                    // elements is preserved by settleRowAwareStack. A non-literal runtime count
+                    // falls through to the unchanged row-variable handling below.
+                    if (resolved.is_native and std.mem.eql(u8, name, "array-n")) {
+                        if (extractPrecedingLiteralDepth(instructions, idx)) |count| {
+                            const effective_in = count + 1;
+                            if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
+                            try materializeQuotations(state, stack, sp.*);
+                            flushToPhysicalStack(state, stack, sp.*);
+                            const ctx_val = emitCallbackPreamble(state, sp.*);
+                            emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
+                            if (exitFallsThrough(state.exit_kind)) {
+                                settleRowAwareStack(state, stack, sp, effective_in, 1);
+                            }
+                            continue;
+                        }
+                    }
+
                     // Indexed stack ops: a literal depth either rewrites the
                     // abstract stack in place over a row, or rejects when it
                     // targets the row interior. A runtime depth has no literal to
@@ -14281,6 +14302,49 @@ test "extractPrecedingLiteralDepth: extracts zero depth" {
         .{ .op = .{ .call_word = "pick-n" }, .line = 1 },
     };
     try testing.expectEqual(@as(?usize, 0), extractPrecedingLiteralDepth(&instrs, 1));
+}
+
+// --- array-n fold tests ---
+
+test "array-n fold: a literal count selects the fold path" {
+    // `3 array-n` exposes its element span as a non-negative fixnum literal, so
+    // the fold reads the count and consumes `count + 1` (elements + the count
+    // literal) producing one array.
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+        .{ .op = .{ .call_word = "array-n" }, .line = 1 },
+    };
+    try testing.expectEqual(@as(?usize, 3), extractPrecedingLiteralDepth(&instrs, 1));
+}
+
+test "array-n fold: a runtime count falls through" {
+    // A count produced by another word is not a literal, so the fold does not
+    // fire and the call falls through to the row-variable handling.
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "#len" }, .line = 1 },
+        .{ .op = .{ .call_word = "array-n" }, .line = 1 },
+    };
+    try testing.expectEqual(@as(?usize, null), extractPrecedingLiteralDepth(&instrs, 1));
+}
+
+test "array-n fold: settling preserves a row below the packed elements" {
+    // Abstract stack: [row(0), raw(1), raw(2), raw(3), count]  sp=5, count=3.
+    // The fold settles with inputs = count + 1 = 4, outputs = 1. The pack
+    // consumes only the entries above the row, so the row is preserved and a
+    // single array slot is left on top: [row(0), array]  sp=2.
+    var state = makeTestState();
+    var stack = [_]StackEntry{
+        .{ .row_region = 0 },
+        .{ .raw_at_slot = 1 },
+        .{ .raw_at_slot = 2 },
+        .{ .raw_at_slot = 3 },
+        .{ .i64_ref = @as(c.ir_ref, 3) },
+    };
+    var sp: usize = 5;
+    settleRowAwareStack(&state, &stack, &sp, 4, 1);
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
+    try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
 }
 
 // --- rewriteIndexedStackOp tests ---
