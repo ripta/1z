@@ -1,8 +1,8 @@
 \ Standard library prelude
 \ This file is embedded and loaded automatically during initialization.
 
-\\ Push an empty array.
-[]: [ [ ] ] ;
+\\ Push an empty quotation. A shortcut for `[ ]`.
+[]: ( -- quotation ) [ [ ] ] ;
 
 \\ Read the next quotation from the tokenizer.
 parse-quotation: ( -- quotation ) [
@@ -976,7 +976,7 @@ constraint-info: struct{
 \\ constraint-info struct, recursing into combinator elements. A raw type-value
 \\ element is left first-class; a raw record element is wrapped recursively.
 \\ `f` passes through unchanged.
-(raw>constraint-info): stack-recursive [
+(raw>constraint-info): ( raw -- constraint-info ) stack-recursive [
   dup f = [ ] [
     dup 0 #nth
     over 1 #nth
@@ -1015,7 +1015,7 @@ constraint-info>>: ( stack-effect-param -- constraint-info ) [
 word-info: struct{ name: string stack-effect: any doc: any markers: array native?: boolean body: any methods: array source-loc: any module: any provenance: any compiled?: boolean protocol: any } ;
 
 \\ Convert a raw 12-element array from native.>word into a word-info struct.
-(raw>word-info): [
+(raw>word-info): ( raw -- word-info ) [
   >param: [
     dup 0 #nth
     over 1 #nth

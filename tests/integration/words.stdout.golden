@@ -290,9 +290,9 @@ yield ( -- )
 #none ( seq quot -- ? )
 #nth? ( seq n -- option )
 #resize! ( seq n fill -- seq )
-(raw>constraint-info)
+(raw>constraint-info) ( raw -- constraint-info )
 (raw>opcode-info) ( raw -- opcode-info )
-(raw>word-info)
+(raw>word-info) ( raw -- word-info )
 (stream-read-exact-step) ( stream acc n -- bytes )
 (stream-write-exact-step) ( stream total remaining -- n )
 ++ ( a1 -- a2 )
@@ -389,7 +389,7 @@ M{
 S{
 V{
 W{
-[]
+[] ( -- quotation )
 acquire ( resource -- )
 add-hook ( on-variant quot -- )
 all-words ( -- array )

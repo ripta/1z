@@ -1,5 +1,5 @@
-Push an empty array.
-[] \compound
+Push an empty quotation. A shortcut for `[ ]`.
+[] ( -- quotation ) \compound
 
 Stack: [ ]
 Execute the quotation when the condition is true.
