@@ -52,7 +52,7 @@ fmt: build ## Format zig and 1z source files
 	timeout $(TARGET_TIMEOUT) zig fmt src/ build.zig
 	timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z fmt $$(find . \( -path './.zig-cache' -o -path './$(ZIG_PREFIX)' \) -prune -o -name '*.1z' -print)
 
-test: branch-info leak-goldens-check test-threads-1 test-threads-auto ## Run all tests under both --threads=1 and --threads=auto
+test: branch-info leak-goldens-check test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
 
 leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 	@if grep -rl 'error(gpa)' tests/ --include='*.golden'; then \
