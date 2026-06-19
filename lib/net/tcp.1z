@@ -16,10 +16,14 @@ listen: ( addr backlog -- server ) [
   make-server
 ] ;
 
-private{
-  \\ How long a single connect race waits before giving up on every address.
-  connect-timeout: const [ 5 seconds ] ;
+\\ How long a single connect race waits before giving up on every address.
+\\ Bind it dynamically with `with-connect-timeout` to override per call.
+connect-timeout: parameter{ [ 5 seconds ] } ;
 
+\\ Run `quot` with the connect race timeout bound to `duration`.
+with-connect-timeout: ( duration quot -- ) [ connect-timeout swap with-parameter ] ;
+
+private{
   \\ One Happy-Eyeballs attempt: connect socket `fd` to `addr`, and on success hand the connected fd
   \\ to `ch`. Any failure or cancellation simply ends the attempt. The orchestrator owns every socket
   \\ and closes the ones that lose.
@@ -40,9 +44,10 @@ private{
     drop
   ] ;
 
-  \\ Deadline sentinel task: after the timeout, push -1 onto `ch` so a fully stalled race gives up.
-  \\ Cancelled once a winner arrives.
-  connect-deadline: ( ch -- ) [ connect-timeout sleep -1 swap send ] ;
+  \\ Deadline sentinel task: after `duration`, push -1 onto `ch` so a fully stalled race gives up.
+  \\ Cancelled once a winner arrives. `duration` is read from the caller's dynamic scope in `connect`
+  \\ and threaded in, since a spawned task does not inherit dynamic parameter bindings.
+  connect-deadline: ( duration ch -- ) [ swap sleep -1 swap send ] ;
 
   \\ Close `fd` unless it is the winning fd.
   close-unless-winner: ( fd winner -- ) [ 2dup = [ 2drop ] [ drop fd-close ] if ] ;
@@ -63,7 +68,7 @@ private{
     tasks: V{ } @set!
     ch:    2 pick-n #len 1 + <buffered-channel> @set!
     over over [ spawn-connect ] curry #each
-    dup ch: @get [ connect-deadline ] curry spawn
+    dup holder: @get timeout: @get over ch: @get [ connect-deadline ] curry curry spawn
     over tasks: @get swap #push! drop
     dup ch: @get receive
     over tasks: @get [ dup cancel-task await-terminal ] #each
@@ -81,7 +86,7 @@ private{
 connect: ( addr -- stream ) [
   resolve
   dup #len 0 = [ drop f "connect: no addresses resolved" EIOFailed make-error throw ] [ ] if
-  M{ } tuck [ race-connect ] curry curry task-scope
+  M{ } timeout: connect-timeout get @set! tuck [ race-connect ] curry curry task-scope
   dup fd: @has? [ fd: @get dup fd-set-blocking fd>stream ] [ drop f "connect: connection failed" EIOFailed make-error throw ] if
 ] ;
 
