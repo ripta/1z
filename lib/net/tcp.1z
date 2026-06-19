@@ -1,6 +1,7 @@
 \ lib/tcp.1z - Mid-level TCP words
 
 use "net" ;
+use "time" ;
 
 server: virtual{ struct{ fd bound-addr } } ;
 
@@ -15,12 +16,73 @@ listen: ( addr backlog -- server ) [
   make-server
 ] ;
 
+private{
+  \\ How long a single connect race waits before giving up on every address.
+  connect-timeout: const [ 5 seconds ] ;
+
+  \\ One Happy-Eyeballs attempt: connect socket `fd` to `addr`, and on success hand the connected fd
+  \\ to `ch`. Any failure or cancellation simply ends the attempt. The orchestrator owns every socket
+  \\ and closes the ones that lose.
+  connect-attempt: ( ch fd addr -- ) [
+    [ over swap native.connect swap send ] ignore-errors
+  ] ;
+
+  \\ Create a socket for `addr`, record its fd in st's fds vector, spawn a connect attempt against it,
+  \\ and record the spawned task in st's tasks vector.
+  spawn-connect: ( addr st -- ) [
+    swap
+    over fds: @get over socket
+    tuck #push! drop
+    2 pick-n ch: @get
+    -rot> swap
+    [ connect-attempt ] curry curry curry spawn
+    over tasks: @get swap #push! drop
+    drop
+  ] ;
+
+  \\ Deadline sentinel task: after the timeout, push -1 onto `ch` so a fully stalled race gives up.
+  \\ Cancelled once a winner arrives.
+  connect-deadline: ( ch -- ) [ connect-timeout sleep -1 swap send ] ;
+
+  \\ Close `fd` unless it is the winning fd.
+  close-unless-winner: ( fd winner -- ) [ 2dup = [ 2drop ] [ drop fd-close ] if ] ;
+
+  \\ Race-connect to every resolved address concurrently.
+  \\ Delivers the winning fd into `holder` under `fd:`.
+  \\
+  \\ Runs as a scope task.
+  \\
+  \\ The orchestrator owns all sockets: it takes the first fd to connect, cancels the rest, and
+  \\ closes every socket that didn't win. The winning fd, which is a raw descriptor that outlives
+  \\ the scope, is handed back so the caller can wrap it in a stream on its own long-lived context.
+  \\ Building the stream inside the scope would tie it to the scope task's arena and leave it
+  \\ dangling once the scope tears down.
+  race-connect: ( addrs holder -- ) [
+    M{ } swap holder: swap @set!
+    fds:   V{ } @set!
+    tasks: V{ } @set!
+    ch:    2 pick-n #len 1 + <buffered-channel> @set!
+    over over [ spawn-connect ] curry #each
+    dup ch: @get [ connect-deadline ] curry spawn
+    over tasks: @get swap #push! drop
+    dup ch: @get receive
+    over tasks: @get [ dup cancel-task await-terminal ] #each
+    over fds: @get over [ close-unless-winner ] curry #each
+    dup 0 < [ drop ] [ over holder: @get fd: 2 pick-n @set! 2drop ] if
+    2drop
+  ] ;
+}
+
 \\ Connect to a remote TCP address and return a read-write stream.
+\\
+\\ Resolves the address and races a connect against every result concurrently (i.e., Happy Eyeballs).
+\\ It returning the first to connect so an unreachable address family, such as IPv6 on a v4-only host,
+\\ doesn't stall the whole `connect`.
 connect: ( addr -- stream ) [
-  resolve #first
-  dup socket
-  dup <rot- native.connect
-  fd>stream
+  resolve
+  dup #len 0 = [ drop f "connect: no addresses resolved" EIOFailed make-error throw ] [ ] if
+  M{ } tuck [ race-connect ] curry curry task-scope
+  dup fd: @has? [ fd: @get dup fd-set-blocking fd>stream ] [ drop f "connect: connection failed" EIOFailed make-error throw ] if
 ] ;
 
 \\ Accept a connection on a listening server.

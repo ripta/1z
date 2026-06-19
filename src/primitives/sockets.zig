@@ -19,6 +19,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "socket", .stack_effect = "addr -- fd", .doc = "Create socket; infers address family and type from addr variant.", .func = nativeSocket, .capability = .io_net },
     .{ .name = "bind", .stack_effect = "fd addr --", .doc = "Bind socket fd to resolved address.", .func = nativeBind, .capability = .io_net },
     .{ .name = "fd-close", .stack_effect = "fd --", .doc = "Close a raw file descriptor.", .func = nativeFdClose, .capability = .io_net },
+    .{ .name = "fd-set-blocking", .stack_effect = "fd --", .doc = "Clear O_NONBLOCK on a raw file descriptor, putting it in blocking mode.", .func = nativeFdSetBlocking, .capability = .io_net },
     .{ .name = "udp-sendto", .stack_effect = "fd data addr -- n", .doc = "Send datagram to address; data is string or byte-array; returns bytes sent.", .func = nativeUdpSendto, .capability = .io_net },
     .{ .name = "udp-recvfrom", .stack_effect = "fd maxlen -- data host port", .doc = "Receive datagram; returns byte-array data, sender host string, and port.", .func = nativeUdpRecvfrom, .capability = .io_net },
     .{ .name = "udp-send", .stack_effect = "fd data -- n", .doc = "Send datagram on connected socket; data is string or byte-array; returns bytes sent.", .func = nativeUdpSend, .capability = .io_net },
@@ -428,6 +429,17 @@ fn nativeFdClose(ctx: *Context) anyerror!void {
     if (fd_val < 0) return error.InvalidArgument;
     const fd: std.posix.fd_t = @intCast(fd_val);
     std.posix.close(fd);
+}
+
+/// fd-set-blocking ( fd -- )
+fn nativeFdSetBlocking(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "fd-set-blocking");
+
+    const fd_val = try popFixnum(ctx);
+    if (fd_val < 0) return error.InvalidArgument;
+
+    const fd: std.posix.fd_t = @intCast(fd_val);
+    clearNonBlocking(fd);
 }
 
 // =============================================================================
