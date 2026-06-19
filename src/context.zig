@@ -1508,10 +1508,15 @@ pub const Context = struct {
         }
     }
 
-    /// Remove a word from the top-level dictionary under the shared write lock.
+    /// Remove a word from the same scope `defineWordLocked` writes to: the
+    /// top-level local frame when one exists, otherwise the dictionary.
     pub fn removeWord(self: *Context, name: []const u8) bool {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
+        if (self.local_frames.items.len > 0) {
+            const top_index = self.local_frames.items.len - 1;
+            return self.local_frames.items[top_index].remove(name);
+        }
         return self.dictionary.remove(name);
     }
 

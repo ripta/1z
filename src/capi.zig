@@ -1003,7 +1003,13 @@ export fn onez_unregister_word(ptr: ?*anyopaque, name: ?[*:0]const u8) c_int {
         },
     }
 
-    _ = handle.ctx.removeWord(name_slice);
+    // Only free the tracked name once the definition is actually gone: the
+    // frame keys on the same allocation, so freeing while it remains keyed
+    // leaves a dangling hash-map key.
+    if (!handle.ctx.removeWord(name_slice)) {
+        setLastError(handle, "word '{s}' could not be removed", .{name_slice});
+        return ONEZ_ERR_KEY_NOT_FOUND;
+    }
 
     const allocator = handle.allocator;
     for (handle.host_words.items, 0..) |entry, i| {
@@ -2162,11 +2168,25 @@ fn captureError(handle: *OnezHandle, err: anyerror) void {
     const details = handle.ctx.error_details.items;
     if (details.len > 0) {
         const detail = details[0];
-        handle.last_error = allocPrintZ(
-            handle.allocator,
-            "{s}:{d}: error '{s}'",
-            .{ detail.source, detail.line, detail.error_type },
-        ) catch null;
+        // A host callback's custom message (set via onez_set_error) is folded
+        // into the innermost detail's message by captureCallStackOnError, so
+        // surface it the same way onez_print_error does: append it when it
+        // carries more than the word name.
+        if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
+            handle.last_error = allocPrintZ(
+                handle.allocator,
+                "{s}:{d}: error '{s}' {s}",
+                .{ detail.source, detail.line, detail.error_type, detail.message },
+            ) catch null;
+        } else {
+            handle.last_error = allocPrintZ(
+                handle.allocator,
+                "{s}:{d}: error '{s}'",
+                .{ detail.source, detail.line, detail.error_type },
+            ) catch null;
+        }
+    } else if (handle.ctx.pending_error_message) |msg| {
+        handle.last_error = allocPrintZ(handle.allocator, "{s}", .{msg}) catch null;
     } else {
         handle.last_error = allocPrintZ(
             handle.allocator,
@@ -2330,8 +2350,6 @@ test "register host word rejects invalid arguments" {
 }
 
 test "set_error provides custom message on callback failure" {
-    // BUG(ripta): the eval error path drops the callback's custom message
-    if (true) return error.SkipZigTest;
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
@@ -2348,9 +2366,6 @@ test "set_error provides custom message on callback failure" {
 }
 
 test "unregister_word removes host word" {
-    // BUG(ripta): a top-level host word is never removed and its name is freed while still keyed,
-    //             so the re-eval below is a use-after-free
-    if (true) return error.SkipZigTest;
     resetHostCallbackTestState();
 
     const handle_ptr = onez_init();
@@ -2400,9 +2415,6 @@ test "unregister_word rejects null arguments" {
 }
 
 test "unregister_word double unregister returns KEY_NOT_FOUND" {
-    // BUG(ripta): The first unregister frees the name while still keyed, so the second unregister's
-    //             lookup is a use-after-free.
-    if (true) return error.SkipZigTest;
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
