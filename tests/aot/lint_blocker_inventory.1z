@@ -1,0 +1,14 @@
+\ Baseline probe: the linter does not yet AOT-compile. Eight private
+\ linter / lexer words reached through `run-lint` are rejected by the C
+\ emitter because their bodies use row-variable stack shapes the AOT
+\ compiler cannot model yet: literal-count `array-n` packs, stack
+\ shuffles and `dip` reaching below a word's declared inputs into the
+\ symbolic row, `#nth!` indexed mutation, and `call`s to quotations of
+\ unknown effect (rule `check>>` / `match:` quotations and `#each` /
+\ `#map` bodies).
+\
+\ This pins the per-word blocker inventory. The golden shrinks as those
+\ codegen gaps close and individual words start compiling.
+use "lint" ;
+use "lint-rules" ;
+{ } run-lint drop

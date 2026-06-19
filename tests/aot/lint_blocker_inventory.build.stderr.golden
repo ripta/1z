@@ -1,0 +1,19 @@
+Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Error: 8 words could not be compiled to C
+  word '(lint-file)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word '(lint-rule-with-context)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word '(build-semantic-context)': NC.5: calls a quotation whose stack effect is unknown
+      hint: annotate the quotation parameter with a concrete stack effect
+  word '(lexer-step)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word '(try-rules)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word '(make-reciprocal-cycle-record)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word '(file-use-targets-only)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word '(extract-use-targets)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+AOT interpreter fallbacks: 267 total (native=251 per-op-native=3 compound-uncompiled=12 quotation=1)
