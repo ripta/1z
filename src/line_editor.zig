@@ -59,6 +59,11 @@ pub const LineEditor = struct {
     /// Initialize the LineEditor by saving the current terminal settings and switching to raw mode.
     pub fn init(allocator: std.mem.Allocator) !LineEditor {
         const fd = std.posix.STDIN_FILENO;
+        // Raw-mode line editing requires a controlling terminal. When stdin is
+        // not a TTY (a pipe, or a test harness with no terminal), bail with a
+        // clean error rather than letting tcgetattr fail with an unexpected
+        // errno and dump a stack trace; callers fall back to a null editor.
+        if (!std.posix.isatty(fd)) return error.NotATerminal;
         const original = try std.posix.tcgetattr(fd);
 
         var raw = original;

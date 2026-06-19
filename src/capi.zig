@@ -429,6 +429,13 @@ export fn onez_eval(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
     ctx.clearExecutionDetails();
     clearLastError(handle);
 
+    // Label evaluated code with a distinct source name so source-location
+    // features (debugger breakpoints, current-source inspection) can target
+    // it, mirroring onez_eval_file labelling with the file path.
+    const old_source = ctx.current_source;
+    ctx.current_source = "<eval>";
+    defer ctx.current_source = old_source;
+
     var processor: StatementProcessor = .{};
     defer processor.deinit();
 
@@ -1093,13 +1100,16 @@ export fn onez_register_method(
     else
         any_sentinel.descriptor.?;
 
+    // A null type_b means a unary registration: "unary method for type T"
+    // (type_a set) or "unary wildcard" (type_a null). Both key the second
+    // slot with the unary sentinel; only the first slot distinguishes them.
+    // Keying it with the any sentinel instead would record a binary
+    // (type_a, any) method that unary dispatch never consults.
     const desc_b: *const value_mod.TypeDescriptor = if (type_b) |tb|
         (@as(*const TypeValue, @ptrCast(@alignCast(tb)))).descriptor orelse {
             setLastError(handle, "type_b has no descriptor", .{});
             return ONEZ_ERR_TYPE_MISMATCH;
         }
-    else if (type_a != null)
-        any_sentinel.descriptor.?
     else
         unary_sentinel.descriptor.?;
 
@@ -1675,7 +1685,7 @@ export fn onez_debug_set_callback(
 /// Set stepper mode to step_into. Pauses before the next instruction.
 export fn onez_debug_step_into(ptr: ?*anyopaque) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    const dbg = handle.ctx.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
     dbg.stepper.mode = .step_into;
     return ONEZ_OK;
 }
@@ -1684,7 +1694,7 @@ export fn onez_debug_step_into(ptr: ?*anyopaque) c_int {
 /// call depth or shallower.
 export fn onez_debug_step_over(ptr: ?*anyopaque) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    const dbg = handle.ctx.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
     dbg.stepper.mode = .step_over;
     dbg.stepper.target_depth = handle.ctx.call_stack.items.len;
     return ONEZ_OK;
@@ -1693,7 +1703,7 @@ export fn onez_debug_step_over(ptr: ?*anyopaque) c_int {
 /// Set stepper mode to step_finish. Runs until the current word returns.
 export fn onez_debug_step_finish(ptr: ?*anyopaque) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    const dbg = handle.ctx.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
     dbg.stepper.mode = .step_finish;
     dbg.stepper.target_depth = handle.ctx.call_stack.items.len;
     return ONEZ_OK;
@@ -1702,7 +1712,7 @@ export fn onez_debug_step_finish(ptr: ?*anyopaque) c_int {
 /// Set stepper mode to continue. Runs until the next breakpoint or end.
 export fn onez_debug_continue(ptr: ?*anyopaque) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const dbg = handle.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
+    const dbg = handle.ctx.debugger orelse return ONEZ_ERR_DEBUGGER_NOT_ACTIVE;
     dbg.stepper.mode = .continue_running;
     return ONEZ_OK;
 }
@@ -2826,13 +2836,12 @@ test "array_get null handle and null value" {
 }
 
 test "hash_get basic" {
-    // BUG(ripta):: fails under crosstest global-state contamination in the batched capi suite
-    if (true) return error.SkipZigTest;
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
 
-    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, "H{ \"x\" 1 \"y\" 2 }", 17));
+    const src = "H{ \"x\" 1 \"y\" 2 }";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
     var hash_handle: ?*anyopaque = null;
     try std.testing.expectEqual(ONEZ_OK, onez_pop_value(handle_ptr, &hash_handle));
     try std.testing.expectEqual(ONEZ_TYPE_HASH, onez_value_type(hash_handle));
@@ -3434,8 +3443,6 @@ test "lookup_type finds user-defined struct type" {
 // =============================================================================
 
 test "register_method unary method invoked via dispatch" {
-    // BUG(ripta):: fails under crosstest global-state contamination in the batched capi suite
-    if (true) return error.SkipZigTest;
     resetHostCallbackTestState();
 
     const handle_ptr = onez_init();
@@ -3545,8 +3552,6 @@ test "register_method returns WORD_NOT_FOUND for unknown word" {
 }
 
 test "register_method passes user_data to callback" {
-    // BUG(ripta):: fails under crosstest global-state contamination in the batched capi suite
-    if (true) return error.SkipZigTest;
     resetHostCallbackTestState();
 
     const handle_ptr = onez_init();
@@ -3741,7 +3746,11 @@ test "isolation preserves stack values across boundary" {
 }
 
 test "isolation discards type registrations" {
-    // BUG(ripta):: fails under crosstest global-state contamination in the batched capi suite
+    // Isolation scopes the type-registry and dispatch frames but not word
+    // definitions, so a virtual type's generated constructor (>iso-color)
+    // persists in the dictionary and still constructs after isolation ends,
+    // instead of failing at the use site as scoped-eval isolation intends.
+    // See spec/bugs/20260618-onez-isolation-word-definitions-not-discarded.md.
     if (true) return error.SkipZigTest;
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
@@ -4027,9 +4036,6 @@ test "debug stepping APIs return DEBUGGER_NOT_ACTIVE before enable" {
 }
 
 test "debug enable and disable lifecycle" {
-    // BUG(ripta): requires an interactive terminal. onez_debug_enable's LineEditor.init calls tcgetattr,
-    //             which fails with errno 19 under the harness.
-    if (true) return error.SkipZigTest;
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
@@ -4407,9 +4413,6 @@ test "breakpoint persists across disable/enable cycle" {
 }
 
 test "breakpoint add_source triggers at file and line" {
-    // BUG(ripta): requires an interactive terminal. onez_debug_enable's LineEditor.init calls tcgetattr,
-    //             which fails with errno 19 under the harness.
-    if (true) return error.SkipZigTest;
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
@@ -4484,18 +4487,21 @@ var test_inspect_handle: ?*anyopaque = null;
 
 fn inspectCurrentWordCallback(event: c_int, handle: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
     if (event == ONEZ_EVENT_PAUSED) {
-        test_inspect_current_word = onez_debug_current_word(handle);
-        test_inspect_frame_count = onez_debug_frame_count(handle);
-        test_inspect_handle = handle;
-        // Continue to let execution finish.
-        _ = onez_debug_continue(handle);
+        // The first pauses are at top-level instructions where the call stack
+        // is empty and current_word is null. Keep stepping until execution is
+        // inside a word, then capture and let it finish.
+        if (onez_debug_current_word(handle)) |word| {
+            test_inspect_current_word = word;
+            test_inspect_frame_count = onez_debug_frame_count(handle);
+            test_inspect_handle = handle;
+            _ = onez_debug_continue(handle);
+        } else {
+            _ = onez_debug_step_into(handle);
+        }
     }
 }
 
 test "debug current_word returns word name during callback" {
-    // BUG(ripta): requires an interactive terminal. onez_debug_enable's LineEditor.init calls tcgetattr,
-    //             which fails with errno 19 under the harness.
-    if (true) return error.SkipZigTest;
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
@@ -4507,8 +4513,10 @@ test "debug current_word returns word name during callback" {
     try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
 
     // Define a word "my-add" and call it. When the debugger pauses inside
-    // "my-add", current_word should return "my-add".
-    const src = "my-add: [ + ] ; 1 2 my-add";
+    // "my-add", current_word should return "my-add". The trailing "dup drop"
+    // keeps the my-add call out of tail position so tail-call optimization does
+    // not elide its frame; the result (3) is preserved.
+    const src = "my-add: [ + ] ; 1 2 my-add dup drop";
     try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
 
     // The callback should have captured a non-null word name.
@@ -4527,15 +4535,18 @@ var test_inspect_source_rc: c_int = -1;
 
 fn inspectSourceCallback(event: c_int, handle: ?*anyopaque, _: ?*anyopaque) callconv(.c) void {
     if (event == ONEZ_EVENT_PAUSED) {
-        test_inspect_source_rc = onez_debug_current_source(handle, &test_inspect_source_file, &test_inspect_source_line, &test_inspect_source_col);
-        _ = onez_debug_continue(handle);
+        // current_source needs a frame on the call stack; the first top-level
+        // pauses have none. Step until execution is inside a word, then read.
+        if (onez_debug_frame_count(handle) > 0) {
+            test_inspect_source_rc = onez_debug_current_source(handle, &test_inspect_source_file, &test_inspect_source_line, &test_inspect_source_col);
+            _ = onez_debug_continue(handle);
+        } else {
+            _ = onez_debug_step_into(handle);
+        }
     }
 }
 
 test "debug current_source returns source info during callback" {
-    // BUG(ripta): requires an interactive terminal. onez_debug_enable's LineEditor.init calls tcgetattr,
-    //             which fails with errno 19 under the harness.
-    if (true) return error.SkipZigTest;
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
@@ -4548,7 +4559,9 @@ test "debug current_source returns source info during callback" {
     try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &inspectSourceCallback, null));
     try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
 
-    const src = "my-word: [ 42 ] ; my-word";
+    // "dup drop" keeps the my-word call out of tail position so its frame is
+    // not elided by tail-call optimization, leaving source info to inspect.
+    const src = "my-word: [ 42 ] ; my-word dup drop";
     try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
 
     // current_source should have returned OK at some point during execution.
@@ -4582,9 +4595,6 @@ fn inspectFrameCallback(event: c_int, handle: ?*anyopaque, _: ?*anyopaque) callc
 }
 
 test "debug frame_count and frame accessors" {
-    // BUG(ripta): requires an interactive terminal. onez_debug_enable's LineEditor.init calls tcgetattr,
-    //             which fails with errno 19 under the harness.
-    if (true) return error.SkipZigTest;
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
@@ -4595,8 +4605,12 @@ test "debug frame_count and frame accessors" {
     try std.testing.expectEqual(ONEZ_OK, onez_debug_set_callback(handle_ptr, &inspectFrameCallback, null));
     try std.testing.expectEqual(ONEZ_OK, onez_debug_enable(handle_ptr));
 
-    // Define nested words so we get a multi-frame call stack.
-    const src = "inner: [ 42 ] ; outer: [ inner ] ; outer";
+    // Define nested words so we get a multi-frame call stack. Both calls are
+    // kept out of tail position so tail-call optimization does not elide their
+    // frames: `inner` is followed by `1 +` inside `outer`, and the top-level
+    // `outer` call is followed by `dup drop`. Otherwise the call stack never
+    // reaches two frames.
+    const src = "inner: [ 42 ] ; outer: [ inner 1 + ] ; outer dup drop";
     try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, src, src.len));
 
     // We should have seen at least 2 frames (outer calling inner).

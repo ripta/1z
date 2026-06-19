@@ -17,6 +17,7 @@ pub fn main() void {
     @disableInstrumentation();
 
     const tests = builtin.test_functions;
+    const name_filter = std.posix.getenv("ONEZ_TEST_FILTER");
     var ok_count: usize = 0;
     var skip_count: usize = 0;
     var fail_count: usize = 0;
@@ -25,6 +26,9 @@ pub fn main() void {
     var total_log_err_count: usize = 0;
 
     for (tests) |test_fn| {
+        if (name_filter) |needle| {
+            if (std.mem.indexOf(u8, test_fn.name, needle) == null) continue;
+        }
         testing.allocator_instance = .{};
         testing.log_level = .warn;
         log_err_count = 0;
