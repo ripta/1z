@@ -570,10 +570,16 @@ export fn onez_eval_file(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
     return ONEZ_OK;
 }
 
-/// Push an isolation frame. Type registrations, dispatch entries, and
-/// protocol obligations created after this call are scoped: they will
-/// be discarded when onez_isolation_end is called. Stack values are
+/// Push an isolation frame. Word definitions, type registrations, dispatch
+/// entries, and protocol obligations created after this call are scoped: they
+/// will be discarded when onez_isolation_end is called. Stack values are
 /// not affected.
+///
+/// The local frame mirrors what `with-isolation` already does for 1z-level
+/// scoped eval: it runs its body through executeQuotationWithFrame, so words
+/// defined inside land in a per-scope frame and vanish on exit. Without it, a
+/// virtual type's generated constructor would survive into the dictionary and
+/// keep constructing after the scope ended.
 export fn onez_isolation_begin(ptr: ?*anyopaque) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
@@ -599,6 +605,15 @@ export fn onez_isolation_begin(ptr: ?*anyopaque) c_int {
     };
     ctx.protocol_obligations = .{};
 
+    ctx.pushLocalFrame() catch {
+        ctx.protocol_obligations.deinit(ctx.allocator);
+        ctx.protocol_obligations = handle.saved_obligation_frames.pop().?;
+        ctx.popDispatchFrame();
+        ctx.popTypeRegistryFrame();
+        setLastError(handle, "isolation begin: local frame alloc failed", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+
     return ONEZ_OK;
 }
 
@@ -618,6 +633,7 @@ export fn onez_isolation_end(ptr: ?*anyopaque) c_int {
     ctx.protocol_obligations.deinit(ctx.allocator);
     ctx.protocol_obligations = handle.saved_obligation_frames.pop().?;
 
+    ctx.popLocalFrame();
     ctx.popDispatchFrame();
     ctx.popTypeRegistryFrame();
 
@@ -3746,29 +3762,31 @@ test "isolation preserves stack values across boundary" {
 }
 
 test "isolation discards type registrations" {
-    // Isolation scopes the type-registry and dispatch frames but not word
-    // definitions, so a virtual type's generated constructor (>iso-color)
-    // persists in the dictionary and still constructs after isolation ends,
-    // instead of failing at the use site as scoped-eval isolation intends.
-    // See spec/bugs/20260618-onez-isolation-word-definitions-not-discarded.md.
-    if (true) return error.SkipZigTest;
+    // Isolation pushes a local frame, so definitions made inside the scope --
+    // including a virtual type's generated constructor (>iso-color) and a plain
+    // compound word -- are discarded on isolation end and no longer resolve,
+    // matching the 1z-level with-isolation combinator.
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
 
     try std.testing.expectEqual(ONEZ_OK, onez_isolation_begin(handle_ptr));
 
-    // Define a virtual type and use its constructor inside isolation.
+    // Define a virtual type and a plain word, and use them inside isolation.
     const define_code = "iso-color: virtual{ string } ;";
     try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, define_code, define_code.len));
-    const inside_code = "\"red\" >iso-color drop";
+    const define_plain = "iso-plain: [ 1 ] ;";
+    try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, define_plain, define_plain.len));
+    const inside_code = "\"red\" >iso-color drop iso-plain drop";
     try std.testing.expectEqual(ONEZ_OK, onez_eval(handle_ptr, inside_code, inside_code.len));
 
     try std.testing.expectEqual(ONEZ_OK, onez_isolation_end(handle_ptr));
 
-    // After isolation, the constructor should no longer find its type descriptor.
+    // After isolation, neither definition should resolve.
     const outside_code = "\"red\" >iso-color";
     try std.testing.expect(onez_eval(handle_ptr, outside_code, outside_code.len) != ONEZ_OK);
+    const outside_plain = "iso-plain";
+    try std.testing.expect(onez_eval(handle_ptr, outside_plain, outside_plain.len) != ONEZ_OK);
 }
 
 test "isolation discards dispatch entries" {

@@ -189,10 +189,10 @@ int onez_eval_file(onez_t ctx, const char *path);
 /* ---- Isolation ---- */
 
 /*
- * Push an isolation frame. Type registrations, dispatch entries, and
- * protocol obligations created after this call are scoped: they will
- * be discarded when onez_isolation_end is called. Stack values are
- * not affected -- only type-system side effects are isolated.
+ * Push an isolation frame. Word definitions, type registrations, dispatch
+ * entries, and protocol obligations created after this call are scoped: they
+ * will be discarded when onez_isolation_end is called. Stack values are
+ * not affected -- only definitions and type-system side effects are isolated.
  *
  * Isolation frames nest: each begin must have a matching end.
  *
@@ -201,8 +201,8 @@ int onez_eval_file(onez_t ctx, const char *path);
 int onez_isolation_begin(onez_t ctx);
 
 /*
- * Pop an isolation frame, discarding type-system side effects created
- * since the matching onez_isolation_begin call.
+ * Pop an isolation frame, discarding the word definitions and type-system
+ * side effects created since the matching onez_isolation_begin call.
  *
  * Must be called even if evaluation within the isolation scope failed,
  * to ensure frames are properly cleaned up.
