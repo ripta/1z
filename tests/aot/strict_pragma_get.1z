@@ -1,0 +1,7 @@
+\ Strict-mode rejection of `pragma-get?`: a row-variable word whose body
+\ underflows the abstract stack in a way the row-underflow fallback deliberately
+\ does not model (the row does not sit at the bottom slot it can settle). It must
+\ stay uncompilable, so calling it from compiled code surfaces as a build error
+\ in --interpreter-fallback=false mode, naming `pragma-get?` as the compound
+\ callee. This guards the fallback against future over-broadening.
+some-pragma: pragma-get? drop

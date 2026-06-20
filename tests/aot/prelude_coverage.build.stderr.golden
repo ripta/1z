@@ -1,4 +1,4 @@
-Prelude compilation: 379/397 words compiled (95.5%)
+Prelude compilation: 383/397 words compiled (96.5%)
   word '#all' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -9,8 +9,8 @@ Prelude compilation: 379/397 words compiled (95.5%)
       NC.8: a quotation in abstract form must become a concrete runtime value
       hint: blocked until quotation bodies can be compiled
   word 'cond' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
+      NC.8: a quotation in abstract form must become a concrete runtime value
+      hint: blocked until quotation bodies can be compiled
   word 'bytes-alloc-ptr' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -26,24 +26,12 @@ Prelude compilation: 379/397 words compiled (95.5%)
   word '(stream-write-exact-step)' cannot be compiled
       NC.5: calls a quotation whose stack effect is unknown
       hint: annotate the quotation parameter with a concrete stack effect
-  word 'trace-stack' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word '1check' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
   word 'tri' cannot be compiled
       NC.8: a quotation in abstract form must become a concrete runtime value
       hint: blocked until quotation bodies can be compiled
-  word 'loop' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
   word '#any' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  word 'while' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
@@ -54,7 +42,7 @@ Prelude compilation: 379/397 words compiled (95.5%)
       NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
 Quotation bodies compiled: 0
-Inline PIC sites: 17/61 generic call sites preseeded
+Inline PIC sites: 17/65 generic call sites preseeded
 AOT interpreter fallbacks: 244 total
   native: 232
   compound-uncompiled: 4

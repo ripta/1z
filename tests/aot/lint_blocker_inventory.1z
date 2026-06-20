@@ -12,6 +12,13 @@
 \ `(make-reciprocal-cycle-record)`), so the set shrank from eight words to
 \ six.
 \
+\ Modeling concrete-arity ops that reach below a word's declared inputs into
+\ the implicit caller row -- emitting them against the live stack and
+\ collapsing to a row instead of rejecting as an abstract underflow --
+\ unblocked `(file-use-targets-only)` (its `nip` reaches below its one input),
+\ so the set shrank from six words to five. The remaining five are blocked on
+\ `call`s to quotations of unknown effect.
+\
 \ This pins the per-word blocker inventory. The golden shrinks as those
 \ codegen gaps close and individual words start compiling.
 use "lint" ;

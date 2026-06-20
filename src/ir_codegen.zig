@@ -3326,6 +3326,10 @@ fn emitDynamicRowFallback(
     const ctx_val = emitCallbackPreamble(state, sp.*);
     if (resolved.is_native) {
         emitNativeWordCall(state, ctx_val, name, resolved, line);
+    } else if (resolved.is_generic) {
+        // A generic compound must dispatch to its registered method, not its
+        // default body; emitAotWordCall would call the body directly.
+        emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
     } else {
         emitAotWordCall(state, ctx_val, name, resolved, line);
     }
@@ -3336,6 +3340,29 @@ fn emitDynamicRowFallback(
         return true;
     }
     return false;
+}
+
+/// Route an inline stack op (`swap`/`over`/`dup`) that reached below the
+/// abstract base into the implicit caller row: resolve it as a native and emit
+/// it against the live physical stack via emitDynamicRowFallback, collapsing the
+/// abstract stack to a fresh row_region. Returns true to `continue`, false to
+/// `break`. Caller must already be in aot_mode.
+fn emitInlineRowUnderflow(
+    state: *CompileState,
+    stack: []StackEntry,
+    sp: *usize,
+    name: []const u8,
+    line: usize,
+) IrCodegenError!bool {
+    const res = state.resolver orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+    const resolved = res.resolve(name, res.user_data) orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+    return emitDynamicRowFallback(state, stack, sp, name, resolved, line);
 }
 
 /// Emit a polymorphic struct native call (make-struct-instance,
@@ -4414,7 +4441,13 @@ fn compileInstructions(
             .call_word, .call_word_direct => {
                 const name = instr.op.callTargetName().?;
                 if (std.mem.eql(u8, name, "dup")) {
-                    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+                    if (sp.* < 1) {
+                        if (state.aot_mode) {
+                            if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
+                            break;
+                        }
+                        return IrCodegenError.StackUnderflow;
+                    }
                     stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 1], sp.*);
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "drop")) {
@@ -4441,7 +4474,16 @@ fn compileInstructions(
                         sp.* -= 1;
                     }
                 } else if (std.mem.eql(u8, name, "swap")) {
-                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+                    if (sp.* < 2) {
+                        // Reaches one below the abstract base into the caller
+                        // row (the `swap drop` shape after a row-collapsing
+                        // call); emit native swap against the live stack.
+                        if (state.aot_mode) {
+                            if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
+                            break;
+                        }
+                        return IrCodegenError.StackUnderflow;
+                    }
                     const top = stack[sp.* - 1];
                     const second = stack[sp.* - 2];
                     // Track swap abstractly without physical modification.
@@ -4449,7 +4491,13 @@ fn compileInstructions(
                     stack[sp.* - 2] = top;
                     stack[sp.* - 1] = second;
                 } else if (std.mem.eql(u8, name, "over")) {
-                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+                    if (sp.* < 2) {
+                        if (state.aot_mode) {
+                            if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
+                            break;
+                        }
+                        return IrCodegenError.StackUnderflow;
+                    }
                     stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 2], sp.*);
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "t")) {
@@ -5536,6 +5584,16 @@ fn compileInstructions(
                                 const target = sp.* - 2 - depth;
                                 if (findRowRegionIndex(stack, sp.*)) |row_idx| {
                                     if (target <= row_idx) {
+                                        // The indexed op reaches into the opaque
+                                        // row. In AOT mode emit the native
+                                        // against the live stack -- it addresses
+                                        // the slot from the runtime depth -- and
+                                        // collapse to a row, as the runtime-depth
+                                        // case below already does.
+                                        if (state.aot_mode) {
+                                            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
+                                            break;
+                                        }
                                         state.not_compilable_reason = .indexed_access_into_row;
                                         return IrCodegenError.NotCompilable;
                                     }
@@ -5605,7 +5663,17 @@ fn compileInstructions(
 
                     if (resolved.is_native) {
                         // Generic native word callback
-                        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
+                        if (sp.* < effective_in) {
+                            // Reaching below the declared inputs touches the
+                            // implicit caller row. In AOT mode emit the native
+                            // against the live stack and collapse to a row,
+                            // rather than rejecting as an abstract underflow.
+                            if (state.aot_mode) {
+                                if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
+                                break;
+                            }
+                            return IrCodegenError.StackUnderflow;
+                        }
 
                         try materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
@@ -5639,7 +5707,13 @@ fn compileInstructions(
                         // the AOT binary works across process boundaries. The
                         // protocol and combinator bounds use parallel slot
                         // tables and helper exports.
-                        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
+                        if (sp.* < effective_in) {
+                            // Reaches into the implicit caller row: route the
+                            // bounded generic through plain generic dispatch
+                            // against the live stack and collapse to a row.
+                            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
+                            break;
+                        }
 
                         try materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
@@ -5658,7 +5732,14 @@ fn compileInstructions(
                         // A plain (non-bounded) generic instead routes through the
                         // dispatch helper so a registered method runs, falling to
                         // the word's default body on a miss.
-                        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
+                        if (sp.* < effective_in) {
+                            // A compound or generic word reaching below its
+                            // declared inputs touches the implicit caller row;
+                            // emit it against the live stack and collapse to a
+                            // row. This is the `(file-use-targets) nip` shape.
+                            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
+                            break;
+                        }
 
                         try materializeQuotations(state, stack, sp.*);
                         flushToPhysicalStack(state, stack, sp.*);
@@ -14345,6 +14426,71 @@ test "array-n fold: settling preserves a row below the packed elements" {
     try testing.expectEqual(@as(usize, 2), sp);
     try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
+}
+
+// --- row-underflow fallback tests ---
+
+const RowUnderflowResolver = struct {
+    fn resolve(name: []const u8, _: *anyopaque) ?ResolvedWord {
+        if (std.mem.eql(u8, name, "swap")) {
+            return .{ .word_id = 0, .input_count = 2, .output_count = 2, .is_native = true };
+        }
+        return null;
+    }
+};
+
+test "row underflow: a word reaching below its declared inputs compiles in AOT mode" {
+    // `( a -- b ) [ swap ]` -- swap needs two operands but the word declares one,
+    // so it reaches one below the abstract base into the implicit caller row. AOT
+    // codegen emits the op against the live stack and collapses to a row instead
+    // of rejecting as an abstract underflow.
+    var dummy: u8 = 0;
+    const resolver = WordResolver{
+        .resolve = RowUnderflowResolver.resolve,
+        .user_data = @ptrCast(&dummy),
+        .dispatch_table_ptr = @ptrFromInt(1),
+    };
+    const instrs = makeInstructions(.{"swap"});
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    const source = try emitWordCAot(
+        &instrs,
+        1,
+        1,
+        "reach-below",
+        resolver,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+    );
+    defer testing.allocator.free(source);
+    // The word body compiled to a C function rather than being rejected.
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_reach_below") != null);
+}
+
+test "row underflow: the same word is rejected in non-AOT (JIT) C emission" {
+    // emitWordC does not set aot_mode, so reaching below the abstract base stays
+    // a StackUnderflow -- JIT behavior is unchanged by the AOT-only fallback.
+    const instrs = makeInstructions(.{"swap"});
+    try testing.expectError(
+        IrCodegenError.StackUnderflow,
+        emitWordC(&instrs, 1, 1, "reach-below", testing.allocator),
+    );
 }
 
 // --- rewriteIndexedStackOp tests ---

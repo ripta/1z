@@ -1,0 +1,29 @@
+\ Reaching into a symbolic row with concrete-arity ops. A runtime-depth
+\ `drop-at` removes an element at a runtime-computed depth and collapses the
+\ remaining stack into an opaque row the AOT compiler cannot statically size.
+\ Concrete-arity operations that then reach into that row -- `nip`, `swap drop`,
+\ `over`, a literal-depth `pick-n`, and `#nth!` -- are emitted against the live
+\ physical stack and collapse to a fresh row, instead of rejecting as an
+\ abstract underflow. Built under runtime-image AOT, so these results come from
+\ the compiled path and match the interpreter.
+
+\ nip into the row: drop-at leaves [10 20 30 40]; nip drops 30 -> [10 20 40]
+10 20 30 40 50 0 drop-at nip . . .
+"--" print-line
+
+\ swap drop into the row: leaves [10 20 30 40]; swap -> [10 20 40 30]; drop -> [10 20 40]
+10 20 30 40 50 0 drop-at swap drop . . .
+"--" print-line
+
+\ over into the row: leaves [10 20 30 40]; over clones 30 -> [10 20 30 40 30]
+10 20 30 40 50 0 drop-at over . . . . .
+"--" print-line
+
+\ literal-depth pick-n reaching into the row: leaves [10 20 30 40], push v=99;
+\ `1 pick-n` clones the element one below v, which lives inside the row (40)
+10 20 30 40 50 0 drop-at 99 1 pick-n . . . . . .
+"--" print-line
+
+\ #nth! reaching into the row for its seq and index: [V 0] collapses to a row,
+\ then `99 #nth!` mutates V[0] through the row; read it back as 99
+V{ 7 8 9 } 0 5 0 drop-at 99 #nth! 0 #nth .

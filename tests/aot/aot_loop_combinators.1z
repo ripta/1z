@@ -1,0 +1,10 @@
+\ `while` and `loop` are row-variable loop combinators: each body ends in a
+\ recursive self-call whose effect reaches below the word's declared inputs into
+\ the symbolic row. Modeling that reach-below shape lets the AOT compiler emit
+\ their word bodies as native C (the predicate and body quotations still run
+\ through the interpreter) instead of rejecting them with an abstract underflow.
+\ Built under runtime-image AOT, so these results come from the compiled
+\ combinator bodies and match the interpreter.
+0 [ dup 3 < ] [ 1 + ] while .
+"--" print-line
+0 [ 1 + dup 3 < ] loop .
