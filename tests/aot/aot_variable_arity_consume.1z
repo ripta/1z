@@ -1,0 +1,19 @@
+\ Consuming a variable-arity result with positional shuffles in the
+\ discriminated arm. A runtime-depth `drop-at` collapses the stack into an
+\ opaque row whose depth is runtime-determined -- the variable-arity producer.
+\ A consumer that then pushes a literal above the row and `swap`s it cannot be
+\ tracked as an abstract reorder: that would move the row off its pinned slot 0
+\ and desync a later live sp-relative op. Instead the swap emits a native swap
+\ against the live physical stack and collapses to a fresh row pinned at slot 0,
+\ the same sp-relative path the indexed ops use. Built under runtime-image AOT,
+\ so these results come from the compiled path and match the interpreter.
+
+\ swap with a literal pushed above the row: drop-at leaves [10 20 30 40] as a
+\ row; push 99; the swap exchanges 99 with the row's top (40) -> [10 20 30 99 40]
+10 20 30 40 50 0 drop-at 99 swap . . . . .
+"--" print-line
+
+\ the (lexer-step) store-back shape: [V 1] collapses to a row; `0 swap` pushes 0
+\ and swaps it under the row top (1), giving idx 0 / val 1 for `#nth!`, which
+\ stores V[0] = 1; reading V[1] back proves the swap reordered the right slots
+V{ 7 8 9 } 1 5 0 drop-at 0 swap #nth! 1 #nth .

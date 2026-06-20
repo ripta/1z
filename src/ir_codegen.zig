@@ -4683,12 +4683,14 @@ fn compileInstructions(
                     const top = stack[sp.* - 1];
                     const second = stack[sp.* - 2];
                     if (state.aot_mode and (top == .row_region or second == .row_region)) {
-                        // Reordering a row off its pinned slot would desync a
-                        // later live sp-relative op against the physical stack.
-                        // Reject to interpreter fallback rather than emit an
-                        // unsound abstract reorder that silently miscompiles.
-                        state.not_compilable_reason = .abstract_stack_underflow;
-                        return IrCodegenError.NotCompilable;
+                        // A swap whose pair touches the row cannot be tracked as
+                        // an abstract reorder -- that would move the row off its
+                        // pinned slot 0 and desync a later live sp-relative op.
+                        // Emit the native swap against the live physical stack
+                        // and collapse to a fresh row pinned at slot 0, the same
+                        // sp-relative path the indexed ops and the sp<2 swap use.
+                        if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
+                        break;
                     }
                     // Track swap abstractly without physical modification.
                     // flushToPhysicalStack resolves cross-references later.
@@ -4702,7 +4704,11 @@ fn compileInstructions(
                         }
                         return IrCodegenError.StackUnderflow;
                     }
-                    if (state.aot_mode and stack[sp.* - 2] == .row_region) {
+                    if (state.aot_mode and (stack[sp.* - 1] == .row_region or stack[sp.* - 2] == .row_region)) {
+                        // The over source or the top is the row: cloning a
+                        // concrete value above the row would un-pin it, so emit
+                        // the native over against the live stack and collapse to
+                        // a fresh row pinned at slot 0.
                         if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
                         break;
                     }
@@ -14906,11 +14912,11 @@ test "mergedVariableArity: concrete arms reset, opaque-row arms accumulate" {
     try testing.expect(mergedVariableArity(false, 2, 1, true));
 }
 
-test "swap over a row is rejected in AOT mode" {
-    // `( a -- ... ) [ swap 5 swap ]` -- the first swap reaches below the declared
-    // input and collapses to a row; pushing a literal and swapping would reorder
-    // the row off its slot, which cannot be modeled faithfully, so AOT codegen
-    // rejects rather than emit an unsound abstract reorder.
+test "swap over a row compiles in AOT mode with the row pinned at slot 0" {
+    // `( a -- b ) [ swap 5 swap ]` -- the first swap reaches below the declared
+    // input and collapses to a row; pushing the literal 5 and swapping it under
+    // the row top now emits a native swap against the live stack and collapses to
+    // a fresh row pinned at slot 0, rather than rejecting as an abstract reorder.
     var dummy: u8 = 0;
     const resolver = WordResolver{
         .resolve = RowUnderflowResolver.resolve,
@@ -14921,7 +14927,7 @@ test "swap over a row is rejected in AOT mode" {
     var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compiled_names.deinit(testing.allocator);
 
-    try testing.expectError(IrCodegenError.NotCompilable, emitWordCAot(
+    const source = try emitWordCAot(
         &instrs,
         1,
         1,
@@ -14945,7 +14951,10 @@ test "swap over a row is rejected in AOT mode" {
         false,
         null,
         false,
-    ));
+    );
+    defer testing.allocator.free(source);
+    // The word body compiled to a C function rather than being rejected.
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_swap_over_row") != null);
 }
 
 // --- rewriteIndexedStackOp tests ---

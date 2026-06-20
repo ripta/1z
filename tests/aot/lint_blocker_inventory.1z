@@ -29,15 +29,20 @@
 \ variable-arity callee.
 \
 \ Recognizing `(try-rules)` as variable-arity (so a caller collapses its result
-\ to a row instead of trusting the declared two outputs) requires rejecting any
-\ inline `swap` that would reorder that row off its slot -- such a reorder
-\ silently miscompiles, so it falls back to the interpreter instead. The reject
-\ is deliberately coarse: it also catches `(build-semantic-context)`, whose
-\ swap-over-a-row is faithful but not yet modeled, so the set is back to two
-\ words. Modeling the pinned-row shuffles re-admits both.
+\ to a row instead of trusting the declared two outputs) and then emitting the
+\ inline `swap` that reorders that row as a live native swap pinned at slot 0
+\ re-admits both `(build-semantic-context)` and `(lexer-step)`, so the
+\ row-variable blocker set is now empty -- the per-word "could not be compiled"
+\ inventory is gone.
 \
-\ This pins the per-word blocker inventory. The golden shrinks as those
-\ codegen gaps close and individual words start compiling.
+\ With the row-variable wall cleared, the build now halts at a separate blocker
+\ that is not about row-variable codegen: the AOT image serializer cannot encode
+\ a `struct_instance` value, and the lint rules registry is a mutable map holding
+\ rule records as struct instances. This surfaces as a generic
+\ "Error generating C source: NotCompilable". Encoding struct instances into the
+\ image is its own concern, tracked with the full lint-driver build rather than
+\ here; this golden pins that struct-instance serialization is the current
+\ residual.
 use "lint" ;
 use "lint-rules" ;
 { } run-lint drop
