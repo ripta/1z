@@ -1,0 +1,23 @@
+\ A concrete `pick-n` that buries a quotation, a `swap` that brings it back to
+\ the top, then a `call`. This is the `(try-rules)` pre-call shuffle
+\ (`2 pick-n swap call`): pick a value up from depth 2, swap the quotation back
+\ to the top, call it against the picked value. The `pick-n` leaves the abstract
+\ stack holding a cross-slot reference (the picked value lives at a physical slot
+\ above where the quotation sat), so the `call` must flush that rearrangement to
+\ physical memory before invoking the quotation. The compiled `call` emits the
+\ flush twice -- once for the interpreter-fallback branch and once for the
+\ direct-code-ptr branch -- and each branch must flush from the same pre-flush
+\ state. Built under runtime-image AOT, so these results come from the compiled
+\ path and match the interpreter.
+
+\ Literal quotation. stack: 100 200 [dup *]; `2 pick-n` copies the 100 over the
+\ quotation, `swap` puts the quotation back on top, `call` runs `dup *` on 100.
+100 200 [ dup * ] 2 pick-n swap call
+. . .
+"--" print-line
+
+\ Quotation fetched from an array at runtime (a genuine Value slot rather than a
+\ compile-time literal body), same `pick-n swap call` shape. Mirrors
+\ `(try-rules)`'s `match: @get ... call`.
+100 200 { [ dup * ] } 0 #nth 2 pick-n swap call
+. . .

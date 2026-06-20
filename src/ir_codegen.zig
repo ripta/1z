@@ -5123,6 +5123,32 @@ fn compileInstructions(
                                 const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
                                 const if_null = c._ir_IF(ctx, is_null);
 
+                                // Both branches flush the pending abstract stack
+                                // to physical memory, but flushToPhysicalStack
+                                // mutates the shared `stack`/`sp` state, resetting
+                                // each entry to physical identity. The cold branch
+                                // is emitted first, so its flush would leave the
+                                // hot branch flushing an already-identity stack --
+                                // a silent no-op that drops the physical
+                                // rearrangement the direct call needs (e.g. a
+                                // preceding `pick-n swap` that left a cross-slot
+                                // reference). Snapshot here and restore before the
+                                // hot branch's flush so each branch flushes from
+                                // the same pre-flush state. The cold branch's
+                                // `sp += 1` widens the flush by one slot, so the
+                                // snapshot covers `sp + 1` entries. The cold
+                                // branch's callback also refreshes the cached
+                                // items_ptr / base_addr to refs defined inside the
+                                // cold block, which do not dominate the hot block;
+                                // restore those too so the hot branch's flush moves
+                                // are anchored to a dominating base.
+                                const snapshot_len = @min(sp.* + 1, stack.len);
+                                var saved_stack: [max_abstract_stack_depth]StackEntry = undefined;
+                                @memcpy(saved_stack[0..snapshot_len], stack[0..snapshot_len]);
+                                const saved_sp = sp.*;
+                                const saved_items_ptr = state.items_ptr;
+                                const saved_base_addr = state.base_addr;
+
                                 // Cold path: interpreter fallback for quotations
                                 // without a code_ptr (e.g., >quotation-constructed).
                                 c._ir_IF_TRUE_cold(ctx, if_null);
@@ -5144,6 +5170,10 @@ fn compileInstructions(
                                 // Hot path: quotation is compiled, call directly
                                 c._ir_IF_FALSE(ctx, if_null);
                                 {
+                                    @memcpy(stack[0..snapshot_len], saved_stack[0..snapshot_len]);
+                                    sp.* = saved_sp;
+                                    state.items_ptr = saved_items_ptr;
+                                    state.base_addr = saved_base_addr;
                                     flushToPhysicalStack(state, stack, sp.*);
 
                                     const new_sp_const = c.ir_const_addr(ctx, sp.*);
