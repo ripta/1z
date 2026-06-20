@@ -348,7 +348,7 @@ format-diagnostic: ( lint-diagnostic -- string ) [
 
 \ Extract relative use targets from a file's token stream.
 \ Returns an array of { resolved-path line col } tuples.
-(extract-use-targets): ( path source tokens -- targets ) [
+(extract-use-targets): ( path source tokens -- path targets ) [
   swap (build-line-index) swap
   \ stack: path(2) line-index(1) tokens(0)
   V{ } f
@@ -387,7 +387,7 @@ format-diagnostic: ( lint-diagnostic -- string ) [
 ] ;
 
 \ Read and tokenize a file, then extract relative use targets.
-(file-use-targets): ( path -- targets ) [
+(file-use-targets): ( path -- path targets ) [
   dup (read-file) dup 1z-tokenize #collect (extract-use-targets)
 ] ;
 

@@ -16,8 +16,17 @@
 \ the implicit caller row -- emitting them against the live stack and
 \ collapsing to a row instead of rejecting as an abstract underflow --
 \ unblocked `(file-use-targets-only)` (its `nip` reaches below its one input),
-\ so the set shrank from six words to five. The remaining five are blocked on
-\ `call`s to quotations of unknown effect.
+\ so the set shrank from six words to five. Compiling `call`s to
+\ quotations of unknown effect together with the surrounding row control flow
+\ then unblocked the rule and circular-dependency words, shrinking the set to
+\ two: `(lexer-step)` and `(extract-use-targets)`.
+\
+\ `(extract-use-targets)`'s body compiles, but its declared effect under-counted
+\ its outputs -- the body leaves `path targets`, not just `targets`, and the AOT
+\ epilogue requires the final stack depth to match the declared output count.
+\ Correcting that declaration (and the same under-count on its caller
+\ `(file-use-targets)`) leaves only `(lexer-step)`, whose blocker is a
+\ variable-arity callee.
 \
 \ This pins the per-word blocker inventory. The golden shrinks as those
 \ codegen gaps close and individual words start compiling.

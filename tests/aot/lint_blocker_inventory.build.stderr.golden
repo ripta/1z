@@ -1,7 +1,5 @@
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: 2 words could not be compiled to C
+Error: 1 word could not be compiled to C
   word '(lexer-step)': NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-  word '(extract-use-targets)': NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-AOT interpreter fallbacks: 285 total (native=275 per-op-native=3 compound-uncompiled=4 quotation=3)
+AOT interpreter fallbacks: 284 total (native=275 per-op-native=3 compound-uncompiled=3 quotation=3)
