@@ -1,0 +1,20 @@
+\ A literal-depth `pick-n` reaching into a variable-arity row. A runtime-depth
+\ `drop-at` collapses the stack into an opaque row; `2 pick-n` then reaches below
+\ the modeled entries into that row to fetch a deep value. The depth (2) exceeds
+\ the abstract entries above the row, so the op must be emitted against the live
+\ physical stack rather than falling through to a fixed-arity settle that would
+\ mis-track it. Built under runtime-image AOT, so these results come from the
+\ compiled path and match the interpreter.
+
+\ row = [10 20 30 40] (0 drop-at drops the top 50). 2 pick-n picks 2 deep:
+\ top=40 (d0) 30 (d1) 20 (d2) -> 20. Print the whole stack, top first.
+10 20 30 40 50 0 drop-at 2 pick-n . . . . .
+"--" print-line
+
+\ The (lexer-step) store-back shape over a row whose deep element is mutable:
+\ row = [V{0} 11 22], then `swap 2 pick-n swap 0 swap #nth!` stores 11 into V[0].
+\ Reading V[0] back proves the deep `2 pick-n` fetched the vector and #nth!
+\ mutated the right slot (prints 11).
+V{ 0 } 11 22 33 0 drop-at
+swap 2 pick-n swap 0 swap #nth!
+0 #nth .

@@ -5864,45 +5864,44 @@ fn compileInstructions(
                         }
                     }
 
-                    // Indexed stack ops: a literal depth either rewrites the
-                    // abstract stack in place over a row, or rejects when it
-                    // targets the row interior. A runtime depth has no literal to
-                    // inspect, so emit the native op against the live stack and
-                    // collapse to a row_region: the native addresses the slot from
-                    // the runtime `n`, performs the shuffle, and raises the same
-                    // out-of-range error the interpreter does.
+                    // Indexed stack ops over a symbolic row.
+                    //
+                    // A literal depth that provably stays above the row rewrites the abstract stack in
+                    // place; otherwise, the depth reaches into the opaque row, or reaches below the
+                    // modeled entries into it, the op is emitted against the live physical stack and
+                    // the abstract stack collapses to a fresh row_region, exactly as a runtime depth
+                    // and the inline row-underflow shuffles do.
+                    //
+                    // A literal depth with no row present falls through to the general native emission,
+                    // which resets the abstract stack to mirror the physical one.
                     if (isIndexedStackOp(name)) {
                         if (extractPrecedingLiteralDepth(instructions, idx)) |depth| {
-                            // The depth argument is on top of the abstract stack.
-                            // After popping it, the deepest position the operation
-                            // can touch is sp - 2 - depth (0-indexed from bottom).
-                            if (sp.* >= 2 and depth <= sp.* - 2) {
-                                const target = sp.* - 2 - depth;
-                                if (findRowRegionIndex(stack, sp.*)) |row_idx| {
-                                    if (target <= row_idx) {
-                                        // The indexed op reaches into the opaque
-                                        // row. In AOT mode emit the native
-                                        // against the live stack -- it addresses
-                                        // the slot from the runtime depth -- and
-                                        // collapse to a row, as the runtime-depth
-                                        // case below already does.
-                                        if (state.aot_mode) {
-                                            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
-                                            break;
-                                        }
-                                        state.not_compilable_reason = .indexed_access_into_row;
-                                        return IrCodegenError.NotCompilable;
-                                    }
-                                    // Row exists but access targets known slots.
-                                    // Rewrite the StackEntry array directly
-                                    // instead of calling the native function.
+                            if (findRowRegionIndex(stack, sp.*)) |row_idx| {
+                                // After popping the depth literal, the deepest slot the op can touch is:
+                                //
+                                //     sp - 2 - depth
+                                //
+                                // The op stays above the row only when that slot is a known entry strictly
+                                // above the row_idx. A depth that exceeds the modeled entries (sp - 2), or
+                                // lands at or below the row reaches into the opaque region and must be
+                                // emitted live.
+                                const stays_above = sp.* >= 2 and depth <= sp.* - 2 and (sp.* - 2 - depth) > row_idx;
+                                if (stays_above) {
                                     try rewriteIndexedStackOp(state, name, stack, sp, depth);
                                     continue;
                                 }
+
+                                if (state.aot_mode) {
+                                    if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
+                                    break;
+                                }
+
+                                state.not_compilable_reason = .indexed_access_into_row;
+                                return IrCodegenError.NotCompilable;
                             }
-                            // Literal depth with no row: fall through to the
-                            // general native emission, which resets the abstract
-                            // stack to mirror the physically-rearranged stack.
+
+                            // Literal depth with no row: fall through to the general native emission,
+                            // which resets the abstract stack to mirror the physically-rearranged stack.
                         } else if (state.aot_mode) {
                             if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) {
                                 continue;
