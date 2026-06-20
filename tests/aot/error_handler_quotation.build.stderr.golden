@@ -1,9 +1,12 @@
+Prelude compilation: 6/6 words compiled (100.0%)
 Quotation bodies compiled: 10/10 (100.0%)
 Inline PIC sites: 0/1 generic call sites preseeded
 AOT interpreter fallbacks: 1 total
   native: 1
   sites:
     native: . -> inspect (line 622)
-Error: 1 word could not be compiled to C
-  word '__entry__': NC.5: calls a quotation whose stack effect is unknown
-      hint: annotate the quotation parameter with a concrete stack effect
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=1/1 jitCallQuotation=0/0 (matches build-time inventory)
+artifact: interpreter
+interpreter: linked (auto: compiled code calls interpreter)
+jitInterpretedCall: not linked
+runtime-image: words=0 stack-effects=1 typevalue-slots=63 blob-present=false

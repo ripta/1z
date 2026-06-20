@@ -1,0 +1,23 @@
+\ Self-recursive tail call with a symbolic row beneath it. A runtime-depth
+\ `drop-at` collapses the stack into an opaque row before the recursive call, so
+\ the tail call cannot use the loop-back-edge argument copy and is emitted as an
+\ ordinary recursive call against the live stack. Built under runtime-image AOT,
+\ so the result comes from the compiled path and matches the interpreter.
+
+\ Sum 1..n with an accumulator. Each non-base step pushes a throwaway sentinel
+\ and removes it with a runtime-depth `drop-at`, collapsing the live stack into a
+\ row, then performs the tail-recursive call against that row.
+row-sum: ( n acc -- total ) [
+  over 0 = [
+    nip
+  ] [
+    over + swap 1 - swap
+    \ stack: (n-1) (acc+n) ; push sentinel, drop it at runtime depth 0 -> row
+    777 0 drop-at
+    row-sum
+  ] if
+] ;
+
+5 0 row-sum . "--" print-line
+0 0 row-sum . "--" print-line
+1 0 row-sum . "--" print-line

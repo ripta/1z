@@ -1,4 +1,4 @@
 Error: 1 word could not be compiled to C
-  word 'not-compilable': NC.5: calls a quotation whose stack effect is unknown
-      hint: annotate the quotation parameter with a concrete stack effect
+  word 'not-compilable': NC.1: arithmetic operand is not a fixnum or float
+      hint: blocked until polymorphic arithmetic can be compiled
 AOT interpreter fallbacks: 1 total (compound-uncompiled=1)

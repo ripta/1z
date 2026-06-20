@@ -1,0 +1,26 @@
+\ Control flow over a symbolic row. A runtime-depth `drop-at` collapses the
+\ stack into an opaque row the AOT compiler cannot statically size. An `if`
+\ whose condition is itself a row reads truthiness from the live physical top,
+\ and a merge where one branch is concrete and the other is a row rejoins to a
+\ single row instead of rejecting. Built under runtime-image AOT, so these
+\ results come from the compiled path and match the interpreter.
+
+\ if-over-a-row: drop-at leaves [10 20 30 40]; `dup 40 =` settles to a row whose
+\ live top is the boolean; the if reads it and runs the true branch.
+10 20 30 40 50 0 drop-at dup 40 = [ "is-40" ] [ "not-40" ] if print-line
+
+\ if-over-a-row taking the false branch.
+10 20 30 99 50 0 drop-at dup 40 = [ "is-40" ] [ "not-40" ] if print-line
+
+\ row-vs-concrete merge through a normal boolean condition: the true branch
+\ leaves a concrete value, the false branch reaches into a row and leaves one.
+\ Both join to a single result that prints the same way.
+t [ 10 20 30 40 50 0 drop-at swap drop ] [ 7 ] if . "--" print-line
+f [ 10 20 30 40 50 0 drop-at swap drop ] [ 7 ] if . "--" print-line
+
+\ non-terminal recover: the handler callback leaves a runtime-determined result,
+\ which the following code consumes through the collapsed row. Success path.
+[ 42 ] [ drop -1 ] recover dup . . "--" print-line
+
+\ non-terminal recover taking the error path: the handler supplies 99.
+[ 1 0 / ] [ drop 99 ] recover dup . . "--" print-line

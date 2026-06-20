@@ -925,6 +925,14 @@ pub const ResolvedWord = struct {
     /// name the bounded site by its constraint. Set whenever `bounded_constraint`
     /// is set.
     bounded_trace_name: ?[]const u8 = null,
+    /// True when the callee's compiled body ends with an opaque row region
+    /// (or a dynamic call) rather than a concrete-arity stack, so its real
+    /// output depth is determined at runtime. The declared `output_count` is
+    /// then not a faithful model of the call result: the call site must
+    /// collapse the abstract stack to a fresh row rather than apply the
+    /// declared concrete effect, or a later branch merge sees diverging
+    /// depths. Populated from the row-returning set discovered before Pass 1a.
+    returns_row: bool = false,
 };
 
 /// Callback interface for resolving word names to dispatch table IDs.
@@ -1894,6 +1902,17 @@ const CompileState = struct {
     base_idx: c.ir_ref,
     value_size_const: c.ir_ref,
     dynamic_call_emitted: bool = false,
+    /// Set when this word's compiled body produces a runtime output depth that
+    /// genuinely varies, so the declared output count does not faithfully model
+    /// a call result. The trigger is an `if` over a row whose two fall-through
+    /// branches leave different stack depths (e.g. `(try-rules)`, where one arm
+    /// returns `new-scanner token` and another returns `t`). A caller of such a
+    /// word must collapse its abstract stack to a row rather than apply the
+    /// declared concrete effect, which would diverge from the runtime depth at a
+    /// later branch merge. A row that arises from a deterministic mechanism
+    /// (reach-below shuffles, indexed-row ops) leaves the declared count intact
+    /// and does not set this.
+    variable_arity: bool = false,
     error_handler_terminal: bool = false,
     not_compilable_reason: ?NotCompilableReason = null,
     dispatch_ptr: c.ir_ref = c.IR_UNUSED,
@@ -1974,6 +1993,11 @@ const CompileState = struct {
     /// instead of baked function pointer addresses (ir_const_addr). This is
     /// required for AOT C emission where addresses are not known at compile time.
     aot_mode: bool = false,
+    /// True for interpreter-free (strict) AOT builds
+    /// (`--interpreter-fallback=false`), where any construct that would require
+    /// interpreter re-entry at runtime must be rejected at build time rather
+    /// than compiled to a path that fatals at runtime.
+    interpreter_free: bool = false,
     /// Set of compiled word names available in AOT mode. Used to decide whether
     /// a compound word call can be a direct function call or must fall through
     /// to `jitInterpretedCall` (permissive AOT only; strict AOT rejects the
@@ -2976,6 +3000,22 @@ fn resetStackToPhysicalPreservingRows(stack: []StackEntry, sp: usize) void {
 /// and its effect on the opaque region cannot be modeled. The abstract stack resyncs
 /// to the live runtime stack with a fresh row, matching how a row-introducing call
 /// collapses the stack.
+/// Collapse the abstract stack to a single fresh row region after a call whose
+/// real result depth is runtime-determined. Reloads the live stack pointer so
+/// the row's top maps to the new physical top, matching how an unresolved
+/// dynamic call collapses the stack. Used at a call site to a row-returning
+/// callee, where the declared concrete output count does not model the result.
+fn collapseToFreshRow(state: *CompileState, stack: []StackEntry, sp: *usize) void {
+    reloadBaseAfterDynamicCall(state);
+    sp.* = 1;
+    stack[0] = .{ .row_region = state.nextRowId() };
+    // The collapse is driven by a genuinely variable-arity callee, so this
+    // word's own output depth becomes variable unless a later normalizing `if`
+    // reconciles it. Propagating the flag lets a word that merely passes a
+    // variable result through inherit the caller-collapse requirement.
+    state.variable_arity = true;
+}
+
 fn settleRowAwareStack(state: *CompileState, stack: []StackEntry, sp: *usize, inputs: usize, outputs: usize) void {
     const sp_before = sp.*;
     const had_row = sp_before > 0 and stack[0].isRowRegion();
@@ -3558,6 +3598,134 @@ fn emitIndirectQuotCall(
     if (state.refresh_stack_fn != c.IR_UNUSED) {
         refreshCachedStackPointer(state);
     }
+}
+
+/// Settle one branch of an if-over-row before its END so both branches leave the
+/// physical stack at a consistent height for the merge's sp reload. When the
+/// branch only ran abstractly-tracked ops above the incoming row, `base_idx` is
+/// unchanged and the physical sp must be stored from the abstract depth. When the
+/// branch collapsed to a fresh row mid-way (a row-introducing call), `base_idx`
+/// moved and the live runtime sp is already correct, so leave it.
+fn finalizeRowBranch(state: *CompileState, stack: []StackEntry, branch_sp: usize, entry_base_idx: c.ir_ref) void {
+    flushToPhysicalStack(state, stack, branch_sp);
+    if (state.base_idx != entry_base_idx) return;
+    const sp_const = c.ir_const_addr(state.ctx, branch_sp);
+    const new_sp = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+    c._ir_STORE(state.ctx, state.sp_ptr, new_sp);
+}
+
+/// Emit an `if` whose condition is a symbolic row: the live physical top holds
+/// the boolean, and the remainder of the stack is opaque. Read truthiness from
+/// the physical top, pop it, compile both branch bodies against a fresh row, and
+/// rejoin to a single fresh row at the merge. AOT-only; the row reaches the live
+/// runtime stack through native callbacks the branch bodies emit, so concrete
+/// abstract modeling is neither possible nor needed. A branch quotation given as
+/// a `raw_at_slot` value rather than a `quotation_body` is dispatched at runtime.
+fn emitIfOverRow(
+    state: *CompileState,
+    stack: []StackEntry,
+    sp: *usize,
+    true_entry: StackEntry,
+    false_entry: StackEntry,
+    true_body: ?[]const Instruction,
+    false_body: ?[]const Instruction,
+) IrCodegenError!void {
+    const ctx = state.ctx;
+
+    // Truthiness of the live physical top, read before the condition is popped.
+    const cond_ref = emitSlotTruthiness(ctx, state.base_addr, 0, state);
+    emitReleaseSlot(state, 0);
+
+    // Pop the condition from the physical stack, then resync the abstract row to
+    // the new live top so both branches model a single fresh row.
+    const one_const = c.ir_const_addr(ctx, 1);
+    const popped_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), state.sp_val, one_const);
+    c._ir_STORE(ctx, state.sp_ptr, popped_sp);
+    reloadBaseAfterDynamicCall(state);
+    sp.* = 1;
+    stack[0] = .{ .row_region = state.nextRowId() };
+
+    const saved_exit_kind = state.exit_kind;
+    const saved_loop_end_set = state.loop_end_set;
+    const saved_items_ptr = state.items_ptr;
+    const saved_base_addr = state.base_addr;
+    const saved_sp_val = state.sp_val;
+    const saved_base_idx = state.base_idx;
+
+    const if_ref = c._ir_IF(ctx, cond_ref);
+
+    c._ir_IF_TRUE(ctx, if_ref);
+    state.recordBlockStart(ctx.unnamed_0.control);
+    state.exit_kind = .falls_through;
+    var true_sp: usize = 1;
+    stack[0] = .{ .row_region = state.nextRowId() };
+    if (true_body) |tb| {
+        try compileInstructions(state, tb, stack, &true_sp);
+    } else {
+        emitIfBranchDispatch(state, stack, &true_sp, true_entry.raw_at_slot);
+    }
+    const true_exit_kind = state.exit_kind;
+    var end_true: c.ir_ref = c.IR_UNUSED;
+    if (exitFallsThrough(true_exit_kind)) {
+        finalizeRowBranch(state, stack, true_sp, saved_base_idx);
+        end_true = c._ir_END(ctx);
+    }
+
+    state.items_ptr = saved_items_ptr;
+    state.base_addr = saved_base_addr;
+    state.sp_val = saved_sp_val;
+    state.base_idx = saved_base_idx;
+
+    c._ir_IF_FALSE(ctx, if_ref);
+    state.recordBlockStart(ctx.unnamed_0.control);
+    state.exit_kind = .falls_through;
+    var false_sp: usize = 1;
+    stack[0] = .{ .row_region = state.nextRowId() };
+    if (false_body) |fb| {
+        try compileInstructions(state, fb, stack, &false_sp);
+    } else {
+        emitIfBranchDispatch(state, stack, &false_sp, false_entry.raw_at_slot);
+    }
+    const false_exit_kind = state.exit_kind;
+    if (exitFallsThrough(false_exit_kind)) {
+        finalizeRowBranch(state, stack, false_sp, saved_base_idx);
+    }
+
+    const true_diverged = !exitFallsThrough(true_exit_kind);
+    const false_diverged = !exitFallsThrough(false_exit_kind);
+
+    if (true_diverged and false_diverged) {
+        state.exit_kind = mergeNonFallthroughExitKinds(true_exit_kind, false_exit_kind);
+        return;
+    } else if (true_diverged) {
+        // Only the false path continues; it falls through after IF_FALSE.
+        reloadBaseAfterDynamicCall(state);
+        sp.* = 1;
+        stack[0] = .{ .row_region = state.nextRowId() };
+        state.exit_kind = saved_exit_kind;
+    } else if (false_diverged) {
+        c._ir_BEGIN(ctx, end_true);
+        reloadBaseAfterDynamicCall(state);
+        sp.* = 1;
+        stack[0] = .{ .row_region = state.nextRowId() };
+        state.exit_kind = saved_exit_kind;
+    } else {
+        // Both branches fall through. When they leave different physical depths
+        // (each branch stored its own sp via finalizeRowBranch), the word's
+        // runtime output depth genuinely varies, so a caller must collapse to a
+        // row rather than trust the declared output count. When they leave equal
+        // depths, the merge reconciles to that fixed depth, normalizing away any
+        // variability a branch inherited from a variable-arity callee.
+        state.variable_arity = true_sp != false_sp;
+        const end_false = c._ir_END(ctx);
+        c._ir_MERGE_2(ctx, end_true, end_false);
+        state.recordBlockStart(ctx.unnamed_0.control);
+        reloadBaseAfterDynamicCall(state);
+        sp.* = 1;
+        stack[0] = .{ .row_region = state.nextRowId() };
+        state.exit_kind = saved_exit_kind;
+    }
+    state.loop_end_set = saved_loop_end_set;
 }
 
 /// Emit a runtime quotation dispatch for an `if` branch where the quotation
@@ -4200,6 +4368,14 @@ fn compileInstructions(
     const bail_status = state.bail_status;
 
     for (instructions, 0..) |instr, idx| {
+        if (std.posix.getenv("ONEZ_DEBUG_TRACE")) |tgt| {
+            if (state.self_name) |sn| {
+                if (std.mem.eql(u8, sn, tgt)) {
+                    const nm = instr.op.callTargetName() orelse @tagName(instr.op);
+                    std.debug.print("TRACE {s} sp={d} hasrow={} op={s} name={s}\n", .{ sn, sp.*, hasRowRegion(stack, sp.*), @tagName(instr.op), nm });
+                }
+            }
+        }
         if (state.dynamic_call_emitted) {
             state.not_compilable_reason = .post_dynamic_call;
             return IrCodegenError.NotCompilable;
@@ -4448,6 +4624,10 @@ fn compileInstructions(
                         }
                         return IrCodegenError.StackUnderflow;
                     }
+                    if (state.aot_mode and stack[sp.* - 1] == .row_region) {
+                        if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
+                        break;
+                    }
                     stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 1], sp.*);
                     sp.* += 1;
                 } else if (std.mem.eql(u8, name, "drop")) {
@@ -4497,6 +4677,10 @@ fn compileInstructions(
                             break;
                         }
                         return IrCodegenError.StackUnderflow;
+                    }
+                    if (state.aot_mode and stack[sp.* - 2] == .row_region) {
+                        if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
+                        break;
                     }
                     stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 2], sp.*);
                     sp.* += 1;
@@ -4685,6 +4869,10 @@ fn compileInstructions(
                         },
                         .raw_at_slot => |s| emitSlotTruthiness(ctx, state.base_addr, s, state),
                         .row_region => {
+                            if (state.aot_mode) {
+                                try emitIfOverRow(state, stack, sp, true_entry, false_entry, true_body, false_body);
+                                continue;
+                            }
                             state.not_compilable_reason = .quotation_truthiness;
                             return IrCodegenError.NotCompilable;
                         },
@@ -4711,6 +4899,11 @@ fn compileInstructions(
                     // that are only defined on the IF_TRUE path.
                     const saved_items_ptr = state.items_ptr;
                     const saved_base_addr = state.base_addr;
+                    // A row-collapsing op in the true branch mutates these; the
+                    // false branch and the merge must resume from the pre-if
+                    // values that dominate both paths.
+                    const saved_base_idx = state.base_idx;
+                    const saved_sp_val = state.sp_val;
 
                     // Infer the branch effect when one branch is raw_at_slot.
                     // The raw_at_slot branch is assumed to have the same effect
@@ -4757,6 +4950,17 @@ fn compileInstructions(
                     // get END for well-formed END/MERGE structure.
                     if (if (state.aot_mode) exitFallsThrough(true_exit_kind) else true_exit_kind != .loop_diverged) {
                         flushToPhysicalStack(state, stack, sp.*);
+                        // Persist the physical sp so a row-aware merge can reload
+                        // it. A branch that collapsed to a fresh row moved base_idx
+                        // and already left the runtime sp live; one that only ran
+                        // abstract ops over a pre-existing row kept base_idx and
+                        // must store the height. Harmless with no row, as it equals
+                        // the epilogue's own store.
+                        if (state.aot_mode and state.base_idx == saved_base_idx) {
+                            const sp_const = c.ir_const_addr(ctx, sp.*);
+                            const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+                            c._ir_STORE(ctx, state.sp_ptr, new_sp);
+                        }
                         end_true = c._ir_END(ctx);
                     }
 
@@ -4764,6 +4968,8 @@ fn compileInstructions(
                     // it uses refs from before the IF that dominate both paths.
                     state.items_ptr = saved_items_ptr;
                     state.base_addr = saved_base_addr;
+                    state.base_idx = saved_base_idx;
+                    state.sp_val = saved_sp_val;
 
                     // Emit false branch
                     c._ir_IF_FALSE(ctx, if_ref);
@@ -4819,10 +5025,32 @@ fn compileInstructions(
                     } else {
                         // Neither branch terminated: normal merge.
                         flushToPhysicalStack(state, saved_stack, false_sp);
+                        const false_has_row = hasRowRegion(saved_stack, false_sp);
+                        if (state.aot_mode and state.base_idx == saved_base_idx) {
+                            const sp_const = c.ir_const_addr(ctx, false_sp);
+                            const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+                            c._ir_STORE(ctx, state.sp_ptr, new_sp);
+                        }
                         const end_false = c._ir_END(ctx);
                         c._ir_MERGE_2(ctx, end_true, end_false);
                         state.recordBlockStart(ctx.unnamed_0.control);
-                        if (!symbolicShapeMatches(stack, sp.*, saved_stack, false_sp)) return IrCodegenError.StackShapeMismatch;
+                        if (!symbolicShapeMatches(stack, sp.*, saved_stack, false_sp)) {
+                            const true_has_row = hasRowRegion(stack, sp.*);
+                            // A row on either side means one branch left an opaque
+                            // result; the two physical tops still agree, so rejoin
+                            // to a single fresh row read from the live sp both
+                            // paths stored. A genuine depth mismatch with no row
+                            // is still a stack-effect error.
+                            if (state.aot_mode and (true_has_row or false_has_row)) {
+                                reloadBaseAfterDynamicCall(state);
+                                sp.* = 1;
+                                stack[0] = .{ .row_region = state.nextRowId() };
+                                state.exit_kind = saved_exit_kind;
+                                state.loop_end_set = saved_loop_end_set;
+                                continue;
+                            }
+                            return IrCodegenError.StackShapeMismatch;
+                        }
                         if (state.refresh_stack_fn != c.IR_UNUSED) {
                             refreshCachedStackPointer(state);
                         }
@@ -4913,6 +5141,14 @@ fn compileInstructions(
                                 if (sp.* < info.input_count) return IrCodegenError.StackUnderflow;
                                 sp.* = sp.* - info.input_count + info.output_count;
                                 resetStackToPhysical(stack, sp.*);
+                            } else if (state.aot_mode and state.interpreter_free) {
+                                // Strict AOT: the cold path above re-enters the
+                                // interpreter when the runtime quotation has no
+                                // compiled code_ptr, which fatals at runtime in
+                                // an interpreter-free binary. Reject the build
+                                // instead of compiling a path that cannot run.
+                                state.not_compilable_reason = .abstract_stack_underflow;
+                                return IrCodegenError.NotCompilable;
                             } else {
                                 // Unresolved quotation effect (row variables).
                                 // Reload physical sp and insert row_region so
@@ -5355,8 +5591,22 @@ fn compileInstructions(
                     emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = frame_kind, .line = instr.line } });
 
                     sp.* -= 2;
-                    state.dynamic_call_emitted = true;
-                    state.error_handler_terminal = true;
+                    if (state.aot_mode and idx != instructions.len - 1) {
+                        // The handler callback ran a quotation whose row-variable
+                        // output makes the stack opaque, like with-parameter.
+                        // Collapse to a fresh row so the instructions that consume
+                        // its result keep compiling, rather than abandoning at the
+                        // next instruction. When the op is last, the word returns
+                        // through the live-sp path below instead.
+                        if (exitFallsThrough(state.exit_kind)) {
+                            reloadBaseAfterDynamicCall(state);
+                            sp.* = 1;
+                            stack[0] = .{ .row_region = state.nextRowId() };
+                        }
+                    } else {
+                        state.dynamic_call_emitted = true;
+                        state.error_handler_terminal = true;
+                    }
                 } else if (isDynamicVarOp(name)) {
                     const is_get = std.mem.eql(u8, name, "get");
                     const required: usize = if (is_get) 1 else 3;
@@ -5415,6 +5665,22 @@ fn compileInstructions(
                 {
                     // Self-recursive tail call: emit back-edge to LOOP_BEGIN
                     const ic = state.input_count;
+                    // When a symbolic row sits under the call the physical depth
+                    // is unknown, so the loop-back-edge argument copy cannot be
+                    // laid out. Emit an ordinary recursive call against the live
+                    // stack and collapse to a row instead.
+                    if (state.aot_mode and (sp.* < ic or hasRowRegion(stack, sp.*))) {
+                        const res = state.resolver orelse {
+                            state.not_compilable_reason = .unresolvable_word;
+                            return IrCodegenError.NotCompilable;
+                        };
+                        const resolved = res.resolve(name, res.user_data) orelse {
+                            state.not_compilable_reason = .unresolvable_word;
+                            return IrCodegenError.NotCompilable;
+                        };
+                        if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
+                        break;
+                    }
                     if (sp.* < ic) return IrCodegenError.StackUnderflow;
 
                     // Bail if both if-branches already set a loop end
@@ -5756,7 +6022,11 @@ fn compileInstructions(
                         }
 
                         if (exitFallsThrough(state.exit_kind)) {
-                            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+                            if (resolved.returns_row) {
+                                collapseToFreshRow(state, stack, sp);
+                            } else {
+                                settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+                            }
                         }
                     } else if (resolved.bounded_constraint != null) {
                         // Bounded generic dispatch: emit the helper that
@@ -5847,8 +6117,12 @@ fn compileInstructions(
                                 refreshCachedStackPointer(state);
                             }
 
-                            // Adjust abstract stack based on specialized effect
-                            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+                            if (resolved.returns_row) {
+                                collapseToFreshRow(state, stack, sp);
+                            } else {
+                                // Adjust abstract stack based on specialized effect
+                                settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+                            }
                         }
                     }
                 }
@@ -6700,8 +6974,9 @@ pub fn emitWordCAot(
     slot_maps: ?*const AotImageSlotMaps,
     emit_slot_table_literals: bool,
     source_file: ?[]const u8,
+    interpreter_free: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -6731,15 +7006,16 @@ fn emitWordCAotWithCName(
     slot_maps: ?*const AotImageSlotMaps,
     emit_slot_table_literals: bool,
     source_file: ?[]const u8,
+    interpreter_free: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -6749,6 +7025,11 @@ fn emitWordCAotWithCName(
 const EmitWordCAotPassResult = struct {
     body: ?[]u8,
     peak_stack_depth: u32,
+    /// True when the word's compiled body returns through the row / dynamic-call
+    /// finalization branch rather than the concrete epilogue, so its result
+    /// depth is runtime-determined. Callers consult this to collapse to a row at
+    /// the call site instead of trusting the declared output count.
+    returns_row: bool = false,
 };
 
 fn emitWordCAotPass(
@@ -6776,6 +7057,7 @@ fn emitWordCAotPass(
     slot_maps: ?*const AotImageSlotMaps,
     emit_slot_table_literals: bool,
     source_file: ?[]const u8,
+    interpreter_free: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
@@ -7044,6 +7326,7 @@ fn emitWordCAotPass(
         .append_word_trace_frame_fn = c.IR_UNUSED,
         .append_builtin_trace_frame_fn = c.IR_UNUSED,
         .aot_mode = true,
+        .interpreter_free = interpreter_free,
         .aot_compiled_names = aot_compiled_names,
         .aot_proto_1arg = proto_1arg,
         .aot_proto_2arg = proto_2arg,
@@ -7115,9 +7398,17 @@ fn emitWordCAotPass(
         try emitEpilogue(&state, stack_buf, sp, input_count, output_count);
     }
 
+    // A word is reported as row-returning to callers only when its runtime
+    // output depth genuinely varies. A row at finalization is necessary but not
+    // sufficient: a deterministic-depth row (reach-below shuffles, indexed-row
+    // ops) leaves the declared output count faithful, so the caller keeps
+    // trusting it. variable_arity is set only by an `if` over a row whose
+    // branches leave different depths, and propagated through pass-through rows.
+    const returns_row = state.variable_arity;
+
     // Discovery pass: skip C emission, let the caller re-run with the peak.
     if (known_peak == null) {
-        return .{ .body = null, .peak_stack_depth = state.peak_sp };
+        return .{ .body = null, .peak_stack_depth = state.peak_sp, .returns_row = returns_row };
     }
 
     // Build the source-lines side table for the patched `ir_emit_c.c` so
@@ -7150,7 +7441,7 @@ fn emitWordCAotPass(
     }
 
     const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator, source_lines_ptr);
-    return .{ .body = body, .peak_stack_depth = state.peak_sp };
+    return .{ .body = body, .peak_stack_depth = state.peak_sp, .returns_row = returns_row };
 }
 
 /// Append an `asm("name")` declaration attribute to `out` so the C compiler renames the linker symbol
@@ -7478,8 +7769,15 @@ pub fn emitProgramC(
         try word_map.put(allocator, w.name, w);
     }
 
+    // Names of words whose compiled body returns through the row / dynamic-call
+    // finalization branch. Populated by the row-returning fixpoint below, before
+    // Pass 1a, and consulted by the resolver so call sites collapse to a row.
+    var returns_row_names: std.StringHashMapUnmanaged(void) = .{};
+    defer returns_row_names.deinit(allocator);
+
     const AotResolverData = struct {
         map: *const std.StringHashMapUnmanaged(AotWordDesc),
+        returns_row_names: *const std.StringHashMapUnmanaged(void),
 
         fn resolve(name_ptr: []const u8, user_data: *anyopaque) ?ResolvedWord {
             const self: *const @This() = @ptrCast(@alignCast(user_data));
@@ -7495,6 +7793,7 @@ pub fn emitProgramC(
                 .bounded_constraint = entry.bounded_constraint,
                 .bounded_arity = entry.bounded_arity,
                 .is_generic = entry.is_generic,
+                .returns_row = self.returns_row_names.contains(name_ptr),
             };
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
@@ -7505,7 +7804,13 @@ pub fn emitProgramC(
         }
     };
 
-    var resolver_data = AotResolverData{ .map = &word_map };
+    // Build-time strict flag: an explicit `--interpreter-fallback=false` build
+    // must reject any construct that would re-enter the interpreter at runtime,
+    // rather than compiling a path that fatals in an interpreter-free binary.
+    // Auto and permissive builds keep the row-region continuation.
+    const strict_interpreter_free = interpreter_fallback == .false;
+
+    var resolver_data = AotResolverData{ .map = &word_map, .returns_row_names = &returns_row_names };
     const resolver = WordResolver{
         .resolve = &AotResolverData.resolve,
         .user_data = @ptrCast(&resolver_data),
@@ -7585,6 +7890,69 @@ pub fn emitProgramC(
     // name-lookup fallback for type-carrier literals.
     const emit_slot_table_literals = slot_maps_ptr != null;
 
+    // Row-returning fixpoint: discover, before Pass 1a, which words compile to a
+    // row-returning body. A word's declared output count does not faithfully
+    // model such a call result, so the call site must collapse to a row instead
+    // of trusting the declared concrete effect (see ResolvedWord.returns_row).
+    // The property is a monotonic fixpoint over the call graph: a word becomes
+    // row-returning if its body reaches the row / dynamic-call finalization
+    // branch, which itself can depend on a callee already being row-returning.
+    // Each round trial-compiles every non-native word not yet marked; on a
+    // success that returns a row, the word is added to the set, which makes more
+    // callers compile and reveal their own row-returning shape on the next
+    // round. The set only grows and is bounded by the word count, so the loop
+    // converges. A word that fails to compile this round is simply retried next
+    // round once any blocking callee is marked. The resolver reads
+    // `returns_row_names` through a stable pointer, so the growing set is visible
+    // to each round's trial compilations.
+    {
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (words) |*w| {
+                if (w.is_native) continue;
+                if (returns_row_names.contains(w.name)) continue;
+                var reason: ?NotCompilableReason = null;
+                const discovered = emitWordCAotPass(
+                    w.instructions,
+                    w.input_count,
+                    w.output_count,
+                    w.name,
+                    w.name,
+                    resolver,
+                    w.name,
+                    &compiled_names,
+                    null,
+                    null,
+                    null,
+                    allocator,
+                    if (w.stack_effect != null) &w.stack_effect.? else null,
+                    null,
+                    &reason,
+                    null,
+                    w.pic_snapshot,
+                    interp_ctx,
+                    null,
+                    null,
+                    null,
+                    slot_maps_ptr,
+                    emit_slot_table_literals,
+                    w.source_file,
+                    strict_interpreter_free,
+                ) catch continue;
+                if (discovered.body) |b| allocator.free(b);
+                if (discovered.returns_row) {
+                    try returns_row_names.put(allocator, w.name, {});
+                    changed = true;
+                }
+            }
+        }
+    }
+    if (std.posix.getenv("ONEZ_DEBUG_ROWRET") != null) {
+        var it = returns_row_names.keyIterator();
+        while (it.next()) |k| std.debug.print("ROWRET {s}\n", .{k.*});
+    }
+
     // 4. Two-pass compilation: first determine which words compile,
     // then re-compile with only the compilable set so that cross-word calls
     // to uncompiled compound callees use `jitInterpretedCall` (permissive
@@ -7622,6 +7990,7 @@ pub fn emitProgramC(
             slot_maps_ptr,
             emit_slot_table_literals,
             w.source_file,
+            strict_interpreter_free,
         ) catch |err| {
             if (reason) |r| {
                 try failure_reasons.put(allocator, w.name, r);
@@ -7663,6 +8032,7 @@ pub fn emitProgramC(
             slot_maps_ptr,
             emit_slot_table_literals,
             q.source_file,
+            strict_interpreter_free,
         ) catch continue;
         allocator.free(trial);
         try compilable_quotation_ids.put(allocator, q.quotation_id, {});
@@ -7728,6 +8098,7 @@ pub fn emitProgramC(
             slot_maps_ptr,
             emit_slot_table_literals,
             w.source_file,
+            strict_interpreter_free,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -7771,6 +8142,7 @@ pub fn emitProgramC(
             slot_maps_ptr,
             emit_slot_table_literals,
             q.source_file,
+            strict_interpreter_free,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -13034,6 +13406,7 @@ test "emitWordCAot emits named callback for safepoint" {
         null,
         false,
         null,
+        false,
     ) catch |err| {
         // times requires a quotation on stack which we don't have in this
         // minimal test -- NotCompilable is expected. Skip this test case
@@ -13077,6 +13450,7 @@ test "emitWordCAot basic arithmetic" {
         null,
         false,
         null,
+        false,
     );
     defer testing.allocator.free(source);
 
@@ -13117,6 +13491,7 @@ test "emitWordCAot quotation call emits code_ptr dispatch" {
         null,
         false,
         null,
+        false,
     ) catch |err| {
         if (err == error.NotCompilable) return;
         return err;
@@ -14477,6 +14852,7 @@ test "row underflow: a word reaching below its declared inputs compiles in AOT m
         null,
         false,
         null,
+        false,
     );
     defer testing.allocator.free(source);
     // The word body compiled to a C function rather than being rejected.
