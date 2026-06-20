@@ -1,0 +1,3 @@
+Error: 1 word could not be compiled to C
+  word '__entry__': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled

@@ -3614,6 +3614,15 @@ fn finalizeRowBranch(state: *CompileState, stack: []StackEntry, branch_sp: usize
     c._ir_STORE(state.ctx, state.sp_ptr, new_sp);
 }
 
+/// Decide the variable-arity flag after an if-over-row whose branches both fall
+/// through. Two concrete arms reconcile to a fixed depth and may reset the flag;
+/// an arm that collapsed to an opaque row carries no trustworthy depth, so it can
+/// only accumulate a difference detected deeper, never clobber it.
+fn mergedVariableArity(prev: bool, true_sp: usize, false_sp: usize, any_row_arm: bool) bool {
+    if (any_row_arm) return prev or (true_sp != false_sp);
+    return true_sp != false_sp;
+}
+
 /// Emit an `if` whose condition is a symbolic row: the live physical top holds
 /// the boolean, and the remainder of the stack is opaque. Read truthiness from
 /// the physical top, pop it, compile both branch bodies against a fresh row, and
@@ -3666,8 +3675,10 @@ fn emitIfOverRow(
     }
     const true_exit_kind = state.exit_kind;
     var end_true: c.ir_ref = c.IR_UNUSED;
+    var true_ends_on_row = false;
     if (exitFallsThrough(true_exit_kind)) {
         finalizeRowBranch(state, stack, true_sp, saved_base_idx);
+        true_ends_on_row = hasRowRegion(stack, true_sp);
         end_true = c._ir_END(ctx);
     }
 
@@ -3687,8 +3698,10 @@ fn emitIfOverRow(
         emitIfBranchDispatch(state, stack, &false_sp, false_entry.raw_at_slot);
     }
     const false_exit_kind = state.exit_kind;
+    var false_ends_on_row = false;
     if (exitFallsThrough(false_exit_kind)) {
         finalizeRowBranch(state, stack, false_sp, saved_base_idx);
+        false_ends_on_row = hasRowRegion(stack, false_sp);
     }
 
     const true_diverged = !exitFallsThrough(true_exit_kind);
@@ -3713,10 +3726,13 @@ fn emitIfOverRow(
         // Both branches fall through. When they leave different physical depths
         // (each branch stored its own sp via finalizeRowBranch), the word's
         // runtime output depth genuinely varies, so a caller must collapse to a
-        // row rather than trust the declared output count. When they leave equal
-        // depths, the merge reconciles to that fixed depth, normalizing away any
-        // variability a branch inherited from a variable-arity callee.
-        state.variable_arity = true_sp != false_sp;
+        // row rather than trust the declared output count. When both leave equal
+        // concrete depths, the merge reconciles to that fixed depth, normalizing
+        // away any variability a branch inherited from a variable-arity callee.
+        // An arm that collapsed to an opaque row carries no trustworthy depth
+        // (its abstract sp is 1 regardless of runtime depth), so it cannot
+        // disprove a difference detected at a deeper if-over-row.
+        state.variable_arity = mergedVariableArity(state.variable_arity, true_sp, false_sp, true_ends_on_row or false_ends_on_row);
         const end_false = c._ir_END(ctx);
         c._ir_MERGE_2(ctx, end_true, end_false);
         state.recordBlockStart(ctx.unnamed_0.control);
@@ -4666,6 +4682,14 @@ fn compileInstructions(
                     }
                     const top = stack[sp.* - 1];
                     const second = stack[sp.* - 2];
+                    if (state.aot_mode and (top == .row_region or second == .row_region)) {
+                        // Reordering a row off its pinned slot would desync a
+                        // later live sp-relative op against the physical stack.
+                        // Reject to interpreter fallback rather than emit an
+                        // unsound abstract reorder that silently miscompiles.
+                        state.not_compilable_reason = .abstract_stack_underflow;
+                        return IrCodegenError.NotCompilable;
+                    }
                     // Track swap abstractly without physical modification.
                     // flushToPhysicalStack resolves cross-references later.
                     stack[sp.* - 2] = top;
@@ -14867,6 +14891,61 @@ test "row underflow: the same word is rejected in non-AOT (JIT) C emission" {
         IrCodegenError.StackUnderflow,
         emitWordC(&instrs, 1, 1, "reach-below", testing.allocator),
     );
+}
+
+test "mergedVariableArity: concrete arms reset, opaque-row arms accumulate" {
+    // Both arms concrete: equal depths reset the flag (the build-semantic-context
+    // normalization), unequal depths set it.
+    try testing.expect(!mergedVariableArity(true, 1, 1, false));
+    try testing.expect(mergedVariableArity(false, 2, 1, false));
+    // An opaque-row arm carries no trustworthy depth: a deeper-detected
+    // difference survives even though both arms read sp 1, and an equal-depth
+    // row pair never clobbers it back to false.
+    try testing.expect(mergedVariableArity(true, 1, 1, true));
+    try testing.expect(!mergedVariableArity(false, 1, 1, true));
+    try testing.expect(mergedVariableArity(false, 2, 1, true));
+}
+
+test "swap over a row is rejected in AOT mode" {
+    // `( a -- ... ) [ swap 5 swap ]` -- the first swap reaches below the declared
+    // input and collapses to a row; pushing a literal and swapping would reorder
+    // the row off its slot, which cannot be modeled faithfully, so AOT codegen
+    // rejects rather than emit an unsound abstract reorder.
+    var dummy: u8 = 0;
+    const resolver = WordResolver{
+        .resolve = RowUnderflowResolver.resolve,
+        .user_data = @ptrCast(&dummy),
+        .dispatch_table_ptr = @ptrFromInt(1),
+    };
+    const instrs = makeInstructions(.{ "swap", @as(i64, 5), "swap" });
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    try testing.expectError(IrCodegenError.NotCompilable, emitWordCAot(
+        &instrs,
+        1,
+        1,
+        "swap-over-row",
+        resolver,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+    ));
 }
 
 // --- rewriteIndexedStackOp tests ---

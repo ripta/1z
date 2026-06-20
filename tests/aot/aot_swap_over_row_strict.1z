@@ -1,0 +1,8 @@
+\ Strict-mode rejection of a swap that reorders an opaque row off its slot. A
+\ runtime-depth `drop-at` collapses the stack into a row; pushing a literal above
+\ it and swapping would move the row off slot 0, desyncing any later live
+\ sp-relative op. The AOT compiler cannot model this faithfully yet, so it must
+\ stay uncompilable: under --interpreter-fallback=false the build must error
+\ rather than silently miscompile. This is the discriminate-then-shuffle shape of
+\ `(lexer-step)`'s false arm, isolated to the offending swap.
+10 20 30 40 50 0 drop-at 99 swap drop

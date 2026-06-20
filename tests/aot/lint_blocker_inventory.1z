@@ -25,8 +25,16 @@
 \ its outputs -- the body leaves `path targets`, not just `targets`, and the AOT
 \ epilogue requires the final stack depth to match the declared output count.
 \ Correcting that declaration (and the same under-count on its caller
-\ `(file-use-targets)`) leaves only `(lexer-step)`, whose blocker is a
+\ `(file-use-targets)`) left only `(lexer-step)`, whose blocker is a
 \ variable-arity callee.
+\
+\ Recognizing `(try-rules)` as variable-arity (so a caller collapses its result
+\ to a row instead of trusting the declared two outputs) requires rejecting any
+\ inline `swap` that would reorder that row off its slot -- such a reorder
+\ silently miscompiles, so it falls back to the interpreter instead. The reject
+\ is deliberately coarse: it also catches `(build-semantic-context)`, whose
+\ swap-over-a-row is faithful but not yet modeled, so the set is back to two
+\ words. Modeling the pinned-row shuffles re-admits both.
 \
 \ This pins the per-word blocker inventory. The golden shrinks as those
 \ codegen gaps close and individual words start compiling.
