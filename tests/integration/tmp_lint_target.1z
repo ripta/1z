@@ -1,3 +1,0 @@
-use "ranges" ;
-x: [ 1 ] ;
-y: [ x x + ] ;

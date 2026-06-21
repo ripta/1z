@@ -20,15 +20,18 @@ Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'using-iterator' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: --interpreter-fallback=false rejects compound-fallback dispatch; 3 call sites still route through the interpreter
+Error: --interpreter-fallback=false rejects compound-fallback dispatch; 4 call sites still route through the interpreter
   'pragma-get' -> 'pragma-get?' (line 1089)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
   '#none' -> '#any' (line 381)
-      callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
+      callee uncompiled: NC.19: defines a helper word inside its body that AOT compilation cannot discover
+      hint: move the helper into a private{ } block at module scope
+  '>word-info' -> '(raw>word-info)' (line 1054)
+      callee uncompiled: NC.19: defines a helper word inside its body that AOT compilation cannot discover
+      hint: move the helper into a private{ } block at module scope
   'generic?' -> '#any' (line 358)
-      callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-AOT interpreter fallbacks: 242 total (native=233 compound-uncompiled=3 quotation=6)
-  static-check: jitInterpretedCall=3/3 jitNativeWordCall=233/233 jitCallQuotation=6/6 (matches build-time inventory)
+      callee uncompiled: NC.19: defines a helper word inside its body that AOT compilation cannot discover
+      hint: move the helper into a private{ } block at module scope
+AOT interpreter fallbacks: 219 total (native=209 compound-uncompiled=4 quotation=6)
+  static-check: jitInterpretedCall=4/4 jitNativeWordCall=209/209 jitCallQuotation=6/6 (matches build-time inventory)
