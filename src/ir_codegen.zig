@@ -7902,6 +7902,7 @@ pub fn emitProgramC(
         \\extern int onez_set_static_libs(void *rt, const char **names, unsigned int count);
         \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
         \\extern int32_t onez_set_trace_words(void *rt, const char *pattern);
+        \\extern int32_t onez_set_stdlib_path_z(void *rt, const char *path);
         \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *struct_instance_slots, void *protocoldescriptor_slots, void *constraintcombinator_slots);
         \\extern int onez_replay_method_dispatch(void *rt);
         \\
@@ -9173,6 +9174,19 @@ pub fn emitProgramC(
             \\    {
             \\        const char *trace_env = getenv("ONEZ_TRACE_WORDS");
             \\        if (trace_env) onez_set_trace_words(rt, trace_env);
+            \\    }
+            \\
+        );
+
+        // Runtime stdlib resolution. A program that does a runtime `use` / `load`
+        // (e.g. an AOT lint binary parsing a source file with its own imports)
+        // resolves stdlib modules through the context's stdlib path, which the
+        // AOT binary otherwise leaves unset. Honor `ONEZ_STDLIB` just as the
+        // interpreter's CLI does, so such programs run without a baked-in path.
+        try out.appendSlice(allocator,
+            \\    {
+            \\        const char *stdlib_env = getenv("ONEZ_STDLIB");
+            \\        if (stdlib_env) onez_set_stdlib_path_z(rt, stdlib_env);
             \\    }
             \\
         );

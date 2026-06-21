@@ -1,0 +1,4 @@
+use "lint" ;
+use "lint-rules" ;
+{ "tests/integration/tmp_lint_target.1z" } run-lint drop
+"PROBE-DONE" print-line

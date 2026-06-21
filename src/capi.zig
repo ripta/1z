@@ -1540,6 +1540,15 @@ export fn onez_set_stdlib_path(ptr: ?*anyopaque, data: [*]const u8, len: usize) 
     return ONEZ_OK;
 }
 
+/// Null-terminated convenience form of `onez_set_stdlib_path`, mirroring
+/// `onez_set_trace_words`. Used by the generated AOT `main` shim to honor the
+/// `ONEZ_STDLIB` environment variable so a runtime `use`/`load` (e.g. an AOT
+/// lint binary parsing a source file with its own imports) resolves stdlib
+/// modules, just as the interpreter does.
+export fn onez_set_stdlib_path_z(ptr: ?*anyopaque, path: [*:0]const u8) c_int {
+    return onez_set_stdlib_path(ptr, path, std.mem.span(path).len);
+}
+
 export fn onez_set_source(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const copy = handle.ctx.quotationAllocator().dupe(u8, data[0..len]) catch {
