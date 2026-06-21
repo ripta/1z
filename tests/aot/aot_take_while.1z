@@ -1,0 +1,15 @@
+\ Focused fixture for the row-variable quotation-parameter consumer shape:
+\ take-while runs `while` on its predicate/body quotation parameters inside a
+\ `[ ... ] dip`, then shuffles the consumed span across the bounded row
+\ (`2 pick-n`, `-rot> #slice`). The preserved-bounded-row layout keeps the
+\ threaded scanner/start values live above the row, so the body compiles to
+\ native C under runtime-image AOT and matches the interpreter.
+use "scanner" ;
+
+\ partial consumption: stop at the first space.
+"hello world" <scanner> [ " " = not ] take-while
+swap drop print-line
+
+\ full consumption: predicate true for every char.
+"12345" <scanner> [ " " = not ] take-while
+swap drop print-line
