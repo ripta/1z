@@ -99,6 +99,13 @@ fn recoverLocalName(instructions: []const Instruction, semi_index: usize) ?Local
     return null;
 }
 
+/// A `case` branches array has a default arm when at least one top-level
+/// element is a bare quotation; keyed arms are nested arrays `{ key [body] }`.
+fn caseBranchesHaveDefault(branches: []const Value) bool {
+    for (branches) |elem| if (elem == .quotation) return true;
+    return false;
+}
+
 /// A quotation-local definition encountered while walking a body, together with
 /// whether it has been referenced. Scoped to a single body walk, so combinator
 /// arms get their own fresh set.
@@ -764,6 +771,31 @@ pub const InferenceEngine = struct {
                     const wd = word_def.?;
 
                     const combinator_kind = classifyCombinator(&wd);
+
+                    // A `case` whose branches array literal has no default arm
+                    // can fall through to a `no-matching-branch` runtime error.
+                    // The branches array is the literal pushed just before the
+                    // call; a dynamically built value is not inspectable here and
+                    // is left unchecked. Emit before dispatch so the warning
+                    // fires regardless of the combinator path taken below.
+                    if (idx > 0 and combinator_kind == .branch and std.mem.eql(u8, name, "case") and self.isInCheckedSource(caller.source_file)) {
+                        switch (instructions[idx - 1].op) {
+                            .push_literal => |val| if (val == .array and !caseBranchesHaveDefault(val.array)) {
+                                try self.emitDiagnostic(.{
+                                    .word_name = caller.word_name,
+                                    .source_file = caller.source_file,
+                                    .source_line = instr.line,
+                                    .severity = .warning,
+                                    .message = try std.fmt.allocPrint(
+                                        self.allocator,
+                                        "case expression has no default arm",
+                                        .{},
+                                    ),
+                                });
+                            },
+                            else => {},
+                        }
+                    }
 
                     // Try row-polymorphic path for any word with row-poly effect and quotation annotations
                     if (wd.stack_effect) |eff| {
@@ -1903,6 +1935,91 @@ test "branch combinator with disagreeing quotations emits diagnostic" {
     try testing.expectEqual(InferenceResult.unknown, result);
     try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
     try testing.expectEqual(Severity.err, engine.diagnostics.items[0].severity);
+}
+
+fn putCaseWord(dict: *Dictionary) !void {
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    try dict.put("case", .{
+        .name = "case",
+        .markers = &.{@constCast(&markers.branch_combinator_marker)},
+        .stack_effect = .{
+            .inputs = &.{ .{ .name = "val" }, .{ .name = "branches" } },
+            .outputs = &.{.{ .name = "x" }},
+        },
+        .action = .{ .native = dummy },
+    });
+}
+
+test "case without default arm warns" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    try putCaseWord(&dict);
+
+    const arm_body: []const Instruction = &.{makeInstr(.{ .push_literal = .{ .fixnum = 0 } })};
+    // { { 1 [ 0 ] } } -- a single keyed arm, no bare-quotation default.
+    const pair: []const Value = &.{ .{ .fixnum = 1 }, .{ .quotation = .{ .instructions = arm_body } } };
+    const branches: []const Value = &.{.{ .array = pair }};
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+        makeInstr(.{ .push_literal = .{ .array = branches } }),
+        makeInstr(.{ .call_word = "case" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, null);
+    defer engine.deinit();
+
+    _ = try engine.inferWord("test-word");
+    try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
+    try testing.expectEqual(Severity.warning, engine.diagnostics.items[0].severity);
+    try testing.expectEqualStrings("case expression has no default arm", engine.diagnostics.items[0].message);
+}
+
+test "case with default arm does not warn" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    try putCaseWord(&dict);
+
+    const arm_body: []const Instruction = &.{makeInstr(.{ .push_literal = .{ .fixnum = 0 } })};
+    const default_body: []const Instruction = &.{makeInstr(.{ .push_literal = .{ .fixnum = 9 } })};
+    const pair: []const Value = &.{ .{ .fixnum = 1 }, .{ .quotation = .{ .instructions = arm_body } } };
+    // { { 1 [ 0 ] } [ 9 ] } -- a keyed arm plus a bare-quotation default.
+    const branches: []const Value = &.{
+        .{ .array = pair },
+        .{ .quotation = .{ .instructions = default_body } },
+    };
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
+        makeInstr(.{ .push_literal = .{ .array = branches } }),
+        makeInstr(.{ .call_word = "case" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, null);
+    defer engine.deinit();
+
+    _ = try engine.inferWord("test-word");
+    try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
 }
 
 test "loop combinator with zero-delta body" {

@@ -1,0 +1,2 @@
+use { split: } "strings" ;
+"a/b/c" "/" split inspect print-line

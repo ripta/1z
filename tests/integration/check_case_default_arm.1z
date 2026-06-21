@@ -1,0 +1,31 @@
+\ A `case` with no default arm warns; a `case` with a default arm and a
+\ closed-enum `match{` do not.
+
+direction: enum{ north: unit south: unit } ;
+
+\ No default arm: a non-matching value falls through to a runtime error, so
+\ this warns under --check.
+no-default: ( sym -- s ) [
+  {
+    { north: [ "N" ] }
+    { south: [ "S" ] }
+  } case
+] ;
+
+\ Has a default arm (the trailing bare quotation): no warning.
+with-default: ( sym -- s ) [
+  {
+    { north: [ "N" ] }
+    { south: [ "S" ] }
+    [ drop "?" ]
+  } case
+] ;
+
+\ match{ on a closed enum is exhaustiveness-checked at parse time and never
+\ compiles to a `case` call, so it is exempt from this warning.
+via-match: ( d -- s ) [
+  match{
+    direction:north: [ "N" ]
+    direction:south: [ "S" ]
+  }
+] ;

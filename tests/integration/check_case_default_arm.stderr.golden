@@ -1,0 +1,1 @@
+tests/integration/check_case_default_arm.1z:12: warning: no-default: case expression has no default arm
