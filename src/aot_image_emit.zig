@@ -850,6 +850,17 @@ fn internValueTypeLiterals(
                 try internValueTypeLiterals(struct_plans, struct_index, effect_table, field);
             }
         },
+        .array => |elems| {
+            for (elems) |elem| {
+                try internValueTypeLiterals(struct_plans, struct_index, effect_table, elem);
+            }
+        },
+        .hash => |h| {
+            var iter = h.iterator();
+            while (iter.next()) |entry| {
+                try internValueTypeLiterals(struct_plans, struct_index, effect_table, entry.value_ptr.*);
+            }
+        },
         .quotation => |q| try internInstructionTypeLiterals(
             struct_plans,
             struct_index,
@@ -3546,7 +3557,17 @@ fn emitWordBodyBytecode(
         else
             instruction_bytecode.serializeQuotationInstructions(body, allocator) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                error.NotEncodable => return error.NotEncodable,
+                // A user word body may push a slot-encodable literal (i.e., a mutable_map holding
+                // struct instances, a struct instance, a nested array of them) that the by-value
+                // serializer cannot encode.
+                //
+                // Fall back to the image serializer so the literal slot-references the live runtime
+                // value. The loader decodes every body through the image decoder, which resolves the
+                // slot tags.
+                error.NotEncodable => instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps) catch |e| switch (e) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.NotEncodable => return error.NotEncodable,
+                },
             };
         defer allocator.free(bytes);
 

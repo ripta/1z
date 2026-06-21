@@ -552,19 +552,19 @@ pub fn loadIntoContext(
     // must be patched first.
     try populateTaggedSlots(ctx, header, slots.tagged);
 
-    // Generator-emitted word bodies decode last: their slot-encoded
-    // `.struct_type` literals resolve through the now-patched slot tables.
-    try decodeGeneratedWordBodies(ctx, header);
+    // Word bodies decode last: their slot-encoded literals (struct_type,
+    // mutable_map, struct_instance, ...) resolve through the now-patched
+    // slot tables.
+    try decodeWordBodies(ctx, header);
 }
 
-/// Decode the deferred bodies of generator-emitted words (struct
-/// constructors, getters, predicates, ...) now that the slot tables are
-/// patched. `populateModulesAndWords` left these words with an empty body
-/// because their `.struct_type` literals slot-encode against tables that
-/// were not yet populated; this pass resolves them through
-/// `deserializeQuotationInstructionsForImage` and installs the real body
-/// so an interpreted quotation (`jitCallQuotation`) calling such a word
-/// runs its actual instructions rather than a no-op.
+/// Decode every word body now that the slot tables are patched.
+/// `populateModulesAndWords` left all bodies empty because a body may
+/// slot-encode `.struct_type` / `.mutable_map` / `.struct_instance`
+/// literals against tables that were not yet populated; this pass resolves
+/// them through `deserializeQuotationInstructionsForImage` and installs the
+/// real body. A slot-free body decodes identically through the image
+/// decoder, so generated and user words share one path.
 /// Build the slot-resolution tables for image-mode bytecode decoding from
 /// the Context's patched slot-table pointers. Both the generated-word-body
 /// pass and method-dispatch replay decode `.struct_type` (and other
@@ -588,7 +588,7 @@ fn imageSlotTables(ctx: *const Context) instruction_bytecode.SlotResolutionTable
     };
 }
 
-fn decodeGeneratedWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
+fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
     if (header.word_count == 0) return;
     const words = header.words orelse return;
     const modules = header.modules orelse return;
@@ -599,7 +599,6 @@ fn decodeGeneratedWordBodies(ctx: *Context, header: *const Header) LoaderError!v
     var wi: u32 = 0;
     while (wi < header.word_count) : (wi += 1) {
         const w = words[wi];
-        if (w.provenance_generator == null) continue;
         if (w.body_bytecode == null or w.body_bytecode_len == 0) continue;
         if (w.module_idx >= header.module_count) return LoaderError.BadWordIndex;
 
@@ -611,11 +610,29 @@ fn decodeGeneratedWordBodies(ctx: *Context, header: *const Header) LoaderError!v
         if (cache_entry.* != .module) continue;
         const word_entry = cache_entry.*.module.words.getPtr(word_name) orelse continue;
 
+        // A non-provenance word whose by-value decode already produced a body
+        // in `populateModulesAndWords` is final; only generator-emitted words
+        // and bodies that failed by-value decode because they slot-encode a
+        // literal are still empty and decode here, now that the slot tables
+        // are patched.
+        if (word_entry.action == .compound and word_entry.action.compound.len > 0) continue;
+
         const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
         const instrs = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables) catch
             return LoaderError.OutOfMemory;
         word_entry.action = .{ .compound = instrs };
     }
+}
+
+/// Decode a non-provenance word body through the by-value decoder during the
+/// initial population pass. A slot-free body decodes here; one that carries a
+/// slot-encoded literal fails (the slot tag is not a by-value tag) and is left
+/// empty so `decodeWordBodies` can decode it through the image decoder once the
+/// slot tables are patched.
+fn decodeWordBodyInline(arena: Allocator, w: Word) []const value_mod.Instruction {
+    if (w.body_bytecode == null or w.body_bytecode_len == 0) return &.{};
+    const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
+    return instruction_bytecode.deserializeQuotationInstructions(bytes, arena) catch &.{};
 }
 
 // -- Module + word population ------------------------------------------
@@ -650,14 +667,16 @@ fn populateModulesAndWords(
 
             const markers_slice = try buildMarkerSlice(arena, w);
             const stack_effect = try decodeStackEffect(arena, header, w.stack_effect_idx, protocol_slots);
-            // Generator-emitted words carry slot-encoded `.struct_type`
-            // literals that only resolve once the struct-type slot table
-            // is patched, which happens after this pass. Leave their body
-            // empty here; `decodeGeneratedWordBodies` fills it in later.
+            // Generator-emitted words and any body carrying slot-encoded
+            // literals (struct_type, mutable_map, struct_instance, ...) decode
+            // after the slot tables are patched, in `decodeWordBodies`. A
+            // slot-free body decodes here through the by-value decoder; one
+            // that carries a slot tag fails that decode (the slot tag is not a
+            // by-value tag) and is left empty for the deferred image pass.
             const body: []const value_mod.Instruction = if (w.provenance_generator != null)
                 &.{}
             else
-                try decodeWordBody(arena, w);
+                decodeWordBodyInline(arena, w);
             const diag = decodeDiagnosticMetadata(w);
 
             // Treat `aot_image_emit.word_id_sentinel` (0xFFFFFFFFu) as
@@ -689,25 +708,6 @@ fn populateModulesAndWords(
         ctx.module_cache_value.map.put(cache_alloc, name_owned, .{ .module = module_ptr }) catch
             return LoaderError.OutOfMemory;
     }
-}
-
-/// Decode a word's body bytecode into a runtime `[]Instruction` slice.
-/// Words emitted with no body bytecode keep the empty-body stub; the
-/// blob loader rewrites that stub for `type_val` blob entries
-/// downstream. The decoder allocates instructions, names, and any
-/// nested literal payloads through the arena, matching the lifetime of
-/// every other loader allocation.
-///
-/// `instruction_bytecode.deserializeQuotationInstructions` collapses
-/// both true OOM and malformed-buffer detections into
-/// `error.OutOfMemory`. We surface that as `LoaderError.OutOfMemory`
-/// here; if the decoder grows a separate format-error path later, this
-/// catch can split apart without disturbing callers.
-fn decodeWordBody(arena: Allocator, w: Word) LoaderError![]const value_mod.Instruction {
-    if (w.body_bytecode == null or w.body_bytecode_len == 0) return &.{};
-    const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-    return instruction_bytecode.deserializeQuotationInstructions(bytes, arena) catch
-        return LoaderError.OutOfMemory;
 }
 
 /// Decoded diagnostic metadata for one image word. Each field mirrors a

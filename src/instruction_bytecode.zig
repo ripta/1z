@@ -442,7 +442,7 @@ pub fn serializeValueIntoForImage(
         },
         .quotation => |q| {
             try buf.append(allocator, value_tag_quotation);
-            try serializeInstructionsInto(buf, q.instructions, allocator);
+            try serializeInstructionsIntoForImage(buf, q.instructions, allocator, maps);
         },
         else => try serializeValueInto(buf, val, allocator),
     }
@@ -771,6 +771,10 @@ pub fn deserializeValueAtForImage(
             const h_ptr = try allocator.create(HashTable);
             h_ptr.* = h;
             break :blk .{ .hash = h_ptr };
+        },
+        value_tag_quotation => blk: {
+            const nested = try deserializeInstructionsAtForImage(data, offset, allocator, tables);
+            break :blk .{ .quotation = .{ .instructions = nested } };
         },
         else => blk: {
             // Rewind one byte so the legacy decoder re-reads the tag.
@@ -1209,6 +1213,80 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
     const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
     try testing.expect(decoded == .struct_instance);
     try testing.expectEqual(@as(*StructInstance, &si), decoded.struct_instance);
+    try testing.expectEqual(buf.items.len, offset);
+}
+
+test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
+    const alloc = testing.allocator;
+
+    // A quotation whose body pushes a struct_type literal -- the shape a
+    // struct instance's `check`/`fix` field holds when the lint registry is
+    // serialized into the runtime image. The by-value path rejects a
+    // struct_type, so before routing the `.quotation` case through the image
+    // serializer this raised `error.NotEncodable`.
+    var st = StructType{ .name = "rec", .fields = &.{"a"} };
+    const quot_instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .struct_type = &st } }, .line = 1 },
+    };
+    const q = Value{ .quotation = .{ .instructions = &quot_instrs } };
+
+    var tv_idx: std.AutoHashMapUnmanaged(*const TypeValue, u32) = .{};
+    defer tv_idx.deinit(alloc);
+    var st_idx: std.AutoHashMapUnmanaged(*const StructType, u32) = .{};
+    defer st_idx.deinit(alloc);
+    try st_idx.put(alloc, &st, 0);
+    var mk_idx: std.AutoHashMapUnmanaged(*const Marker, u32) = .{};
+    defer mk_idx.deinit(alloc);
+    var pm_idx: std.AutoHashMapUnmanaged(*const Parameter, u32) = .{};
+    defer pm_idx.deinit(alloc);
+    var tg_idx: std.AutoHashMapUnmanaged(TaggedKey, u32) = .{};
+    defer tg_idx.deinit(alloc);
+    var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
+    defer mm_idx.deinit(alloc);
+    var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
+    defer sx_idx.deinit(alloc);
+
+    const enc = SlotEncodingMaps{
+        .typevalue_slot_index = &tv_idx,
+        .struct_type_slot_index = &st_idx,
+        .marker_slot_index = &mk_idx,
+        .parameter_slot_index = &pm_idx,
+        .tagged_slot_index = &tg_idx,
+        .mutable_map_slot_index = &mm_idx,
+        .struct_instance_slot_index = &sx_idx,
+    };
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(alloc);
+    try serializeValueIntoForImage(&buf, q, alloc, &enc);
+
+    var st_slots = [_]?*StructType{&st};
+    const tables = SlotResolutionTables{
+        .typevalue_slots = null,
+        .typevalue_slot_count = 0,
+        .struct_type_slots = &st_slots,
+        .struct_type_slot_count = 1,
+        .marker_slots = null,
+        .marker_slot_count = 0,
+        .parameter_slots = null,
+        .parameter_slot_count = 0,
+        .tagged_slots = null,
+        .tagged_slot_count = 0,
+        .mutable_map_slots = null,
+        .mutable_map_slot_count = 0,
+        .struct_instance_slots = null,
+        .struct_instance_slot_count = 0,
+    };
+
+    var offset: usize = 0;
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    defer alloc.free(decoded.quotation.instructions);
+    try testing.expect(decoded == .quotation);
+    const di = decoded.quotation.instructions;
+    try testing.expectEqual(@as(usize, 1), di.len);
+    try testing.expect(di[0].op == .push_literal);
+    try testing.expect(di[0].op.push_literal == .struct_type);
+    try testing.expectEqual(&st, di[0].op.push_literal.struct_type);
     try testing.expectEqual(buf.items.len, offset);
 }
 

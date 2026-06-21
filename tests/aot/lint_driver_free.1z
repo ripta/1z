@@ -1,0 +1,10 @@
+\ Interpreter-free (`--interpreter-fallback=false`) build of the standalone
+\ lint driver. This build is expected to FAIL: three row-variable lexer / lint
+\ words -- `(lint-rule-with-context)`, `(lexer-step)`, `(try-rules)` -- compile
+\ under runtime-image AOT with an interpreter fallback but cannot be lowered to
+\ native C without it, so strict interpreter-free codegen rejects them (NC.13).
+\ This golden captures that residual: the lint path cannot currently go fully
+\ interpreter-free.
+use "lint" ;
+use "lint-rules" ;
+{ "tests/fixtures/lint/unused-import.1z" } run-lint [ 0 ] [ 1 ] if sys-exit

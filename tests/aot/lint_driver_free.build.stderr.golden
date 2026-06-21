@@ -1,0 +1,9 @@
+Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Error: 3 words could not be compiled to C
+  word '(lint-rule-with-context)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word '(lexer-step)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word '(try-rules)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+AOT interpreter fallbacks: 269 total (native=258 per-op-native=3 compound-uncompiled=6 quotation=2)

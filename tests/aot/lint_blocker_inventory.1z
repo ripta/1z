@@ -35,14 +35,13 @@
 \ row-variable blocker set is now empty -- the per-word "could not be compiled"
 \ inventory is gone.
 \
-\ With the row-variable wall cleared, the build now halts at a separate blocker
-\ that is not about row-variable codegen: the AOT image serializer cannot encode
-\ a `struct_instance` value, and the lint rules registry is a mutable map holding
-\ rule records as struct instances. This surfaces as a generic
-\ "Error generating C source: NotCompilable". Encoding struct instances into the
-\ image is its own concern, tracked with the full lint-driver build rather than
-\ here; this golden pins that struct-instance serialization is the current
-\ residual.
+\ The struct-instance image-serialization residual is now resolved: a struct
+\ instance nested inside an array inside the parse-time-seeded lint registry
+\ map is interned and slot-encoded, the `(lint-registry)` word body whose
+\ literal could not be encoded by-value falls back to the image serializer, and
+\ the lint bootstrap compiles end to end. This probe now builds successfully
+\ (exit 0); the runtime-image lint driver is exercised by lint_driver, and the
+\ interpreter-free residual by lint_driver_free.
 use "lint" ;
 use "lint-rules" ;
 { } run-lint drop
