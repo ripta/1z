@@ -1,0 +1,100 @@
+\ lib/doc-extract.1z - Source-level doc-comment extraction
+\
+\ Tokenizes 1z source and builds a mapping from word name to the word's
+\ doc-comment, recovered from the source rather than from runtime
+\ introspection. Unlike the `doc>>` field on word-info, this preserves the
+\ doc-comment's original multi-line structure: consecutive `\\` lines are
+\ joined with newlines and indentation beyond the single separating space is
+\ kept, so a downstream renderer can recover paragraphs and indented code
+\ examples.
+
+use "lexer" ;
+use "1z-tokens" ;
+use "strings" ;
+use "sequences" ;
+
+\ Drop the trailing `:` from a definition symbol token's value (`foo:` -> `foo`).
+(strip-colon): ( str -- str ) [ dup #len 1 - #take ] ;
+
+\ Strip a doc-comment token's `\\` prefix, mirroring the parser's
+\ stripDocCommentPrefix: a too-short token yields the empty string; otherwise
+\ drop the `\\` plus a single space or tab separator, preserving any further
+\ indentation.
+(strip-doc-prefix): ( str -- str ) [
+  dup #len 2 <=
+  [ drop "" ]
+  [
+    dup 2 #nth dup " " = swap "\t" = or
+    [ 3 #drop ]
+    [ 2 #drop ]
+    if
+  ]
+  if
+] ;
+
+\ A token that may sit between a doc-comment and the definition it documents
+\ without breaking the attachment.
+(skip-token?): ( token -- ? ) [
+  kind>> dup whitespace: = over newline: = or swap comment: = or
+] ;
+
+\ Append a freshly-stripped doc-comment line to the pending accumulator,
+\ joining consecutive lines with a newline. `f` pending means none yet.
+(append-pending): ( map pending content -- map pending' ) [
+  swap dup f =
+  [ drop ]
+  [ "\n" #append swap #append ]
+  if
+] ;
+
+\ A definition symbol closes the pending doc-comment: file it under the word
+\ name and clear the accumulator. A symbol with no pending doc-comment is a
+\ bare symbol literal used as a value, not a documented definition, so it is
+\ ignored.
+(attach-symbol): ( map pending token -- map pending' ) [
+  over f =
+  [ drop ]
+  [ value>> (strip-colon) swap @set! f ]
+  if
+] ;
+
+\ Fold step over one token, threading the result map and the pending
+\ doc-comment accumulator.
+(extract-step): ( map pending token -- map pending' ) [
+  dup kind>> doc-comment: =
+  [
+    value>> (strip-doc-prefix) (append-pending)
+  ] [
+    dup (skip-token?)
+    [ drop ]
+    [
+      dup kind>> symbol: =
+      [ (attach-symbol) ]
+      [ drop drop f ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+\\ Tokenize 1z source and return a mutable map from word name to its
+\\ source-level doc-comment string. Consecutive `\\` lines are joined with
+\\ newlines; a doc-comment not immediately followed by a definition is dropped.
+extract-doc-comments: ( source -- map ) [
+  1z-tokenize #collect
+  M{ } f
+  2 pick-n [ (extract-step) ] #each
+  drop nip
+] ;
+
+\ Read an entire file into a string.
+(read-file): ( path -- contents ) [
+  read: stream-open dup stream-read-all swap stream-close bytes>
+] ;
+
+\\ Read a 1z source file and extract its doc-comments, returning a mutable map
+\\ from word name to its source-level doc-comment string.
+extract-doc-comments-from-file: ( path -- map ) [
+  (read-file) extract-doc-comments
+] ;

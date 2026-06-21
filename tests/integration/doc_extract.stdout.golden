@@ -1,0 +1,43 @@
+Stack: [ ]
+=== single-line doc-comment ===
+Stack: [ ]
+Stack: [ M{ add: "Add two numbers." } ]
+PASS: single line attaches to following definition
+Stack: [ ]
+=== multi-line doc-comment ===
+Stack: [ ]
+Stack: [ M{ foo: "first line
+second line" } ]
+PASS: consecutive lines joined with newline
+Stack: [ ]
+=== indentation preserved ===
+Stack: [ ]
+Stack: [ M{ bar: "Example:
+  2 2 +" } ]
+PASS: indentation beyond the separator space is kept
+Stack: [ ]
+=== blank line paragraph separator ===
+Stack: [ ]
+Stack: [ M{ baz: "para one
+
+para two" } ]
+PASS: blank doc line round-trips as empty line
+Stack: [ ]
+=== orphaned doc-comment ===
+Stack: [ ]
+Stack: [ M{ } ]
+PASS: doc not immediately before a definition does not attach
+Stack: [ M{ } ]
+PASS: orphaned doc-comment produces no mapping
+Stack: [ ]
+=== symbol literal not a definition ===
+Stack: [ ]
+Stack: [ M{ run: "doc for run" } ]
+PASS: definition symbol is documented
+Stack: [ M{ run: "doc for run" } ]
+PASS: symbol literal in the body is not treated as a definition
+Stack: [ ]
+=== extraction from a file ===
+Stack: [ ]
+PASS: doc extracted from a source file on disk
+Stack: [ ]

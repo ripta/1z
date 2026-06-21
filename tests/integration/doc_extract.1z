@@ -1,0 +1,69 @@
+use "testing" ;
+use "doc-extract" ;
+use "os/fs" ;
+use "os/path" ;
+
+\ Note: a doc-comment is two literal backslashes (`\\`). In a 1z string literal
+\ each backslash is escaped, so a doc-comment line is written as `\\\\` here.
+
+(write-file): ( content path -- ) [
+  write: stream-open
+  dup -rot> [ print ] with-output-stream
+  stream-close
+] ;
+
+\ --- Single-line doc-comment ---
+
+"single-line doc-comment" test-section
+
+"\\\\ Add two numbers.\nadd: ( a b -- c ) [ + ] ;\n" extract-doc-comments
+"add" @get "Add two numbers." "single line attaches to following definition" assert=
+
+\ --- Multi-line doc-comment ---
+
+"multi-line doc-comment" test-section
+
+"\\\\ first line\n\\\\ second line\nfoo: [ ] ;\n" extract-doc-comments
+"foo" @get "first line\nsecond line" "consecutive lines joined with newline" assert=
+
+\ --- Indentation preserved (code example) ---
+
+"indentation preserved" test-section
+
+"\\\\ Example:\n\\\\   2 2 +\nbar: [ ] ;\n" extract-doc-comments
+"bar" @get "Example:\n  2 2 +" "indentation beyond the separator space is kept" assert=
+
+\ --- Blank doc-comment line as paragraph separator ---
+
+"blank line paragraph separator" test-section
+
+"\\\\ para one\n\\\\\n\\\\ para two\nbaz: [ ] ;\n" extract-doc-comments
+"baz" @get "para one\n\npara two" "blank doc line round-trips as empty line" assert=
+
+\ --- Orphaned doc-comment is dropped ---
+
+"orphaned doc-comment" test-section
+
+"\\\\ orphan\n42 print-line\nqux: [ ] ;\n" extract-doc-comments
+dup "qux" @has? "doc not immediately before a definition does not attach" assert-false
+#len 0 "orphaned doc-comment produces no mapping" assert=
+
+\ --- Symbol literal used as a value is not a definition ---
+
+"symbol literal not a definition" test-section
+
+"\\\\ doc for run\nrun: [ name: drop ] ;\n" extract-doc-comments
+dup "run" @get "doc for run" "definition symbol is documented" assert=
+"name" @has? "symbol literal in the body is not treated as a definition" assert-false
+
+\ --- Reading from a file ---
+
+"extraction from a file" test-section
+
+[
+  "sample.1z" path-join
+  dup
+  "\\\\ Doc from file.\nffoo: [ ] ;\n" swap (write-file)
+  extract-doc-comments-from-file
+  "ffoo" @get "Doc from file." "doc extracted from a source file on disk" assert=
+] using-temp-directory
