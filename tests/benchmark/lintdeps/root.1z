@@ -1,0 +1,3 @@
+use "./mid.1z" ;
+use "./leaf.1z" ;
+z: [ a x ] ;

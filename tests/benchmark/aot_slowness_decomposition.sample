@@ -1,0 +1,45 @@
+AOT-vs-interpreter slowness decomposition
+=========================================
+
+Release interpreter (`1z run`) vs runtime-image AOT (`1z build --emit-runtime-image`),
+same machine, ONEZ_STDLIB=lib. Per-call = elapsed_ns / iters.
+
+bench_boundary_raw   (2,000,000 iters; dynamic quotation pulled from a hash and called)
+  interpreter   6434294000 ns   3.22 us/call
+  runtime AOT    747435000 ns   0.37 us/call      AOT 8.6x FASTER
+
+bench_generic_dispatch (2,000,000 iters; #nth + generic #len on a short string)
+  interpreter   6984119000 ns   3.49 us/call
+  runtime AOT    568292000 ns   0.28 us/call      AOT 12.3x FASTER
+
+bench_strlen_scaling (50,000 iters; #len on one string, dup-ed through the loop)
+  len   interpreter ns   us/call    AOT ns      us/call    AOT speedup
+  100    148408000      2.97        11941000    0.24        12.4x faster
+  1000   161814000      3.24        26044000    0.52         6.2x faster
+  10000  295249000      5.90       157269000    3.15         1.9x faster
+  -> #len is O(bytes) (utf8CodepointCount); identical native in both builds, so
+     the shared O(n) scan dominates as length grows and the builds converge.
+
+bench_tokenize_iso   (30 iters; 1z-tokenize #collect over a fixed 720-byte source)
+  interpreter   3270961000 ns   109.0 ms/tokenize
+  runtime AOT   5056520000 ns   168.5 ms/tokenize    AOT 1.55x slower
+  -> 720 bytes / 348 tokens = 109 ms per tokenize in the RELEASE interpreter:
+     the tokenizer is O(n^2) (rest/#slice/#len rescans remaining input per rule
+     per token). This dominates lint time in BOTH builds.
+
+Conclusions
+-----------
+1. The compiled<->interpreter boundary is NOT expensive per call: AOT is 8-12x
+   FASTER than the interpreter at the isolated dynamic-call and generic-dispatch
+   paths. The prior "boundary is far more expensive per call" explanation is
+   refuted by direct measurement.
+2. The dominant ABSOLUTE cost in both builds is the O(n^2) codepoint-scanning
+   tokenizer, built on O(bytes) #len / #slice. Making string length/slicing O(1)
+   (byte-indexed) is the generic, reusable win for every string-heavy program.
+3. AOT tokenization is only ~1.55x slower than the interpreter -- a small
+   per-lookup penalty when interpreted rule quotations resolve module-private
+   words through the runtime image. Nowhere near the linter's ~470x.
+4. Therefore the linter's ~470x AOT regression is NOT per-call cost. It is
+   re-execution: the dependency walk tokenizes far more under AOT than under the
+   interpreter. Localizing exactly which memo/cache is not shared across the
+   boundary is the open follow-up.

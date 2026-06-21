@@ -1,0 +1,27 @@
+\ Benchmark: per-call generic-dispatch cost from compiled code.
+\
+\ In the AOT binary, `#len` (a generic) is reached via
+\ jitNativeWordCall -> tryDispatchGenericWithPic -> tryDispatchGenericById on
+\ every call. This isolates that dispatch path: `#len` is called on a SHORT
+\ string pulled from a vector at runtime (so the operand type is not a
+\ compile-time constant and the call cannot be folded), keeping the actual
+\ codepoint-count work tiny so the dispatch machinery dominates.
+\
+\ Compared against bench_strlen_scaling (where the codepoint scan dominates),
+\ this separates "dispatch is slow" from "the string scan is slow".
+
+\ Vector holding a short string; #nth returns it at runtime.
+holder: ( -- vec ) const [ V{ "abcdefghij" } ] ;
+
+iters: ( -- fixnum ) const [ 2000000 ] ;
+
+do-len: ( -- ) [ holder 0 #nth #len drop ] ;
+
+run-loop: ( -- ) [ iters [ do-len ] times ] ;
+
+\ warm
+do-len
+
+"generic-dispatch iters:      " print iters .
+"generic-dispatch elapsed_ns: " print
+[ run-loop ] benchmark "elapsed_ns" @get .

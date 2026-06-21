@@ -1,0 +1,45 @@
+\ Benchmark: isolated tokenizer throughput.
+\
+\ Runs the exact `1z-tokenize #collect` path the linter's hot loop uses, but
+\ with nothing else around it -- no run-lint, no (compute-circular-deps)
+\ dependency walk, no rule evaluation. Tokenizes one fixed source string K
+\ times and reports elapsed nanoseconds and the token count.
+\
+\ Purpose: the keystone of the AOT-slowness investigation. The linter's
+\ runtime-image AOT binary is >2 orders of magnitude slower than the
+\ interpreter; profiling pins ~100% of its time in the tokenize/scanner path
+\ (#len / #slice over strings). This isolates tokenization so the interpreter
+\ and the runtime-image AOT binary can be compared on the SAME input with the
+\ dependency-walk and caching layers removed.
+\
+\   AOT ~= interpreter here  -> tokenize itself is not the divergence; the
+\                              blowup lives in the lint dependency walk / cache.
+\   AOT >> interpreter here  -> the per-token interpreted-rule-quotation path
+\                              under AOT is the cost.
+
+use "scanner" ;
+use "lexer" ;
+use "1z-tokens" ;
+use { repeat: } "strings" ;
+
+\ A representative chunk of 1z source exercising many token rules: stack
+\ effects, symbols, brace prefixes, strings, numbers, comments.
+chunk: ( -- str ) const [
+  "double: ( n -- n ) [ 2 * ] ;\nH{ kind: word: match: [ foo ] }\n\\ a doc\nx: const [ 42 0xFF 3.14 ] ;\nv: virtual{ fixnum } ;\n"
+] ;
+
+\ Repeat the chunk to control input size.
+src: ( -- str ) const [ chunk 6 repeat ] ;
+
+count-tokens: ( str -- n ) [ 1z-tokenize #collect #len ] ;
+
+iters: ( -- fixnum ) const [ 30 ] ;
+
+\ warm
+src count-tokens drop
+
+"tokenize-iso input-bytes: " print src #len .
+"tokenize-iso tokens:      " print src count-tokens .
+"tokenize-iso iters:       " print iters .
+"tokenize-iso elapsed_ns:  " print
+[ iters [ src count-tokens drop ] times ] benchmark "elapsed_ns" @get .

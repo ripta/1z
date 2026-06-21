@@ -1,0 +1,37 @@
+\ Benchmark: string #len is O(bytes), not O(1).
+\
+\ `#len` on a string is utf8CodepointCount -- a full scan of the string.
+\ `#slice` (and `rest`) are likewise codepoint-based, O(bytes). The 1z
+\ tokenizer calls `rest` / `#len` per rule per token, so per-token work scales
+\ with remaining input length: an O(n^2) rescan over the source. This bench
+\ pins the per-call cost of `#len` against input length so that hazard is
+\ visible independent of the tokenizer.
+\
+\ Both the interpreter and AOT run the identical native (nativeLenString), so
+\ this establishes the algorithmic floor every string-heavy program pays.
+
+use { repeat: } "strings" ;
+
+base: ( -- str ) const [ "0123456789" ] ;
+
+src-100:   ( -- str ) const [ base 10 repeat ] ;
+src-1000:  ( -- str ) const [ base 100 repeat ] ;
+src-10000: ( -- str ) const [ base 1000 repeat ] ;
+
+iters: ( -- fixnum ) const [ 50000 ] ;
+
+\ `const` does not memoize (it re-evaluates each call), so each source string
+\ is built ONCE on the stack and `dup`-ed through the loop -- otherwise the
+\ repeat-rebuild, not #len, would dominate the timing.
+len-loop: ( str -- ) [ iters [ dup #len drop ] times drop ] ;
+
+\ warm
+src-100 #len drop
+src-1000 #len drop
+src-10000 #len drop
+
+"strlen iters: " print iters .
+
+"strlen len=100    ns=" print [ src-100 len-loop ] benchmark "elapsed_ns" @get .
+"strlen len=1000   ns=" print [ src-1000 len-loop ] benchmark "elapsed_ns" @get .
+"strlen len=10000  ns=" print [ src-10000 len-loop ] benchmark "elapsed_ns" @get .

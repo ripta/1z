@@ -1,0 +1,34 @@
+\ Benchmark: raw compiled<->interpreted boundary cost per quotation call.
+\
+\ The prior AOT-linter finding attributed the slowness to the
+\ compiled<->interpreter boundary being far more expensive per call. This
+\ isolates exactly that crossing: a quotation retrieved from a hash at runtime
+\ (the lexer's `match: @get ... call` shape, which the AOT compiler cannot
+\ inline) is called in a tight loop with a trivial body (`1 +`). No generic
+\ dispatch, no string work -- just the per-crossing cost.
+\
+\ Structured so the loop compiles under runtime-image AOT while the dynamic
+\ `call` in `do-call` is the single word that falls back to the interpreter --
+\ the same shape as the real lexer's per-token rule call.
+\
+\   AOT ~= interpreter  -> the boundary thunk itself is cheap; the prior
+\                          attribution is wrong and the cost is elsewhere.
+\   AOT >> interpreter  -> the boundary crossing is the per-call cost the
+\                          prior finding named (quantified here in isolation).
+
+\ Hash holding a quotation, retrieved at runtime so the call stays dynamic.
+qholder: ( -- hash ) const [ H{ step: [ 1 + ] } ] ;
+
+iters: ( -- fixnum ) const [ 2000000 ] ;
+
+\ The dynamic boundary crossing: pull a quotation from the hash and call it.
+do-call: ( n -- n ) [ qholder step: @get call ] ;
+
+run-loop: ( -- ) [ iters [ 0 do-call drop ] times ] ;
+
+\ warm
+0 do-call drop
+
+"boundary-raw iters:      " print iters .
+"boundary-raw elapsed_ns: " print
+[ run-loop ] benchmark "elapsed_ns" @get .
