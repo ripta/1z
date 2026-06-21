@@ -6503,13 +6503,19 @@ fn isNestedDefinedName(instructions: []const Instruction, target: []const u8) bo
 }
 
 /// Find a callee in `instructions` that is defined by a nested `;` statement in
-/// the same body and is not resolvable in the AOT compilation set. Returns the
-/// helper's name, or null when the word's failure is not a nested-definition
-/// case. Drives the build diagnostic that names the helper and recommends a
+/// the same body. Returns the helper's name, or null when the body calls no
+/// such helper. Drives both the per-word compile gate (the word must run
+/// interpreted) and the build diagnostic that names the helper and recommends a
 /// `private{ }` block. The returned slice borrows from the instruction stream.
+///
+/// A nested helper shadows any global word of the same name within the body, but
+/// compiled codegen resolves calls through the global-only resolver and cannot
+/// bind to the nested local; a same-named global (e.g. a generated struct
+/// converter) would otherwise be mis-bound, silently changing behavior. So a
+/// nested-defined callee is flagged even when a global namesake resolves, not
+/// only when the name is otherwise unresolvable.
 fn findUndiscoverableNestedDef(
     instructions: []const Instruction,
-    resolver: ?WordResolver,
 ) ?[]const u8 {
     for (instructions) |instr| {
         switch (instr.op) {
@@ -6517,9 +6523,6 @@ fn findUndiscoverableNestedDef(
                 const name = instr.op.callTargetName() orelse continue;
                 if (std.mem.eql(u8, name, ";")) continue;
                 if (isSupportedOp(name) or isStackOp(name)) continue;
-                if (resolver) |res| {
-                    if (res.resolve(name, res.user_data) != null) continue;
-                }
                 if (isNestedDefinedName(instructions, name)) return name;
             },
             .push_literal => {},
@@ -8110,6 +8113,16 @@ pub fn emitProgramC(
     defer failure_reasons.deinit(allocator);
     for (words) |*w| {
         if (w.is_native) continue;
+        // A word that calls a helper it defines via a nested `name: [ ... ] ;`
+        // statement in its own body cannot be compiled correctly: codegen
+        // resolves the call through the global-only resolver, which cannot see
+        // the nested-local, so a name that also exists globally (e.g. a
+        // generated struct converter) mis-binds to the global. Run such a word
+        // interpreted, where nested-scope shadowing is honored.
+        if (findUndiscoverableNestedDef(w.instructions) != null) {
+            try failure_reasons.put(allocator, w.name, .nested_definition);
+            continue;
+        }
         var reason: ?NotCompilableReason = null;
         const trial = emitWordCAot(
             w.instructions,
@@ -8366,7 +8379,7 @@ pub fn emitProgramC(
         var uncompiled: std.ArrayListUnmanaged(UncompiledWord) = .{};
         for (words) |w| {
             if (!w.is_prelude and !actually_compiled.contains(w.word_id)) {
-                if (findUndiscoverableNestedDef(w.instructions, resolver)) |nested| {
+                if (findUndiscoverableNestedDef(w.instructions)) |nested| {
                     try uncompiled.append(allocator, .{
                         .name = w.name,
                         .reason = .nested_definition,
@@ -10979,6 +10992,30 @@ fn lookupAnyModuleWord(ctx: *Context, word_name: []const u8) ?ModuleWordHit {
 fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
     try ctx.pushModuleDepsFrame(hit.module);
     defer ctx.popModuleDepsFrameTraced(hit.module);
+
+    // A module-private generic word resolved through this path -- a struct
+    // field getter loaded from the runtime image is the standard case -- carries
+    // the generic marker but only an empty stub body; its real behavior lives in
+    // its dispatch methods. The global-dictionary path (`looked_up_word` above)
+    // already dispatches such a word on its operand type before running the
+    // body; without the same step here the stub runs as a no-op, leaving the
+    // operand on the stack where the caller expects the field value. Dispatch
+    // first, mirroring that path, and only fall through to the body on a miss.
+    const has_generic = for (hit.word.markers) |mk| {
+        if (markers_mod.isGenericMarker(mk)) break true;
+    } else false;
+    if (has_generic and hit.word.dispatch_id != 0) {
+        const pic: ?*pic_mod.PolymorphicCache = if (hit.word.word_id) |wid| blk: {
+            const em = ctx.jit_dispatch.getMut(wid) orelse break :blk null;
+            if (em.dispatch_pic) |p| break :blk p;
+            const p = ctx.allocator.create(pic_mod.PolymorphicCache) catch break :blk null;
+            p.* = .{};
+            em.dispatch_pic = p;
+            break :blk p;
+        } else null;
+        if (try dispatch_helpers.tryDispatchGenericById(ctx, hit.word.dispatch_id, pic)) return;
+    }
+
     switch (hit.word.action) {
         .native => |func| try func(ctx),
         .host_callback => |host| {
