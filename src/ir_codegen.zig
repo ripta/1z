@@ -7894,6 +7894,7 @@ pub fn emitProgramC(
         \\extern void *onez_init(void);
         \\extern void *onez_init_no_prelude(void);
         \\extern int onez_set_args(void *ctx, int argc, char **argv);
+        \\extern int onez_set_source(void *ctx, const char *data, unsigned long len);
         \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
         \\extern int32_t onez_runtime_register_quotations(void *rt, int32_t (**table)(uintptr_t), uint32_t size);
         \\extern int32_t onez_runtime_run(void *rt, uint32_t entry_word_id);
@@ -9093,7 +9094,20 @@ pub fn emitProgramC(
     }
 
     if (!meta.freestanding) {
-        try out.appendSlice(allocator, "    onez_set_args(rt, argc, argv);\n");
+        // command-line-args excludes the program name, matching the
+        // interpreter (where it is the args after the script path). argv[0] is
+        // the program name, so program_args = argv[1..]; current_source stays
+        // argv[0] for error attribution, set after onez_set_args (which would
+        // otherwise derive current_source from the new argv[0]).
+        try out.appendSlice(allocator,
+            \\    if (argc > 0) {
+            \\        onez_set_args(rt, argc - 1, argv + 1);
+            \\        onez_set_source(rt, argv[0], __builtin_strlen(argv[0]));
+            \\    } else {
+            \\        onez_set_args(rt, 0, argv);
+            \\    }
+            \\
+        );
     }
 
     // Register statically linked FFI libraries.
@@ -11902,7 +11916,9 @@ test "emitProgramC: hosted preamble contains libc includes and main shim" {
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdlib.h>") != null);
     try testing.expect(std.mem.indexOf(u8, source, "#include <string.h>") != null);
     try testing.expect(std.mem.indexOf(u8, source, "int main(int argc, char **argv)") != null);
-    try testing.expect(std.mem.indexOf(u8, source, "onez_set_args(rt, argc, argv)") != null);
+    // program_args excludes the program name (argv[0]), matching the interpreter.
+    try testing.expect(std.mem.indexOf(u8, source, "onez_set_args(rt, argc - 1, argv + 1)") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_set_source(rt, argv[0]") != null);
     try testing.expect(std.mem.indexOf(u8, source, "getenv(\"ONEZ_INTERPRETER_FALLBACK\")") != null);
     try testing.expect(std.mem.indexOf(u8, source, "getenv(\"ONEZ_TRACE_WORDS\")") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_set_trace_words(rt, trace_env)") != null);

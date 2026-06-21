@@ -1,0 +1,5 @@
+\ Regression: an AOT binary's command-line-args must exclude argv[0] (the
+\ program name), matching the interpreter. The AOT test harness runs the binary
+\ with no trailing arguments, so the count is 0 once argv[0] is excluded; before
+\ the fix it was 1 (the binary path leaked in as a data argument).
+command-line-args #len >string print-line
