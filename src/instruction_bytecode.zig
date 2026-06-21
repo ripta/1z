@@ -49,6 +49,10 @@
 //!   Image-mode encoding prefers `16 = mutable_map_slot` so freeze-time
 //!   identity is preserved; the non-image form is used by JIT
 //!   round-tripping where no slot map is available.
+//! - `17 = struct_instance_slot`: image-mode only. `u32 slot_index`
+//!   resolved through `SlotResolutionTables.struct_instance_slots`, so a
+//!   freeze-time struct instance is reconstructed once and shared by every
+//!   reference.
 //!
 //! All multi-byte integers are little-endian.
 //!
@@ -79,6 +83,7 @@ const HashTable = value_mod.HashTable;
 const TypeValue = value_mod.TypeValue;
 const VirtualType = value_mod.VirtualType;
 const StructType = value_mod.StructType;
+const StructInstance = value_mod.StructInstance;
 const Marker = value_mod.Marker;
 const Parameter = value_mod.Parameter;
 const MutableMap = value_mod.MutableMap;
@@ -105,6 +110,7 @@ pub const SlotEncodingMaps = struct {
     parameter_slot_index: *const std.AutoHashMapUnmanaged(*const Parameter, u32),
     tagged_slot_index: *const std.AutoHashMapUnmanaged(TaggedKey, u32),
     mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const MutableMap, u32),
+    struct_instance_slot_index: *const std.AutoHashMapUnmanaged(*const StructInstance, u32),
 };
 
 /// Key for the tagged slot map, mirrored from `aot_image_emit.TaggedSlotKey`
@@ -131,6 +137,8 @@ pub const SlotResolutionTables = struct {
     tagged_slot_count: u32,
     mutable_map_slots: ?[*]?*MutableMap,
     mutable_map_slot_count: u32,
+    struct_instance_slots: ?[*]?*StructInstance,
+    struct_instance_slot_count: u32,
 };
 
 /// Op tags. Stored in the bytecode stream.
@@ -170,6 +178,14 @@ const value_tag_mutable_map: u8 = 15;
 /// `SlotResolutionTables.mutable_map_slots`. Preserves the identity of
 /// a parse-time-materialized mutable map across an AOT freeze boundary.
 const value_tag_mutable_map_slot: u8 = 16;
+
+/// Slot-indexed `struct_instance` literal used in image-mode bytecode.
+/// Carries a `u32 slot_index` resolved through
+/// `SlotResolutionTables.struct_instance_slots`. Preserves the identity of
+/// a freeze-time struct instance (instance fields are mutable, so an alias
+/// shared at freeze time must stay shared at runtime) across an AOT freeze
+/// boundary.
+const value_tag_struct_instance_slot: u8 = 17;
 
 /// Serialize an instruction slice into a freshly allocated byte buffer.
 /// Caller owns the returned slice.
@@ -396,6 +412,11 @@ pub fn serializeValueIntoForImage(
         .mutable_map => |m| {
             const slot = maps.mutable_map_slot_index.get(m) orelse return error.NotEncodable;
             try buf.append(allocator, value_tag_mutable_map_slot);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot));
+        },
+        .struct_instance => |si| {
+            const slot = maps.struct_instance_slot_index.get(si) orelse return error.NotEncodable;
+            try buf.append(allocator, value_tag_struct_instance_slot);
             try buf.appendSlice(allocator, std.mem.asBytes(&slot));
         },
         .array => |elems| {
@@ -711,6 +732,15 @@ pub fn deserializeValueAtForImage(
             const table = tables.mutable_map_slots orelse return error.OutOfMemory;
             const m = table[slot] orelse return error.OutOfMemory;
             break :blk .{ .mutable_map = m };
+        },
+        value_tag_struct_instance_slot => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (slot >= tables.struct_instance_slot_count) return error.OutOfMemory;
+            const table = tables.struct_instance_slots orelse return error.OutOfMemory;
+            const si = table[slot] orelse return error.OutOfMemory;
+            break :blk .{ .struct_instance = si };
         },
         value_tag_array => blk: {
             if (offset.* + 4 > data.len) return error.OutOfMemory;
@@ -1115,6 +1145,71 @@ test "roundtrip: unit literal" {
     defer freeDecodedInstructions(decoded);
 
     try testing.expect(decoded[0].op.push_literal == .unit);
+}
+
+test "image roundtrip: struct_instance encodes as a slot and decodes to the same pointer" {
+    const alloc = testing.allocator;
+
+    var st = StructType{ .name = "rec", .fields = &.{ "a", "b" } };
+    var fields = [_]Value{ .{ .fixnum = 10 }, .{ .fixnum = 20 } };
+    var si = StructInstance{ .struct_type = &st, .fields = &fields };
+
+    // Encode side: only the struct_instance index is populated; the other
+    // index maps are empty but must be present.
+    var tv_idx: std.AutoHashMapUnmanaged(*const TypeValue, u32) = .{};
+    defer tv_idx.deinit(alloc);
+    var st_idx: std.AutoHashMapUnmanaged(*const StructType, u32) = .{};
+    defer st_idx.deinit(alloc);
+    var mk_idx: std.AutoHashMapUnmanaged(*const Marker, u32) = .{};
+    defer mk_idx.deinit(alloc);
+    var pm_idx: std.AutoHashMapUnmanaged(*const Parameter, u32) = .{};
+    defer pm_idx.deinit(alloc);
+    var tg_idx: std.AutoHashMapUnmanaged(TaggedKey, u32) = .{};
+    defer tg_idx.deinit(alloc);
+    var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
+    defer mm_idx.deinit(alloc);
+    var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
+    defer sx_idx.deinit(alloc);
+    try sx_idx.put(alloc, &si, 0);
+
+    const enc = SlotEncodingMaps{
+        .typevalue_slot_index = &tv_idx,
+        .struct_type_slot_index = &st_idx,
+        .marker_slot_index = &mk_idx,
+        .parameter_slot_index = &pm_idx,
+        .tagged_slot_index = &tg_idx,
+        .mutable_map_slot_index = &mm_idx,
+        .struct_instance_slot_index = &sx_idx,
+    };
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(alloc);
+    try serializeValueIntoForImage(&buf, .{ .struct_instance = &si }, alloc, &enc);
+
+    // Decode side: a slot table whose only entry resolves back to `si`.
+    var si_slots = [_]?*StructInstance{&si};
+    const tables = SlotResolutionTables{
+        .typevalue_slots = null,
+        .typevalue_slot_count = 0,
+        .struct_type_slots = null,
+        .struct_type_slot_count = 0,
+        .marker_slots = null,
+        .marker_slot_count = 0,
+        .parameter_slots = null,
+        .parameter_slot_count = 0,
+        .tagged_slots = null,
+        .tagged_slot_count = 0,
+        .mutable_map_slots = null,
+        .mutable_map_slot_count = 0,
+        .struct_instance_slots = &si_slots,
+        .struct_instance_slot_count = 1,
+    };
+
+    var offset: usize = 0;
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    try testing.expect(decoded == .struct_instance);
+    try testing.expectEqual(@as(*StructInstance, &si), decoded.struct_instance);
+    try testing.expectEqual(buf.items.len, offset);
 }
 
 test "lowering: type_val push_literal becomes call_word" {

@@ -359,6 +359,7 @@ export fn onez_load_runtime_image(
     parameter_slots_ptr: ?*anyopaque,
     tagged_slots_ptr: ?*anyopaque,
     mutable_map_slots_ptr: ?*anyopaque,
+    struct_instance_slots_ptr: ?*anyopaque,
     protocoldescriptor_slots_ptr: ?*anyopaque,
     constraintcombinator_slots_ptr: ?*anyopaque,
 ) c_int {
@@ -395,6 +396,10 @@ export fn onez_load_runtime_image(
         @ptrCast(@alignCast(sp))
     else
         null;
+    const struct_instance_slots: ?aot_image_loader.StructInstanceSlotTable = if (struct_instance_slots_ptr) |sp|
+        @ptrCast(@alignCast(sp))
+    else
+        null;
     const protocoldescriptor_slots: ?aot_image_loader.ProtocolDescriptorSlotTable = if (protocoldescriptor_slots_ptr) |sp|
         @ptrCast(@alignCast(sp))
     else
@@ -411,6 +416,7 @@ export fn onez_load_runtime_image(
         .parameters = parameter_slots,
         .tagged = tagged_slots,
         .mutable_maps = mutable_map_slots,
+        .struct_instances = struct_instance_slots,
         .protocol_descriptors = protocoldescriptor_slots,
         .constraint_combinators = constraintcombinator_slots,
     }, null) catch |err| {

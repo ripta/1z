@@ -57,7 +57,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 9;
+pub const format_version: u32 = 10;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -103,6 +103,12 @@ pub const ImageEmissionStats = struct {
     /// and patched at load time with a freshly-allocated `*MutableMap`
     /// populated from the row's serialized entry bytes.
     mutable_map_slot_count: u32 = 0,
+    /// Number of distinct `*StructInstance` pointers reachable through
+    /// compiled word bodies or frozen mutable maps. Emitted as
+    /// `onez_image_struct_instance_slots[]` and patched at load time with a
+    /// freshly-allocated `*StructInstance` populated from the row's
+    /// serialized field bytes.
+    struct_instance_slot_count: u32 = 0,
     /// Number of distinct `*ProtocolDescriptor` pointers from protocol-bounded
     /// call sites. Emitted as `onez_image_protocoldescriptor_slots[]` and
     /// patched at load time by name lookup in the runtime context.
@@ -272,6 +278,7 @@ pub fn emitImageCFromCollection(
     try emitParameterSlotTable(out, allocator, effect_table);
     try emitTaggedSlotTable(out, allocator, effect_table);
     try emitMutableMapSlotTable(out, allocator, effect_table);
+    try emitStructInstanceSlotTable(out, allocator, effect_table);
     try emitMarkerDescriptionsStorage(out, allocator, effect_table);
     try emitParameterDescriptionsStorage(out, allocator, effect_table);
     try emitStructTypeSlotTable(out, allocator, struct_plans_items);
@@ -279,6 +286,7 @@ pub fn emitImageCFromCollection(
     try emitTypeValueData(out, allocator, effect_table, struct_plans_items, struct_index);
     try emitTaggedDescriptionsStorage(out, allocator, effect_table, struct_index);
     try emitMutableMapDescriptionsStorage(out, allocator, effect_table, struct_index);
+    try emitStructInstanceDescriptionsStorage(out, allocator, effect_table, struct_index);
     try emitProtocolDescriptorSlotTable(out, allocator, effect_table);
     try emitProtocolDescriptorStorage(out, allocator, effect_table);
     try emitConstraintCombinatorSlotTable(out, allocator, effect_table);
@@ -300,6 +308,7 @@ pub fn emitImageCFromCollection(
     stats.struct_type_slot_count = @intCast(struct_plans_items.len);
     stats.tagged_slot_count = effect_table.taggedSlotCount();
     stats.mutable_map_slot_count = effect_table.mutableMapSlotCount();
+    stats.struct_instance_slot_count = effect_table.structInstanceSlotCount();
     stats.protocoldescriptor_slot_count = effect_table.protocolSlotCount();
     stats.constraintcombinator_slot_count = effect_table.combinatorSlotCount();
     return stats;
@@ -383,6 +392,15 @@ pub const StackEffectTable = struct {
     /// the same runtime pointer. Indices are 0-based with no sentinel.
     mutable_map_slots: std.ArrayListUnmanaged(*const value_mod.MutableMap) = .{},
     mutable_map_slot_index: std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32) = .{},
+    /// Distinct `*StructInstance` pointers reached from compiled word bodies and from inside frozen
+    /// mutable maps. Each unique freeze-time instance gets its own slot; the loader allocates a fresh
+    /// `StructInstance` per slot and populates its fields from serialized bytecode, so every freeze-
+    /// time reference shares one runtime pointer (instance fields are mutable, so aliasing must be
+    /// preserved).
+    ///
+    /// Indices are 0-based with no sentinel.
+    struct_instance_slots: std.ArrayListUnmanaged(*const value_mod.StructInstance) = .{},
+    struct_instance_slot_index: std.AutoHashMapUnmanaged(*const value_mod.StructInstance, u32) = .{},
     /// Distinct `*ProtocolDescriptor` pointers reached from protocol-bounded call sites in
     /// AOT-compiled word bodies or from `.protocol` annotations in serialized stack effects.
     ///
@@ -421,6 +439,8 @@ pub const StackEffectTable = struct {
         self.tagged_slot_index.deinit(self.allocator);
         self.mutable_map_slots.deinit(self.allocator);
         self.mutable_map_slot_index.deinit(self.allocator);
+        self.struct_instance_slots.deinit(self.allocator);
+        self.struct_instance_slot_index.deinit(self.allocator);
         self.protocol_slots.deinit(self.allocator);
         self.protocol_slot_index.deinit(self.allocator);
         self.combinator_slots.deinit(self.allocator);
@@ -490,6 +510,16 @@ pub const StackEffectTable = struct {
         return idx;
     }
 
+    /// Intern a `*StructInstance` pointer. Returns the assigned 0-based
+    /// slot index; identical pointers collapse to the same slot.
+    fn internStructInstance(self: *StackEffectTable, si: *const value_mod.StructInstance) Allocator.Error!u32 {
+        if (self.struct_instance_slot_index.get(si)) |idx| return idx;
+        const idx: u32 = @intCast(self.struct_instance_slots.items.len);
+        try self.struct_instance_slots.append(self.allocator, si);
+        try self.struct_instance_slot_index.put(self.allocator, si, idx);
+        return idx;
+    }
+
     /// Intern a `*ProtocolDescriptor` pointer. Returns the assigned
     /// 0-based slot index; identical pointers collapse to the same slot.
     pub fn internProtocol(self: *StackEffectTable, pd: *const value_mod.ProtocolDescriptor) Allocator.Error!u32 {
@@ -546,6 +576,10 @@ pub const StackEffectTable = struct {
         return @intCast(self.mutable_map_slots.items.len);
     }
 
+    fn structInstanceSlotCount(self: *const StackEffectTable) u32 {
+        return @intCast(self.struct_instance_slots.items.len);
+    }
+
     fn protocolSlotCount(self: *const StackEffectTable) u32 {
         return @intCast(self.protocol_slots.items.len);
     }
@@ -589,6 +623,12 @@ pub const StackEffectTable = struct {
     /// null when the pointer has not been interned.
     pub fn lookupMutableMapSlot(self: *const StackEffectTable, m: *const value_mod.MutableMap) ?u32 {
         return self.mutable_map_slot_index.get(m);
+    }
+
+    /// Look up the 0-based struct_instance slot index for `si`. Returns
+    /// null when the pointer has not been interned.
+    pub fn lookupStructInstanceSlot(self: *const StackEffectTable, si: *const value_mod.StructInstance) ?u32 {
+        return self.struct_instance_slot_index.get(si);
     }
 
     /// Look up the 0-based protocol slot index for `pd`. Returns
@@ -801,6 +841,13 @@ fn internValueTypeLiterals(
             var iter = m.map.iterator();
             while (iter.next()) |entry| {
                 try internValueTypeLiterals(struct_plans, struct_index, effect_table, entry.value_ptr.*);
+            }
+        },
+        .struct_instance => |si| {
+            _ = try effect_table.internStructInstance(si);
+            _ = try internStructType(struct_plans, struct_index, effect_table, si.struct_type);
+            for (si.fields) |field| {
+                try internValueTypeLiterals(struct_plans, struct_index, effect_table, field);
             }
         },
         .quotation => |q| try internInstructionTypeLiterals(
@@ -1362,6 +1409,7 @@ fn emitTaggedDescriptionsStorage(
         .parameter_slot_index = &table.parameter_slot_index,
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .struct_instance_slot_index = &table.struct_instance_slot_index,
     };
 
     for (table.tagged_slots.items, 0..) |entry, i| {
@@ -1467,6 +1515,7 @@ fn emitMutableMapDescriptionsStorage(
         .parameter_slot_index = &table.parameter_slot_index,
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .struct_instance_slot_index = &table.struct_instance_slot_index,
     };
 
     for (table.mutable_map_slots.items, 0..) |m, i| {
@@ -1506,6 +1555,105 @@ fn emitMutableMapDescriptionsStorage(
         try writeMutableMapDescBodySym(out, allocator, i);
         try out.appendSlice(allocator, ", .entries_bytecode_len = sizeof(");
         try writeMutableMapDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ") },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+fn writeStructInstanceDescBodySym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_struct_instance_desc_{d}_data", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+/// Emit `onez_image_struct_instance_slots[]`: one NULL pointer per distinct
+/// `*StructInstance` reached through compiled word bodies or nested inside a
+/// frozen mutable map. The loader allocates a fresh `StructInstance` per slot
+/// at image load and patches each entry with the runtime pointer. No-op when
+/// no struct instances have been interned.
+fn emitStructInstanceSlotTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.structInstanceSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "__attribute__((used)) struct onez_struct_instance *onez_image_struct_instance_slots[");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{table.structInstanceSlotCount()}) catch unreachable);
+    try out.appendSlice(allocator, "] = {\n");
+    var i: u32 = 0;
+    while (i < table.structInstanceSlotCount()) : (i += 1) {
+        try out.appendSlice(allocator, "    NULL, /* slot ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_struct_instance_descriptions_storage[]`: one row per slot
+/// in `onez_image_struct_instance_slots[]`. Each row carries the slot index of
+/// the owning StructType and the field values in image-mode bytecode (a `u32`
+/// count followed by each field), so nested type-carrier values, mutable maps,
+/// and nested struct instances resolve through their own slot tables. No-op
+/// when no struct instances have been interned.
+fn emitStructInstanceDescriptionsStorage(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+    struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+) ImageEmitError!void {
+    if (table.structInstanceSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+
+    const slot_maps: instruction_bytecode.SlotEncodingMaps = .{
+        .typevalue_slot_index = &table.type_slot_index,
+        .struct_type_slot_index = struct_index,
+        .marker_slot_index = &table.marker_slot_index,
+        .parameter_slot_index = &table.parameter_slot_index,
+        .tagged_slot_index = &table.tagged_slot_index,
+        .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .struct_instance_slot_index = &table.struct_instance_slot_index,
+    };
+
+    for (table.struct_instance_slots.items, 0..) |si, i| {
+        var fields_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer fields_buf.deinit(allocator);
+
+        const field_count: u32 = @intCast(si.fields.len);
+        try fields_buf.appendSlice(allocator, std.mem.asBytes(&field_count));
+        for (si.fields) |field| {
+            instruction_bytecode.serializeValueIntoForImage(&fields_buf, field, allocator, &slot_maps) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NotEncodable => return error.NotEncodable,
+            };
+        }
+
+        try out.appendSlice(allocator, "static const uint8_t ");
+        try writeStructInstanceDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = {");
+        for (fields_buf.items, 0..) |byte, bi| {
+            if (bi > 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{byte}) catch unreachable);
+        }
+        try out.appendSlice(allocator, "};\n");
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_struct_instance_description_t onez_image_struct_instance_descriptions_storage[] = {\n");
+    for (table.struct_instance_slots.items, 0..) |si, i| {
+        const st_slot = struct_index.get(si.struct_type) orelse return error.NotEncodable;
+        try out.appendSlice(allocator, "    { .slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ", .struct_type_slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{st_slot}) catch unreachable);
+        try out.appendSlice(allocator, ", .fields_bytecode = ");
+        try writeStructInstanceDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ", .fields_bytecode_len = sizeof(");
+        try writeStructInstanceDescBodySym(out, allocator, i);
         try out.appendSlice(allocator, ") },\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -1828,6 +1976,7 @@ fn emitDispatchEntryTable(
         .parameter_slot_index = &table.parameter_slot_index,
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .struct_instance_slot_index = &table.struct_instance_slot_index,
     };
 
     var rows: std.ArrayListUnmanaged(DispatchEntryRow) = .{};
@@ -3091,6 +3240,19 @@ fn emitTypeDeclarations(
         \\    uint32_t       entries_bytecode_len;
         \\} onez_image_mutable_map_description_t;
         \\
+        \\/* One frozen struct instance. The loader allocates a fresh             */
+        \\/* StructInstance whose struct_type is onez_image_struct_type_slots     */
+        \\/* [struct_type_slot], decodes the field values from fields_bytecode    */
+        \\/* (a u32 count followed by each field via deserializeValueAtForImage), */
+        \\/* and patches onez_image_struct_instance_slots[slot]. Identity is      */
+        \\/* preserved across the freeze boundary.                                */
+        \\typedef struct onez_image_struct_instance_description {
+        \\    uint32_t    slot;                 /* index into onez_image_struct_instance_slots */
+        \\    uint32_t    struct_type_slot;     /* index into onez_image_struct_type_slots */
+        \\    const uint8_t *fields_bytecode;
+        \\    uint32_t       fields_bytecode_len;
+        \\} onez_image_struct_instance_description_t;
+        \\
         \\/* One required method of a protocol. The effect index points into       */
         \\/* onez_image_stack_effects_storage[]; 0 means no declared effect.        */
         \\typedef struct onez_image_protocol_method {
@@ -3172,6 +3334,7 @@ fn emitTypeDeclarations(
         \\    uint32_t parameter_slot_count;
         \\    uint32_t tagged_slot_count;
         \\    uint32_t mutable_map_slot_count;
+        \\    uint32_t struct_instance_slot_count;
         \\    uint32_t protocoldescriptor_slot_count;
         \\    uint32_t constraintcombinator_slot_count;
         \\    uint32_t dispatch_entry_slot_count;
@@ -3186,6 +3349,7 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_parameter_description *parameter_descriptions;
         \\    const struct onez_image_tagged_description *tagged_descriptions;
         \\    const struct onez_image_mutable_map_description *mutable_map_descriptions;
+        \\    const struct onez_image_struct_instance_description *struct_instance_descriptions;
         \\    const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
         \\    const struct onez_image_constraintcombinator_description *constraintcombinator_descriptions;
         \\    const struct onez_image_dispatch_entry_description *dispatch_entry_descriptions;
@@ -3340,6 +3504,7 @@ fn emitWordBodyBytecode(
         .parameter_slot_index = &effect_table.parameter_slot_index,
         .tagged_slot_index = &effect_table.tagged_slot_index,
         .mutable_map_slot_index = &effect_table.mutable_map_slot_index,
+        .struct_instance_slot_index = &effect_table.struct_instance_slot_index,
     };
 
     var emitted_any = false;
@@ -3758,6 +3923,7 @@ fn emitHeader(
     const parameter_slot_count: u32 = effect_table.parameterSlotCount();
     const tagged_slot_count: u32 = effect_table.taggedSlotCount();
     const mutable_map_slot_count: u32 = effect_table.mutableMapSlotCount();
+    const struct_instance_slot_count: u32 = effect_table.structInstanceSlotCount();
     const protocoldescriptor_slot_count: u32 = effect_table.protocolSlotCount();
     const constraintcombinator_slot_count: u32 = effect_table.combinatorSlotCount();
 
@@ -3773,6 +3939,7 @@ fn emitHeader(
     const parameter_descs_ref: []const u8 = if (parameter_slot_count > 0) "onez_image_parameter_descriptions_storage" else "NULL";
     const tagged_descs_ref: []const u8 = if (tagged_slot_count > 0) "onez_image_tagged_descriptions_storage" else "NULL";
     const mutable_map_descs_ref: []const u8 = if (mutable_map_slot_count > 0) "onez_image_mutable_map_descriptions_storage" else "NULL";
+    const struct_instance_descs_ref: []const u8 = if (struct_instance_slot_count > 0) "onez_image_struct_instance_descriptions_storage" else "NULL";
     const protocoldescriptor_descs_ref: []const u8 = if (protocoldescriptor_slot_count > 0) "onez_image_protocoldescriptor_descriptions_storage" else "NULL";
     const constraintcombinator_descs_ref: []const u8 = if (constraintcombinator_slot_count > 0) "onez_image_constraintcombinator_descriptions_storage" else "NULL";
     const dispatch_entry_descs_ref: []const u8 = if (stats.dispatch_entry_slot_count > 0) "onez_image_dispatch_entry_descriptions_storage" else "NULL";
@@ -3804,6 +3971,8 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{tagged_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .mutable_map_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{mutable_map_slot_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .struct_instance_slot_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{struct_instance_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .protocoldescriptor_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{protocoldescriptor_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .constraintcombinator_slot_count = ");
@@ -3832,6 +4001,8 @@ fn emitHeader(
     try out.appendSlice(allocator, tagged_descs_ref);
     try out.appendSlice(allocator, ",\n    .mutable_map_descriptions = ");
     try out.appendSlice(allocator, mutable_map_descs_ref);
+    try out.appendSlice(allocator, ",\n    .struct_instance_descriptions = ");
+    try out.appendSlice(allocator, struct_instance_descs_ref);
     try out.appendSlice(allocator, ",\n    .protocoldescriptor_descriptions = ");
     try out.appendSlice(allocator, protocoldescriptor_descs_ref);
     try out.appendSlice(allocator, ",\n    .constraintcombinator_descriptions = ");
@@ -3883,7 +4054,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 9") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 10") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);

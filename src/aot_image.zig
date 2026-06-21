@@ -64,8 +64,8 @@ pub const BlobReason = enum {
     /// runtime fixup.
     template,
     /// A Value variant that should not appear in `module.words` at all
-    /// (e.g., `module`, `struct_instance`, `stream`, `task`). Surfaces as
-    /// an invariant violation in the dump output but does not panic.
+    /// (e.g., `module`, `stream`, `task`). Surfaces as an invariant
+    /// violation in the dump output but does not panic.
     unexpected_variant,
 };
 
@@ -151,12 +151,23 @@ pub fn classifyValue(val: Value) Classification {
         .bignum => Classification.blobOf(.bignum),
         .template => Classification.blobOf(.template),
 
+        // A struct instance is structural: its `StructType` is a
+        // link-resolvable reference carried by the struct-type slot table,
+        // and its field values classify independently. An instance with a
+        // blob field falls to blob, exactly like an `.array`.
+        .struct_instance => |si| blk: {
+            var acc = Classification.structural_unit;
+            for (si.fields) |field| {
+                acc = acc.combine(classifyValue(field));
+            }
+            break :blk acc;
+        },
+
         // Out-of-scope variants. These should not appear in `module.words`
         // at freeze time -- finding one means either a freeze-time invariant
         // was violated or this list needs updating. Surface it as an
         // unexpected blob entry so the dump flag highlights it.
         .module,
-        .struct_instance,
         .stream,
         .resource,
         .benchmark_report,
@@ -557,6 +568,22 @@ test "classifyValue: parameter is blob" {
 test "classifyValue: struct_type is structural" {
     var st = value_mod.StructType{ .name = "point", .fields = &.{ "x", "y" } };
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .struct_type = &st }).path);
+}
+
+test "classifyValue: struct_instance with structural fields is structural" {
+    var st = value_mod.StructType{ .name = "rec", .fields = &.{ "a", "b" } };
+    var fields = [_]Value{ .{ .fixnum = 1 }, .{ .symbol = "two" } };
+    var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .struct_instance = &si }).path);
+}
+
+test "classifyValue: struct_instance with a blob field is blob" {
+    var st = value_mod.StructType{ .name = "rec", .fields = &.{"a"} };
+    var ht = value_mod.HashTable{};
+    var fields = [_]Value{.{ .hash = &ht }};
+    var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
+    const c = classifyValue(.{ .struct_instance = &si });
+    try testing.expectEqual(ImagePath.blob, c.path);
 }
 
 test "classifyModuleWord: native and host_callback return null" {

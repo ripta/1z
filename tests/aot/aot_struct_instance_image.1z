@@ -1,0 +1,23 @@
+\ Struct instances reachable at freeze time are carried into the runtime-image
+\ AOT binary and reconstructed by the loader, matching the interpreter. Two
+\ freeze-time shapes are exercised: a struct instance folded directly into the
+\ instruction stream by a parse-time word, and a struct instance nested inside a
+\ parse-time mutable map (the lint-registry shape, where a map holds rule
+\ records). Both route through the new struct-instance slot table: the direct
+\ literal as a struct_instance slot push, the nested one as a struct_instance
+\ entry inside the map's serialized description.
+
+rec: struct{ a b } ;
+
+\ Direct parse-time-folded struct-instance literal: `(mk)` runs at parse time
+\ and leaves a struct instance, captured as a literal in the instruction stream.
+(mk): ( -- rec ) parse-time [ 10 20 make-rec ] ;
+(mk) a>> .
+(mk) b>> .
+
+\ Struct instance seeded into a parse-time mutable map. The map and its
+\ struct-instance value are both freeze-time values, so the map serializes as a
+\ description whose entry decodes back to the reconstructed struct instance.
+(reg): ( -- mmap ) parse-time [ M{ } dup "k" 1 2 make-rec @set! drop ] ;
+(reg) "k" @get a>> .
+(reg) "k" @get b>> .

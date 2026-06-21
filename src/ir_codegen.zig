@@ -1822,6 +1822,7 @@ pub const AotImageSlotMaps = struct {
     parameter_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.Parameter, u32),
     tagged_slot_index: *const std.AutoHashMapUnmanaged(ibc.TaggedKey, u32),
     mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.MutableMap, u32),
+    struct_instance_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructInstance, u32),
     protocol_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.ProtocolDescriptor, u32),
     combinator_slot_index: *const std.AutoHashMapUnmanaged(*const value_mod.ConstraintCombinator, u32),
 };
@@ -1872,6 +1873,10 @@ fn resolveTypedLiteralSlot(state: *const CompileState, val: Value) ?TypedLiteral
             null,
         .mutable_map => |m| if (maps.mutable_map_slot_index.get(m)) |slot|
             .{ .slot = slot, .helper_name = "onez_push_mutable_map_slot" }
+        else
+            null,
+        .struct_instance => |si| if (maps.struct_instance_slot_index.get(si)) |slot|
+            .{ .slot = slot, .helper_name = "onez_push_struct_instance_slot" }
         else
             null,
         else => null,
@@ -7792,6 +7797,7 @@ pub const AotMetadata = struct {
     runtime_image_parameter_slot_count: u32 = 0,
     runtime_image_tagged_slot_count: u32 = 0,
     runtime_image_mutable_map_slot_count: u32 = 0,
+    runtime_image_struct_instance_slot_count: u32 = 0,
     runtime_image_protocoldescriptor_slot_count: u32 = 0,
     runtime_image_constraintcombinator_slot_count: u32 = 0,
     /// Count of method dispatch-entry rows serialized into the image. An
@@ -7893,7 +7899,7 @@ pub fn emitProgramC(
         \\extern int onez_set_static_libs(void *rt, const char **names, unsigned int count);
         \\extern int32_t onez_set_interpreter_fallback(void *rt, _Bool allowed);
         \\extern int32_t onez_set_trace_words(void *rt, const char *pattern);
-        \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *protocoldescriptor_slots, void *constraintcombinator_slots);
+        \\extern int onez_load_runtime_image(void *rt, const void *header, void *typevalue_slots, void *struct_type_slots, void *marker_slots, void *parameter_slots, void *tagged_slots, void *mutable_map_slots, void *struct_instance_slots, void *protocoldescriptor_slots, void *constraintcombinator_slots);
         \\extern int onez_replay_method_dispatch(void *rt);
         \\
         \\
@@ -8014,6 +8020,7 @@ pub fn emitProgramC(
             .parameter_slot_index = &image_collection.?.effect_table.parameter_slot_index,
             .tagged_slot_index = &image_collection.?.effect_table.tagged_slot_index,
             .mutable_map_slot_index = &image_collection.?.effect_table.mutable_map_slot_index,
+            .struct_instance_slot_index = &image_collection.?.effect_table.struct_instance_slot_index,
             .protocol_slot_index = &image_collection.?.effect_table.protocol_slot_index,
             .combinator_slot_index = &image_collection.?.effect_table.combinator_slot_index,
         };
@@ -8422,6 +8429,7 @@ pub fn emitProgramC(
             .parameter_slot_index = &coll.effect_table.parameter_slot_index,
             .tagged_slot_index = &coll.effect_table.tagged_slot_index,
             .mutable_map_slot_index = &coll.effect_table.mutable_map_slot_index,
+            .struct_instance_slot_index = &coll.effect_table.struct_instance_slot_index,
         } else null;
         var uncompiled_q: std.ArrayListUnmanaged(UncompiledQuotation) = .{};
         defer uncompiled_q.deinit(allocator);
@@ -8620,6 +8628,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "static inline int32_t onez_push_tagged_slot(uintptr_t ctx, uintptr_t slot) { return jitPushTaggedSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushMutableMapSlot(uintptr_t ctx, uintptr_t slot);\n");
     try out.appendSlice(allocator, "static inline int32_t onez_push_mutable_map_slot(uintptr_t ctx, uintptr_t slot) { return jitPushMutableMapSlot(ctx, slot); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushStructInstanceSlot(uintptr_t ctx, uintptr_t slot);\n");
+    try out.appendSlice(allocator, "static inline int32_t onez_push_struct_instance_slot(uintptr_t ctx, uintptr_t slot) { return jitPushStructInstanceSlot(ctx, slot); }\n");
     try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatch(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t aotSatisfiesAndDispatchCombinator(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t slot_idx, uintptr_t arity, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t aotTryDispatchGenericOrCall(uintptr_t ctx, uintptr_t dispatch_id, uintptr_t word_id);\n");
@@ -8857,6 +8867,7 @@ pub fn emitProgramC(
         meta.runtime_image_struct_type_slot_count = stats.struct_type_slot_count;
         meta.runtime_image_marker_slot_count = stats.marker_slot_count;
         meta.runtime_image_mutable_map_slot_count = stats.mutable_map_slot_count;
+        meta.runtime_image_struct_instance_slot_count = stats.struct_instance_slot_count;
         meta.runtime_image_protocoldescriptor_slot_count = stats.protocoldescriptor_slot_count;
         meta.runtime_image_constraintcombinator_slot_count = stats.constraintcombinator_slot_count;
         meta.runtime_image_dispatch_entry_slot_count = stats.dispatch_entry_slot_count;
@@ -9005,6 +9016,12 @@ pub fn emitProgramC(
                 \\
             );
         }
+        if (meta.runtime_image_struct_instance_slot_count > 0) {
+            try out.appendSlice(allocator,
+                \\    extern struct onez_struct_instance *onez_image_struct_instance_slots[];
+                \\
+            );
+        }
         if (meta.runtime_image_protocoldescriptor_slot_count > 0) {
             try out.appendSlice(allocator,
                 \\    extern struct onez_protocoldescriptor *onez_image_protocoldescriptor_slots[];
@@ -9037,6 +9054,10 @@ pub fn emitProgramC(
             "NULL, ");
         try out.appendSlice(allocator, if (meta.runtime_image_mutable_map_slot_count > 0)
             "onez_image_mutable_map_slots, "
+        else
+            "NULL, ");
+        try out.appendSlice(allocator, if (meta.runtime_image_struct_instance_slot_count > 0)
+            "onez_image_struct_instance_slots, "
         else
             "NULL, ");
         try out.appendSlice(allocator, if (meta.runtime_image_protocoldescriptor_slot_count > 0)
@@ -10716,6 +10737,33 @@ export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     mmap.header.retain();
     ctx.stack.push(.{ .mutable_map = mmap }) catch {
         mmap.header.release();
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    return 0;
+}
+
+/// Push the image's struct instance for `slot` onto the stack. A struct
+/// instance has no refcount header of its own; the image owns the canonical
+/// `*StructInstance`, so retain its field vector to balance the release that
+/// occurs when the pushed copy is dropped.
+export fn jitPushStructInstanceSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const table = ctx.image_struct_instance_slots orelse {
+        recordSlotMiss(ctx, "struct_instance", slot);
+        ctx.jit_pending_error = error.WordNotFound;
+        return 2;
+    };
+    const si = table[slot] orelse {
+        recordSlotMiss(ctx, "struct_instance", slot);
+        ctx.jit_pending_error = error.WordNotFound;
+        return 2;
+    };
+    const val: Value = .{ .struct_instance = si };
+    container_backing.retainValue(val);
+    ctx.stack.push(val) catch {
+        container_backing.releaseValue(val);
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
