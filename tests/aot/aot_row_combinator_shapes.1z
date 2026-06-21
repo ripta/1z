@@ -1,0 +1,26 @@
+\ User-code reproducers for the preserved-bounded-row layout. Each word calls a
+\ row-variable combinator on its own quotation parameter -- which collapses the
+\ abstract stack to a bounded row -- and then operates on values threaded above
+\ that row. The preserved layout keeps those values live, so the bodies compile
+\ to native C under runtime-image AOT and produce the same results as the
+\ interpreter. A combinator called on a literal quotation is specialized
+\ instead, so the parameter is what forces the row.
+
+\ keep-then-shuffle: `keep` runs the quotation parameter on a copy and leaves
+\ its result above the threaded value; `swap` then reaches across the bounded
+\ row to reorder them. This is the `1check` shape.
+check-with: ( x quot -- ? x ) [ keep swap ] ;
+
+\ counted loop: thread a counter and quotation above a bounded row introduced by
+\ `2dip`, decrement the counter across the row, and recurse. The body nets zero
+\ stack change across the row, so the back-edge invariant holds.
+ntimes: ( n quot -- ) [
+  over 0 >
+  [ dup 2dip swap -- swap ntimes ]
+  [ 2drop ]
+  if
+] ;
+
+5 [ 2 > ] check-with . .
+"--" print-line
+3 [ "tick" print-line ] ntimes

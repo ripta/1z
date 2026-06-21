@@ -3346,40 +3346,91 @@ fn emitResolvedNativeCallback(
     }
 }
 
-/// Emit a word call whose effect on the abstract stack cannot be modeled, as an
-/// opaque dynamic call: flush the abstract stack to physical memory, emit the
-/// call, then collapse the abstract stack to a fresh `row_region` so subsequent
-/// instructions above the region keep compiling. Used both for native callees
-/// with unresolved row-variable effects and for runtime-depth indexed stack ops.
-/// Returns true when compilation should `continue` (the call falls through) and
-/// false when it diverged and the caller should `break`.
-fn emitDynamicRowFallback(
-    state: *CompileState,
-    stack: []StackEntry,
-    sp: *usize,
-    name: []const u8,
-    resolved: ResolvedWord,
-    line: usize,
-) IrCodegenError!bool {
+/// Emit a word call whose effect on the abstract stack cannot be modeled, as an opaque dynamic call.
+/// Used both for native callees with unresolved row-variable effects and for runtime-depth indexed
+/// stack ops.
+///
+/// Returns true when compilation should `continue`; false when it diverged and the caller should `break`.
+fn emitDynamicRowFallback(state: *CompileState, stack: []StackEntry, sp: *usize, name: []const u8, resolved: ResolvedWord, line: usize) IrCodegenError!bool {
+    return emitDynamicRowFallbackPreserving(state, stack, sp, name, resolved, line, 0);
+}
+
+/// After the call keeps the callee's trailing `preserve` concrete outputs live above the collapsed
+/// row instead of folding them into it.
+///
+/// Unspecializable row-variable callee whose declared effect keeps concrete values above the output
+/// row variable:
+///
+///     2dip: ( ..a x y quot -- ..b x y )
+///
+/// keeps `x y`. Collapsing only the region the callee's quotation parameter actually touched (`..b`);
+/// the threaded `x y` stay as `raw_at_slot` entries pinned at the live physical top, so a combinator
+/// threading them keeps operating on real entries.
+///
+/// base_idx is set to `new_sp - 1 - preserve` so abstract slot 0 (i.e., the row) maps just below the
+/// preserved suffix and abstract slots `1..=preserve` map to the top `preserve` physical slots.
+/// `preserve == 0` is the plain collapse to `sp == 1`.
+fn emitDynamicRowFallbackPreserving(state: *CompileState, stack: []StackEntry, sp: *usize, name: []const u8, resolved: ResolvedWord, line: usize, preserve: usize) IrCodegenError!bool {
     try materializeQuotations(state, stack, sp.*);
     flushToPhysicalStack(state, stack, sp.*);
+
     const ctx_val = emitCallbackPreamble(state, sp.*);
     if (resolved.is_native) {
         emitNativeWordCall(state, ctx_val, name, resolved, line);
     } else if (resolved.is_generic) {
-        // A generic compound must dispatch to its registered method, not its
-        // default body; emitAotWordCall would call the body directly.
         emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
     } else {
         emitAotWordCall(state, ctx_val, name, resolved, line);
     }
+
     if (exitFallsThrough(state.exit_kind)) {
-        reloadBaseAfterDynamicCall(state);
-        sp.* = 1;
-        stack[0] = .{ .row_region = state.nextRowId() };
+        if (preserve == 0) {
+            reloadBaseAfterDynamicCall(state);
+            sp.* = 1;
+            stack[0] = .{ .row_region = state.nextRowId() };
+        } else {
+            const ctx = state.ctx;
+            const new_sp_val = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
+            const off_const = c.ir_const_addr(ctx, 1 + preserve);
+            state.base_idx = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), new_sp_val, off_const);
+            state.sp_val = new_sp_val;
+            refreshCachedStackPointer(state);
+            sp.* = 1 + preserve;
+            stack[0] = .{ .row_region = state.nextRowId() };
+            var i: usize = 1;
+            while (i <= preserve) : (i += 1) stack[i] = .{ .raw_at_slot = i };
+        }
         return true;
     }
+
     return false;
+}
+
+/// Count the trailing concrete outputs that sit above the last output row variable in `eff`.
+///
+/// Returns 0 when the outputs carry no row variable (the plain collapse applies) or ends with a
+/// row variable (no concrete suffix to preserve). For example, for
+///
+///     2dip: ( ..a x y quot -- ..b x y )
+///
+/// this value is 2 (i.e., `x` and `y`).
+fn trailingConcreteOutputs(eff: *const StackEffect) usize {
+    var has_row = false;
+    for (eff.outputs) |p| {
+        if (p.is_row_variable) {
+            has_row = true;
+            break;
+        }
+    }
+    if (!has_row) return 0;
+    var count: usize = 0;
+    var i = eff.outputs.len;
+    while (i > 0) {
+        i -= 1;
+        if (eff.outputs[i].is_row_variable) break;
+        count += 1;
+    }
+    return count;
 }
 
 /// Route an inline stack op (`swap`/`over`/`dup`) that reached below the
@@ -5730,17 +5781,35 @@ fn compileInstructions(
                     // laid out. Emit an ordinary recursive call against the live
                     // stack and collapse to a row instead.
                     if (state.aot_mode and (sp.* < ic or hasRowRegion(stack, sp.*))) {
+                        // Bounded-row drift guard: a tail recursion consuming `ic` inputs cannot
+                        // leave more than `ic` tracked entries above a bounded row.
+                        //
+                        // The surplus strands above the row and accumulates every iteration. When
+                        // the abstract stack is a single row pinned at slot 0 with more than `ic`
+                        // concrete entries above it, the body is not stack-neutral across the row;
+                        // emitting the recursive call against the live stack would miscompile into
+                        // a growing stack that faults at runtime, so reject cleanly.
+                        //
+                        // Collapsed shapes (0..ic entries above the row) keep the live-stack
+                        // recursive fallback.
+                        if (sp.* > 1 and stack[0].isRowRegion() and !hasRowRegion(stack[1..sp.*], sp.* - 1) and sp.* - 1 > @as(usize, ic)) {
+                            return IrCodegenError.StackShapeMismatch;
+                        }
+
                         const res = state.resolver orelse {
                             state.not_compilable_reason = .unresolvable_word;
                             return IrCodegenError.NotCompilable;
                         };
+
                         const resolved = res.resolve(name, res.user_data) orelse {
                             state.not_compilable_reason = .unresolvable_word;
                             return IrCodegenError.NotCompilable;
                         };
+
                         if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
                         break;
                     }
+
                     if (sp.* < ic) return IrCodegenError.StackUnderflow;
 
                     // Bail if both if-branches already set a loop end
@@ -5976,7 +6045,16 @@ fn compileInstructions(
                             // `compound_uncompiled` is non-zero. The static cross-check in
                             // `AotFallbackStaticCheck` guards the classification contract by
                             // comparing the build-time inventory against the assembled C.
-                            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) {
+                            //
+                            // When the callee keeps concrete outputs above its
+                            // output row variable (e.g. `2dip`'s `x y`), preserve
+                            // them as live entries above the bounded row so a
+                            // combinator threading them -- `times` decrementing
+                            // its counter after `dup 2dip` -- keeps operating on
+                            // real entries instead of reaching into a collapsed
+                            // region.
+                            const preserve = trailingConcreteOutputs(callee_eff);
+                            if (try emitDynamicRowFallbackPreserving(state, stack, sp, name, resolved, instr.line, preserve)) {
                                 continue;
                             }
                             break;

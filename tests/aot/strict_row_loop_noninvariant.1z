@@ -1,0 +1,12 @@
+\ Back-edge invariance, negative case: a counted-loop combinator whose body is
+\ not stack-neutral across the bounded row. Each iteration leaves an extra value
+\ (`0`) above the row, so the recursive back-edge shape does not match the loop
+\ entry. The AOT compiler must reject this cleanly under
+\ --interpreter-fallback=false rather than miscompile a drifting stack.
+bad-loop: ( n quot -- ) [
+  over 0 >
+  [ dup 2dip 0 swap -- swap bad-loop ]
+  [ 2drop ]
+  if
+] ;
+3 [ "tick" print-line ] bad-loop

@@ -1,13 +1,7 @@
-Prelude compilation: 385/397 words compiled (97.0%)
+Prelude compilation: 388/397 words compiled (97.7%)
   word '#all' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  word 'times' cannot be compiled
-      NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word 'bi' cannot be compiled
-      NC.8: a quotation in abstract form must become a concrete runtime value
-      hint: blocked until quotation bodies can be compiled
   word 'cond' cannot be compiled
       NC.8: a quotation in abstract form must become a concrete runtime value
       hint: blocked until quotation bodies can be compiled
@@ -23,9 +17,6 @@ Prelude compilation: 385/397 words compiled (97.0%)
   word 'benchmark-report?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  word 'tri' cannot be compiled
-      NC.8: a quotation in abstract form must become a concrete runtime value
-      hint: blocked until quotation bodies can be compiled
   word '#any' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -37,10 +28,10 @@ Prelude compilation: 385/397 words compiled (97.0%)
       hint: blocked until the AOT resolver includes this word
 Quotation bodies compiled: 0
 Inline PIC sites: 17/66 generic call sites preseeded
-AOT interpreter fallbacks: 252 total
+AOT interpreter fallbacks: 255 total
   native: 239
   compound-uncompiled: 3
-  quotation: 10
+  quotation: 13
   sites:
     native: provenance? -> native.struct-type-predicate (line 0)
     native: nan? -> = (line 346)
@@ -58,8 +49,8 @@ AOT interpreter fallbacks: 252 total
     native: >method-info -> native.hash-to-struct (line 0)
     native: >on -> native.enum-from-symbol (line 0)
     native: all-words -> native.all-words (line 1057)
-    ... 236 more
-  static-check: jitInterpretedCall=3/3 jitNativeWordCall=239/239 jitCallQuotation=10/10 (matches build-time inventory)
+    ... 239 more
+  static-check: jitInterpretedCall=3/3 jitNativeWordCall=239/239 jitCallQuotation=13/13 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter

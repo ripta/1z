@@ -1,4 +1,0 @@
-Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: --interpreter-fallback=false requires all words to compile; 1 word need the interpreter
-  word 'times' (prelude): NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled

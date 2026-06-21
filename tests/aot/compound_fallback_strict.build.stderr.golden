@@ -3,7 +3,7 @@ Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back t
 Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Error: --interpreter-fallback=false rejects compound-fallback dispatch; 1 call site still route through the interpreter
   '__entry__' -> 'bi' (line 8)
-      callee uncompiled: NC.8: a quotation in abstract form must become a concrete runtime value
-      hint: blocked until quotation bodies can be compiled
+      callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
 AOT interpreter fallbacks: 2 total (native=1 compound-uncompiled=1)
   static-check: jitInterpretedCall=1/1 jitNativeWordCall=1/1 jitCallQuotation=0/0 (matches build-time inventory)

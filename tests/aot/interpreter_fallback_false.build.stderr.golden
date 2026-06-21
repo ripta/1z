@@ -30,5 +30,5 @@ Error: --interpreter-fallback=false rejects compound-fallback dispatch; 3 call s
   'generic?' -> '#any' (line 358)
       callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-AOT interpreter fallbacks: 241 total (native=233 compound-uncompiled=3 quotation=5)
-  static-check: jitInterpretedCall=3/3 jitNativeWordCall=233/233 jitCallQuotation=5/5 (matches build-time inventory)
+AOT interpreter fallbacks: 242 total (native=233 compound-uncompiled=3 quotation=6)
+  static-check: jitInterpretedCall=3/3 jitNativeWordCall=233/233 jitCallQuotation=6/6 (matches build-time inventory)

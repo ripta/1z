@@ -1,2 +1,2 @@
-Fatal: word 'bi' requires interpreter fallback; rebuild with --interpreter-fallback=true
+Fatal: word '#all' requires interpreter fallback; rebuild with --interpreter-fallback=true
 error.interpreter-fallback-disabled

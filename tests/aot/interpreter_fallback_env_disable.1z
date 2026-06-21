@@ -1,7 +1,6 @@
 \ Test: ONEZ_INTERPRETER_FALLBACK=0 disables fallback at runtime.
-\ The word `bi` carries row-variable quotation parameters and its body
-\ remains uncompilable (NC.8), so a caller reaches it through the
-\ interpreter fallback path. With fallback disabled, this should crash
-\ with a diagnostic.
-1 [ 2 + ] [ 3 + ] bi
-. .
+\ The word `#all` remains uncompilable in the AOT set, so a caller reaches
+\ it through the interpreter fallback path. With fallback disabled, this
+\ should crash with a diagnostic.
+{ 1 2 3 } [ 0 > ] #all
+.

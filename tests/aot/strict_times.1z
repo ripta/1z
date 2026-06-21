@@ -1,5 +1,7 @@
-\ Strict-mode rejection of `times`: recursive loop combinator with a
-\ row-variable quotation body. The abstract stack cannot be modeled
-\ through the recursive call, so the strict build must reject the
-\ compound fallback.
+\ Strict-mode compilation of `times`: the recursive loop combinator's word body
+\ calls `2dip` on its quotation parameter, collapsing the abstract stack to a
+\ bounded row. The preserved-bounded-row layout keeps the counter and quotation
+\ live above that row, so the body compiles to native C and the build succeeds
+\ under --interpreter-fallback=false (the quotation parameter still runs through
+\ the interpreter). The call site runs the inlined counter loop.
 3 [ "tick" print-line ] times
