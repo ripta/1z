@@ -1,0 +1,7 @@
+\ Generic AOT lint driver for benchmarking: lints the files named on the
+\ command line, the same bootstrap `1z lint` runs through the interpreter.
+\ Run with ONEZ_STDLIB pointed at the standard library so a linted file's own
+\ `use` imports resolve at runtime.
+use "lint" ;
+use "lint-rules" ;
+command-line-args run-lint [ 0 ] [ 1 ] if sys-exit

@@ -1,14 +1,12 @@
 \ Standalone AOT lint driver: the same bootstrap the `1z lint` subcommand
 \ runs through the interpreter, against a fixed fixture, so the compiled
-\ tokenize / lint path can be built ahead-of-time. The harness passes no argv
-\ to AOT binaries, so the target path is embedded rather than read from
-\ `command-line-args`.
+\ tokenize / lint path can be built ahead-of-time. The target path is embedded
+\ rather than read from argv.
 \
-\ This is a build-only test: the runtime-image driver compiles, but running it
-\ hits a separate, pre-existing AOT runtime-image execution bug in the full
-\ run-lint path (a scanner reaches `>` where a number is expected), tracked in
-\ spec/bugs/. Once that is fixed this becomes a run-and-match test against
-\ interpreted `1z lint`.
+\ Run-and-match test: the runtime-image driver builds and, with ONEZ_STDLIB
+\ pointed at the standard library (so the linted file's own `use` imports
+\ resolve at runtime), produces output identical to interpreted
+\ `1z lint tests/fixtures/lint/unused-import.1z`.
 use "lint" ;
 use "lint-rules" ;
 { "tests/fixtures/lint/unused-import.1z" } run-lint [ 0 ] [ 1 ] if sys-exit

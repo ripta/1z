@@ -340,19 +340,16 @@ pub fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocato
                 try serializeValueInto(buf, entry.value_ptr.*, allocator);
             }
         },
-        .mutable_map => |m| {
-            try buf.append(allocator, value_tag_mutable_map);
-            const entry_count: u32 = @intCast(m.map.count());
-            try buf.appendSlice(allocator, std.mem.asBytes(&entry_count));
-            var iter = m.map.iterator();
-            while (iter.next()) |entry| {
-                const key = entry.key_ptr.*;
-                const key_len: u32 = @intCast(key.len);
-                try buf.appendSlice(allocator, std.mem.asBytes(&key_len));
-                try buf.appendSlice(allocator, key);
-                try serializeValueInto(buf, entry.value_ptr.*, allocator);
-            }
-        },
+        // A mutable_map is an identity-bearing, runtime-mutable object: encoding
+        // it by value would deserialize to an independent copy that does not
+        // share later mutations, so a word body that pushes a parse-time-folded
+        // mutable_map literal (e.g. the lint run-state map) would have its
+        // compiled slot-encoded instance and its interpreted image-bytecode
+        // instance diverge. Reject by-value here -- mirroring `struct_instance`,
+        // which also falls through to `NotEncodable` -- so the word-body emitter
+        // defers to the slot-aware image serializer and both paths reference the
+        // single loader-built instance.
+        .mutable_map => return error.NotEncodable,
         .stack_effect => |effect| {
             try buf.append(allocator, value_tag_stack_effect);
             try writeParamArray(buf, allocator, effect.inputs);
