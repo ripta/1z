@@ -41,6 +41,12 @@ pub const ImageEmitError = Allocator.Error || error{NotEncodable};
 /// resolve through the linked interpreter when invoked".
 pub const word_id_sentinel: u32 = 0xFFFFFFFF;
 
+/// `quotation_id` value a dispatch-entry row carries when its method body
+/// was never reached by the freeze and so has no compiled quotation
+/// function: the row's `body_bytecode` carries the interpreter-run body
+/// directly, and the loader skips the quotation-function-table lookup.
+pub const dispatch_interp_quotation_id_sentinel: u32 = 0xFFFFFFFF;
+
 /// Bit positions in `onez_image_word.flags`. Kept in sync with the
 /// emitted C struct.
 const flag_bit_polymorphic: u8 = 1 << 0;
@@ -277,12 +283,12 @@ pub fn emitImageCFromCollection(
     try emitProtocolDescriptorStorage(out, allocator, effect_table);
     try emitConstraintCombinatorSlotTable(out, allocator, effect_table);
     try emitConstraintCombinatorStorage(out, allocator, effect_table);
-    stats.dispatch_entry_slot_count = try emitDispatchEntryTable(out, allocator, ctx, effect_table, quotation_id_map, dispatch_id_names, interpreter_run_bodies);
+    stats.dispatch_entry_slot_count = try emitDispatchEntryTable(out, allocator, ctx, effect_table, struct_index, !options.metadata_only, quotation_id_map, dispatch_id_names, interpreter_run_bodies);
 
     try emitWordNameStrings(out, allocator, manifest);
     try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
     if (!options.metadata_only) {
-        try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens);
+        try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens, effect_table, struct_index);
     }
     try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, &stats);
     try emitHeader(out, allocator, manifest, marker_pool, effect_table, struct_plans_items, stats);
@@ -1736,6 +1742,10 @@ const DispatchEntryRow = struct {
     /// resolves it through the quotation-function table by `quotation_id` instead). Borrowed from
     /// the codegen's interpreter-run-bodies map.
     body_bytecode: ?[]const u8 = null,
+    /// True when `body_bytecode` was serialized fresh for this row (an
+    /// undiscovered method body) and must be freed by the emitter; false
+    /// when borrowed from the codegen's interpreter-run-bodies map.
+    owns_body: bool = false,
 
     fn lessThan(_: void, a: DispatchEntryRow, b: DispatchEntryRow) bool {
         if (a.dispatch_id != b.dispatch_id) return a.dispatch_id < b.dispatch_id;
@@ -1783,6 +1793,13 @@ fn emitDispatchEntryTable(
     allocator: Allocator,
     ctx: *const Context,
     table: *const StackEffectTable,
+    struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    // When true, a method the freeze never compiled gets an interpreter-run
+    // row carrying its serialized body, so an interpreted quotation can
+    // dispatch it. Only a full runtime image carries interpreter bodies, so a
+    // metadata-only image keeps the prior behavior of emitting rows for
+    // compiled methods only.
+    emit_unreached_interp_run: bool,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
     dispatch_id_names: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
     interpreter_run_bodies: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
@@ -1804,8 +1821,27 @@ fn emitDispatchEntryTable(
         if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
     }
 
+    const slot_maps: instruction_bytecode.SlotEncodingMaps = .{
+        .typevalue_slot_index = &table.type_slot_index,
+        .struct_type_slot_index = struct_index,
+        .marker_slot_index = &table.marker_slot_index,
+        .parameter_slot_index = &table.parameter_slot_index,
+        .tagged_slot_index = &table.tagged_slot_index,
+        .mutable_map_slot_index = &table.mutable_map_slot_index,
+    };
+
     var rows: std.ArrayListUnmanaged(DispatchEntryRow) = .{};
-    defer rows.deinit(allocator);
+    defer {
+        // Free the bodies serialized fresh for undiscovered entries; rows
+        // whose body bytes were borrowed from `interpreter_run_bodies` are
+        // owned by the caller and left alone.
+        for (rows.items) |row| {
+            if (row.owns_body) {
+                if (row.body_bytecode) |bytes| allocator.free(bytes);
+            }
+        }
+        rows.deinit(allocator);
+    }
 
     var iter = ctx.dispatch.entries.iterator();
     while (iter.next()) |slot| {
@@ -1814,8 +1850,31 @@ fn emitDispatchEntryTable(
             .quotation => |q| q.instructions,
             .native_fn, .host_callback => continue,
         };
-        const quotation_id = map.get(@intFromPtr(body.ptr)) orelse continue;
         const key = slot.key_ptr.*;
+        // A method body the freeze compiled or collected has a quotation_id; its interpreter-run
+        // bytecode is already serialized into interpreter_run_bodies.
+        //
+        // A method body the freeze never reached, e.g., a generated field getter called only
+        // through a dynamically-retrieved quotation, has no quotation_id; serialize its body here
+        // (image-encoded for the struct_type literal) so the loader registers an interpreter-run
+        // entry. Without this such a method is dropped and dispatching it from an interpreted
+        // quotation fails with "no method found".
+        var quotation_id: u32 = undefined;
+        var body_bytecode: ?[]const u8 = null;
+        var owns_body = false;
+        if (map.get(@intFromPtr(body.ptr))) |qid| {
+            quotation_id = qid;
+            body_bytecode = if (interpreter_run_bodies) |m| m.get(qid) else null;
+        } else {
+            if (!emit_unreached_interp_run) continue;
+            quotation_id = dispatch_interp_quotation_id_sentinel;
+            body_bytecode = instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NotEncodable => continue,
+            };
+            owns_body = true;
+        }
+
         try rows.append(allocator, .{
             .dispatch_id = key.dispatch_id,
             .type_a_slot = dispatchTypeSlot(ctx, table, &desc_index, key.type_a),
@@ -1823,7 +1882,8 @@ fn emitDispatchEntryTable(
             .quotation_id = quotation_id,
             .module_name = if (entry.source_module) |m| m.name else null,
             .generic_name = if (dispatch_id_names) |m| m.get(key.dispatch_id) else null,
-            .body_bytecode = if (interpreter_run_bodies) |m| m.get(quotation_id) else null,
+            .body_bytecode = body_bytecode,
+            .owns_body = owns_body,
         });
     }
 
@@ -1836,10 +1896,10 @@ fn emitDispatchEntryTable(
     // Per-row body bytecode arrays for interpreter-run method bodies, emitted
     // before the row storage so each row can reference its array. Keyed by
     // quotation_id, which is unique per row.
-    for (rows.items) |row| {
+    for (rows.items, 0..) |row, ri| {
         const bytes = row.body_bytecode orelse continue;
         try out.appendSlice(allocator, "static const uint8_t onez_image_dispatch_q_");
-        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.quotation_id}) catch unreachable);
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{ri}) catch unreachable);
         try out.appendSlice(allocator, "_body[] = {");
         for (bytes, 0..) |byte, bi| {
             if (bi > 0) try out.append(allocator, ',');
@@ -1849,7 +1909,7 @@ fn emitDispatchEntryTable(
     }
 
     try out.appendSlice(allocator, "static const onez_image_dispatch_entry_description_t onez_image_dispatch_entry_descriptions_storage[] = {\n");
-    for (rows.items) |row| {
+    for (rows.items, 0..) |row, ri| {
         try out.appendSlice(allocator, "    { .dispatch_id = ");
         try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.dispatch_id}) catch unreachable);
         try out.appendSlice(allocator, ", .type_a_slot = ");
@@ -1877,7 +1937,7 @@ fn emitDispatchEntryTable(
         try out.appendSlice(allocator, ", .body_bytecode = ");
         if (row.body_bytecode) |bytes| {
             try out.appendSlice(allocator, "onez_image_dispatch_q_");
-            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.quotation_id}) catch unreachable);
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{ri}) catch unreachable);
             try out.appendSlice(allocator, "_body, .body_bytecode_len = ");
             try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{bytes.len}) catch unreachable);
         } else {
@@ -2898,17 +2958,27 @@ fn emitTypeDeclarations(
         \\    uint32_t provenance_role_len;
         \\} onez_image_word_t;
         \\
-        \\/* TypeValue static C data schema. Every TypeValue reachable from any */
-        \\/* module-private word's body or from another descriptor's cross-     */
-        \\/* references gets a row in onez_image_typevalues_storage[] and a    */
-        \\/* paired row in onez_image_typedescriptors_storage[] indexed by the */
-        \\/* same slot number. Cross-references between TypeValues encode as   */
-        \\/* slot indices into onez_image_typevalue_slots[]; the loader fills  */
-        \\/* the slot table during pass 2 of the load and reads it during      */
-        \\/* pass 3 when materializing each descriptor's kind-specific data.   */
-        \\/* `kind` matches Zig TypeKind: 0=builtin, 1=sentinel, 2=struct_,    */
-        \\/* 3=virtual, 4=enum_, 5=enum_variant, 6=resource, 7=ffi_struct,     */
-        \\/* 8=union_.                                                          */
+        \\/* TypeValue static C data schema. Every TypeValue reachable from any module-private word's body or
+        \\ * from another descriptor's cross-references gets a row in onez_image_typevalues_storage[] and a
+        \\ * paired row in onez_image_typedescriptors_storage[] indexed by the same slot number.
+        \\ *
+        \\ * Cross-references between TypeValues encode as slot indices into onez_image_typevalue_slots[]; the
+        \\ * loader fills the slot table during pass 2 of the load and reads it during pass 3 when materializing
+        \\ * each descriptor's kind-specific data.
+        \\ *
+        \\ * The `kind` matches Zig's TypeKind:
+        \\ *
+        \\ *   0  builtin
+        \\ *   1  sentinel
+        \\ *   2  struct_
+        \\ *   3  virtual
+        \\ *   4  enum_
+        \\ *   5  enum_variant
+        \\ *   6  resource
+        \\ *   7  ffi_struct
+        \\ *   8  union_
+        \\ *
+        \\**/
         \\typedef struct onez_image_enum_variant {
         \\    const char *name;
         \\    uint32_t name_len;
@@ -3258,8 +3328,19 @@ fn emitWordBodyBytecode(
     ctx: *const Context,
     manifest: ImageManifest,
     word_body_lens: []u32,
+    effect_table: *const StackEffectTable,
+    struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
 ) ImageEmitError!void {
     if (manifest.entries.len == 0) return;
+
+    const slot_maps: instruction_bytecode.SlotEncodingMaps = .{
+        .typevalue_slot_index = &effect_table.type_slot_index,
+        .struct_type_slot_index = struct_index,
+        .marker_slot_index = &effect_table.marker_slot_index,
+        .parameter_slot_index = &effect_table.parameter_slot_index,
+        .tagged_slot_index = &effect_table.tagged_slot_index,
+        .mutable_map_slot_index = &effect_table.mutable_map_slot_index,
+    };
 
     var emitted_any = false;
     var num_buf: [32]u8 = undefined;
@@ -3272,7 +3353,6 @@ fn emitWordBodyBytecode(
             .native, .host_callback => continue,
         };
         if (body.len == 0) continue;
-        if (mw_ptr.provenance != null) continue;
         // Words that push a TypeValue have their body rewritten by the
         // runtime-image loader after it allocates the runtime
         // TypeValue. Encoding the body as bytecode would lower the
@@ -3282,10 +3362,27 @@ fn emitWordBodyBytecode(
         // populate the body from `typevalue_slot`.
         if (findTypeValueLiteral(mw_ptr) != null) continue;
 
-        const bytes = instruction_bytecode.serializeQuotationInstructions(body, allocator) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.NotEncodable => return error.NotEncodable,
-        };
+        // Generator-emitted words (struct constructors, getters,
+        // predicates, ...) push a runtime `.struct_type` literal the
+        // by-value serializer cannot encode. Route them through the
+        // image serializer so the literal slot-encodes and the loader
+        // resolves it to the live runtime StructType; without a real
+        // body these words run as no-ops when an interpreted quotation
+        // (`jitCallQuotation`) calls them. A still-unencodable generated
+        // body falls back to the prior empty-body behavior.
+        if (std.posix.getenv("ONEZ_DEBUG_NTH") != null and mw_ptr.provenance != null) {
+            std.debug.print("DBG emit-body parent={?s} role={?s} bodylen={d}\n", .{ if (mw_ptr.provenance) |p| p.parent else null, if (mw_ptr.provenance) |p| p.role else null, body.len });
+        }
+        const bytes = if (mw_ptr.provenance != null)
+            instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NotEncodable => continue,
+            }
+        else
+            instruction_bytecode.serializeQuotationInstructions(body, allocator) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NotEncodable => return error.NotEncodable,
+            };
         defer allocator.free(bytes);
 
         try out.appendSlice(allocator, "static const uint8_t ");
@@ -4892,17 +4989,20 @@ test "emitImageC: structural bytecode round-trips through decoder" {
     try testing.expectEqualStrings("double", decoded[1].op.call_word);
 }
 
-test "emitImageC: generator-provenanced word skips body bytecode" {
+test "emitImageC: generator-provenanced word emits interpreter-run body bytecode" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
 
-    // Generator-emitted words encode @intFromPtr of a runtime type as
-    // a fixnum literal -- non-deterministic across builds. Provenance
-    // is the signal we filter on; the body shape mirrors what
-    // `definePredicate` produces.
+    // Generator-emitted words (struct constructors, getters, predicates)
+    // push a slot-encodable type-carrier literal and call a native. Their
+    // body is serialized through the image serializer so an interpreted
+    // quotation calling them runs the real instructions instead of a
+    // no-op. A plain scalar literal stands in for the type-carrier here;
+    // it serializes by value, exercising the provenance-routes-to-image
+    // path without setting up a full StructType slot table.
     const body = try arena.dupe(Instruction, &.{
-        .{ .op = .{ .push_literal = .{ .fixnum = 184500376 } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
         .{ .op = .{ .call_word = "native.virtual-type-predicate" }, .line = 0, .column = 0 },
     });
     const m = try arena.create(Module);
@@ -4927,8 +5027,7 @@ test "emitImageC: generator-provenanced word skips body bytecode" {
 
     _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
 
-    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_body[]") == null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_body[]") != null);
 }
 
 const dispatch_mod = @import("dispatch.zig");
@@ -5678,7 +5777,7 @@ test "emitDispatchEntryTable: an interpreter-run method body carries its bytecod
     try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = onez_image_dispatch_q_0_body, .body_bytecode_len = 3") != null);
 }
 
-test "emitDispatchEntryTable: an unreachable entry body produces no row" {
+test "emitDispatchEntryTable: a freeze-unreached entry body emits an interpreter-run row" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     const arena = ctx.quotationAllocator();
@@ -5700,7 +5799,10 @@ test "emitDispatchEntryTable: an unreachable entry body produces no row" {
     var lookup: std.StringHashMapUnmanaged(u32) = .{};
     defer lookup.deinit(testing.allocator);
 
-    // The body pointer is absent from the manifest, so the entry is unreachable.
+    // The body pointer is absent from the manifest, so the freeze never
+    // compiled this method. Its body is serialized fresh and emitted as an
+    // interpreter-run row carrying the sentinel quotation_id, so a method
+    // reached only through an interpreted quotation still dispatches.
     var qmap: std.AutoHashMapUnmanaged(usize, u32) = .{};
     defer qmap.deinit(testing.allocator);
 
@@ -5712,10 +5814,12 @@ test "emitDispatchEntryTable: an unreachable entry body produces no row" {
 
     const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null);
 
-    try testing.expectEqual(@as(u32, 0), stats.dispatch_entry_slot_count);
-    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_entry_descriptions_storage") == null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_entry_slot_count = 0") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, ".dispatch_entry_descriptions = NULL") != null);
+    try testing.expectEqual(@as(u32, 1), stats.dispatch_entry_slot_count);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_q_0_body[] = {") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = onez_image_dispatch_q_0_body") != null);
+    var qid_buf: [64]u8 = undefined;
+    const qid_needle = std.fmt.bufPrint(&qid_buf, ".quotation_id = {d}", .{dispatch_interp_quotation_id_sentinel}) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, qid_needle) != null);
 }
 
 test "emitDispatchEntryTable: wildcard type_a emits the reserved ANY sentinel" {

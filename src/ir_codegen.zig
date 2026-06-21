@@ -8330,13 +8330,32 @@ pub fn emitProgramC(
     //              build fails with a method-body-specific diagnostic.
     {
         const can_link_interpreter = !(interpreter_fallback == .false and lock_interpreter_setting);
+        // Interpreter-run method bodies (e.g. generated struct field
+        // getters) push a runtime `.struct_type` literal the by-value
+        // serializer rejects. When a slot map is available, route them
+        // through the image serializer so the literal slot-encodes and
+        // the dispatch replay resolves it to the live runtime StructType;
+        // otherwise such a method runs as a no-op when dispatched by an
+        // interpreted quotation (`jitCallQuotation`).
+        const method_slot_maps: ?ibc.SlotEncodingMaps = if (image_collection) |*coll| .{
+            .typevalue_slot_index = &coll.effect_table.type_slot_index,
+            .struct_type_slot_index = &coll.struct_index,
+            .marker_slot_index = &coll.effect_table.marker_slot_index,
+            .parameter_slot_index = &coll.effect_table.parameter_slot_index,
+            .tagged_slot_index = &coll.effect_table.tagged_slot_index,
+            .mutable_map_slot_index = &coll.effect_table.mutable_map_slot_index,
+        } else null;
         var uncompiled_q: std.ArrayListUnmanaged(UncompiledQuotation) = .{};
         defer uncompiled_q.deinit(allocator);
         for (quotations) |q| {
             if (q.is_method_body) {
                 if (q.compiled) continue;
                 if (emit_runtime_image and can_link_interpreter) {
-                    const bytes = serializeQuotationInstructions(q.instructions, allocator) catch |err| switch (err) {
+                    const maybe_bytes = if (method_slot_maps) |*sm|
+                        ibc.serializeQuotationInstructionsForImage(q.instructions, allocator, sm)
+                    else
+                        serializeQuotationInstructions(q.instructions, allocator);
+                    const bytes = maybe_bytes catch |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
                         error.NotEncodable => {
                             try uncompiled_q.append(allocator, .{
@@ -8704,6 +8723,23 @@ pub fn emitProgramC(
         for (words) |w| {
             if (w.dispatch_id != 0) try dispatch_id_names.put(allocator, w.dispatch_id, w.name);
         }
+        // The post-freeze word list above omits empty-body generated generics
+        // (struct field getters/setters), whose dispatch entries still need a
+        // generic name so the loader can patch the loaded word's dispatch_id
+        // to match its replayed methods. Add every module-cache word carrying
+        // a dispatch_id, covering those getters.
+        {
+            var mod_it = ctx.module_cache_value.map.valueIterator();
+            while (mod_it.next()) |cached| {
+                if (cached.* != .module) continue;
+                var w_it = cached.*.module.words.iterator();
+                while (w_it.next()) |we| {
+                    if (we.value_ptr.dispatch_id != 0) {
+                        try dispatch_id_names.put(allocator, we.value_ptr.dispatch_id, we.key_ptr.*);
+                    }
+                }
+            }
+        }
 
         const stats = aot_image_emit_mod.emitImageCFromCollection(
             &out,
@@ -9054,8 +9090,11 @@ pub fn emitProgramC(
     // Replay the image's method dispatch entries now that both the image
     // surfaces (modules, typevalue slots) and the quotation-function table
     // are in place. Each entry's compiled body resolves through the
-    // just-registered quotation table.
-    if ((meta.runtime_image_present or meta.metadata_image_present) and quotations.len > 0) {
+    // just-registered quotation table; interpreter-run entries resolve their
+    // body bytecode directly, so replay runs even with no compiled
+    // quotations (a method reached only through an interpreted quotation has
+    // no compiled body but still needs its dispatch entry registered).
+    if (meta.runtime_image_present or meta.metadata_image_present) {
         try out.appendSlice(allocator,
             \\    if (onez_replay_method_dispatch(rt) != 0) {
             \\        onez_print_error(rt);

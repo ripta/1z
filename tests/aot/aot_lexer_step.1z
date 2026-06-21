@@ -1,0 +1,12 @@
+use "lexer" ;
+use "scanner" ;
+
+"abc" V{ } H{ kind: any: match: [
+    dup peek dup f = [ 2drop f ] [
+      swap dup position>> swap advance
+      -rot> [ any: swap ] dip make-token
+    ] if
+  ]
+} #push! >array <lexer>
+tokenize #collect
+[ dup value>> swap pos>> >string " @ " #append swap #append print-line ] #each

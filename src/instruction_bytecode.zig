@@ -208,6 +208,51 @@ pub fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions:
     }
 }
 
+/// Image-mode variant of `serializeInstructionsInto`. Every `push_literal`
+/// operand routes through `serializeValueIntoForImage`, so type-carrier
+/// values -- notably `.struct_type`, which the by-value path rejects with
+/// `NotEncodable` -- are emitted as slot references the loader resolves to
+/// live runtime pointers. Used for generator-emitted word bodies (struct
+/// constructors, getters, predicates, ...) whose `push_literal` operands are
+/// runtime type pointers. Unlike the by-value path, type-carrier literals
+/// are not lowered to `call_word`; they slot-encode directly.
+pub fn serializeInstructionsIntoForImage(
+    buf: *std.ArrayListUnmanaged(u8),
+    instructions: []const Instruction,
+    allocator: Allocator,
+    slot_maps: *const SlotEncodingMaps,
+) SerializeError!void {
+    const count: u32 = @intCast(instructions.len);
+    try buf.appendSlice(allocator, std.mem.asBytes(&count));
+    for (instructions) |instr| {
+        const line: u32 = @intCast(instr.line);
+        const col: u32 = @intCast(instr.column);
+        try buf.appendSlice(allocator, std.mem.asBytes(&line));
+        try buf.appendSlice(allocator, std.mem.asBytes(&col));
+        switch (instr.op) {
+            .push_literal => |val| {
+                try buf.append(allocator, op_tag_push_literal);
+                try serializeValueIntoForImage(buf, val, allocator, slot_maps);
+            },
+            .call_word => |name| try writeCallWord(buf, allocator, name),
+            .call_word_direct => |slot| try writeCallWord(buf, allocator, slot.name),
+        }
+    }
+}
+
+/// Image-mode variant of `serializeQuotationInstructions`. See
+/// `serializeInstructionsIntoForImage`.
+pub fn serializeQuotationInstructionsForImage(
+    instructions: []const Instruction,
+    allocator: Allocator,
+    slot_maps: *const SlotEncodingMaps,
+) SerializeError![]u8 {
+    var buf = std.ArrayListUnmanaged(u8){};
+    errdefer buf.deinit(allocator);
+    try serializeInstructionsIntoForImage(&buf, instructions, allocator, slot_maps);
+    return buf.toOwnedSlice(allocator);
+}
+
 /// If `val` is a non-simple literal that should be lowered to `call_word`,
 /// return its name. Otherwise return null.
 fn lowerableName(val: Value) ?[]const u8 {
@@ -418,6 +463,59 @@ pub fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Al
         offset.* += 1;
         if (op_tag == op_tag_push_literal) {
             const val = try deserializeValueAt(data, offset, allocator);
+            instr.* = .{ .op = .{ .push_literal = val }, .line = line, .column = col };
+        } else if (op_tag == op_tag_call_word) {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const nlen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (offset.* + nlen > data.len) return error.OutOfMemory;
+            const name_copy = try allocator.dupe(u8, data[offset.*..][0..nlen]);
+            offset.* += nlen;
+            instr.* = .{ .op = .{ .call_word = name_copy }, .line = line, .column = col };
+        } else {
+            return error.OutOfMemory;
+        }
+    }
+    return instructions;
+}
+
+/// Image-mode variant of `deserializeQuotationInstructions`. `push_literal`
+/// operands decode through `deserializeValueAtForImage`, which resolves
+/// slot-encoded type-carrier values against the loader's slot tables and
+/// falls back to the by-value decoder for plain literals. Backward
+/// compatible with bodies serialized by the non-image path, since those
+/// carry no slot tags.
+pub fn deserializeQuotationInstructionsForImage(
+    data: []const u8,
+    allocator: Allocator,
+    slot_tables: *const SlotResolutionTables,
+) Allocator.Error![]Instruction {
+    var offset: usize = 0;
+    return deserializeInstructionsAtForImage(data, &offset, allocator, slot_tables);
+}
+
+/// Image-mode variant of `deserializeInstructionsAt`. See
+/// `deserializeQuotationInstructionsForImage`.
+pub fn deserializeInstructionsAtForImage(
+    data: []const u8,
+    offset: *usize,
+    allocator: Allocator,
+    slot_tables: *const SlotResolutionTables,
+) Allocator.Error![]Instruction {
+    if (offset.* + 4 > data.len) return error.OutOfMemory;
+    const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+    offset.* += 4;
+    const instructions = try allocator.alloc(Instruction, count);
+    for (instructions) |*instr| {
+        if (offset.* + 9 > data.len) return error.OutOfMemory; // line(4)+col(4)+op_tag(1)
+        const line = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+        offset.* += 4;
+        const col = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+        offset.* += 4;
+        const op_tag = data[offset.*];
+        offset.* += 1;
+        if (op_tag == op_tag_push_literal) {
+            const val = try deserializeValueAtForImage(data, offset, allocator, slot_tables);
             instr.* = .{ .op = .{ .push_literal = val }, .line = line, .column = col };
         } else if (op_tag == op_tag_call_word) {
             if (offset.* + 4 > data.len) return error.OutOfMemory;

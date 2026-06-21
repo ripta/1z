@@ -73,17 +73,27 @@ typedef struct onez_image_word {
     uint32_t provenance_role_len;
 } onez_image_word_t;
 
-/* TypeValue static C data schema. Every TypeValue reachable from any */
-/* module-private word's body or from another descriptor's cross-     */
-/* references gets a row in onez_image_typevalues_storage[] and a    */
-/* paired row in onez_image_typedescriptors_storage[] indexed by the */
-/* same slot number. Cross-references between TypeValues encode as   */
-/* slot indices into onez_image_typevalue_slots[]; the loader fills  */
-/* the slot table during pass 2 of the load and reads it during      */
-/* pass 3 when materializing each descriptor's kind-specific data.   */
-/* `kind` matches Zig TypeKind: 0=builtin, 1=sentinel, 2=struct_,    */
-/* 3=virtual, 4=enum_, 5=enum_variant, 6=resource, 7=ffi_struct,     */
-/* 8=union_.                                                          */
+/* TypeValue static C data schema. Every TypeValue reachable from any module-private word's body or
+ * from another descriptor's cross-references gets a row in onez_image_typevalues_storage[] and a
+ * paired row in onez_image_typedescriptors_storage[] indexed by the same slot number.
+ *
+ * Cross-references between TypeValues encode as slot indices into onez_image_typevalue_slots[]; the
+ * loader fills the slot table during pass 2 of the load and reads it during pass 3 when materializing
+ * each descriptor's kind-specific data.
+ *
+ * The `kind` matches Zig's TypeKind:
+ *
+ *   0  builtin
+ *   1  sentinel
+ *   2  struct_
+ *   3  virtual
+ *   4  enum_
+ *   5  enum_variant
+ *   6  resource
+ *   7  ffi_struct
+ *   8  union_
+ *
+**/
 typedef struct onez_image_enum_variant {
     const char *name;
     uint32_t name_len;

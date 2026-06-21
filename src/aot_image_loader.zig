@@ -512,6 +512,69 @@ pub fn loadIntoContext(
     // routes through `deserializeValueAtForImage`), so those tables
     // must be patched first.
     try populateTaggedSlots(ctx, header, slots.tagged);
+
+    // Generator-emitted word bodies decode last: their slot-encoded
+    // `.struct_type` literals resolve through the now-patched slot tables.
+    try decodeGeneratedWordBodies(ctx, header);
+}
+
+/// Decode the deferred bodies of generator-emitted words (struct
+/// constructors, getters, predicates, ...) now that the slot tables are
+/// patched. `populateModulesAndWords` left these words with an empty body
+/// because their `.struct_type` literals slot-encode against tables that
+/// were not yet populated; this pass resolves them through
+/// `deserializeQuotationInstructionsForImage` and installs the real body
+/// so an interpreted quotation (`jitCallQuotation`) calling such a word
+/// runs its actual instructions rather than a no-op.
+/// Build the slot-resolution tables for image-mode bytecode decoding from
+/// the Context's patched slot-table pointers. Both the generated-word-body
+/// pass and method-dispatch replay decode `.struct_type` (and other
+/// type-carrier) literals against these.
+fn imageSlotTables(ctx: *const Context) instruction_bytecode.SlotResolutionTables {
+    return .{
+        .typevalue_slots = ctx.image_typevalue_slots,
+        .typevalue_slot_count = ctx.image_typevalue_slot_count,
+        .struct_type_slots = ctx.image_struct_type_slots,
+        .struct_type_slot_count = ctx.image_struct_type_slot_count,
+        .marker_slots = ctx.image_marker_slots,
+        .marker_slot_count = ctx.image_marker_slot_count,
+        .parameter_slots = ctx.image_parameter_slots,
+        .parameter_slot_count = ctx.image_parameter_slot_count,
+        .tagged_slots = ctx.image_tagged_slots,
+        .tagged_slot_count = ctx.image_tagged_slot_count,
+        .mutable_map_slots = ctx.image_mutable_map_slots,
+        .mutable_map_slot_count = ctx.image_mutable_map_slot_count,
+    };
+}
+
+fn decodeGeneratedWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
+    if (header.word_count == 0) return;
+    const words = header.words orelse return;
+    const modules = header.modules orelse return;
+    const arena = ctx.quotationAllocator();
+
+    const tables = imageSlotTables(ctx);
+
+    var wi: u32 = 0;
+    while (wi < header.word_count) : (wi += 1) {
+        const w = words[wi];
+        if (w.provenance_generator == null) continue;
+        if (w.body_bytecode == null or w.body_bytecode_len == 0) continue;
+        if (w.module_idx >= header.module_count) return LoaderError.BadWordIndex;
+
+        const m = modules[w.module_idx];
+        const module_name = nameSlice(m.name, m.name_len);
+        const word_name = nameSlice(w.name, w.name_len);
+
+        const cache_entry = ctx.module_cache_value.map.getPtr(module_name) orelse continue;
+        if (cache_entry.* != .module) continue;
+        const word_entry = cache_entry.*.module.words.getPtr(word_name) orelse continue;
+
+        const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
+        const instrs = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables) catch
+            return LoaderError.OutOfMemory;
+        word_entry.action = .{ .compound = instrs };
+    }
 }
 
 // -- Module + word population ------------------------------------------
@@ -546,7 +609,14 @@ fn populateModulesAndWords(
 
             const markers_slice = try buildMarkerSlice(arena, w);
             const stack_effect = try decodeStackEffect(arena, header, w.stack_effect_idx, protocol_slots);
-            const body = try decodeWordBody(arena, w);
+            // Generator-emitted words carry slot-encoded `.struct_type`
+            // literals that only resolve once the struct-type slot table
+            // is patched, which happens after this pass. Leave their body
+            // empty here; `decodeGeneratedWordBodies` fills it in later.
+            const body: []const value_mod.Instruction = if (w.provenance_generator != null)
+                &.{}
+            else
+                try decodeWordBody(arena, w);
             const diag = decodeDiagnosticMetadata(w);
 
             // Treat `aot_image_emit.word_id_sentinel` (0xFFFFFFFFu) as
@@ -657,9 +727,19 @@ fn buildMarkerSlice(arena: Allocator, w: Word) LoaderError![]const *value_mod.Ma
     var i: u32 = 0;
     while (i < w.marker_count) : (i += 1) {
         const image_marker = ptrs[i];
-        const marker_ptr = arena.create(value_mod.Marker) catch return LoaderError.OutOfMemory;
-        marker_ptr.* = .{ .name = nameSlice(image_marker.name, image_marker.name_len) };
-        out[i] = marker_ptr;
+        const name = nameSlice(image_marker.name, image_marker.name_len);
+        // Resolve well-known markers to their runtime singletons so
+        // pointer-identity marker checks (e.g. `isGenericMarker`, which
+        // gates interpreter generic dispatch) recognize them. A fresh
+        // allocation here would compare unequal to every singleton,
+        // silently disabling marker-driven behavior for loaded words.
+        if (markers_mod.lookupWellKnownMarker(name)) |well_known| {
+            out[i] = well_known;
+        } else {
+            const marker_ptr = arena.create(value_mod.Marker) catch return LoaderError.OutOfMemory;
+            marker_ptr.* = .{ .name = name };
+            out[i] = marker_ptr;
+        }
     }
     return out;
 }
@@ -1522,12 +1602,14 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
     const count = ctx.image_dispatch_entry_count;
     if (count == 0) return;
     const rows_raw = ctx.image_dispatch_entry_descriptions orelse return;
-    const fns = ctx.aot_quotation_fns orelse return;
+    // The quotation-function table may be absent when every dispatch entry is
+    // interpreter-run (no method body compiled). Treat that as an empty table:
+    // entries resolve their bodies from the row bytecode instead.
+    const fns_opt = ctx.aot_quotation_fns;
     const rows: [*]const DispatchEntryDescription = @ptrCast(@alignCast(rows_raw));
 
     const slots = ctx.image_typevalue_slots;
     const slot_count = ctx.image_typevalue_slot_count;
-
     var i: u32 = 0;
     while (i < count) : (i += 1) {
         const row = rows[i];
@@ -1535,18 +1617,30 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
         const type_a = (try resolveDispatchTypeDescriptor(ctx, slots, slot_count, row.type_a_slot)) orelse continue;
         const type_b = (try resolveDispatchTypeDescriptor(ctx, slots, slot_count, row.type_b_slot)) orelse continue;
 
-        if (row.quotation_id >= fns.size) continue;
-        // A body resolves either to a compiled native function (the common
-        // case) or, when it did not compile, to interpreter-run bytecode the
-        // row carries (full runtime image only). Register the bytecode with a
-        // null code_ptr so the dispatcher runs it through the interpreter. A
-        // row with neither is skipped, as before.
+        // A method body resolves either to a compiled native function (the
+        // common case, indexed by `quotation_id` in the quotation-function
+        // table) or, when the freeze never compiled it, to interpreter-run
+        // bytecode the row carries directly (`quotation_id` is the sentinel,
+        // or the table is absent). Register the bytecode with a null code_ptr
+        // so the dispatcher runs it through the interpreter. A row with
+        // neither is skipped, as before.
         var body_instructions: []const value_mod.Instruction = &.{};
-        const code_ptr: ?*const anyopaque = fns.table[row.quotation_id] orelse blk: {
+        const is_interp_only = row.quotation_id == aot_image_emit.dispatch_interp_quotation_id_sentinel;
+        const compiled_fn: ?*const anyopaque = blk: {
+            if (is_interp_only) break :blk null;
+            const fns = fns_opt orelse break :blk null;
+            if (row.quotation_id >= fns.size) break :blk null;
+            break :blk fns.table[row.quotation_id];
+        };
+        const code_ptr: ?*const anyopaque = compiled_fn orelse blk: {
             const bc_ptr = row.body_bytecode orelse continue;
             if (row.body_bytecode_len == 0) continue;
             const bytes = bc_ptr[0..row.body_bytecode_len];
-            body_instructions = instruction_bytecode.deserializeQuotationInstructions(bytes, ctx.quotationAllocator()) catch
+            // Slot-aware decode: method bodies may carry slot-encoded
+            // `.struct_type` literals (e.g. generated field getters). The
+            // tables are patched before replay runs, so they resolve here.
+            const body_tables = imageSlotTables(ctx);
+            body_instructions = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &body_tables) catch
                 return LoaderError.OutOfMemory;
             break :blk null;
         };
@@ -1590,6 +1684,24 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
             error.DuplicateMethod => {},
             else => return LoaderError.OutOfMemory,
         };
+    }
+
+    // Patch each loaded generic word's `dispatch_id` to the value its
+    // replayed methods registered under. The image word table does not
+    // serialize `dispatch_id`, so a loaded generic word defaults to 0;
+    // interpreter generic dispatch (`tryDispatchGenericById`) keys on
+    // `word.dispatch_id`, so without this it never matches the replayed
+    // method entries and every generic call from an interpreted quotation
+    // fails with "no method found".
+    var mod_it = ctx.module_cache_value.map.valueIterator();
+    while (mod_it.next()) |cached| {
+        if (cached.* != .module) continue;
+        var word_it = cached.*.module.words.iterator();
+        while (word_it.next()) |word_entry| {
+            if (ctx.aot_generic_dispatch_ids.get(word_entry.key_ptr.*)) |did| {
+                word_entry.value_ptr.dispatch_id = did;
+            }
+        }
     }
 }
 
