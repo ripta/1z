@@ -54,3 +54,20 @@ format-doc-comment: ( doc-str -- markdown-str ) [
   [ "```\n" #append ] [ ] if
   nip
 ] ;
+
+\\ Render a source cross-reference for a word. With no base URL (`f` or empty),
+\\ produce a text reference `Defined in {rel}:{line}`; with a base URL, produce a
+\\ clickable link `[source]({base}/{rel}#L{line})`. A missing path or line (`f`)
+\\ produces the empty string.
+format-source-ref: ( base-url rel-path line -- str ) [
+  over f = over f = or
+  [ 3drop "" ]
+  [
+    >string
+    2 pick-n dup f = swap "" = or
+    [ "Defined in " 2 pick-n #append ":" #append over #append nip nip nip ]
+    [ "[source](" 3 pick-n #append "/" #append 2 pick-n #append "#L" #append over #append ")" #append nip nip nip ]
+    if
+  ]
+  if
+] ;

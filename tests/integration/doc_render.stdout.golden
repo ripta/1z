@@ -41,3 +41,21 @@ Stack: [ "```1z
 " ]
 PASS: a blank line between two code lines does not split the block
 Stack: [ ]
+=== source reference text form ===
+Stack: [ ]
+Stack: [ "Defined in lib/math.1z:42" ]
+PASS: no base url yields a text reference
+Stack: [ ]
+=== source reference link form ===
+Stack: [ ]
+Stack: [ "[source](https://example.com/lib/math.1z#L42)" ]
+PASS: a base url yields a clickable link
+Stack: [ ]
+=== source reference missing parts ===
+Stack: [ ]
+Stack: [ "" ]
+PASS: no reference when the path is f
+Stack: [ ]
+Stack: [ "" ]
+PASS: no reference when the line is f
+Stack: [ ]

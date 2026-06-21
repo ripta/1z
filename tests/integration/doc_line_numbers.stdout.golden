@@ -1,0 +1,36 @@
+Stack: [ ]
+=== single definition line ===
+Stack: [ ]
+Stack: [ M{ add: 1 } ]
+PASS: definition on line 1
+Stack: [ ]
+=== multiple definitions ===
+Stack: [ ]
+Stack: [ M{ baz: 3 bar: 2 foo: 1 } ]
+PASS: foo on line 1
+Stack: [ M{ baz: 3 bar: 2 foo: 1 } ]
+PASS: bar on line 2
+Stack: [ M{ baz: 3 bar: 2 foo: 1 } ]
+PASS: baz on line 3
+Stack: [ ]
+=== undocumented definition ===
+Stack: [ ]
+Stack: [ M{ q: 2 } ]
+PASS: undocumented definition gets a line
+Stack: [ ]
+=== documented definition line ===
+Stack: [ ]
+Stack: [ M{ widget: 2 } ]
+PASS: line points at the definition, not its doc-comment
+Stack: [ ]
+=== symbol literal does not shadow ===
+Stack: [ ]
+Stack: [ M{ bar: 1 foo: 2 } ]
+PASS: bar on line 1
+Stack: [ M{ bar: 1 foo: 2 } ]
+PASS: foo recorded at its real definition, not the body literal
+Stack: [ ]
+=== line extraction from a file ===
+Stack: [ ]
+PASS: line extracted from a source file on disk
+Stack: [ ]

@@ -35,3 +35,27 @@ use "doc-render" ;
 
 "  a\n\n  b" format-doc-comment
 "```1z\n  a\n\n  b\n```\n" "a blank line between two code lines does not split the block" assert=
+
+\ --- Source cross-reference: text form when no base URL ---
+
+"source reference text form" test-section
+
+f "lib/math.1z" 42 format-source-ref
+"Defined in lib/math.1z:42" "no base url yields a text reference" assert=
+
+\ --- Source cross-reference: link form with a base URL ---
+
+"source reference link form" test-section
+
+"https://example.com" "lib/math.1z" 42 format-source-ref
+"[source](https://example.com/lib/math.1z#L42)" "a base url yields a clickable link" assert=
+
+\ --- Source cross-reference: empty when path or line is missing ---
+
+"source reference missing parts" test-section
+
+"https://example.com" f 42 format-source-ref
+"" "no reference when the path is f" assert=
+
+f "lib/math.1z" f format-source-ref
+"" "no reference when the line is f" assert=

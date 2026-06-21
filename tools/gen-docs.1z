@@ -10,6 +10,7 @@ use "sequences" ;
 use "runtime/introspect" ;
 use "doc-extract" ;
 use "doc-render" ;
+use "config" ;
 
 \ --- Step 1: Discover stdlib modules ---
 
@@ -31,16 +32,45 @@ module-word-infos: ( module -- array ) [
   #map #collect
 ] ;
 
-\ Source-level doc-comment map for a module key, built by tokenizing the
-\ module's source file. Empty when no source file exists; the "prelude" group
-\ has no lib/ source file, so it falls back to an empty map and the
-\ introspection `doc>>` text.
-module-doc-map: ( key -- map ) [
+\ Source-level doc-comment and definition-line maps for a module key, built by
+\ tokenizing the module's source file once. Empty maps when no source file
+\ exists; the "prelude" group has no lib/ source file, so it falls back to empty
+\ maps and the introspection `doc>>` text with no cross-reference.
+module-token-maps: ( key -- doc-map line-map ) [
   >string stdlib-dir swap path-join ".1z" #append
   dup file-exists?
-  [ extract-doc-comments-from-file ]
-  [ drop M{ } ]
+  [ extract-doc-info-from-file ]
+  [ drop M{ } M{ } ]
   if
+] ;
+
+\ Repo-relative source path (lib/<key>.1z) for a module key, or f when the key
+\ has no lib/ source file. The displayed path uses the fixed lib/ layout rather
+\ than the resolved stdlib-dir, which is the zig-out/lib symlink.
+module-source-rel: ( key -- rel-or-f ) [
+  >string
+  dup stdlib-dir swap path-join ".1z" #append file-exists?
+  [ "lib/" swap #append ".1z" #append ]
+  [ drop f ]
+  if
+] ;
+
+\ Read the documentation source base URL from ./1z.conf if present, else f.
+\ When set, source cross-references become clickable links.
+load-source-base-url: ( -- base-url-or-f ) [
+  "1z.conf" file-exists?
+  [ "1z.conf" load-config-data f "source-base-url" config-get-or ]
+  [ f ]
+  if
+] ;
+
+\ Build the per-module render context hash carried into each word's render.
+(make-ctx): ( doc-map line-map rel base -- ctx ) [
+  H{ }
+  swap "base" swap @set
+  swap "rel" swap @set
+  swap "lines" swap @set
+  swap "docs" swap @set
 ] ;
 
 \ Load one module without importing it, then file its words under its name in
@@ -150,8 +180,26 @@ render-doc-section: ( doc-map wi -- str ) [
   if
 ] ;
 
+\ Look up a word's definition line in the line map, returning the line or f.
+(line-or-f): ( lines name -- line-or-f ) [
+  @get? dup option:some? [ option:some> ] [ drop f ] if
+] ;
+
+\ Render the source cross-reference for a word from the render context, or the
+\ empty string when the module has no source file or the line is unknown.
+render-source-ref: ( ctx wi -- str ) [
+  name>>
+  over "lines" @get over (line-or-f)
+  nip
+  over "rel" @get
+  2 pick-n "base" @get
+  swap 2 pick-n
+  format-source-ref
+  nip nip
+] ;
+
 \ Render a single word entry
-render-word: ( doc-map wi -- str ) [
+render-word: ( ctx wi -- str ) [
   "### " over name>> #append "\n\n" #append
 
   over markers>> render-markers #append
@@ -161,11 +209,17 @@ render-word: ( doc-map wi -- str ) [
   [ >string "`" swap #append "`\n\n" #append #append ]
   if
 
-  2 pick-n 2 pick-n render-doc-section #append
+  2 pick-n "docs" @get 2 pick-n render-doc-section #append
 
   over methods>> render-methods #append
 
   over render-type-info #append
+
+  2 pick-n 2 pick-n render-source-ref
+  dup #len 0 =
+  [ drop ]
+  [ "\n" swap #append "\n" #append #append ]
+  if
 
   nip nip
 ] ;
@@ -222,9 +276,9 @@ write-index-page: ( content -- ) [
   stream-close
 ] ;
 
-\ Render a full module page. The doc-map supplies source-level doc-comments,
-\ curried into each word's render so it can prefer them over introspection.
-render-module-page: ( doc-map name words -- str ) [
+\ Render a full module page. The render context supplies source-level
+\ doc-comments and source locations, curried into each word's render.
+render-module-page: ( ctx name words -- str ) [
   sort-words >iterator  \ doc-map name iter
   2 pick-n [ swap render-word "\n" #append ] curry
   #map #collect "" #join  \ doc-map name body
@@ -256,23 +310,28 @@ H{ } prelude-group
 
 "docs/reference" ensure-directory
 
-\ Generate one module's docs. Called via curry: TOS=grouped, below=key.
-generate-one: ( key grouped -- ) [
-  swap  \ grouped key
-  dup >string "  " swap #append "..." #append eprint-line
-  dup module-doc-map      \ grouped key doc-map
-  over >string            \ grouped key doc-map name
-  3 pick-n 3 pick-n @get  \ grouped key doc-map name words
-  render-module-page      \ grouped key content
-  swap >string swap       \ grouped name content
+\ Generate one module's docs. Called via double curry, so the per-key call
+\ supplies the iterated key with base-url and grouped captured.
+generate-one: ( key base-url grouped -- ) [
+  2 pick-n >string "  " swap #append "..." #append eprint-line
+  2 pick-n module-token-maps  \ key base-url grouped doc-map line-map
+  4 pick-n module-source-rel  \ key base-url grouped doc-map line-map rel
+  4 pick-n                    \ key base-url grouped doc-map line-map rel base-url
+  (make-ctx)                  \ key base-url grouped ctx
+  3 pick-n >string            \ key base-url grouped ctx name
+  2 pick-n 5 pick-n @get      \ key base-url grouped ctx name words
+  render-module-page          \ key base-url grouped content
+  3 pick-n >string swap       \ key base-url grouped name content
   write-module-page
-  drop
+  3drop
 ] ;
 
 "Generating documentation..." eprint-line
-dup
-dup @keys [ >string ] #sort-by
-swap [ generate-one ] curry #each
+load-source-base-url
+over [ generate-one ] curry
+curry
+over @keys [ >string ] #sort-by
+swap #each
 
 "Generating index..." eprint-line
 render-index-page write-index-page

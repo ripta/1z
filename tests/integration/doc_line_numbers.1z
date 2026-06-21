@@ -1,0 +1,63 @@
+use "testing" ;
+use "doc-extract" ;
+use "os/fs" ;
+use "os/path" ;
+
+\ Note: a doc-comment is two literal backslashes (`\\`). In a 1z string literal
+\ each backslash is escaped, so a doc-comment line is written as `\\\\` here.
+
+(write-file): ( content path -- ) [
+  write: stream-open
+  dup -rot> [ print ] with-output-stream
+  stream-close
+] ;
+
+\ --- Single definition ---
+
+"single definition line" test-section
+
+"add: [ + ] ;\n" extract-definition-lines
+"add" @get 1 "definition on line 1" assert=
+
+\ --- Multiple definitions at distinct lines ---
+
+"multiple definitions" test-section
+
+"foo: [ ] ;\nbar: [ ] ;\nbaz: [ ] ;\n" extract-definition-lines
+dup "foo" @get 1 "foo on line 1" assert=
+dup "bar" @get 2 "bar on line 2" assert=
+"baz" @get 3 "baz on line 3" assert=
+
+\ --- Undocumented definition still gets a line ---
+
+"undocumented definition" test-section
+
+"\nq: [ ] ;\n" extract-definition-lines
+"q" @get 2 "undocumented definition gets a line" assert=
+
+\ --- Documented definition: line is the definition, not the doc-comment ---
+
+"documented definition line" test-section
+
+"\\\\ doc.\nwidget: [ ] ;\n" extract-definition-lines
+"widget" @get 2 "line points at the definition, not its doc-comment" assert=
+
+\ --- Symbol literal in a body does not shadow the real definition ---
+
+"symbol literal does not shadow" test-section
+
+"bar: [ foo: @get ] ;\nfoo: [ 1 ] ;\n" extract-definition-lines
+dup "bar" @get 1 "bar on line 1" assert=
+"foo" @get 2 "foo recorded at its real definition, not the body literal" assert=
+
+\ --- Reading from a file ---
+
+"line extraction from a file" test-section
+
+[
+  "sample.1z" path-join
+  dup
+  "\nffoo: [ ] ;\n" swap (write-file)
+  extract-definition-lines-from-file
+  "ffoo" @get 2 "line extracted from a source file on disk" assert=
+] using-temp-directory
