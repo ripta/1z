@@ -10,22 +10,24 @@ definitions, and control flow.
    polymorphic dispatch, and protocols
 2. [Modules](modules.md) -- loading, importing, qualified access, and
    selective imports
-3. [Iterators and Sequences](iterators.md) -- lazy adapters, eager consumers,
+3. [Standard Library Resolution](stdlib-resolution.md) -- how imports are
+   resolved across the interpreter, embedding hosts, and AOT binaries
+4. [Iterators and Sequences](iterators.md) -- lazy adapters, eager consumers,
    and pipelines
-4. [Concurrency](concurrency.md) -- green threads, structured scopes, channels
-5. [Async I/O](async-io.md) -- transparent non-blocking I/O inside task scopes
-6. [Streams](streams.md) -- the shared read / write surface over files,
+5. [Concurrency](concurrency.md) -- green threads, structured scopes, channels
+6. [Async I/O](async-io.md) -- transparent non-blocking I/O inside task scopes
+7. [Streams](streams.md) -- the shared read / write surface over files,
    pipes, in-memory buffers, and bidirectional fd pairs
-7. [HTTP](http.md) -- request/response, handler shape, routing, static files
-8. [CGI](cgi.md) -- running net/http handlers as classical CGI scripts
-9. [Foreign Function Interface](ffi.md) -- calling C libraries from 1z
-10. [Execution and Compilation Modes](execution-modes.md) -- interpreter,
+8. [HTTP](http.md) -- request/response, handler shape, routing, static files
+9. [CGI](cgi.md) -- running net/http handlers as classical CGI scripts
+10. [Foreign Function Interface](ffi.md) -- calling C libraries from 1z
+11. [Execution and Compilation Modes](execution-modes.md) -- interpreter,
     JIT, runtime-image AOT, and interpreter-free AOT tradeoffs
-11. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
+12. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
     and `samply` see 1z words in AOT binaries
-12. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
+13. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
     on QEMU riscv64 with no operating system
-13. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
+14. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
     comparison for experienced stack-language programmers
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with
