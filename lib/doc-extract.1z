@@ -78,14 +78,74 @@ use "sequences" ;
   if
 ] ;
 
+\ Fold a materialized token array into the doc-comment map.
+(doc-comments-from-tokens): ( tokens -- map ) [
+  M{ } f
+  2 pick-n [ (extract-step) ] #each
+  drop nip
+] ;
+
 \\ Tokenize 1z source and return a mutable map from word name to its
 \\ source-level doc-comment string. Consecutive `\\` lines are joined with
 \\ newlines; a doc-comment not immediately followed by a definition is dropped.
 extract-doc-comments: ( source -- map ) [
-  1z-tokenize #collect
-  M{ } f
-  2 pick-n [ (extract-step) ] #each
-  drop nip
+  1z-tokenize #collect (doc-comments-from-tokens)
+] ;
+
+\ A bracket or brace that opens a nested region; definitions sit at depth 0.
+(opener?): ( kind -- ? ) [ dup open-bracket: = swap open-brace: = or ] ;
+
+\ A bracket or brace that closes a nested region.
+(closer?): ( kind -- ? ) [ dup close-bracket: = swap close-brace: = or ] ;
+
+\ Record a top-level definition's line. A `symbol:` token at depth 0 is a
+\ definition; its name is filed against the current line, first occurrence
+\ winning so a `name:` symbol-literal inside a later body cannot overwrite the
+\ real definition's line. Any other token, or a symbol nested in a body, is
+\ dropped.
+(record-line): ( line-map line depth token -- line-map line depth ) [
+  dup kind>> symbol: = 2 pick-n 0 = and
+  [
+    value>> (strip-colon)
+    3 pick-n over @has?
+    [ drop ]
+    [ 3 pick-n swap 3 pick-n @set! drop ]
+    if
+  ]
+  [ drop ]
+  if
+] ;
+
+\ Fold step over one token, threading the line map, the current 1-based line,
+\ and the bracket/brace nesting depth.
+(line-step): ( line-map line depth token -- line-map line depth ) [
+  dup kind>> newline: =
+  [ drop swap 1 + swap ]
+  [
+    dup kind>> (opener?)
+    [ drop 1 + ]
+    [
+      dup kind>> (closer?)
+      [ drop 1 - ]
+      [ (record-line) ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+\ Fold a materialized token array into the definition-line map.
+(definition-lines-from-tokens): ( tokens -- map ) [
+  M{ } 1 0
+  3 pick-n [ (line-step) ] #each
+  drop drop nip
+] ;
+
+\\ Tokenize 1z source and return a mutable map from word name to the 1-based
+\\ line number of its top-level definition. Includes undocumented definitions.
+extract-definition-lines: ( source -- map ) [
+  1z-tokenize #collect (definition-lines-from-tokens)
 ] ;
 
 \ Read an entire file into a string.
@@ -97,4 +157,19 @@ extract-doc-comments: ( source -- map ) [
 \\ from word name to its source-level doc-comment string.
 extract-doc-comments-from-file: ( path -- map ) [
   (read-file) extract-doc-comments
+] ;
+
+\\ Read a 1z source file and return a mutable map from word name to the 1-based
+\\ line number of its top-level definition.
+extract-definition-lines-from-file: ( path -- map ) [
+  (read-file) extract-definition-lines
+] ;
+
+\\ Read a 1z source file, tokenize it once, and return both the doc-comment map
+\\ and the definition-line map. Preferred when a caller needs both, avoiding a
+\\ second tokenization pass.
+extract-doc-info-from-file: ( path -- doc-map line-map ) [
+  (read-file) 1z-tokenize #collect
+  dup (doc-comments-from-tokens)
+  swap (definition-lines-from-tokens)
 ] ;
