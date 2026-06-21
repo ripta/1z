@@ -1,0 +1,37 @@
+use "testing" ;
+use "doc-render" ;
+
+\ --- Single prose paragraph passes through ---
+
+"single prose paragraph" test-section
+
+"Add two numbers." format-doc-comment
+"Add two numbers.\n" "single prose line gains a trailing newline, no fences" assert=
+
+\ --- Multi-paragraph prose preserves the blank line, no fences ---
+
+"multi-paragraph prose" test-section
+
+"para one\n\npara two" format-doc-comment
+"para one\n\npara two\n" "blank line between paragraphs is preserved" assert=
+
+\ --- Indented example becomes a fenced 1z code block ---
+
+"indented example" test-section
+
+"Example:\n  2 2 +" format-doc-comment
+"Example:\n```1z\n  2 2 +\n```\n" "indented line wrapped in a 1z fence, indentation kept" assert=
+
+\ --- Prose, then code, then prose closes the fence ---
+
+"code surrounded by prose" test-section
+
+"Example:\n  2 2 +\nDone." format-doc-comment
+"Example:\n```1z\n  2 2 +\n```\nDone.\n" "fence opens before code and closes before trailing prose" assert=
+
+\ --- Blank line inside a code block stays in the block ---
+
+"blank line inside code" test-section
+
+"  a\n\n  b" format-doc-comment
+"```1z\n  a\n\n  b\n```\n" "a blank line between two code lines does not split the block" assert=

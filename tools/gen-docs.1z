@@ -8,6 +8,8 @@ use "os/path" ;
 use "strings" ;
 use "sequences" ;
 use "runtime/introspect" ;
+use "doc-extract" ;
+use "doc-render" ;
 
 \ --- Step 1: Discover stdlib modules ---
 
@@ -27,6 +29,18 @@ module-word-infos: ( module -- array ) [
   dup @keys swap
   [ swap native.>word (raw>word-info) ] curry
   #map #collect
+] ;
+
+\ Source-level doc-comment map for a module key, built by tokenizing the
+\ module's source file. Empty when no source file exists; the "prelude" group
+\ has no lib/ source file, so it falls back to an empty map and the
+\ introspection `doc>>` text.
+module-doc-map: ( key -- map ) [
+  >string stdlib-dir swap path-join ".1z" #append
+  dup file-exists?
+  [ extract-doc-comments-from-file ]
+  [ drop M{ } ]
+  if
 ] ;
 
 \ Load one module without importing it, then file its words under its name in
@@ -117,8 +131,27 @@ render-type-info: ( wi -- str ) [
   if
 ] ;
 
+\ Render the documentation paragraph for a word. Prefer the source-level
+\ doc-comment from the module's token map, which preserves paragraph breaks and
+\ indented code examples; fall back to the introspection `doc>>` field, then to
+\ an undocumented marker.
+render-doc-section: ( doc-map wi -- str ) [
+  over over name>> @has?
+  [
+    swap over name>> @get format-doc-comment "\n" #append
+    swap drop
+  ]
+  [
+    nip doc>> dup f =
+    [ drop "*Undocumented.*\n" ]
+    [ "\n" #append ]
+    if
+  ]
+  if
+] ;
+
 \ Render a single word entry
-render-word: ( wi -- str ) [
+render-word: ( doc-map wi -- str ) [
   "### " over name>> #append "\n\n" #append
 
   over markers>> render-markers #append
@@ -128,14 +161,13 @@ render-word: ( wi -- str ) [
   [ >string "`" swap #append "`\n\n" #append #append ]
   if
 
-  over doc>> dup f =
-  [ drop "*Undocumented.*\n" #append ]
-  [ #append "\n" #append ]
-  if
+  2 pick-n 2 pick-n render-doc-section #append
 
   over methods>> render-methods #append
 
-  swap render-type-info #append
+  over render-type-info #append
+
+  nip nip
 ] ;
 
 \ Sort word-infos alphabetically by name
@@ -190,13 +222,16 @@ write-index-page: ( content -- ) [
   stream-close
 ] ;
 
-\ Render a full module page
-render-module-page: ( name words -- str ) [
-  sort-words  \ name sorted-words
-  swap        \ sorted-words name
-  "# " swap #append "\n\n" #append  \ sorted-words "# name\n\n"
-  swap >iterator [ render-word "\n" #append ] #map #collect "" #join
-  #append
+\ Render a full module page. The doc-map supplies source-level doc-comments,
+\ curried into each word's render so it can prefer them over introspection.
+render-module-page: ( doc-map name words -- str ) [
+  sort-words >iterator  \ doc-map name iter
+  2 pick-n [ swap render-word "\n" #append ] curry
+  #map #collect "" #join  \ doc-map name body
+  swap                    \ doc-map body name
+  "# " swap #append "\n\n" #append  \ doc-map body "# name\n\n"
+  swap #append  \ doc-map page
+  nip
 ] ;
 
 \ --- Step 5: Write files ---
@@ -225,10 +260,13 @@ H{ } prelude-group
 generate-one: ( key grouped -- ) [
   swap  \ grouped key
   dup >string "  " swap #append "..." #append eprint-line
-  dup >string                      \ grouped key name
-  [ @get ] dip swap                \ name words
-  over [ render-module-page ] dip  \ content name
-  swap write-module-page
+  dup module-doc-map      \ grouped key doc-map
+  over >string            \ grouped key doc-map name
+  3 pick-n 3 pick-n @get  \ grouped key doc-map name words
+  render-module-page      \ grouped key content
+  swap >string swap       \ grouped name content
+  write-module-page
+  drop
 ] ;
 
 "Generating documentation..." eprint-line

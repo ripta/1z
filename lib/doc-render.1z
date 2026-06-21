@@ -1,0 +1,56 @@
+\ lib/doc-render.1z - Render a source-level doc-comment to markdown
+\
+\ Turns a doc-comment string (as recovered by lib/doc-extract.1z, with its
+\ original line structure preserved) into markdown: prose lines pass through
+\ unchanged, and runs of indented lines are wrapped in `1z`-tagged fenced code
+\ blocks. Indentation is kept verbatim inside the fence. A doc-comment with no
+\ indented lines round-trips to its prose unchanged.
+
+use "strings" ;
+use "sequences" ;
+
+\ A line is a code-example line when it is non-empty and begins with a space or
+\ tab. The leading whitespace is what survives doc-extract stripping the `\\`
+\ prefix and its single separator, so it is the indentation signal.
+(code-line?): ( line -- ? ) [
+  dup #len 0 =
+  [ drop f ]
+  [ 0 #nth dup " " = swap "\t" = or ]
+  if
+] ;
+
+\ A line that is empty or all whitespace. Inside a code block a blank line stays
+\ in the block rather than closing the fence.
+(blank-line?): ( line -- ? ) [ trim #len 0 = ] ;
+
+\ Append a line plus a trailing newline to the accumulator.
+(append-line): ( acc line -- acc' ) [ "\n" #append #append ] ;
+
+\ Fold step over one source line, threading the output accumulator and whether
+\ we are currently inside a fenced code block.
+(fmt-step): ( acc in-code? line -- acc' in-code'? ) [
+  swap
+  [
+    dup (code-line?) over (blank-line?) or
+    [ (append-line) t ]
+    [ swap "```\n" #append swap (append-line) f ]
+    if
+  ]
+  [
+    dup (code-line?)
+    [ swap "```1z\n" #append swap (append-line) t ]
+    [ (append-line) f ]
+    if
+  ]
+  if
+] ;
+
+\\ Render a source-level doc-comment string to markdown. Prose lines pass
+\\ through; consecutive indented lines become a `1z` fenced code block.
+format-doc-comment: ( doc-str -- markdown-str ) [
+  "\n" split
+  "" f
+  2 pick-n [ (fmt-step) ] #each
+  [ "```\n" #append ] [ ] if
+  nip
+] ;

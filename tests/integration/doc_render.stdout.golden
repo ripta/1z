@@ -1,0 +1,43 @@
+=== single prose paragraph ===
+Stack: [ ]
+Stack: [ "Add two numbers.
+" ]
+PASS: single prose line gains a trailing newline, no fences
+Stack: [ ]
+=== multi-paragraph prose ===
+Stack: [ ]
+Stack: [ "para one
+
+para two
+" ]
+PASS: blank line between paragraphs is preserved
+Stack: [ ]
+=== indented example ===
+Stack: [ ]
+Stack: [ "Example:
+```1z
+  2 2 +
+```
+" ]
+PASS: indented line wrapped in a 1z fence, indentation kept
+Stack: [ ]
+=== code surrounded by prose ===
+Stack: [ ]
+Stack: [ "Example:
+```1z
+  2 2 +
+```
+Done.
+" ]
+PASS: fence opens before code and closes before trailing prose
+Stack: [ ]
+=== blank line inside code ===
+Stack: [ ]
+Stack: [ "```1z
+  a
+
+  b
+```
+" ]
+PASS: a blank line between two code lines does not split the block
+Stack: [ ]
