@@ -1,7 +1,7 @@
-AOT interpreter fallbacks: 265 total (native=255 per-op-native=3 compound-uncompiled=3 quotation=4)
-  static-check: jitInterpretedCall=3/3 jitNativeWordCall=258/258 jitCallQuotation=4/4 (matches build-time inventory)
+AOT interpreter fallbacks: 255 total (native=245 per-op-native=3 compound-uncompiled=3 quotation=4)
+  static-check: jitInterpretedCall=3/3 jitNativeWordCall=248/248 jitCallQuotation=4/4 (matches build-time inventory)
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: linked
-runtime-image: words=529 stack-effects=526 typevalue-slots=80 blob-present=true
+runtime-image: words=532 stack-effects=529 typevalue-slots=80 blob-present=true

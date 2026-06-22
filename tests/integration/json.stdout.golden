@@ -42,6 +42,10 @@ PASS: empty string
 Stack: [ t t t t t t f f f ]
 PASS: string with space
 Stack: [ t t t t t t f f f ]
+PASS: multi-byte string value
+Stack: [ t t t t t t f f f ]
+PASS: multi-byte string with space
+Stack: [ t t t t t t f f f ]
 === parse-json: string escapes ===
 Stack: [ t t t t t t f f f ]
 PASS: newline escape

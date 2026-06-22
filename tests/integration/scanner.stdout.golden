@@ -64,50 +64,50 @@ PASS: rest on empty string
 Stack: [ ]
 === full scan ===
 Stack: [ ]
-Stack: [ scanner{ str: "abc" start: 0 end: 3 } ]
+Stack: [ scanner{ str: "abc" byte-cursor: 0 codepoint-pos: 0 } ]
 PASS: scan a
-Stack: [ scanner{ str: "abc" start: 0 end: 3 } ]
-Stack: [ scanner{ str: "abc" start: 1 end: 3 } ]
+Stack: [ scanner{ str: "abc" byte-cursor: 0 codepoint-pos: 0 } ]
+Stack: [ scanner{ str: "abc" byte-cursor: 1 codepoint-pos: 1 } ]
 PASS: scan b
-Stack: [ scanner{ str: "abc" start: 1 end: 3 } ]
-Stack: [ scanner{ str: "abc" start: 2 end: 3 } ]
+Stack: [ scanner{ str: "abc" byte-cursor: 1 codepoint-pos: 1 } ]
+Stack: [ scanner{ str: "abc" byte-cursor: 2 codepoint-pos: 2 } ]
 PASS: scan c
-Stack: [ scanner{ str: "abc" start: 2 end: 3 } ]
-Stack: [ scanner{ str: "abc" start: 3 end: 3 } ]
+Stack: [ scanner{ str: "abc" byte-cursor: 2 codepoint-pos: 2 } ]
+Stack: [ scanner{ str: "abc" byte-cursor: 3 codepoint-pos: 3 } ]
 PASS: at end after scanning all
 Stack: [ ]
 === backtracking via dup ===
 Stack: [ ]
-Stack: [ scanner{ str: "hello" start: 2 end: 5 } scanner{ str: "hello" start: 2 end: 5 } ]
+Stack: [ scanner{ str: "hello" byte-cursor: 2 codepoint-pos: 2 } scanner{ str: "hello" byte-cursor: 2 codepoint-pos: 2 } ]
 PASS: advanced copy at end
-Stack: [ scanner{ str: "hello" start: 2 end: 5 } ]
+Stack: [ scanner{ str: "hello" byte-cursor: 2 codepoint-pos: 2 } ]
 PASS: original unchanged at position 2
 Stack: [ ]
 === take-while ===
 Stack: [ ]
 PASS: take-while digits
-Stack: [ scanner{ str: "123abc" start: 3 end: 6 } ]
+Stack: [ scanner{ str: "123abc" byte-cursor: 3 codepoint-pos: 3 } ]
 PASS: take-while advances position
 Stack: [ ]
 PASS: take-while alpha
-Stack: [ scanner{ str: "abc123" start: 3 end: 6 } ]
+Stack: [ scanner{ str: "abc123" byte-cursor: 3 codepoint-pos: 3 } ]
 Stack: [ ]
 PASS: take-while no match returns empty
-Stack: [ scanner{ str: "abc" start: 0 end: 3 } ]
+Stack: [ scanner{ str: "abc" byte-cursor: 0 codepoint-pos: 0 } ]
 PASS: take-while no match stays at 0
 Stack: [ ]
 PASS: take-while on empty returns empty
-Stack: [ scanner{ str: "" start: 0 end: 0 } ]
+Stack: [ scanner{ str: "" byte-cursor: 0 codepoint-pos: 0 } ]
 Stack: [ ]
 PASS: take-while full match
-Stack: [ scanner{ str: "12345" start: 5 end: 5 } ]
+Stack: [ scanner{ str: "12345" byte-cursor: 5 codepoint-pos: 5 } ]
 PASS: take-while full match at end
 Stack: [ ]
 === skip-while ===
 Stack: [ ]
-Stack: [ scanner{ str: "   hello" start: 3 end: 8 } ]
+Stack: [ scanner{ str: "   hello" byte-cursor: 3 codepoint-pos: 3 } ]
 PASS: skip-while skips spaces
-Stack: [ scanner{ str: "   hello" start: 3 end: 8 } ]
+Stack: [ scanner{ str: "   hello" byte-cursor: 3 codepoint-pos: 3 } ]
 PASS: skip-while leaves rest
 Stack: [ ]
 PASS: skip-while on empty at end
@@ -116,9 +116,9 @@ PASS: skip-while no match stays at 0
 Stack: [ ]
 === expect ===
 Stack: [ ]
-Stack: [ scanner{ str: "hello world" start: 5 end: 11 } ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 5 codepoint-pos: 5 } ]
 PASS: expect advances past expected
-Stack: [ scanner{ str: "hello world" start: 5 end: 11 } ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 5 codepoint-pos: 5 } ]
 PASS: expect leaves rest
 Stack: [ ]
 PASS: expect empty string is no-op
@@ -129,23 +129,23 @@ PASS: expect past end throws
 Stack: [ ]
 === composition ===
 Stack: [ ]
-Stack: [ scanner{ str: "  123abc" start: 0 end: 8 } ]
-Stack: [ scanner{ str: "  123abc" start: 2 end: 8 } ]
+Stack: [ scanner{ str: "  123abc" byte-cursor: 0 codepoint-pos: 0 } ]
+Stack: [ scanner{ str: "  123abc" byte-cursor: 2 codepoint-pos: 2 } ]
 PASS: composed: take digits
-Stack: [ scanner{ str: "  123abc" start: 5 end: 8 } ]
+Stack: [ scanner{ str: "  123abc" byte-cursor: 5 codepoint-pos: 5 } ]
 PASS: composed: rest after take
 Stack: [ ]
-=== start>> and end>> ===
+=== position>> and mark on ASCII ===
 Stack: [ ]
-PASS: start>> is 0
+PASS: position>> is 0
 Stack: [ ]
-PASS: end>> is string length
+PASS: mark is 0
 Stack: [ ]
-PASS: start>> after advance
+PASS: position>> after advance
 Stack: [ ]
-PASS: end>> unchanged after advance
+PASS: mark after advance (ASCII: byte == codepoint)
 Stack: [ ]
-PASS: end>> on empty string
+PASS: empty string is at end
 Stack: [ ]
 === mark ===
 Stack: [ ]
@@ -155,88 +155,88 @@ PASS: mark after advances
 Stack: [ ]
 === slice-from ===
 Stack: [ ]
-Stack: [ scanner{ str: "hello" start: 3 end: 5 } ]
+Stack: [ scanner{ str: "hello" byte-cursor: 3 codepoint-pos: 3 } ]
 PASS: slice-from 0 to 3
-Stack: [ scanner{ str: "hello" start: 3 end: 5 } ]
+Stack: [ scanner{ str: "hello" byte-cursor: 3 codepoint-pos: 3 } ]
 Stack: [ ]
-Stack: [ 0 scanner{ str: "hello" start: 0 end: 5 } ]
-Stack: [ 0 scanner{ str: "hello" start: 3 end: 5 } ]
+Stack: [ 0 scanner{ str: "hello" byte-cursor: 0 codepoint-pos: 0 } ]
+Stack: [ 0 scanner{ str: "hello" byte-cursor: 3 codepoint-pos: 3 } ]
 PASS: slice-from mark to current
 Stack: [ ]
-Stack: [ 1 scanner{ str: "hello" start: 3 end: 5 } ]
+Stack: [ 1 scanner{ str: "hello" byte-cursor: 3 codepoint-pos: 3 } ]
 PASS: slice-from mid-range
 Stack: [ ]
-Stack: [ 0 scanner{ str: "hello" start: 0 end: 5 } ]
+Stack: [ 0 scanner{ str: "hello" byte-cursor: 0 codepoint-pos: 0 } ]
 PASS: slice-from same position is empty
 Stack: [ ]
 === find ===
 Stack: [ ]
-Stack: [ scanner{ str: "hello world" start: 6 end: 11 } ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 6 codepoint-pos: 6 } ]
 PASS: find existing needle is not f
-Stack: [ scanner{ str: "hello world" start: 6 end: 11 } ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 6 codepoint-pos: 6 } ]
 PASS: find positions at match
 Stack: [ ]
 Stack: [ f ]
 PASS: find missing needle returns f
 Stack: [ ]
-Stack: [ scanner{ str: "hello world" start: 0 end: 11 } ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 0 codepoint-pos: 0 } ]
 PASS: find empty needle returns current
 Stack: [ ]
-Stack: [ scanner{ str: "hello world" start: 3 end: 11 } ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 3 codepoint-pos: 3 } ]
 PASS: find respects current position
 Stack: [ ]
-Stack: [ scanner{ str: "aXbXc" start: 1 end: 5 } ]
+Stack: [ scanner{ str: "aXbXc" byte-cursor: 1 codepoint-pos: 1 } ]
 PASS: find first occurrence
 Stack: [ ]
 === skip-exact ===
 Stack: [ ]
-Stack: [ scanner{ str: "hello world" start: 5 end: 11 } ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 5 codepoint-pos: 5 } ]
 PASS: skip-exact match is not f
-Stack: [ scanner{ str: "hello world" start: 5 end: 11 } ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 5 codepoint-pos: 5 } ]
 PASS: skip-exact advances past match
 Stack: [ ]
 Stack: [ f ]
 PASS: skip-exact mismatch returns f
 Stack: [ ]
-Stack: [ scanner{ str: "hello" start: 0 end: 5 } ]
+Stack: [ scanner{ str: "hello" byte-cursor: 0 codepoint-pos: 0 } ]
 PASS: skip-exact empty is no-op
 Stack: [ ]
-Stack: [ scanner{ str: "hello" start: 5 end: 5 } ]
+Stack: [ scanner{ str: "hello" byte-cursor: 5 codepoint-pos: 5 } ]
 PASS: skip-exact full string reaches end
 Stack: [ ]
 === take-until ===
 Stack: [ ]
-Stack: [ scanner{ str: "hello world" start: 5 end: 11 } "hello" ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 5 codepoint-pos: 5 } "hello" ]
 PASS: take-until returns text before needle
-Stack: [ scanner{ str: "hello world" start: 5 end: 11 } ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 5 codepoint-pos: 5 } ]
 PASS: take-until scanner at delimiter
 Stack: [ ]
-Stack: [ scanner{ str: "hello world" start: 5 end: 11 } "hello" ]
-Stack: [ "hello" scanner{ str: "hello world" start: 6 end: 11 } ]
+Stack: [ scanner{ str: "hello world" byte-cursor: 5 codepoint-pos: 5 } "hello" ]
+Stack: [ "hello" scanner{ str: "hello world" byte-cursor: 6 codepoint-pos: 6 } ]
 PASS: skip-exact after take-until is not f
-Stack: [ "hello" scanner{ str: "hello world" start: 6 end: 11 } ]
+Stack: [ "hello" scanner{ str: "hello world" byte-cursor: 6 codepoint-pos: 6 } ]
 PASS: skip then rest gives remainder
 Stack: [ "hello" ]
 Stack: [ ]
-Stack: [ scanner{ str: "hello" start: 0 end: 5 } f ]
+Stack: [ scanner{ str: "hello" byte-cursor: 0 codepoint-pos: 0 } f ]
 PASS: take-until not-found returns f
-Stack: [ scanner{ str: "hello" start: 0 end: 5 } ]
+Stack: [ scanner{ str: "hello" byte-cursor: 0 codepoint-pos: 0 } ]
 PASS: take-until not-found preserves scanner
 Stack: [ ]
-Stack: [ scanner{ str: "hello" start: 0 end: 5 } "" ]
+Stack: [ scanner{ str: "hello" byte-cursor: 0 codepoint-pos: 0 } "" ]
 PASS: take-until empty needle returns empty string
-Stack: [ scanner{ str: "hello" start: 0 end: 5 } ]
+Stack: [ scanner{ str: "hello" byte-cursor: 0 codepoint-pos: 0 } ]
 PASS: take-until empty needle stays at start
 Stack: [ ]
-Stack: [ scanner{ str: "a::b::c" start: 1 end: 7 } "a" ]
+Stack: [ scanner{ str: "a::b::c" byte-cursor: 1 codepoint-pos: 1 } "a" ]
 PASS: take-until multi-char delimiter
-Stack: [ scanner{ str: "a::b::c" start: 1 end: 7 } ]
-Stack: [ scanner{ str: "a::b::c" start: 3 end: 7 } ]
+Stack: [ scanner{ str: "a::b::c" byte-cursor: 1 codepoint-pos: 1 } ]
+Stack: [ scanner{ str: "a::b::c" byte-cursor: 3 codepoint-pos: 3 } ]
 PASS: skip-exact after multi-char take-until
-Stack: [ scanner{ str: "a::b::c" start: 3 end: 7 } ]
-Stack: [ scanner{ str: "a::b::c" start: 4 end: 7 } "b" ]
+Stack: [ scanner{ str: "a::b::c" byte-cursor: 3 codepoint-pos: 3 } ]
+Stack: [ scanner{ str: "a::b::c" byte-cursor: 4 codepoint-pos: 4 } "b" ]
 PASS: second take-until segment
-Stack: [ scanner{ str: "a::b::c" start: 4 end: 7 } ]
+Stack: [ scanner{ str: "a::b::c" byte-cursor: 4 codepoint-pos: 4 } ]
 PASS: rest after second take-until
 Stack: [ ]
 === inspect ===
@@ -246,4 +246,63 @@ Stack: [ ]
 PASS: inspect after advances
 Stack: [ ]
 PASS: inspect on empty
+Stack: [ ]
+=== multi-byte peek and advance ===
+Stack: [ ]
+PASS: peek first ASCII char
+Stack: [ ]
+PASS: peek multi-byte char
+Stack: [ ]
+PASS: peek past multi-byte char
+Stack: [ ]
+PASS: advance over 5 codepoints reaches end
+Stack: [ ]
+=== multi-byte position>> vs mark ===
+Stack: [ ]
+PASS: position>> counts codepoints
+Stack: [ ]
+PASS: mark counts bytes (h=1, é=2)
+Stack: [ ]
+PASS: mark before multi-byte char is 1
+Stack: [ ]
+PASS: mark after l is 4
+Stack: [ ]
+=== multi-byte rest ===
+Stack: [ ]
+PASS: rest at start is full string
+Stack: [ ]
+PASS: rest after one advance
+Stack: [ ]
+PASS: rest after multi-byte char
+Stack: [ ]
+=== multi-byte take-while ===
+Stack: [ ]
+PASS: take-while over multi-byte word
+Stack: [ scanner{ str: "héllo wörld" byte-cursor: 6 codepoint-pos: 5 } ]
+PASS: take-while leaves codepoint position
+Stack: [ ]
+=== multi-byte find ===
+Stack: [ ]
+Stack: [ scanner{ str: "héllo wörld" byte-cursor: 7 codepoint-pos: 6 } ]
+PASS: find multi-byte needle is not f
+Stack: [ scanner{ str: "héllo wörld" byte-cursor: 7 codepoint-pos: 6 } ]
+PASS: find re-syncs codepoint position across multi-byte prefix
+Stack: [ ]
+PASS: find leaves byte cursor at match
+Stack: [ ]
+=== multi-byte slice-from ===
+Stack: [ ]
+Stack: [ 0 scanner{ str: "héllo" byte-cursor: 0 codepoint-pos: 0 } ]
+Stack: [ 0 scanner{ str: "héllo" byte-cursor: 4 codepoint-pos: 3 } ]
+PASS: slice-from spans a multi-byte char
+Stack: [ ]
+=== multi-byte take-until ===
+Stack: [ ]
+Stack: [ scanner{ str: "a::héllo::c" byte-cursor: 1 codepoint-pos: 1 } "a" ]
+PASS: take-until first segment
+Stack: [ scanner{ str: "a::héllo::c" byte-cursor: 1 codepoint-pos: 1 } ]
+Stack: [ scanner{ str: "a::héllo::c" byte-cursor: 9 codepoint-pos: 8 } "héllo" ]
+PASS: take-until multi-byte segment
+Stack: [ scanner{ str: "a::héllo::c" byte-cursor: 9 codepoint-pos: 8 } ]
+PASS: rest after multi-byte segment
 Stack: [ ]

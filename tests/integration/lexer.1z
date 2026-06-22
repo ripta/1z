@@ -39,6 +39,18 @@ use "char" ;
   ] [ drop f ] if
 ] ;
 
+\ Rule that matches a run of non-space characters (accepts multi-byte codepoints)
+(nonspace-match): ( scanner -- new-scanner token | f ) [
+  dup peek dup f = [ 2drop f ] [
+    " " = not [
+      dup position>> swap
+      [ " " = not ] take-while
+      \ start-pos scanner' value
+      <rot- [ word: swap ] dip make-token
+    ] [ drop f ] if
+  ] if
+] ;
+
 \ Rule that matches any single character
 (any-match): ( scanner -- new-scanner token | f ) [
   dup peek dup f = [ 2drop f ] [
@@ -52,10 +64,11 @@ use "char" ;
 ] ;
 
 \ Build rule hashes
-DIGIT-RULE: const [ H{ kind: number: match: [ (digit-match) ] } ] ;
-ALPHA-RULE: const [ H{ kind: word: match: [ (alpha-match) ] } ] ;
-PLUS-RULE:  const [ H{ kind: plus: match: [ (plus-match) ] } ] ;
-ANY-RULE:   const [ H{ kind: any: match: [ (any-match) ] } ] ;
+DIGIT-RULE:    const [ H{ kind: number: match: [ (digit-match) ] } ] ;
+ALPHA-RULE:    const [ H{ kind: word: match: [ (alpha-match) ] } ] ;
+PLUS-RULE:     const [ H{ kind: plus: match: [ (plus-match) ] } ] ;
+ANY-RULE:      const [ H{ kind: any: match: [ (any-match) ] } ] ;
+NONSPACE-RULE: const [ H{ kind: word: match: [ (nonspace-match) ] } ] ;
 
 \ ===== Tests =====
 
@@ -120,6 +133,18 @@ pos>> 2 "second pos is 2" assert=
 2 #nth dup kind>> word: "third is word:" assert=
 dup value>> "cd" "third value is cd" assert=
 pos>> 4 "third pos is 4" assert=
+
+\ A non-space word rule over multi-byte input: token values preserve multi-byte
+\ characters and positions stay codepoint indices, confirming the lexer's
+\ peek/advance/position>>/take-while path round-trips multi-byte input.
+"multi-byte word tokens" test-section
+"héllo wörld" V{ } skip-whitespace-rule #push! NONSPACE-RULE #push! >array <lexer>
+tokenize #collect
+dup #len 2 "multi-byte: two word tokens" assert=
+dup 0 #nth dup value>> "héllo" "multi-byte: first word value" assert=
+pos>> 0 "multi-byte: first word at codepoint 0" assert=
+1 #nth dup value>> "wörld" "multi-byte: second word value" assert=
+pos>> 6 "multi-byte: second word at codepoint 6 (not byte 7)" assert=
 
 "error on unrecognized input" test-section
 [ "!" V{ } ALPHA-RULE #push! >array <lexer> tokenize #collect ] "unrecognized char throws" assert-error

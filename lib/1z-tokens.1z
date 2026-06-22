@@ -18,13 +18,19 @@ use "conversions" ;
 (non-newline?): ( ch -- ? ) [ (lf) = not ] ;
 (ws-not-newline?): ( ch -- ? ) [ dup " " = swap (tab) = or ] ;
 
-\ Extract the substring from start-pos to scanner's current position.
-\ Output matches the shape of take-while: start-pos scanner' value.
-(extract-value): ( start-pos scanner -- start-pos scanner value ) [
-  2dup
-  dup position>> swap str>>
-  \ start-pos scanner start-pos end-pos source
-  -rot> #slice
+\ Slice the matched text by byte offsets while keeping the codepoint start position for the token.
+\
+\ Callers capture both a codepoint position `(start-cp)` and a byte mark `(start-byte)` before
+\ advancing the scanner; this slices `source[start-byte .. current-byte]` and discards start-byte.
+\ Output matches the shape of take-while: start-cp scanner' value.
+(extract-value): ( start-cp start-byte scanner -- start-cp scanner value ) [
+  dup str>> over mark
+  \ start-cp start-byte scanner source end-byte
+  3 pick-n swap
+  \ start-cp start-byte scanner source start-byte end-byte
+  #byte-slice
+  \ start-cp start-byte scanner value
+  [ nip ] dip
 ] ;
 
 \ --- Rule 1: newline ---
@@ -119,8 +125,10 @@ use "conversions" ;
 
 (string-match): ( scanner -- new-scanner token | f ) [
   dup peek "\"" = [
-    dup position>> swap advance (string-loop)
-    \ start-pos scanner'
+    dup position>> over mark <rot-
+    \ start-cp start-byte scanner
+    advance (string-loop)
+    \ start-cp start-byte scanner'
     (extract-value)
     <rot- [ string: swap ] dip make-token
   ] [ drop f ] if
@@ -145,16 +153,16 @@ use "conversions" ;
 
 (stack-effect-match): ( scanner -- new-scanner token | f ) [
   dup peek "(" = [
-    dup position>>
-    \ scanner start-pos
-    swap advance (stack-effect-loop)
-    \ start-pos scanner' found?
+    dup position>> over mark <rot-
+    \ start-cp start-byte scanner
+    advance (stack-effect-loop)
+    \ start-cp start-byte scanner' found?
     [
       (extract-value)
       <rot- [ stack-effect: swap ] dip make-token
     ] [
       \ not a stack effect: drop consumed scanner, return f
-      2drop f
+      3drop f
     ] if
   ] [ drop f ] if
 ] ;
@@ -207,9 +215,8 @@ use "conversions" ;
 
 (1z-number-match): ( scanner -- new-scanner token | f ) [
   dup (starts-number?) [
-    dup position>>
-    \ scanner start-pos
-    swap
+    dup position>> over mark <rot-
+    \ start-cp start-byte scanner
     \ skip optional leading -
     dup peek "-" = [ advance ] when
     \ check for base prefix
@@ -244,7 +251,7 @@ use "conversions" ;
       (consume-fractional)
       (consume-exponent)
     ] if
-    \ start-pos scanner'
+    \ start-cp start-byte scanner'
     (extract-value)
     <rot- [ number: swap ] dip make-token
   ] [ drop f ] if

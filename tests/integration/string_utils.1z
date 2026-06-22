@@ -67,6 +67,15 @@ dup #first "" "split-once? delim at start before" assert=
 dup #first "hello" "split-once? delim at end before" assert=
 #last "" "split-once? delim at end after" assert=
 
+"split-once? multi-byte" test-section
+"héllo→wörld" "→" split-once? unwrap-or-throw
+dup #first "héllo" "split-once? multi-byte before" assert=
+#last "wörld" "split-once? multi-byte after" assert=
+
+"café,thé" "," split-once? unwrap-or-throw
+dup #first "café" "split-once? multi-byte segment before ASCII delim" assert=
+#last "thé" "split-once? multi-byte segment after ASCII delim" assert=
+
 "split-once? not found" test-section
 "hello" "," split-once? option:none? "split-once? no match is none" assert-true
 "" "," split-once? option:none? "split-once? empty string is none" assert-true

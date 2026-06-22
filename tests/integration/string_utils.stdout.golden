@@ -100,6 +100,18 @@ PASS: split-once? delim at end before
 Stack: [ { "hello" "" } ]
 PASS: split-once? delim at end after
 Stack: [ ]
+=== split-once? multi-byte ===
+Stack: [ ]
+Stack: [ { "héllo" "wörld" } ]
+PASS: split-once? multi-byte before
+Stack: [ { "héllo" "wörld" } ]
+PASS: split-once? multi-byte after
+Stack: [ ]
+Stack: [ { "café" "thé" } ]
+PASS: split-once? multi-byte segment before ASCII delim
+Stack: [ { "café" "thé" } ]
+PASS: split-once? multi-byte segment after ASCII delim
+Stack: [ ]
 === split-once? not found ===
 Stack: [ ]
 PASS: split-once? no match is none

@@ -32,6 +32,8 @@ f " " hex-digit? "space is not hex digit" assert-false
 "hello" "\"hello\"" parse-json "simple string" assert=
 "" "\"\"" parse-json "empty string" assert=
 "hello world" "\"hello world\"" parse-json "string with space" assert=
+"café" "\"café\"" parse-json "multi-byte string value" assert=
+"héllo wörld" "\"héllo wörld\"" parse-json "multi-byte string with space" assert=
 
 "parse-json: string escapes" test-section
 "hello\nworld" "\"hello\\nworld\"" parse-json "newline escape" assert=

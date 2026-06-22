@@ -76,6 +76,15 @@ dup query>> "" "query empty" assert=
 dup fragment>> "just-fragment" "lone fragment" assert=
 drop
 
+\ Multi-byte content in path/query/fragment: the scanner splits on the ASCII
+\ delimiters and preserves the multi-byte component bytes.
+"http://example.com/café?q=thé#señor" parse(rfc3986)
+dup host>> "example.com" "multi-byte: host" assert=
+dup path>> "/café" "multi-byte: path" assert=
+dup query>> "q=thé" "multi-byte: query" assert=
+dup fragment>> "señor" "multi-byte: fragment" assert=
+drop
+
 \ -----------------------------------------------------------------------
 "parse: alias of parse(rfc3986)" test-section
 \ -----------------------------------------------------------------------

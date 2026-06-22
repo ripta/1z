@@ -102,6 +102,16 @@ Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: 
 PASS: lone fragment
 Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/" uri-has-query?: f uri-query: "" uri-has-fragment?: t uri-fragment: "just-fragment" }> ]
 Stack: [ ]
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/café" uri-has-query?: t uri-query: "q=thé" uri-has-fragment?: t uri-fragment: "señor" }> ]
+PASS: multi-byte: host
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/café" uri-has-query?: t uri-query: "q=thé" uri-has-fragment?: t uri-fragment: "señor" }> ]
+PASS: multi-byte: path
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/café" uri-has-query?: t uri-query: "q=thé" uri-has-fragment?: t uri-fragment: "señor" }> ]
+PASS: multi-byte: query
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/café" uri-has-query?: t uri-query: "q=thé" uri-has-fragment?: t uri-fragment: "señor" }> ]
+PASS: multi-byte: fragment
+Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/café" uri-has-query?: t uri-query: "q=thé" uri-has-fragment?: t uri-fragment: "señor" }> ]
+Stack: [ ]
 === parse: alias of parse(rfc3986) ===
 Stack: [ ]
 Stack: [ <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-has-query?: t uri-query: "q" uri-has-fragment?: t uri-fragment: "f" }> ]

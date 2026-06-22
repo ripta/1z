@@ -57,33 +57,33 @@ PASS: parse?(whatwg) returns some on valid
 Stack: [ <option:some option-payload{ value: <uri uri-data{ uri-scheme: "http" uri-has-authority?: t uri-authority: "example.com" uri-host: "example.com" uri-port: "" uri-path: "/p" uri-has-query?: t uri-query: "q" uri-has-fragment?: t uri-fragment: "f" }> }> ]
 PASS: parse?(whatwg) unwraps to a uri (fragment)
 Stack: [ ]
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" <option:none none:> ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" <option:none none:> ]
 PASS: parse?(rfc3986) rejects ! in scheme
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" <option:some option-payload{ value: <uri uri-data{ uri-scheme: "ht!tp" uri-has-authority?: f uri-authority: "" uri-host: "" uri-port: "" uri-path: "permissive" uri-has-query?: f uri-query: "" uri-has-fragment?: f uri-fragment: "" }> }> ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" <option:some option-payload{ value: <uri uri-data{ uri-scheme: "ht!tp" uri-has-authority?: f uri-authority: "" uri-host: "" uri-port: "" uri-path: "permissive" uri-has-query?: f uri-query: "" uri-has-fragment?: f uri-fragment: "" }> }> ]
 PASS: parse?(whatwg) accepts ! in scheme
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" <option:some option-payload{ value: <uri uri-data{ uri-scheme: "ht!tp" uri-has-authority?: f uri-authority: "" uri-host: "" uri-port: "" uri-path: "permissive" uri-has-query?: f uri-query: "" uri-has-fragment?: f uri-fragment: "" }> }> ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" <option:some option-payload{ value: <uri uri-data{ uri-scheme: "ht!tp" uri-has-authority?: f uri-authority: "" uri-host: "" uri-port: "" uri-path: "permissive" uri-has-query?: f uri-query: "" uri-has-fragment?: f uri-fragment: "" }> }> ]
 PASS: parse?(whatwg) preserves the scheme bytes
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]
 === parse? returns none on invalid input ===
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]
 PASS: parse? none on empty input
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]
 PASS: parse?(rfc3986) none on empty input
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]
 PASS: parse? none on missing separator
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]
 PASS: parse?(rfc3986) none on missing separator
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]
 PASS: parse? none on empty scheme
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]
 PASS: parse?(rfc3986) none on empty scheme
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]
 PASS: parse? none on digit-first scheme
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" t scanner{ str: "1http://x" byte-cursor: 5 codepoint-pos: 5 } "1http" ]
 PASS: parse?(rfc3986) none on digit-first scheme
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" t scanner{ str: "1http://x" byte-cursor: 5 codepoint-pos: 5 } "1http" t scanner{ str: "1http://x" byte-cursor: 5 codepoint-pos: 5 } "1http" ]
 PASS: parse? none on bad scheme byte (strict)
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" t scanner{ str: "ht!tp://x" start: 5 end: 9 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" t scanner{ str: "1http://x" byte-cursor: 5 codepoint-pos: 5 } "1http" t scanner{ str: "1http://x" byte-cursor: 5 codepoint-pos: 5 } "1http" t scanner{ str: "ht!tp://x" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]
 PASS: parse?(rfc3986) none on bad scheme byte
-Stack: [ t scanner{ str: "ht!tp:permissive" start: 5 end: 16 } "ht!tp" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" t scanner{ str: "1http://x" start: 5 end: 9 } "1http" t scanner{ str: "ht!tp://x" start: 5 end: 9 } "ht!tp" t scanner{ str: "ht!tp://x" start: 5 end: 9 } "ht!tp" ]
+Stack: [ t scanner{ str: "ht!tp:permissive" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" t scanner{ str: "1http://x" byte-cursor: 5 codepoint-pos: 5 } "1http" t scanner{ str: "1http://x" byte-cursor: 5 codepoint-pos: 5 } "1http" t scanner{ str: "ht!tp://x" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" t scanner{ str: "ht!tp://x" byte-cursor: 5 codepoint-pos: 5 } "ht!tp" ]

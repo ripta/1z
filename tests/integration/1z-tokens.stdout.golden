@@ -305,6 +305,37 @@ PASS: pos: [ at 5
 Stack: [ { token{ kind: symbol: value: "foo:" pos: 0 } token{ kind: whitespace: value: " " pos: 4 } token{ kind: open-bracket: value: "[" pos: 5 } token{ kind: whitespace: value: " " pos: 6 } token{ kind: close-bracket: value: "]" pos: 7 } } ]
 PASS: pos: ] at 7
 Stack: [ ]
+=== multi-byte values and positions ===
+Stack: [ ]
+Stack: [ { token{ kind: word: value: "héllo" pos: 0 } token{ kind: whitespace: value: " " pos: 5 } token{ kind: word: value: "wörld" pos: 6 } } ]
+PASS: multi-byte: three tokens
+Stack: [ { token{ kind: word: value: "héllo" pos: 0 } token{ kind: whitespace: value: " " pos: 5 } token{ kind: word: value: "wörld" pos: 6 } } ]
+PASS: multi-byte: first word value
+Stack: [ { token{ kind: word: value: "héllo" pos: 0 } token{ kind: whitespace: value: " " pos: 5 } token{ kind: word: value: "wörld" pos: 6 } } ]
+PASS: multi-byte: first word at 0
+Stack: [ { token{ kind: word: value: "héllo" pos: 0 } token{ kind: whitespace: value: " " pos: 5 } token{ kind: word: value: "wörld" pos: 6 } } ]
+PASS: multi-byte: whitespace value
+Stack: [ { token{ kind: word: value: "héllo" pos: 0 } token{ kind: whitespace: value: " " pos: 5 } token{ kind: word: value: "wörld" pos: 6 } } ]
+PASS: multi-byte: whitespace at codepoint 5
+Stack: [ { token{ kind: word: value: "héllo" pos: 0 } token{ kind: whitespace: value: " " pos: 5 } token{ kind: word: value: "wörld" pos: 6 } } ]
+PASS: multi-byte: second word value
+Stack: [ { token{ kind: word: value: "héllo" pos: 0 } token{ kind: whitespace: value: " " pos: 5 } token{ kind: word: value: "wörld" pos: 6 } } ]
+PASS: multi-byte: second word at codepoint 6
+Stack: [ ]
+=== multi-byte string literal ===
+Stack: [ ]
+Stack: [ { token{ kind: string: value: ""café"" pos: 0 } } ]
+PASS: multi-byte string kind
+Stack: [ token{ kind: string: value: ""café"" pos: 0 } ]
+PASS: multi-byte string value preserved
+Stack: [ ]
+=== multi-byte number then word ===
+Stack: [ ]
+Stack: [ { token{ kind: number: value: "4" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "²" pos: 2 } } ]
+PASS: number value before multi-byte
+Stack: [ { token{ kind: number: value: "4" pos: 0 } token{ kind: whitespace: value: " " pos: 1 } token{ kind: word: value: "²" pos: 2 } } ]
+PASS: token after number at codepoint 2
+Stack: [ ]
 === edge cases ===
 Stack: [ ]
 Stack: [ { } ]

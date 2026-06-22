@@ -275,6 +275,30 @@ dup 0 #nth pos>> 0 "pos: foo: at 0" assert=
 dup 2 #nth pos>> 5 "pos: [ at 5" assert=
 4 #nth pos>> 7 "pos: ] at 7" assert=
 
+\ ===== Multi-byte (UTF-8) input =====
+
+\ Token values must preserve multi-byte characters, and token positions must
+\ stay codepoint indices even after a multi-byte token.
+"multi-byte values and positions" test-section
+"héllo wörld" (tokens)
+dup #len 3 "multi-byte: three tokens" assert=
+dup 0 #nth value>> "héllo" "multi-byte: first word value" assert=
+dup 0 #nth pos>> 0 "multi-byte: first word at 0" assert=
+dup 1 #nth value>> " " "multi-byte: whitespace value" assert=
+dup 1 #nth pos>> 5 "multi-byte: whitespace at codepoint 5" assert=
+dup 2 #nth value>> "wörld" "multi-byte: second word value" assert=
+2 #nth pos>> 6 "multi-byte: second word at codepoint 6" assert=
+
+"multi-byte string literal" test-section
+"\"café\"" (tokens)
+#first dup kind>> string: "multi-byte string kind" assert=
+value>> "\"café\"" "multi-byte string value preserved" assert=
+
+"multi-byte number then word" test-section
+"4 ²" (tokens)
+dup 0 #nth value>> "4" "number value before multi-byte" assert=
+2 #nth pos>> 2 "token after number at codepoint 2" assert=
+
 \ ===== Edge cases =====
 
 "edge cases" test-section
