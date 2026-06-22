@@ -1,0 +1,5 @@
+\ Module A-transitive: uses a second module and defines a word that calls
+\ one of that module's words directly. The dep on `dep-word` is transitive:
+\ it lives in A's deps, not in A's public words, so it is not reexported.
+use "mod_c_dep.1z" ;
+uses-transitive-dep: [ dep-word "-from-a" #append ] ;

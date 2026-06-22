@@ -521,7 +521,13 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
         .imported = true,
         .stack_effect = mod_word.stack_effect,
         .markers = mod_word.markers,
-        .source_module = module,
+        // A word the module being imported had itself imported (e.g. via
+        // `reexport`) already carries its originating module, which is where
+        // its body's late-bound dep references resolve. Preserve it; only a
+        // word the module defines itself (source_module null) is anchored to
+        // the module now being imported. Mirrors the `orelse module` pattern
+        // in pushModuleDepsFrame and wordDefFromModuleWord.
+        .source_module = mod_word.source_module orelse module,
         .source_file = mod_word.source_file,
         .source_line = mod_word.source_line,
         .source_column = mod_word.source_column,

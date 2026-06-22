@@ -1,0 +1,4 @@
+\ Module B-reexport-transitive: reexports A-transitive.
+\ The reexported `uses-transitive-dep` must resolve its transitive dep on
+\ `dep-word`, which A imported from C and which is not itself reexported.
+"mod_a_transitive_dep.1z" load reexport

@@ -8,3 +8,7 @@ Stack: [ ]
 Stack: [ ]
 PASS: reexported compound word resolves its deps
 Stack: [ ]
+=== reexport: compound word resolves transitive deps ===
+Stack: [ ]
+PASS: reexported word resolves its transitive deps
+Stack: [ ]

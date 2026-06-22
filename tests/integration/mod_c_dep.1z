@@ -1,0 +1,2 @@
+\ Module C: provides a word that module A depends on transitively.
+dep-word: [ "dep" ] ;

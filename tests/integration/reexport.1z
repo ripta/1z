@@ -8,3 +8,7 @@ from-b-re "from-b-re" "B's own word is accessible" assert=
 "reexport: compound word resolves deps" test-section
 use "mod_b_reexport_compound.1z" ;
 compound-a "helped-compound" "reexported compound word resolves its deps" assert=
+
+"reexport: compound word resolves transitive deps" test-section
+use "mod_b_reexport_transitive.1z" ;
+uses-transitive-dep "dep-from-a" "reexported word resolves its transitive deps" assert=
