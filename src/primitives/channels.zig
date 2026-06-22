@@ -243,7 +243,36 @@ fn nativeReceive(ctx: *Context) anyerror!void {
         return error.InvalidState;
     };
 
-    // if there are waiting senders, take the value directly from the first one
+    // NOTE(ripta): drain the buffer before any direct sender handoff so fifo order holds
+    //
+    // A sender on a buffered channel only blocks once the buffer is full, so the buffered values are
+    // always older than a blocked sender's value. Pop from the buffer, then if a sender is waiting,
+    // move its value into the freed slot and wake the sender.
+    if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
+        const val = ch.buffer.pop();
+        const copied = try tasks.deepCopyValue(val, ctx.arena.allocator());
+        try ctx.stack.pushMoved(copied);
+
+        // The buffer's owning reference to the popped value ends here.
+        container_backing.releaseValue(val);
+
+        if (ch.waiting_senders.items.len > 0) {
+            const sender_entry = ch.waiting_senders.orderedRemove(0);
+
+            // The buffer becomes a new owner of the sender's value; the woken sender releases its own reference.
+            container_backing.retainValue(sender_entry.value);
+            ch.buffer.push(sender_entry.value);
+            sender_entry.task.blocked_on_channel = null;
+            sender_entry.task.value_delivered = true;
+            try scheduler.wakeTask(sender_entry.task);
+        }
+
+        releaseChannel(ctx, ch);
+        return;
+    }
+
+    // buffer empty: always the case for an unbuffered channel
+    // if sender is waiting, take its value directly and wake it
     if (ch.waiting_senders.items.len > 0) {
         const sender_entry = ch.waiting_senders.orderedRemove(0);
         const sender = sender_entry.task;
@@ -255,29 +284,6 @@ fn nativeReceive(ctx: *Context) anyerror!void {
         sender.value_delivered = true;
         releaseChannel(ctx, ch);
         try scheduler.wakeTask(sender);
-        return;
-    }
-
-    // if buffer is non-empty, pop from it; then if senders are waiting, move
-    // the first sender's value into the buffer and wake the sender
-    if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
-        const val = ch.buffer.pop();
-        const copied = try tasks.deepCopyValue(val, ctx.arena.allocator());
-        try ctx.stack.pushMoved(copied);
-        // The buffer's owning reference to the popped value ends here.
-        container_backing.releaseValue(val);
-
-        if (ch.waiting_senders.items.len > 0) {
-            const sender_entry = ch.waiting_senders.orderedRemove(0);
-            // The buffer becomes a new owner of the sender's value; the
-            // woken sender releases its own reference.
-            container_backing.retainValue(sender_entry.value);
-            ch.buffer.push(sender_entry.value);
-            sender_entry.task.blocked_on_channel = null;
-            sender_entry.task.value_delivered = true;
-            try scheduler.wakeTask(sender_entry.task);
-        }
-        releaseChannel(ctx, ch);
         return;
     }
 
@@ -299,9 +305,8 @@ fn nativeReceive(ctx: *Context) anyerror!void {
     acquireChannel(ctx, ch);
     current.blocked_on_channel = null;
 
-    // NOTE(ripta_: A sender may have delivered a value directly to our stack while we
-    //              were suspended. If so, the receive is complete regardless of whether
-    //              the channel was subsequently closed.
+    // NOTE(ripta): A sender may have delivered a value directly to our stack while we were suspended.
+    //              If so, the receive is complete regardless of whether the channel was subsequently closed.
     if (current.value_delivered) {
         current.value_delivered = false;
         releaseChannel(ctx, ch);
@@ -338,17 +343,8 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
     acquireChannel(ctx, ch);
     defer releaseChannel(ctx, ch);
 
-    if (ch.waiting_senders.items.len > 0) {
-        const sender_entry = ch.waiting_senders.orderedRemove(0);
-        const copied = try tasks.deepCopyValue(sender_entry.value, ctx.arena.allocator());
-        try ctx.stack.pushMoved(copied);
-        try ctx.stack.push(.{ .boolean = true });
-        sender_entry.task.blocked_on_channel = null;
-        sender_entry.task.value_delivered = true;
-        try scheduler.wakeTask(sender_entry.task);
-        return;
-    }
-
+    // drain buffered data before a blocked sender so FIFO order holds, matching receive
+    // an unbuffered channel has an empty buffer and falls through
     if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
         const val = ch.buffer.pop();
         const copied = try tasks.deepCopyValue(val, ctx.arena.allocator());
@@ -367,6 +363,17 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
             sender_entry.task.value_delivered = true;
             try scheduler.wakeTask(sender_entry.task);
         }
+        return;
+    }
+
+    if (ch.waiting_senders.items.len > 0) {
+        const sender_entry = ch.waiting_senders.orderedRemove(0);
+        const copied = try tasks.deepCopyValue(sender_entry.value, ctx.arena.allocator());
+        try ctx.stack.pushMoved(copied);
+        try ctx.stack.push(.{ .boolean = true });
+        sender_entry.task.blocked_on_channel = null;
+        sender_entry.task.value_delivered = true;
+        try scheduler.wakeTask(sender_entry.task);
         return;
     }
 
@@ -490,22 +497,12 @@ fn nativeSelect(ctx: *Context) anyerror!void {
 
     lockChannelsOrdered(ctx, channels);
 
-    // NOTE(ripta): we check waiting senders before buffered data to give priority to directt
-    //              handoff in unbuffered channels, but this means that if a sender and a buffered
-    //              value become available simultaneously, the sender wins.
+    // Per channel, drain buffered data before a blocked sender so FIFO order
+    // holds: a sender on a buffered channel only blocks once the buffer is
+    // full, so the buffered values are older. An unbuffered channel has an
+    // empty buffer and falls through to its waiting sender, preserving the
+    // direct-handoff priority that path relies on.
     for (channels) |ch| {
-        if (ch.waiting_senders.items.len > 0) {
-            const sender_entry = ch.waiting_senders.orderedRemove(0);
-            const copied = try tasks.deepCopyValue(sender_entry.value, alloc);
-            try ctx.stack.pushMoved(copied);
-            try ctx.stack.push(.{ .channel = ch });
-
-            sender_entry.task.blocked_on_channel = null;
-            unlockChannelsOrdered(ctx, channels);
-            try scheduler.wakeTask(sender_entry.task);
-            return;
-        }
-
         if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
             const buf_val = ch.buffer.pop();
             const copied = try tasks.deepCopyValue(buf_val, alloc);
@@ -525,6 +522,18 @@ fn nativeSelect(ctx: *Context) anyerror!void {
                 try scheduler.wakeTask(sender_entry.task);
             }
             unlockChannelsOrdered(ctx, channels);
+            return;
+        }
+
+        if (ch.waiting_senders.items.len > 0) {
+            const sender_entry = ch.waiting_senders.orderedRemove(0);
+            const copied = try tasks.deepCopyValue(sender_entry.value, alloc);
+            try ctx.stack.pushMoved(copied);
+            try ctx.stack.push(.{ .channel = ch });
+
+            sender_entry.task.blocked_on_channel = null;
+            unlockChannelsOrdered(ctx, channels);
+            try scheduler.wakeTask(sender_entry.task);
             return;
         }
     }

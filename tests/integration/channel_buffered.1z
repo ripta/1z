@@ -1,4 +1,5 @@
 use "testing" ;
+use "time" ;
 
 \ -- 1. Buffered channel: send doesn't block when buffer has space --
 
@@ -33,6 +34,7 @@ test-buffered-full-blocks: ( -- ) [
     1 <buffered-channel>
     dup 1 swap send
     dup [ 2 swap send ] curry spawn
+    100 milliseconds sleep  \ force the spawned sender to block first
     swap receive
     swap await drop
     1 "full buffer: first receive" assert=
