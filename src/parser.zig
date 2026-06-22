@@ -315,15 +315,27 @@ fn executeParseTimeWord(
         }
     }
 
-    // 6. Emit deferred call_word instructions requested via `emit-call`
-    for (c.parse_time_deferred_calls.items) |call_name| {
-        if (c.preResolveCallTarget(call_name)) |slot| {
-            instructions.append(allocator, .{ .op = .{ .call_word_direct = slot }, .line = line }) catch return ParseError.OutOfMemory;
-        } else {
-            instructions.append(allocator, .{ .op = .{ .call_word = call_name }, .line = line }) catch return ParseError.OutOfMemory;
+    // 6. Drain deferred emissions requested via `emit-call` / `emit-body`, in
+    //    order. A `.call` becomes a call_word instruction; a `.body` splices
+    //    the quotation's instructions inline, verbatim, so each instruction
+    //    keeps its own source position for diagnostics.
+    for (c.parse_time_deferred_emissions.items) |emission| {
+        switch (emission) {
+            .call => |call_name| {
+                if (c.preResolveCallTarget(call_name)) |slot| {
+                    instructions.append(allocator, .{ .op = .{ .call_word_direct = slot }, .line = line }) catch return ParseError.OutOfMemory;
+                } else {
+                    instructions.append(allocator, .{ .op = .{ .call_word = call_name }, .line = line }) catch return ParseError.OutOfMemory;
+                }
+            },
+            .body => |body| {
+                for (body) |instr| {
+                    instructions.append(allocator, instr) catch return ParseError.OutOfMemory;
+                }
+            },
         }
     }
-    c.parse_time_deferred_calls.clearRetainingCapacity();
+    c.parse_time_deferred_emissions.clearRetainingCapacity();
 }
 
 /// Strip the `\\ ` prefix from a doc-comment token's text.
@@ -1141,17 +1153,25 @@ fn executeParseTimeWordForArray(
         .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
     }
 
-    // Execute deferred calls, e.g., `emit-call` from `V{`, `B{`, `M{`, so the
-    // final value is produced immediately rather than left as a raw quotation.
-    for (c.parse_time_deferred_calls.items) |call_name| {
-        if (c.lookupWord(call_name)) |deferred_word| {
-            switch (deferred_word.action) {
-                .native, .host_callback => deferred_word.invoke(c) catch |err| return handleParseTimeError(c, err),
-                .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
-            }
+    // Execute deferred emissions, e.g., `emit-call` from `V{`, `B{`, `M{`, so
+    // the final value is produced immediately rather than left as a raw
+    // quotation. Unlike the instruction-stream path, this context captures
+    // values rather than instructions, so a `.body` is executed in the current
+    // frame rather than spliced.
+    for (c.parse_time_deferred_emissions.items) |emission| {
+        switch (emission) {
+            .call => |call_name| {
+                if (c.lookupWord(call_name)) |deferred_word| {
+                    switch (deferred_word.action) {
+                        .native, .host_callback => deferred_word.invoke(c) catch |err| return handleParseTimeError(c, err),
+                        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
+                    }
+                }
+            },
+            .body => |body| c.executeQuotationWithFrame(.{ .instructions = body }) catch |err| return handleParseTimeError(c, err),
         }
     }
-    c.parse_time_deferred_calls.clearRetainingCapacity();
+    c.parse_time_deferred_emissions.clearRetainingCapacity();
 
     const post_depth = c.stack.depth();
     if (post_depth > pre_depth) {

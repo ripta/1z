@@ -1,0 +1,34 @@
+\ Test emit-body: splice a quotation's instructions inline into the parse stream.
+
+use "testing" ;
+
+\ A parse-time word that reads a region up to END and splices it inline.
+splice-region: parse-time [ "END" parse-until emit-body ] ;
+
+"emit-body inline splice at top level" test-section
+
+\ The spliced region defines a word; because the splice is inline at top level,
+\ the `;` defines it at module scope (context inheritance).
+splice-region spliced-word: [ 42 ] ;
+END
+spliced-word 42 "emit-body splices a top-level definition" assert=
+
+"emit-body inline splice into a quotation body" test-section
+
+\ When the parse-time word runs while a quotation body is parsed, the region is
+\ spliced into that quotation rather than the top-level stream.
+add-region: [ splice-region 10 + END ] ;
+5 add-region 15 "emit-body splices into a quotation body" assert=
+
+"emit-body re-entrancy: parse-time word inside the region" test-section
+
+\ A parse-time word inside the spliced region runs during the region parse; its
+\ result is captured as a literal in the spliced body.
+contribute-7: parse-time [ 7 ] ;
+splice-region contribute-7 1 + END
+8 "emit-body region runs a nested parse-time word" assert=
+
+"emit-body outside parse time" test-section
+
+\ emit-body should error when called outside a parse-time context.
+[ [ 1 ] emit-body ] [ "parse time" assert-error ] recover

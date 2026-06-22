@@ -1,0 +1,2 @@
+tests/integration/emit_body_position.1z:8: error 'division-by-zero' at word '/'
+  stack effect: ( a b -- a/b )

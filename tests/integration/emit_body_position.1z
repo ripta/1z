@@ -1,0 +1,9 @@
+\ emit-body preserves each spliced instruction's own source position, so a
+\ runtime error inside a spliced region reports the region's line, not the line
+\ where the splicing parse-time word was invoked.
+
+splice-region: parse-time [ "END" parse-until emit-body ] ;
+
+splice-region
+1 0 /
+END

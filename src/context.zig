@@ -293,6 +293,17 @@ pub const AotQuotationFnTable = struct {
     size: u32,
 };
 
+/// A deferred parse-time emission requested by a parse-time word, drained in
+/// order by `executeParseTimeWord` after the word runs. `emit-call` records a
+/// `.call`; `emit-body` records a `.body`. A single ordered queue keeps
+/// interleaved emissions in their requested order.
+pub const DeferredEmission = union(enum) {
+    /// A word name to emit as a `call_word` / `call_word_direct` instruction.
+    call: []const u8,
+    /// A quotation's instructions to splice inline into the parse stream.
+    body: []const Instruction,
+};
+
 /// The Context holds all interpreter state.
 pub const Context = struct {
     stack: Stack,
@@ -314,8 +325,9 @@ pub const Context = struct {
     local_frames: std.ArrayListUnmanaged(LocalFrame),
     /// Tokenizer for parse-time word access (set during parsing, null otherwise)
     parse_tokenizer: ?*Tokenizer = null,
-    /// Deferred call_word emissions requested by parse-time words via `emit-call`
-    parse_time_deferred_calls: std.ArrayListUnmanaged([]const u8) = .{},
+    /// Deferred emissions requested by parse-time words via `emit-call` /
+    /// `emit-body`, drained in order after the parse-time word runs.
+    parse_time_deferred_emissions: std.ArrayListUnmanaged(DeferredEmission) = .{},
     /// Optional benchmark stats (null when benchmarking is disabled)
     benchmark: ?*BenchmarkStats = null,
     /// Optional word-attributed profile stats (null when --profile is unset)
@@ -1086,7 +1098,7 @@ pub const Context = struct {
         }
         self.pragma_frames.deinit(self.allocator);
         self.pragma_registry.deinit(self.allocator);
-        self.parse_time_deferred_calls.deinit(self.allocator);
+        self.parse_time_deferred_emissions.deinit(self.allocator);
         self.import_history.deinit(self.allocator);
         for (self.type_registry_frames.items) |*frame| {
             frame.deinit(self.allocator);

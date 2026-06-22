@@ -22,6 +22,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "parse-literal", .stack_effect = "-- value", .doc = "Read the next literal value from the tokenizer.", .func = nativeParseLiteral, .parse_time_only = true },
     .{ .name = "resolve-literal", .stack_effect = "string -- value ?", .doc = "Resolve a string as a scalar literal.", .func = nativeResolveLiteral },
     .{ .name = "emit-call", .stack_effect = "symbol --", .doc = "Request a call_word emission for the named word after the current parse-time word completes.", .func = nativeEmitCall, .parse_time_only = true },
+    .{ .name = "emit-body", .stack_effect = "quotation --", .doc = "Splice the quotation's body (its instructions) inline into the current parse stream after the calling word's stack results.", .func = nativeEmitBody, .parse_time_only = true },
 };
 
 fn isSkippable(kind: Token.Kind) bool {
@@ -256,7 +257,14 @@ fn nativeEmitCall(ctx: *Context) anyerror!void {
         }
     }
 
-    try ctx.parse_time_deferred_calls.append(ctx.allocator, name);
+    try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .call = name });
+}
+
+/// emit-body ( quotation -- ) - Splice the quotation's body inline after the
+/// parse-time word completes.
+fn nativeEmitBody(ctx: *Context) anyerror!void {
+    const quot = try helpers.popQuotation(ctx);
+    try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .body = quot.instructions });
 }
 
 /// parse-literal ( -- value ) - Read the next literal from the tokenizer.

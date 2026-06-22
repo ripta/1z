@@ -1,0 +1,21 @@
+Stack: [ ]
+=== emit-body inline splice at top level ===
+Stack: [ ]
+Stack: [ ]
+PASS: emit-body splices a top-level definition
+Stack: [ ]
+=== emit-body inline splice into a quotation body ===
+Stack: [ ]
+Stack: [ ]
+PASS: emit-body splices into a quotation body
+Stack: [ ]
+=== emit-body re-entrancy: parse-time word inside the region ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ 8 ]
+PASS: emit-body region runs a nested parse-time word
+Stack: [ ]
+=== emit-body outside parse time ===
+Stack: [ ]
+PASS: parse time
+Stack: [ [ 1 ] ]
