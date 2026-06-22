@@ -1,4 +1,4 @@
-\ lib/doc-render.1z - Render a source-level doc-comment to markdown
+\ lib/doc/render.1z - Render a source-level doc-comment to markdown
 \
 \ Turns a doc-comment string (as recovered by lib/doc-extract.1z, with its
 \ original line structure preserved) into markdown: prose lines pass through

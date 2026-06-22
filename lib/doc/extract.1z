@@ -1,4 +1,4 @@
-\ lib/doc-extract.1z - Source-level doc-comment extraction
+\ lib/doc/extract.1z - Source-level doc-comment extraction
 \
 \ Tokenizes 1z source and builds a mapping from word name to the word's
 \ doc-comment, recovered from the source rather than from runtime

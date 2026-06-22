@@ -1,0 +1,57 @@
+\ lib/doc/report.1z - Cross-reference report for undocumented public words
+\
+\ Cross-references runtime introspection (word-info) against the source-level
+\ doc-comment map produced by lib/doc/extract.1z to flag public words that lack
+\ a doc-comment, and formats the per-word warning emitted during documentation
+\ generation. This is the generation-time counterpart to the linter's
+\ `missing-doc-comment` rule; the linter remains the authoritative lint check.
+
+use "strings" ;
+use "sequences" ;
+
+\\ Whether a word should appear in the documentation's undocumented check. A
+\\ word is public when it is not a native primitive, was not auto-generated
+\\ (carries no provenance), and is not a private word whose name starts with
+\\ `(`. Mirrors the linter's `(skip-word?)`, negated.
+public-word?: ( wi -- ? ) [
+  dup native?>> [
+    drop f
+  ] [
+    dup provenance>> f = not [
+      drop f
+    ] [
+      name>> >string "(" #starts-with? not
+    ] if
+  ] if
+] ;
+
+\\ Whether a public word lacks a doc-comment, given the module's source-level
+\\ doc-comment map. True when the word is public and has neither a source-level
+\\ doc-comment (its name is absent from the doc-map) nor an introspection
+\\ `doc>>` string. This is the same condition under which the generator renders
+\\ a word as undocumented, restricted to public words.
+undocumented-public-word?: ( doc-map wi -- ? ) [
+  dup public-word? [
+    dup doc>> f = [
+      name>> @has? not
+    ] [
+      2drop f
+    ] if
+  ] [
+    2drop f
+  ] if
+] ;
+
+\\ Format the stderr warning for an undocumented public word, citing its source
+\\ location: `{rel}:{line}: warning: undocumented public word '{name}'`. When
+\\ the line is unknown (`f`), the `:line` segment is omitted.
+format-undocumented-warning: ( rel line name -- str ) [
+  [
+    dup f =
+    [ drop ]
+    [ >string ":" swap #append #append ]
+    if
+    ": warning: undocumented public word '" #append
+  ] dip
+  #append "'" #append
+] ;

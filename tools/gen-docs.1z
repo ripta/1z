@@ -8,8 +8,9 @@ use "os/path" ;
 use "strings" ;
 use "sequences" ;
 use "runtime/introspect" ;
-use "doc-extract" ;
-use "doc-render" ;
+use "doc/extract" ;
+use "doc/render" ;
+use "doc/report" ;
 use "config" ;
 
 \ --- Step 1: Discover stdlib modules ---
@@ -198,6 +199,31 @@ render-source-ref: ( ctx wi -- str ) [
   nip nip
 ] ;
 
+\ Emit a stderr warning for one undocumented public word, citing its source
+\ location from the render context. Documented or non-public words are ignored.
+(warn-one): ( ctx wi -- ) [
+  over "docs" @get over undocumented-public-word?
+  [
+    over "rel" @get
+    2 pick-n "lines" @get 2 pick-n name>> (line-or-f)
+    2 pick-n name>>
+    format-undocumented-warning eprint-line
+    2drop
+  ]
+  [ 2drop ]
+  if
+] ;
+
+\ Warn on every undocumented public word in a source-backed module. Modules
+\ with no source file (rel is f), such as the prelude group, are skipped so
+\ every emitted warning can cite a concrete source location.
+warn-undocumented: ( ctx words -- ) [
+  over "rel" @get f =
+  [ 2drop ]
+  [ swap [ swap (warn-one) ] curry #each ]
+  if
+] ;
+
 \ Render a single word entry
 render-word: ( ctx wi -- str ) [
   "### " over name>> #append "\n\n" #append
@@ -314,14 +340,15 @@ H{ } prelude-group
 \ supplies the iterated key with base-url and grouped captured.
 generate-one: ( key base-url grouped -- ) [
   2 pick-n >string "  " swap #append "..." #append eprint-line
-  2 pick-n module-token-maps  \ key base-url grouped doc-map line-map
-  4 pick-n module-source-rel  \ key base-url grouped doc-map line-map rel
-  4 pick-n                    \ key base-url grouped doc-map line-map rel base-url
-  (make-ctx)                  \ key base-url grouped ctx
-  3 pick-n >string            \ key base-url grouped ctx name
-  2 pick-n 5 pick-n @get      \ key base-url grouped ctx name words
-  render-module-page          \ key base-url grouped content
-  3 pick-n >string swap       \ key base-url grouped name content
+  2 pick-n module-token-maps       \ key base-url grouped doc-map line-map
+  4 pick-n module-source-rel       \ key base-url grouped doc-map line-map rel
+  4 pick-n                         \ key base-url grouped doc-map line-map rel base-url
+  (make-ctx)                       \ key base-url grouped ctx
+  3 pick-n >string                 \ key base-url grouped ctx name
+  2 pick-n 5 pick-n @get           \ key base-url grouped ctx name words
+  2 pick-n over warn-undocumented  \ warn on undocumented public words
+  render-module-page               \ key base-url grouped content
+  3 pick-n >string swap            \ key base-url grouped name content
   write-module-page
   3drop
 ] ;

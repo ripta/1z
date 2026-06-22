@@ -1,0 +1,37 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== public-word? classification ===
+Stack: [ ]
+PASS: documented public word is public
+Stack: [ ]
+PASS: undocumented public word is still public
+Stack: [ ]
+PASS: private word is not public
+Stack: [ ]
+PASS: native word is not public
+Stack: [ ]
+=== undocumented-public-word? detection ===
+Stack: [ ]
+Stack: [ t ]
+PASS: public word lacking any doc is undocumented
+Stack: [ ]
+Stack: [ f ]
+PASS: public word with an introspection doc is not undocumented
+Stack: [ ]
+Stack: [ f ]
+PASS: word present in the source doc-map is not undocumented
+Stack: [ ]
+Stack: [ f ]
+PASS: private word is never flagged
+Stack: [ ]
+=== format-undocumented-warning ===
+Stack: [ ]
+Stack: [ "lib/foo.1z:42: warning: undocumented public word 'bar'" ]
+Stack: [ "lib/foo.1z:42: warning: undocumented public word 'bar'" "lib/foo.1z:42: warning: undocumented public word 'bar'" ]
+PASS: warning cites path and line
+Stack: [ ]
+Stack: [ "lib/foo.1z: warning: undocumented public word 'baz'" ]
+Stack: [ "lib/foo.1z: warning: undocumented public word 'baz'" "lib/foo.1z: warning: undocumented public word 'baz'" ]
+PASS: warning omits the line when unknown
+Stack: [ ]

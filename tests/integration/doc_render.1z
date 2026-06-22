@@ -1,5 +1,5 @@
 use "testing" ;
-use "doc-render" ;
+use "doc/render" ;
 
 \ --- Single prose paragraph passes through ---
 

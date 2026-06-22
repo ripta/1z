@@ -1,5 +1,5 @@
 use "testing" ;
-use "doc-extract" ;
+use "doc/extract" ;
 use "os/fs" ;
 use "os/path" ;
 

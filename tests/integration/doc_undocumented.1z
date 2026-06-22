@@ -1,0 +1,49 @@
+use "testing" ;
+use "doc/report" ;
+
+\ Words with known documentation status, introspected via `>word-info` so the
+\ report predicates run against genuine word-info structs.
+
+\\ A documented public word.
+documented-word: ( -- ) [ ] ;
+
+undoc-word: ( -- ) [ ] ;
+
+(private-helper): ( -- ) [ ] ;
+
+\ --- public-word? classification ---
+
+"public-word? classification" test-section
+
+documented-word: >word-info public-word? "documented public word is public" assert-true
+undoc-word: >word-info public-word? "undocumented public word is still public" assert-true
+(private-helper): >word-info public-word? "private word is not public" assert-false
++: >word-info public-word? "native word is not public" assert-false
+
+\ --- undocumented-public-word? detection ---
+
+"undocumented-public-word? detection" test-section
+
+M{ } undoc-word: >word-info undocumented-public-word?
+"public word lacking any doc is undocumented" assert-true
+
+M{ } documented-word: >word-info undocumented-public-word?
+"public word with an introspection doc is not undocumented" assert-false
+
+M{ } "undoc-word" "source doc" @set! undoc-word: >word-info undocumented-public-word?
+"word present in the source doc-map is not undocumented" assert-false
+
+M{ } (private-helper): >word-info undocumented-public-word?
+"private word is never flagged" assert-false
+
+\ --- format-undocumented-warning ---
+
+"format-undocumented-warning" test-section
+
+"lib/foo.1z" 42 "bar" format-undocumented-warning
+"lib/foo.1z:42: warning: undocumented public word 'bar'"
+"warning cites path and line" assert=
+
+"lib/foo.1z" f "baz" format-undocumented-warning
+"lib/foo.1z: warning: undocumented public word 'baz'"
+"warning omits the line when unknown" assert=

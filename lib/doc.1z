@@ -1,0 +1,12 @@
+\ lib/doc.1z - Documentation tooling: load extraction, rendering, and reporting.
+\
+\ Convenience aggregator over the doc/ submodules.
+\
+\ Note: `reexport` currently drops a reexported word's transitively-imported dependencies,
+\       so `extract-doc-info-from-file` (which in turn calls `1z-tokenize`) raises
+\       `unknown-word` when reached through this aggregator. Alternatively, import
+\       `doc/extract` directly for that word.
+
+"doc/extract" load reexport
+"doc/render" load reexport
+"doc/report" load reexport
