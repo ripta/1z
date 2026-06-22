@@ -27,6 +27,15 @@ const stack_effect_mod = @import("../stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 
+/// Source location of a `struct{ ... }` declaration, captured at parse time and
+/// stamped on every generated word so introspection and the linter see the
+/// declaration site rather than the prelude quotation that runs `define-struct`.
+const GenSrcLoc = struct {
+    file: ?[]const u8 = null,
+    line: usize = 0,
+    column: usize = 0,
+};
+
 pub const primitives = [_]Primitive{
     .{ .name = "define-struct", .stack_effect = "name: descriptor markers --", .doc = "Define a struct type and its accessor words.", .func = nativeDefineStruct },
 };
@@ -98,6 +107,20 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
         },
     };
 
+    // The `struct{` parse-time word stamps the declaration's source location
+    // into the descriptor under `src-loc` as a { file line column } array. The
+    // descriptor map (and its borrowed file string) is released at function
+    // end, so dupe the file into the long-lived quotation arena.
+    var src_loc: GenSrcLoc = .{};
+    if (raw_desc_map.map.get("src-loc")) |sl_val| {
+        if (sl_val == .array and sl_val.array.len == 3) {
+            const parts = sl_val.array;
+            if (parts[0] == .string) src_loc.file = try alloc.dupe(u8, parts[0].string);
+            if (parts[1] == .fixnum) src_loc.line = @intCast(parts[1].fixnum);
+            if (parts[2] == .fixnum) src_loc.column = @intCast(parts[2].fixnum);
+        }
+    }
+
     const has_mutable = for (markers_slice) |mk| {
         if (markers_mod.isMutableMarker(mk)) break true;
     } else false;
@@ -132,24 +155,27 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
         .stack_effect = try helpers.makeSimpleEffect(alloc, "-- type"),
         .markers = type_markers,
         .provenance = .{ .generator = "struct", .parent = name, .role = "type" },
+        .source_file = src_loc.file,
+        .source_line = src_loc.line,
+        .source_column = src_loc.column,
         .action = .{ .compound = type_instrs },
     });
 
     // make-NAME: ( field1 field2 ... -- instance ) - positional constructor
     const make_name = try std.fmt.allocPrint(alloc, "make-{s}", .{name});
-    try defineConstructor(ctx, make_name, struct_type, markers_slice);
+    try defineConstructor(ctx, make_name, struct_type, markers_slice, src_loc);
 
     // >NAME: ( hash -- instance ) - hash-to-struct converter
     const convert_name = try std.fmt.allocPrint(alloc, ">{s}", .{name});
-    try defineHashConverter(ctx, convert_name, struct_type, markers_slice);
+    try defineHashConverter(ctx, convert_name, struct_type, markers_slice, src_loc);
 
     // unmake-NAME: ( instance -- field1 field2 ... ) - positional destructor
     const unmake_name = try std.fmt.allocPrint(alloc, "unmake-{s}", .{name});
-    try defineDestructor(ctx, unmake_name, struct_type, markers_slice);
+    try defineDestructor(ctx, unmake_name, struct_type, markers_slice, src_loc);
 
     // NAME>hash: ( instance -- hash ) - convert to hash
     const to_hash_name = try std.fmt.allocPrint(alloc, "{s}>hash", .{name});
-    try defineToHash(ctx, to_hash_name, struct_type, markers_slice);
+    try defineToHash(ctx, to_hash_name, struct_type, markers_slice, src_loc);
 
     // >hash dispatch for this struct type
     const hash_instrs = try alloc.alloc(Instruction, 2);
@@ -160,19 +186,19 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
 
     // NAME?: ( val -- ? ) - type predicate
     const pred_name = try std.fmt.allocPrint(alloc, "{s}?", .{name});
-    try defineTypePredicate(ctx, pred_name, struct_type, markers_slice);
+    try defineTypePredicate(ctx, pred_name, struct_type, markers_slice, src_loc);
 
     // FIELD>>: ( instance -- value ) - field getter
     for (fields_slice, 0..) |field, i| {
         const getter_name = try std.fmt.allocPrint(alloc, "{s}>>", .{field});
-        try defineFieldGetter(ctx, getter_name, struct_type, i, markers_slice, field);
+        try defineFieldGetter(ctx, getter_name, struct_type, i, markers_slice, field, src_loc);
     }
 
     // >>FIELD: ( instance value -- instance ) - field setter (only if mutable)
     if (has_mutable) {
         for (fields_slice, 0..) |field, i| {
             const setter_name = try std.fmt.allocPrint(alloc, ">>{s}", .{field});
-            try defineFieldSetter(ctx, setter_name, struct_type, i, markers_slice, field);
+            try defineFieldSetter(ctx, setter_name, struct_type, i, markers_slice, field, src_loc);
         }
     }
 
@@ -401,7 +427,7 @@ fn structInstanceToHashHelper(ctx: *Context) anyerror!void {
 }
 
 /// make-NAME: ( field1 field2 ... -- instance ) - positional constructor
-fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
+fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker, src_loc: GenSrcLoc) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
@@ -413,12 +439,15 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
         .stack_effect = try buildConstructorEffect(alloc, struct_type),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "constructor" },
+        .source_file = src_loc.file,
+        .source_line = src_loc.line,
+        .source_column = src_loc.column,
         .action = .{ .compound = instrs },
     });
 }
 
 // >NAME: ( hash -- instance ) - hash-to-struct converter (generic, extensible via method{)
-fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
+fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker, src_loc: GenSrcLoc) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
@@ -435,6 +464,9 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
         .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
         .markers = generic_markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "hash-converter" },
+        .source_file = src_loc.file,
+        .source_line = src_loc.line,
+        .source_column = src_loc.column,
         .action = .{ .compound = instrs },
     });
 
@@ -447,7 +479,7 @@ fn defineHashConverter(ctx: *Context, name: []const u8, struct_type: *const Stru
 }
 
 /// unmake-NAME: ( instance -- field1 field2 ... ) - positional destructor
-fn defineDestructor(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
+fn defineDestructor(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker, src_loc: GenSrcLoc) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
@@ -460,12 +492,15 @@ fn defineDestructor(ctx: *Context, name: []const u8, struct_type: *const StructT
         .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "destructor" },
+        .source_file = src_loc.file,
+        .source_line = src_loc.line,
+        .source_column = src_loc.column,
         .action = .{ .compound = instrs },
     });
 }
 
 /// NAME>hash: ( instance -- hash ) - convert struct instance to hash
-fn defineToHash(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
+fn defineToHash(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker, src_loc: GenSrcLoc) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
@@ -478,12 +513,15 @@ fn defineToHash(ctx: *Context, name: []const u8, struct_type: *const StructType,
         .stack_effect = try helpers.makeSimpleEffect(alloc, effect_str),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "to-hash" },
+        .source_file = src_loc.file,
+        .source_line = src_loc.line,
+        .source_column = src_loc.column,
         .action = .{ .compound = instrs },
     });
 }
 
 /// NAME?: ( val -- ? ) - type predicate
-fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker) !void {
+fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const StructType, markers: []const *Marker, src_loc: GenSrcLoc) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 2);
@@ -495,12 +533,15 @@ fn defineTypePredicate(ctx: *Context, name: []const u8, struct_type: *const Stru
         .stack_effect = try helpers.makeSimpleEffect(alloc, "val -- ?"),
         .markers = markers,
         .provenance = .{ .generator = "struct", .parent = struct_type.name, .role = "predicate" },
+        .source_file = src_loc.file,
+        .source_line = src_loc.line,
+        .source_column = src_loc.column,
         .action = .{ .compound = instrs },
     });
 }
 
 /// FIELD>>: ( instance -- value ) - field getter (generic, dispatches on struct type)
-fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker, field: []const u8) !void {
+fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker, field: []const u8, src_loc: GenSrcLoc) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -523,6 +564,9 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
             .name = name,
             .stack_effect = try buildGetterEffect(alloc, struct_type, field_index),
             .markers = generic_markers,
+            .source_file = src_loc.file,
+            .source_line = src_loc.line,
+            .source_column = src_loc.column,
             .action = .{ .compound = &.{} },
         });
     }
@@ -543,7 +587,7 @@ fn defineFieldGetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 /// Setters use binary dispatch keyed on (struct_type, *) so the dispatch
 /// system matches the struct instance at stack position N-2 regardless of
 /// the value type at the top.
-fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker, field: []const u8) !void {
+fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const StructType, field_index: usize, _: []const *Marker, field: []const u8, src_loc: GenSrcLoc) !void {
     const alloc = ctx.quotationAllocator();
 
     const instrs = try alloc.alloc(Instruction, 3);
@@ -566,6 +610,9 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
             .name = name,
             .stack_effect = try buildSetterEffect(alloc, struct_type, field_index),
             .markers = generic_markers,
+            .source_file = src_loc.file,
+            .source_line = src_loc.line,
+            .source_column = src_loc.column,
             .action = .{ .compound = &.{} },
         });
     }

@@ -1,0 +1,23 @@
+Stack: [ ]
+=== struct type word reports the declaration line ===
+Stack: [ ]
+PASS: type word line
+Stack: [ source-loc{ file: "tests/integration/struct_source_loc.1z" line: 7 column: 20 } ]
+PASS: type word file is a string
+Stack: [ ]
+=== generated struct words report the declaration line ===
+Stack: [ ]
+PASS: constructor line
+Stack: [ ]
+PASS: hash-converter line
+Stack: [ ]
+PASS: destructor line
+Stack: [ ]
+PASS: to-hash line
+Stack: [ ]
+PASS: predicate line
+Stack: [ ]
+PASS: getter line
+Stack: [ ]
+PASS: setter line
+Stack: [ ]

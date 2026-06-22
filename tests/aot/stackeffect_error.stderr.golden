@@ -1,2 +1,2 @@
-<aot>:586: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
+<aot>:587: error 'type-mismatch' expected string or byte-array, got fixnum 42 at word 'stream-write'
   stack effect: ( stream bytes -- n )

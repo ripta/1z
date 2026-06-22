@@ -1,0 +1,20 @@
+\ Generated struct words must report the struct declaration's source location,
+\ not the prelude quotation that runs define-struct.
+
+use "testing" ;
+
+\ Declared on the next line; every generated word must report that line.
+srcloc-pt: mutable struct{ slt-a slt-b } ;
+
+"struct type word reports the declaration line" test-section
+srcloc-pt: >word-info source-loc>> dup line>> 7 "type word line" assert=
+file>> string? t "type word file is a string" assert=
+
+"generated struct words report the declaration line" test-section
+make-srcloc-pt: >word-info source-loc>> line>> 7 "constructor line" assert=
+>srcloc-pt: >word-info source-loc>> line>> 7 "hash-converter line" assert=
+unmake-srcloc-pt: >word-info source-loc>> line>> 7 "destructor line" assert=
+srcloc-pt>hash: >word-info source-loc>> line>> 7 "to-hash line" assert=
+srcloc-pt?: >word-info source-loc>> line>> 7 "predicate line" assert=
+slt-a>>: >word-info source-loc>> line>> 7 "getter line" assert=
+>>slt-a: >word-info source-loc>> line>> 7 "setter line" assert=

@@ -67,8 +67,9 @@ W{: parse-time [ "}" parse-tokens-until ] ;
 \   name: struct{ field1 field2 ... } ;
 struct{: parse-time [
   M{ type: struct-descriptor: }
-  fields: "}" parse-values-until @set!
-  define: [ define-struct ] @set!
+  fields:  "}" parse-values-until @set!
+  src-loc: native.parse-source-loc 3 array-n @set!
+  define:  [ define-struct ] @set!
 ] ;
 
 \\ Virtual type definition syntax.

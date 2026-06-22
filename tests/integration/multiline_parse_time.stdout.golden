@@ -115,7 +115,7 @@ Stack: [ ]
 === multiline parse-values-until ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ { M{ define: [ define-struct ] fields: { "a" "b" } type: struct-descriptor: } "hello" } ]
+Stack: [ { M{ define: [ define-struct ] fields: { "a" "b" } type: struct-descriptor: src-loc: { "tests/integration/multiline_parse_time.1z" 176 1 } } "hello" } ]
 PASS: multiline parse-values-until collects values
 Stack: [ ]
 === nested multiline ===

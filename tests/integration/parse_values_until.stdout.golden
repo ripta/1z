@@ -22,13 +22,13 @@ Stack: [ ]
 === parse-values-until with parse-time words ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ { M{ define: [ define-struct ] fields: { "x" "y" } type: struct-descriptor: } } ]
+Stack: [ { M{ define: [ define-struct ] fields: { "x" "y" } type: struct-descriptor: src-loc: { "tests/integration/parse_values_until.1z" 37 1 } } } ]
 PASS: struct{ produces one value
 Stack: [ ]
-Stack: [ { "hello" M{ define: [ define-struct ] fields: { "x" "y" } type: struct-descriptor: } } ]
+Stack: [ { "hello" M{ define: [ define-struct ] fields: { "x" "y" } type: struct-descriptor: src-loc: { "tests/integration/parse_values_until.1z" 40 1 } } } ]
 PASS: raw token + struct produces two values
 Stack: [ ]
-Stack: [ { "hello" M{ define: [ define-struct ] fields: { "x" "y" } type: struct-descriptor: } } ]
+Stack: [ { "hello" M{ define: [ define-struct ] fields: { "x" "y" } type: struct-descriptor: src-loc: { "tests/integration/parse_values_until.1z" 43 1 } } } ]
 PASS: first value is raw string
 Stack: [ ]
 === parse-types-until ===
