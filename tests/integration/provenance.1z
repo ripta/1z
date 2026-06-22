@@ -192,8 +192,26 @@ generator>> "struct" "generated-by generator matches" assert=
 "generated-by on hand-written word" test-section
 my-handwritten: generated-by f "generated-by returns f for hand-written word" assert=
 
-"generated-by on generic word" test-section
-x>>: generated-by f "generated-by returns f for generic word" assert=
+"generated-by on generated generic accessor" test-section
+x>>: generated-by
+dup provenance? t "generated-by returns provenance for generated getter" assert=
+generator>> "struct" "generated getter generated-by generator matches" assert=
+
+"getter word-level provenance" test-section
+acc-prov-rec: struct{ ap-alpha ap-beta } ;
+ap-alpha>>: >word-info provenance>>
+dup provenance? t "getter word-level provenance is a provenance struct" assert=
+dup generator>> "struct" "getter word-level provenance generator" assert=
+dup parent>> "acc-prov-rec" "getter word-level provenance parent" assert=
+role>> "getter" "getter word-level provenance role" assert=
+
+"setter word-level provenance" test-section
+acc-prov-mut: mutable struct{ ap-val } ;
+>>ap-val: >word-info provenance>>
+dup provenance? t "setter word-level provenance is a provenance struct" assert=
+dup generator>> "struct" "setter word-level provenance generator" assert=
+dup parent>> "acc-prov-mut" "setter word-level provenance parent" assert=
+role>> "setter" "setter word-level provenance role" assert=
 
 "consistency: all generated-words are findable" test-section
 gw-point: generated-words >iterator [ >word-info? option:some? ] #map #collect

@@ -1,0 +1,5 @@
+\\ A 2D point.
+point: struct{ x y } ;
+
+\\ A mutable counter.
+counter: mutable struct{ value } ;

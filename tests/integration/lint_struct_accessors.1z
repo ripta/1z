@@ -1,0 +1,2 @@
+\ Regression test: 1z lint must not flag auto-generated struct accessors
+\ (field>> / >>field). The real lint target is the fixture named in .flags.

@@ -278,9 +278,36 @@ Stack: [ ]
 Stack: [ ]
 PASS: generated-by returns f for hand-written word
 Stack: [ ]
-=== generated-by on generic word ===
+=== generated-by on generated generic accessor ===
 Stack: [ ]
-PASS: generated-by returns f for generic word
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "getter" } ]
+PASS: generated-by returns provenance for generated getter
+Stack: [ provenance{ generator: "struct" parent: "prov-point" role: "getter" } ]
+PASS: generated getter generated-by generator matches
+Stack: [ ]
+=== getter word-level provenance ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ provenance{ generator: "struct" parent: "acc-prov-rec" role: "getter" } ]
+PASS: getter word-level provenance is a provenance struct
+Stack: [ provenance{ generator: "struct" parent: "acc-prov-rec" role: "getter" } ]
+PASS: getter word-level provenance generator
+Stack: [ provenance{ generator: "struct" parent: "acc-prov-rec" role: "getter" } ]
+PASS: getter word-level provenance parent
+Stack: [ provenance{ generator: "struct" parent: "acc-prov-rec" role: "getter" } ]
+PASS: getter word-level provenance role
+Stack: [ ]
+=== setter word-level provenance ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ provenance{ generator: "struct" parent: "acc-prov-mut" role: "setter" } ]
+PASS: setter word-level provenance is a provenance struct
+Stack: [ provenance{ generator: "struct" parent: "acc-prov-mut" role: "setter" } ]
+PASS: setter word-level provenance generator
+Stack: [ provenance{ generator: "struct" parent: "acc-prov-mut" role: "setter" } ]
+PASS: setter word-level provenance parent
+Stack: [ provenance{ generator: "struct" parent: "acc-prov-mut" role: "setter" } ]
+PASS: setter word-level provenance role
 Stack: [ ]
 === consistency: all generated-words are findable ===
 Stack: [ ]
