@@ -1,7 +1,3 @@
-matrix{ 1 ;
- ;
-  2 }
-matrix{ 1 2 ;
-}
-matrix{ ;
-}
+matrix{ 1 ; ; 2 }
+matrix{ 1 2 ; }
+matrix{ ; }

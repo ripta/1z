@@ -1,0 +1,12 @@
+linux: choose{
+  linux: [
+    tag: ( -- n ) [ 1 ] ;
+  ]
+  macos: [
+    tag: ( -- n ) [ 2 ] ;
+  ]
+  _ [
+    tag: ( -- n ) [ 9 ] ;
+  ]
+}
+tag .

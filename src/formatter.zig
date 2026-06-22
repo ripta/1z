@@ -307,16 +307,29 @@ pub const Formatter = struct {
                     at_file_start = false;
                     after_comment = false;
                     try writer.writeAll(" ;");
-                    // After semicolon, write pending comments and newline
-                    for (pending_comments.items) |comment| {
-                        try writer.writeAll("  ");
-                        try writer.writeAll(comment);
+
+                    // A `;` terminates a definition statement only at the top level or inside a multi-line block.
+                    // In either case the next statement belongs on its own line.
+                    // Inside a single-line block (a quotation or brace form the user kept on one line), the `;`
+                    // is part of that line and must not force a break, or the closing bracket gets orphaned.
+                    const ends_statement = indent_level == 0 or self.isInMultiLineBlock(i);
+                    if (ends_statement) {
+                        // After semicolon, write pending comments and newline
+                        for (pending_comments.items) |comment| {
+                            try writer.writeAll("  ");
+                            try writer.writeAll(comment);
+                        }
+
+                        pending_comments.clearRetainingCapacity();
+                        try writer.writeAll("\n");
+                        line_start = true;
+                        after_opening = false;
+                        newlines_written = 1;
+                    } else {
+                        line_start = false;
+                        after_opening = false;
+                        newlines_written = 0;
                     }
-                    pending_comments.clearRetainingCapacity();
-                    try writer.writeAll("\n");
-                    line_start = true;
-                    after_opening = false;
-                    newlines_written = 1;
                 },
 
                 .symbol => {
