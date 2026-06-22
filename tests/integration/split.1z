@@ -26,3 +26,10 @@ use "strings" ;
 "a,b," "," split { "a" "b" "" } "trailing delimiter" assert=
 "," "," split { "" "" } "only delimiter" assert=
 ",," "," split { "" "" "" } "two delimiters" assert=
+
+"split multi-byte UTF-8" test-section
+"a→b→c" "→" split { "a" "b" "c" } "multi-byte delimiter" assert=
+"café,thé" "," split { "café" "thé" } "multi-byte content, ascii delimiter" assert=
+"αβγ" "," split { "αβγ" } "multi-byte content, no delimiter" assert=
+"→a→" "→" split { "" "a" "" } "leading and trailing multi-byte delimiter" assert=
+"café" "é" split { "caf" "" } "multi-byte delimiter at end" assert=

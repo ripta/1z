@@ -1,0 +1,56 @@
+\ Tests for the byte-offset substrate: #byte-index-of-from and #byte-slice
+
+use "testing" ;
+
+"#byte-index-of-from - basic ASCII" test-section
+6 "hello world" "world" 0 #byte-index-of-from "find world at byte 0" assert=
+6 "hello world" "world" 6 #byte-index-of-from "find world at byte 6" assert=
+f "hello world" "world" 7 #byte-index-of-from "world not found past byte 7" assert=
+
+"#byte-index-of-from - offset skips earlier matches" test-section
+1 "a,b,c" "," 0 #byte-index-of-from "first comma from byte 0" assert=
+3 "a,b,c" "," 2 #byte-index-of-from "second comma from byte 2" assert=
+
+"#byte-index-of-from - not found" test-section
+f "hello" "xyz" 0 #byte-index-of-from "xyz not in hello" assert=
+f "hello" "o" 5 #byte-index-of-from "search from end, non-empty needle" assert=
+
+"#byte-index-of-from - empty needle" test-section
+0 "hello" "" 0 #byte-index-of-from "empty needle at byte 0" assert=
+3 "hello" "" 3 #byte-index-of-from "empty needle at byte 3" assert=
+5 "hello" "" 5 #byte-index-of-from "empty needle at byte end" assert=
+
+"#byte-index-of-from - byte offsets, not codepoint indices" test-section
+\ "café,thé": bytes c0 a1 f2 é3-4 ,5 t6 h7 é8-9; the comma is at byte 5 (codepoint index 4).
+5 "café,thé" "," 0 #byte-index-of-from "comma byte offset past multi-byte content" assert=
+\ "a→b→c": a0 →1-3 b4 →5-7 c8; arrows at byte 1 and byte 5.
+1 "a→b→c" "→" 0 #byte-index-of-from "first arrow byte offset" assert=
+5 "a→b→c" "→" 2 #byte-index-of-from "second arrow byte offset" assert=
+
+"#byte-index-of-from - error cases" test-section
+[ "hello" "l" -1 #byte-index-of-from ] index-out-of-bounds: "negative start" assert-error-type
+[ "hello" "l" 6 #byte-index-of-from ] index-out-of-bounds: "start beyond end" assert-error-type
+[ 42 "x" 0 #byte-index-of-from ] type-mismatch: "non-string str" assert-error-type
+[ "hello" 42 0 #byte-index-of-from ] type-mismatch: "non-string needle" assert-error-type
+[ "hello" "l" "x" #byte-index-of-from ] type-mismatch: "non-fixnum start" assert-error-type
+
+"#byte-slice - basic ASCII" test-section
+"hello" "hello world" 0 5 #byte-slice "slice prefix" assert=
+"world" "hello world" 6 11 #byte-slice "slice suffix" assert=
+"" "hello" 3 3 #byte-slice "empty slice" assert=
+"hello" "hello" 0 5 #byte-slice "full string" assert=
+
+"#byte-slice - multi-byte on codepoint boundaries" test-section
+\ "café": c0 a1 f2 é3-4 (5 bytes).
+"caf" "café" 0 3 #byte-slice "slice before multi-byte char" assert=
+"é" "café" 3 5 #byte-slice "slice the multi-byte char" assert=
+"café" "café" 0 5 #byte-slice "full multi-byte string" assert=
+
+"#byte-slice - error cases" test-section
+[ "hello" -1 3 #byte-slice ] index-out-of-bounds: "negative start" assert-error-type
+[ "hello" 0 -1 #byte-slice ] index-out-of-bounds: "negative end" assert-error-type
+[ "hello" 4 2 #byte-slice ] index-out-of-bounds: "start > end" assert-error-type
+[ "hello" 0 6 #byte-slice ] index-out-of-bounds: "end beyond length" assert-error-type
+[ "café" 4 5 #byte-slice ] invalid-utf8: "start mid-codepoint" assert-error-type
+[ "café" 0 4 #byte-slice ] invalid-utf8: "end mid-codepoint" assert-error-type
+[ 42 0 1 #byte-slice ] type-mismatch: "non-string" assert-error-type

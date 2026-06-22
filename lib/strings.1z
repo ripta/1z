@@ -8,25 +8,27 @@
 use "sequences" ;
 use "scanner" ;
 
-\\ Recursively scan str for delim starting at pos, pushing each segment onto
-\\ vec; once no further delimiter is found, push the trailing segment and
-\\ freeze vec into an array.
-(split-scan): stack-recursive ( str delim vec pos -- array ) [
-  3 pick-n 3 pick-n 2 pick-n #index-of-from
+\\ Recursively scan str for delim starting at byte offset pos, pushing each
+\\ segment onto vec; once no further delimiter is found, push the trailing
+\\ segment and freeze vec into an array. pos is a byte offset throughout, so the
+\\ scan is O(n) regardless of multi-byte density. delim-blen is the delimiter's
+\\ byte length, threaded so the advance past a found delimiter needs no rescan.
+(split-scan): stack-recursive ( str delim delim-blen vec pos -- array ) [
+  4 pick-n 4 pick-n 2 pick-n #byte-index-of-from
   dup
   [
-    \ Found at idx: push str[pos..idx] to vec, advance pos, recurse
-    4 pick-n 2 pick-n 2 pick-n #slice
+    \ Found at byte idx: push str[pos..idx] to vec, advance pos, recurse
+    5 pick-n 2 pick-n 2 pick-n #byte-slice
     3 pick-n swap #push! drop
-    3 pick-n #len + swap drop
+    3 pick-n + swap drop
     (split-scan)
   ]
   [
-    \ Not found: push str[pos..end] to vec, freeze
+    \ Not found: push str[pos..byte-len] to vec, freeze
     drop
-    3 pick-n dup #len 2 pick-n swap #slice
+    4 pick-n dup >bytes #len 2 pick-n swap #byte-slice
     2 pick-n swap #push! drop
-    drop nip nip >array
+    drop nip nip nip >array
   ]
   if
 ] ;
@@ -46,7 +48,7 @@ split: ( str delim -- array ) [
   [
     over #len 0 =
     [ 2drop { "" } ]
-    [ V{ } 0 (split-scan) ]
+    [ dup >bytes #len V{ } 0 (split-scan) ]
     if
   ]
   if

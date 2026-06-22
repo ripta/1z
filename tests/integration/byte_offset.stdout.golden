@@ -1,0 +1,82 @@
+=== #byte-index-of-from - basic ASCII ===
+Stack: [ ]
+PASS: find world at byte 0
+Stack: [ ]
+PASS: find world at byte 6
+Stack: [ ]
+PASS: world not found past byte 7
+Stack: [ ]
+=== #byte-index-of-from - offset skips earlier matches ===
+Stack: [ ]
+PASS: first comma from byte 0
+Stack: [ ]
+PASS: second comma from byte 2
+Stack: [ ]
+=== #byte-index-of-from - not found ===
+Stack: [ ]
+PASS: xyz not in hello
+Stack: [ ]
+PASS: search from end, non-empty needle
+Stack: [ ]
+=== #byte-index-of-from - empty needle ===
+Stack: [ ]
+PASS: empty needle at byte 0
+Stack: [ ]
+PASS: empty needle at byte 3
+Stack: [ ]
+PASS: empty needle at byte end
+Stack: [ ]
+=== #byte-index-of-from - byte offsets, not codepoint indices ===
+Stack: [ ]
+PASS: comma byte offset past multi-byte content
+Stack: [ ]
+PASS: first arrow byte offset
+Stack: [ ]
+PASS: second arrow byte offset
+Stack: [ ]
+=== #byte-index-of-from - error cases ===
+Stack: [ ]
+PASS: negative start
+Stack: [ ]
+PASS: start beyond end
+Stack: [ ]
+PASS: non-string str
+Stack: [ ]
+PASS: non-string needle
+Stack: [ ]
+PASS: non-fixnum start
+Stack: [ ]
+=== #byte-slice - basic ASCII ===
+Stack: [ ]
+PASS: slice prefix
+Stack: [ ]
+PASS: slice suffix
+Stack: [ ]
+PASS: empty slice
+Stack: [ ]
+PASS: full string
+Stack: [ ]
+=== #byte-slice - multi-byte on codepoint boundaries ===
+Stack: [ ]
+PASS: slice before multi-byte char
+Stack: [ ]
+PASS: slice the multi-byte char
+Stack: [ ]
+PASS: full multi-byte string
+Stack: [ ]
+=== #byte-slice - error cases ===
+Stack: [ ]
+PASS: negative start
+Stack: [ ]
+PASS: negative end
+Stack: [ ]
+PASS: start > end
+Stack: [ ]
+PASS: end beyond length
+Stack: [ ]
+PASS: start mid-codepoint
+Stack: [ ]
+PASS: end mid-codepoint
+Stack: [ ]
+PASS: non-string
+Stack: [ ]

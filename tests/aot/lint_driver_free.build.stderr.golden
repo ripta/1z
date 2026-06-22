@@ -6,4 +6,4 @@ Error: 3 words could not be compiled to C
       hint: blocked until row-variable stack regions can be modeled
   word '(try-rules)': NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-AOT interpreter fallbacks: 246 total (native=234 per-op-native=3 compound-uncompiled=7 quotation=2)
+AOT interpreter fallbacks: 247 total (native=235 per-op-native=3 compound-uncompiled=7 quotation=2)

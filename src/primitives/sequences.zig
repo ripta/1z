@@ -566,6 +566,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#reduce", .stack_effect = "seq init quot: ( acc elem -- acc' ) -- value", .doc = "Fold sequence with accumulator.", .func = nativeReduce },
     .{ .name = "#reduce-index", .stack_effect = "seq init quot: ( acc elem idx -- acc' ) -- value", .doc = "Fold sequence with accumulator and zero-based index.", .func = nativeReduceIndex },
     .{ .name = "#slice", .stack_effect = "seq start end -- subseq", .doc = "Extract subsequence from start (inclusive) to end (exclusive).", .func = nativeSlice },
+    .{ .name = "#byte-slice", .stack_effect = "str start-byte end-byte -- str", .doc = "Zero-copy byte-range sub-slice of a string; rejects mid-codepoint offsets.", .func = nativeByteSlice },
     .{ .name = "#take", .stack_effect = "seq n -- seq'", .doc = "Take first n elements of sequence.", .func = nativeTake },
     .{ .name = "#drop", .stack_effect = "seq n -- seq'", .doc = "Drop first n elements of sequence.", .func = nativeDrop },
     .{ .name = "#sort", .stack_effect = "seq quot: ( a b -- ? ) -- array", .doc = "Sort sequence using comparator quotation. Returns a new sorted array.", .func = nativeSort },
@@ -591,6 +592,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#in?", .stack_effect = "seq elem -- ?", .doc = "Test if sequence contains element (substring test for strings).", .func = nativeIn },
     .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .doc = "Find index of element, or f if not found.", .func = nativeIndexOf },
     .{ .name = "#index-of-from", .stack_effect = "str needle start -- n/f", .doc = "Find index of substring starting from codepoint position.", .func = nativeIndexOfFrom },
+    .{ .name = "#byte-index-of-from", .stack_effect = "str needle start-byte -- byte-n/f", .doc = "Find byte offset of substring starting from a byte offset; no codepoint accounting.", .func = nativeByteIndexOfFrom },
     // Freeze
     .{ .name = "freeze", .stack_effect = "vector -- array", .doc = "Convert a vector to an array (copy semantics).", .func = nativeFreeze, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Container conversion
@@ -1039,6 +1041,57 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+/// #byte-slice ( str start-byte end-byte -- str ) - Zero-copy byte-range sub-slice of a string
+fn nativeByteSlice(ctx: *Context) anyerror!void {
+    const end_val = try popFixnum(ctx);
+    const start_val = try popFixnum(ctx);
+    const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq);
+
+    const s = switch (seq) {
+        .string => |str| str,
+        else => {
+            setErrorContext(ctx, "#byte-slice requires string, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    };
+
+    if (start_val < 0) {
+        setErrorContext(ctx, "negative start byte offset {d}", .{start_val});
+        return error.IndexOutOfBounds;
+    }
+    if (end_val < 0) {
+        setErrorContext(ctx, "negative end byte offset {d}", .{end_val});
+        return error.IndexOutOfBounds;
+    }
+    if (start_val > end_val) {
+        setErrorContext(ctx, "start {d} > end {d}", .{ start_val, end_val });
+        return error.IndexOutOfBounds;
+    }
+
+    const start: usize = @intCast(start_val);
+    const end: usize = @intCast(end_val);
+
+    if (end > s.len) {
+        setErrorContext(ctx, "byte-slice [{}:{}] out of bounds for string of {} bytes", .{ start, end, s.len });
+        return error.IndexOutOfBounds;
+    }
+
+    // Reject offsets that land mid-codepoint so the result is always valid UTF-8.
+    // A byte is a UTF-8 continuation byte iff its top two bits are 10. An offset
+    // equal to s.len is the end-of-string boundary and is always valid.
+    if (start < s.len and (s[start] & 0xC0) == 0x80) {
+        setErrorContext(ctx, "start byte offset {d} falls mid-codepoint", .{start});
+        return error.InvalidUtf8;
+    }
+    if (end < s.len and (s[end] & 0xC0) == 0x80) {
+        setErrorContext(ctx, "end byte offset {d} falls mid-codepoint", .{end});
+        return error.InvalidUtf8;
+    }
+
+    try ctx.stack.push(.{ .string = s[start..end] });
 }
 
 /// #append ( seq1 seq2 -- seq ) - Concatenate seq2 to seq1, returns new sequence of type seq1
@@ -2212,6 +2265,67 @@ fn nativeIndexOfFrom(ctx: *Context) anyerror!void {
     }
 }
 
+/// #byte-index-of-from ( str needle start-byte -- byte-n/f ) - Find byte offset of substring from a byte offset
+fn nativeByteIndexOfFrom(ctx: *Context) anyerror!void {
+    const start_val = try ctx.stack.pop();
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(start_val);
+    defer container_backing.releaseValue(elem);
+    defer container_backing.releaseValue(seq);
+
+    const start_fixnum = switch (start_val) {
+        .fixnum => |i| i,
+        else => {
+            setErrorContext(ctx, "#byte-index-of-from requires fixnum start, got {s}", .{valueTypeName(start_val)});
+            return error.TypeMismatch;
+        },
+    };
+
+    const s = switch (seq) {
+        .string => |str| str,
+        else => {
+            setErrorContext(ctx, "#byte-index-of-from requires string, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    };
+
+    const needle = switch (elem) {
+        .string => |es| es,
+        else => {
+            setErrorContext(ctx, "#byte-index-of-from requires string needle, got {s}", .{valueTypeName(elem)});
+            return error.TypeMismatch;
+        },
+    };
+
+    if (start_fixnum < 0) {
+        setErrorContext(ctx, "negative start byte offset {d}", .{start_fixnum});
+        return error.IndexOutOfBounds;
+    }
+    const start: usize = @intCast(start_fixnum);
+
+    if (start > s.len) {
+        setErrorContext(ctx, "start byte offset {d} out of bounds for string of {d} bytes", .{ start, s.len });
+        return error.IndexOutOfBounds;
+    }
+
+    if (needle.len == 0) {
+        try ctx.stack.push(.{ .fixnum = @intCast(start) });
+        return;
+    }
+
+    if (start == s.len) {
+        try ctx.stack.push(.{ .boolean = false });
+        return;
+    }
+
+    if (std.mem.indexOfPos(u8, s, start, needle)) |byte_idx| {
+        try ctx.stack.push(.{ .fixnum = @intCast(byte_idx) });
+    } else {
+        try ctx.stack.push(.{ .boolean = false });
+    }
+}
+
 /// #take ( seq n -- seq' ) - First n elements
 pub fn nativeTake(ctx: *Context) anyerror!void {
     const n_val = try popFixnum(ctx);
@@ -3311,4 +3425,228 @@ test "#index-of-from non-string needle throws TypeMismatch" {
     try ctx.stack.push(.{ .fixnum = 42 });
     try ctx.stack.push(.{ .fixnum = 0 });
     try std.testing.expectError(error.TypeMismatch, nativeIndexOfFrom(&ctx));
+}
+
+test "#byte-index-of-from basic ASCII" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello world" });
+    try ctx.stack.push(.{ .string = "world" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try nativeByteIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(i64, 6), result.fixnum);
+}
+
+test "#byte-index-of-from with offset skips earlier match" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "a,b,c" });
+    try ctx.stack.push(.{ .string = "," });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try nativeByteIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(i64, 3), result.fixnum);
+}
+
+test "#byte-index-of-from not found returns f" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "xyz" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try nativeByteIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .boolean and result.boolean == false);
+}
+
+test "#byte-index-of-from empty needle returns start" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "" });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try nativeByteIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(i64, 3), result.fixnum);
+}
+
+test "#byte-index-of-from returns byte offset past multi-byte codepoint" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // "héllo": h(1) é(2 bytes) l l o; "llo" starts at byte 3 (codepoint index 2).
+    try ctx.stack.push(.{ .string = "héllo" });
+    try ctx.stack.push(.{ .string = "llo" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try nativeByteIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(i64, 3), result.fixnum);
+}
+
+test "#byte-index-of-from start at end returns f" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "l" });
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try nativeByteIndexOfFrom(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .boolean and result.boolean == false);
+}
+
+test "#byte-index-of-from negative start throws IndexOutOfBounds" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "l" });
+    try ctx.stack.push(.{ .fixnum = -1 });
+    try std.testing.expectError(error.IndexOutOfBounds, nativeByteIndexOfFrom(&ctx));
+}
+
+test "#byte-index-of-from start beyond end throws IndexOutOfBounds" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .string = "l" });
+    try ctx.stack.push(.{ .fixnum = 6 });
+    try std.testing.expectError(error.IndexOutOfBounds, nativeByteIndexOfFrom(&ctx));
+}
+
+test "#byte-index-of-from non-string str throws TypeMismatch" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try ctx.stack.push(.{ .string = "x" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try std.testing.expectError(error.TypeMismatch, nativeByteIndexOfFrom(&ctx));
+}
+
+test "#byte-slice basic ASCII" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello world" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try nativeByteSlice(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqualStrings("hello", result.string);
+}
+
+test "#byte-slice multi-byte on codepoint boundaries" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // "héllo": bytes h=0, é=1..2, l=3, l=4, o=5 (len 6). [0:3] = "hé".
+    try ctx.stack.push(.{ .string = "héllo" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try nativeByteSlice(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqualStrings("hé", result.string);
+}
+
+test "#byte-slice full string" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "héllo" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .fixnum = 6 });
+    try nativeByteSlice(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqualStrings("héllo", result.string);
+}
+
+test "#byte-slice empty slice" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try nativeByteSlice(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqualStrings("", result.string);
+}
+
+test "#byte-slice negative start throws IndexOutOfBounds" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .fixnum = -1 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try std.testing.expectError(error.IndexOutOfBounds, nativeByteSlice(&ctx));
+}
+
+test "#byte-slice start greater than end throws IndexOutOfBounds" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .fixnum = 4 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try std.testing.expectError(error.IndexOutOfBounds, nativeByteSlice(&ctx));
+}
+
+test "#byte-slice end beyond length throws IndexOutOfBounds" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .fixnum = 6 });
+    try std.testing.expectError(error.IndexOutOfBounds, nativeByteSlice(&ctx));
+}
+
+test "#byte-slice mid-codepoint start throws InvalidUtf8" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // byte 2 is the continuation byte of é, so starting there is mid-codepoint.
+    try ctx.stack.push(.{ .string = "héllo" });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try std.testing.expectError(error.InvalidUtf8, nativeByteSlice(&ctx));
+}
+
+test "#byte-slice mid-codepoint end throws InvalidUtf8" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // byte 2 is the continuation byte of é, so ending there is mid-codepoint.
+    try ctx.stack.push(.{ .string = "héllo" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try std.testing.expectError(error.InvalidUtf8, nativeByteSlice(&ctx));
+}
+
+test "#byte-slice non-string throws TypeMismatch" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try std.testing.expectError(error.TypeMismatch, nativeByteSlice(&ctx));
 }

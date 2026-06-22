@@ -40,3 +40,15 @@ PASS: only delimiter
 Stack: [ ]
 PASS: two delimiters
 Stack: [ ]
+=== split multi-byte UTF-8 ===
+Stack: [ ]
+PASS: multi-byte delimiter
+Stack: [ ]
+PASS: multi-byte content, ascii delimiter
+Stack: [ ]
+PASS: multi-byte content, no delimiter
+Stack: [ ]
+PASS: leading and trailing multi-byte delimiter
+Stack: [ ]
+PASS: multi-byte delimiter at end
+Stack: [ ]
