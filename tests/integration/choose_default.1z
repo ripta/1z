@@ -6,12 +6,15 @@ use "testing" ;
 
 \ The selector matches no explicit key, so the `_` region is selected.
 freebsd: choose{
-  linux: [ os-tag: [ "linux" ] ;
-]
-  macos: [ os-tag: [ "macos" ] ;
-]
-  _ [ os-tag: [ "posix" ] ;
-]
+  linux: [
+    os-tag: [ "linux" ] ;
+  ]
+  macos: [
+    os-tag: [ "macos" ] ;
+  ]
+  _ [
+    os-tag: [ "posix" ] ;
+  ]
 }
 os-tag "posix" "_ arm selected when no explicit key matches" assert=
 
@@ -20,9 +23,11 @@ os-tag "posix" "_ arm selected when no explicit key matches" assert=
 \ A `_` placed before an explicit key matches first and shadows the later key,
 \ exactly as case's trailing-quotation default would.
 linux: choose{
-  _ [ shadowed: [ "default" ] ;
-]
-  linux: [ shadowed: [ "linux" ] ;
-]
+  _ [
+    shadowed: [ "default" ] ;
+  ]
+  linux: [
+    shadowed: [ "linux" ] ;
+  ]
 }
 shadowed "default" "a leading _ shadows later branches" assert=

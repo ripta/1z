@@ -106,7 +106,7 @@ match{: parse-time [
 \ Raw-skip a balanced bracket group, tracking nesting depth across [ ] { } ( ).
 \ Reads tokens without evaluating them, so a skipped branch's parse-time words
 \ never fire.
-(choose-skip-bal): ( depth -- ) [
+(choose-skip-bal): ( depth: fixnum -- ) [
   dup 0 = [ drop ] [
     parse-token
     dup "[" = over "(" = or over #last "{" = or
@@ -131,7 +131,7 @@ match{: parse-time [
 
 \ Does a branch key token match the selector? `_` is the catch-all; any other
 \ key must be a symbol literal compared against the selector's `name:` form.
-(choose-key-match?): ( selkey keytok -- selkey ? ) [
+(choose-key-match?): ( selkey: string keytok: string -- selkey ? ) [
   dup "_" =
   [ drop t ]
   [ dup #last ":" = not
@@ -144,7 +144,7 @@ match{: parse-time [
 \ Scan branches forward looking for the first match. On a match, splice that
 \ branch's region inline and skip the rest; on a miss, skip the region and
 \ continue. At the closing brace with nothing matched, raise a parse-time error.
-(choose-scan): ( selkey -- ) [
+(choose-scan): ( selkey: string -- ) [
   peek-token "}" =
   [ parse-token drop
     drop
@@ -166,7 +166,7 @@ match{: parse-time [
 \\ instructions never reach the binary. Keys are symbol literals; a bare `_` arm
 \\ is the catch-all. The selected region is spliced inline, so a `;` in it
 \\ defines at the surrounding scope.
-choose{: parse-time [
+choose{: parse-time ( selector: symbol -- ) [
   dup symbol? not
   [ f "choose{ selector must be a symbol" EInvalidArgument make-error throw ]
   when

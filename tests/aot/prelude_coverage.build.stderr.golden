@@ -1,4 +1,4 @@
-Prelude compilation: 390/401 words compiled (97.3%)
+Prelude compilation: 391/402 words compiled (97.3%)
   word '#all' cannot be compiled
       NC.19: defines a helper word inside its body that AOT compilation cannot discover
       hint: move the helper into a private{ } block at module scope
@@ -33,10 +33,10 @@ Prelude compilation: 390/401 words compiled (97.3%)
       NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
 Quotation bodies compiled: 0
-Inline PIC sites: 5/48 generic call sites preseeded
-AOT interpreter fallbacks: 244 total
-  native: 227
-  compound-uncompiled: 4
+Inline PIC sites: 5/49 generic call sites preseeded
+AOT interpreter fallbacks: 246 total
+  native: 228
+  compound-uncompiled: 5
   quotation: 13
   sites:
     native: provenance? -> native.struct-type-predicate (line 0)
@@ -55,8 +55,8 @@ AOT interpreter fallbacks: 244 total
     native: >method-info -> native.hash-to-struct (line 0)
     native: >on -> native.enum-from-symbol (line 0)
     native: all-words -> native.all-words (line 1131)
-    ... 228 more
-  static-check: jitInterpretedCall=4/4 jitNativeWordCall=227/227 jitCallQuotation=13/13 (matches build-time inventory)
+    ... 230 more
+  static-check: jitInterpretedCall=5/5 jitNativeWordCall=228/228 jitCallQuotation=13/13 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter

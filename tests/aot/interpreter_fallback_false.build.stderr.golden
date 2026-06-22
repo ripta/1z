@@ -20,7 +20,7 @@ Warning: '3apply' parameter 'quot' has row-variable effect; quotation call falls
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'using-iterator' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: --interpreter-fallback=false rejects compound-fallback dispatch; 4 call sites still route through the interpreter
+Error: --interpreter-fallback=false rejects compound-fallback dispatch; 5 call sites still route through the interpreter
   'pragma-get' -> 'pragma-get?' (line 1163)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
@@ -33,5 +33,8 @@ Error: --interpreter-fallback=false rejects compound-fallback dispatch; 4 call s
   'generic?' -> '#any' (line 432)
       callee uncompiled: NC.19: defines a helper word inside its body that AOT compilation cannot discover
       hint: move the helper into a private{ } block at module scope
-AOT interpreter fallbacks: 231 total (native=221 compound-uncompiled=4 quotation=6)
-  static-check: jitInterpretedCall=4/4 jitNativeWordCall=221/221 jitCallQuotation=6/6 (matches build-time inventory)
+  'choose{' -> '(choose-scan)' (line 174)
+      callee uncompiled: NC.6: calls a word that is not available in the AOT compilation set
+      hint: blocked until the AOT resolver includes this word
+AOT interpreter fallbacks: 233 total (native=222 compound-uncompiled=5 quotation=6)
+  static-check: jitInterpretedCall=5/5 jitNativeWordCall=222/222 jitCallQuotation=6/6 (matches build-time inventory)
