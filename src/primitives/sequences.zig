@@ -554,6 +554,7 @@ pub const primitives = [_]Primitive{
         .func = nativeLen,
         .markers = &.{@constCast(&markers_mod.generic_marker)},
     },
+    .{ .name = "#byte-len", .stack_effect = "str -- n", .doc = "Length of a string in bytes. O(1); returns the underlying byte-slice length.", .func = nativeByteLen },
     // Sequence element access
     .{ .name = "#nth", .stack_effect = "seq n -- elem", .doc = "Get element at index.", .func = nativeNth, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#first", .stack_effect = "seq -- elem", .doc = "Get first element of sequence.", .func = nativeFirst, .markers = &.{@constCast(&markers_mod.generic_marker)} },
@@ -567,6 +568,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#reduce-index", .stack_effect = "seq init quot: ( acc elem idx -- acc' ) -- value", .doc = "Fold sequence with accumulator and zero-based index.", .func = nativeReduceIndex },
     .{ .name = "#slice", .stack_effect = "seq start end -- subseq", .doc = "Extract subsequence from start (inclusive) to end (exclusive).", .func = nativeSlice },
     .{ .name = "#byte-slice", .stack_effect = "str start-byte end-byte -- str", .doc = "Zero-copy byte-range sub-slice of a string; rejects mid-codepoint offsets.", .func = nativeByteSlice },
+    .{ .name = "#byte-decode", .stack_effect = "str byte-offset -- char next-byte-offset", .doc = "Decode the codepoint at a byte offset, returning it as a single-codepoint string and the byte offset just past it.", .func = nativeByteDecode },
     .{ .name = "#take", .stack_effect = "seq n -- seq'", .doc = "Take first n elements of sequence.", .func = nativeTake },
     .{ .name = "#drop", .stack_effect = "seq n -- seq'", .doc = "Drop first n elements of sequence.", .func = nativeDrop },
     .{ .name = "#sort", .stack_effect = "seq quot: ( a b -- ? ) -- array", .doc = "Sort sequence using comparator quotation. Returns a new sorted array.", .func = nativeSort },
@@ -1092,6 +1094,66 @@ fn nativeByteSlice(ctx: *Context) anyerror!void {
     }
 
     try ctx.stack.push(.{ .string = s[start..end] });
+}
+
+/// #byte-len ( str -- n ) - Length of a string in bytes
+fn nativeByteLen(ctx: *Context) anyerror!void {
+    const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq);
+
+    const s = switch (seq) {
+        .string => |str| str,
+        else => {
+            setErrorContext(ctx, "#byte-len requires string, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    };
+
+    try ctx.stack.push(.{ .fixnum = @intCast(s.len) });
+}
+
+/// #byte-decode ( str byte-offset -- char next-byte-offset ) - Decode the codepoint at a byte offset
+fn nativeByteDecode(ctx: *Context) anyerror!void {
+    const offset_val = try popFixnum(ctx);
+    const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(seq);
+
+    const s = switch (seq) {
+        .string => |str| str,
+        else => {
+            setErrorContext(ctx, "#byte-decode requires string, got {s}", .{valueTypeName(seq)});
+            return error.TypeMismatch;
+        },
+    };
+
+    if (offset_val < 0) {
+        setErrorContext(ctx, "negative byte offset {d}", .{offset_val});
+        return error.IndexOutOfBounds;
+    }
+    const off: usize = @intCast(offset_val);
+    if (off >= s.len) {
+        setErrorContext(ctx, "byte offset {d} at or past end of string of {d} bytes", .{ off, s.len });
+        return error.IndexOutOfBounds;
+    }
+
+    // A continuation byte (top two bits 10) is mid-codepoint and cannot start one.
+    if ((s[off] & 0xC0) == 0x80) {
+        setErrorContext(ctx, "byte offset {d} falls mid-codepoint", .{off});
+        return error.InvalidUtf8;
+    }
+
+    const width = std.unicode.utf8ByteSequenceLength(s[off]) catch {
+        setErrorContext(ctx, "invalid UTF-8 lead byte at offset {d}", .{off});
+        return error.InvalidUtf8;
+    };
+    const next = off + width;
+    if (next > s.len) {
+        setErrorContext(ctx, "truncated UTF-8 sequence at offset {d}", .{off});
+        return error.InvalidUtf8;
+    }
+
+    try ctx.stack.push(.{ .string = s[off..next] });
+    try ctx.stack.push(.{ .fixnum = @intCast(next) });
 }
 
 /// #append ( seq1 seq2 -- seq ) - Concatenate seq2 to seq1, returns new sequence of type seq1

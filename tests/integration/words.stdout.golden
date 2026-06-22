@@ -2,7 +2,9 @@ Stack: [ ]
 === Native Primitives ===
 #append ( seq1 seq2 -- seq )
 #append! ( vec seq -- vec )
+#byte-decode ( str byte-offset -- char next-byte-offset )
 #byte-index-of-from ( str needle start-byte -- byte-n/f )
+#byte-len ( str -- n )
 #byte-slice ( str start-byte end-byte -- str )
 #collect ( iterator -- array )
 #count ( iterator -- n )

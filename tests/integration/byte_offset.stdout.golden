@@ -80,3 +80,61 @@ PASS: end mid-codepoint
 Stack: [ ]
 PASS: non-string
 Stack: [ ]
+=== #byte-len - basic ===
+Stack: [ ]
+PASS: ASCII byte length equals codepoint length
+Stack: [ ]
+PASS: empty string is zero bytes
+Stack: [ ]
+PASS: multi-byte string counts bytes not codepoints
+Stack: [ ]
+PASS: byte length across multiple multi-byte chars
+Stack: [ ]
+=== #byte-len - error cases ===
+Stack: [ ]
+PASS: non-string
+Stack: [ ]
+=== #byte-decode - ASCII ===
+Stack: [ ]
+PASS: decode first char
+Stack: [ ]
+PASS: ASCII next offset is off+1
+Stack: [ ]
+PASS: decode last char
+Stack: [ ]
+PASS: last char next offset is length
+Stack: [ ]
+=== #byte-decode - multi-byte ===
+Stack: [ ]
+PASS: decode 2-byte codepoint
+Stack: [ ]
+PASS: 2-byte codepoint advances offset by 2
+Stack: [ ]
+PASS: decode 3-byte codepoint
+Stack: [ ]
+PASS: 3-byte codepoint advances offset by 3
+Stack: [ ]
+=== #byte-decode - sequential walk ===
+Stack: [ ]
+PASS: walk char 0
+Stack: [ ]
+PASS: walk char 1 at byte 1
+Stack: [ ]
+PASS: walk char 2 at byte 3
+Stack: [ ]
+PASS: final next offset is byte length
+Stack: [ ]
+=== #byte-decode - error cases ===
+Stack: [ ]
+PASS: negative offset
+Stack: [ ]
+PASS: offset at end
+Stack: [ ]
+PASS: offset past end
+Stack: [ ]
+PASS: offset mid-codepoint
+Stack: [ ]
+PASS: non-string
+Stack: [ ]
+PASS: non-fixnum offset
+Stack: [ ]
