@@ -1,0 +1,10 @@
+=== choose default arm ===
+Stack: [ ]
+Stack: [ ]
+PASS: _ arm selected when no explicit key matches
+Stack: [ ]
+=== choose default not enforced last ===
+Stack: [ ]
+Stack: [ ]
+PASS: a leading _ shadows later branches
+Stack: [ ]

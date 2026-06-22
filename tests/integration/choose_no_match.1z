@@ -1,0 +1,6 @@
+\ choose{ with no matching key and no `_` arm raises a parse-time error.
+
+freebsd: choose{
+  linux: [ 1 ]
+  macos: [ 2 ]
+}

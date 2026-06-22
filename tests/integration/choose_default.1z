@@ -1,0 +1,28 @@
+\ choose{ falls back to the bare `_` catch-all arm when no explicit key matches.
+
+use "testing" ;
+
+"choose default arm" test-section
+
+\ The selector matches no explicit key, so the `_` region is selected.
+freebsd: choose{
+  linux: [ os-tag: [ "linux" ] ;
+]
+  macos: [ os-tag: [ "macos" ] ;
+]
+  _ [ os-tag: [ "posix" ] ;
+]
+}
+os-tag "posix" "_ arm selected when no explicit key matches" assert=
+
+"choose default not enforced last" test-section
+
+\ A `_` placed before an explicit key matches first and shadows the later key,
+\ exactly as case's trailing-quotation default would.
+linux: choose{
+  _ [ shadowed: [ "default" ] ;
+]
+  linux: [ shadowed: [ "linux" ] ;
+]
+}
+shadowed "default" "a leading _ shadows later branches" assert=

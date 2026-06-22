@@ -1,0 +1,1 @@
+tests/integration/choose_no_match.1z:6: error 'invalid-argument' choose{ has no matching branch and no _ default arm

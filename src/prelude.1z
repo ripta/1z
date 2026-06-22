@@ -100,6 +100,80 @@ match{: parse-time [
   unchecked-match: emit-call
 ] ;
 
+\ Parse-time conditional inclusion. These helpers run during `choose{`'s
+\ parse-time execution, so they are plain runtime words, not parse-time words.
+
+\ Raw-skip a balanced bracket group, tracking nesting depth across [ ] { } ( ).
+\ Reads tokens without evaluating them, so a skipped branch's parse-time words
+\ never fire.
+(choose-skip-bal): ( depth -- ) [
+  dup 0 = [ drop ] [
+    parse-token
+    dup "[" = over "(" = or over #last "{" = or
+    [ drop 1 + ]
+    [ dup "]" = over "}" = or over ")" = or [ drop 1 - ] [ drop ] if ]
+    if
+    (choose-skip-bal)
+  ] if
+] ;
+
+\ A branch has already been selected: raw-skip every remaining branch up to the
+\ closing brace, then consume the brace.
+(choose-skip-rest): ( -- ) [
+  peek-token "}" =
+  [ parse-token drop ]
+  [ parse-token drop
+    parse-token drop
+    1 (choose-skip-bal)
+    (choose-skip-rest)
+  ] if
+] ;
+
+\ Does a branch key token match the selector? `_` is the catch-all; any other
+\ key must be a symbol literal compared against the selector's `name:` form.
+(choose-key-match?): ( selkey keytok -- selkey ? ) [
+  dup "_" =
+  [ drop t ]
+  [ dup #last ":" = not
+    [ f "choose{ branch key must be a symbol literal or _" EInvalidArgument make-error throw ]
+    when
+    over =
+  ] if
+] ;
+
+\ Scan branches forward looking for the first match. On a match, splice that
+\ branch's region inline and skip the rest; on a miss, skip the region and
+\ continue. At the closing brace with nothing matched, raise a parse-time error.
+(choose-scan): ( selkey -- ) [
+  peek-token "}" =
+  [ parse-token drop
+    drop
+    f "choose{ has no matching branch and no _ default arm" EInvalidArgument make-error throw
+  ]
+  [ parse-token
+    (choose-key-match?)
+    parse-token "[" = not
+    [ f "choose{ branch key must be followed by [" EInvalidArgument make-error throw ]
+    when
+    [ drop "]" parse-until emit-body (choose-skip-rest) ]
+    [ 1 (choose-skip-bal) (choose-scan) ]
+    if
+  ] if
+] ;
+
+\\ Parse-time dispatch on a symbol selector: include only the branch whose key
+\\ matches, raw-skipping the rest so their parse-time words never fire and their
+\\ instructions never reach the binary. Keys are symbol literals; a bare `_` arm
+\\ is the catch-all. The selected region is spliced inline, so a `;` in it
+\\ defines at the surrounding scope.
+choose{: parse-time [
+  dup symbol? not
+  [ f "choose{ selector must be a symbol" EInvalidArgument make-error throw ]
+  when
+  >string ":" #append
+  (choose-scan)
+] ;
+
 \ Standard sum types
 \\ Backing struct for option:some.
 option-payload: struct{ value } ;

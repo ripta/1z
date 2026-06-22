@@ -1,0 +1,22 @@
+=== choose explicit branch selection ===
+Stack: [ ]
+Stack: [ ]
+PASS: selected branch defines at module scope
+Stack: [ ]
+=== choose first match wins, later branches skipped ===
+Stack: [ ]
+Stack: [ ]
+PASS: first matching key wins over a trailing _
+Stack: [ ]
+=== choose unselected parse-time words never fire ===
+Stack: [ ]
+Stack: [ ]
+PASS: selected branch ran
+Stack: [ ]
+PASS: unselected struct{ never registered make-pt
+Stack: [ ]
+=== choose splices a region containing nested brackets ===
+Stack: [ ]
+Stack: [ ]
+PASS: nested brackets in the selected region splice correctly
+Stack: [ ]

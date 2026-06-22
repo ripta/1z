@@ -1,0 +1,55 @@
+\ choose{ selects the branch whose symbol key matches the selector, splices its
+\ region inline, and raw-skips the rest so their parse-time words never fire.
+
+use "testing" ;
+
+"choose explicit branch selection" test-section
+
+\ The selected region's inline `;` defines at module scope; the unselected
+\ branches (including a present `_`) do not run.
+linux: choose{
+  linux: [ os-tag: [ "linux" ] ;
+]
+  macos: [ os-tag: [ "macos" ] ;
+]
+  _ [ os-tag: [ "other" ] ;
+]
+}
+os-tag "linux" "selected branch defines at module scope" assert=
+
+"choose first match wins, later branches skipped" test-section
+
+\ A matching key earlier in the list wins; a later `_` does not override it.
+macos: choose{
+  linux: [ pick: [ 1 ] ;
+]
+  macos: [ pick: [ 2 ] ;
+]
+  _ [ pick: [ 9 ] ;
+]
+}
+pick 2 "first matching key wins over a trailing _" assert=
+
+"choose unselected parse-time words never fire" test-section
+
+\ The unselected macos branch contains a struct{ ; its constructor must be absent
+\ because that branch was raw-skipped, not parsed.
+linux: choose{
+  linux: [ ran-tag: [ 1 ] ;
+]
+  macos: [ pt: struct{ x: fixnum y: fixnum } ;
+]
+}
+ran-tag 1 "selected branch ran" assert=
+[ 1 2 make-pt ] "unselected struct{ never registered make-pt" assert-error
+
+"choose splices a region containing nested brackets" test-section
+
+\ A matched region with nested [ ] quotations splices inline correctly.
+linux: choose{
+  macos: [ run: [ 0 ] ;
+]
+  linux: [ run: [ [ 5 ] call ] ;
+]
+}
+run 5 "nested brackets in the selected region splice correctly" assert=
