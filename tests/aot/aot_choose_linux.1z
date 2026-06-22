@@ -4,8 +4,14 @@
 \ would fail with a duplicate const definition. It builds and prints the linux
 \ value, proving the macos and _ branches are absent.
 linux: choose{
-  linux: [ tag: ( -- n ) [ 1 ] ; ]
-  macos: [ tag: ( -- n ) [ 2 ] ; ]
-  _ [ tag: ( -- n ) [ 9 ] ; ]
+  linux: [
+    tag: ( -- n ) [ 1 ] ;
+  ]
+  macos: [
+    tag: ( -- n ) [ 2 ] ;
+  ]
+  _ [
+    tag: ( -- n ) [ 9 ] ;
+  ]
 }
 tag .

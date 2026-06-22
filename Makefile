@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -472,6 +472,10 @@ benchmark-lint: release ## Build the runtime-image AOT lint driver and time it a
 	@scripts/benchmark-lint.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/lint_bench.aot \
 		tests/integration/combinators.1z lib/data/json.1z > tests/benchmark/lint_bench.sample
 	@cat tests/benchmark/lint_bench.sample
+
+benchmark-tokenize: release ## Run the tokenizer scaling benchmark and record the linearity sample
+	./$(ZIG_PREFIX)/bin/1z run --max-memory=2G tests/benchmark/bench_tokenize_scaling.1z > tests/benchmark/bench_tokenize_scaling.sample
+	@cat tests/benchmark/bench_tokenize_scaling.sample
 
 # NOTE(ripta): The focused split-based, index-based, flat (struct-free), and `while`-driven harnesses
 #              build successfully with `--emit-runtime-image`. Their AOT runtime currently errors at

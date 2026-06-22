@@ -1,0 +1,58 @@
+\ Benchmark: tokenization is linear in input length, not quadratic.
+\
+\ Runs the exact `1z-tokenize #collect` path the linter's hot loop uses (the
+\ same path bench_tokenize_iso.1z isolates) across a sweep of input sizes. The
+\ scanner (lib/scanner.1z) now addresses its input by byte offset, so `peek` /
+\ `advance` / `rest` are O(1)/O(slice) instead of re-walking codepoints from the
+\ string start. The signal is the per-byte cost: with a byte-offset cursor the
+\ elapsed time grows in proportion to input size (flat ns/byte); with the old
+\ codepoint cursor it grew with the square (ns/byte rising with size).
+\
+\ Each `mult` is the chunk repeated that many times, so a 4x larger input under
+\ a linear scanner takes ~4x the time. Compare the elapsed_ns column across the
+\ 4x size steps to read off linearity directly.
+
+use "scanner" ;
+use "lexer" ;
+use "1z-tokens" ;
+use { repeat: } "strings" ;
+
+\ The same representative chunk bench_tokenize_iso.1z uses: stack effects,
+\ symbols, brace prefixes, strings, numbers, comments.
+chunk: ( -- str ) const [
+  "double: ( n -- n ) [ 2 * ] ;\nH{ kind: word: match: [ foo ] }\n\\ a doc\nx: const [ 42 0xFF 3.14 ] ;\nv: virtual{ fixnum } ;\n"
+] ;
+
+count-tokens: ( str -- n ) [ 1z-tokenize #collect #len ] ;
+
+iters: ( -- fixnum ) const [ 5 ] ;
+
+\ Build the source ONCE on the stack and `dup` it through the timed loop --
+\ `const` does not memoize, so rebuilding inside the loop would let `repeat`,
+\ not the tokenizer, dominate the timing (the bench_strlen_scaling.1z hazard).
+report-src: ( src -- ) [
+  "bytes=" over #byte-len >string #append
+  "  tokens=" #append over count-tokens >string #append
+  "  elapsed_ns=" #append
+  swap
+  [ iters [ dup count-tokens drop ] times drop ] benchmark "elapsed_ns" @get
+  >string #append print-line
+] ;
+
+run-size: ( mult -- ) [
+  "tokenize-scaling mult=" over >string #append "  " #append print
+  chunk swap repeat report-src
+] ;
+
+\ warm
+chunk 16 repeat count-tokens drop
+
+"tokenize-scaling iters: " print iters .
+
+1 run-size
+2 run-size
+4 run-size
+8 run-size
+16 run-size
+32 run-size
+64 run-size
