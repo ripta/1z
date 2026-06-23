@@ -312,7 +312,9 @@ pub const Formatter = struct {
                     // In either case the next statement belongs on its own line.
                     // Inside a single-line block (a quotation or brace form the user kept on one line), the `;`
                     // is part of that line and must not force a break, or the closing bracket gets orphaned.
-                    const ends_statement = indent_level == 0 or self.isInMultiLineBlock(i);
+                    // The block counts as multi-line when a newline appears anywhere within it, even if its
+                    // first content shares the opening line (as in `matrix{ 1 ;` ... `}`).
+                    const ends_statement = indent_level == 0 or self.enclosingBlockIsMultiLine(i);
                     if (ends_statement) {
                         // After semicolon, write pending comments and newline
                         for (pending_comments.items) |comment| {
@@ -421,6 +423,42 @@ pub const Formatter = struct {
                             break;
                         }
                         k += 1;
+                    }
+                    return false;
+                }
+                depth -= 1;
+            }
+        }
+        return false;
+    }
+
+    /// Determine whether the block enclosing pos spans multiple lines, scanning the whole
+    /// block rather than only the gap after its opening bracket. A `matrix{ 1 ;` ... `}` form
+    /// keeps its first content on the opening line yet is still multi-line, so the row-separating
+    /// `;` tokens must break.
+    fn enclosingBlockIsMultiLine(self: *Formatter, pos: usize) bool {
+        // Find the enclosing opening bracket by walking backwards with depth tracking.
+        var depth: i32 = 0;
+        var j: usize = pos;
+        while (j > 0) {
+            j -= 1;
+            const t = self.tokens.items[j];
+            if (t.isClosing()) {
+                depth += 1;
+            } else if (t.isOpening()) {
+                if (depth == 0) {
+                    // Scan forward from the opening bracket to its matching close for any newline.
+                    var inner_depth: i32 = 0;
+                    var k = j + 1;
+                    while (k < self.tokens.items.len) : (k += 1) {
+                        const u = self.tokens.items[k];
+                        if (u.kind == .newline) return true;
+                        if (u.isOpening()) {
+                            inner_depth += 1;
+                        } else if (u.isClosing()) {
+                            if (inner_depth == 0) return false;
+                            inner_depth -= 1;
+                        }
                     }
                     return false;
                 }
