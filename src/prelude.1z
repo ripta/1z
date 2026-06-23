@@ -835,7 +835,7 @@ loop: loop-combinator ( ... pred: ( ... -- ... ? ) -- ... ) [
 \\ Dispatch on a value by matching it against an array of `{ key quot }` pairs.
 \\ A trailing bare quotation acts as the default branch.
 \\ Throws `no-matching-branch` if no branch matches.
-case: branch-combinator ( val branches -- ... ) [
+case: branch-combinator partial-dispatch ( val branches -- ... ) [
   dup #len 0 = [
     drop no-matching-branch throw
   ] [
@@ -855,7 +855,7 @@ case: branch-combinator ( val branches -- ... ) [
 \\ Each branch is a `{ pred-quot body-quot }` pair.
 \\ A trailing bare quotation acts as the default branch.
 \\ Throws `no-matching-branch` if no branch matches.
-cond: branch-combinator ( branches -- ... ) [
+cond: branch-combinator partial-dispatch ( branches -- ... ) [
   dup #len 0 = [
     drop { cond: } no-matching-branch throw
   ] [

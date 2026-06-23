@@ -1,0 +1,25 @@
+=== partial-dispatch marker identity ===
+Stack: [ ]
+Stack: [ t ]
+PASS: partial-dispatch marker has pointer identity
+Stack: [ ]
+=== partial-dispatch on user-defined words ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: user word carries partial-dispatch
+Stack: [ ]
+=== partial-dispatch on case and cond ===
+Stack: [ ]
+Stack: [ t ]
+PASS: case has partial-dispatch
+Stack: [ ]
+Stack: [ t ]
+PASS: cond has partial-dispatch
+Stack: [ ]
+Stack: [ t ]
+PASS: case still has branch-combinator
+Stack: [ ]
+Stack: [ t ]
+PASS: cond still has branch-combinator
+Stack: [ ]

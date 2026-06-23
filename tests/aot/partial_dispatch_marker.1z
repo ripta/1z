@@ -1,0 +1,8 @@
+\ Exercises the well-known partial-dispatch marker under runtime-image AOT.
+\ The freshly-pushed marker must compare equal to the one serialized onto
+\ `case`'s word definition: the image loader resolves the serialized marker
+\ through lookupWellKnownMarker back to the static singleton, preserving
+\ freeze->runtime pointer identity.
+
+partial-dispatch partial-dispatch = .
+"case" word-markers [ partial-dispatch = ] #filter #count 0 > .

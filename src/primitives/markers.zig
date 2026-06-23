@@ -43,6 +43,12 @@ pub const branch_combinator_marker: Marker = .{ .name = "branch-combinator" };
 /// Indicates the word repeatedly executes a quotation argument.
 pub const loop_combinator_marker: Marker = .{ .name = "loop-combinator" };
 
+/// Well-known marker for words that dispatch over an open, non-exhaustive set
+/// of branches and fall through to `no-matching-branch` unless a default arm
+/// is present. Untied from the combinator family: open-dispatch and
+/// combinator-ness are orthogonal.
+pub const partial_dispatch_marker: Marker = .{ .name = "partial-dispatch" };
+
 /// Well-known marker for shadow-ok word definitions.
 /// When present on a `use` invocation, suppresses the import conflict check.
 pub const shadow_ok_marker: Marker = .{ .name = "shadow-ok" };
@@ -231,6 +237,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "const", .stack_effect = "-- marker", .doc = "Push the well-known const marker.", .func = nativeConstMarker, .parse_time = true },
     .{ .name = "branch-combinator", .stack_effect = "-- marker", .doc = "Push the well-known branch-combinator marker.", .func = nativeBranchCombinatorMarker, .parse_time = true },
     .{ .name = "loop-combinator", .stack_effect = "-- marker", .doc = "Push the well-known loop-combinator marker.", .func = nativeLoopCombinatorMarker, .parse_time = true },
+    .{ .name = "partial-dispatch", .stack_effect = "-- marker", .doc = "Push the well-known partial-dispatch marker. Indicates open, non-exhaustive branch dispatch.", .func = nativePartialDispatchMarker, .parse_time = true },
     .{ .name = "shadow-ok", .stack_effect = "-- marker", .doc = "Push the well-known shadow-ok marker. Suppresses the import conflict check on `use`.", .func = nativeShadowOkMarker, .parse_time = true },
     .{ .name = "typed", .stack_effect = "-- marker", .doc = "Push the well-known typed marker.", .func = nativeTypedMarker, .parse_time = true },
     .{ .name = "stack-recursive", .stack_effect = "-- marker", .doc = "Push the well-known stack-recursive marker.", .func = nativeStackRecursiveMarker, .parse_time = true },
@@ -297,6 +304,11 @@ pub fn nativeBranchCombinatorMarker(ctx: *Context) anyerror!void {
 /// loop-combinator ( -- marker ) - Push the well-known loop-combinator marker
 pub fn nativeLoopCombinatorMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&loop_combinator_marker) });
+}
+
+/// partial-dispatch ( -- marker ) - Push the well-known partial-dispatch marker
+pub fn nativePartialDispatchMarker(ctx: *Context) anyerror!void {
+    try ctx.stack.push(.{ .marker = @constCast(&partial_dispatch_marker) });
 }
 
 /// shadow-ok ( -- marker ) - Push the well-known shadow-ok marker
@@ -399,6 +411,11 @@ pub fn isLoopCombinatorMarker(mk: *const Marker) bool {
     return mk == &loop_combinator_marker;
 }
 
+/// Check if a marker is the well-known partial-dispatch marker
+pub fn isPartialDispatchMarker(mk: *const Marker) bool {
+    return mk == &partial_dispatch_marker;
+}
+
 /// Check if a marker is the well-known shadow-ok marker
 pub fn isShadowOkMarker(mk: *const Marker) bool {
     return mk == &shadow_ok_marker;
@@ -478,6 +495,7 @@ pub fn lookupWellKnownMarker(name: []const u8) ?*Marker {
     if (std.mem.eql(u8, name, "const")) return @constCast(&const_marker);
     if (std.mem.eql(u8, name, "branch-combinator")) return @constCast(&branch_combinator_marker);
     if (std.mem.eql(u8, name, "loop-combinator")) return @constCast(&loop_combinator_marker);
+    if (std.mem.eql(u8, name, "partial-dispatch")) return @constCast(&partial_dispatch_marker);
     if (std.mem.eql(u8, name, "shadow-ok")) return @constCast(&shadow_ok_marker);
     if (std.mem.eql(u8, name, "typed")) return @constCast(&typed_marker);
     if (std.mem.eql(u8, name, "stack-recursive")) return @constCast(&stack_recursive_marker);

@@ -1,0 +1,28 @@
+\ Test that the partial-dispatch marker pushes with pointer identity, attaches
+\ to user-defined words and round-trips through word-markers, and is carried by
+\ the open-dispatch prelude words case and cond alongside branch-combinator.
+
+use "testing" ;
+
+"partial-dispatch marker identity" test-section
+
+partial-dispatch partial-dispatch =
+t "partial-dispatch marker has pointer identity" assert=
+
+"partial-dispatch on user-defined words" test-section
+
+user-dispatch: partial-dispatch [ ] ;
+"user-dispatch" word-markers [ partial-dispatch = ] #filter #count 1 =
+t "user word carries partial-dispatch" assert=
+
+"partial-dispatch on case and cond" test-section
+
+"case" word-markers [ partial-dispatch = ] #filter #count 1 =
+t "case has partial-dispatch" assert=
+"cond" word-markers [ partial-dispatch = ] #filter #count 1 =
+t "cond has partial-dispatch" assert=
+
+"case" word-markers [ branch-combinator = ] #filter #count 1 =
+t "case still has branch-combinator" assert=
+"cond" word-markers [ branch-combinator = ] #filter #count 1 =
+t "cond still has branch-combinator" assert=

@@ -40,7 +40,7 @@ Stack: [ ]
 Dispatch on a value by matching it against an array of `{ key quot }` pairs.
 A trailing bare quotation acts as the default branch.
 Throws `no-matching-branch` if no branch matches.
-case ( val branches -- ... ) [<marker:branch-combinator>] \compound
+case ( val branches -- ... ) [<marker:partial-dispatch>, <marker:branch-combinator>] \compound
 
 Stack: [ ]
 Format a string by interpolating values from a source using a template string.
