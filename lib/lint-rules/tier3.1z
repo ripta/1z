@@ -340,7 +340,7 @@ make-lint-rule register-lint-rule
 (sequence-param-name?): ( param -- ? ) [
   name>> >string
   { "seq" "arr" "array" "list" "iter" "iterator"
-    "string" "str" "vec" "bytes" "elts" "items"
+    "string" "str" "vec" "bytes" "byte-array" "elts" "items"
     "elements" "seqs" "collections"
   }
   swap [ = ] curry #any

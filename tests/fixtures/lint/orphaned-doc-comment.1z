@@ -1,2 +1,6 @@
 \\ orphaned doc comment
 42
+
+\\ A doc comment on a private helper is not orphaned: the (name): definition
+\\ tokenizes as a stack-effect token, which the rule must accept.
+(private-helper): ( x -- x ) [ ] ;

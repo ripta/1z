@@ -1,2 +1,6 @@
 \\ Double a number.
 #double: ( n -- n ) [ 2 * ] ;
+
+\\ Length of a byte array; the byte-array param is a sequence, so the # prefix
+\\ is appropriate and must not be flagged.
+#blen: ( byte-array -- fixnum ) [ #len ] ;

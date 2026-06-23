@@ -216,7 +216,10 @@ use "conversions" ;
         drop
       ] [
         1 pick-n dup f = not [
-          1 pick-n kind>> symbol: = [
+          \ A private-word definition (name): tokenizes as a stack-effect:
+          \ token (the (name) parens), not a symbol:, so accept either as a
+          \ definition the doc comment attaches to.
+          1 pick-n kind>> dup symbol: = swap stack-effect: = or [
             drop
           ] [
             "orphaned-doc-comment" warning:

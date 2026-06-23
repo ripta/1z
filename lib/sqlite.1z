@@ -58,9 +58,9 @@ ESqliteError: [ sqlite-error: ] ;
 \\ Open a SQLite database, returning a db-handle. Throws ESqliteError on failure.
 open: ( path -- db-handle ) [
   (open)
-  \\ Stack: resource rc
+  \ Stack: resource rc
   dup SQLITE_OK = [ drop ] [
-    \\ sqlite3_open allocates a handle even on error; close it before throwing
+    \ sqlite3_open allocates a handle even on error; close it before throwing
     swap dup (errmsg) swap resource-close
     ESqliteError make-error throw
   ] if

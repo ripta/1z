@@ -33,17 +33,17 @@ compress-level: ( byte-array level -- byte-array ) [
   swap
   dup #len (compress-bound)
   dup bytes-alloc
-  \\ Stack: level input bound out-buf
+  \ Stack: level input bound out-buf
   bytes>ffi-ptr
-  \\ Stack: level input bound out-buf dest-ptr
+  \ Stack: level input bound out-buf dest-ptr
   2 pick-n
-  \\ Stack: level input bound out-buf dest-ptr destLen
+  \ Stack: level input bound out-buf dest-ptr destLen
   4 pick-n bytes>ffi-ptr+len
-  \\ Stack: level input bound out-buf dest-ptr destLen src-ptr srcLen
+  \ Stack: level input bound out-buf dest-ptr destLen src-ptr srcLen
   7 pick-n
-  \\ Stack: level input bound out-buf dest-ptr destLen src-ptr srcLen level
+  \ Stack: level input bound out-buf dest-ptr destLen src-ptr srcLen level
   (compress2)
-  \\ Stack: level input bound out-buf actual-destLen return-code
+  \ Stack: level input bound out-buf actual-destLen return-code
   (check-zlib)
   bytes-resize!
   3nip
@@ -63,15 +63,15 @@ uncompress-max: ( byte-array max-size -- byte-array ) [
 \\ Decompress expecting a known output size. Single attempt, no retry.
 uncompress-sized: ( byte-array expected-len -- byte-array ) [
   dup bytes-alloc
-  \\ Stack: input expected out-buf
+  \ Stack: input expected out-buf
   bytes>ffi-ptr
-  \\ Stack: input expected out-buf dest-ptr
+  \ Stack: input expected out-buf dest-ptr
   2 pick-n
-  \\ Stack: input expected out-buf dest-ptr destLen
+  \ Stack: input expected out-buf dest-ptr destLen
   4 pick-n bytes>ffi-ptr+len
-  \\ Stack: input expected out-buf dest-ptr destLen src-ptr srcLen
+  \ Stack: input expected out-buf dest-ptr destLen src-ptr srcLen
   (uncompress-raw)
-  \\ Stack: input expected out-buf actual-destLen return-code
+  \ Stack: input expected out-buf actual-destLen return-code
   (check-zlib)
   bytes-resize!
   2nip
@@ -94,30 +94,30 @@ uncompress-sized: ( byte-array expected-len -- byte-array ) [
 \\ Try a single decompression at a given buffer size.
 \\ Returns option:some on success, option:none on buffer-too-small.
 (try-uncompress): ( guess input -- option ) [
-  \\ Stack: guess input
+  \ Stack: guess input
   over bytes-alloc
-  \\ Stack: guess input out-buf
+  \ Stack: guess input out-buf
   bytes>ffi-ptr
-  \\ Stack: guess input out-buf dest-ptr
+  \ Stack: guess input out-buf dest-ptr
   3 pick-n
-  \\ Stack: guess input out-buf dest-ptr destLen(=guess)
+  \ Stack: guess input out-buf dest-ptr destLen(=guess)
   3 pick-n bytes>ffi-ptr+len
-  \\ Stack: guess input out-buf dest-ptr destLen src-ptr srcLen
+  \ Stack: guess input out-buf dest-ptr destLen src-ptr srcLen
   (uncompress-raw)
-  \\ Stack: guess input out-buf actual-destLen return-code
+  \ Stack: guess input out-buf actual-destLen return-code
   dup 0 = [
     drop
-    \\ Stack: guess input out-buf actual-destLen
+    \ Stack: guess input out-buf actual-destLen
     bytes-resize!
     2nip
     >option:some
   ] [
     dup -5 = [
-      \\ Buffer too small, clean up
+      \ Buffer too small, clean up
       drop drop drop drop drop
       >option:none
     ] [
-      \\ Other zlib error
+      \ Other zlib error
       (check-zlib)
     ] if
   ] if
