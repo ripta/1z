@@ -4428,6 +4428,231 @@ fn emitChooseBuiltin(
     stack[output_slot] = .{ .raw_at_slot = output_slot };
 }
 
+/// How a per-op intrinsic handler tells `compileInstructions` to continue.
+///
+/// `next` lets the iteration finish through the shared epilogue, which is the normal fall-through.
+/// It also stands in for an explicit `continue`, since after the row-fallback paths the epilogue
+/// is a noöp.
+///
+/// `stop` ends compilation of the body, replacing the `break` the row-fallback arms take when no
+/// native could be emitted.
+const ControlFlow = enum { next, stop };
+
+/// The inputs a per-op intrinsic handler needs at the dispatch boundary.
+/// Everything else is reached through `state`.
+const EmitCtx = struct {
+    state: *CompileState,
+    instructions: []const Instruction,
+    idx: usize,
+    name: []const u8,
+    stack: []StackEntry,
+    sp: *usize,
+    line: usize,
+};
+
+/// Static pre-scan capability bits for an intrinsic, mirroring `PreScanFlags`.
+///
+/// Carried on each table entry so the pre-scan can read an op's requirements from the same source
+/// of truth as codegen.
+const PreScanCaps = struct {
+    needs_safepoint: bool = false,
+    needs_error_handling: bool = false,
+    needs_dynamic_vars: bool = false,
+    needs_iterators: bool = false,
+    needs_param_validation: bool = false,
+    needs_dispatch: bool = false,
+    needs_poly_fallback: bool = false,
+};
+
+/// One intrinsic's compile-time codegen routine plus its static prescan capabilities. The handler
+/// emits IR; the real native address still comes from the `WordResolver` at emit time, not from this table.
+const IntrinsicEntry = struct {
+    handler: *const fn (EmitCtx) IrCodegenError!ControlFlow,
+    caps: PreScanCaps = .{},
+};
+
+/// The intrinsic codegen table:
+///
+///     op name -> emit handler + prescan caps
+///
+/// The codegen ladder dispatches through this intrinsic table, before its remaining `if`/`else if` arms.
+/// Container-scope decls are order-independent, so this may reference handlers defined below.
+const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
+    .{ "t", IntrinsicEntry{ .handler = emitIntrinsicTrue } },
+    .{ "f", IntrinsicEntry{ .handler = emitIntrinsicFalse } },
+    .{ "abs", IntrinsicEntry{ .handler = emitIntrinsicAbs } },
+    .{ "dup", IntrinsicEntry{ .handler = emitIntrinsicDup } },
+    .{ "drop", IntrinsicEntry{ .handler = emitIntrinsicDrop } },
+    .{ "swap", IntrinsicEntry{ .handler = emitIntrinsicSwap } },
+    .{ "over", IntrinsicEntry{ .handler = emitIntrinsicOver } },
+});
+
+fn emitIntrinsicTrue(ec: EmitCtx) IrCodegenError!ControlFlow {
+    ec.stack[ec.sp.*] = .{ .bool_ref = c.ir_const_bool(ec.state.ctx, true) };
+    ec.sp.* += 1;
+    return .next;
+}
+
+fn emitIntrinsicFalse(ec: EmitCtx) IrCodegenError!ControlFlow {
+    ec.stack[ec.sp.*] = .{ .bool_ref = c.ir_const_bool(ec.state.ctx, false) };
+    ec.sp.* += 1;
+    return .next;
+}
+
+fn emitIntrinsicAbs(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const ctx = state.ctx;
+    const bail_status = state.bail_status;
+
+    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+    sp.* -= 1;
+    const entry = stack[sp.*];
+
+    if (entry == .f64_ref) {
+        const a = entry.f64_ref;
+        const zero = c.ir_const_double(ctx, 0.0);
+        const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
+        const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_DOUBLE), a);
+        const if_neg = c._ir_IF(ctx, is_neg);
+        c._ir_IF_TRUE(ctx, if_neg);
+        const end_true = c._ir_END(ctx);
+        c._ir_IF_FALSE(ctx, if_neg);
+        const end_false = c._ir_END(ctx);
+        c._ir_MERGE_2(ctx, end_true, end_false);
+        const result = c._ir_PHI_2(ctx, c.IR_DOUBLE, neg_a, a);
+        stack[sp.*] = .{ .f64_ref = result };
+    } else {
+        const a = try requireI64(entry, state);
+
+        const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
+        const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
+        const if_min = c._ir_IF(ctx, is_min);
+        c._ir_IF_TRUE_cold(ctx, if_min);
+        if (state.overflow_error_fn != c.IR_UNUSED) {
+            emitErrorReturn(state, state.overflow_error_fn);
+        } else {
+            c._ir_RETURN(ctx, bail_status);
+        }
+        c._ir_IF_FALSE(ctx, if_min);
+
+        const zero = c.ir_const_i64(ctx, 0);
+        const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
+        const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_I64), a);
+        const if_neg = c._ir_IF(ctx, is_neg);
+        c._ir_IF_TRUE(ctx, if_neg);
+        const end_true = c._ir_END(ctx);
+        c._ir_IF_FALSE(ctx, if_neg);
+        const end_false = c._ir_END(ctx);
+        c._ir_MERGE_2(ctx, end_true, end_false);
+        const result = c._ir_PHI_2(ctx, c.IR_I64, neg_a, a);
+        stack[sp.*] = .{ .i64_ref = result };
+    }
+    sp.* += 1;
+    return .next;
+}
+
+fn emitIntrinsicDup(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    if (sp.* < 1) {
+        if (state.aot_mode) {
+            if (try emitInlineRowUnderflow(state, stack, sp, ec.name, ec.line)) return .next;
+            return .stop;
+        }
+        return IrCodegenError.StackUnderflow;
+    }
+    if (state.aot_mode and stack[sp.* - 1] == .row_region) {
+        if (try emitInlineRowUnderflow(state, stack, sp, ec.name, ec.line)) return .next;
+        return .stop;
+    }
+    stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 1], sp.*);
+    sp.* += 1;
+    return .next;
+}
+
+fn emitIntrinsicDrop(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+    if (stack[sp.* - 1] == .row_region and state.resolver != null) {
+        // The row stands for an unknown number of live values and its top is the live physical top.
+        // Pop exactly one through the native and keep the row, rather than discarding the whole
+        // region, which would leave a following drop with nothing and underflow the word.
+        try emitResolvedNativeCallback(state, ec.name, stack, sp, ec.line);
+    } else {
+        // Discarding an owning slot: release its backing. Scalars tracked as typed refs never alias
+        // a backing.
+        if (stack[sp.* - 1] == .raw_at_slot) {
+            emitReleaseSlot(state, stack[sp.* - 1].raw_at_slot);
+        } else if (stack[sp.* - 1] == .row_region) {
+            // The row's top is the live physical top, so release it here rather than leaking its
+            // backing; the abstract position maps through to that slot.
+            emitReleaseSlot(state, sp.* - 1);
+        }
+        sp.* -= 1;
+    }
+    return .next;
+}
+
+fn emitIntrinsicSwap(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    if (sp.* < 2) {
+        // Reaches one below the abstract base into the caller row (the `swap drop` shape after a
+        // row-collapsing call); emit native swap against the live stack.
+        if (state.aot_mode) {
+            if (try emitInlineRowUnderflow(state, stack, sp, ec.name, ec.line)) return .next;
+            return .stop;
+        }
+        return IrCodegenError.StackUnderflow;
+    }
+    const top = stack[sp.* - 1];
+    const second = stack[sp.* - 2];
+    if (state.aot_mode and (top == .row_region or second == .row_region)) {
+        // A swap whose pair touches the row cannot be tracked as an abstract reorder. That would
+        // move the row off its pinned slot 0 and desync a later live sp-relative op.
+        //
+        // Emit the native swap against the live physical stack and collapse to a fresh row pinned
+        // at slot 0, the same sp-relative path the indexed ops and the sp<2 swap use.
+        if (try emitInlineRowUnderflow(state, stack, sp, ec.name, ec.line)) return .next;
+        return .stop;
+    }
+    // Track swap abstractly without physical modification.
+    // flushToPhysicalStack resolves cross-references later.
+    stack[sp.* - 2] = top;
+    stack[sp.* - 1] = second;
+    return .next;
+}
+
+fn emitIntrinsicOver(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    if (sp.* < 2) {
+        if (state.aot_mode) {
+            if (try emitInlineRowUnderflow(state, stack, sp, ec.name, ec.line)) return .next;
+            return .stop;
+        }
+        return IrCodegenError.StackUnderflow;
+    }
+    if (state.aot_mode and (stack[sp.* - 1] == .row_region or stack[sp.* - 2] == .row_region)) {
+        // The over source or the top is the row: cloning a
+        // concrete value above the row would un-pin it, so emit
+        // the native over against the live stack and collapse to
+        // a fresh row pinned at slot 0.
+        if (try emitInlineRowUnderflow(state, stack, sp, ec.name, ec.line)) return .next;
+        return .stop;
+    }
+    stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 2], sp.*);
+    sp.* += 1;
+    return .next;
+}
+
 /// Compile a sequence of instructions, updating the abstract stack.
 /// Used both for top-level word bodies and for inlined quotation bodies.
 fn compileInstructions(
@@ -4688,139 +4913,22 @@ fn compileInstructions(
             },
             .call_word, .call_word_direct => {
                 const name = instr.op.callTargetName().?;
-                if (std.mem.eql(u8, name, "dup")) {
-                    if (sp.* < 1) {
-                        if (state.aot_mode) {
-                            if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
-                            break;
-                        }
-                        return IrCodegenError.StackUnderflow;
+                if (intrinsic_table.get(name)) |entry| {
+                    switch (try entry.handler(.{
+                        .state = state,
+                        .instructions = instructions,
+                        .idx = idx,
+                        .name = name,
+                        .stack = stack,
+                        .sp = sp,
+                        .line = instr.line,
+                    })) {
+                        // `next` falls out to the shared per-iteration epilogue
+                        // below (the `peak_sp` update and the `exitFallsThrough`
+                        // break), the same path the inline arms took.
+                        .next => {},
+                        .stop => break,
                     }
-                    if (state.aot_mode and stack[sp.* - 1] == .row_region) {
-                        if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
-                        break;
-                    }
-                    stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 1], sp.*);
-                    sp.* += 1;
-                } else if (std.mem.eql(u8, name, "drop")) {
-                    if (sp.* < 1) return IrCodegenError.StackUnderflow;
-                    if (stack[sp.* - 1] == .row_region and state.resolver != null) {
-                        // The row stands for an unknown number of live values
-                        // and its top is the live physical top. Pop exactly one
-                        // through the native and keep the row, rather than
-                        // discarding the whole region -- which would leave a
-                        // following drop with nothing and underflow the word.
-                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
-                    } else {
-                        // Discarding an owning slot: release its backing. Scalars
-                        // tracked as typed refs never alias a backing.
-                        if (stack[sp.* - 1] == .raw_at_slot) {
-                            emitReleaseSlot(state, stack[sp.* - 1].raw_at_slot);
-                        } else if (stack[sp.* - 1] == .row_region) {
-                            // The row's top is the live physical top, so release
-                            // it here rather than leaking its backing; the
-                            // abstract position maps through liveSlotAddr to that
-                            // slot.
-                            emitReleaseSlot(state, sp.* - 1);
-                        }
-                        sp.* -= 1;
-                    }
-                } else if (std.mem.eql(u8, name, "swap")) {
-                    if (sp.* < 2) {
-                        // Reaches one below the abstract base into the caller
-                        // row (the `swap drop` shape after a row-collapsing
-                        // call); emit native swap against the live stack.
-                        if (state.aot_mode) {
-                            if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
-                            break;
-                        }
-                        return IrCodegenError.StackUnderflow;
-                    }
-                    const top = stack[sp.* - 1];
-                    const second = stack[sp.* - 2];
-                    if (state.aot_mode and (top == .row_region or second == .row_region)) {
-                        // A swap whose pair touches the row cannot be tracked as
-                        // an abstract reorder -- that would move the row off its
-                        // pinned slot 0 and desync a later live sp-relative op.
-                        // Emit the native swap against the live physical stack
-                        // and collapse to a fresh row pinned at slot 0, the same
-                        // sp-relative path the indexed ops and the sp<2 swap use.
-                        if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
-                        break;
-                    }
-                    // Track swap abstractly without physical modification.
-                    // flushToPhysicalStack resolves cross-references later.
-                    stack[sp.* - 2] = top;
-                    stack[sp.* - 1] = second;
-                } else if (std.mem.eql(u8, name, "over")) {
-                    if (sp.* < 2) {
-                        if (state.aot_mode) {
-                            if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
-                            break;
-                        }
-                        return IrCodegenError.StackUnderflow;
-                    }
-                    if (state.aot_mode and (stack[sp.* - 1] == .row_region or stack[sp.* - 2] == .row_region)) {
-                        // The over source or the top is the row: cloning a
-                        // concrete value above the row would un-pin it, so emit
-                        // the native over against the live stack and collapse to
-                        // a fresh row pinned at slot 0.
-                        if (try emitInlineRowUnderflow(state, stack, sp, name, instr.line)) continue;
-                        break;
-                    }
-                    stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 2], sp.*);
-                    sp.* += 1;
-                } else if (std.mem.eql(u8, name, "t")) {
-                    stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, true) };
-                    sp.* += 1;
-                } else if (std.mem.eql(u8, name, "f")) {
-                    stack[sp.*] = .{ .bool_ref = c.ir_const_bool(ctx, false) };
-                    sp.* += 1;
-                } else if (std.mem.eql(u8, name, "abs")) {
-                    if (sp.* < 1) return IrCodegenError.StackUnderflow;
-                    sp.* -= 1;
-                    const entry = stack[sp.*];
-
-                    if (entry == .f64_ref) {
-                        const a = entry.f64_ref;
-                        const zero = c.ir_const_double(ctx, 0.0);
-                        const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
-                        const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_DOUBLE), a);
-                        const if_neg = c._ir_IF(ctx, is_neg);
-                        c._ir_IF_TRUE(ctx, if_neg);
-                        const end_true = c._ir_END(ctx);
-                        c._ir_IF_FALSE(ctx, if_neg);
-                        const end_false = c._ir_END(ctx);
-                        c._ir_MERGE_2(ctx, end_true, end_false);
-                        const result = c._ir_PHI_2(ctx, c.IR_DOUBLE, neg_a, a);
-                        stack[sp.*] = .{ .f64_ref = result };
-                    } else {
-                        const a = try requireI64(entry, state);
-
-                        const min_val = c.ir_const_i64(ctx, std.math.minInt(i64));
-                        const is_min = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), a, min_val);
-                        const if_min = c._ir_IF(ctx, is_min);
-                        c._ir_IF_TRUE_cold(ctx, if_min);
-                        if (state.overflow_error_fn != c.IR_UNUSED) {
-                            emitErrorReturn(state, state.overflow_error_fn);
-                        } else {
-                            c._ir_RETURN(ctx, bail_status);
-                        }
-                        c._ir_IF_FALSE(ctx, if_min);
-
-                        const zero = c.ir_const_i64(ctx, 0);
-                        const is_neg = c.ir_fold2(ctx, c.IR_OPT(c.IR_LT, c.IR_BOOL), a, zero);
-                        const neg_a = c.ir_fold1(ctx, c.IR_OPT(c.IR_NEG, c.IR_I64), a);
-                        const if_neg = c._ir_IF(ctx, is_neg);
-                        c._ir_IF_TRUE(ctx, if_neg);
-                        const end_true = c._ir_END(ctx);
-                        c._ir_IF_FALSE(ctx, if_neg);
-                        const end_false = c._ir_END(ctx);
-                        c._ir_MERGE_2(ctx, end_true, end_false);
-                        const result = c._ir_PHI_2(ctx, c.IR_I64, neg_a, a);
-                        stack[sp.*] = .{ .i64_ref = result };
-                    }
-                    sp.* += 1;
                 } else if (isComparisonOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
@@ -12509,6 +12617,49 @@ test "compile over on fixnums" {
     try testing.expectEqual(@as(i64, 10), values[0].fixnum);
     try testing.expectEqual(@as(i64, 20), values[1].fixnum);
     try testing.expectEqual(@as(i64, 10), values[2].fixnum);
+}
+
+test "compile t pushes true" {
+    const instrs = makeInstructions(.{"t"});
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .boolean);
+    try testing.expectEqual(true, values[0].boolean);
+}
+
+test "compile f pushes false" {
+    const instrs = makeInstructions(.{"f"});
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    const status = callCompiledValues(func, &values, &sp);
+    try testing.expectEqual(@as(i32, 0), status);
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .boolean);
+    try testing.expectEqual(false, values[0].boolean);
+}
+
+test "compile abs on negative fixnum" {
+    const instrs = makeInstructions(.{"abs"});
+    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var out: i64 = undefined;
+    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{-5}, &out));
+    try testing.expectEqual(@as(i64, 5), out);
+    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{7}, &out));
+    try testing.expectEqual(@as(i64, 7), out);
 }
 
 test "compile dup * (square)" {
