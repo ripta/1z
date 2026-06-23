@@ -1,0 +1,4 @@
+\ A user word carrying dynamic-eval is treated as a dynamic call by --check,
+\ so a caller with a declared effect produces no cannot-verify warning.
+my-eval: ( s -- x ) dynamic-eval [ drop 0 ] ;
+uses-my-eval: ( s -- x ) [ my-eval ] ;

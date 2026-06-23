@@ -667,6 +667,7 @@ pub const InferenceEngine = struct {
         var uncertain: bool = false;
         var uncertain_source: ?[]const u8 = null;
         var uncertain_is_polymorphic: bool = false;
+        var uncertain_is_dynamic: bool = false;
         var dead_code: bool = false;
         var dead_code_warned: bool = false;
         const DeadCodeCause = union(enum) { underflow, terminal_call: []const u8, terminal_branch };
@@ -745,6 +746,7 @@ pub const InferenceEngine = struct {
                                             uncertain = true;
                                             uncertain_source = name;
                                             uncertain_is_polymorphic = true;
+                                            uncertain_is_dynamic = false;
                                             continue;
                                         }
                                     }
@@ -897,13 +899,14 @@ pub const InferenceEngine = struct {
                     }
                     if (dead_code) continue;
 
-                    if (isDynamicCall(name)) {
+                    if (isDynamicCall(&wd)) {
                         if (wd.stack_effect) |eff| {
                             if (computeDeclaredDelta(eff)) |result| {
                                 delta += result.known;
                                 try adjustStackModel(&stack_model, result.known, self.allocator);
                                 uncertain = true;
                                 uncertain_source = name;
+                                uncertain_is_dynamic = true;
                                 continue;
                             }
                         }
@@ -922,6 +925,7 @@ pub const InferenceEngine = struct {
                                     try adjustStackModel(&stack_model, result.known, self.allocator);
                                     uncertain = true;
                                     uncertain_source = name;
+                                    uncertain_is_dynamic = false;
                                     continue;
                                 }
                             }
@@ -935,7 +939,7 @@ pub const InferenceEngine = struct {
         body_is_terminal = dead_code;
 
         if (dead_code or uncertain) {
-            if (uncertain and uncertain_source != null and !isDynamicCall(uncertain_source.?)) {
+            if (uncertain and uncertain_source != null and !uncertain_is_dynamic) {
                 self.last_unknown_callee = uncertain_source;
                 self.last_unknown_is_polymorphic = uncertain_is_polymorphic;
             }
@@ -1700,8 +1704,11 @@ fn computeDeclaredDelta(effect: StackEffect) ?InferenceResult {
     return .{ .known = outputs - inputs };
 }
 
-fn isDynamicCall(name: []const u8) bool {
-    return std.mem.eql(u8, name, "eval-string");
+fn isDynamicCall(word_def: *const WordDefinition) bool {
+    for (word_def.markers) |mk| {
+        if (markers.isDynamicEvalMarker(mk)) return true;
+    }
+    return false;
 }
 
 fn isGeneric(word_def: *const WordDefinition) bool {
@@ -2020,6 +2027,74 @@ test "case with default arm does not warn" {
 
     _ = try engine.inferWord("test-word");
     try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "user word carrying dynamic-eval is treated as a dynamic call" {
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    const eval_effect: StackEffect = .{
+        .inputs = &.{.{ .name = "s" }},
+        .outputs = &.{.{ .name = "x" }},
+    };
+    const caller_body: []const Instruction = &.{makeInstr(.{ .call_word = "my-eval" })};
+
+    // With the dynamic-eval marker, the call is treated as a dynamic call even
+    // though my-eval has a fully concrete declared effect, so the caller's
+    // inference is forced uncertain and returns .unknown -- with no diagnostic,
+    // since the dynamic source is excluded from the cannot-verify reporting.
+    {
+        var dict = Dictionary.init(testing.allocator);
+        defer dict.deinit();
+        var dispatch = DispatchTable.init(testing.allocator);
+        defer dispatch.deinit();
+
+        try dict.put("my-eval", .{
+            .name = "my-eval",
+            .markers = &.{@constCast(&markers.dynamic_eval_marker)},
+            .stack_effect = eval_effect,
+            .action = .{ .native = dummy },
+        });
+        try dict.put("caller", .{
+            .name = "caller",
+            .source_file = "test.1z",
+            .action = .{ .compound = caller_body },
+        });
+
+        var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, null);
+        defer engine.deinit();
+
+        const result = try engine.inferWord("caller");
+        try testing.expect(result == .unknown);
+        try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+    }
+
+    // The identical word without the marker is an ordinary concrete-effect
+    // callee, so the caller infers cleanly to a known delta of 0.
+    {
+        var dict = Dictionary.init(testing.allocator);
+        defer dict.deinit();
+        var dispatch = DispatchTable.init(testing.allocator);
+        defer dispatch.deinit();
+
+        try dict.put("my-eval", .{
+            .name = "my-eval",
+            .stack_effect = eval_effect,
+            .action = .{ .native = dummy },
+        });
+        try dict.put("caller", .{
+            .name = "caller",
+            .source_file = "test.1z",
+            .action = .{ .compound = caller_body },
+        });
+
+        var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, null);
+        defer engine.deinit();
+
+        const result = try engine.inferWord("caller");
+        try testing.expect(result == .known and result.known == 0);
+        try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+    }
 }
 
 test "loop combinator with zero-delta body" {
