@@ -4150,7 +4150,7 @@ fn batch(ctx: *Context, file_path: []const u8, show_stack: bool) u8 {
 
         const pragma_settings = effect_inference.readCheckPragmas(ctx);
 
-        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), pragma_settings.severity_override, pragma_settings.suppressed, pragma_settings.suppress_undeclared, &ctx.builtin_type_values, ctx.getAnyTypeSentinel(), pragma_settings.type_check_mode, pragma_settings.arity_check_mode, ctx);
+        var engine = effect_inference.InferenceEngine.init(&ctx.dictionary, &ctx.dispatch, ctx.local_frames.items, ctx.quotationAllocator(), pragma_settings.severity_override, pragma_settings.suppressed, pragma_settings.suppress_undeclared, &ctx.builtin_type_values, ctx.getAnyTypeSentinel(), pragma_settings.type_check_mode, pragma_settings.arity_check_mode, pragma_settings.default_arm_mode, ctx);
         defer engine.deinit();
         engine.analyzeAll(ctx.current_source) catch |err| {
             err_writer.print("Error during effect inference: {any}\n", .{err}) catch {};

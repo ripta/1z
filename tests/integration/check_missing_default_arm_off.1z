@@ -1,0 +1,10 @@
+\ pragma{ missing-default-arm: "off" } disables the default-arm check, so a
+\ default-less case emits nothing and --check succeeds.
+pragma{ missing-default-arm: "off" }
+
+no-default: ( sym -- s ) [
+  {
+    { north: [ "N" ] }
+    { south: [ "S" ] }
+  } case
+] ;

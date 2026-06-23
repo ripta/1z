@@ -755,6 +755,7 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
         ctx.getAnyTypeSentinel(),
         settings.type_check_mode,
         settings.arity_check_mode,
+        settings.default_arm_mode,
         ctx,
     );
     defer engine.deinit();

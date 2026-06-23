@@ -1035,6 +1035,10 @@ pub const Context = struct {
             .native_validator = &control.nativeCallsiteArityMismatchValidator,
         });
 
+        try self.pragma_registry.put(self.allocator, "missing-default-arm", .{
+            .native_validator = &control.nativeMissingDefaultArmValidator,
+        });
+
         try self.pragma_registry.put(self.allocator, "allow-uninhabited-constraint", .{});
 
         // Split prelude into lines and process incrementally

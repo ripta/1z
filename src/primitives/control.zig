@@ -201,6 +201,27 @@ pub fn nativeTypeCheckValidator(ctx: *Context) anyerror!void {
     }
 }
 
+/// Native validator for the missing-default-arm pragma.
+/// Accepts "error", "warning", or "off".
+pub fn nativeMissingDefaultArmValidator(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            if (std.mem.eql(u8, s, "error") or std.mem.eql(u8, s, "warning") or std.mem.eql(u8, s, "off")) {
+                try ctx.stack.push(.{ .string = s });
+                try ctx.stack.push(.{ .boolean = true });
+            } else {
+                try ctx.stack.push(.{ .string = "missing-default-arm: expected \"error\", \"warning\", or \"off\"" });
+                try ctx.stack.push(.{ .boolean = false });
+            }
+        },
+        else => {
+            try ctx.stack.push(.{ .string = "missing-default-arm: expected \"error\", \"warning\", or \"off\"" });
+            try ctx.stack.push(.{ .boolean = false });
+        },
+    }
+}
+
 /// Native validator for the require-doc pragma. Maps level names to the
 /// bitmask consumed by enforceRequireDoc. Follows the same protocol as
 /// quotation validators: push validated_value t on success, or error_msg f

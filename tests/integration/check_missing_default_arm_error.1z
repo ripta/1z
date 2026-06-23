@@ -1,0 +1,10 @@
+\ pragma{ missing-default-arm: "error" } is the explicit form of the default; a
+\ default-less case fails --check (exit 1).
+pragma{ missing-default-arm: "error" }
+
+no-default: ( sym -- s ) [
+  {
+    { north: [ "N" ] }
+    { south: [ "S" ] }
+  } case
+] ;

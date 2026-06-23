@@ -1,0 +1,1 @@
+tests/integration/check_missing_default_arm_error.1z:9: err: no-default: case expression has no default arm

@@ -122,6 +122,7 @@ bind: ( stmt i value -- ) [ [ unmake-stmt-handle ] 2dip (bind) ] ;
     { 3 [ (column-text) ] }
     { 4 [ 2dup (column-bytes) -rot> (column-blob) swap ffi-ptr+len>bytes ] }
     { 5 [ 2drop option:none ] }
+    [ 2dup (column-type) >string "unexpected sqlite column type: " swap #append ESqliteError make-error throw ]
   } case
 ] ;
 

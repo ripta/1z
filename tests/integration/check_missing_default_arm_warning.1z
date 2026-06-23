@@ -1,0 +1,10 @@
+\ pragma{ missing-default-arm: "warning" } downgrades the default-arm check to a
+\ warning, so a default-less case warns but does not fail --check (exit 0).
+pragma{ missing-default-arm: "warning" }
+
+no-default: ( sym -- s ) [
+  {
+    { north: [ "N" ] }
+    { south: [ "S" ] }
+  } case
+] ;

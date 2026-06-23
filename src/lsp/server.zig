@@ -388,6 +388,7 @@ pub const Server = struct {
             self.ctx.getAnyTypeSentinel(),
             .err,
             .err,
+            .err,
             self.ctx,
         );
         defer engine.deinit();

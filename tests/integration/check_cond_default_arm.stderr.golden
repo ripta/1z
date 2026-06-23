@@ -1,1 +1,1 @@
-tests/integration/check_cond_default_arm.1z:11: warning: no-default: cond expression has no default arm
+tests/integration/check_cond_default_arm.1z:11: err: no-default: cond expression has no default arm
