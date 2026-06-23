@@ -1,0 +1,21 @@
+\ A `cond` with no default arm warns; a `cond` with a default arm does not.
+\ `cond` carries the same `partial-dispatch` marker as `case`, so the
+\ missing-default-arm check covers it too.
+
+\ No default arm: if no predicate matches, this falls through to a runtime
+\ error, so it warns under --check.
+no-default: ( n -- s ) [
+  {
+    { [ dup 0 < ] [ drop "neg" ] }
+    { [ dup 0 = ] [ drop "zero" ] }
+  } cond
+] ;
+
+\ Has a default arm (the trailing bare quotation): no warning.
+with-default: ( n -- s ) [
+  {
+    { [ dup 0 < ] [ drop "neg" ] }
+    { [ dup 0 = ] [ drop "zero" ] }
+    [ drop "pos" ]
+  } cond
+] ;

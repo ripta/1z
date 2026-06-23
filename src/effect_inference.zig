@@ -99,9 +99,9 @@ fn recoverLocalName(instructions: []const Instruction, semi_index: usize) ?Local
     return null;
 }
 
-/// A `case` branches array has a default arm when at least one top-level
+/// A `case`/`cond` branches array has a default arm when at least one top-level
 /// element is a bare quotation; keyed arms are nested arrays `{ key [body] }`.
-fn caseBranchesHaveDefault(branches: []const Value) bool {
+fn branchesHaveDefault(branches: []const Value) bool {
     for (branches) |elem| if (elem == .quotation) return true;
     return false;
 }
@@ -774,15 +774,16 @@ pub const InferenceEngine = struct {
 
                     const combinator_kind = classifyCombinator(&wd);
 
-                    // A `case` whose branches array literal has no default arm
-                    // can fall through to a `no-matching-branch` runtime error.
-                    // The branches array is the literal pushed just before the
-                    // call; a dynamically built value is not inspectable here and
-                    // is left unchecked. Emit before dispatch so the warning
-                    // fires regardless of the combinator path taken below.
-                    if (idx > 0 and combinator_kind == .branch and std.mem.eql(u8, name, "case") and self.isInCheckedSource(caller.source_file)) {
+                    // A `partial-dispatch` word (`case`, `cond`) whose branches
+                    // array literal has no default arm can fall through to a
+                    // `no-matching-branch` runtime error. The branches array is
+                    // the literal pushed just before the call; a dynamically
+                    // built value is not inspectable here and is left unchecked.
+                    // Emit before dispatch so the warning fires regardless of the
+                    // combinator path taken below.
+                    if (idx > 0 and isPartialDispatch(&wd) and self.isInCheckedSource(caller.source_file)) {
                         switch (instructions[idx - 1].op) {
-                            .push_literal => |val| if (val == .array and !caseBranchesHaveDefault(val.array)) {
+                            .push_literal => |val| if (val == .array and !branchesHaveDefault(val.array)) {
                                 try self.emitDiagnostic(.{
                                     .word_name = caller.word_name,
                                     .source_file = caller.source_file,
@@ -790,8 +791,8 @@ pub const InferenceEngine = struct {
                                     .severity = .warning,
                                     .message = try std.fmt.allocPrint(
                                         self.allocator,
-                                        "case expression has no default arm",
-                                        .{},
+                                        "{s} expression has no default arm",
+                                        .{name},
                                     ),
                                 });
                             },
@@ -1719,6 +1720,13 @@ fn isGeneric(word_def: *const WordDefinition) bool {
     return false;
 }
 
+fn isPartialDispatch(word_def: *const WordDefinition) bool {
+    for (word_def.markers) |mk| {
+        if (markers.isPartialDispatchMarker(mk)) return true;
+    }
+    return false;
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -1950,9 +1958,30 @@ fn putCaseWord(dict: *Dictionary) !void {
     }.f;
     try dict.put("case", .{
         .name = "case",
-        .markers = &.{@constCast(&markers.branch_combinator_marker)},
+        .markers = &.{
+            @constCast(&markers.branch_combinator_marker),
+            @constCast(&markers.partial_dispatch_marker),
+        },
         .stack_effect = .{
             .inputs = &.{ .{ .name = "val" }, .{ .name = "branches" } },
+            .outputs = &.{.{ .name = "x" }},
+        },
+        .action = .{ .native = dummy },
+    });
+}
+
+fn putCondWord(dict: *Dictionary) !void {
+    const dummy: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    try dict.put("cond", .{
+        .name = "cond",
+        .markers = &.{
+            @constCast(&markers.branch_combinator_marker),
+            @constCast(&markers.partial_dispatch_marker),
+        },
+        .stack_effect = .{
+            .inputs = &.{.{ .name = "branches" }},
             .outputs = &.{.{ .name = "x" }},
         },
         .action = .{ .native = dummy },
@@ -2027,6 +2056,43 @@ test "case with default arm does not warn" {
 
     _ = try engine.inferWord("test-word");
     try testing.expectEqual(@as(usize, 0), engine.diagnostics.items.len);
+}
+
+test "cond without default arm warns" {
+    var dict = Dictionary.init(testing.allocator);
+    defer dict.deinit();
+    var dispatch = DispatchTable.init(testing.allocator);
+    defer dispatch.deinit();
+
+    try putCondWord(&dict);
+
+    // { { [ pred ] [ body ] } } -- a single predicate/body pair, no default.
+    const pred_body: []const Instruction = &.{makeInstr(.{ .push_literal = .{ .boolean = false } })};
+    const arm_body: []const Instruction = &.{makeInstr(.{ .push_literal = .{ .fixnum = 0 } })};
+    const pair: []const Value = &.{
+        .{ .quotation = .{ .instructions = pred_body } },
+        .{ .quotation = .{ .instructions = arm_body } },
+    };
+    const branches: []const Value = &.{.{ .array = pair }};
+
+    const body: []const Instruction = &.{
+        makeInstr(.{ .push_literal = .{ .array = branches } }),
+        makeInstr(.{ .call_word = "cond" }),
+    };
+
+    try dict.put("test-word", .{
+        .name = "test-word",
+        .source_file = "test.1z",
+        .action = .{ .compound = body },
+    });
+
+    var engine = InferenceEngine.init(&dict, &dispatch, &.{}, testing.allocator, null, false, true, null, null, .off, .off, null);
+    defer engine.deinit();
+
+    _ = try engine.inferWord("test-word");
+    try testing.expectEqual(@as(usize, 1), engine.diagnostics.items.len);
+    try testing.expectEqual(Severity.warning, engine.diagnostics.items[0].severity);
+    try testing.expectEqualStrings("cond expression has no default arm", engine.diagnostics.items[0].message);
 }
 
 test "user word carrying dynamic-eval is treated as a dynamic call" {
