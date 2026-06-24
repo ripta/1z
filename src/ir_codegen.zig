@@ -564,23 +564,6 @@ pub const AotWordDesc = struct {
     bounded_arity: dispatch_helpers.ProtocolArity = .unary,
 };
 
-const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
-const supported_comparison_ops = [_][]const u8{ "=", "<", ">" };
-
-fn isBinaryOp(name: []const u8) bool {
-    for (supported_binary_ops) |op| {
-        if (std.mem.eql(u8, name, op)) return true;
-    }
-    return false;
-}
-
-fn isComparisonOp(name: []const u8) bool {
-    for (supported_comparison_ops) |op| {
-        if (std.mem.eql(u8, name, op)) return true;
-    }
-    return false;
-}
-
 const supported_indexed_stack_ops = [_][]const u8{ "pick-n", "<rot-n", "rot-n>", "nip-n" };
 
 fn isIndexedStackOp(name: []const u8) bool {
@@ -2169,6 +2152,33 @@ const MiniStackEntry = union(enum) {
     other,
 };
 
+/// Threaded state bundle passed to a custom intrinsic effect handler, mirroring `EmitCtx` on the codegen side.
+/// Effect inference has no state object, so the bundle carries exactly the values the bespoke arms thread.
+const EffectCtx = struct {
+    mini_stack: *[max_mini_stack_depth]MiniStackEntry,
+    sp: *usize,
+    delta: *i32,
+    min_delta: *i32,
+    resolver: ?WordResolver,
+};
+
+/// A fixed `(input_count, output_count)` stack effect.
+const FixedEffect = struct {
+    input_count: u8,
+    output_count: u8,
+};
+
+/// An intrinsic's effect during quotation effect inference.
+///
+/// `.none` means the op is not handled inline and falls through to the `WordResolver`.
+/// `.fixed` carries a static count pair.
+/// `.custom` points at a per-op effect handler for the bespoke mini-stack ops.
+const IntrinsicEffect = union(enum) {
+    none,
+    fixed: FixedEffect,
+    custom: *const fn (EffectCtx) error{EffectInferenceOverflow}!bool,
+};
+
 /// Infer the concrete stack effect of a quotation body by abstract stack
 /// simulation. Returns null if the effect cannot be statically determined
 /// (e.g., unresolvable word, dynamic call on unknown quotation).
@@ -2318,29 +2328,15 @@ fn inferBuiltinEffect(
         return true;
     }
 
-    // Boolean literals.
-    if (std.mem.eql(u8, name, "t") or std.mem.eql(u8, name, "f")) {
-        try applyFixedEffect(mini_stack, sp, delta, min_delta, 0, 1);
-        return true;
-    }
-
-    // abs: ( n -- n )
-    if (std.mem.eql(u8, name, "abs")) {
-        try applyFixedEffect(mini_stack, sp, delta, min_delta, 1, 1);
-        return true;
-    }
-
-    // Binary ops: ( a b -- result )
-    if (isBinaryOp(name)) {
-        try applyFixedEffect(mini_stack, sp, delta, min_delta, 2, 1);
-        return true;
-    }
-
-    // Comparison ops: ( a b -- bool )
-    if (isComparisonOp(name)) {
-        try applyFixedEffect(mini_stack, sp, delta, min_delta, 2, 1);
-        return true;
-    }
+    // Fixed-effect ops are defined by their table entry's `effect` field (`t` / `f`, `abs`, binary, comparison, `choose`).
+    // A `.none` or `.custom` entry falls through to the bespoke inline arms.
+    if (intrinsic_table.get(name)) |entry| switch (entry.effect) {
+        .fixed => |fx| {
+            try applyFixedEffect(mini_stack, sp, delta, min_delta, fx.input_count, fx.output_count);
+            return true;
+        },
+        .none, .custom => {},
+    };
 
     // `call`: pop quotation, apply its effect.
     if (std.mem.eql(u8, name, "call")) {
@@ -2429,12 +2425,6 @@ fn inferBuiltinEffect(
             return true;
         }
         return false;
-    }
-
-    // choose: ( a1 a2 quot -- a )
-    if (std.mem.eql(u8, name, "choose")) {
-        try applyFixedEffect(mini_stack, sp, delta, min_delta, 3, 1);
-        return true;
     }
 
     // Not a recognized built-in.
@@ -4301,6 +4291,7 @@ const PreScanCaps = struct {
 const IntrinsicEntry = struct {
     handler: *const fn (EmitCtx) IrCodegenError!ControlFlow,
     caps: PreScanCaps = .{},
+    effect: IntrinsicEffect = .none,
 };
 
 /// The intrinsic codegen table:
@@ -4310,26 +4301,26 @@ const IntrinsicEntry = struct {
 /// The codegen ladder dispatches through this intrinsic table, before its remaining `if`/`else if` arms.
 /// Container-scope decls are order-independent, so this may reference handlers defined below.
 const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
-    .{ "t", IntrinsicEntry{ .handler = emitIntrinsicTrue } },
-    .{ "f", IntrinsicEntry{ .handler = emitIntrinsicFalse } },
-    .{ "abs", IntrinsicEntry{ .handler = emitIntrinsicAbs } },
+    .{ "t", IntrinsicEntry{ .handler = emitIntrinsicTrue, .effect = .{ .fixed = .{ .input_count = 0, .output_count = 1 } } } },
+    .{ "f", IntrinsicEntry{ .handler = emitIntrinsicFalse, .effect = .{ .fixed = .{ .input_count = 0, .output_count = 1 } } } },
+    .{ "abs", IntrinsicEntry{ .handler = emitIntrinsicAbs, .effect = .{ .fixed = .{ .input_count = 1, .output_count = 1 } } } },
     .{ "dup", IntrinsicEntry{ .handler = emitIntrinsicDup } },
     .{ "drop", IntrinsicEntry{ .handler = emitIntrinsicDrop } },
     .{ "swap", IntrinsicEntry{ .handler = emitIntrinsicSwap } },
     .{ "over", IntrinsicEntry{ .handler = emitIntrinsicOver } },
     .{ "if", IntrinsicEntry{ .handler = emitIntrinsicIf } },
     .{ "call", IntrinsicEntry{ .handler = emitIntrinsicCall } },
-    .{ "choose", IntrinsicEntry{ .handler = emitIntrinsicChoose } },
-    .{ "=", IntrinsicEntry{ .handler = emitIntrinsicEq, .caps = .{ .needs_poly_fallback = true } } },
-    .{ "<", IntrinsicEntry{ .handler = emitIntrinsicLt, .caps = .{ .needs_poly_fallback = true } } },
-    .{ ">", IntrinsicEntry{ .handler = emitIntrinsicGt, .caps = .{ .needs_poly_fallback = true } } },
-    .{ "+", IntrinsicEntry{ .handler = emitIntrinsicAdd, .caps = .{ .needs_poly_fallback = true } } },
-    .{ "-", IntrinsicEntry{ .handler = emitIntrinsicSub, .caps = .{ .needs_poly_fallback = true } } },
-    .{ "*", IntrinsicEntry{ .handler = emitIntrinsicMul, .caps = .{ .needs_poly_fallback = true } } },
-    .{ "/", IntrinsicEntry{ .handler = emitIntrinsicDiv, .caps = .{ .needs_poly_fallback = true } } },
-    .{ "%", IntrinsicEntry{ .handler = emitIntrinsicMod, .caps = .{ .needs_poly_fallback = true } } },
-    .{ "div", IntrinsicEntry{ .handler = emitIntrinsicIntDiv } },
-    .{ "rem", IntrinsicEntry{ .handler = emitIntrinsicRem } },
+    .{ "choose", IntrinsicEntry{ .handler = emitIntrinsicChoose, .effect = .{ .fixed = .{ .input_count = 3, .output_count = 1 } } } },
+    .{ "=", IntrinsicEntry{ .handler = emitIntrinsicEq, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
+    .{ "<", IntrinsicEntry{ .handler = emitIntrinsicLt, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
+    .{ ">", IntrinsicEntry{ .handler = emitIntrinsicGt, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
+    .{ "+", IntrinsicEntry{ .handler = emitIntrinsicAdd, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
+    .{ "-", IntrinsicEntry{ .handler = emitIntrinsicSub, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
+    .{ "*", IntrinsicEntry{ .handler = emitIntrinsicMul, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
+    .{ "/", IntrinsicEntry{ .handler = emitIntrinsicDiv, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
+    .{ "%", IntrinsicEntry{ .handler = emitIntrinsicMod, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
+    .{ "div", IntrinsicEntry{ .handler = emitIntrinsicIntDiv, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
+    .{ "rem", IntrinsicEntry{ .handler = emitIntrinsicRem, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
     .{ "pick-n", IntrinsicEntry{ .handler = emitIntrinsicPickN, .caps = .{ .needs_native_call = true } } },
     .{ "<rot-n", IntrinsicEntry{ .handler = emitIntrinsicRotNUp, .caps = .{ .needs_native_call = true } } },
     .{ "rot-n>", IntrinsicEntry{ .handler = emitIntrinsicRotNDown, .caps = .{ .needs_native_call = true } } },
@@ -14699,6 +14690,30 @@ test "inferQuotationEffect: comparison ops" {
     const eff = inferQuotationEffect(&instrs, null) catch unreachable;
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 2), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+test "inferQuotationEffect: div and rem" {
+    // [ div ] and [ rem ] are both ( a b -- result ): (2 -- 1).
+    const div_instrs = makeInstructions(.{"div"});
+    const div_eff = inferQuotationEffect(&div_instrs, null) catch unreachable;
+    try testing.expect(div_eff != null);
+    try testing.expectEqual(@as(u8, 2), div_eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), div_eff.?.output_count);
+
+    const rem_instrs = makeInstructions(.{"rem"});
+    const rem_eff = inferQuotationEffect(&rem_instrs, null) catch unreachable;
+    try testing.expect(rem_eff != null);
+    try testing.expectEqual(@as(u8, 2), rem_eff.?.input_count);
+    try testing.expectEqual(@as(u8, 1), rem_eff.?.output_count);
+}
+
+test "inferQuotationEffect: choose" {
+    // [ choose ] is ( a1 a2 quot -- a ): (3 -- 1).
+    const instrs = makeInstructions(.{"choose"});
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 3), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
 }
 
