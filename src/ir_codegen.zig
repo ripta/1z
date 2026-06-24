@@ -565,59 +565,7 @@ pub const AotWordDesc = struct {
 };
 
 const supported_binary_ops = [_][]const u8{ "+", "-", "*", "/", "div", "rem", "%" };
-const supported_unary_ops = [_][]const u8{"abs"};
 const supported_comparison_ops = [_][]const u8{ "=", "<", ">" };
-
-fn isSupportedOp(name: []const u8) bool {
-    for (supported_binary_ops) |op| {
-        if (std.mem.eql(u8, name, op)) return true;
-    }
-    for (supported_unary_ops) |op| {
-        if (std.mem.eql(u8, name, op)) return true;
-    }
-    for (supported_comparison_ops) |op| {
-        if (std.mem.eql(u8, name, op)) return true;
-    }
-
-    // HACK(ripta): include some non-primitive ops as "supported" so they can be compiled with the same fast path
-    //              as primitives instead of going through dynamic dispatch
-    if (std.mem.eql(u8, name, "if")) return true;
-    if (std.mem.eql(u8, name, "call")) return true;
-    if (std.mem.eql(u8, name, "choose")) return true;
-    if (std.mem.eql(u8, name, "t") or std.mem.eql(u8, name, "f")) return true;
-
-    if (isLoopOp(name)) return true;
-    if (isErrorHandlingOp(name)) return true;
-    if (isDynamicVarOp(name)) return true;
-    if (isIteratorOp(name)) return true;
-
-    // HACK(ripta): not technically native, but treat certain native core library words as harcoded
-    //              instrinsics so they can be compiled with the same fast path instead of dynamic dispatch
-    if (std.mem.eql(u8, name, "native.virtual-unwrap")) return true;
-    if (std.mem.eql(u8, name, "native.struct-field-get")) return true;
-    if (std.mem.eql(u8, name, "native.struct-field-set")) return true;
-    if (std.mem.eql(u8, name, "native.typed-validate-and-promote")) return true;
-    if (std.mem.eql(u8, name, "native.make-struct-instance")) return true;
-    if (std.mem.eql(u8, name, "native.struct-instance-destructure")) return true;
-    if (std.mem.eql(u8, name, "native.struct-instance-to-hash")) return true;
-    if (std.mem.eql(u8, name, "native.struct-type-predicate")) return true;
-    if (std.mem.eql(u8, name, "native.hash-to-struct")) return true;
-    if (std.mem.eql(u8, name, "native.virtual-struct-wrap")) return true;
-    if (std.mem.eql(u8, name, "native.virtual-struct-unwrap")) return true;
-
-    return false;
-}
-
-/// Struct native ops dispatched through `jitNativeWordCall` in AOT mode.
-fn isStructNativeOp(name: []const u8) bool {
-    return std.mem.eql(u8, name, "native.make-struct-instance") or
-        std.mem.eql(u8, name, "native.struct-instance-destructure") or
-        std.mem.eql(u8, name, "native.struct-instance-to-hash") or
-        std.mem.eql(u8, name, "native.struct-type-predicate") or
-        std.mem.eql(u8, name, "native.hash-to-struct") or
-        std.mem.eql(u8, name, "native.virtual-struct-wrap") or
-        std.mem.eql(u8, name, "native.virtual-struct-unwrap");
-}
 
 fn isBinaryOp(name: []const u8) bool {
     for (supported_binary_ops) |op| {
@@ -633,26 +581,6 @@ fn isComparisonOp(name: []const u8) bool {
     return false;
 }
 
-/// Map a binary op name to a PolyArithOp for polymorphic fixnum/float handling.
-/// Returns null for integer-only ops (div, rem) that have no float path.
-fn polyArithOpFromName(name: []const u8) ?PolyArithOp {
-    if (std.mem.eql(u8, name, "+")) return .add;
-    if (std.mem.eql(u8, name, "-")) return .sub;
-    if (std.mem.eql(u8, name, "*")) return .mul;
-    if (std.mem.eql(u8, name, "/")) return .div;
-    if (std.mem.eql(u8, name, "%")) return .mod;
-    return null;
-}
-
-const supported_stack_ops = [_][]const u8{ "dup", "drop", "swap", "over" };
-
-fn isStackOp(name: []const u8) bool {
-    for (supported_stack_ops) |op| {
-        if (std.mem.eql(u8, name, op)) return true;
-    }
-    return false;
-}
-
 const supported_indexed_stack_ops = [_][]const u8{ "pick-n", "<rot-n", "rot-n>", "nip-n" };
 
 fn isIndexedStackOp(name: []const u8) bool {
@@ -660,23 +588,6 @@ fn isIndexedStackOp(name: []const u8) bool {
         if (std.mem.eql(u8, name, op)) return true;
     }
     return false;
-}
-
-const supported_loop_ops = [_][]const u8{ "times", "loop", "while", "until" };
-
-fn isLoopOp(name: []const u8) bool {
-    for (supported_loop_ops) |op| {
-        if (std.mem.eql(u8, name, op)) return true;
-    }
-    return false;
-}
-
-fn isErrorHandlingOp(name: []const u8) bool {
-    return std.mem.eql(u8, name, "recover") or std.mem.eql(u8, name, "cleanup");
-}
-
-fn isDynamicVarOp(name: []const u8) bool {
-    return std.mem.eql(u8, name, "get") or std.mem.eql(u8, name, "with-parameter");
 }
 
 const IteratorOpcode = enum(u8) {
@@ -691,27 +602,6 @@ const IteratorOpcode = enum(u8) {
     filter = 9,
     reduce = 10,
 };
-
-fn isIteratorOp(name: []const u8) bool {
-    return iteratorOpcodeFromName(name) != null;
-}
-
-fn iteratorOpcodeFromName(name: []const u8) ?IteratorOpcode {
-    // >iterator is a generic compound word in the prelude, not a pure
-    // native. Calling nativeToIterator directly would bypass generic
-    // dispatch, breaking user-defined >iterator methods on virtual types.
-    if (std.mem.eql(u8, name, "#next")) return .next;
-    if (std.mem.eql(u8, name, "#collect")) return .collect;
-    if (std.mem.eql(u8, name, "#count")) return .count;
-    if (std.mem.eql(u8, name, "close-iterator")) return .close_iterator;
-    if (std.mem.eql(u8, name, "#take")) return .take;
-    if (std.mem.eql(u8, name, "#drop")) return .drop;
-    if (std.mem.eql(u8, name, "#each")) return .each;
-    if (std.mem.eql(u8, name, "#map")) return .map;
-    if (std.mem.eql(u8, name, "#filter")) return .filter;
-    if (std.mem.eql(u8, name, "#reduce")) return .reduce;
-    return null;
-}
 
 const IteratorEffects = struct {
     inputs: usize,
@@ -4403,6 +4293,7 @@ const PreScanCaps = struct {
     needs_param_validation: bool = false,
     needs_dispatch: bool = false,
     needs_poly_fallback: bool = false,
+    needs_native_call: bool = false,
 };
 
 /// One intrinsic's compile-time codegen routine plus its static prescan capabilities. The handler
@@ -4439,10 +4330,10 @@ const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
     .{ "%", IntrinsicEntry{ .handler = emitIntrinsicMod, .caps = .{ .needs_poly_fallback = true } } },
     .{ "div", IntrinsicEntry{ .handler = emitIntrinsicIntDiv } },
     .{ "rem", IntrinsicEntry{ .handler = emitIntrinsicRem } },
-    .{ "pick-n", IntrinsicEntry{ .handler = emitIntrinsicPickN } },
-    .{ "<rot-n", IntrinsicEntry{ .handler = emitIntrinsicRotNUp } },
-    .{ "rot-n>", IntrinsicEntry{ .handler = emitIntrinsicRotNDown } },
-    .{ "nip-n", IntrinsicEntry{ .handler = emitIntrinsicNipN } },
+    .{ "pick-n", IntrinsicEntry{ .handler = emitIntrinsicPickN, .caps = .{ .needs_native_call = true } } },
+    .{ "<rot-n", IntrinsicEntry{ .handler = emitIntrinsicRotNUp, .caps = .{ .needs_native_call = true } } },
+    .{ "rot-n>", IntrinsicEntry{ .handler = emitIntrinsicRotNDown, .caps = .{ .needs_native_call = true } } },
+    .{ "nip-n", IntrinsicEntry{ .handler = emitIntrinsicNipN, .caps = .{ .needs_native_call = true } } },
     .{ "times", IntrinsicEntry{ .handler = emitIntrinsicTimes, .caps = .{ .needs_safepoint = true } } },
     .{ "loop", IntrinsicEntry{ .handler = emitIntrinsicLoop, .caps = .{ .needs_safepoint = true } } },
     .{ "while", IntrinsicEntry{ .handler = emitIntrinsicWhile, .caps = .{ .needs_safepoint = true } } },
@@ -6911,6 +6802,18 @@ const PreScanFlags = struct {
             self.needs_param_validation or self.needs_poly_fallback or
             self.needs_satisfies_dispatch;
     }
+
+    /// Merge an intrinsic's static pre-scan capabilities into these flags.
+    fn applyCaps(self: *PreScanFlags, caps: PreScanCaps) void {
+        if (caps.needs_safepoint) self.needs_safepoint = true;
+        if (caps.needs_error_handling) self.needs_error_handling = true;
+        if (caps.needs_dynamic_vars) self.needs_dynamic_vars = true;
+        if (caps.needs_iterators) self.needs_iterators = true;
+        if (caps.needs_param_validation) self.needs_param_validation = true;
+        if (caps.needs_dispatch) self.needs_dispatch = true;
+        if (caps.needs_poly_fallback) self.needs_poly_fallback = true;
+        if (caps.needs_native_call) self.needs_native_call = true;
+    }
 };
 
 /// Recursively scan instructions and quotation bodies for dispatch calls
@@ -6930,24 +6833,9 @@ fn preScanInstructions(
             },
             .call_word, .call_word_direct => {
                 const name = instr.op.callTargetName().?;
-                if (polyArithOpFromName(name) != null or isComparisonOp(name)) {
-                    flags.needs_poly_fallback = true;
-                }
-                if (isLoopOp(name)) {
-                    flags.needs_safepoint = true;
-                } else if (isErrorHandlingOp(name)) {
-                    flags.needs_error_handling = true;
-                } else if (isDynamicVarOp(name)) {
-                    flags.needs_dynamic_vars = true;
-                } else if (isIteratorOp(name)) {
-                    flags.needs_iterators = true;
-                    const opcode = iteratorOpcodeFromName(name).?;
-                    if (iteratorEffects(opcode).dynamic) {
-                        flags.needs_param_validation = true;
-                    }
-                } else if (isStructNativeOp(name)) {
-                    flags.needs_dispatch = true;
-                } else if (!isSupportedOp(name) and !isStackOp(name)) {
+                if (intrinsic_table.get(name)) |entry| {
+                    flags.applyCaps(entry.caps);
+                } else {
                     if (resolver) |res| {
                         if (res.resolve(name, res.user_data)) |resolved| {
                             if (resolved.is_native) {
@@ -7021,7 +6909,7 @@ fn findUndiscoverableNestedDef(
             .call_word, .call_word_direct => {
                 const name = instr.op.callTargetName() orelse continue;
                 if (std.mem.eql(u8, name, ";")) continue;
-                if (isSupportedOp(name) or isStackOp(name)) continue;
+                if (intrinsic_table.has(name) and !isIndexedStackOp(name)) continue;
                 if (isNestedDefinedName(instructions, name)) return name;
             },
             .push_literal => {},
@@ -15520,6 +15408,36 @@ test "isIndexedStackOp: rejects non-indexed ops" {
     try testing.expect(!isIndexedStackOp("swap"));
     try testing.expect(!isIndexedStackOp("pick"));
     try testing.expect(!isIndexedStackOp("rot"));
+}
+
+fn preScanFlagsFor(comptime op: []const u8) !PreScanFlags {
+    const instrs = makeInstructions(.{op});
+    var flags = PreScanFlags{};
+    try preScanInstructions(&instrs, null, &flags, false);
+    return flags;
+}
+
+test "preScanInstructions: intrinsic caps drive flags" {
+    // The indexed-stack reconciliation: pick-n et al. carry needs_native_call as
+    // a static cap, matching the resolver-derived flag they got before 331.6.
+    try testing.expect((try preScanFlagsFor("nip-n")).needs_native_call);
+    try testing.expect((try preScanFlagsFor("pick-n")).needs_native_call);
+
+    try testing.expect((try preScanFlagsFor("times")).needs_safepoint);
+    try testing.expect((try preScanFlagsFor("recover")).needs_error_handling);
+    try testing.expect((try preScanFlagsFor("get")).needs_dynamic_vars);
+    try testing.expect((try preScanFlagsFor("+")).needs_poly_fallback);
+    try testing.expect((try preScanFlagsFor("<")).needs_poly_fallback);
+    try testing.expect((try preScanFlagsFor("native.make-struct-instance")).needs_dispatch);
+
+    const map_flags = try preScanFlagsFor("#map");
+    try testing.expect(map_flags.needs_iterators);
+    try testing.expect(map_flags.needs_param_validation);
+
+    // A non-dynamic iterator op sets needs_iterators but not param validation.
+    const next_flags = try preScanFlagsFor("#next");
+    try testing.expect(next_flags.needs_iterators);
+    try testing.expect(!next_flags.needs_param_validation);
 }
 
 // --- findRowRegionIndex tests ---
