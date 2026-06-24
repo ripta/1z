@@ -2268,167 +2268,209 @@ fn inferBuiltinEffect(
     min_delta: *i32,
     resolver: ?WordResolver,
 ) error{EffectInferenceOverflow}!?bool {
-    // Stack shufflers need special mini-stack handling to propagate
-    // quotation-body knowledge through shuffles.
-    if (std.mem.eql(u8, name, "dup")) {
-        // ( a -- a a ): net +1, needs 1 input.
-        delta.* -= 1;
-        min_delta.* = @min(min_delta.*, delta.*);
-        delta.* += 2;
-        if (sp.* >= 1) {
-            // Duplicate top entry (preserving quotation body if present).
-            const top = mini_stack[sp.* - 1];
-            if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
-            mini_stack[sp.*] = top;
-            sp.* += 1;
-        } else {
-            // Duping from below initial level: push two unknowns.
-            if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
-            mini_stack[sp.*] = .other;
-            sp.* += 1;
-            if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
-            mini_stack[sp.*] = .other;
-            sp.* += 1;
-        }
-        return true;
-    }
+    // `drop` needs special mini-stack handling but is not yet a table effect.
     if (std.mem.eql(u8, name, "drop")) {
         delta.* -= 1;
         min_delta.* = @min(min_delta.*, delta.*);
         if (sp.* > 0) sp.* -= 1;
         return true;
     }
-    if (std.mem.eql(u8, name, "swap")) {
-        // ( a b -- b a ): net 0, needs 2 inputs.
-        delta.* -= 2;
-        min_delta.* = @min(min_delta.*, delta.*);
-        delta.* += 2;
-        if (sp.* >= 2) {
-            const tmp = mini_stack[sp.* - 1];
-            mini_stack[sp.* - 1] = mini_stack[sp.* - 2];
-            mini_stack[sp.* - 2] = tmp;
-        }
-        // If sp < 2, entries are below initial level; no mini-stack change needed.
-        return true;
-    }
-    if (std.mem.eql(u8, name, "over")) {
-        // ( a b -- a b a ): net +1, needs 2 inputs.
-        delta.* -= 2;
-        min_delta.* = @min(min_delta.*, delta.*);
-        delta.* += 3;
-        if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
-        if (sp.* >= 2) {
-            // Copy second element to top.
-            mini_stack[sp.*] = mini_stack[sp.* - 2];
-        } else {
-            // Some entries below initial level; push unknown.
-            mini_stack[sp.*] = .other;
-        }
-        sp.* += 1;
-        return true;
-    }
 
-    // Fixed-effect ops are defined by their table entry's `effect` field (`t` / `f`, `abs`, binary, comparison, `choose`).
-    // A `.none` or `.custom` entry falls through to the bespoke inline arms.
+    // Intrinsic effects are defined by the table entry's `effect` field:
+    // `.fixed` carries a static count pair, `.custom` points at a per-op
+    // handler for the bespoke mini-stack ops (`dup`, `swap`, `over`, `call`,
+    // `if`), and `.none` falls through to the `WordResolver`.
     if (intrinsic_table.get(name)) |entry| switch (entry.effect) {
         .fixed => |fx| {
             try applyFixedEffect(mini_stack, sp, delta, min_delta, fx.input_count, fx.output_count);
             return true;
         },
-        .none, .custom => {},
+        .custom => |handler| return try handler(.{
+            .mini_stack = mini_stack,
+            .sp = sp,
+            .delta = delta,
+            .min_delta = min_delta,
+            .resolver = resolver,
+        }),
+        .none => {},
     };
-
-    // `call`: pop quotation, apply its effect.
-    if (std.mem.eql(u8, name, "call")) {
-        // Consume the quotation from the stack.
-        delta.* -= 1;
-        min_delta.* = @min(min_delta.*, delta.*);
-
-        // Check if top of mini-stack is a known quotation body.
-        if (sp.* > 0) {
-            sp.* -= 1;
-            switch (mini_stack[sp.*]) {
-                .quotation => |body| {
-                    // Recursively infer the quotation's effect.
-                    const effect = try inferQuotationEffect(body, resolver) orelse return false;
-                    const in: i32 = @intCast(effect.input_count);
-                    const out: i32 = @intCast(effect.output_count);
-                    delta.* -= in;
-                    min_delta.* = @min(min_delta.*, delta.*);
-                    delta.* += out;
-
-                    // Push opaque outputs onto mini-stack.
-                    var pushes: usize = effect.output_count;
-                    while (pushes > 0) {
-                        if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
-                        mini_stack[sp.*] = .other;
-                        sp.* += 1;
-                        pushes -= 1;
-                    }
-                    return true;
-                },
-                .other => return false, // Unknown quotation, bail.
-            }
-        } else {
-            // Popping from below initial level: unknown value, bail.
-            return false;
-        }
-    }
-
-    // `if`: ( cond true-quot false-quot -- results... )
-    if (std.mem.eql(u8, name, "if")) {
-        // Consume condition + two quotations.
-        delta.* -= 3;
-        min_delta.* = @min(min_delta.*, delta.*);
-
-        // Need both quotation bodies visible on mini-stack.
-        if (sp.* >= 3) {
-            const false_entry = mini_stack[sp.* - 1];
-            const true_entry = mini_stack[sp.* - 2];
-            sp.* -= 3; // pop condition + both quotations
-
-            const true_body = switch (true_entry) {
-                .quotation => |body| body,
-                .other => return false,
-            };
-            const false_body = switch (false_entry) {
-                .quotation => |body| body,
-                .other => return false,
-            };
-
-            const true_eff = try inferQuotationEffect(true_body, resolver) orelse return false;
-            const false_eff = try inferQuotationEffect(false_body, resolver) orelse return false;
-
-            // Both branches must have the same net delta.
-            const true_delta = @as(i32, @intCast(true_eff.output_count)) - @as(i32, @intCast(true_eff.input_count));
-            const false_delta = @as(i32, @intCast(false_eff.output_count)) - @as(i32, @intCast(false_eff.input_count));
-            if (true_delta != false_delta) return false;
-
-            // Both branches must consume the same number of inputs.
-            if (true_eff.input_count != false_eff.input_count) return false;
-
-            // Apply branch effect.
-            const in: i32 = @intCast(true_eff.input_count);
-            const out: i32 = @intCast(true_eff.output_count);
-            delta.* -= in;
-            min_delta.* = @min(min_delta.*, delta.*);
-            delta.* += out;
-
-            // Push opaque outputs.
-            var pushes: usize = true_eff.output_count;
-            while (pushes > 0) {
-                if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
-                mini_stack[sp.*] = .other;
-                sp.* += 1;
-                pushes -= 1;
-            }
-            return true;
-        }
-        return false;
-    }
 
     // Not a recognized built-in.
     return null;
+}
+
+/// `dup` effect: ( a -- a a ), net +1, needs 1 input. Duplicates the top
+/// mini-stack entry so quotation-body knowledge propagates through the copy.
+fn inferEffectDup(ec: EffectCtx) error{EffectInferenceOverflow}!bool {
+    const mini_stack = ec.mini_stack;
+    const sp = ec.sp;
+    const delta = ec.delta;
+    const min_delta = ec.min_delta;
+    delta.* -= 1;
+    min_delta.* = @min(min_delta.*, delta.*);
+    delta.* += 2;
+    if (sp.* >= 1) {
+        // Duplicate top entry (preserving quotation body if present).
+        const top = mini_stack[sp.* - 1];
+        if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+        mini_stack[sp.*] = top;
+        sp.* += 1;
+    } else {
+        // Duping from below initial level: push two unknowns.
+        if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+        mini_stack[sp.*] = .other;
+        sp.* += 1;
+        if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+        mini_stack[sp.*] = .other;
+        sp.* += 1;
+    }
+    return true;
+}
+
+/// `swap` effect: ( a b -- b a ), net 0, needs 2 inputs. Swaps the top two
+/// mini-stack entries so quotation-body knowledge follows the shuffle.
+fn inferEffectSwap(ec: EffectCtx) error{EffectInferenceOverflow}!bool {
+    const mini_stack = ec.mini_stack;
+    const sp = ec.sp;
+    const delta = ec.delta;
+    const min_delta = ec.min_delta;
+    delta.* -= 2;
+    min_delta.* = @min(min_delta.*, delta.*);
+    delta.* += 2;
+    if (sp.* >= 2) {
+        const tmp = mini_stack[sp.* - 1];
+        mini_stack[sp.* - 1] = mini_stack[sp.* - 2];
+        mini_stack[sp.* - 2] = tmp;
+    }
+    // If sp < 2, entries are below initial level; no mini-stack change needed.
+    return true;
+}
+
+/// `over` effect: ( a b -- a b a ), net +1, needs 2 inputs. Copies the second
+/// mini-stack entry to the top so quotation-body knowledge propagates.
+fn inferEffectOver(ec: EffectCtx) error{EffectInferenceOverflow}!bool {
+    const mini_stack = ec.mini_stack;
+    const sp = ec.sp;
+    const delta = ec.delta;
+    const min_delta = ec.min_delta;
+    delta.* -= 2;
+    min_delta.* = @min(min_delta.*, delta.*);
+    delta.* += 3;
+    if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+    if (sp.* >= 2) {
+        // Copy second element to top.
+        mini_stack[sp.*] = mini_stack[sp.* - 2];
+    } else {
+        // Some entries below initial level; push unknown.
+        mini_stack[sp.*] = .other;
+    }
+    sp.* += 1;
+    return true;
+}
+
+/// `call` effect: pop a quotation and apply its effect. Recurses into the
+/// quotation's body when it is a known literal; bails (`false`) when the
+/// callee is opaque or below the initial level.
+fn inferEffectCall(ec: EffectCtx) error{EffectInferenceOverflow}!bool {
+    const mini_stack = ec.mini_stack;
+    const sp = ec.sp;
+    const delta = ec.delta;
+    const min_delta = ec.min_delta;
+    const resolver = ec.resolver;
+
+    // Consume the quotation from the stack.
+    delta.* -= 1;
+    min_delta.* = @min(min_delta.*, delta.*);
+
+    // Check if top of mini-stack is a known quotation body.
+    if (sp.* > 0) {
+        sp.* -= 1;
+        switch (mini_stack[sp.*]) {
+            .quotation => |body| {
+                // Recursively infer the quotation's effect.
+                const effect = try inferQuotationEffect(body, resolver) orelse return false;
+                const in: i32 = @intCast(effect.input_count);
+                const out: i32 = @intCast(effect.output_count);
+                delta.* -= in;
+                min_delta.* = @min(min_delta.*, delta.*);
+                delta.* += out;
+
+                // Push opaque outputs onto mini-stack.
+                var pushes: usize = effect.output_count;
+                while (pushes > 0) {
+                    if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+                    mini_stack[sp.*] = .other;
+                    sp.* += 1;
+                    pushes -= 1;
+                }
+                return true;
+            },
+            .other => return false, // Unknown quotation, bail.
+        }
+    } else {
+        // Popping from below initial level: unknown value, bail.
+        return false;
+    }
+}
+
+/// `if` effect: ( cond true-quot false-quot -- results... ). Both branch
+/// bodies must be known literals with matching input counts and net deltas;
+/// bails (`false`) otherwise.
+fn inferEffectIf(ec: EffectCtx) error{EffectInferenceOverflow}!bool {
+    const mini_stack = ec.mini_stack;
+    const sp = ec.sp;
+    const delta = ec.delta;
+    const min_delta = ec.min_delta;
+    const resolver = ec.resolver;
+
+    // Consume condition + two quotations.
+    delta.* -= 3;
+    min_delta.* = @min(min_delta.*, delta.*);
+
+    // Need both quotation bodies visible on mini-stack.
+    if (sp.* >= 3) {
+        const false_entry = mini_stack[sp.* - 1];
+        const true_entry = mini_stack[sp.* - 2];
+        sp.* -= 3; // pop condition + both quotations
+
+        const true_body = switch (true_entry) {
+            .quotation => |body| body,
+            .other => return false,
+        };
+        const false_body = switch (false_entry) {
+            .quotation => |body| body,
+            .other => return false,
+        };
+
+        const true_eff = try inferQuotationEffect(true_body, resolver) orelse return false;
+        const false_eff = try inferQuotationEffect(false_body, resolver) orelse return false;
+
+        // Both branches must have the same net delta.
+        const true_delta = @as(i32, @intCast(true_eff.output_count)) - @as(i32, @intCast(true_eff.input_count));
+        const false_delta = @as(i32, @intCast(false_eff.output_count)) - @as(i32, @intCast(false_eff.input_count));
+        if (true_delta != false_delta) return false;
+
+        // Both branches must consume the same number of inputs.
+        if (true_eff.input_count != false_eff.input_count) return false;
+
+        // Apply branch effect.
+        const in: i32 = @intCast(true_eff.input_count);
+        const out: i32 = @intCast(true_eff.output_count);
+        delta.* -= in;
+        min_delta.* = @min(min_delta.*, delta.*);
+        delta.* += out;
+
+        // Push opaque outputs.
+        var pushes: usize = true_eff.output_count;
+        while (pushes > 0) {
+            if (sp.* >= max_mini_stack_depth) return error.EffectInferenceOverflow;
+            mini_stack[sp.*] = .other;
+            sp.* += 1;
+            pushes -= 1;
+        }
+        return true;
+    }
+    return false;
 }
 
 /// Apply a fixed (input_count, output_count) effect to delta, min_delta,
@@ -4304,12 +4346,12 @@ const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
     .{ "t", IntrinsicEntry{ .handler = emitIntrinsicTrue, .effect = .{ .fixed = .{ .input_count = 0, .output_count = 1 } } } },
     .{ "f", IntrinsicEntry{ .handler = emitIntrinsicFalse, .effect = .{ .fixed = .{ .input_count = 0, .output_count = 1 } } } },
     .{ "abs", IntrinsicEntry{ .handler = emitIntrinsicAbs, .effect = .{ .fixed = .{ .input_count = 1, .output_count = 1 } } } },
-    .{ "dup", IntrinsicEntry{ .handler = emitIntrinsicDup } },
+    .{ "dup", IntrinsicEntry{ .handler = emitIntrinsicDup, .effect = .{ .custom = inferEffectDup } } },
     .{ "drop", IntrinsicEntry{ .handler = emitIntrinsicDrop } },
-    .{ "swap", IntrinsicEntry{ .handler = emitIntrinsicSwap } },
-    .{ "over", IntrinsicEntry{ .handler = emitIntrinsicOver } },
-    .{ "if", IntrinsicEntry{ .handler = emitIntrinsicIf } },
-    .{ "call", IntrinsicEntry{ .handler = emitIntrinsicCall } },
+    .{ "swap", IntrinsicEntry{ .handler = emitIntrinsicSwap, .effect = .{ .custom = inferEffectSwap } } },
+    .{ "over", IntrinsicEntry{ .handler = emitIntrinsicOver, .effect = .{ .custom = inferEffectOver } } },
+    .{ "if", IntrinsicEntry{ .handler = emitIntrinsicIf, .effect = .{ .custom = inferEffectIf } } },
+    .{ "call", IntrinsicEntry{ .handler = emitIntrinsicCall, .effect = .{ .custom = inferEffectCall } } },
     .{ "choose", IntrinsicEntry{ .handler = emitIntrinsicChoose, .effect = .{ .fixed = .{ .input_count = 3, .output_count = 1 } } } },
     .{ "=", IntrinsicEntry{ .handler = emitIntrinsicEq, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
     .{ "<", IntrinsicEntry{ .handler = emitIntrinsicLt, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
@@ -14821,6 +14863,43 @@ test "inferQuotationEffect: dup propagates quotation body" {
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 0), eff.?.input_count);
     try testing.expectEqual(@as(u8, 1), eff.?.output_count);
+}
+
+test "inferQuotationEffect: swap propagates quotation body" {
+    // [ [ 1 ] 0 swap call ] should be (0 -- 2):
+    // Push quotation, push 0, swap (quotation back on top), call (pushes 1).
+    // The quotation body survives the swap, so call recurses into it.
+    const inner = makeInstructions(.{@as(i64, 1)});
+    const inner_val = Value{ .quotation = .{ .instructions = &inner } };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = inner_val }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "swap" }, .line = 3 },
+        .{ .op = .{ .call_word = "call" }, .line = 4 },
+    };
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 0), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 2), eff.?.output_count);
+}
+
+test "inferQuotationEffect: over propagates quotation body" {
+    // [ [ 1 ] 0 over call ] should be (0 -- 3):
+    // Push quotation, push 0, over (copies the quotation to the top), call.
+    // over copies the second element, so the quotation body is preserved on
+    // the copy and call recurses into it.
+    const inner = makeInstructions(.{@as(i64, 1)});
+    const inner_val = Value{ .quotation = .{ .instructions = &inner } };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = inner_val }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 2 },
+        .{ .op = .{ .call_word = "over" }, .line = 3 },
+        .{ .op = .{ .call_word = "call" }, .line = 4 },
+    };
+    const eff = inferQuotationEffect(&instrs, null) catch unreachable;
+    try testing.expect(eff != null);
+    try testing.expectEqual(@as(u8, 0), eff.?.input_count);
+    try testing.expectEqual(@as(u8, 3), eff.?.output_count);
 }
 
 // ---------------------------------------------------------------------------
