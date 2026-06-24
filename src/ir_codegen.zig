@@ -2257,9 +2257,19 @@ pub fn inferQuotationEffect(
 }
 
 /// Handle built-in words during quotation effect inference.
+///
 /// Returns `true` if the word was handled successfully, `false` if inference
 /// should abort (bail), or `null` if the word is not a built-in (caller should
 /// try the WordResolver).
+///
+/// The intrinsic effect surface is defined entirely by the table entry's `effect` field:
+///
+/// - `.fixed` carries a static count pair.
+/// - `.custom` points at a per-op handler for the bespoke mini-stack ops (`dup`, `swap`, `over`,
+///   `call`, `if`).
+/// - `.none` is the deliberate, parity-preserving effect for resolver-dispatched ops
+///   (indexed-stack, iterator, dynamic-var, struct-native, loop, error-handling) whose effect is
+///   not statically inferable here, so they fall through to the `WordResolver`.
 fn inferBuiltinEffect(
     name: []const u8,
     mini_stack: *[max_mini_stack_depth]MiniStackEntry,
@@ -2268,18 +2278,6 @@ fn inferBuiltinEffect(
     min_delta: *i32,
     resolver: ?WordResolver,
 ) error{EffectInferenceOverflow}!?bool {
-    // `drop` needs special mini-stack handling but is not yet a table effect.
-    if (std.mem.eql(u8, name, "drop")) {
-        delta.* -= 1;
-        min_delta.* = @min(min_delta.*, delta.*);
-        if (sp.* > 0) sp.* -= 1;
-        return true;
-    }
-
-    // Intrinsic effects are defined by the table entry's `effect` field:
-    // `.fixed` carries a static count pair, `.custom` points at a per-op
-    // handler for the bespoke mini-stack ops (`dup`, `swap`, `over`, `call`,
-    // `if`), and `.none` falls through to the `WordResolver`.
     if (intrinsic_table.get(name)) |entry| switch (entry.effect) {
         .fixed => |fx| {
             try applyFixedEffect(mini_stack, sp, delta, min_delta, fx.input_count, fx.output_count);
@@ -4347,7 +4345,7 @@ const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
     .{ "f", IntrinsicEntry{ .handler = emitIntrinsicFalse, .effect = .{ .fixed = .{ .input_count = 0, .output_count = 1 } } } },
     .{ "abs", IntrinsicEntry{ .handler = emitIntrinsicAbs, .effect = .{ .fixed = .{ .input_count = 1, .output_count = 1 } } } },
     .{ "dup", IntrinsicEntry{ .handler = emitIntrinsicDup, .effect = .{ .custom = inferEffectDup } } },
-    .{ "drop", IntrinsicEntry{ .handler = emitIntrinsicDrop } },
+    .{ "drop", IntrinsicEntry{ .handler = emitIntrinsicDrop, .effect = .{ .fixed = .{ .input_count = 1, .output_count = 0 } } } },
     .{ "swap", IntrinsicEntry{ .handler = emitIntrinsicSwap, .effect = .{ .custom = inferEffectSwap } } },
     .{ "over", IntrinsicEntry{ .handler = emitIntrinsicOver, .effect = .{ .custom = inferEffectOver } } },
     .{ "if", IntrinsicEntry{ .handler = emitIntrinsicIf, .effect = .{ .custom = inferEffectIf } } },
@@ -14684,6 +14682,14 @@ test "inferQuotationEffect: drop" {
     try testing.expect(eff != null);
     try testing.expectEqual(@as(u8, 1), eff.?.input_count);
     try testing.expectEqual(@as(u8, 0), eff.?.output_count);
+}
+
+test "inferQuotationEffect: .none ops defer to the resolver" {
+    const indexed = makeInstructions(.{"nip-n"});
+    try testing.expect((try inferQuotationEffect(&indexed, null)) == null);
+
+    const dynamic_var = makeInstructions(.{"get"});
+    try testing.expect((try inferQuotationEffect(&dynamic_var, null)) == null);
 }
 
 test "inferQuotationEffect: swap" {
