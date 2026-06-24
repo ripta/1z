@@ -3811,6 +3811,18 @@ fn compilePredBodyLoop(
 ) IrCodegenError!void {
     const ctx = state.ctx;
 
+    // Resolve the body quotation before compiling the predicate. Predicate
+    // compilation writes through `stack`, and `body_entry` may alias the stack
+    // slot it was read from, so reading `body_entry` after the predicate runs
+    // would observe the predicate's scratch values instead of the body. The
+    // scalar slice / slot extracted here cannot alias that slot.
+    const BodySource = union(enum) { quotation: []const Instruction, slot: usize, unsupported };
+    const body_source: BodySource = switch (body_entry) {
+        .quotation_body => |body| .{ .quotation = body },
+        .raw_at_slot => |s| .{ .slot = s },
+        else => .unsupported,
+    };
+
     flushToPhysicalStack(state, stack, sp.*);
 
     // Snapshot the symbolic stack state at loop entry for back-edge
@@ -3869,17 +3881,17 @@ fn compilePredBodyLoop(
     c._ir_IF_TRUE(ctx, if_continue);
 
     // Execute body
-    switch (body_entry) {
-        .quotation_body => |body| {
+    switch (body_source) {
+        .quotation => |body| {
             resetStackToPhysicalPreservingRows(stack, sp.*);
             try compileInstructions(state, body, stack, sp);
             if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
             flushToPhysicalStack(state, stack, sp.*);
         },
-        .raw_at_slot => |s| {
+        .slot => |s| {
             try emitIndirectQuotCall(state, stack, sp, s, 0);
         },
-        else => {
+        .unsupported => {
             state.not_compilable_reason = .quotation_reification;
             return IrCodegenError.NotCompilable;
         },
@@ -4431,10 +4443,35 @@ const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
     .{ "<rot-n", IntrinsicEntry{ .handler = emitIntrinsicRotNUp } },
     .{ "rot-n>", IntrinsicEntry{ .handler = emitIntrinsicRotNDown } },
     .{ "nip-n", IntrinsicEntry{ .handler = emitIntrinsicNipN } },
+    .{ "times", IntrinsicEntry{ .handler = emitIntrinsicTimes, .caps = .{ .needs_safepoint = true } } },
+    .{ "loop", IntrinsicEntry{ .handler = emitIntrinsicLoop, .caps = .{ .needs_safepoint = true } } },
+    .{ "while", IntrinsicEntry{ .handler = emitIntrinsicWhile, .caps = .{ .needs_safepoint = true } } },
+    .{ "until", IntrinsicEntry{ .handler = emitIntrinsicUntil, .caps = .{ .needs_safepoint = true } } },
+    .{ "recover", IntrinsicEntry{ .handler = emitIntrinsicRecover, .caps = .{ .needs_error_handling = true } } },
+    .{ "cleanup", IntrinsicEntry{ .handler = emitIntrinsicCleanup, .caps = .{ .needs_error_handling = true } } },
+    .{ "get", IntrinsicEntry{ .handler = emitIntrinsicGet, .caps = .{ .needs_dynamic_vars = true } } },
+    .{ "with-parameter", IntrinsicEntry{ .handler = emitIntrinsicWithParameter, .caps = .{ .needs_dynamic_vars = true } } },
+    .{ "#next", IntrinsicEntry{ .handler = emitIntrinsicIterNext, .caps = .{ .needs_iterators = true } } },
+    .{ "#collect", IntrinsicEntry{ .handler = emitIntrinsicIterCollect, .caps = .{ .needs_iterators = true } } },
+    .{ "#count", IntrinsicEntry{ .handler = emitIntrinsicIterCount, .caps = .{ .needs_iterators = true } } },
+    .{ "close-iterator", IntrinsicEntry{ .handler = emitIntrinsicCloseIterator, .caps = .{ .needs_iterators = true } } },
+    .{ "#take", IntrinsicEntry{ .handler = emitIntrinsicIterTake, .caps = .{ .needs_iterators = true } } },
+    .{ "#drop", IntrinsicEntry{ .handler = emitIntrinsicIterDrop, .caps = .{ .needs_iterators = true } } },
+    .{ "#each", IntrinsicEntry{ .handler = emitIntrinsicIterEach, .caps = .{ .needs_iterators = true, .needs_param_validation = true } } },
+    .{ "#map", IntrinsicEntry{ .handler = emitIntrinsicIterMap, .caps = .{ .needs_iterators = true, .needs_param_validation = true } } },
+    .{ "#filter", IntrinsicEntry{ .handler = emitIntrinsicIterFilter, .caps = .{ .needs_iterators = true, .needs_param_validation = true } } },
+    .{ "#reduce", IntrinsicEntry{ .handler = emitIntrinsicIterReduce, .caps = .{ .needs_iterators = true, .needs_param_validation = true } } },
     .{ "native.make-struct-instance", IntrinsicEntry{ .handler = emitIntrinsicMakeStructInstance, .caps = .{ .needs_dispatch = true } } },
     .{ "native.struct-instance-destructure", IntrinsicEntry{ .handler = emitIntrinsicStructInstanceDestructure, .caps = .{ .needs_dispatch = true } } },
     .{ "native.virtual-struct-wrap", IntrinsicEntry{ .handler = emitIntrinsicVirtualStructWrap, .caps = .{ .needs_dispatch = true } } },
     .{ "native.virtual-struct-unwrap", IntrinsicEntry{ .handler = emitIntrinsicVirtualStructUnwrap, .caps = .{ .needs_dispatch = true } } },
+    .{ "native.virtual-unwrap", IntrinsicEntry{ .handler = emitIntrinsicVirtualUnwrap } },
+    .{ "native.struct-field-get", IntrinsicEntry{ .handler = emitIntrinsicStructFieldGet } },
+    .{ "native.struct-field-set", IntrinsicEntry{ .handler = emitIntrinsicStructFieldSet } },
+    .{ "native.typed-validate-and-promote", IntrinsicEntry{ .handler = emitIntrinsicTypedValidateAndPromote } },
+    .{ "native.struct-instance-to-hash", IntrinsicEntry{ .handler = emitIntrinsicStructInstanceToHash, .caps = .{ .needs_dispatch = true } } },
+    .{ "native.struct-type-predicate", IntrinsicEntry{ .handler = emitIntrinsicStructTypePredicate, .caps = .{ .needs_dispatch = true } } },
+    .{ "native.hash-to-struct", IntrinsicEntry{ .handler = emitIntrinsicHashToStruct, .caps = .{ .needs_dispatch = true } } },
 });
 
 fn emitIntrinsicTrue(ec: EmitCtx) IrCodegenError!ControlFlow {
@@ -5886,6 +5923,407 @@ fn emitIntrinsicNipN(ec: EmitCtx) IrCodegenError!ControlFlow {
     return emitIndexedStackDispatch(ec, .nip_n);
 }
 
+fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const ctx = state.ctx;
+
+    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+    sp.* -= 2;
+    const n_entry = stack[sp.*];
+    const quot_entry = stack[sp.* + 1];
+
+    const initial_n = try requireI64(n_entry, state);
+
+    // Flush user stack to physical memory before the loop
+    flushToPhysicalStack(state, stack, sp.*);
+
+    // Snapshot symbolic stack state at loop entry for
+    // back-edge invariance checks.
+    const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp.*]) catch return IrCodegenError.OutOfMemory;
+    defer state.allocator.free(loop_entry_stack);
+    const loop_entry_sp = sp.*;
+
+    // Write sp to memory so indirect calls can see it
+    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
+    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
+    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
+
+    // Zero-iteration check: n > 0
+    const zero = c.ir_const_i64(ctx, 0);
+    const gt_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_GT, c.IR_BOOL), initial_n, zero);
+    const if_skip = c._ir_IF(ctx, gt_zero);
+
+    c._ir_IF_FALSE(ctx, if_skip);
+    const skip_end = c._ir_END(ctx);
+
+    c._ir_IF_TRUE(ctx, if_skip);
+    const entry_end = c._ir_END(ctx);
+
+    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+    state.recordBlockStart(loop_ref);
+    const counter_phi = c._ir_PHI_2(ctx, c.IR_I64, initial_n, c.IR_UNUSED);
+
+    switch (quot_entry) {
+        .quotation_body => |body| {
+            resetStackToPhysicalPreservingRows(stack, sp.*);
+            try compileInstructions(state, body, stack, sp);
+            if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
+            // Flush body results back
+            flushToPhysicalStack(state, stack, sp.*);
+        },
+        .raw_at_slot => |s| {
+            try emitIndirectQuotCall(state, stack, sp, s, ec.line);
+        },
+        else => {
+            state.not_compilable_reason = .quotation_reification;
+            return IrCodegenError.NotCompilable;
+        },
+    }
+
+    // Reset stack entries after body
+    resetStackToPhysicalPreservingRows(stack, sp.*);
+
+    // Decrement counter
+    const one = c.ir_const_i64(ctx, 1);
+    const new_counter = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_I64), counter_phi, one);
+    c._ir_PHI_SET_OP(ctx, counter_phi, 2, new_counter);
+
+    // Continue if new_counter > 0
+    const continue_cond = c.ir_fold2(ctx, c.IR_OPT(c.IR_GT, c.IR_BOOL), new_counter, zero);
+    const if_continue = c._ir_IF(ctx, continue_cond);
+    c._ir_IF_TRUE(ctx, if_continue);
+    emitSafepointCall(state);
+    const loop_end = c._ir_LOOP_END(ctx);
+    c.ir_set_op2(ctx, loop_ref, loop_end);
+
+    c._ir_IF_FALSE(ctx, if_continue);
+    const exit_end = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, skip_end, exit_end);
+
+    // The safepoint on the loop-continue path updated
+    // state.items_ptr/base_addr to IR refs that don't dominate
+    // this merge point. Re-LOAD to get dominating refs.
+    if (state.refresh_stack_fn != c.IR_UNUSED) {
+        refreshCachedStackPointer(state);
+    }
+    return .next;
+}
+
+fn emitIntrinsicLoop(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const ctx = state.ctx;
+
+    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+    sp.* -= 1;
+    const pred_entry = stack[sp.*];
+
+    // Flush user stack to physical memory before the loop
+    flushToPhysicalStack(state, stack, sp.*);
+
+    // Snapshot symbolic stack state at loop entry for
+    // back-edge invariance checks.
+    const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp.*]) catch return IrCodegenError.OutOfMemory;
+    defer state.allocator.free(loop_entry_stack);
+    const loop_entry_sp = sp.*;
+
+    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
+    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
+    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
+
+    const entry_end = c._ir_END(ctx);
+    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
+    state.recordBlockStart(loop_ref);
+    // AOT loop back-edges can arrive after callbacks moved ctx.stack.items.
+    // Refresh at the header so predicate slot accesses use the live base.
+    if (state.aot_mode and state.refresh_stack_fn != c.IR_UNUSED) {
+        refreshCachedStackPointer(state);
+    }
+
+    // Execute predicate body
+    const pre_body_sp = sp.*;
+    switch (pred_entry) {
+        .quotation_body => |body| {
+            resetStackToPhysicalPreservingRows(stack, sp.*);
+            try compileInstructions(state, body, stack, sp);
+        },
+        .raw_at_slot => |s| {
+            try emitIndirectQuotCall(state, stack, sp, s, ec.line);
+            sp.* += 1; // predicate pushes one value (bool)
+            resetStackToPhysicalPreservingRows(stack, sp.*);
+        },
+        else => {
+            state.not_compilable_reason = .quotation_reification;
+            return IrCodegenError.NotCompilable;
+        },
+    }
+
+    // Pred should push a boolean on top
+    if (sp.* < pre_body_sp + 1) return IrCodegenError.StackShapeMismatch;
+    sp.* -= 1;
+    const cond_entry = stack[sp.*];
+    if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
+
+    const continue_cond = try emitTruthiness(state, cond_entry, state.base_addr);
+
+    flushToPhysicalStack(state, stack, sp.*);
+    resetStackToPhysicalPreservingRows(stack, sp.*);
+
+    const if_continue = c._ir_IF(ctx, continue_cond);
+    c._ir_IF_TRUE(ctx, if_continue);
+    emitSafepointCall(state);
+    const loop_end = c._ir_LOOP_END(ctx);
+    c.ir_set_op2(ctx, loop_ref, loop_end);
+
+    c._ir_IF_FALSE(ctx, if_continue);
+
+    // The safepoint on the IF_TRUE (continue) path updated
+    // state.items_ptr/base_addr to IR refs that don't dominate
+    // this exit path. Re-LOAD to get dominating refs.
+    if (state.refresh_stack_fn != c.IR_UNUSED) {
+        refreshCachedStackPointer(state);
+    }
+    return .next;
+}
+
+fn emitIntrinsicWhile(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitPredBodyLoopOp(ec, false);
+}
+
+fn emitIntrinsicUntil(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitPredBodyLoopOp(ec, true);
+}
+
+fn emitPredBodyLoopOp(ec: EmitCtx, is_until: bool) IrCodegenError!ControlFlow {
+    const stack = ec.stack;
+    const sp = ec.sp;
+    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+    sp.* -= 2;
+    const pred_entry = stack[sp.*];
+    const body_entry = stack[sp.* + 1];
+    try compilePredBodyLoop(ec.state, stack, sp, pred_entry, body_entry, is_until);
+    return .next;
+}
+
+fn emitIntrinsicRecover(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitErrorHandlerCall(ec, ec.state.recover_fn, .recover);
+}
+
+fn emitIntrinsicCleanup(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitErrorHandlerCall(ec, ec.state.cleanup_fn, .cleanup);
+}
+
+fn emitErrorHandlerCall(ec: EmitCtx, callback_fn: c.ir_ref, frame_kind: BuiltinTraceFrameKind) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const ctx = state.ctx;
+
+    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+
+    try materializeQuotations(state, stack, sp.*);
+    flushToPhysicalStack(state, stack, sp.*);
+    const ctx_val = emitCallbackPreamble(state, sp.*);
+
+    const call_result = c._ir_CALL_1(ctx, c.IR_I32, callback_fn, ctx_val);
+    emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = frame_kind, .line = ec.line } });
+
+    sp.* -= 2;
+    if (state.aot_mode and ec.idx != ec.instructions.len - 1) {
+        // The handler callback ran a quotation whose row-variable
+        // output makes the stack opaque, like with-parameter.
+        // Collapse to a fresh row so the instructions that consume
+        // its result keep compiling, rather than abandoning at the
+        // next instruction. When the op is last, the word returns
+        // through the live-sp path below instead.
+        if (exitFallsThrough(state.exit_kind)) {
+            reloadBaseAfterDynamicCall(state);
+            sp.* = 1;
+            stack[0] = .{ .row_region = state.nextRowId() };
+        }
+    } else {
+        state.dynamic_call_emitted = true;
+        state.error_handler_terminal = true;
+    }
+    return .next;
+}
+
+fn emitIntrinsicGet(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const ctx = state.ctx;
+
+    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+
+    try materializeQuotations(state, stack, sp.*);
+    flushToPhysicalStack(state, stack, sp.*);
+    const ctx_val = emitCallbackPreamble(state, sp.*);
+
+    const call_result = c._ir_CALL_1(ctx, c.IR_I32, state.get_fn, ctx_val);
+    emitCallbackPostCheck(state, call_result, call_result, null, .none);
+
+    // get: pops 1 param, pushes 1 value (net 0)
+    settleRowAwareStack(state, stack, sp, 1, 1);
+    return .next;
+}
+
+fn emitIntrinsicWithParameter(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const ctx = state.ctx;
+
+    if (sp.* < 3) return IrCodegenError.StackUnderflow;
+
+    try materializeQuotations(state, stack, sp.*);
+    flushToPhysicalStack(state, stack, sp.*);
+    const ctx_val = emitCallbackPreamble(state, sp.*);
+
+    const call_result = c._ir_CALL_1(ctx, c.IR_I32, state.with_parameter_fn, ctx_val);
+    emitCallbackPostCheck(state, call_result, call_result, null, .none);
+
+    // NOTE(ripta): with-parameter: The body quotation's row-variable output
+    //              makes the stack opaque after the call. Collapse to a fresh
+    //              row_region so instructions that consume the body's result
+    //              keep compiling above it.
+    if (exitFallsThrough(state.exit_kind)) {
+        reloadBaseAfterDynamicCall(state);
+        sp.* = 1;
+        stack[0] = .{ .row_region = state.nextRowId() };
+    }
+    return .next;
+}
+
+fn emitIntrinsicIterNext(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIteratorOp(ec, .next);
+}
+
+fn emitIntrinsicIterCollect(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIteratorOp(ec, .collect);
+}
+
+fn emitIntrinsicIterCount(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIteratorOp(ec, .count);
+}
+
+fn emitIntrinsicCloseIterator(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIteratorOp(ec, .close_iterator);
+}
+
+fn emitIntrinsicIterTake(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIteratorOp(ec, .take);
+}
+
+fn emitIntrinsicIterDrop(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIteratorOp(ec, .drop);
+}
+
+fn emitIntrinsicIterEach(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIteratorOp(ec, .each);
+}
+
+fn emitIntrinsicIterMap(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIteratorOp(ec, .map);
+}
+
+fn emitIntrinsicIterFilter(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIteratorOp(ec, .filter);
+}
+
+fn emitIntrinsicIterReduce(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIteratorOp(ec, .reduce);
+}
+
+fn emitIteratorOp(ec: EmitCtx, opcode: IteratorOpcode) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const ctx = state.ctx;
+
+    const effects = iteratorEffects(opcode);
+    if (sp.* < effects.inputs) return IrCodegenError.StackUnderflow;
+
+    try materializeQuotations(state, stack, sp.*);
+    flushToPhysicalStack(state, stack, sp.*);
+    const ctx_val = emitCallbackPreamble(state, sp.*);
+
+    if (effects.dynamic) {
+        if (state.interp_ctx) |ictx| {
+            if (ictx.lookupWordStackEffectPtr(ec.name)) |eff_ptr| {
+                emitParamValidation(state, @intFromPtr(eff_ptr));
+            }
+        }
+    }
+
+    const opcode_const = c.ir_const_addr(ctx, @intFromEnum(opcode));
+    const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.iterator_fn, ctx_val, opcode_const);
+    emitCallbackPostCheck(state, call_result, call_result, null, .none);
+
+    settleRowAwareStack(state, stack, sp, effects.inputs, effects.outputs);
+    return .next;
+}
+
+fn emitIntrinsicVirtualUnwrap(ec: EmitCtx) IrCodegenError!ControlFlow {
+    // The inline emitter bakes a process-local VirtualType pointer
+    // constant, so it is JIT-only. In AOT mode the preceding
+    // .type_val literal is routed through the runtime-image slot
+    // table and the native callback handles the rest.
+    if (ec.state.aot_mode or !tryEmitInlineVirtualUnwrap(ec.state, ec.instructions, ec.idx, ec.stack, ec.sp)) {
+        return emitNativeCallbackOp(ec);
+    }
+    return .next;
+}
+
+fn emitIntrinsicStructFieldGet(ec: EmitCtx) IrCodegenError!ControlFlow {
+    // JIT-only inline emitter; AOT uses the native callback because the preceding .struct_type
+    // literal goes through the runtime-image slot table. The inline emitter bakes a freeze-time
+    // StructType pointer that does not match the runtime-image pointer across the process boundary.
+    if (ec.state.aot_mode or !tryEmitInlineStructFieldGet(ec.state, ec.instructions, ec.idx, ec.stack, ec.sp)) {
+        return emitNativeCallbackOp(ec);
+    }
+    return .next;
+}
+
+fn emitIntrinsicStructFieldSet(ec: EmitCtx) IrCodegenError!ControlFlow {
+    // JIT-only inline emitter; AOT uses the native callback for the same freeze-time vs runtime-
+    // image pointer mismatch reason as native.struct-field-get above.
+    if (ec.state.aot_mode or !tryEmitInlineStructFieldSet(ec.state, ec.instructions, ec.idx, ec.stack, ec.sp)) {
+        return emitNativeCallbackOp(ec);
+    }
+    return .next;
+}
+
+fn emitIntrinsicTypedValidateAndPromote(ec: EmitCtx) IrCodegenError!ControlFlow {
+    // JIT-only inline emitter; AOT uses the native callback because the preceding .type_val
+    // literal goes through the slot table.
+    if (ec.state.aot_mode or !tryEmitInlineTypedValidateAndPromote(ec.state, ec.instructions, ec.idx, ec.stack, ec.sp)) {
+        return emitNativeCallbackOp(ec);
+    }
+    return .next;
+}
+
+fn emitIntrinsicStructInstanceToHash(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitNativeCallbackOp(ec);
+}
+
+fn emitIntrinsicStructTypePredicate(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitNativeCallbackOp(ec);
+}
+
+fn emitIntrinsicHashToStruct(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitNativeCallbackOp(ec);
+}
+
+fn emitNativeCallbackOp(ec: EmitCtx) IrCodegenError!ControlFlow {
+    try emitResolvedNativeCallback(ec.state, ec.name, ec.stack, ec.sp, ec.line);
+    return .next;
+}
+
 /// Compile a sequence of instructions, updating the abstract stack.
 /// Used both for top-level word bodies and for inlined quotation bodies.
 fn compileInstructions(
@@ -6161,245 +6599,6 @@ fn compileInstructions(
                         .next => {},
                         .stop => break,
                     }
-                } else if (std.mem.eql(u8, name, "times")) {
-                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
-                    sp.* -= 2;
-                    const n_entry = stack[sp.*];
-                    const quot_entry = stack[sp.* + 1];
-
-                    const initial_n = try requireI64(n_entry, state);
-
-                    // Flush user stack to physical memory before the loop
-                    flushToPhysicalStack(state, stack, sp.*);
-
-                    // Snapshot symbolic stack state at loop entry for
-                    // back-edge invariance checks.
-                    const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp.*]) catch return IrCodegenError.OutOfMemory;
-                    defer state.allocator.free(loop_entry_stack);
-                    const loop_entry_sp = sp.*;
-
-                    // Write sp to memory so indirect calls can see it
-                    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
-                    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
-                    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
-
-                    // Zero-iteration check: n > 0
-                    const zero = c.ir_const_i64(ctx, 0);
-                    const gt_zero = c.ir_fold2(ctx, c.IR_OPT(c.IR_GT, c.IR_BOOL), initial_n, zero);
-                    const if_skip = c._ir_IF(ctx, gt_zero);
-
-                    c._ir_IF_FALSE(ctx, if_skip);
-                    const skip_end = c._ir_END(ctx);
-
-                    c._ir_IF_TRUE(ctx, if_skip);
-                    const entry_end = c._ir_END(ctx);
-
-                    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
-                    state.recordBlockStart(loop_ref);
-                    const counter_phi = c._ir_PHI_2(ctx, c.IR_I64, initial_n, c.IR_UNUSED);
-
-                    switch (quot_entry) {
-                        .quotation_body => |body| {
-                            resetStackToPhysicalPreservingRows(stack, sp.*);
-                            try compileInstructions(state, body, stack, sp);
-                            if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
-                            // Flush body results back
-                            flushToPhysicalStack(state, stack, sp.*);
-                        },
-                        .raw_at_slot => |s| {
-                            try emitIndirectQuotCall(state, stack, sp, s, instr.line);
-                        },
-                        else => {
-                            state.not_compilable_reason = .quotation_reification;
-                            return IrCodegenError.NotCompilable;
-                        },
-                    }
-
-                    // Reset stack entries after body
-                    resetStackToPhysicalPreservingRows(stack, sp.*);
-
-                    // Decrement counter
-                    const one = c.ir_const_i64(ctx, 1);
-                    const new_counter = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_I64), counter_phi, one);
-                    c._ir_PHI_SET_OP(ctx, counter_phi, 2, new_counter);
-
-                    // Continue if new_counter > 0
-                    const continue_cond = c.ir_fold2(ctx, c.IR_OPT(c.IR_GT, c.IR_BOOL), new_counter, zero);
-                    const if_continue = c._ir_IF(ctx, continue_cond);
-                    c._ir_IF_TRUE(ctx, if_continue);
-                    emitSafepointCall(state);
-                    const loop_end = c._ir_LOOP_END(ctx);
-                    c.ir_set_op2(ctx, loop_ref, loop_end);
-
-                    c._ir_IF_FALSE(ctx, if_continue);
-                    const exit_end = c._ir_END(ctx);
-
-                    c._ir_MERGE_2(ctx, skip_end, exit_end);
-
-                    // The safepoint on the loop-continue path updated
-                    // state.items_ptr/base_addr to IR refs that don't dominate
-                    // this merge point. Re-LOAD to get dominating refs.
-                    if (state.refresh_stack_fn != c.IR_UNUSED) {
-                        refreshCachedStackPointer(state);
-                    }
-                } else if (std.mem.eql(u8, name, "loop")) {
-                    if (sp.* < 1) return IrCodegenError.StackUnderflow;
-                    sp.* -= 1;
-                    const pred_entry = stack[sp.*];
-
-                    // Flush user stack to physical memory before the loop
-                    flushToPhysicalStack(state, stack, sp.*);
-
-                    // Snapshot symbolic stack state at loop entry for
-                    // back-edge invariance checks.
-                    const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp.*]) catch return IrCodegenError.OutOfMemory;
-                    defer state.allocator.free(loop_entry_stack);
-                    const loop_entry_sp = sp.*;
-
-                    const pre_loop_sp_const = c.ir_const_addr(ctx, sp.*);
-                    const pre_loop_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, pre_loop_sp_const);
-                    c._ir_STORE(ctx, state.sp_ptr, pre_loop_sp);
-
-                    const entry_end = c._ir_END(ctx);
-                    const loop_ref = c._ir_LOOP_BEGIN(ctx, entry_end);
-                    state.recordBlockStart(loop_ref);
-                    // AOT loop back-edges can arrive after callbacks moved ctx.stack.items.
-                    // Refresh at the header so predicate slot accesses use the live base.
-                    if (state.aot_mode and state.refresh_stack_fn != c.IR_UNUSED) {
-                        refreshCachedStackPointer(state);
-                    }
-
-                    // Execute predicate body
-                    const pre_body_sp = sp.*;
-                    switch (pred_entry) {
-                        .quotation_body => |body| {
-                            resetStackToPhysicalPreservingRows(stack, sp.*);
-                            try compileInstructions(state, body, stack, sp);
-                        },
-                        .raw_at_slot => |s| {
-                            try emitIndirectQuotCall(state, stack, sp, s, instr.line);
-                            sp.* += 1; // predicate pushes one value (bool)
-                            resetStackToPhysicalPreservingRows(stack, sp.*);
-                        },
-                        else => {
-                            state.not_compilable_reason = .quotation_reification;
-                            return IrCodegenError.NotCompilable;
-                        },
-                    }
-
-                    // Pred should push a boolean on top
-                    if (sp.* < pre_body_sp + 1) return IrCodegenError.StackShapeMismatch;
-                    sp.* -= 1;
-                    const cond_entry = stack[sp.*];
-                    if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
-
-                    const continue_cond = try emitTruthiness(state, cond_entry, state.base_addr);
-
-                    flushToPhysicalStack(state, stack, sp.*);
-                    resetStackToPhysicalPreservingRows(stack, sp.*);
-
-                    const if_continue = c._ir_IF(ctx, continue_cond);
-                    c._ir_IF_TRUE(ctx, if_continue);
-                    emitSafepointCall(state);
-                    const loop_end = c._ir_LOOP_END(ctx);
-                    c.ir_set_op2(ctx, loop_ref, loop_end);
-
-                    c._ir_IF_FALSE(ctx, if_continue);
-
-                    // The safepoint on the IF_TRUE (continue) path updated
-                    // state.items_ptr/base_addr to IR refs that don't dominate
-                    // this exit path. Re-LOAD to get dominating refs.
-                    if (state.refresh_stack_fn != c.IR_UNUSED) {
-                        refreshCachedStackPointer(state);
-                    }
-                } else if (std.mem.eql(u8, name, "while") or std.mem.eql(u8, name, "until")) {
-                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
-                    sp.* -= 2;
-                    const pred_entry = stack[sp.*];
-                    const body_entry = stack[sp.* + 1];
-                    try compilePredBodyLoop(state, stack, sp, pred_entry, body_entry, std.mem.eql(u8, name, "until"));
-                } else if (isErrorHandlingOp(name)) {
-                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
-
-                    try materializeQuotations(state, stack, sp.*);
-                    flushToPhysicalStack(state, stack, sp.*);
-                    const ctx_val = emitCallbackPreamble(state, sp.*);
-
-                    const callback_fn = if (std.mem.eql(u8, name, "recover"))
-                        state.recover_fn
-                    else
-                        state.cleanup_fn;
-
-                    const call_result = c._ir_CALL_1(ctx, c.IR_I32, callback_fn, ctx_val);
-                    const frame_kind: BuiltinTraceFrameKind = if (std.mem.eql(u8, name, "recover")) .recover else .cleanup;
-                    emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = frame_kind, .line = instr.line } });
-
-                    sp.* -= 2;
-                    if (state.aot_mode and idx != instructions.len - 1) {
-                        // The handler callback ran a quotation whose row-variable
-                        // output makes the stack opaque, like with-parameter.
-                        // Collapse to a fresh row so the instructions that consume
-                        // its result keep compiling, rather than abandoning at the
-                        // next instruction. When the op is last, the word returns
-                        // through the live-sp path below instead.
-                        if (exitFallsThrough(state.exit_kind)) {
-                            reloadBaseAfterDynamicCall(state);
-                            sp.* = 1;
-                            stack[0] = .{ .row_region = state.nextRowId() };
-                        }
-                    } else {
-                        state.dynamic_call_emitted = true;
-                        state.error_handler_terminal = true;
-                    }
-                } else if (isDynamicVarOp(name)) {
-                    const is_get = std.mem.eql(u8, name, "get");
-                    const required: usize = if (is_get) 1 else 3;
-                    if (sp.* < required) return IrCodegenError.StackUnderflow;
-
-                    try materializeQuotations(state, stack, sp.*);
-                    flushToPhysicalStack(state, stack, sp.*);
-                    const ctx_val = emitCallbackPreamble(state, sp.*);
-
-                    const callback_fn = if (is_get) state.get_fn else state.with_parameter_fn;
-                    const call_result = c._ir_CALL_1(ctx, c.IR_I32, callback_fn, ctx_val);
-                    emitCallbackPostCheck(state, call_result, call_result, null, .none);
-
-                    if (is_get) {
-                        // get: pops 1 param, pushes 1 value (net 0)
-                        settleRowAwareStack(state, stack, sp, 1, 1);
-                    } else {
-                        // NOTE(ripta): with-parameter: The body quotation's row-variable output
-                        //              makes the stack opaque after the call. Collapse to a fresh
-                        //              row_region so instructions that consume the body's result
-                        //              keep compiling above it.
-                        if (exitFallsThrough(state.exit_kind)) {
-                            reloadBaseAfterDynamicCall(state);
-                            sp.* = 1;
-                            stack[0] = .{ .row_region = state.nextRowId() };
-                        }
-                    }
-                } else if (isIteratorOp(name)) {
-                    const opcode = iteratorOpcodeFromName(name).?;
-                    const effects = iteratorEffects(opcode);
-                    if (sp.* < effects.inputs) return IrCodegenError.StackUnderflow;
-
-                    try materializeQuotations(state, stack, sp.*);
-                    flushToPhysicalStack(state, stack, sp.*);
-                    const ctx_val = emitCallbackPreamble(state, sp.*);
-
-                    if (effects.dynamic) {
-                        if (state.interp_ctx) |ictx| {
-                            if (ictx.lookupWordStackEffectPtr(name)) |eff_ptr| {
-                                emitParamValidation(state, @intFromPtr(eff_ptr));
-                            }
-                        }
-                    }
-
-                    const opcode_const = c.ir_const_addr(ctx, @intFromEnum(opcode));
-                    const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.iterator_fn, ctx_val, opcode_const);
-                    emitCallbackPostCheck(state, call_result, call_result, null, .none);
-
-                    settleRowAwareStack(state, stack, sp, effects.inputs, effects.outputs);
                 } else if (
                 // oh, yuck
                 state.self_name != null and
@@ -6522,38 +6721,6 @@ fn compileInstructions(
 
                     sp.* = ic;
                     resetStackToPhysical(stack, sp.*);
-                } else if (std.mem.eql(u8, name, "native.virtual-unwrap")) {
-                    // The inline emitter bakes a process-local VirtualType pointer
-                    // constant, so it is JIT-only. In AOT mode the preceding
-                    // .type_val literal is routed through the runtime-image slot
-                    // table and the native callback handles the rest.
-                    if (state.aot_mode or !tryEmitInlineVirtualUnwrap(state, instructions, idx, stack, sp)) {
-                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
-                    }
-                } else if (std.mem.eql(u8, name, "native.struct-field-get")) {
-                    // JIT-only inline emitter; AOT uses the native callback because the preceding .struct_type
-                    // literal goes through the runtime-image slot table. The inline emitter bakes a freeze-time
-                    // StructType pointer that does not match the runtime-image pointer across the process boundary.
-                    if (state.aot_mode or !tryEmitInlineStructFieldGet(state, instructions, idx, stack, sp)) {
-                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
-                    }
-                } else if (std.mem.eql(u8, name, "native.struct-field-set")) {
-                    // JIT-only inline emitter; AOT uses the native callback for the same freeze-time vs runtime-
-                    // image pointer mismatch reason as native.struct-field-get above.
-                    if (state.aot_mode or !tryEmitInlineStructFieldSet(state, instructions, idx, stack, sp)) {
-                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
-                    }
-                } else if (std.mem.eql(u8, name, "native.typed-validate-and-promote")) {
-                    // JIT-only inline emitter; AOT uses the native callback because the preceding .type_val
-                    // literal goes through the slot table.
-                    if (state.aot_mode or !tryEmitInlineTypedValidateAndPromote(state, instructions, idx, stack, sp)) {
-                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
-                    }
-                } else if (std.mem.eql(u8, name, "native.struct-instance-to-hash") or
-                    std.mem.eql(u8, name, "native.struct-type-predicate") or
-                    std.mem.eql(u8, name, "native.hash-to-struct"))
-                {
-                    try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                 } else {
                     // Unrecognized word: try dispatch table call if a resolver is available
                     const res = state.resolver orelse {
