@@ -2926,9 +2926,15 @@ fn extractPrecedingLiteralDepth(instructions: []const Instruction, idx: usize) ?
 /// Perform a compile-time symbolic rewrite of an indexed stack operation.
 /// Rearranges the StackEntry array directly when the operation touches only known entries above a symbolic row.
 /// The depth literal is popped from the abstract stack and the operation's semantics are applied abstractly.
+/// Which indexed stack op a handler is rewriting. Replaces string matching on
+/// the op name with a value so the abstract-stack rewrite carries no `eql`
+/// re-derivation. `rot_up` is `<rot-n` (pull to top); `rot_down` is `rot-n>`
+/// (push to depth).
+const IndexedStackOp = enum { pick_n, rot_up, rot_down, nip_n };
+
 fn rewriteIndexedStackOp(
     state: *CompileState,
-    name: []const u8,
+    op: IndexedStackOp,
     stack: []StackEntry,
     sp: *usize,
     depth: usize,
@@ -2936,41 +2942,46 @@ fn rewriteIndexedStackOp(
     // Pop the depth literal from the abstract stack.
     sp.* -= 1;
 
-    if (std.mem.eql(u8, name, "pick-n")) {
-        // ( ... x_n ... x_0 n -- ... x_n ... x_0 x_n )
-        // clone the entry at depth to the top
-        const target = sp.* - 1 - depth;
-        stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[target], sp.*);
-        sp.* += 1;
-    } else if (std.mem.eql(u8, name, "<rot-n")) {
-        // ( ... x_n x_n-1 ... x_0 n -- ... x_n-1 ... x_0 x_n )
-        // pull the entry at depth to the top, shifting others down
-        if (depth == 0) return;
-        const target = sp.* - 1 - depth;
-        const saved = stack[target];
-        var i = target;
-        while (i < sp.* - 1) : (i += 1) {
-            stack[i] = stack[i + 1];
-        }
-        stack[sp.* - 1] = saved;
-    } else if (std.mem.eql(u8, name, "rot-n>")) {
-        // ( ... x_0 n -- x_0 ... )
-        // push the top entry to depth, shifting others up
-        if (depth == 0) return;
-        const target = sp.* - 1 - depth;
-        const saved = stack[sp.* - 1];
-        var i = sp.* - 1;
-        while (i > target) : (i -= 1) {
-            stack[i] = stack[i - 1];
-        }
-        stack[target] = saved;
-    } else if (std.mem.eql(u8, name, "nip-n")) {
-        // ( ...x1..xn y n -- y )
-        // keep the top entry, drop depth entries beneath it
-        if (depth == 0) return;
-        const top = stack[sp.* - 1];
-        sp.* -= depth;
-        stack[sp.* - 1] = top;
+    switch (op) {
+        .pick_n => {
+            // ( ... x_n ... x_0 n -- ... x_n ... x_0 x_n )
+            // clone the entry at depth to the top
+            const target = sp.* - 1 - depth;
+            stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[target], sp.*);
+            sp.* += 1;
+        },
+        .rot_up => {
+            // ( ... x_n x_n-1 ... x_0 n -- ... x_n-1 ... x_0 x_n )
+            // pull the entry at depth to the top, shifting others down
+            if (depth == 0) return;
+            const target = sp.* - 1 - depth;
+            const saved = stack[target];
+            var i = target;
+            while (i < sp.* - 1) : (i += 1) {
+                stack[i] = stack[i + 1];
+            }
+            stack[sp.* - 1] = saved;
+        },
+        .rot_down => {
+            // ( ... x_0 n -- x_0 ... )
+            // push the top entry to depth, shifting others up
+            if (depth == 0) return;
+            const target = sp.* - 1 - depth;
+            const saved = stack[sp.* - 1];
+            var i = sp.* - 1;
+            while (i > target) : (i -= 1) {
+                stack[i] = stack[i - 1];
+            }
+            stack[target] = saved;
+        },
+        .nip_n => {
+            // ( ...x1..xn y n -- y )
+            // keep the top entry, drop depth entries beneath it
+            if (depth == 0) return;
+            const top = stack[sp.* - 1];
+            sp.* -= depth;
+            stack[sp.* - 1] = top;
+        },
     }
 }
 
@@ -4406,6 +4417,20 @@ const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
     .{ "if", IntrinsicEntry{ .handler = emitIntrinsicIf } },
     .{ "call", IntrinsicEntry{ .handler = emitIntrinsicCall } },
     .{ "choose", IntrinsicEntry{ .handler = emitIntrinsicChoose } },
+    .{ "=", IntrinsicEntry{ .handler = emitIntrinsicEq, .caps = .{ .needs_poly_fallback = true } } },
+    .{ "<", IntrinsicEntry{ .handler = emitIntrinsicLt, .caps = .{ .needs_poly_fallback = true } } },
+    .{ ">", IntrinsicEntry{ .handler = emitIntrinsicGt, .caps = .{ .needs_poly_fallback = true } } },
+    .{ "+", IntrinsicEntry{ .handler = emitIntrinsicAdd, .caps = .{ .needs_poly_fallback = true } } },
+    .{ "-", IntrinsicEntry{ .handler = emitIntrinsicSub, .caps = .{ .needs_poly_fallback = true } } },
+    .{ "*", IntrinsicEntry{ .handler = emitIntrinsicMul, .caps = .{ .needs_poly_fallback = true } } },
+    .{ "/", IntrinsicEntry{ .handler = emitIntrinsicDiv, .caps = .{ .needs_poly_fallback = true } } },
+    .{ "%", IntrinsicEntry{ .handler = emitIntrinsicMod, .caps = .{ .needs_poly_fallback = true } } },
+    .{ "div", IntrinsicEntry{ .handler = emitIntrinsicIntDiv } },
+    .{ "rem", IntrinsicEntry{ .handler = emitIntrinsicRem } },
+    .{ "pick-n", IntrinsicEntry{ .handler = emitIntrinsicPickN } },
+    .{ "<rot-n", IntrinsicEntry{ .handler = emitIntrinsicRotNUp } },
+    .{ "rot-n>", IntrinsicEntry{ .handler = emitIntrinsicRotNDown } },
+    .{ "nip-n", IntrinsicEntry{ .handler = emitIntrinsicNipN } },
     .{ "native.make-struct-instance", IntrinsicEntry{ .handler = emitIntrinsicMakeStructInstance, .caps = .{ .needs_dispatch = true } } },
     .{ "native.struct-instance-destructure", IntrinsicEntry{ .handler = emitIntrinsicStructInstanceDestructure, .caps = .{ .needs_dispatch = true } } },
     .{ "native.virtual-struct-wrap", IntrinsicEntry{ .handler = emitIntrinsicVirtualStructWrap, .caps = .{ .needs_dispatch = true } } },
@@ -5309,6 +5334,558 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     return .next;
 }
 
+/// Shared body for the comparison intrinsics (`=`, `<`, `>`): pop two operands
+/// and fold a boolean compare with `ir_op`. When both operands are runtime
+/// unknowns, or are non-numeric, fall back to the polymorphic native comparison
+/// rather than optimistically assuming i64 (which would bail for type values,
+/// strings, etc.).
+fn emitComparison(ec: EmitCtx, ir_op: c_uint) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const name = ec.name;
+    const line = ec.line;
+
+    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+    sp.* -= 2;
+
+    // When both operands are runtime unknowns and a resolver is available,
+    // delegate to the polymorphic native directly. resolveOperandPair would
+    // optimistically assume i64 and emit a fixnum tag check that bails for
+    // non-numeric types (type values, strings, etc.).
+    if (stack[sp.*] == .raw_at_slot and stack[sp.* + 1] == .raw_at_slot and state.resolver != null) {
+        sp.* += 2;
+        try emitResolvedNativeCallback(state, name, stack, sp, line);
+        return .next;
+    }
+
+    const resolved = resolveOperandPair(stack[sp.*], stack[sp.* + 1], state) catch |err| switch (err) {
+        IrCodegenError.NotCompilable => {
+            // Operands are not numeric (e.g., bool_ref vs raw_at_slot).
+            // Fall back to the polymorphic native comparison.
+            sp.* += 2;
+            try emitResolvedNativeCallback(state, name, stack, sp, line);
+            return .next;
+        },
+        else => return err,
+    };
+
+    const result = switch (resolved) {
+        .i64_pair => |p| c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_BOOL), p.a, p.b),
+        .f64_pair => |p| c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_BOOL), p.a, p.b),
+    };
+    stack[sp.*] = .{ .bool_ref = result };
+    sp.* += 1;
+    return .next;
+}
+
+fn emitIntrinsicEq(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitComparison(ec, c.IR_EQ);
+}
+
+fn emitIntrinsicLt(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitComparison(ec, c.IR_LT);
+}
+
+fn emitIntrinsicGt(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitComparison(ec, c.IR_GT);
+}
+
+/// Shared raw/raw polymorphic fast path for the arithmetic intrinsics that
+/// support both fixnum and float (`+ - * / %`). When both operands are runtime
+/// unknowns, emit polymorphic code that branches on fixnum vs float at runtime
+/// instead of bailing on a type mismatch; returns true when it consumed the
+/// operands, false when the caller should emit its concrete-type path. The
+/// caller must have already popped the two operands (so they sit at sp and
+/// sp+1).
+fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) bool {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const entry_a = stack[sp.*];
+    const entry_b = stack[sp.* + 1];
+    if (entry_a != .raw_at_slot or entry_b != .raw_at_slot) return false;
+
+    // Polymorphic arith writes directly to a physical slot. If any entry below the operands
+    // aliases `dest_slot`, save dest_slot to a scratch slot first so the write doesn't
+    // clobber the aliased value.
+    const dest_slot = sp.*;
+    const scratch = @max(dest_slot, @max(entry_a.raw_at_slot, entry_b.raw_at_slot)) + 1;
+    for (0..sp.*) |j| {
+        if (stack[j] == .raw_at_slot and stack[j].raw_at_slot == dest_slot) {
+            emitCopySlot(ctx, state.base_addr, dest_slot, scratch);
+            stack[j] = .{ .raw_at_slot = scratch };
+            break;
+        }
+    }
+    emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, dest_slot, op, ec.line);
+    stack[sp.*] = .{ .raw_at_slot = sp.* };
+    sp.* += 1;
+    return true;
+}
+
+/// Shared body for the overflow-checked arithmetic intrinsics (`+ - *`): pop two
+/// operands, try the polymorphic raw/raw fast path, else resolve the operand
+/// pair and emit the overflow-checked i64 op (`ov_op`) or the folded f64 op
+/// (`f64_op`).
+fn emitOverflowArith(ec: EmitCtx, poly_op: PolyArithOp, comptime ov_op: comptime_int, f64_op: c_uint) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+    sp.* -= 2;
+
+    if (emitPolyArithFastPath(ec, poly_op)) return .next;
+
+    const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
+    switch (resolved) {
+        .i64_pair => |p| stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, ov_op, p.a, p.b, state.bail_status) },
+        .f64_pair => |p| stack[sp.*] = .{ .f64_ref = c.ir_fold2(ctx, c.IR_OPT(f64_op, c.IR_DOUBLE), p.a, p.b) },
+    }
+    sp.* += 1;
+    return .next;
+}
+
+fn emitIntrinsicAdd(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitOverflowArith(ec, .add, c.IR_ADD_OV, c.IR_ADD);
+}
+
+fn emitIntrinsicSub(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitOverflowArith(ec, .sub, c.IR_SUB_OV, c.IR_SUB);
+}
+
+fn emitIntrinsicMul(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitOverflowArith(ec, .mul, c.IR_MUL_OV, c.IR_MUL);
+}
+
+/// `/`: like the overflow-checked family, but the i64 path is a guarded division
+/// (div-by-zero and minInt/-1) rather than an overflow-checked op.
+fn emitIntrinsicDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+    sp.* -= 2;
+
+    if (emitPolyArithFastPath(ec, .div)) return .next;
+
+    const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
+    switch (resolved) {
+        .i64_pair => |p| stack[sp.*] = .{ .i64_ref = emitDivision(ctx, p.a, p.b, state.bail_status) },
+        .f64_pair => |p| stack[sp.*] = .{ .f64_ref = c.ir_fold2(ctx, c.IR_OPT(c.IR_DIV, c.IR_DOUBLE), p.a, p.b) },
+    }
+    sp.* += 1;
+    return .next;
+}
+
+/// `%` (Euclidean mod): polymorphic raw/raw fast path, else an integer-only
+/// guarded modulo.
+fn emitIntrinsicMod(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+    sp.* -= 2;
+
+    if (emitPolyArithFastPath(ec, .mod)) return .next;
+
+    const a = try requireI64(stack[sp.*], state);
+    const b = try requireI64(stack[sp.* + 1], state);
+    stack[sp.*] = .{ .i64_ref = emitEuclideanMod(ctx, a, b, state.bail_status) };
+    sp.* += 1;
+    return .next;
+}
+
+/// `div`: integer-only guarded division. No polymorphic float path.
+fn emitIntrinsicIntDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+    sp.* -= 2;
+
+    const a = try requireI64(stack[sp.*], state);
+    const b = try requireI64(stack[sp.* + 1], state);
+    stack[sp.*] = .{ .i64_ref = emitDivision(ctx, a, b, state.bail_status) };
+    sp.* += 1;
+    return .next;
+}
+
+/// `rem`: integer-only guarded remainder. No polymorphic float path.
+fn emitIntrinsicRem(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    if (sp.* < 2) return IrCodegenError.StackUnderflow;
+    sp.* -= 2;
+
+    const a = try requireI64(stack[sp.*], state);
+    const b = try requireI64(stack[sp.* + 1], state);
+    stack[sp.*] = .{ .i64_ref = emitRemainder(ctx, a, b, state.bail_status) };
+    sp.* += 1;
+    return .next;
+}
+
+/// Emit a resolved word through the generic native/dispatch path: row-variable
+/// effect specialization, then the is_native / AOT-bounded / AOT-direct /
+/// bounded / compound emission chain. Shared by the terminal `else` of
+/// `compileInstructions` (ordinary words) and the indexed-stack handlers (the
+/// literal-depth, no-row case that falls through to generic emission). Returns
+/// `.next` for the inline `continue` paths and normal completion, `.stop` for
+/// the inline `break` paths.
+fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const name = ec.name;
+    const idx = ec.idx;
+    const line = ec.line;
+
+    // Specialize input/output counts for row-variable effects
+    // using literal quotation bodies visible on the abstract stack.
+    // Must happen before materializeQuotations destroys quotation_body entries.
+    var effective_in = resolved.input_count;
+    var effective_out = resolved.output_count;
+    if (resolved.callee_effect) |callee_eff| {
+        const row_result = resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver) catch |err| {
+            state.not_compilable_reason = switch (err) {
+                error.EffectInferenceOverflow => .effect_inference_overflow,
+                error.RowBindingOverflow => .row_binding_overflow,
+            };
+            return IrCodegenError.NotCompilable;
+        };
+        if (row_result) |specialized| {
+            effective_in = specialized.input_count;
+            effective_out = specialized.output_count;
+        } else if (state.aot_mode) {
+            // Row-variable resolution failed but the word exists in the resolver.
+            // Emit an interpreter call and insert a row_region so subsequent
+            // instructions above the region can continue compiling.
+            // Same model as quotation `call` with unresolved effects.
+            //
+            // The symbolic-row machinery used in the call sequel
+            // (`reloadBaseAfterDynamicCall` + a fresh `row_region`) is what
+            // lets compilation continue past this fallback. Strict-mode
+            // rejection is intentionally handled out-of-line:
+            // `emitNativeWordCall` and the uncompiled fallthrough in
+            // `emitAotWordCall` register their emission via
+            // `noteAotFallbackEmission`, and the compound-fallback
+            // diagnostic in `main.zig` rejects the build when
+            // `compound_uncompiled` is non-zero. The static cross-check in
+            // `AotFallbackStaticCheck` guards the classification contract by
+            // comparing the build-time inventory against the assembled C.
+            //
+            // When the callee keeps concrete outputs above its
+            // output row variable (e.g. `2dip`'s `x y`), preserve
+            // them as live entries above the bounded row so a
+            // combinator threading them -- `times` decrementing
+            // its counter after `dup 2dip` -- keeps operating on
+            // real entries instead of reaching into a collapsed
+            // region.
+            const preserve = trailingConcreteOutputs(callee_eff);
+            if (try emitDynamicRowFallbackPreserving(state, stack, sp, name, resolved, line, preserve)) {
+                return .next;
+            }
+            return .stop;
+        } else {
+            state.not_compilable_reason = .unresolvable_word;
+            return IrCodegenError.NotCompilable;
+        }
+    }
+
+    if (resolved.is_native) {
+        // Generic native word callback
+        if (sp.* < effective_in) {
+            // Reaching below the declared inputs touches the
+            // implicit caller row. In AOT mode emit the native
+            // against the live stack and collapse to a row,
+            // rather than rejecting as an abstract underflow.
+            if (state.aot_mode) {
+                if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line)) return .next;
+                return .stop;
+            }
+            return IrCodegenError.StackUnderflow;
+        }
+
+        try materializeQuotations(state, stack, sp.*);
+        flushToPhysicalStack(state, stack, sp.*);
+        const ctx_val = emitCallbackPreamble(state, sp.*);
+
+        if (resolved.stack_effect_ptr) |eff_ptr| {
+            emitParamValidation(state, eff_ptr);
+        }
+
+        // Try inline PIC (from interpreter profiling) or
+        // dispatch-table-driven inline checks (from frozen
+        // dispatch table) before falling back to generic
+        // native call. Both include the slow-path fallback
+        // internally, so when either succeeds no separate
+        // call is needed.
+        if (!emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, line) and
+            !emitInlineDispatchTableCheck(state, ctx_val, name, resolved, effective_in, line))
+        {
+            emitNativeWordCall(state, ctx_val, name, resolved, line);
+        }
+
+        if (exitFallsThrough(state.exit_kind)) {
+            // Adjust abstract stack by specialized effect
+            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+        }
+    } else if (state.aot_mode and resolved.bounded_constraint != null and state.aot_slot_maps != null) {
+        // AOT bounded generic dispatch: emit the slot-indexed
+        // helper that satisfies-checks the operand(s) and
+        // dispatches the concrete-type method. Uses slot-table
+        // index instead of a process-local descriptor pointer so
+        // the AOT binary works across process boundaries. The
+        // protocol and combinator bounds use parallel slot
+        // tables and helper exports.
+        if (sp.* < effective_in) {
+            // Reaches into the implicit caller row: route the
+            // bounded generic through plain generic dispatch
+            // against the live stack and collapse to a row.
+            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line)) return .next;
+            return .stop;
+        }
+
+        try materializeQuotations(state, stack, sp.*);
+        flushToPhysicalStack(state, stack, sp.*);
+        _ = emitCallbackPreamble(state, sp.*);
+
+        switch (resolved.bounded_constraint.?) {
+            .protocol => |pd| emitAotSatisfiesAndDispatch(state, resolved.dispatch_id, pd, resolved.bounded_arity, line),
+            .combinator => |cc| emitAotSatisfiesAndDispatchCombinator(state, resolved.dispatch_id, cc, resolved.bounded_arity, line),
+        }
+
+        if (exitFallsThrough(state.exit_kind)) {
+            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+        }
+    } else if (state.aot_mode) {
+        // AOT mode: direct call by name or interpreter fallback.
+        // A plain (non-bounded) generic instead routes through the
+        // dispatch helper so a registered method runs, falling to
+        // the word's default body on a miss.
+        if (sp.* < effective_in) {
+            // A compound or generic word reaching below its
+            // declared inputs touches the implicit caller row;
+            // emit it against the live stack and collapse to a
+            // row. This is the `(file-use-targets) nip` shape.
+            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line)) return .next;
+            return .stop;
+        }
+
+        try materializeQuotations(state, stack, sp.*);
+        flushToPhysicalStack(state, stack, sp.*);
+        const ctx_val = emitCallbackPreamble(state, sp.*);
+
+        if (resolved.stack_effect_ptr) |eff_ptr| {
+            emitParamValidation(state, eff_ptr);
+        }
+
+        if (resolved.is_generic) {
+            emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
+        } else {
+            emitAotWordCall(state, ctx_val, name, resolved, line);
+        }
+
+        if (exitFallsThrough(state.exit_kind)) {
+            if (resolved.returns_row) {
+                collapseToFreshRow(state, stack, sp);
+            } else {
+                settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+            }
+        }
+    } else if (resolved.bounded_constraint != null) {
+        // Bounded generic dispatch: emit the helper that
+        // satisfies-checks the operand(s) and dispatches the
+        // concrete-type method in one call. No PIC is installed,
+        // and the bound is checked exactly once (by the helper)
+        // rather than re-validated. The emission predicate
+        // guarantees the bound requires this generic, so a
+        // satisfying operand always resolves a method -- the helper
+        // never reaches its raise-on-miss path, matching the
+        // interpreter's behavior.
+        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
+
+        try materializeQuotations(state, stack, sp.*);
+        flushToPhysicalStack(state, stack, sp.*);
+        _ = emitCallbackPreamble(state, sp.*);
+
+        switch (resolved.bounded_constraint.?) {
+            .protocol => |pd| emitSatisfiesAndDispatch(state, resolved.dispatch_id, @intFromPtr(pd), resolved.bounded_arity, resolved.bounded_trace_name orelse name, line),
+            .combinator => |cc| emitSatisfiesAndDispatchCombinator(state, resolved.dispatch_id, @intFromPtr(cc), resolved.bounded_arity, resolved.bounded_trace_name orelse name, line),
+        }
+
+        if (exitFallsThrough(state.exit_kind)) {
+            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+        }
+    } else {
+        // Compound word: dispatch table indirect call
+        DispatchLayout.ensureInit();
+
+        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
+
+        try materializeQuotations(state, stack, sp.*);
+        flushToPhysicalStack(state, stack, sp.*);
+        _ = emitCallbackPreamble(state, sp.*);
+
+        if (resolved.stack_effect_ptr) |eff_ptr| {
+            emitParamValidation(state, eff_ptr);
+        }
+
+        // Load entries.items.ptr from the dispatch table
+        const dispatch_ptr = state.dispatch_ptr;
+        const items_ptr_off = c.ir_const_addr(ctx, DispatchLayout.items_ptr_offset);
+        const entries_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dispatch_ptr, items_ptr_off);
+        const entries_ptr = c._ir_LOAD(ctx, c.IR_ADDR, entries_ptr_addr);
+
+        // Index into entries array: entries_ptr + word_id * entry_size + code_ptr_offset
+        const entry_byte_off = c.ir_const_addr(ctx, resolved.word_id * DispatchLayout.entry_size + DispatchLayout.code_ptr_offset);
+        const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), entries_ptr, entry_byte_off);
+        const callee_code_ptr = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+        // Null-check code_ptr: fallback to interpreter if callee not compiled
+        const null_addr = c.ir_const_addr(ctx, 0);
+        const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), callee_code_ptr, null_addr);
+        const if_null = c._ir_IF(ctx, is_null);
+
+        // Cold path: callee not compiled, call interpreter fallback
+        c._ir_IF_TRUE_cold(ctx, if_null);
+        {
+            JitContextLayout.ensureInit();
+            const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+            const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+            const ctx_val2 = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
+            const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
+            const line_const = c.ir_const_addr(ctx, line);
+            state.noteAotFallbackEmission(.compound_uncompiled, name, resolved.word_id, line);
+            const fb_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, line_const);
+            emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
+        }
+        const end_fallback = if (resolved.never_returns) c.IR_UNUSED else c._ir_END(ctx);
+
+        // Hot path: callee is compiled, call directly
+        c._ir_IF_FALSE(ctx, if_null);
+        {
+            const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
+            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, .{ .named = .{ .name = name, .line = line } });
+        }
+        if (resolved.never_returns) {
+            state.exit_kind = .terminal_return;
+        } else {
+            const end_compiled = c._ir_END(ctx);
+            c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+
+            // Both branches called emitCallbackPostCheck which
+            // updated state.items_ptr/base_addr to branch-local
+            // IR refs. Re-LOAD after the merge so subsequent
+            // code uses refs that dominate this point.
+            if (state.refresh_stack_fn != c.IR_UNUSED) {
+                refreshCachedStackPointer(state);
+            }
+
+            if (resolved.returns_row) {
+                collapseToFreshRow(state, stack, sp);
+            } else {
+                // Adjust abstract stack based on specialized effect
+                settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+            }
+        }
+    }
+
+    return .next;
+}
+
+/// Shared dispatch for the indexed-stack intrinsics (`pick-n`, `<rot-n`,
+/// `rot-n>`, `nip-n`) over a symbolic row.
+///
+/// A literal depth that provably stays above the row rewrites the abstract stack
+/// in place; otherwise the depth reaches into the opaque row, or below the
+/// modeled entries into it, so the op is emitted against the live physical stack
+/// and the abstract stack collapses to a fresh row_region, exactly as a runtime
+/// depth and the inline row-underflow shuffles do. A literal depth with no row
+/// present falls through to the general native emission, which resets the
+/// abstract stack to mirror the physical one.
+fn emitIndexedStackDispatch(ec: EmitCtx, op: IndexedStackOp) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const name = ec.name;
+
+    const res = state.resolver orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+    const resolved = res.resolve(name, res.user_data) orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+
+    if (extractPrecedingLiteralDepth(ec.instructions, ec.idx)) |depth| {
+        if (findRowRegionIndex(stack, sp.*)) |row_idx| {
+            // After popping the depth literal, the deepest slot the op can touch is:
+            //
+            //     sp - 2 - depth
+            //
+            // The op stays above the row only when that slot is a known entry strictly
+            // above the row_idx. A depth that exceeds the modeled entries (sp - 2), or
+            // lands at or below the row reaches into the opaque region and must be
+            // emitted live.
+            const stays_above = sp.* >= 2 and depth <= sp.* - 2 and (sp.* - 2 - depth) > row_idx;
+            if (stays_above) {
+                try rewriteIndexedStackOp(state, op, stack, sp, depth);
+                return .next;
+            }
+
+            if (state.aot_mode) {
+                if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line)) return .next;
+                return .stop;
+            }
+
+            state.not_compilable_reason = .indexed_access_into_row;
+            return IrCodegenError.NotCompilable;
+        }
+
+        // Literal depth with no row: fall through to the general native emission,
+        // which resets the abstract stack to mirror the physically-rearranged stack.
+        return emitGenericResolvedNativeCall(ec, resolved);
+    } else if (state.aot_mode) {
+        if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line)) return .next;
+        return .stop;
+    } else {
+        state.not_compilable_reason = .indexed_access_into_row;
+        return IrCodegenError.NotCompilable;
+    }
+}
+
+fn emitIntrinsicPickN(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIndexedStackDispatch(ec, .pick_n);
+}
+
+fn emitIntrinsicRotNUp(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIndexedStackDispatch(ec, .rot_up);
+}
+
+fn emitIntrinsicRotNDown(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIndexedStackDispatch(ec, .rot_down);
+}
+
+fn emitIntrinsicNipN(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitIndexedStackDispatch(ec, .nip_n);
+}
+
 /// Compile a sequence of instructions, updating the abstract stack.
 /// Used both for top-level word bodies and for inlined quotation bodies.
 fn compileInstructions(
@@ -5318,7 +5895,6 @@ fn compileInstructions(
     sp: *usize,
 ) IrCodegenError!void {
     const ctx = state.ctx;
-    const bail_status = state.bail_status;
 
     for (instructions, 0..) |instr, idx| {
         if (std.posix.getenv("ONEZ_DEBUG_TRACE")) |tgt| {
@@ -5585,45 +6161,6 @@ fn compileInstructions(
                         .next => {},
                         .stop => break,
                     }
-                } else if (isComparisonOp(name)) {
-                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
-                    sp.* -= 2;
-
-                    // When both operands are runtime unknowns and a resolver
-                    // is available, delegate to the polymorphic native
-                    // directly. resolveOperandPair would optimistically assume
-                    // i64 and emit a fixnum tag check that bails for
-                    // non-numeric types (type values, strings, etc.).
-                    if (stack[sp.*] == .raw_at_slot and stack[sp.* + 1] == .raw_at_slot and state.resolver != null) {
-                        sp.* += 2;
-                        try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
-                        continue;
-                    }
-
-                    const resolved = resolveOperandPair(stack[sp.*], stack[sp.* + 1], state) catch |err| switch (err) {
-                        IrCodegenError.NotCompilable => {
-                            // Operands are not numeric (e.g., bool_ref vs raw_at_slot).
-                            // Fall back to the polymorphic native comparison.
-                            sp.* += 2;
-                            try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
-                            continue;
-                        },
-                        else => return err,
-                    };
-
-                    const ir_op: c_uint = if (std.mem.eql(u8, name, "="))
-                        c.IR_EQ
-                    else if (std.mem.eql(u8, name, "<"))
-                        c.IR_LT
-                    else
-                        c.IR_GT;
-
-                    const result = switch (resolved) {
-                        .i64_pair => |p| c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_BOOL), p.a, p.b),
-                        .f64_pair => |p| c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_BOOL), p.a, p.b),
-                    };
-                    stack[sp.*] = .{ .bool_ref = result };
-                    sp.* += 1;
                 } else if (std.mem.eql(u8, name, "times")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
@@ -5781,83 +6318,6 @@ fn compileInstructions(
                     const pred_entry = stack[sp.*];
                     const body_entry = stack[sp.* + 1];
                     try compilePredBodyLoop(state, stack, sp, pred_entry, body_entry, std.mem.eql(u8, name, "until"));
-                } else if (isBinaryOp(name)) {
-                    if (sp.* < 2) return IrCodegenError.StackUnderflow;
-                    sp.* -= 2;
-
-                    const entry_a = stack[sp.*];
-                    const entry_b = stack[sp.* + 1];
-
-                    // When both operands are raw_at_slot (runtime unknowns) and the
-                    // operation supports float, emit polymorphic code that branches
-                    // on fixnum vs float at runtime instead of bailing on type mismatch.
-                    const poly_op: ?PolyArithOp = if (entry_a == .raw_at_slot and entry_b == .raw_at_slot)
-                        polyArithOpFromName(name)
-                    else
-                        null;
-
-                    if (poly_op) |op| {
-                        // Polymorphic arith writes directly to a physical slot. If any entry below the operands
-                        // aliases `dest_slot`, save dest_slot to a scratch slot first so the write doesn't
-                        // clobber the aliased value.
-                        const dest_slot = sp.*;
-                        const scratch = @max(dest_slot, @max(entry_a.raw_at_slot, entry_b.raw_at_slot)) + 1;
-                        for (0..sp.*) |j| {
-                            if (stack[j] == .raw_at_slot and stack[j].raw_at_slot == dest_slot) {
-                                emitCopySlot(ctx, state.base_addr, dest_slot, scratch);
-                                stack[j] = .{ .raw_at_slot = scratch };
-                                break;
-                            }
-                        }
-                        emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, dest_slot, op, instr.line);
-                        stack[sp.*] = .{ .raw_at_slot = sp.* };
-                        sp.* += 1;
-                    } else if (std.mem.eql(u8, name, "div")) {
-                        // div and rem are integer-only; resolve both operands as i64.
-                        const a = try requireI64(entry_a, state);
-                        const b = try requireI64(entry_b, state);
-                        stack[sp.*] = .{ .i64_ref = emitDivision(ctx, a, b, bail_status) };
-                        sp.* += 1;
-                    } else if (std.mem.eql(u8, name, "rem")) {
-                        const a = try requireI64(entry_a, state);
-                        const b = try requireI64(entry_b, state);
-                        stack[sp.*] = .{ .i64_ref = emitRemainder(ctx, a, b, bail_status) };
-                        sp.* += 1;
-                    } else if (std.mem.eql(u8, name, "%")) {
-                        const a = try requireI64(entry_a, state);
-                        const b = try requireI64(entry_b, state);
-                        stack[sp.*] = .{ .i64_ref = emitEuclideanMod(ctx, a, b, bail_status) };
-                        sp.* += 1;
-                    } else {
-                        // +, -, *, / support both i64 and f64 operands.
-                        const resolved = try resolveOperandPair(entry_a, entry_b, state);
-                        switch (resolved) {
-                            .i64_pair => |p| {
-                                if (std.mem.eql(u8, name, "+")) {
-                                    stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_ADD_OV, p.a, p.b, bail_status) };
-                                } else if (std.mem.eql(u8, name, "-")) {
-                                    stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_SUB_OV, p.a, p.b, bail_status) };
-                                } else if (std.mem.eql(u8, name, "*")) {
-                                    stack[sp.*] = .{ .i64_ref = emitOverflowCheckedBinary(ctx, c.IR_MUL_OV, p.a, p.b, bail_status) };
-                                } else {
-                                    // "/"
-                                    stack[sp.*] = .{ .i64_ref = emitDivision(ctx, p.a, p.b, bail_status) };
-                                }
-                            },
-                            .f64_pair => |p| {
-                                const ir_op: c_uint = if (std.mem.eql(u8, name, "+"))
-                                    c.IR_ADD
-                                else if (std.mem.eql(u8, name, "-"))
-                                    c.IR_SUB
-                                else if (std.mem.eql(u8, name, "*"))
-                                    c.IR_MUL
-                                else
-                                    c.IR_DIV;
-                                stack[sp.*] = .{ .f64_ref = c.ir_fold2(ctx, c.IR_OPT(ir_op, c.IR_DOUBLE), p.a, p.b) };
-                            },
-                        }
-                        sp.* += 1;
-                    }
                 } else if (isErrorHandlingOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
 
@@ -6126,304 +6586,18 @@ fn compileInstructions(
                         }
                     }
 
-                    // Indexed stack ops over a symbolic row.
-                    //
-                    // A literal depth that provably stays above the row rewrites the abstract stack in
-                    // place; otherwise, the depth reaches into the opaque row, or reaches below the
-                    // modeled entries into it, the op is emitted against the live physical stack and
-                    // the abstract stack collapses to a fresh row_region, exactly as a runtime depth
-                    // and the inline row-underflow shuffles do.
-                    //
-                    // A literal depth with no row present falls through to the general native emission,
-                    // which resets the abstract stack to mirror the physical one.
-                    if (isIndexedStackOp(name)) {
-                        if (extractPrecedingLiteralDepth(instructions, idx)) |depth| {
-                            if (findRowRegionIndex(stack, sp.*)) |row_idx| {
-                                // After popping the depth literal, the deepest slot the op can touch is:
-                                //
-                                //     sp - 2 - depth
-                                //
-                                // The op stays above the row only when that slot is a known entry strictly
-                                // above the row_idx. A depth that exceeds the modeled entries (sp - 2), or
-                                // lands at or below the row reaches into the opaque region and must be
-                                // emitted live.
-                                const stays_above = sp.* >= 2 and depth <= sp.* - 2 and (sp.* - 2 - depth) > row_idx;
-                                if (stays_above) {
-                                    try rewriteIndexedStackOp(state, name, stack, sp, depth);
-                                    continue;
-                                }
-
-                                if (state.aot_mode) {
-                                    if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
-                                    break;
-                                }
-
-                                state.not_compilable_reason = .indexed_access_into_row;
-                                return IrCodegenError.NotCompilable;
-                            }
-
-                            // Literal depth with no row: fall through to the general native emission,
-                            // which resets the abstract stack to mirror the physically-rearranged stack.
-                        } else if (state.aot_mode) {
-                            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) {
-                                continue;
-                            }
-                            break;
-                        } else {
-                            state.not_compilable_reason = .indexed_access_into_row;
-                            return IrCodegenError.NotCompilable;
-                        }
-                    }
-
-                    // Specialize input/output counts for row-variable effects
-                    // using literal quotation bodies visible on the abstract stack.
-                    // Must happen before materializeQuotations destroys quotation_body entries.
-                    var effective_in = resolved.input_count;
-                    var effective_out = resolved.output_count;
-                    if (resolved.callee_effect) |callee_eff| {
-                        const row_result = resolveRowVariableEffect(callee_eff, stack, sp.*, state.resolver) catch |err| {
-                            state.not_compilable_reason = switch (err) {
-                                error.EffectInferenceOverflow => .effect_inference_overflow,
-                                error.RowBindingOverflow => .row_binding_overflow,
-                            };
-                            return IrCodegenError.NotCompilable;
-                        };
-                        if (row_result) |specialized| {
-                            effective_in = specialized.input_count;
-                            effective_out = specialized.output_count;
-                        } else if (state.aot_mode) {
-                            // Row-variable resolution failed but the word exists in the resolver.
-                            // Emit an interpreter call and insert a row_region so subsequent
-                            // instructions above the region can continue compiling.
-                            // Same model as quotation `call` with unresolved effects.
-                            //
-                            // The symbolic-row machinery used in the call sequel
-                            // (`reloadBaseAfterDynamicCall` + a fresh `row_region`) is what
-                            // lets compilation continue past this fallback. Strict-mode
-                            // rejection is intentionally handled out-of-line:
-                            // `emitNativeWordCall` and the uncompiled fallthrough in
-                            // `emitAotWordCall` register their emission via
-                            // `noteAotFallbackEmission`, and the compound-fallback
-                            // diagnostic in `main.zig` rejects the build when
-                            // `compound_uncompiled` is non-zero. The static cross-check in
-                            // `AotFallbackStaticCheck` guards the classification contract by
-                            // comparing the build-time inventory against the assembled C.
-                            //
-                            // When the callee keeps concrete outputs above its
-                            // output row variable (e.g. `2dip`'s `x y`), preserve
-                            // them as live entries above the bounded row so a
-                            // combinator threading them -- `times` decrementing
-                            // its counter after `dup 2dip` -- keeps operating on
-                            // real entries instead of reaching into a collapsed
-                            // region.
-                            const preserve = trailingConcreteOutputs(callee_eff);
-                            if (try emitDynamicRowFallbackPreserving(state, stack, sp, name, resolved, instr.line, preserve)) {
-                                continue;
-                            }
-                            break;
-                        } else {
-                            state.not_compilable_reason = .unresolvable_word;
-                            return IrCodegenError.NotCompilable;
-                        }
-                    }
-
-                    if (resolved.is_native) {
-                        // Generic native word callback
-                        if (sp.* < effective_in) {
-                            // Reaching below the declared inputs touches the
-                            // implicit caller row. In AOT mode emit the native
-                            // against the live stack and collapse to a row,
-                            // rather than rejecting as an abstract underflow.
-                            if (state.aot_mode) {
-                                if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
-                                break;
-                            }
-                            return IrCodegenError.StackUnderflow;
-                        }
-
-                        try materializeQuotations(state, stack, sp.*);
-                        flushToPhysicalStack(state, stack, sp.*);
-                        const ctx_val = emitCallbackPreamble(state, sp.*);
-
-                        if (resolved.stack_effect_ptr) |eff_ptr| {
-                            emitParamValidation(state, eff_ptr);
-                        }
-
-                        // Try inline PIC (from interpreter profiling) or
-                        // dispatch-table-driven inline checks (from frozen
-                        // dispatch table) before falling back to generic
-                        // native call. Both include the slow-path fallback
-                        // internally, so when either succeeds no separate
-                        // call is needed.
-                        if (!emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, instr.line) and
-                            !emitInlineDispatchTableCheck(state, ctx_val, name, resolved, effective_in, instr.line))
-                        {
-                            emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
-                        }
-
-                        if (exitFallsThrough(state.exit_kind)) {
-                            // Adjust abstract stack by specialized effect
-                            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
-                        }
-                    } else if (state.aot_mode and resolved.bounded_constraint != null and state.aot_slot_maps != null) {
-                        // AOT bounded generic dispatch: emit the slot-indexed
-                        // helper that satisfies-checks the operand(s) and
-                        // dispatches the concrete-type method. Uses slot-table
-                        // index instead of a process-local descriptor pointer so
-                        // the AOT binary works across process boundaries. The
-                        // protocol and combinator bounds use parallel slot
-                        // tables and helper exports.
-                        if (sp.* < effective_in) {
-                            // Reaches into the implicit caller row: route the
-                            // bounded generic through plain generic dispatch
-                            // against the live stack and collapse to a row.
-                            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
-                            break;
-                        }
-
-                        try materializeQuotations(state, stack, sp.*);
-                        flushToPhysicalStack(state, stack, sp.*);
-                        _ = emitCallbackPreamble(state, sp.*);
-
-                        switch (resolved.bounded_constraint.?) {
-                            .protocol => |pd| emitAotSatisfiesAndDispatch(state, resolved.dispatch_id, pd, resolved.bounded_arity, instr.line),
-                            .combinator => |cc| emitAotSatisfiesAndDispatchCombinator(state, resolved.dispatch_id, cc, resolved.bounded_arity, instr.line),
-                        }
-
-                        if (exitFallsThrough(state.exit_kind)) {
-                            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
-                        }
-                    } else if (state.aot_mode) {
-                        // AOT mode: direct call by name or interpreter fallback.
-                        // A plain (non-bounded) generic instead routes through the
-                        // dispatch helper so a registered method runs, falling to
-                        // the word's default body on a miss.
-                        if (sp.* < effective_in) {
-                            // A compound or generic word reaching below its
-                            // declared inputs touches the implicit caller row;
-                            // emit it against the live stack and collapse to a
-                            // row. This is the `(file-use-targets) nip` shape.
-                            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, instr.line)) continue;
-                            break;
-                        }
-
-                        try materializeQuotations(state, stack, sp.*);
-                        flushToPhysicalStack(state, stack, sp.*);
-                        const ctx_val = emitCallbackPreamble(state, sp.*);
-
-                        if (resolved.stack_effect_ptr) |eff_ptr| {
-                            emitParamValidation(state, eff_ptr);
-                        }
-
-                        if (resolved.is_generic) {
-                            emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, instr.line);
-                        } else {
-                            emitAotWordCall(state, ctx_val, name, resolved, instr.line);
-                        }
-
-                        if (exitFallsThrough(state.exit_kind)) {
-                            if (resolved.returns_row) {
-                                collapseToFreshRow(state, stack, sp);
-                            } else {
-                                settleRowAwareStack(state, stack, sp, effective_in, effective_out);
-                            }
-                        }
-                    } else if (resolved.bounded_constraint != null) {
-                        // Bounded generic dispatch: emit the helper that
-                        // satisfies-checks the operand(s) and dispatches the
-                        // concrete-type method in one call. No PIC is installed,
-                        // and the bound is checked exactly once (by the helper)
-                        // rather than re-validated. The emission predicate
-                        // guarantees the bound requires this generic, so a
-                        // satisfying operand always resolves a method -- the helper
-                        // never reaches its raise-on-miss path, matching the
-                        // interpreter's behavior.
-                        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
-
-                        try materializeQuotations(state, stack, sp.*);
-                        flushToPhysicalStack(state, stack, sp.*);
-                        _ = emitCallbackPreamble(state, sp.*);
-
-                        switch (resolved.bounded_constraint.?) {
-                            .protocol => |pd| emitSatisfiesAndDispatch(state, resolved.dispatch_id, @intFromPtr(pd), resolved.bounded_arity, resolved.bounded_trace_name orelse name, instr.line),
-                            .combinator => |cc| emitSatisfiesAndDispatchCombinator(state, resolved.dispatch_id, @intFromPtr(cc), resolved.bounded_arity, resolved.bounded_trace_name orelse name, instr.line),
-                        }
-
-                        if (exitFallsThrough(state.exit_kind)) {
-                            settleRowAwareStack(state, stack, sp, effective_in, effective_out);
-                        }
-                    } else {
-                        // Compound word: dispatch table indirect call
-                        DispatchLayout.ensureInit();
-
-                        if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
-
-                        try materializeQuotations(state, stack, sp.*);
-                        flushToPhysicalStack(state, stack, sp.*);
-                        _ = emitCallbackPreamble(state, sp.*);
-
-                        if (resolved.stack_effect_ptr) |eff_ptr| {
-                            emitParamValidation(state, eff_ptr);
-                        }
-
-                        // Load entries.items.ptr from the dispatch table
-                        const dispatch_ptr = state.dispatch_ptr;
-                        const items_ptr_off = c.ir_const_addr(ctx, DispatchLayout.items_ptr_offset);
-                        const entries_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), dispatch_ptr, items_ptr_off);
-                        const entries_ptr = c._ir_LOAD(ctx, c.IR_ADDR, entries_ptr_addr);
-
-                        // Index into entries array: entries_ptr + word_id * entry_size + code_ptr_offset
-                        const entry_byte_off = c.ir_const_addr(ctx, resolved.word_id * DispatchLayout.entry_size + DispatchLayout.code_ptr_offset);
-                        const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), entries_ptr, entry_byte_off);
-                        const callee_code_ptr = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
-
-                        // Null-check code_ptr: fallback to interpreter if callee not compiled
-                        const null_addr = c.ir_const_addr(ctx, 0);
-                        const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), callee_code_ptr, null_addr);
-                        const if_null = c._ir_IF(ctx, is_null);
-
-                        // Cold path: callee not compiled, call interpreter fallback
-                        c._ir_IF_TRUE_cold(ctx, if_null);
-                        {
-                            JitContextLayout.ensureInit();
-                            const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
-                            const ctx_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-                            const ctx_val2 = c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr);
-                            const word_id_const = c.ir_const_addr(ctx, resolved.word_id);
-                            const line_const = c.ir_const_addr(ctx, instr.line);
-                            state.noteAotFallbackEmission(.compound_uncompiled, name, resolved.word_id, instr.line);
-                            const fb_result = c._ir_CALL_3(ctx, c.IR_I32, state.interpreted_call_fn, ctx_val2, word_id_const, line_const);
-                            emitCallbackPostCheck(state, fb_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
-                        }
-                        const end_fallback = if (resolved.never_returns) c.IR_UNUSED else c._ir_END(ctx);
-
-                        // Hot path: callee is compiled, call directly
-                        c._ir_IF_FALSE(ctx, if_null);
-                        {
-                            const call_result = c._ir_CALL_1(ctx, c.IR_I32, callee_code_ptr, state.jit_ctx_ptr);
-                            emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, .{ .named = .{ .name = name, .line = instr.line } });
-                        }
-                        if (resolved.never_returns) {
-                            state.exit_kind = .terminal_return;
-                        } else {
-                            const end_compiled = c._ir_END(ctx);
-                            c._ir_MERGE_2(ctx, end_fallback, end_compiled);
-
-                            // Both branches called emitCallbackPostCheck which
-                            // updated state.items_ptr/base_addr to branch-local
-                            // IR refs. Re-LOAD after the merge so subsequent
-                            // code uses refs that dominate this point.
-                            if (state.refresh_stack_fn != c.IR_UNUSED) {
-                                refreshCachedStackPointer(state);
-                            }
-
-                            if (resolved.returns_row) {
-                                collapseToFreshRow(state, stack, sp);
-                            } else {
-                                // Adjust abstract stack based on specialized effect
-                                settleRowAwareStack(state, stack, sp, effective_in, effective_out);
-                            }
-                        }
+                    const ec = EmitCtx{
+                        .state = state,
+                        .instructions = instructions,
+                        .idx = idx,
+                        .name = name,
+                        .stack = stack,
+                        .sp = sp,
+                        .line = instr.line,
+                    };
+                    switch (try emitGenericResolvedNativeCall(ec, resolved)) {
+                        .next => {},
+                        .stop => break,
                     }
                 }
             },
@@ -15463,7 +15637,7 @@ test "rewriteIndexedStackOp: pick-n duplicates entry at depth" {
     };
 
     var sp: usize = 5;
-    try rewriteIndexedStackOp(&state, "pick-n", &stack, &sp, 2);
+    try rewriteIndexedStackOp(&state, .pick_n, &stack, &sp, 2);
     try testing.expectEqual(@as(usize, 5), sp);
     try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
     try testing.expectEqual(StackEntry{ .i64_ref = ref_a }, stack[1]);
@@ -15488,7 +15662,7 @@ test "rewriteIndexedStackOp: pick-n depth 0 duplicates top" {
     };
 
     var sp: usize = 3;
-    try rewriteIndexedStackOp(&state, "pick-n", &stack, &sp, 0);
+    try rewriteIndexedStackOp(&state, .pick_n, &stack, &sp, 0);
     try testing.expectEqual(@as(usize, 3), sp);
     try testing.expectEqual(StackEntry{ .i64_ref = ref_a }, stack[1]);
     try testing.expectEqual(StackEntry{ .i64_ref = ref_a }, stack[2]);
@@ -15508,7 +15682,7 @@ test "rewriteIndexedStackOp: <rot-n pulls entry to top" {
     };
 
     var sp: usize = 5;
-    try rewriteIndexedStackOp(&state, "<rot-n", &stack, &sp, 2);
+    try rewriteIndexedStackOp(&state, .rot_up, &stack, &sp, 2);
     try testing.expectEqual(@as(usize, 4), sp);
     try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 2 }, stack[1]);
@@ -15528,7 +15702,7 @@ test "rewriteIndexedStackOp: <rot-n depth 0 is no-op" {
     };
 
     var sp: usize = 4;
-    try rewriteIndexedStackOp(&state, "<rot-n", &stack, &sp, 0);
+    try rewriteIndexedStackOp(&state, .rot_up, &stack, &sp, 0);
     try testing.expectEqual(@as(usize, 3), sp);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 2 }, stack[2]);
@@ -15549,7 +15723,7 @@ test "rewriteIndexedStackOp: rot-n> pushes top to depth" {
     };
 
     var sp: usize = 5;
-    try rewriteIndexedStackOp(&state, "rot-n>", &stack, &sp, 2);
+    try rewriteIndexedStackOp(&state, .rot_down, &stack, &sp, 2);
     try testing.expectEqual(@as(usize, 4), sp);
     try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 3 }, stack[1]);
@@ -15568,7 +15742,7 @@ test "rewriteIndexedStackOp: rot-n> depth 0 is no-op" {
     };
 
     var sp: usize = 3;
-    try rewriteIndexedStackOp(&state, "rot-n>", &stack, &sp, 0);
+    try rewriteIndexedStackOp(&state, .rot_down, &stack, &sp, 0);
     try testing.expectEqual(@as(usize, 2), sp);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
 }
@@ -15588,7 +15762,7 @@ test "rewriteIndexedStackOp: nip-n keeps top and drops depth entries" {
     };
 
     var sp: usize = 5;
-    try rewriteIndexedStackOp(&state, "nip-n", &stack, &sp, 2);
+    try rewriteIndexedStackOp(&state, .nip_n, &stack, &sp, 2);
     try testing.expectEqual(@as(usize, 2), sp);
     try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 3 }, stack[1]);
@@ -15605,7 +15779,7 @@ test "rewriteIndexedStackOp: nip-n depth 0 is no-op" {
     };
 
     var sp: usize = 3;
-    try rewriteIndexedStackOp(&state, "nip-n", &stack, &sp, 0);
+    try rewriteIndexedStackOp(&state, .nip_n, &stack, &sp, 0);
     try testing.expectEqual(@as(usize, 2), sp);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
 }
@@ -15623,7 +15797,7 @@ test "rewriteIndexedStackOp: <rot-n depth 1 acts like swap" {
     };
 
     var sp: usize = 4;
-    try rewriteIndexedStackOp(&state, "<rot-n", &stack, &sp, 1);
+    try rewriteIndexedStackOp(&state, .rot_up, &stack, &sp, 1);
     try testing.expectEqual(@as(usize, 3), sp);
     try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 2 }, stack[1]);
@@ -15645,7 +15819,7 @@ test "rewriteIndexedStackOp: nip-n depth 1 preserves row_region" {
     };
 
     var sp: usize = 5;
-    try rewriteIndexedStackOp(&state, "nip-n", &stack, &sp, 1);
+    try rewriteIndexedStackOp(&state, .nip_n, &stack, &sp, 1);
     try testing.expectEqual(@as(usize, 3), sp);
     try testing.expectEqual(StackEntry{ .row_region = 0 }, stack[0]);
     try testing.expectEqual(StackEntry{ .raw_at_slot = 1 }, stack[1]);
