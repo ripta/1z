@@ -3461,88 +3461,6 @@ fn emitInlineRowUnderflow(
     return emitDynamicRowFallback(state, stack, sp, name, resolved, line);
 }
 
-/// Emit a polymorphic struct native call (make-struct-instance,
-/// struct-instance-destructure, virtual-struct-wrap, or
-/// virtual-struct-unwrap). Derives input/output counts from the struct
-/// fields in the preceding push_literal: a .struct_type literal for the
-/// plain struct path, or a .type_val carrying a struct-backed
-/// VirtualType for the virtual path.
-fn emitStructNativeCall(
-    state: *CompileState,
-    instructions: []const Instruction,
-    idx: usize,
-    name: []const u8,
-    stack: []StackEntry,
-    sp: *usize,
-    line: usize,
-) IrCodegenError!void {
-    if (idx < 1) {
-        state.not_compilable_reason = .pre_scan_failure;
-        return IrCodegenError.NotCompilable;
-    }
-
-    const is_virtual = std.mem.eql(u8, name, "native.virtual-struct-wrap") or
-        std.mem.eql(u8, name, "native.virtual-struct-unwrap");
-
-    const struct_type_ptr: *const StructType = switch (instructions[idx - 1].op) {
-        .push_literal => |v| blk: {
-            if (is_virtual) {
-                if (v != .type_val) {
-                    state.not_compilable_reason = .pre_scan_failure;
-                    return IrCodegenError.NotCompilable;
-                }
-                const vt = v.type_val.virtual_type orelse {
-                    state.not_compilable_reason = .pre_scan_failure;
-                    return IrCodegenError.NotCompilable;
-                };
-                break :blk vt.anon_struct orelse {
-                    state.not_compilable_reason = .pre_scan_failure;
-                    return IrCodegenError.NotCompilable;
-                };
-            }
-            if (v != .struct_type) {
-                state.not_compilable_reason = .pre_scan_failure;
-                return IrCodegenError.NotCompilable;
-            }
-            break :blk v.struct_type;
-        },
-        else => {
-            state.not_compilable_reason = .pre_scan_failure;
-            return IrCodegenError.NotCompilable;
-        },
-    };
-
-    const num_fields: u8 = @intCast(struct_type_ptr.fields.len);
-    const is_constructor = std.mem.eql(u8, name, "native.make-struct-instance") or
-        std.mem.eql(u8, name, "native.virtual-struct-wrap");
-
-    // make-struct-instance / virtual-struct-wrap:    ( field1..fieldN literal -- instance )
-    // struct-instance-destructure / virtual-struct-unwrap: ( instance literal -- field1..fieldN )
-    const effective_in: u8 = if (is_constructor) num_fields + 1 else 2;
-    const effective_out: u8 = if (is_constructor) 1 else num_fields;
-
-    if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
-
-    try materializeQuotations(state, stack, sp.*);
-    flushToPhysicalStack(state, stack, sp.*);
-    const ctx_val = emitCallbackPreamble(state, sp.*);
-
-    const res = state.resolver orelse {
-        state.not_compilable_reason = .unresolvable_word;
-        return IrCodegenError.NotCompilable;
-    };
-    const resolved = res.resolve(name, res.user_data) orelse {
-        state.not_compilable_reason = .unresolvable_word;
-        return IrCodegenError.NotCompilable;
-    };
-
-    emitNativeWordCall(state, ctx_val, name, resolved, line);
-
-    if (exitFallsThrough(state.exit_kind)) {
-        settleRowAwareStack(state, stack, sp, effective_in, effective_out);
-    }
-}
-
 /// Emit a runtime truthiness check for a Value at a physical stack slot.
 /// Loads the tag and payload, computing:
 ///   is_falsy = (tag == boolean) AND (payload == false)
@@ -4485,6 +4403,10 @@ const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
     .{ "drop", IntrinsicEntry{ .handler = emitIntrinsicDrop } },
     .{ "swap", IntrinsicEntry{ .handler = emitIntrinsicSwap } },
     .{ "over", IntrinsicEntry{ .handler = emitIntrinsicOver } },
+    .{ "native.make-struct-instance", IntrinsicEntry{ .handler = emitIntrinsicMakeStructInstance, .caps = .{ .needs_dispatch = true } } },
+    .{ "native.struct-instance-destructure", IntrinsicEntry{ .handler = emitIntrinsicStructInstanceDestructure, .caps = .{ .needs_dispatch = true } } },
+    .{ "native.virtual-struct-wrap", IntrinsicEntry{ .handler = emitIntrinsicVirtualStructWrap, .caps = .{ .needs_dispatch = true } } },
+    .{ "native.virtual-struct-unwrap", IntrinsicEntry{ .handler = emitIntrinsicVirtualStructUnwrap, .caps = .{ .needs_dispatch = true } } },
 });
 
 fn emitIntrinsicTrue(ec: EmitCtx) IrCodegenError!ControlFlow {
@@ -4651,6 +4573,113 @@ fn emitIntrinsicOver(ec: EmitCtx) IrCodegenError!ControlFlow {
     stack[sp.*] = try cloneStackEntry(state, state.base_addr, stack[sp.* - 2], sp.*);
     sp.* += 1;
     return .next;
+}
+
+/// The literal a struct-native op derives its arity from sits in the preceding
+/// instruction. Fetch it, failing as not-compilable when there is no preceding
+/// instruction or it is not a `push_literal`.
+fn precedingStructLiteral(ec: EmitCtx) IrCodegenError!Value {
+    if (ec.idx < 1) {
+        ec.state.not_compilable_reason = .pre_scan_failure;
+        return IrCodegenError.NotCompilable;
+    }
+    return switch (ec.instructions[ec.idx - 1].op) {
+        .push_literal => |v| v,
+        else => {
+            ec.state.not_compilable_reason = .pre_scan_failure;
+            return IrCodegenError.NotCompilable;
+        },
+    };
+}
+
+/// Derive the struct type from a plain `.struct_type` literal.
+fn structTypeFromStructLiteral(state: *CompileState, v: Value) IrCodegenError!*const StructType {
+    if (v != .struct_type) {
+        state.not_compilable_reason = .pre_scan_failure;
+        return IrCodegenError.NotCompilable;
+    }
+    return v.struct_type;
+}
+
+/// Derive the struct type backing a struct-backed virtual type, from a
+/// `.type_val` literal whose `virtual_type.anon_struct` carries the fields.
+fn structTypeFromVirtualLiteral(state: *CompileState, v: Value) IrCodegenError!*const StructType {
+    if (v != .type_val) {
+        state.not_compilable_reason = .pre_scan_failure;
+        return IrCodegenError.NotCompilable;
+    }
+    const vt = v.type_val.virtual_type orelse {
+        state.not_compilable_reason = .pre_scan_failure;
+        return IrCodegenError.NotCompilable;
+    };
+    return vt.anon_struct orelse {
+        state.not_compilable_reason = .pre_scan_failure;
+        return IrCodegenError.NotCompilable;
+    };
+}
+
+/// The common emit tail shared by the four struct-native handlers: check the
+/// stack depth, flush to the physical stack, then dispatch to the polymorphic
+/// native through the resolver and settle the abstract stack with the op's
+/// concrete in / out counts.
+fn emitStructNativeTail(ec: EmitCtx, effective_in: u8, effective_out: u8) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
+
+    try materializeQuotations(state, stack, sp.*);
+    flushToPhysicalStack(state, stack, sp.*);
+    const ctx_val = emitCallbackPreamble(state, sp.*);
+
+    const res = state.resolver orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+    const resolved = res.resolve(ec.name, res.user_data) orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+
+    emitNativeWordCall(state, ctx_val, ec.name, resolved, ec.line);
+
+    if (exitFallsThrough(state.exit_kind)) {
+        settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+    }
+    return .next;
+}
+
+// make-struct-instance: ( field1..fieldN literal -- instance )
+fn emitIntrinsicMakeStructInstance(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const v = try precedingStructLiteral(ec);
+    const struct_type_ptr = try structTypeFromStructLiteral(ec.state, v);
+    const num_fields: u8 = @intCast(struct_type_ptr.fields.len);
+    return emitStructNativeTail(ec, num_fields + 1, 1);
+}
+
+// struct-instance-destructure: ( instance literal -- field1..fieldN )
+fn emitIntrinsicStructInstanceDestructure(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const v = try precedingStructLiteral(ec);
+    const struct_type_ptr = try structTypeFromStructLiteral(ec.state, v);
+    const num_fields: u8 = @intCast(struct_type_ptr.fields.len);
+    return emitStructNativeTail(ec, 2, num_fields);
+}
+
+// virtual-struct-wrap: ( field1..fieldN literal -- instance )
+fn emitIntrinsicVirtualStructWrap(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const v = try precedingStructLiteral(ec);
+    const struct_type_ptr = try structTypeFromVirtualLiteral(ec.state, v);
+    const num_fields: u8 = @intCast(struct_type_ptr.fields.len);
+    return emitStructNativeTail(ec, num_fields + 1, 1);
+}
+
+// virtual-struct-unwrap: ( instance literal -- field1..fieldN )
+fn emitIntrinsicVirtualStructUnwrap(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const v = try precedingStructLiteral(ec);
+    const struct_type_ptr = try structTypeFromVirtualLiteral(ec.state, v);
+    const num_fields: u8 = @intCast(struct_type_ptr.fields.len);
+    return emitStructNativeTail(ec, 2, num_fields);
 }
 
 /// Compile a sequence of instructions, updating the abstract stack.
@@ -6029,16 +6058,6 @@ fn compileInstructions(
                     if (state.aot_mode or !tryEmitInlineTypedValidateAndPromote(state, instructions, idx, stack, sp)) {
                         try emitResolvedNativeCallback(state, name, stack, sp, instr.line);
                     }
-                } else if (std.mem.eql(u8, name, "native.make-struct-instance") or
-                    std.mem.eql(u8, name, "native.struct-instance-destructure") or
-                    std.mem.eql(u8, name, "native.virtual-struct-wrap") or
-                    std.mem.eql(u8, name, "native.virtual-struct-unwrap"))
-                {
-                    // Polymorphic struct operations: derive input/output counts
-                    // from the struct fields in the preceding push_literal
-                    // (a .struct_type for the plain shape, a .type_val whose
-                    // virtual_type is struct-backed for the virtual shape).
-                    try emitStructNativeCall(state, instructions, idx, name, stack, sp, instr.line);
                 } else if (std.mem.eql(u8, name, "native.struct-instance-to-hash") or
                     std.mem.eql(u8, name, "native.struct-type-predicate") or
                     std.mem.eql(u8, name, "native.hash-to-struct"))
