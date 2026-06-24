@@ -4403,6 +4403,9 @@ const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
     .{ "drop", IntrinsicEntry{ .handler = emitIntrinsicDrop } },
     .{ "swap", IntrinsicEntry{ .handler = emitIntrinsicSwap } },
     .{ "over", IntrinsicEntry{ .handler = emitIntrinsicOver } },
+    .{ "if", IntrinsicEntry{ .handler = emitIntrinsicIf } },
+    .{ "call", IntrinsicEntry{ .handler = emitIntrinsicCall } },
+    .{ "choose", IntrinsicEntry{ .handler = emitIntrinsicChoose } },
     .{ "native.make-struct-instance", IntrinsicEntry{ .handler = emitIntrinsicMakeStructInstance, .caps = .{ .needs_dispatch = true } } },
     .{ "native.struct-instance-destructure", IntrinsicEntry{ .handler = emitIntrinsicStructInstanceDestructure, .caps = .{ .needs_dispatch = true } } },
     .{ "native.virtual-struct-wrap", IntrinsicEntry{ .handler = emitIntrinsicVirtualStructWrap, .caps = .{ .needs_dispatch = true } } },
@@ -4680,6 +4683,630 @@ fn emitIntrinsicVirtualStructUnwrap(ec: EmitCtx) IrCodegenError!ControlFlow {
     const struct_type_ptr = try structTypeFromVirtualLiteral(ec.state, v);
     const num_fields: u8 = @intCast(struct_type_ptr.fields.len);
     return emitStructNativeTail(ec, 2, num_fields);
+}
+
+// call: ( quot -- ... )   invoke a quotation
+fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const bail_status = state.bail_status;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    if (sp.* < 1) return IrCodegenError.StackUnderflow;
+    sp.* -= 1;
+    const entry = stack[sp.*];
+    switch (entry) {
+        .quotation_body => |body| {
+            const saved_inline_trace_frame_count = state.inline_trace_frame_count;
+            if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+                state.inline_trace_frames[state.inline_trace_frame_count] = .{
+                    .kind = .call,
+                    .line = ec.line,
+                };
+                state.inline_trace_frame_count += 1;
+            }
+            try compileInstructions(state, body, stack, sp);
+            if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
+        },
+        .raw_at_slot => |s| {
+            {
+                const elem_addr = liveSlotAddr(state, s);
+
+                // Check tag is quotation
+                const quotation_tag_const = emitTagConst(ctx, .quotation);
+                emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, bail_status);
+
+                // Load code_ptr from the quotation's payload
+                const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
+                const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
+                const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+                // Null-check code_ptr
+                const null_addr = c.ir_const_addr(ctx, 0);
+                const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+                const if_null = c._ir_IF(ctx, is_null);
+
+                // Both branches flush the pending abstract stack
+                // to physical memory, but flushToPhysicalStack
+                // mutates the shared `stack`/`sp` state, resetting
+                // each entry to physical identity. The cold branch
+                // is emitted first, so its flush would leave the
+                // hot branch flushing an already-identity stack --
+                // a silent no-op that drops the physical
+                // rearrangement the direct call needs (e.g. a
+                // preceding `pick-n swap` that left a cross-slot
+                // reference). Snapshot here and restore before the
+                // hot branch's flush so each branch flushes from
+                // the same pre-flush state. The cold branch's
+                // `sp += 1` widens the flush by one slot, so the
+                // snapshot covers `sp + 1` entries. The cold
+                // branch's callback also refreshes the cached
+                // items_ptr / base_addr to refs defined inside the
+                // cold block, which do not dominate the hot block;
+                // restore those too so the hot branch's flush moves
+                // are anchored to a dominating base.
+                const snapshot_len = @min(sp.* + 1, stack.len);
+                var saved_stack: [max_abstract_stack_depth]StackEntry = undefined;
+                @memcpy(saved_stack[0..snapshot_len], stack[0..snapshot_len]);
+                const saved_sp = sp.*;
+                const saved_items_ptr = state.items_ptr;
+                const saved_base_addr = state.base_addr;
+
+                // Cold path: interpreter fallback for quotations
+                // without a code_ptr (e.g., >quotation-constructed).
+                c._ir_IF_TRUE_cold(ctx, if_null);
+                {
+                    sp.* += 1;
+                    flushToPhysicalStack(state, stack, sp.*);
+                    const ctx_val = emitCallbackPreamble(state, sp.*);
+                    sp.* -= 1;
+                    const call_quot_fn = if (state.aot_mode)
+                        state.call_quotation_fn
+                    else
+                        c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
+                    state.noteAotFallbackEmission(.quotation, "<quotation>", 0, ec.line);
+                    const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
+                    emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+                }
+                const end_fallback = c._ir_END(ctx);
+
+                // Hot path: quotation is compiled, call directly
+                c._ir_IF_FALSE(ctx, if_null);
+                {
+                    @memcpy(stack[0..snapshot_len], saved_stack[0..snapshot_len]);
+                    sp.* = saved_sp;
+                    state.items_ptr = saved_items_ptr;
+                    state.base_addr = saved_base_addr;
+                    flushToPhysicalStack(state, stack, sp.*);
+
+                    const new_sp_const = c.ir_const_addr(ctx, sp.*);
+                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
+                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+                    const call_result = if (state.aot_mode)
+                        c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
+                    else
+                        c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
+                    emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+                }
+                const end_compiled = c._ir_END(ctx);
+
+                c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+
+                if (state.refresh_stack_fn != c.IR_UNUSED) {
+                    refreshCachedStackPointer(state);
+                }
+            }
+
+            if (state.quotation_slots.findSlot(s)) |info| {
+                // Concrete effect known: apply it to the abstract stack
+                // and continue compilation.
+                if (sp.* < info.input_count) return IrCodegenError.StackUnderflow;
+                sp.* = sp.* - info.input_count + info.output_count;
+                resetStackToPhysical(stack, sp.*);
+            } else if (state.aot_mode and state.interpreter_free) {
+                // Strict AOT: the cold path above re-enters the
+                // interpreter when the runtime quotation has no
+                // compiled code_ptr, which fatals at runtime in
+                // an interpreter-free binary. Reject the build
+                // instead of compiling a path that cannot run.
+                state.not_compilable_reason = .abstract_stack_underflow;
+                return IrCodegenError.NotCompilable;
+            } else {
+                // Unresolved quotation effect (row variables).
+                // Reload physical sp and insert row_region so
+                // subsequent instructions above the region can
+                // continue compiling.
+                reloadBaseAfterDynamicCall(state);
+                sp.* = 1;
+                stack[0] = .{ .row_region = state.nextRowId() };
+            }
+        },
+        .i64_ref, .f64_ref, .bool_ref, .row_region => {
+            state.not_compilable_reason = .quotation_reification;
+            return IrCodegenError.NotCompilable;
+        },
+    }
+    return .next;
+}
+
+// choose: ( a1 a2 quot -- a )   keep a1 if quot(a1,a2) is truthy, else a2
+fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const bail_status = state.bail_status;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    // Duplicate a1 and a2, call quot on the copies,
+    // then branch: truthy keeps a1, falsy keeps a2.
+    if (sp.* < 3) return IrCodegenError.StackUnderflow;
+    sp.* -= 3;
+    const output_slot = sp.*;
+    const entry_a1 = stack[output_slot];
+    const entry_a2 = stack[output_slot + 1];
+    const entry_quot = stack[output_slot + 2];
+
+    switch (entry_quot) {
+        .quotation_body => |body| {
+            // Flush a1/a2 to physical slots so they survive
+            // the quotation body compilation.
+            stack[output_slot] = entry_a1;
+            stack[output_slot + 1] = entry_a2;
+            sp.* = output_slot + 2;
+            flushToPhysicalStack(state, stack, sp.*);
+
+            // Copy a1/a2 for quotation consumption. The copies
+            // are owning references the predicate consumes and
+            // releases, so retain each to balance that release.
+            emitCopySlot(ctx, state.base_addr, output_slot, output_slot + 2);
+            emitRetainSlot(state, output_slot + 2);
+            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot + 3);
+            emitRetainSlot(state, output_slot + 3);
+            stack[output_slot + 2] = .{ .raw_at_slot = output_slot + 2 };
+            stack[output_slot + 3] = .{ .raw_at_slot = output_slot + 3 };
+            sp.* = output_slot + 4;
+            if (sp.* > state.peak_sp) state.peak_sp = @intCast(sp.*);
+
+            // Compile the quotation body: consumes 2, pushes 1.
+            try compileInstructions(state, body, stack, sp);
+            if (sp.* != output_slot + 3) return IrCodegenError.StackShapeMismatch;
+
+            // Pop the result and compute truthiness.
+            sp.* -= 1;
+            const result_entry = stack[sp.*];
+            const cond_ref = try emitTruthiness(state, result_entry, state.base_addr);
+
+            // Branch: truthy keeps a1, falsy keeps a2. The
+            // non-selected operand is dropped, so release it.
+            const if_ref = c._ir_IF(ctx, cond_ref);
+
+            c._ir_IF_TRUE(ctx, if_ref);
+            emitReleaseSlot(state, output_slot + 1);
+            const true_end = c._ir_END(ctx);
+
+            c._ir_IF_FALSE(ctx, if_ref);
+            emitReleaseSlot(state, output_slot);
+            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot);
+            const false_end = c._ir_END(ctx);
+
+            c._ir_MERGE_2(ctx, true_end, false_end);
+
+            sp.* = output_slot + 1;
+            stack[output_slot] = .{ .raw_at_slot = output_slot };
+        },
+        .raw_at_slot => |quot_slot| {
+            // Dynamic quotation: load code_ptr before rearranging.
+            const quot_addr = liveSlotAddr(state, quot_slot);
+
+            // Tag-check: must be a quotation.
+            const quotation_tag_const = emitTagConst(ctx, .quotation);
+            emitTagCheck(ctx, quot_addr, quotation_tag_const, state.tag_offset_const, bail_status);
+
+            // Load code_ptr from the quotation payload.
+            const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
+            const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), quot_addr, code_ptr_off);
+            const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+            // Flush a1/a2 to their physical slots.
+            stack[output_slot] = entry_a1;
+            stack[output_slot + 1] = entry_a2;
+            sp.* = output_slot + 2;
+            flushToPhysicalStack(state, stack, sp.*);
+
+            // Copy a1/a2 for quotation consumption. The copies
+            // are owning references the predicate consumes and
+            // releases, so retain each to balance that release.
+            emitCopySlot(ctx, state.base_addr, output_slot, output_slot + 2);
+            emitRetainSlot(state, output_slot + 2);
+            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot + 3);
+            emitRetainSlot(state, output_slot + 3);
+            // Copy quotation to slot after the copies (a
+            // quotation carries no refcounted backing).
+            emitCopySlot(ctx, state.base_addr, quot_slot, output_slot + 4);
+
+            sp.* = output_slot + 4;
+            if (sp.* + 1 > state.peak_sp) state.peak_sp = @intCast(sp.* + 1);
+
+            // Null-check code_ptr for compiled vs interpreter dispatch.
+            const null_addr = c.ir_const_addr(ctx, 0);
+            const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+            const if_null = c._ir_IF(ctx, is_null);
+
+            // Cold path: interpreter fallback.
+            c._ir_IF_TRUE_cold(ctx, if_null);
+            {
+                // Interpreter expects quotation on top of stack.
+                const fb_sp = output_slot + 5;
+                const fb_sp_const = c.ir_const_addr(ctx, fb_sp);
+                const fb_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, fb_sp_const);
+                c._ir_STORE(ctx, state.sp_ptr, fb_sp_val);
+
+                const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
+                    state.preloaded_ctx_val
+                else blk: {
+                    JitContextLayout.ensureInit();
+                    const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
+                    const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
+                    break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
+                };
+                const call_quot_fn = if (state.aot_mode)
+                    state.call_quotation_fn
+                else
+                    c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
+                state.noteAotFallbackEmission(.quotation, "<quotation>", 0, ec.line);
+                const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
+                emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
+            }
+            const end_fallback = c._ir_END(ctx);
+
+            // Hot path: compiled quotation via code_ptr.
+            c._ir_IF_FALSE(ctx, if_null);
+            {
+                // sp points past the copies (no quotation on stack).
+                const hot_sp_const = c.ir_const_addr(ctx, sp.*);
+                const hot_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, hot_sp_const);
+                c._ir_STORE(ctx, state.sp_ptr, hot_sp_val);
+
+                const call_result = if (state.aot_mode)
+                    c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
+                else
+                    c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
+                emitCallbackPostCheck(state, call_result, call_result, null, .none);
+            }
+            const end_compiled = c._ir_END(ctx);
+
+            c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+
+            if (state.refresh_stack_fn != c.IR_UNUSED) {
+                refreshCachedStackPointer(state);
+            }
+
+            // Quotation consumed 2 copies and pushed 1 result.
+            // Result is at physical slot output_slot + 2.
+            const cond_ref = emitSlotTruthiness(ctx, state.base_addr, output_slot + 2, state);
+
+            const if_ref = c._ir_IF(ctx, cond_ref);
+
+            c._ir_IF_TRUE(ctx, if_ref);
+            emitReleaseSlot(state, output_slot + 1);
+            const true_end = c._ir_END(ctx);
+
+            c._ir_IF_FALSE(ctx, if_ref);
+            emitReleaseSlot(state, output_slot);
+            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot);
+            const false_end = c._ir_END(ctx);
+
+            c._ir_MERGE_2(ctx, true_end, false_end);
+
+            // Write final sp.
+            const final_sp_const = c.ir_const_addr(ctx, output_slot + 1);
+            const final_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
+            c._ir_STORE(ctx, state.sp_ptr, final_sp);
+
+            sp.* = output_slot + 1;
+            stack[output_slot] = .{ .raw_at_slot = output_slot };
+        },
+        else => {
+            state.not_compilable_reason = .quotation_reification;
+            return IrCodegenError.NotCompilable;
+        },
+    }
+    return .next;
+}
+
+// if: ( cond true-quot false-quot -- ... )   branch on truthiness
+fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const ctx = state.ctx;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    // 1z truthiness: only `f` (boolean false) is falsy; every other value is truthy.
+    // The condition entry types each need a different IR emission strategy:
+    //
+    //   bool_ref       -- use the IR bool directly as the branch condition
+    //   i64/f64/quot   -- always truthy, so emit only the true branch
+    //   raw_at_slot    -- load tag+payload from memory to compute is_truthy at runtime
+    //
+    // Both branches must produce the same stack depth; results
+    // are merged with PHI nodes after the MERGE point.
+    if (sp.* < 3) return IrCodegenError.StackUnderflow;
+    sp.* -= 3;
+
+    const cond_entry = stack[sp.*];
+    const true_entry = stack[sp.* + 1];
+    const false_entry = stack[sp.* + 2];
+
+    // Extract quotation bodies where available; raw_at_slot
+    // branches will be dispatched at runtime.
+    const true_body: ?[]const Instruction = switch (true_entry) {
+        .quotation_body => |body| body,
+        .raw_at_slot => null,
+        else => {
+            state.not_compilable_reason = .quotation_reification;
+            return IrCodegenError.NotCompilable;
+        },
+    };
+    const false_body: ?[]const Instruction = switch (false_entry) {
+        .quotation_body => |body| body,
+        .raw_at_slot => null,
+        else => {
+            state.not_compilable_reason = .quotation_reification;
+            return IrCodegenError.NotCompilable;
+        },
+    };
+
+    // At least one branch must be a quotation_body so the
+    // branch effect can be inferred. Both raw_at_slot is
+    // unsupported (no effect information available).
+    if (true_body == null and false_body == null) {
+        state.not_compilable_reason = .quotation_reification;
+        return IrCodegenError.NotCompilable;
+    }
+
+    // Determine the IR bool for the condition
+    const cond_ref = switch (cond_entry) {
+        .bool_ref => |ref| ref,
+        .i64_ref, .f64_ref, .quotation_body => {
+            // Non-boolean values and quotations are always truthy
+            // Only the true branch executes; compile both to validate stack effects match
+            if (true_body) |tb| {
+                if (false_body) |fb| {
+                    const false_stack = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
+                    defer state.allocator.free(false_stack);
+                    var false_sp = sp.*;
+                    const saved_exit_kind = state.exit_kind;
+                    const saved_loop_end_set = state.loop_end_set;
+                    state.exit_kind = .falls_through;
+                    try compileInstructions(state, fb, false_stack, &false_sp);
+                    const false_exit_kind = state.exit_kind;
+                    state.exit_kind = .falls_through;
+                    state.loop_end_set = saved_loop_end_set;
+                    try compileInstructions(state, tb, stack, sp);
+                    if (exitFallsThrough(false_exit_kind) and !symbolicShapeMatches(stack, sp.*, false_stack, false_sp)) return IrCodegenError.StackShapeMismatch;
+                    if (!exitFallsThrough(false_exit_kind) and exitFallsThrough(state.exit_kind)) {
+                        state.loop_end_set = saved_loop_end_set;
+                    } else if (exitFallsThrough(false_exit_kind) and !exitFallsThrough(state.exit_kind)) {
+                        state.loop_end_set = saved_loop_end_set;
+                    }
+                    if (!exitFallsThrough(false_exit_kind) and !exitFallsThrough(state.exit_kind)) {
+                        state.exit_kind = mergeNonFallthroughExitKinds(false_exit_kind, state.exit_kind);
+                    } else if (exitFallsThrough(state.exit_kind)) {
+                        state.exit_kind = saved_exit_kind;
+                    }
+                } else {
+                    try compileInstructions(state, tb, stack, sp);
+                }
+            } else {
+                // True branch is raw_at_slot: dispatch at runtime.
+                emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
+                // Infer effect from the false (quotation_body) branch.
+                const eff = inferQuotationEffect(false_body.?, if (state.resolver) |r| r else null) catch {
+                    state.not_compilable_reason = .effect_inference_overflow;
+                    return IrCodegenError.NotCompilable;
+                } orelse {
+                    state.not_compilable_reason = .quotation_reification;
+                    return IrCodegenError.NotCompilable;
+                };
+                sp.* = sp.* - eff.input_count + eff.output_count;
+                resetStackToPhysical(stack, sp.*);
+            }
+            return .next;
+        },
+        .raw_at_slot => |s| emitSlotTruthiness(ctx, state.base_addr, s, state),
+        .row_region => {
+            if (state.aot_mode) {
+                try emitIfOverRow(state, stack, sp, true_entry, false_entry, true_body, false_body);
+                return .next;
+            }
+            state.not_compilable_reason = .quotation_truthiness;
+            return IrCodegenError.NotCompilable;
+        },
+    };
+
+    // `if` consumes the condition; release its backing if it
+    // carried one (mirrors the interpreter's popBoolean). The
+    // condition slot is below the new top and no longer live, so
+    // the release precedes the branch bodies that overwrite it.
+    if (cond_entry == .raw_at_slot) {
+        emitReleaseSlot(state, cond_entry.raw_at_slot);
+    }
+
+    // Save stack state for the false branch
+    const saved_sp = sp.*;
+    const saved_stack = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
+    defer state.allocator.free(saved_stack);
+    const saved_exit_kind = state.exit_kind;
+    const saved_loop_end_set = state.loop_end_set;
+
+    // Save items_ptr/base_addr before the true branch so the
+    // false branch can use refs that dominate both paths.
+    // Callbacks in the true branch may update these to IR refs
+    // that are only defined on the IF_TRUE path.
+    const saved_items_ptr = state.items_ptr;
+    const saved_base_addr = state.base_addr;
+    // A row-collapsing op in the true branch mutates these; the
+    // false branch and the merge must resume from the pre-if
+    // values that dominate both paths.
+    const saved_base_idx = state.base_idx;
+    const saved_sp_val = state.sp_val;
+
+    // Infer the branch effect when one branch is raw_at_slot.
+    // The raw_at_slot branch is assumed to have the same effect
+    // as the quotation_body branch.
+    const branch_effect: ?InferredEffect = if (true_body == null or false_body == null) blk: {
+        const known_body = true_body orelse false_body orelse unreachable;
+        break :blk inferQuotationEffect(known_body, if (state.resolver) |r| r else null) catch {
+            state.not_compilable_reason = .effect_inference_overflow;
+            return IrCodegenError.NotCompilable;
+        } orelse {
+            state.not_compilable_reason = .quotation_reification;
+            return IrCodegenError.NotCompilable;
+        };
+    } else null;
+
+    // Emit true branch
+    const if_ref = c._ir_IF(ctx, cond_ref);
+    c._ir_IF_TRUE(ctx, if_ref);
+    state.recordBlockStart(ctx.unnamed_0.control);
+    state.exit_kind = .falls_through;
+    const saved_inline_trace_frame_count = state.inline_trace_frame_count;
+    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+        state.inline_trace_frames[state.inline_trace_frame_count] = .{
+            .kind = .if_op,
+            .line = ec.line,
+        };
+        state.inline_trace_frame_count += 1;
+    }
+    if (true_body) |tb| {
+        try compileInstructions(state, tb, stack, sp);
+    } else {
+        // Runtime dispatch for raw_at_slot quotation
+        emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
+        const eff = branch_effect.?;
+        sp.* = sp.* - eff.input_count + eff.output_count;
+        resetStackToPhysical(stack, sp.*);
+    }
+    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
+    const true_exit_kind = state.exit_kind;
+    var end_true: c.ir_ref = c.IR_UNUSED;
+    // In AOT mode (ir_emit_c), skip END after terminal_return
+    // because ir_emit_c hangs on dead code after RETURN.
+    // In JIT mode (ir_emit), terminal_return branches still
+    // get END for well-formed END/MERGE structure.
+    if (if (state.aot_mode) exitFallsThrough(true_exit_kind) else true_exit_kind != .loop_diverged) {
+        flushToPhysicalStack(state, stack, sp.*);
+        // Persist the physical sp so a row-aware merge can reload
+        // it. A branch that collapsed to a fresh row moved base_idx
+        // and already left the runtime sp live; one that only ran
+        // abstract ops over a pre-existing row kept base_idx and
+        // must store the height. Harmless with no row, as it equals
+        // the epilogue's own store.
+        if (state.aot_mode and state.base_idx == saved_base_idx) {
+            const sp_const = c.ir_const_addr(ctx, sp.*);
+            const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+            c._ir_STORE(ctx, state.sp_ptr, new_sp);
+        }
+        end_true = c._ir_END(ctx);
+    }
+
+    // Restore items_ptr/base_addr before the false branch so
+    // it uses refs from before the IF that dominate both paths.
+    state.items_ptr = saved_items_ptr;
+    state.base_addr = saved_base_addr;
+    state.base_idx = saved_base_idx;
+    state.sp_val = saved_sp_val;
+
+    // Emit false branch
+    c._ir_IF_FALSE(ctx, if_ref);
+    state.recordBlockStart(ctx.unnamed_0.control);
+    var false_sp = saved_sp;
+    state.exit_kind = .falls_through;
+    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
+    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+        state.inline_trace_frames[state.inline_trace_frame_count] = .{
+            .kind = .if_op,
+            .line = ec.line,
+        };
+        state.inline_trace_frame_count += 1;
+    }
+    if (false_body) |fb| {
+        try compileInstructions(state, fb, saved_stack, &false_sp);
+    } else {
+        emitIfBranchDispatch(state, saved_stack, &false_sp, false_entry.raw_at_slot);
+        const eff = branch_effect.?;
+        false_sp = false_sp - eff.input_count + eff.output_count;
+        resetStackToPhysical(saved_stack, false_sp);
+    }
+    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
+    const false_exit_kind = state.exit_kind;
+
+    // In AOT mode, treat terminal_return the same as
+    // loop_diverged (both are non-falls-through) because
+    // ir_emit_c cannot handle dead END/MERGE after RETURN.
+    // In JIT mode, only loop_diverged is truly diverged;
+    // terminal_return branches participate in MERGE.
+    const true_diverged = if (state.aot_mode) !exitFallsThrough(true_exit_kind) else true_exit_kind == .loop_diverged;
+    const false_diverged = if (state.aot_mode) !exitFallsThrough(false_exit_kind) else false_exit_kind == .loop_diverged;
+
+    if (true_diverged and false_diverged) {
+        state.exit_kind = mergeNonFallthroughExitKinds(true_exit_kind, false_exit_kind);
+    } else if (true_diverged) {
+        // Only false path continues. No END or MERGE needed:
+        // the false branch code just falls through after IF_FALSE.
+        // The same pattern as the exit path of a compiled loop.
+        flushToPhysicalStack(state, saved_stack, false_sp);
+        sp.* = false_sp;
+        @memcpy(stack, saved_stack);
+        resetStackToPhysicalPreservingRows(stack, sp.*);
+        state.exit_kind = saved_exit_kind;
+    } else if (false_diverged) {
+        // Only true path continues. Resume from true branch's END.
+        c._ir_BEGIN(ctx, end_true);
+        if (state.refresh_stack_fn != c.IR_UNUSED) {
+            refreshCachedStackPointer(state);
+        }
+        resetStackToPhysicalPreservingRows(stack, sp.*);
+        state.exit_kind = saved_exit_kind;
+    } else {
+        // Neither branch terminated: normal merge.
+        flushToPhysicalStack(state, saved_stack, false_sp);
+        const false_has_row = hasRowRegion(saved_stack, false_sp);
+        if (state.aot_mode and state.base_idx == saved_base_idx) {
+            const sp_const = c.ir_const_addr(ctx, false_sp);
+            const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
+            c._ir_STORE(ctx, state.sp_ptr, new_sp);
+        }
+        const end_false = c._ir_END(ctx);
+        c._ir_MERGE_2(ctx, end_true, end_false);
+        state.recordBlockStart(ctx.unnamed_0.control);
+        if (!symbolicShapeMatches(stack, sp.*, saved_stack, false_sp)) {
+            const true_has_row = hasRowRegion(stack, sp.*);
+            // A row on either side means one branch left an opaque
+            // result; the two physical tops still agree, so rejoin
+            // to a single fresh row read from the live sp both
+            // paths stored. A genuine depth mismatch with no row
+            // is still a stack-effect error.
+            if (state.aot_mode and (true_has_row or false_has_row)) {
+                reloadBaseAfterDynamicCall(state);
+                sp.* = 1;
+                stack[0] = .{ .row_region = state.nextRowId() };
+                state.exit_kind = saved_exit_kind;
+                state.loop_end_set = saved_loop_end_set;
+                return .next;
+            }
+            return IrCodegenError.StackShapeMismatch;
+        }
+        if (state.refresh_stack_fn != c.IR_UNUSED) {
+            refreshCachedStackPointer(state);
+        }
+        resetStackToPhysicalPreservingRows(stack, sp.*);
+        state.exit_kind = saved_exit_kind;
+        state.loop_end_set = saved_loop_end_set;
+    }
+    return .next;
 }
 
 /// Compile a sequence of instructions, updating the abstract stack.
@@ -4997,426 +5624,6 @@ fn compileInstructions(
                     };
                     stack[sp.*] = .{ .bool_ref = result };
                     sp.* += 1;
-                } else if (std.mem.eql(u8, name, "if")) {
-                    // 1z truthiness: only `f` (boolean false) is falsy; every other value is truthy.
-                    // The condition entry types each need a different IR emission strategy:
-                    //
-                    //   bool_ref       -- use the IR bool directly as the branch condition
-                    //   i64/f64/quot   -- always truthy, so emit only the true branch
-                    //   raw_at_slot    -- load tag+payload from memory to compute is_truthy at runtime
-                    //
-                    // Both branches must produce the same stack depth; results
-                    // are merged with PHI nodes after the MERGE point.
-                    if (sp.* < 3) return IrCodegenError.StackUnderflow;
-                    sp.* -= 3;
-
-                    const cond_entry = stack[sp.*];
-                    const true_entry = stack[sp.* + 1];
-                    const false_entry = stack[sp.* + 2];
-
-                    // Extract quotation bodies where available; raw_at_slot
-                    // branches will be dispatched at runtime.
-                    const true_body: ?[]const Instruction = switch (true_entry) {
-                        .quotation_body => |body| body,
-                        .raw_at_slot => null,
-                        else => {
-                            state.not_compilable_reason = .quotation_reification;
-                            return IrCodegenError.NotCompilable;
-                        },
-                    };
-                    const false_body: ?[]const Instruction = switch (false_entry) {
-                        .quotation_body => |body| body,
-                        .raw_at_slot => null,
-                        else => {
-                            state.not_compilable_reason = .quotation_reification;
-                            return IrCodegenError.NotCompilable;
-                        },
-                    };
-
-                    // At least one branch must be a quotation_body so the
-                    // branch effect can be inferred. Both raw_at_slot is
-                    // unsupported (no effect information available).
-                    if (true_body == null and false_body == null) {
-                        state.not_compilable_reason = .quotation_reification;
-                        return IrCodegenError.NotCompilable;
-                    }
-
-                    // Determine the IR bool for the condition
-                    const cond_ref = switch (cond_entry) {
-                        .bool_ref => |ref| ref,
-                        .i64_ref, .f64_ref, .quotation_body => {
-                            // Non-boolean values and quotations are always truthy
-                            // Only the true branch executes; compile both to validate stack effects match
-                            if (true_body) |tb| {
-                                if (false_body) |fb| {
-                                    const false_stack = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
-                                    defer state.allocator.free(false_stack);
-                                    var false_sp = sp.*;
-                                    const saved_exit_kind = state.exit_kind;
-                                    const saved_loop_end_set = state.loop_end_set;
-                                    state.exit_kind = .falls_through;
-                                    try compileInstructions(state, fb, false_stack, &false_sp);
-                                    const false_exit_kind = state.exit_kind;
-                                    state.exit_kind = .falls_through;
-                                    state.loop_end_set = saved_loop_end_set;
-                                    try compileInstructions(state, tb, stack, sp);
-                                    if (exitFallsThrough(false_exit_kind) and !symbolicShapeMatches(stack, sp.*, false_stack, false_sp)) return IrCodegenError.StackShapeMismatch;
-                                    if (!exitFallsThrough(false_exit_kind) and exitFallsThrough(state.exit_kind)) {
-                                        state.loop_end_set = saved_loop_end_set;
-                                    } else if (exitFallsThrough(false_exit_kind) and !exitFallsThrough(state.exit_kind)) {
-                                        state.loop_end_set = saved_loop_end_set;
-                                    }
-                                    if (!exitFallsThrough(false_exit_kind) and !exitFallsThrough(state.exit_kind)) {
-                                        state.exit_kind = mergeNonFallthroughExitKinds(false_exit_kind, state.exit_kind);
-                                    } else if (exitFallsThrough(state.exit_kind)) {
-                                        state.exit_kind = saved_exit_kind;
-                                    }
-                                } else {
-                                    try compileInstructions(state, tb, stack, sp);
-                                }
-                            } else {
-                                // True branch is raw_at_slot: dispatch at runtime.
-                                emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
-                                // Infer effect from the false (quotation_body) branch.
-                                const eff = inferQuotationEffect(false_body.?, if (state.resolver) |r| r else null) catch {
-                                    state.not_compilable_reason = .effect_inference_overflow;
-                                    return IrCodegenError.NotCompilable;
-                                } orelse {
-                                    state.not_compilable_reason = .quotation_reification;
-                                    return IrCodegenError.NotCompilable;
-                                };
-                                sp.* = sp.* - eff.input_count + eff.output_count;
-                                resetStackToPhysical(stack, sp.*);
-                            }
-                            continue;
-                        },
-                        .raw_at_slot => |s| emitSlotTruthiness(ctx, state.base_addr, s, state),
-                        .row_region => {
-                            if (state.aot_mode) {
-                                try emitIfOverRow(state, stack, sp, true_entry, false_entry, true_body, false_body);
-                                continue;
-                            }
-                            state.not_compilable_reason = .quotation_truthiness;
-                            return IrCodegenError.NotCompilable;
-                        },
-                    };
-
-                    // `if` consumes the condition; release its backing if it
-                    // carried one (mirrors the interpreter's popBoolean). The
-                    // condition slot is below the new top and no longer live, so
-                    // the release precedes the branch bodies that overwrite it.
-                    if (cond_entry == .raw_at_slot) {
-                        emitReleaseSlot(state, cond_entry.raw_at_slot);
-                    }
-
-                    // Save stack state for the false branch
-                    const saved_sp = sp.*;
-                    const saved_stack = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
-                    defer state.allocator.free(saved_stack);
-                    const saved_exit_kind = state.exit_kind;
-                    const saved_loop_end_set = state.loop_end_set;
-
-                    // Save items_ptr/base_addr before the true branch so the
-                    // false branch can use refs that dominate both paths.
-                    // Callbacks in the true branch may update these to IR refs
-                    // that are only defined on the IF_TRUE path.
-                    const saved_items_ptr = state.items_ptr;
-                    const saved_base_addr = state.base_addr;
-                    // A row-collapsing op in the true branch mutates these; the
-                    // false branch and the merge must resume from the pre-if
-                    // values that dominate both paths.
-                    const saved_base_idx = state.base_idx;
-                    const saved_sp_val = state.sp_val;
-
-                    // Infer the branch effect when one branch is raw_at_slot.
-                    // The raw_at_slot branch is assumed to have the same effect
-                    // as the quotation_body branch.
-                    const branch_effect: ?InferredEffect = if (true_body == null or false_body == null) blk: {
-                        const known_body = true_body orelse false_body orelse unreachable;
-                        break :blk inferQuotationEffect(known_body, if (state.resolver) |r| r else null) catch {
-                            state.not_compilable_reason = .effect_inference_overflow;
-                            return IrCodegenError.NotCompilable;
-                        } orelse {
-                            state.not_compilable_reason = .quotation_reification;
-                            return IrCodegenError.NotCompilable;
-                        };
-                    } else null;
-
-                    // Emit true branch
-                    const if_ref = c._ir_IF(ctx, cond_ref);
-                    c._ir_IF_TRUE(ctx, if_ref);
-                    state.recordBlockStart(ctx.unnamed_0.control);
-                    state.exit_kind = .falls_through;
-                    const saved_inline_trace_frame_count = state.inline_trace_frame_count;
-                    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
-                        state.inline_trace_frames[state.inline_trace_frame_count] = .{
-                            .kind = .if_op,
-                            .line = instr.line,
-                        };
-                        state.inline_trace_frame_count += 1;
-                    }
-                    if (true_body) |tb| {
-                        try compileInstructions(state, tb, stack, sp);
-                    } else {
-                        // Runtime dispatch for raw_at_slot quotation
-                        emitIfBranchDispatch(state, stack, sp, true_entry.raw_at_slot);
-                        const eff = branch_effect.?;
-                        sp.* = sp.* - eff.input_count + eff.output_count;
-                        resetStackToPhysical(stack, sp.*);
-                    }
-                    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
-                    const true_exit_kind = state.exit_kind;
-                    var end_true: c.ir_ref = c.IR_UNUSED;
-                    // In AOT mode (ir_emit_c), skip END after terminal_return
-                    // because ir_emit_c hangs on dead code after RETURN.
-                    // In JIT mode (ir_emit), terminal_return branches still
-                    // get END for well-formed END/MERGE structure.
-                    if (if (state.aot_mode) exitFallsThrough(true_exit_kind) else true_exit_kind != .loop_diverged) {
-                        flushToPhysicalStack(state, stack, sp.*);
-                        // Persist the physical sp so a row-aware merge can reload
-                        // it. A branch that collapsed to a fresh row moved base_idx
-                        // and already left the runtime sp live; one that only ran
-                        // abstract ops over a pre-existing row kept base_idx and
-                        // must store the height. Harmless with no row, as it equals
-                        // the epilogue's own store.
-                        if (state.aot_mode and state.base_idx == saved_base_idx) {
-                            const sp_const = c.ir_const_addr(ctx, sp.*);
-                            const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-                            c._ir_STORE(ctx, state.sp_ptr, new_sp);
-                        }
-                        end_true = c._ir_END(ctx);
-                    }
-
-                    // Restore items_ptr/base_addr before the false branch so
-                    // it uses refs from before the IF that dominate both paths.
-                    state.items_ptr = saved_items_ptr;
-                    state.base_addr = saved_base_addr;
-                    state.base_idx = saved_base_idx;
-                    state.sp_val = saved_sp_val;
-
-                    // Emit false branch
-                    c._ir_IF_FALSE(ctx, if_ref);
-                    state.recordBlockStart(ctx.unnamed_0.control);
-                    var false_sp = saved_sp;
-                    state.exit_kind = .falls_through;
-                    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
-                    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
-                        state.inline_trace_frames[state.inline_trace_frame_count] = .{
-                            .kind = .if_op,
-                            .line = instr.line,
-                        };
-                        state.inline_trace_frame_count += 1;
-                    }
-                    if (false_body) |fb| {
-                        try compileInstructions(state, fb, saved_stack, &false_sp);
-                    } else {
-                        emitIfBranchDispatch(state, saved_stack, &false_sp, false_entry.raw_at_slot);
-                        const eff = branch_effect.?;
-                        false_sp = false_sp - eff.input_count + eff.output_count;
-                        resetStackToPhysical(saved_stack, false_sp);
-                    }
-                    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
-                    const false_exit_kind = state.exit_kind;
-
-                    // In AOT mode, treat terminal_return the same as
-                    // loop_diverged (both are non-falls-through) because
-                    // ir_emit_c cannot handle dead END/MERGE after RETURN.
-                    // In JIT mode, only loop_diverged is truly diverged;
-                    // terminal_return branches participate in MERGE.
-                    const true_diverged = if (state.aot_mode) !exitFallsThrough(true_exit_kind) else true_exit_kind == .loop_diverged;
-                    const false_diverged = if (state.aot_mode) !exitFallsThrough(false_exit_kind) else false_exit_kind == .loop_diverged;
-
-                    if (true_diverged and false_diverged) {
-                        state.exit_kind = mergeNonFallthroughExitKinds(true_exit_kind, false_exit_kind);
-                    } else if (true_diverged) {
-                        // Only false path continues. No END or MERGE needed:
-                        // the false branch code just falls through after IF_FALSE.
-                        // The same pattern as the exit path of a compiled loop.
-                        flushToPhysicalStack(state, saved_stack, false_sp);
-                        sp.* = false_sp;
-                        @memcpy(stack, saved_stack);
-                        resetStackToPhysicalPreservingRows(stack, sp.*);
-                        state.exit_kind = saved_exit_kind;
-                    } else if (false_diverged) {
-                        // Only true path continues. Resume from true branch's END.
-                        c._ir_BEGIN(ctx, end_true);
-                        if (state.refresh_stack_fn != c.IR_UNUSED) {
-                            refreshCachedStackPointer(state);
-                        }
-                        resetStackToPhysicalPreservingRows(stack, sp.*);
-                        state.exit_kind = saved_exit_kind;
-                    } else {
-                        // Neither branch terminated: normal merge.
-                        flushToPhysicalStack(state, saved_stack, false_sp);
-                        const false_has_row = hasRowRegion(saved_stack, false_sp);
-                        if (state.aot_mode and state.base_idx == saved_base_idx) {
-                            const sp_const = c.ir_const_addr(ctx, false_sp);
-                            const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-                            c._ir_STORE(ctx, state.sp_ptr, new_sp);
-                        }
-                        const end_false = c._ir_END(ctx);
-                        c._ir_MERGE_2(ctx, end_true, end_false);
-                        state.recordBlockStart(ctx.unnamed_0.control);
-                        if (!symbolicShapeMatches(stack, sp.*, saved_stack, false_sp)) {
-                            const true_has_row = hasRowRegion(stack, sp.*);
-                            // A row on either side means one branch left an opaque
-                            // result; the two physical tops still agree, so rejoin
-                            // to a single fresh row read from the live sp both
-                            // paths stored. A genuine depth mismatch with no row
-                            // is still a stack-effect error.
-                            if (state.aot_mode and (true_has_row or false_has_row)) {
-                                reloadBaseAfterDynamicCall(state);
-                                sp.* = 1;
-                                stack[0] = .{ .row_region = state.nextRowId() };
-                                state.exit_kind = saved_exit_kind;
-                                state.loop_end_set = saved_loop_end_set;
-                                continue;
-                            }
-                            return IrCodegenError.StackShapeMismatch;
-                        }
-                        if (state.refresh_stack_fn != c.IR_UNUSED) {
-                            refreshCachedStackPointer(state);
-                        }
-                        resetStackToPhysicalPreservingRows(stack, sp.*);
-                        state.exit_kind = saved_exit_kind;
-                        state.loop_end_set = saved_loop_end_set;
-                    }
-                } else if (std.mem.eql(u8, name, "call")) {
-                    if (sp.* < 1) return IrCodegenError.StackUnderflow;
-                    sp.* -= 1;
-                    const entry = stack[sp.*];
-                    switch (entry) {
-                        .quotation_body => |body| {
-                            const saved_inline_trace_frame_count = state.inline_trace_frame_count;
-                            if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
-                                state.inline_trace_frames[state.inline_trace_frame_count] = .{
-                                    .kind = .call,
-                                    .line = instr.line,
-                                };
-                                state.inline_trace_frame_count += 1;
-                            }
-                            try compileInstructions(state, body, stack, sp);
-                            if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
-                        },
-                        .raw_at_slot => |s| {
-                            {
-                                const elem_addr = liveSlotAddr(state, s);
-
-                                // Check tag is quotation
-                                const quotation_tag_const = emitTagConst(ctx, .quotation);
-                                emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, bail_status);
-
-                                // Load code_ptr from the quotation's payload
-                                const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
-                                const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
-                                const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
-
-                                // Null-check code_ptr
-                                const null_addr = c.ir_const_addr(ctx, 0);
-                                const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
-                                const if_null = c._ir_IF(ctx, is_null);
-
-                                // Both branches flush the pending abstract stack
-                                // to physical memory, but flushToPhysicalStack
-                                // mutates the shared `stack`/`sp` state, resetting
-                                // each entry to physical identity. The cold branch
-                                // is emitted first, so its flush would leave the
-                                // hot branch flushing an already-identity stack --
-                                // a silent no-op that drops the physical
-                                // rearrangement the direct call needs (e.g. a
-                                // preceding `pick-n swap` that left a cross-slot
-                                // reference). Snapshot here and restore before the
-                                // hot branch's flush so each branch flushes from
-                                // the same pre-flush state. The cold branch's
-                                // `sp += 1` widens the flush by one slot, so the
-                                // snapshot covers `sp + 1` entries. The cold
-                                // branch's callback also refreshes the cached
-                                // items_ptr / base_addr to refs defined inside the
-                                // cold block, which do not dominate the hot block;
-                                // restore those too so the hot branch's flush moves
-                                // are anchored to a dominating base.
-                                const snapshot_len = @min(sp.* + 1, stack.len);
-                                var saved_stack: [max_abstract_stack_depth]StackEntry = undefined;
-                                @memcpy(saved_stack[0..snapshot_len], stack[0..snapshot_len]);
-                                const saved_sp = sp.*;
-                                const saved_items_ptr = state.items_ptr;
-                                const saved_base_addr = state.base_addr;
-
-                                // Cold path: interpreter fallback for quotations
-                                // without a code_ptr (e.g., >quotation-constructed).
-                                c._ir_IF_TRUE_cold(ctx, if_null);
-                                {
-                                    sp.* += 1;
-                                    flushToPhysicalStack(state, stack, sp.*);
-                                    const ctx_val = emitCallbackPreamble(state, sp.*);
-                                    sp.* -= 1;
-                                    const call_quot_fn = if (state.aot_mode)
-                                        state.call_quotation_fn
-                                    else
-                                        c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-                                    state.noteAotFallbackEmission(.quotation, "<quotation>", 0, instr.line);
-                                    const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-                                    emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .{ .builtin = .{ .kind = .call, .line = instr.line } });
-                                }
-                                const end_fallback = c._ir_END(ctx);
-
-                                // Hot path: quotation is compiled, call directly
-                                c._ir_IF_FALSE(ctx, if_null);
-                                {
-                                    @memcpy(stack[0..snapshot_len], saved_stack[0..snapshot_len]);
-                                    sp.* = saved_sp;
-                                    state.items_ptr = saved_items_ptr;
-                                    state.base_addr = saved_base_addr;
-                                    flushToPhysicalStack(state, stack, sp.*);
-
-                                    const new_sp_const = c.ir_const_addr(ctx, sp.*);
-                                    const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
-                                    c._ir_STORE(ctx, state.sp_ptr, new_sp);
-
-                                    const call_result = if (state.aot_mode)
-                                        c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
-                                    else
-                                        c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-                                    emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = instr.line } });
-                                }
-                                const end_compiled = c._ir_END(ctx);
-
-                                c._ir_MERGE_2(ctx, end_fallback, end_compiled);
-
-                                if (state.refresh_stack_fn != c.IR_UNUSED) {
-                                    refreshCachedStackPointer(state);
-                                }
-                            }
-
-                            if (state.quotation_slots.findSlot(s)) |info| {
-                                // Concrete effect known: apply it to the abstract stack
-                                // and continue compilation.
-                                if (sp.* < info.input_count) return IrCodegenError.StackUnderflow;
-                                sp.* = sp.* - info.input_count + info.output_count;
-                                resetStackToPhysical(stack, sp.*);
-                            } else if (state.aot_mode and state.interpreter_free) {
-                                // Strict AOT: the cold path above re-enters the
-                                // interpreter when the runtime quotation has no
-                                // compiled code_ptr, which fatals at runtime in
-                                // an interpreter-free binary. Reject the build
-                                // instead of compiling a path that cannot run.
-                                state.not_compilable_reason = .abstract_stack_underflow;
-                                return IrCodegenError.NotCompilable;
-                            } else {
-                                // Unresolved quotation effect (row variables).
-                                // Reload physical sp and insert row_region so
-                                // subsequent instructions above the region can
-                                // continue compiling.
-                                reloadBaseAfterDynamicCall(state);
-                                sp.* = 1;
-                                stack[0] = .{ .row_region = state.nextRowId() };
-                            }
-                        },
-                        .i64_ref, .f64_ref, .bool_ref, .row_region => {
-                            state.not_compilable_reason = .quotation_reification;
-                            return IrCodegenError.NotCompilable;
-                        },
-                    }
                 } else if (std.mem.eql(u8, name, "times")) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
@@ -5574,182 +5781,6 @@ fn compileInstructions(
                     const pred_entry = stack[sp.*];
                     const body_entry = stack[sp.* + 1];
                     try compilePredBodyLoop(state, stack, sp, pred_entry, body_entry, std.mem.eql(u8, name, "until"));
-                } else if (std.mem.eql(u8, name, "choose")) {
-                    // choose: ( a1 a2 quot -- a )
-                    // Duplicate a1 and a2, call quot on the copies,
-                    // then branch: truthy keeps a1, falsy keeps a2.
-                    if (sp.* < 3) return IrCodegenError.StackUnderflow;
-                    sp.* -= 3;
-                    const output_slot = sp.*;
-                    const entry_a1 = stack[output_slot];
-                    const entry_a2 = stack[output_slot + 1];
-                    const entry_quot = stack[output_slot + 2];
-
-                    switch (entry_quot) {
-                        .quotation_body => |body| {
-                            // Flush a1/a2 to physical slots so they survive
-                            // the quotation body compilation.
-                            stack[output_slot] = entry_a1;
-                            stack[output_slot + 1] = entry_a2;
-                            sp.* = output_slot + 2;
-                            flushToPhysicalStack(state, stack, sp.*);
-
-                            // Copy a1/a2 for quotation consumption. The copies
-                            // are owning references the predicate consumes and
-                            // releases, so retain each to balance that release.
-                            emitCopySlot(ctx, state.base_addr, output_slot, output_slot + 2);
-                            emitRetainSlot(state, output_slot + 2);
-                            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot + 3);
-                            emitRetainSlot(state, output_slot + 3);
-                            stack[output_slot + 2] = .{ .raw_at_slot = output_slot + 2 };
-                            stack[output_slot + 3] = .{ .raw_at_slot = output_slot + 3 };
-                            sp.* = output_slot + 4;
-                            if (sp.* > state.peak_sp) state.peak_sp = @intCast(sp.*);
-
-                            // Compile the quotation body: consumes 2, pushes 1.
-                            try compileInstructions(state, body, stack, sp);
-                            if (sp.* != output_slot + 3) return IrCodegenError.StackShapeMismatch;
-
-                            // Pop the result and compute truthiness.
-                            sp.* -= 1;
-                            const result_entry = stack[sp.*];
-                            const cond_ref = try emitTruthiness(state, result_entry, state.base_addr);
-
-                            // Branch: truthy keeps a1, falsy keeps a2. The
-                            // non-selected operand is dropped, so release it.
-                            const if_ref = c._ir_IF(ctx, cond_ref);
-
-                            c._ir_IF_TRUE(ctx, if_ref);
-                            emitReleaseSlot(state, output_slot + 1);
-                            const true_end = c._ir_END(ctx);
-
-                            c._ir_IF_FALSE(ctx, if_ref);
-                            emitReleaseSlot(state, output_slot);
-                            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot);
-                            const false_end = c._ir_END(ctx);
-
-                            c._ir_MERGE_2(ctx, true_end, false_end);
-
-                            sp.* = output_slot + 1;
-                            stack[output_slot] = .{ .raw_at_slot = output_slot };
-                        },
-                        .raw_at_slot => |quot_slot| {
-                            // Dynamic quotation: load code_ptr before rearranging.
-                            const quot_addr = liveSlotAddr(state, quot_slot);
-
-                            // Tag-check: must be a quotation.
-                            const quotation_tag_const = emitTagConst(ctx, .quotation);
-                            emitTagCheck(ctx, quot_addr, quotation_tag_const, state.tag_offset_const, bail_status);
-
-                            // Load code_ptr from the quotation payload.
-                            const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
-                            const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), quot_addr, code_ptr_off);
-                            const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
-
-                            // Flush a1/a2 to their physical slots.
-                            stack[output_slot] = entry_a1;
-                            stack[output_slot + 1] = entry_a2;
-                            sp.* = output_slot + 2;
-                            flushToPhysicalStack(state, stack, sp.*);
-
-                            // Copy a1/a2 for quotation consumption. The copies
-                            // are owning references the predicate consumes and
-                            // releases, so retain each to balance that release.
-                            emitCopySlot(ctx, state.base_addr, output_slot, output_slot + 2);
-                            emitRetainSlot(state, output_slot + 2);
-                            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot + 3);
-                            emitRetainSlot(state, output_slot + 3);
-                            // Copy quotation to slot after the copies (a
-                            // quotation carries no refcounted backing).
-                            emitCopySlot(ctx, state.base_addr, quot_slot, output_slot + 4);
-
-                            sp.* = output_slot + 4;
-                            if (sp.* + 1 > state.peak_sp) state.peak_sp = @intCast(sp.* + 1);
-
-                            // Null-check code_ptr for compiled vs interpreter dispatch.
-                            const null_addr = c.ir_const_addr(ctx, 0);
-                            const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
-                            const if_null = c._ir_IF(ctx, is_null);
-
-                            // Cold path: interpreter fallback.
-                            c._ir_IF_TRUE_cold(ctx, if_null);
-                            {
-                                // Interpreter expects quotation on top of stack.
-                                const fb_sp = output_slot + 5;
-                                const fb_sp_const = c.ir_const_addr(ctx, fb_sp);
-                                const fb_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, fb_sp_const);
-                                c._ir_STORE(ctx, state.sp_ptr, fb_sp_val);
-
-                                const ctx_val = if (state.preloaded_ctx_val != c.IR_UNUSED)
-                                    state.preloaded_ctx_val
-                                else blk: {
-                                    JitContextLayout.ensureInit();
-                                    const ctx_off = c.ir_const_addr(ctx, JitContextLayout.ctx_offset);
-                                    const ctx_addr2 = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.jit_ctx_ptr, ctx_off);
-                                    break :blk c._ir_LOAD(ctx, c.IR_ADDR, ctx_addr2);
-                                };
-                                const call_quot_fn = if (state.aot_mode)
-                                    state.call_quotation_fn
-                                else
-                                    c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-                                state.noteAotFallbackEmission(.quotation, "<quotation>", 0, instr.line);
-                                const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-                                emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
-                            }
-                            const end_fallback = c._ir_END(ctx);
-
-                            // Hot path: compiled quotation via code_ptr.
-                            c._ir_IF_FALSE(ctx, if_null);
-                            {
-                                // sp points past the copies (no quotation on stack).
-                                const hot_sp_const = c.ir_const_addr(ctx, sp.*);
-                                const hot_sp_val = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, hot_sp_const);
-                                c._ir_STORE(ctx, state.sp_ptr, hot_sp_val);
-
-                                const call_result = if (state.aot_mode)
-                                    c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
-                                else
-                                    c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-                                emitCallbackPostCheck(state, call_result, call_result, null, .none);
-                            }
-                            const end_compiled = c._ir_END(ctx);
-
-                            c._ir_MERGE_2(ctx, end_fallback, end_compiled);
-
-                            if (state.refresh_stack_fn != c.IR_UNUSED) {
-                                refreshCachedStackPointer(state);
-                            }
-
-                            // Quotation consumed 2 copies and pushed 1 result.
-                            // Result is at physical slot output_slot + 2.
-                            const cond_ref = emitSlotTruthiness(ctx, state.base_addr, output_slot + 2, state);
-
-                            const if_ref = c._ir_IF(ctx, cond_ref);
-
-                            c._ir_IF_TRUE(ctx, if_ref);
-                            emitReleaseSlot(state, output_slot + 1);
-                            const true_end = c._ir_END(ctx);
-
-                            c._ir_IF_FALSE(ctx, if_ref);
-                            emitReleaseSlot(state, output_slot);
-                            emitCopySlot(ctx, state.base_addr, output_slot + 1, output_slot);
-                            const false_end = c._ir_END(ctx);
-
-                            c._ir_MERGE_2(ctx, true_end, false_end);
-
-                            // Write final sp.
-                            const final_sp_const = c.ir_const_addr(ctx, output_slot + 1);
-                            const final_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, final_sp_const);
-                            c._ir_STORE(ctx, state.sp_ptr, final_sp);
-
-                            sp.* = output_slot + 1;
-                            stack[output_slot] = .{ .raw_at_slot = output_slot };
-                        },
-                        else => {
-                            state.not_compilable_reason = .quotation_reification;
-                            return IrCodegenError.NotCompilable;
-                        },
-                    }
                 } else if (isBinaryOp(name)) {
                     if (sp.* < 2) return IrCodegenError.StackUnderflow;
                     sp.* -= 2;
