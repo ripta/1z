@@ -1,0 +1,44 @@
+\ lib/expr/ast.1z: AST for the hosted expression language
+\
+\ The hosted expression AST.
+\
+\ Each node kind is a struct payload gathered under the expr-node enum, so lowering dispatches
+\ with `match{` gains exhaustiveness. Operators are stored as strings, matching the keys of
+\ pratt/arith's operator table.
+
+\\ A scalar literal node, carrying its value.
+lit-node: struct{ value } ;
+
+\\ A unary-operator node: an operator string and the operand node it applies to.
+unop-node: struct{ op operand } ;
+
+\\ A binary-operator node: an operator string and its left and right operand nodes.
+binop-node: struct{ op left right } ;
+
+\\ The tagged union of expression node kinds. Dispatch over it with `match{`,
+\\ which forces every site to handle each variant or fail at parse time.
+expr-node: enum{
+  lit:   lit-node
+  unop:  unop-node
+  binop: binop-node
+} ;
+
+\\ Wrap a scalar value as a literal node. The value is left untyped so any
+\\ scalar literal can be carried.
+lit: ( value -- expr-node ) [ >expr-node:lit ] ;
+
+\\ Build a unary-operator node from an operator string and its operand node.
+unop: ( op: string operand: expr-node -- expr-node ) [ make-expr-node:unop ] ;
+
+\\ Build a binary-operator node from an operator string and its left and right
+\\ operand nodes.
+binop: ( op: string left: expr-node right: expr-node -- expr-node ) [ make-expr-node:binop ] ;
+
+\\ True when the node is a scalar literal; returns f for any other value.
+lit?: ( expr-node -- bool ) [ expr-node:lit? ] ;
+
+\\ True when the node is a unary-operator node; returns f for any other value.
+unop?: ( expr-node -- bool ) [ expr-node:unop? ] ;
+
+\\ True when the node is a binary-operator node; returns f for any other value.
+binop?: ( expr-node -- bool ) [ expr-node:binop? ] ;

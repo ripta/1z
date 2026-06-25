@@ -1,0 +1,105 @@
+\ Unit tests for lib/expr/ast.1z.
+
+use "testing" ;
+use "expr/ast" ;
+
+\\ Extract a literal node's value, throwing on any other node kind.
+expr-lit-value: ( expr-node -- value ) [
+  match{
+    expr-node:lit:   [ ]
+    expr-node:unop:  [ drop drop f "expected lit, got unop" throw ]
+    expr-node:binop: [ drop drop drop f "expected lit, got binop" throw ]
+  }
+] ;
+
+"node predicates" test-section
+
+test-lit-predicate: ( -- ) [
+  42 lit lit? "lit node is a lit" assert-true
+  42 lit unop? "lit node is not a unop" assert-false
+  42 lit binop? "lit node is not a binop" assert-false
+] ;
+
+test-unop-predicate: ( -- ) [
+  "-" 42 lit unop unop? "unop node is a unop" assert-true
+  "-" 42 lit unop lit? "unop node is not a lit" assert-false
+  "-" 42 lit unop binop? "unop node is not a binop" assert-false
+] ;
+
+test-binop-predicate: ( -- ) [
+  "+" 1 lit 2 lit binop binop? "binop node is a binop" assert-true
+  "+" 1 lit 2 lit binop lit? "binop node is not a lit" assert-false
+  "+" 1 lit 2 lit binop unop? "binop node is not a unop" assert-false
+] ;
+
+"literal payload" test-section
+
+test-lit-value: ( -- ) [
+  42 lit match{
+    expr-node:lit:   [ ]
+    expr-node:unop:  [ drop drop f throw ]
+    expr-node:binop: [ drop drop drop f throw ]
+  } 42 "lit unwraps to its value" assert=
+] ;
+
+"unary operator payload" test-section
+
+test-unop-payload: ( -- ) [
+  "-" 7 lit unop match{
+    expr-node:lit: [ drop f throw ]
+    expr-node:unop: [      \ ( op operand )
+      expr-lit-value swap  \ ( operand-value op )
+      "-" "unop carries its operator" assert=
+      7 "unop carries its operand" assert=
+    ]
+    expr-node:binop: [ drop drop drop f throw ]
+  }
+] ;
+
+"binary operator payload" test-section
+
+test-binop-payload: ( -- ) [
+  "+" 3 lit 4 lit binop match{
+    expr-node:lit:   [ drop f throw ]
+    expr-node:unop:  [ drop drop f throw ]
+    expr-node:binop: [  \ ( op left right )
+      expr-lit-value                   \ ( op left right-value )
+      swap expr-lit-value              \ ( op right-value left-value )
+      3 "binop left operand" assert=   \ ( op right-value )
+      4 "binop right operand" assert=  \ ( op )
+      "+" "binop operator" assert=     \ ( )
+    ]
+  }
+] ;
+
+"recursive nesting" test-section
+
+test-binop-nested: ( -- ) [
+  "+"
+  "*" 2 lit 3 lit binop  \ left is itself a binop
+  4 lit                  \ right
+  binop
+  match{
+    expr-node:lit:   [ drop f throw ]
+    expr-node:unop:  [ drop drop f throw ]
+    expr-node:binop: [  \ ( op left right )
+      expr-lit-value    \ right value ( op left right-value )
+      4 "outer binop right operand" assert=
+      \ ( op left ) -- left is a nested binop
+      binop? "outer binop left is itself a binop" assert-true
+      "+" "outer binop operator" assert=
+    ]
+  }
+] ;
+
+"constructor alias parity" test-section
+
+test-lit-alias-matches-raw: ( -- ) [
+  9 lit 9 >expr-node:lit = "lit alias equals raw wrap" assert-true
+] ;
+
+test-binop-alias-matches-raw: ( -- ) [
+  "*" 5 lit 6 lit binop
+  "*" 5 lit 6 lit make-expr-node:binop
+  = "binop alias equals raw make" assert-true
+] ;
