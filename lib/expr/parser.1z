@@ -1,0 +1,118 @@
+\ lib/expr/parser.1z: reusable parser for the hosted expression language.
+\
+\ Turns an expression source string into the nominal expr-node AST defined in
+\ expr/ast. Lexing uses a punctuation-splitting sub-lexer (EXPR-LEXER /
+\ tokenize-expr) exposed for reuse by hosted-language header parsers; parsing
+\ uses the Pratt core from lib/pratt with the arithmetic operator set from
+\ lib/pratt/arith. The handlers build AST nodes rather than evaluating, and the
+\ selective import deliberately omits pratt's own `parse-expr` so this module
+\ can own that name for its string-to-AST entry word.
+
+use "lexer" ;
+use "conversions" ;
+use "strings" ;
+use "expr/ast" ;
+use { ARITHMETIC-OPS: UNARY-MINUS-BP: <pratt>: parse-pratt: parse-right: next-token: parse-complete: } "pratt/arith" ;
+
+\\ The lexer that splits an expression body into number and punctuation tokens,
+\\ skipping whitespace. Exposed for reuse by hosted-language header parsers.
+EXPR-LEXER: const [
+  V{ }
+  skip-whitespace-rule #push!
+  number-rule #push!
+  { "+" "-" "*" "/" "(" ")" } symbols-rule #push!
+  >array <lexer>
+] ;
+
+\\ Tokenize an expression source string into a lazy token iterator.
+tokenize-expr: ( source: string -- iterator ) [ EXPR-LEXER tokenize ] ;
+
+private{
+  (throw-invalid-argument): ( message -- ) [
+    f swap EInvalidArgument make-error throw
+  ] ;
+
+  (unexpected-expression): ( token -- ) [
+    dup value>> swap pos>>
+    "expected expression, got '" <rot-
+    #append "' at byte " #append
+    swap >string #append
+    (throw-invalid-argument)
+  ] ;
+
+  (expected-close-paren): ( token/f -- ) [
+    dup f = [
+      drop "expected ')' at end of input"
+    ] [
+      dup value>> swap pos>>
+      "expected ')', got '" <rot-
+      #append "' at byte " #append
+      swap >string #append
+    ] if
+    (throw-invalid-argument)
+  ] ;
+
+  \ Wrap a number token's resolved scalar value as a literal node.
+  (parse-literal): ( token -- expr-node ) [
+    value>> resolve-literal
+    [ lit ]
+    [ drop "invalid numeric literal" (throw-invalid-argument) ]
+    if
+  ] ;
+
+  \ Parse a parenthesized sub-expression and consume the closing ')'. Parens only
+  \ regroup, so the inner node is returned with no wrapper node.
+  (parse-group): ( parser tokens -- expr-node ) [
+    2dup swap 0 parse-pratt
+    1 pick-n next-token
+    dup f = [ (expected-close-paren) ] when
+    dup value>> ")" = not [ (expected-close-paren) ] when
+    drop nip nip
+  ] ;
+
+  (expr-prefix): ( token parser tokens -- expr-node ) [
+    <rot-
+    \ parser tokens token
+    dup kind>> number: = [
+      (parse-literal) nip nip
+    ] [
+      dup value>> "(" = [
+        drop (parse-group)
+      ] [
+        dup value>> "-" = [
+          drop
+          swap UNARY-MINUS-BP parse-pratt
+          "-" swap unop
+        ] [
+          (unexpected-expression)
+        ] if
+      ] if
+    ] if
+  ] ;
+
+  (expr-infix): ( left token parser tokens -- expr-node ) [
+    parse-right
+    \ left token right
+    swap value>>
+    \ left right op
+    -rot>
+    \ op left right
+    binop
+  ] ;
+}
+
+\\ Construct the Pratt parser that builds expr-node ASTs for arithmetic
+\\ expressions: `+`, `-`, `*`, `/`, parentheses, and unary minus.
+<expr-pratt>: ( -- parser ) [
+  H{
+    operators: ARITHMETIC-OPS
+    prefix:    [ (expr-prefix) ]
+    infix:     [ (expr-infix) ]
+  } <pratt>
+] ;
+
+\\ Parse an expression source string into an expr-node AST, requiring the whole
+\\ string to be a single expression. Throws on malformed or trailing input.
+parse-expr: ( source: string -- expr-node ) [
+  tokenize-expr <expr-pratt> parse-complete
+] ;

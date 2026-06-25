@@ -13,46 +13,48 @@ ARITHMETIC-OPS: const [
 
 UNARY-MINUS-BP: const [ 30 ] ;
 
-(throw-invalid-argument): ( message -- ) [
-  f swap EInvalidArgument make-error throw
-] ;
+private{
+  (throw-invalid-argument): ( message -- ) [
+    f swap EInvalidArgument make-error throw
+  ] ;
 
-(unexpected-expression): ( token -- ) [
-  dup value>> swap pos>>
-  "expected expression, got '" <rot-
-  #append "' at byte " #append
-  swap >string #append
-  (throw-invalid-argument)
-] ;
-
-(expected-close-paren): ( token/f -- ) [
-  dup f = [
-    drop "expected ')' at end of input"
-  ] [
+  (unexpected-expression): ( token -- ) [
     dup value>> swap pos>>
-    "expected ')', got '" <rot-
+    "expected expression, got '" <rot-
     #append "' at byte " #append
     swap >string #append
-  ] if
-  (throw-invalid-argument)
-] ;
+    (throw-invalid-argument)
+  ] ;
 
-(parse-number-token): ( token -- value ) [
-  value>> resolve-literal
-  [ ]
-  [ drop "invalid numeric literal" (throw-invalid-argument) ]
-  if
-] ;
+  (expected-close-paren): ( token/f -- ) [
+    dup f = [
+      drop "expected ')' at end of input"
+    ] [
+      dup value>> swap pos>>
+      "expected ')', got '" <rot-
+      #append "' at byte " #append
+      swap >string #append
+    ] if
+    (throw-invalid-argument)
+  ] ;
 
-(parse-group): ( parser tokens -- value ) [
-  2dup swap 0 parse-pratt
-  1 pick-n next-token
-  dup f = [ (expected-close-paren) ] when
-  dup value>> ")" = not [ (expected-close-paren) ] when
-  drop nip nip
-] ;
+  (parse-number-token): ( token -- value ) [
+    value>> resolve-literal
+    [ ]
+    [ drop "invalid numeric literal" (throw-invalid-argument) ]
+    if
+  ] ;
 
-(arith-prefix): ( token parser tokens -- value ) [
+  (parse-group): ( parser tokens -- value ) [
+    2dup swap 0 parse-pratt
+    1 pick-n next-token
+    dup f = [ (expected-close-paren) ] when
+    dup value>> ")" = not [ (expected-close-paren) ] when
+    drop nip nip
+  ] ;
+}
+
+arith-prefix: ( token parser tokens -- value ) [
   <rot-
   \ parser tokens token
   dup kind>> number: = [
@@ -73,7 +75,7 @@ UNARY-MINUS-BP: const [ 30 ] ;
   ] if
 ] ;
 
-(arith-infix): ( left token parser tokens -- value ) [
+arith-infix: ( left token parser tokens -- value ) [
   parse-right
   \ left token right
   swap value>>
@@ -94,7 +96,7 @@ UNARY-MINUS-BP: const [ 30 ] ;
 <arithmetic-pratt>: ( -- parser ) [
   H{
     operators: ARITHMETIC-OPS
-    prefix:    [ (arith-prefix) ]
-    infix:     [ (arith-infix) ]
+    prefix:    [ arith-prefix ]
+    infix:     [ arith-infix ]
   } <pratt>
 ] ;

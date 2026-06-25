@@ -1,0 +1,145 @@
+\ Unit tests for lib/expr/parser.1z.
+
+use "testing" ;
+use "sequences" ;
+use "lexer" ;
+use "expr/parser" ;
+use "expr/ast" ;
+
+\ Extract a literal node's value, throwing on any other node kind.
+lit-value: ( expr-node -- value ) [
+  match{
+    expr-node:lit:   [ ]
+    expr-node:unop:  [ drop drop f "expected lit, got unop" throw ]
+    expr-node:binop: [ drop drop drop f "expected lit, got binop" throw ]
+  }
+] ;
+
+\ Extract a unary node's operator and operand, throwing on any other node kind.
+unop-parts: ( expr-node -- op operand ) [
+  match{
+    expr-node:lit:   [ drop f "expected unop, got lit" throw ]
+    expr-node:unop:  [ ]
+    expr-node:binop: [ drop drop drop f "expected unop, got binop" throw ]
+  }
+] ;
+
+\ Extract a binary node's operator and operands, throwing on any other node kind.
+binop-parts: ( expr-node -- op left right ) [
+  match{
+    expr-node:lit:   [ drop f "expected binop, got lit" throw ]
+    expr-node:unop:  [ drop drop f "expected binop, got unop" throw ]
+    expr-node:binop: [ ]
+  }
+] ;
+
+"parse shape" test-section
+
+test-single-number: ( -- ) [
+  "42" parse-expr lit-value 42 "single number is lit 42" assert=
+] ;
+
+test-addition: ( -- ) [
+  "1 + 2" parse-expr binop-parts  \ op left right
+  lit-value 2 "addition right operand" assert=
+  lit-value 1 "addition left operand" assert=
+  "+" "addition operator" assert=
+] ;
+
+"operator precedence" test-section
+
+test-mul-binds-under-add: ( -- ) [
+  "1 + 2 * 3" parse-expr binop-parts  \ op left right
+  binop-parts                         \ op left iop il ir
+  lit-value 3 "1 + 2 * 3: nested right is 3" assert=
+  lit-value 2 "1 + 2 * 3: nested left is 2" assert=
+  "*" "1 + 2 * 3: nested op is *" assert=
+  lit-value 1 "1 + 2 * 3: outer left is 1" assert=
+  "+" "1 + 2 * 3: outer op is +" assert=
+] ;
+
+test-mul-before-add: ( -- ) [
+  "2 * 3 + 1" parse-expr binop-parts  \ op left right
+  lit-value 1 "2 * 3 + 1: outer right is 1" assert=
+  binop-parts  \ op iop il ir
+  lit-value 3 "2 * 3 + 1: nested right is 3" assert=
+  lit-value 2 "2 * 3 + 1: nested left is 2" assert=
+  "*" "2 * 3 + 1: nested op is *" assert=
+  "+" "2 * 3 + 1: outer op is +" assert=
+] ;
+
+"left associativity" test-section
+
+test-subtraction-left-assoc: ( -- ) [
+  "10 - 3 - 2" parse-expr binop-parts  \ op left right
+  lit-value 2 "10 - 3 - 2: outer right is 2" assert=
+  binop-parts  \ op iop il ir
+  lit-value 3 "10 - 3 - 2: inner right is 3" assert=
+  lit-value 10 "10 - 3 - 2: inner left is 10" assert=
+  "-" "10 - 3 - 2: inner op is -" assert=
+  "-" "10 - 3 - 2: outer op is -" assert=
+] ;
+
+"parentheses" test-section
+
+test-parens-override-precedence: ( -- ) [
+  "(1 + 2) * 3" parse-expr binop-parts  \ op left right
+  lit-value 3 "(1 + 2) * 3: right is 3" assert=
+  binop-parts  \ op iop il ir
+  lit-value 2 "(1 + 2) * 3: grouped right is 2" assert=
+  lit-value 1 "(1 + 2) * 3: grouped left is 1" assert=
+  "+" "(1 + 2) * 3: grouped op is +" assert=
+  "*" "(1 + 2) * 3: outer op is *" assert=
+] ;
+
+test-nested-parens: ( -- ) [
+  "((1 + 2))" parse-expr binop-parts  \ op left right; parens add no wrapper node
+  lit-value 2 "((1 + 2)): right is 2" assert=
+  lit-value 1 "((1 + 2)): left is 1" assert=
+  "+" "((1 + 2)): op is +" assert=
+] ;
+
+"unary minus" test-section
+
+test-unary-minus: ( -- ) [
+  "-5" parse-expr unop-parts  \ op operand
+  lit-value 5 "-5: operand is 5" assert=
+  "-" "-5: operator is -" assert=
+] ;
+
+test-unary-minus-in-expr: ( -- ) [
+  "-5 + 3" parse-expr binop-parts  \ op left right
+  lit-value 3 "-5 + 3: right is 3" assert=
+  unop-parts  \ op uop uoperand
+  lit-value 5 "-5 + 3: unary operand is 5" assert=
+  "-" "-5 + 3: unary op is -" assert=
+  "+" "-5 + 3: binary op is +" assert=
+] ;
+
+"sub-lexer" test-section
+
+test-tokenize-expr: ( -- ) [
+  "1 + 2" tokenize-expr #collect  \ array of tokens
+  dup #len 3 "1 + 2 yields three tokens" assert=
+  dup 0 #nth value>> "1" "first token value is 1" assert=
+  dup 1 #nth value>> "+" "second token value is +" assert=
+  2 #nth value>> "2" "third token value is 2" assert=
+] ;
+
+"error handling" test-section
+
+test-trailing-token-throws: ( -- ) [
+  [ "1 2" parse-expr ] "trailing token throws" assert-error
+] ;
+
+test-empty-input-throws: ( -- ) [
+  [ "" parse-expr ] "empty input throws" assert-error
+] ;
+
+test-leading-operator-throws: ( -- ) [
+  [ "+" parse-expr ] "leading operator throws" assert-error
+] ;
+
+test-unclosed-paren-throws: ( -- ) [
+  [ "(1" parse-expr ] "unclosed paren throws" assert-error
+] ;

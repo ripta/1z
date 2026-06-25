@@ -18,12 +18,12 @@ pratt: struct{ operators prefix infix } ;
   make-pratt
 ] ;
 
-\ --- Peekable token iterator wrapper ---
 \ Uses a mutable map so all call sites share state by reference.
-
-(make-peekable): ( iterator -- peekable ) [
-  M{ } iter: <rot- @set! buf: option:none @set!
-] ;
+private{
+  (make-peekable): ( iterator -- peekable ) [
+    M{ } iter: <rot- @set! buf: option:none @set!
+  ] ;
+}
 
 \\ Peek at the next token without consuming it. Returns token or f.
 peek-token: ( peekable -- token/f ) [
@@ -61,70 +61,76 @@ next-token: ( peekable -- token/f ) [
   ] if
 ] ;
 
-\ --- Error helpers ---
-
-(prefix-error): ( token/f -- ) [
-  dup f = [
-    drop "expected expression at end of input"
-  ] [
-    dup value>> swap pos>>
-    \ value pos
-    "expected expression, got '" <rot-
-    \ pos "expected..." value
-    #append "' at byte " #append
-    swap >string #append
-  ] if
-  f swap EInvalidArgument make-error throw
-] ;
-
-\ --- Core algorithm ---
-
-(pratt-loop): stack-recursive ( peekable parser min-bp left -- value ) [
-  \ Invariant: peekable(3) parser(2) min-bp(1) left(0)
-  3 pick-n peek-token
-  \ peekable(4) parser(3) min-bp(2) left(1) token/f(0)
-  dup f = [
-    drop nip nip nip
-  ] [
-    \ Look up operator; @get? returns option (non-operators end the expr)
-    dup value>> 4 pick-n operators>> swap @get?
-    \ peekable(5) parser(4) min-bp(3) left(2) token(1) option(0)
-    dup option:none? [
-      2drop nip nip nip
+private{
+  (prefix-error): ( token/f -- ) [
+    dup f = [
+      drop "expected expression at end of input"
     ] [
-      option:some> left-bp: @get
-      \ peekable(5) parser(4) min-bp(3) left(2) token(1) left-bp(0)
-      3 pick-n
-      \ ...(6) token(2) left-bp(1) min-bp-copy(0)
-      < [
-        \ left-bp < min-bp: stop
-        drop nip nip nip
+      dup value>> swap pos>>
+      \ value pos
+      "expected expression, got '" <rot-
+      \ pos "expected..." value
+      #append "' at byte " #append
+      swap >string #append
+    ] if
+    f swap EInvalidArgument make-error throw
+  ] ;
+
+  (pratt-loop): stack-recursive ( peekable parser min-bp left -- value ) [
+    \ Invariant: peekable(3) parser(2) min-bp(1) left(0)
+    3 pick-n peek-token
+    \ peekable(4) parser(3) min-bp(2) left(1) token/f(0)
+    dup f = [
+      drop nip nip nip
+    ] [
+      \ Look up operator; @get? returns option (non-operators end the expr)
+      dup value>> 4 pick-n operators>> swap @get?
+      \ peekable(5) parser(4) min-bp(3) left(2) token(1) option(0)
+      dup option:none? [
+        2drop nip nip nip
       ] [
-        \ Continue: consume peeked token, call infix handler
-        4 pick-n next-token drop
-        \ peekable(4) parser(3) min-bp(2) left(1) token(0)
-        3 pick-n 5 pick-n
-        \ ...(6) left(3) token(2) parser(1) peekable(0)
-        1 pick-n infix>> call
-        \ peekable(3) parser(2) min-bp(1) new-left(0)
-        (pratt-loop)
+        option:some> left-bp: @get
+        \ peekable(5) parser(4) min-bp(3) left(2) token(1) left-bp(0)
+        3 pick-n
+        \ ...(6) token(2) left-bp(1) min-bp-copy(0)
+        < [
+          \ left-bp < min-bp: stop
+          drop nip nip nip
+        ] [
+          \ Continue: consume peeked token, call infix handler
+          4 pick-n next-token drop
+          \ peekable(4) parser(3) min-bp(2) left(1) token(0)
+          3 pick-n 5 pick-n
+          \ ...(6) left(3) token(2) parser(1) peekable(0)
+          1 pick-n infix>> call
+          \ peekable(3) parser(2) min-bp(1) new-left(0)
+          (pratt-loop)
+        ] if
       ] if
     ] if
-  ] if
-] ;
+  ] ;
 
-(parse-expr): stack-recursive ( peekable parser min-bp -- value ) [
-  2 pick-n next-token
-  dup f = [ (prefix-error) ] when
-  \ peekable(3) parser(2) min-bp(1) token(0)
-  dup 3 pick-n 5 pick-n
-  \ ...(6) token(3) token(2) parser(1) peekable(0)
-  1 pick-n prefix>> call
-  \ peekable(4) parser(3) min-bp(2) token(1) left(0)
-  nip
-  \ peekable(3) parser(2) min-bp(1) left(0)
-  (pratt-loop)
-] ;
+  (parse-expr): stack-recursive ( peekable parser min-bp -- value ) [
+    2 pick-n next-token
+    dup f = [ (prefix-error) ] when
+    \ peekable(3) parser(2) min-bp(1) token(0)
+    dup 3 pick-n 5 pick-n
+    \ ...(6) token(3) token(2) parser(1) peekable(0)
+    1 pick-n prefix>> call
+    \ peekable(4) parser(3) min-bp(2) token(1) left(0)
+    nip
+    \ peekable(3) parser(2) min-bp(1) left(0)
+    (pratt-loop)
+  ] ;
+
+  (trailing-token-error): ( token -- ) [
+    dup value>> swap pos>>
+    "unexpected trailing token '" <rot-
+    #append "' at byte " #append
+    swap >string #append
+    f swap EInvalidArgument make-error throw
+  ] ;
+}
 
 \\ Parse a token iterator using a Pratt parser. Returns the parsed value.
 parse-expr: ( iterator parser -- value ) [
@@ -147,4 +153,17 @@ parse-right: ( token parser tokens -- token right ) [
   \ stack: token tokens parser rbp
   parse-pratt
   \ stack: token right
+] ;
+
+\\ Parse a complete expression from a token iterator, requiring the entire input
+\\ to be consumed. Like `parse-expr`, but throws if any token remains after the
+\\ expression instead of leaving the trailing input unconsumed.
+parse-complete: ( iterator parser -- value ) [
+  swap (make-peekable) swap
+  \ peekable parser
+  2dup 0 (parse-expr)
+  \ peekable parser value
+  swap drop swap
+  \ value peekable
+  dup next-token dup f = [ 2drop ] [ (trailing-token-error) ] if
 ] ;

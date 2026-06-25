@@ -42,26 +42,8 @@ report-msg: M{ value: "" } ;
   " " swap repeat "^" #append
 ] ;
 
-(throw-trailing-token): ( token -- ) [
-  dup value>> swap pos>>
-  "unexpected trailing token '" <rot-
-  #append "' at byte " #append
-  swap >string #append
-  f swap EInvalidArgument make-error throw
-] ;
-
 (parse-complete): ( expr -- value ) [
-  CALC-LEXER tokenize (make-peekable)
-  <arithmetic-pratt>
-  2dup 0 parse-pratt
-  \ peekable parser value
-  swap drop swap
-  \ value peekable
-  dup next-token dup f = [
-    2drop
-  ] [
-    (throw-trailing-token)
-  ] if
+  CALC-LEXER tokenize <arithmetic-pratt> parse-complete
 ] ;
 
 (report-error): ( expr error -- ) [
