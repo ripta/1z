@@ -1865,6 +1865,14 @@ const CompileState = struct {
     input_count: u8 = 0,
     exit_kind: ExitKind = .falls_through,
     loop_end_set: bool = false,
+    /// When true, this self-tail-call word threads state above a bounded row, so the loop entry is
+    /// rebased around a row pinned at abstract slot 0 and the tail call emits a row-aware back-edge
+    /// instead of ordinary recursion.
+    row_aware_loop: bool = false,
+    /// Pass-1 discovery output: set when the self-tail-call is reached in the preserved-`ic` row
+    /// shape while `row_aware_loop` is false. The two-pass driver feeds this back as the pass-2
+    /// `row_aware_loop` input.
+    row_aware_loop_detected: bool = false,
     mutual_group: ?[]const []const u8 = null,
     trampoline_status: c.ir_ref = c.IR_UNUSED,
     /// When true, callback references use named extern symbols (ir_const_func)
@@ -2923,6 +2931,57 @@ fn resetStackToPhysicalPreservingRows(stack: []StackEntry, sp: usize) void {
             stack[i] = .{ .raw_at_slot = i };
         }
     }
+}
+
+/// Establish the row-aware self-tail-call loop entry.
+///
+/// Model the caller's region below the inputs as a bounded row pinned at abstract slot 0, with the
+/// `ic` inputs as raw_at_slot entries above it, and rebase `base_idx` from the live stack pointer
+/// so every iteration addresses the inputs sp-relative above the row. Emitted immediately after
+/// `LOOP_BEGIN`, so the rederivation reruns at the loop header on every back-edge.
+fn setupRowAwareLoopEntry(state: *CompileState, stack: []StackEntry, sp: *usize) void {
+    const ctx = state.ctx;
+    const ic: usize = state.input_count;
+    // base_idx = live_sp - (1 + ic): the row occupies the slot just below input
+    // 0, with the inputs in the top `ic` slots.
+    const hdr_sp = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
+    const off_const = c.ir_const_addr(ctx, 1 + ic);
+    state.base_idx = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), hdr_sp, off_const);
+    refreshCachedStackPointer(state);
+    stack[0] = .{ .row_region = state.nextRowId() };
+    var i: usize = 1;
+    while (i <= ic) : (i += 1) stack[i] = .{ .raw_at_slot = i };
+    sp.* = 1 + ic;
+    if (sp.* > state.peak_sp) state.peak_sp = @intCast(sp.*);
+}
+
+/// Emit the row-aware self-tail-call back-edge for a word in the preserved-`ic` shape.
+///
+/// The `ic` new arguments are already the live top slots, so no copy to static input slots is needed.
+/// sp is re-stored to the row-relative entry height (i.e., `base_idx + 1 + ic`) and the loop closes
+/// over `LOOP_BEGIN`.
+fn emitRowAwareSelfTailCall(state: *CompileState, stack: []StackEntry, sp: *usize) IrCodegenError!void {
+    const ctx = state.ctx;
+    const ic: usize = state.input_count;
+    if (state.loop_end_set) {
+        state.not_compilable_reason = .nested_loop_conflict;
+        return IrCodegenError.NotCompilable;
+    }
+
+    flushToPhysicalStack(state, stack, sp.*);
+
+    const height_const = c.ir_const_addr(ctx, 1 + ic);
+    const height = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, height_const);
+    c._ir_STORE(ctx, state.sp_ptr, height);
+    emitSafepointCall(state);
+
+    const loop_end = c._ir_LOOP_END(ctx);
+    c.ir_set_op2(ctx, state.loop_begin_ref, loop_end);
+    state.loop_end_set = true;
+    state.exit_kind = .loop_diverged;
+    sp.* = 1 + ic;
+
+    resetStackToPhysicalPreservingRows(stack, sp.*);
 }
 
 /// Settle the abstract stack after a concrete-arity op (i.e., consuming `inputs`,
@@ -6543,11 +6602,27 @@ fn compileInstructions(
                         // concrete entries above it, the body is not stack-neutral across the row;
                         // emitting the recursive call against the live stack would miscompile into
                         // a growing stack that faults at runtime, so reject cleanly.
-                        //
-                        // Collapsed shapes (0..ic entries above the row) keep the live-stack
-                        // recursive fallback.
-                        if (sp.* > 1 and stack[0].isRowRegion() and !hasRowRegion(stack[1..sp.*], sp.* - 1) and sp.* - 1 > @as(usize, ic)) {
+                        const row_at_slot0 = sp.* > 1 and stack[0].isRowRegion() and !hasRowRegion(stack[1..sp.*], sp.* - 1);
+                        if (row_at_slot0 and sp.* - 1 > @as(usize, ic)) {
                             return IrCodegenError.StackShapeMismatch;
+                        }
+
+                        // Preserved-`ic` shape: a row pinned at slot 0 with exactly `ic` concrete
+                        // entries above it.
+                        //
+                        // This is the stack-neutral row-bearing recursion that a true loopback-edge
+                        // can carry. When the row-aware loop entry is in effect (pass 2), emit the O(1)
+                        // back-edge that rebases around the row; otherwise record the shape for the
+                        // two-pass driver and keep the ordinary-recursion fallback.
+                        //
+                        // Partial collapses (`< ic` above the row) and the fully collapsed shape
+                        // (`sp == 1`) keep ordinary recursion.
+                        if (row_at_slot0 and sp.* - 1 == @as(usize, ic)) {
+                            if (state.row_aware_loop) {
+                                try emitRowAwareSelfTailCall(state, stack, sp);
+                                break;
+                            }
+                            state.row_aware_loop_detected = true;
                         }
 
                         const res = state.resolver orelse {
@@ -6982,14 +7057,15 @@ pub fn compileWordWithPicSnapshot(
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
 ) IrCodegenError!CompiledWord {
-    const discovered = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, null);
-    const second = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, discovered.peak_stack_depth);
+    const discovered = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, null, false);
+    const second = try compileWordPass(instructions, input_count, output_count, resolver, self_name, pic_table, interp_ctx, mutual_group, stack_effect, discovered.peak_stack_depth, discovered.row_aware_self_loop);
     return second.compiled orelse IrCodegenError.CompilationFailed;
 }
 
 const CompileWordPassResult = struct {
     compiled: ?CompiledWord,
     peak_stack_depth: u32,
+    row_aware_self_loop: bool = false,
 };
 
 fn compileWordPass(
@@ -7003,6 +7079,7 @@ fn compileWordPass(
     mutual_group: ?[]const []const u8,
     stack_effect: ?*const StackEffect,
     known_peak: ?u32,
+    row_aware_self_loop: bool,
 ) IrCodegenError!CompileWordPassResult {
     ValueLayout.ensureInit();
 
@@ -7183,7 +7260,11 @@ fn compileWordPass(
     // Initialize inputs as raw_at_slot entries. Tag checking and unboxing
     // happen lazily at use sites (e.g., when arithmetic needs a fixnum).
     const stack_alloc = std.heap.page_allocator;
-    const stack_depth: usize = if (known_peak) |peak| @as(usize, peak) else estimateStackDepth(instructions, input_count);
+    // The row-aware loop entry pins an extra row slot at the bottom, shifting
+    // every abstract entry up by one, so its peak is one above the no-row peak
+    // discovered on pass 1. Physical capacity is unchanged (the `-1` in
+    // `base_idx` offsets the `+1` in sp), so only the buffer grows.
+    const stack_depth: usize = (if (known_peak) |peak| @as(usize, peak) else estimateStackDepth(instructions, input_count)) + @intFromBool(row_aware_self_loop);
     const stack = stack_alloc.alloc(StackEntry, stack_depth) catch return IrCodegenError.OutOfMemory;
     defer stack_alloc.free(stack);
     var sp: usize = 0;
@@ -7256,6 +7337,10 @@ fn compileWordPass(
                 state.safepoint_fn = c.ir_const_addr(&ctx, @intFromPtr(&jitSafepoint));
                 state.error_propagate_status = c.ir_const_i32(&ctx, 2);
             }
+            if (row_aware_self_loop) {
+                state.row_aware_loop = true;
+                setupRowAwareLoopEntry(&state, stack, &sp);
+            }
         }
     }
 
@@ -7293,7 +7378,7 @@ fn compileWordPass(
     // Discovery pass: the IR we just built is throwaway. Skip JIT and let
     // the caller re-run with known_peak to emit the prologue capacity check.
     if (known_peak == null) {
-        return .{ .compiled = null, .peak_stack_depth = state.peak_sp };
+        return .{ .compiled = null, .peak_stack_depth = state.peak_sp, .row_aware_self_loop = state.row_aware_loop_detected };
     }
 
     // JIT compile
@@ -7307,6 +7392,7 @@ fn compileWordPass(
                 .peak_stack_depth = state.peak_sp,
             },
             .peak_stack_depth = state.peak_sp,
+            .row_aware_self_loop = state.row_aware_loop_detected,
         };
     }
     return IrCodegenError.CompilationFailed;
@@ -7572,13 +7658,13 @@ fn emitWordCAotWithCName(
     interpreter_free: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, false) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, discovered.row_aware_self_loop) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -7593,6 +7679,10 @@ const EmitWordCAotPassResult = struct {
     /// depth is runtime-determined. Callers consult this to collapse to a row at
     /// the call site instead of trusting the declared output count.
     returns_row: bool = false,
+    /// Pass-1 discovery: the self-tail-call is reached in the preserved-`ic` row
+    /// shape, so pass 2 should rebase the loop entry around the row and emit the
+    /// row-aware back-edge instead of ordinary recursion.
+    row_aware_self_loop: bool = false,
 };
 
 fn emitWordCAotPass(
@@ -7621,6 +7711,7 @@ fn emitWordCAotPass(
     emit_slot_table_literals: bool,
     source_file: ?[]const u8,
     interpreter_free: bool,
+    row_aware_self_loop: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
 
@@ -7827,7 +7918,10 @@ fn emitWordCAotPass(
     const base_byte_offset = c.ir_fold2(&ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), base_idx, value_size_const);
     const base_addr = c.ir_fold2(&ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), items_ptr_after_check, base_byte_offset);
 
-    const stack_depth: usize = if (known_peak) |peak| @as(usize, peak) else estimateStackDepth(instructions, input_count);
+    // The row-aware loop entry pins an extra row slot at the bottom, so the
+    // abstract peak is one above the no-row peak discovered on pass 1; physical
+    // capacity is unchanged, so only the buffer grows.
+    const stack_depth: usize = (if (known_peak) |peak| @as(usize, peak) else estimateStackDepth(instructions, input_count)) + @intFromBool(row_aware_self_loop);
     const stack_buf = allocator.alloc(StackEntry, stack_depth) catch return IrCodegenError.OutOfMemory;
     defer allocator.free(stack_buf);
     var sp: usize = 0;
@@ -7923,6 +8017,10 @@ fn emitWordCAotPass(
                 state.safepoint_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitSafepoint"), proto_1arg);
                 state.error_propagate_status = c.ir_const_i32(&ctx, 2);
             }
+            if (row_aware_self_loop) {
+                state.row_aware_loop = true;
+                setupRowAwareLoopEntry(&state, stack_buf, &sp);
+            }
         }
     }
 
@@ -7971,7 +8069,7 @@ fn emitWordCAotPass(
 
     // Discovery pass: skip C emission, let the caller re-run with the peak.
     if (known_peak == null) {
-        return .{ .body = null, .peak_stack_depth = state.peak_sp, .returns_row = returns_row };
+        return .{ .body = null, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected };
     }
 
     // Build the source-lines side table for the patched `ir_emit_c.c` so
@@ -8004,7 +8102,7 @@ fn emitWordCAotPass(
     }
 
     const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator, source_lines_ptr);
-    return .{ .body = body, .peak_stack_depth = state.peak_sp, .returns_row = returns_row };
+    return .{ .body = body, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected };
 }
 
 /// Append an `asm("name")` declaration attribute to `out` so the C compiler renames the linker symbol
@@ -8506,6 +8604,7 @@ pub fn emitProgramC(
                     emit_slot_table_literals,
                     w.source_file,
                     strict_interpreter_free,
+                    false,
                 ) catch continue;
                 if (discovered.body) |b| allocator.free(b);
                 if (discovered.returns_row) {

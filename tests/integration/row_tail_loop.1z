@@ -1,0 +1,22 @@
+use "testing" ;
+
+\ A user-defined combinator of the `times` shape: it threads state above a
+\ bounded row (introduced by `2dip` on the quotation parameter) and recurses by
+\ name, so the recursion routes through the generic self-tail-call path rather
+\ than the inline `times` emitter. Under compilation this exercises the
+\ row-aware self-tail-call back-edge.
+my-times: ( n quot -- ) [
+  over 0 >
+  [ dup 2dip swap -- swap my-times ]
+  [ 2drop ]
+  if
+] ;
+
+"row-aware self-tail-call combinator" test-section
+
+\ Stack-neutral body: an accumulator below the row is updated each iteration.
+0 5 [ 1 + ] my-times 5 "stack-neutral body runs n times" assert=
+0 0 [ 1 + ] my-times 0 "zero iterations leaves the accumulator" assert=
+
+\ Row-growing body: each iteration pushes a value into the bounded row.
+3 [ 1 ] my-times + + 3 "row-growing body pushes once per iteration" assert=

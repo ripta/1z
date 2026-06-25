@@ -1,0 +1,17 @@
+\ A user-defined combinator of the `times` shape, recursing by name so the
+\ recursion routes through the generic self-tail-call path (not the inline
+\ `times` emitter). The body calls `2dip` on its quotation parameter, collapsing
+\ the abstract stack to a bounded row with the counter and quotation threaded
+\ above it. Built under runtime-image AOT, the row-aware self-tail-call back-edge
+\ compiles the combinator body to a native loop; the quotation parameter still
+\ runs through the interpreter, and the printed output matches the interpreter.
+my-times: ( n quot -- ) [
+  over 0 >
+  [ dup 2dip swap -- swap my-times ]
+  [ 2drop ]
+  if
+] ;
+
+3 [ "tick" print-line ] my-times
+0 [ "skip" print-line ] my-times
+"done" print-line

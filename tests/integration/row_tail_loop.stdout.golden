@@ -1,0 +1,9 @@
+Stack: [ ]
+=== row-aware self-tail-call combinator ===
+Stack: [ ]
+PASS: stack-neutral body runs n times
+Stack: [ ]
+PASS: zero iterations leaves the accumulator
+Stack: [ ]
+PASS: row-growing body pushes once per iteration
+Stack: [ ]
