@@ -1,0 +1,31 @@
+use "testing" ;
+
+\ Confirms the row-aware self-tail-call back-edge gives constant C-stack: a
+\ user-defined combinator of the `times` shape, recursing by name so the
+\ recursion routes through the generic self-tail-call path (the back-edge), not
+\ the inline `times` emitter. Same shape as aot_row_tail_loop.1z, whose
+\ classification already proves the body compiles to native.
+\
+\ Each task runs my-times to a literal depth far past the depth at which an
+\ ordinary recursive call overflows the 768 KB task stack (compiled ordinary
+\ recursion Bus-errors by ~1024 deep). The back-edge keeps the C stack constant,
+\ so each completes; the accumulator threaded below the bounded row equals the
+\ depth, confirming every iteration ran. Output matches the interpreter.
+\
+\ task-stack-peak is not used here: it is updated only on the interpreter's
+\ word-execution path, so it reads 0 for the compiled back-edge and cannot
+\ observe compiled C-stack growth. Completion past the overflow depth is the
+\ positive signal instead.
+my-times: ( n quot -- ) [
+  over 0 >
+  [ dup 2dip swap -- swap my-times ]
+  [ 2drop ]
+  if
+] ;
+
+"row-aware back-edge deep completion" test-section
+
+[
+  [ 0 4096 [ 1 + ] my-times ] spawn await 4096 "back-edge completes 4096 deep" assert=
+  [ 0 8192 [ 1 + ] my-times ] spawn await 8192 "back-edge completes 8192 deep" assert=
+] task-scope

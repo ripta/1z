@@ -1,0 +1,3 @@
+=== row-aware back-edge deep completion ===
+PASS: back-edge completes 4096 deep
+PASS: back-edge completes 8192 deep
