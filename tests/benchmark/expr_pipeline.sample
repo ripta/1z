@@ -1,0 +1,38 @@
+--- parser overhead (parse-expr: tokenize + Pratt parse) ---
+Name                      Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+-----------------------   -----   ----------   ------------   -----------   ----------
+tokenize small (3 tok)        4   186.410 ms      46.602 ms         4,767           12
+tokenize deep (17 tok)        1   188.894 ms     188.894 ms        18,997           12
+parse    small (3 tok)        2   120.695 ms      60.347 ms         5,703           28
+parse    med   (parens)       1   153.796 ms     153.796 ms        13,900           35
+parse    deep  (17 tok)       1   251.734 ms     251.734 ms        22,572           29
+
+--- lowering overhead (lower: AST -> quotation, AST precomputed) ---
+Name             Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+--------------   -----   ----------   ------------   -----------   ----------
+lower    small     106   105.393 ms     994.273 us            71            7
+lower    med       100   184.294 ms       1.842 ms           129            8
+
+--- combined parse + lower (full parse-time cost of expr{ }) ---
+Name             Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+--------------   -----   ----------   ------------   -----------   ----------
+p+lower  small       2   122.205 ms      61.102 ms         5,742           28
+p+lower  deep        1   259.096 ms     259.096 ms        22,730           29
+
+--- runtime: expr{ } inline (emit-body) vs direct 1z ---
+Name                      Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+----------------------   ------   ----------   ------------   -----------   ----------
+gen-inline  1 + 2 * 3    61,696   192.310 ms       3.117 us             7            3
+direct      1 2 3 * +    63,408   197.838 ms       3.120 us             7            3
+gen-inline  20 / 4 / 2   64,002   199.822 ms       3.122 us             7            2
+direct      20 4 / 2 /   62,326   193.013 ms       3.096 us             7            2
+gen-inline  -5 + 3       62,096   195.003 ms       3.140 us             7            2
+direct      5 -1 * 3 +   32,135   100.894 ms       3.139 us             7            2
+
+--- runtime: lower-produced quotation called as a value vs direct quotation ---
+Name                       Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+------------------------   -----   ----------   ------------   -----------   ----------
+call gen-quot 1 + 2 * 3      190   194.437 ms       1.023 ms            78            7
+call direct   1 2 3 * +    4,254   147.894 ms      34.765 us             8            3
+call gen-quot 20 / 4 / 2      91   104.296 ms       1.146 ms            77            6
+call direct   20 4 / 2 /   3,920   140.447 ms      35.828 us             8            2

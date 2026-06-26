@@ -1,0 +1,109 @@
+\ Hosted expression pipeline benchmark (lib/expr).
+\
+\ Measures the three cost components of the expr{ } pipeline separately:
+\   - parser overhead   (tokenize + Pratt parse, parse-expr)
+\   - lowering overhead (AST -> quotation, lower)
+\   - runtime overhead  of the generated form against equivalent direct 1z
+\
+\ Two "generated form" runtimes are reported, because they differ sharply:
+\   1. expr{ } spliced inline via emit-body -- the real production path. The
+\      lowered quotation's instructions are spliced into the enclosing word at
+\      parse time, so at runtime it is flat and matches direct 1z exactly.
+\   2. the lower-produced quotation called as a first-class value
+\      (the public `parse-expr lower call` path). `lower` builds the quotation by
+\      curry / compose, so as a standalone value it is a nested composed-quotation
+\      tree whose execution re-enters each sub-quotation -- markedly slower than a
+\      flat instruction sequence.
+\
+\ Isolation: the parse rows call parse-expr directly. The lowering and runtime
+\ rows operate on inputs precomputed once with `const`, so their timed loop
+\ excludes the earlier stages. The expr{ } inline words run their parse + lower at
+\ parse time when the word is defined, so their timed loop is execution-only.
+\
+\ Those precomputed ASTs are built with the public AST constructors
+\ (lit / unop / binop) rather than parse-expr, because a const body that runs
+\ parse-expr currently fails to resolve the Pratt parser's module-private prefix
+\ handler (the defining-module reference is lost across the const force); a
+\ constructor-built AST is identical to what parse-expr produces and lowers to the
+\ identical quotation, so the measurement is unaffected. The direct-1z forms are
+\ the known output of `lower` (see lib/expr/lower_test.1z):
+\   1 + 2 * 3  ->  [ 1 2 3 * + ]
+\   20 / 4 / 2 ->  [ 20 4 / 2 / ]
+\   -5 + 3     ->  [ 5 -1 * 3 + ]
+
+use "expr" ;
+use "sequences" ;
+use "lexer" ;
+\ materializing the lazy token stream via #collect needs (lexer-step) in scope
+
+\ Expression sources of increasing size, for the parse / parse+lower rows.
+SMALL-SRC: const [ "1 + 2 * 3" ] ;
+MED-SRC:   const [ "(1 + 2) * (3 - 4) / 5" ] ;
+DEEP-SRC:  const [ "1 + 2 * 3 - 4 / 2 + 5 * 6 - 7 + 8 / 4" ] ;
+
+\ ASTs built once via constructors, so the lowering rows pay no parse cost.
+\   small: 1 + (2 * 3)
+\   med:   ((1 + 2) * (3 - 4)) / 5
+SMALL-AST: const [ "+" 1 lit "*" 2 lit 3 lit binop binop ] ;
+MED-AST: const [ "/" "*" "+" 1 lit 2 lit binop "-" 3 lit 4 lit binop binop 5 lit binop ] ;
+
+\ Lowered quotations built once, so the runtime call rows pay no parse or lower cost.
+SMALL-QUOT: const [ SMALL-AST lower ] ;
+DIV-QUOT:   const [ "/" "/" 20 lit 4 lit binop 2 lit binop lower ] ;
+NEG-QUOT:   const [ "+" "-" 5 lit unop 3 lit binop lower ] ;
+
+\ expr{ } inline words: parse + lower happen at definition (parse) time; the body
+\ ends up as flat spliced 1z, so calling them is execution-only.
+GEN-SMALL: [ expr{ 1 + 2 * 3 } ] ;
+GEN-DIV:   [ expr{ 20 / 4 / 2 } ] ;
+GEN-NEG:   [ expr{ -5 + 3 } ] ;
+DIR-SMALL: [ 1 2 3 * + ] ;
+DIR-DIV:   [ 20 4 / 2 / ] ;
+DIR-NEG:   [ 5 -1 * 3 + ] ;
+
+"--- parser overhead (parse-expr: tokenize + Pratt parse) ---" print-line
+[
+  "tokenize small (3 tok)" [ SMALL-SRC tokenize-expr #collect drop ] benchmark-auto
+  "tokenize deep (17 tok)" [ DEEP-SRC tokenize-expr #collect drop ] benchmark-auto
+  "parse    small (3 tok)" [ SMALL-SRC parse-expr drop ] benchmark-auto
+  "parse    med   (parens)" [ MED-SRC parse-expr drop ] benchmark-auto
+  "parse    deep  (17 tok)" [ DEEP-SRC parse-expr drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- lowering overhead (lower: AST -> quotation, AST precomputed) ---" print-line
+[
+  "lower    small" [ SMALL-AST lower drop ] benchmark-auto
+  "lower    med" [ MED-AST lower drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- combined parse + lower (full parse-time cost of expr{ }) ---" print-line
+[
+  "p+lower  small" [ SMALL-SRC parse-expr lower drop ] benchmark-auto
+  "p+lower  deep" [ DEEP-SRC parse-expr lower drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- runtime: expr{ } inline (emit-body) vs direct 1z ---" print-line
+[
+  "gen-inline  1 + 2 * 3" [ GEN-SMALL drop ] benchmark-auto
+  "direct      1 2 3 * +" [ DIR-SMALL drop ] benchmark-auto
+  "gen-inline  20 / 4 / 2" [ GEN-DIV drop ] benchmark-auto
+  "direct      20 4 / 2 /" [ DIR-DIV drop ] benchmark-auto
+  "gen-inline  -5 + 3" [ GEN-NEG drop ] benchmark-auto
+  "direct      5 -1 * 3 +" [ DIR-NEG drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- runtime: lower-produced quotation called as a value vs direct quotation ---" print-line
+[
+  "call gen-quot 1 + 2 * 3" [ SMALL-QUOT call drop ] benchmark-auto
+  "call direct   1 2 3 * +" [ [ 1 2 3 * + ] call drop ] benchmark-auto
+  "call gen-quot 20 / 4 / 2" [ DIV-QUOT call drop ] benchmark-auto
+  "call direct   20 4 / 2 /" [ [ 20 4 / 2 / ] call drop ] benchmark-auto
+] run-benchmarks
