@@ -1,0 +1,15 @@
+\ Same program as aot_target_introspection_host.1z, built with
+\ --target=x86_64-linux. A hosted --target only redirects the parse-time
+\ accessors, so the binary still links against the host runtime and runs here,
+\ but choose{ now selects the linux / x86_64 arms. The flip relative to the host
+\ fixture, with both building cleanly, is the dead-branch-elimination proof.
+target-os choose{
+  macos: [ os-name: ( -- s ) [ "macos" ] ; ]
+  linux: [ os-name: ( -- s ) [ "linux" ] ; ]
+}
+target-arch choose{
+  aarch64: [ arch-name: ( -- s ) [ "aarch64" ] ; ]
+  x86_64: [ arch-name: ( -- s ) [ "x86_64" ] ; ]
+}
+os-name print-line
+arch-name print-line

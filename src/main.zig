@@ -2664,6 +2664,27 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             } else {
                 err_writer.writeAll("Error: AOT build rejected an unidentified interpreter-dependent native\n") catch {};
             }
+        } else if (err == error.ExecutionFailed and ctx.parse_diagnostics != null) {
+            // A parse-time word threw while the entry file was being executed during freeze. The
+            // rich diagnostic it computed lives in `parse_diagnostics`, so we'll need tto surface
+            // it separately instead of the generic `ExecutionFailed` errorName.
+            const diag = ctx.parse_diagnostics.?;
+            if (diag.error_type) |error_type| {
+                var kebab_buf: [128]u8 = undefined;
+                const kebab_name = pascalToKebabRuntime(error_type, &kebab_buf);
+                if (diag.source_file) |sf| {
+                    err_writer.print("{s}: error '{s}'", .{ sf, kebab_name }) catch {};
+                } else {
+                    err_writer.print("error '{s}'", .{kebab_name}) catch {};
+                }
+                if (diag.message) |msg| {
+                    err_writer.print(" {s}", .{msg}) catch {};
+                }
+                err_writer.writeAll("\n") catch {};
+            } else {
+                err_writer.print("Error freezing module graph: {s}\n", .{@errorName(err)}) catch {};
+            }
+            ctx.parse_diagnostics = null;
         } else {
             err_writer.print("Error freezing module graph: {s}\n", .{@errorName(err)}) catch {};
         }

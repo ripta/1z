@@ -1,0 +1,15 @@
+\ The parse-time accessors resolve before the AOT compiler sees the stream, so
+\ only the host-target branch reaches the binary. Both choose{ arms define the
+\ same word; a surviving unselected arm would change the output or fail the
+\ build, so a passing golden witnesses the unselected branch is gone. Default
+\ build (no --target) resolves the host: macos / aarch64.
+target-os choose{
+  macos: [ os-name: ( -- s ) [ "macos" ] ; ]
+  linux: [ os-name: ( -- s ) [ "linux" ] ; ]
+}
+target-arch choose{
+  aarch64: [ arch-name: ( -- s ) [ "aarch64" ] ; ]
+  x86_64: [ arch-name: ( -- s ) [ "x86_64" ] ; ]
+}
+os-name print-line
+arch-name print-line

@@ -1,0 +1,1 @@
+error 'unsupported-target' target-os: unrecognized build target OS 'windows'

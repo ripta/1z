@@ -1,0 +1,8 @@
+\ A cross-build to an unenumerated target fails at the accessor, by
+\ construction: target-os errors at parse time before any branch is selected,
+\ so the build aborts. Built with --target=x86_64-windows.
+target-os choose{
+  macos: [ x: ( -- n ) [ 1 ] ; ]
+  linux: [ x: ( -- n ) [ 2 ] ; ]
+}
+x .
