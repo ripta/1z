@@ -1,0 +1,14 @@
+\ target-os / target-arch parse-time accessor tests
+
+use "testing" ;
+
+"target-os / target-arch accessors" test-section
+
+\ Both resolve at parse time to a symbol
+target-os type-of symbol "target-os returns a symbol" assert=
+target-arch type-of symbol "target-arch returns a symbol" assert=
+
+\ Value parity with sys-info: the accessor's symbol equals sys-info's string
+\ promoted to a symbol. On a non-cross host build the two coincide.
+sys-info "os" @get >symbol target-os = t "target-os matches sys-info os" assert=
+sys-info "arch" @get >symbol target-arch = t "target-arch matches sys-info arch" assert=

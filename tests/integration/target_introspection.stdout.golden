@@ -1,0 +1,10 @@
+=== target-os / target-arch accessors ===
+Stack: [ ]
+PASS: target-os returns a symbol
+Stack: [ ]
+PASS: target-arch returns a symbol
+Stack: [ ]
+PASS: target-os matches sys-info os
+Stack: [ ]
+PASS: target-arch matches sys-info arch
+Stack: [ ]

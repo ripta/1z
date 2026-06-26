@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const Stack = @import("stack.zig").Stack;
@@ -388,6 +389,14 @@ pub const Context = struct {
     parse_time_source_line: usize = 0,
     /// Source column of the current parse-time word invocation.
     parse_time_source_column: usize = 0,
+    /// Resolved build-target OS / architecture for the parse-time `target-os`
+    /// and `target-arch` accessors. Defaults to the host's `builtin.target`,
+    /// which is correct for `1z run` / `eval` / the REPL and non-cross AOT
+    /// builds. An AOT build with `--target` overrides these before the module
+    /// graph is frozen, so a parse-time accessor reads the build target rather
+    /// than the host under cross-compilation.
+    target_os: std.Target.Os.Tag = builtin.os.tag,
+    target_arch: std.Target.Cpu.Arch = builtin.cpu.arch,
     /// Source file of the file currently being loaded by nativeLoadImpl.
     /// Set and restored via save-restore in nativeLoadImpl so that runtime words,
     /// like `reexport`, which execute inside the loaded file's body, can record

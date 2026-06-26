@@ -2420,6 +2420,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var interpreter_fallback: ir_codegen.InterpreterFallbackMode = .auto;
     var lock_interpreter_setting = false;
     var target_triple_override: ?[]const u8 = null;
+    var target_os_override: ?std.Target.Os.Tag = null;
+    var target_arch_override: ?std.Target.Cpu.Arch = null;
     var target_is_freestanding = false;
     var linker_script: ?[]const u8 = null;
     var static_libs: std.ArrayListUnmanaged([]const u8) = .{};
@@ -2520,6 +2522,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 return 1;
             };
             target_triple_override = value;
+            target_os_override = query.os_tag;
+            target_arch_override = query.cpu_arch;
             if (query.os_tag) |tag| {
                 target_is_freestanding = (tag == .freestanding);
             }
@@ -2569,6 +2573,12 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var ctx_obj = Context.init(allocator);
     defer ctx_obj.deinit();
     const ctx = &ctx_obj;
+
+    // Resolve the build target for the parse-time `target-os` / `target-arch`
+    // accessors before the module graph is frozen. A `--target` cross build
+    // overrides the host default so the accessors read the build target.
+    if (target_os_override) |os| ctx.target_os = os;
+    if (target_arch_override) |arch| ctx.target_arch = arch;
 
     // Discover stdlib path.
     var self_exe_buf: [std.fs.max_path_bytes]u8 = undefined;
