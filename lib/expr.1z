@@ -1,0 +1,13 @@
+\ lib/expr.1z: the parse-time expr{ } form, plus the re-exported parse/lower pipeline.
+
+use "strings" ;
+"expr/ast" load reexport
+"expr/parser" load reexport
+"expr/lower" load reexport
+
+\\ Inline arithmetic expression syntax (`+ - * /`, parens, unary minus).
+\\ `expr{ 1 + 2 * 3 }` is equivalent to `1 2 3 * +`.
+expr{: parse-time [
+  "}" parse-tokens-until " " #join  \ raw body tokens -> source string
+  parse-expr lower emit-body        \ AST -> quotation -> spliced inline
+] ;

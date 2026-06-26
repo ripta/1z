@@ -1,0 +1,40 @@
+\ lib/expr/lower.1z: lower an expr-node AST to a quotation that computes its value.
+
+use "expr/ast" ;
+
+private{
+  \ Map each binary operator string to the quotation that performs it. The keys
+  \ match pratt/arith's operator table; a node carrying an unknown operator makes
+  \ @get throw, which is the correct failure.
+  (BINOP-QUOTS): const [
+    H{
+      "+" [ + ]
+      "-" [ - ]
+      "*" [ * ]
+      "/" [ / ]
+    }
+  ] ;
+}
+
+\\ Lower an expr-node AST into a quotation that computes the expression's value.
+lower: ( node: expr-node -- quotation ) [
+  match{
+    expr-node:lit: [  \ ( value )
+      [ ] curry       \ [ value ]
+    ]
+    expr-node:unop: [  \ ( op operand )
+      \ Only unary minus exists, so the operator is discarded; negate by `-1 *`,
+      \ matching arith-prefix in pratt/arith.
+      nip  \ ( operand )
+      lower [ -1 * ] compose
+    ]
+    expr-node:binop: [         \ ( op left right )
+      lower swap               \ ( op [R] left )
+      lower swap               \ ( op [L] [R] )
+      compose                  \ ( op [ L R ] )
+      swap                     \ ( [ L R ] op )
+      (BINOP-QUOTS) swap @get  \ ( [ L R ] [op] )
+      compose                  \ ( [ L R op ] )
+    ]
+  }
+] ;

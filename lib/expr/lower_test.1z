@@ -1,0 +1,72 @@
+\ Unit tests for lib/expr/lower.1z.
+
+use "testing" ;
+use "expr/ast" ;
+use "expr/lower" ;
+
+"literal lowering" test-section
+
+test-lit-lowers: ( -- ) [
+  42 lit lower call 42 "lit lowers to its value" assert=
+] ;
+
+test-lit-zero-lowers: ( -- ) [
+  0 lit lower call 0 "lit 0 lowers to 0" assert=
+] ;
+
+"binary operator lowering" test-section
+
+test-add-lowers: ( -- ) [
+  "+" 1 lit 2 lit binop lower call
+  1 2 + "addition parity" assert=
+] ;
+
+test-sub-lowers: ( -- ) [
+  "-" 10 lit 3 lit binop lower call
+  10 3 - "subtraction parity" assert=
+] ;
+
+test-mul-lowers: ( -- ) [
+  "*" 4 lit 5 lit binop lower call
+  4 5 * "multiplication parity" assert=
+] ;
+
+test-div-lowers: ( -- ) [
+  "/" 20 lit 4 lit binop lower call
+  20 4 / "division parity" assert=
+] ;
+
+"nested lowering" test-section
+
+test-nested-binop-lowers: ( -- ) [
+  \ 1 + 2 * 3  =>  binop +  (lit 1)  (binop *  (lit 2) (lit 3))
+  "+" 1 lit
+  "*" 2 lit 3 lit binop
+  binop lower call
+  1 2 3 * + "nested precedence parity" assert=
+] ;
+
+test-left-assoc-lowers: ( -- ) [
+  \ (10 - 3) - 2
+  "-"
+  "-" 10 lit 3 lit binop
+  2 lit
+  binop lower call
+  10 3 - 2 - "left-associative subtraction parity" assert=
+] ;
+
+"unary minus lowering" test-section
+
+test-unary-minus-lowers: ( -- ) [
+  "-" 5 lit unop lower call
+  5 -1 * "unary minus parity" assert=
+] ;
+
+test-unary-minus-in-expr-lowers: ( -- ) [
+  \ (-5) + 3
+  "+"
+  "-" 5 lit unop
+  3 lit
+  binop lower call
+  5 -1 * 3 + "unary minus inside binop parity" assert=
+] ;
