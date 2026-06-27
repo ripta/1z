@@ -57,18 +57,17 @@ use "conversions" ;
 \ --- Rule 3: doc-comment (\\  followed by whitespace or at end) ---
 
 (starts-doc-comment?): ( scanner -- ? ) [
-  dup rest dup #len 2 < [ 2drop f ] [
-    dup 0 #nth "\\" = over 1 #nth "\\" = and [
+  dup peek "\\" = [
+    dup advance peek "\\" = [
       \ two backslashes present; check third char or end
-      #len 2 = [
+      advance advance peek dup f = [
         \ exactly \\ at end of input
         drop t
       ] [
-        rest 2 #nth
         dup " " = over (tab) = or over (lf) = or swap (cr) = or
       ] if
-    ] [ 2drop f ] if
-  ] if
+    ] [ drop f ] if
+  ] [ drop f ] if
 ] ;
 
 (doc-comment-match): ( scanner -- new-scanner token | f ) [
@@ -82,17 +81,14 @@ use "conversions" ;
 \ --- Rule 4: comment (\  followed by whitespace or at end) ---
 
 (starts-comment?): ( scanner -- ? ) [
-  dup rest dup #len 0 = [ 2drop f ] [
-    dup 0 #nth "\\" = [
-      #len 1 = [
-        \ lone backslash at end of input
-        drop t
-      ] [
-        rest 1 #nth
-        dup " " = over (tab) = or over (lf) = or swap (cr) = or
-      ] if
-    ] [ 2drop f ] if
-  ] if
+  dup peek "\\" = [
+    advance peek dup f = [
+      \ lone backslash at end of input
+      drop t
+    ] [
+      dup " " = over (tab) = or over (lf) = or swap (cr) = or
+    ] if
+  ] [ drop f ] if
 ] ;
 
 (comment-match): ( scanner -- new-scanner token | f ) [
@@ -317,8 +313,8 @@ BRACE-PREFIXES: const [
 ] ;
 
 (open-brace-match): ( scanner -- new-scanner token | f ) [
-  dup rest dup #len 0 = [ 2drop f ] [
-    drop BRACE-PREFIXES (try-brace-prefix)
+  dup at-end? [ drop f ] [
+    BRACE-PREFIXES (try-brace-prefix)
   ] if
 ] ;
 

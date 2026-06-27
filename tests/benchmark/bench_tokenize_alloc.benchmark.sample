@@ -1,19 +1,19 @@
 === tokenizer per-token marginal cost (1x vs 8x chunk) ===
 tokens: small=58  large=464  delta=406
 
-total_instructions  small=61282  large=489353  per-token=1054
-call_word  small=40418  large=322798  per-token=695
-push_literal  small=20864  large=166555  per-token=358
-total_allocations  small=43251  large=345539  per-token=744
-total_bytes  small=99615568  large=794234584  per-token=1710884
+total_instructions  small=61989  large=495009  per-token=1066
+call_word  small=40820  large=326014  per-token=702
+push_literal  small=21169  large=168995  per-token=364
+total_allocations  small=43328  large=346155  per-token=745
+total_bytes  small=100598992  large=802101976  per-token=1727839
 
 === Benchmark Results ===
 Timing:
-  Prelude load:    5.390 ms
-    Parse:         4.719 ms
-    Execute:       459.000 us
-  User code:       2080.125 ms
-  Total:           2085.515 ms
+  Prelude load:    5.333 ms
+    Parse:         4.674 ms
+    Execute:       445.000 us
+  User code:       2035.124 ms
+  Total:           2040.457 ms
 
 Prelude Inventory:
   Dictionary:      426
@@ -26,28 +26,28 @@ Prelude Inventory:
   Struct types:    12
 
 Instructions:
-  push_literal:    1,482,345
-  call_word:       2,870,298
-  Total:           4,352,643
+  push_literal:    1,504,000
+  call_word:       2,898,840
+  Total:           4,402,840
 
 Stack:
   Peak depth:      18
   Task stack peak: 0 B
 
 Memory:
-  Allocations:     5,016,312
-  Total bytes:     11025.14 MB
-  Peak live:       33.83 MB
+  Allocations:     5,025,244
+  Total bytes:     11133.94 MB
+  Peak live:       33.84 MB
   Live backings:   77 (peak 77)
 
 Allocation Profile (top 10 by net bytes):
-  if                   +1049.69 MB  (276,631 calls)
-  dip                  +629.36 MB  (50,106 calls)
-  2dup                 +353.29 MB  (60,588 calls)
-  call                 -309.98 MB  (52,697 calls)
-  keep                 +289.35 MB  (6,816 calls)
-  do                   +255.39 MB  (3,124 calls)
-  peek                 -244.61 MB  (31,098 calls)
-  >char                +242.27 MB  (12,993 calls)
-  while                +240.17 MB  (3,124 calls)
-  (tab)                +224.44 MB  (7,242 calls)
+  if                   +932.03 MB  (280,181 calls)
+  dip                  +617.81 MB  (50,390 calls)
+  2dup                 +387.37 MB  (65,984 calls)
+  keep                 +289.04 MB  (6,816 calls)
+  call                 -288.40 MB  (52,697 calls)
+  peek                 -278.12 MB  (35,358 calls)
+  at-end?              +265.57 MB  (50,141 calls)
+  do                   +246.61 MB  (3,124 calls)
+  >char                +242.30 MB  (12,993 calls)
+  while                +241.40 MB  (3,124 calls)
