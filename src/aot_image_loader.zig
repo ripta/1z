@@ -665,7 +665,7 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
 fn decodeWordBodyInline(arena: Allocator, w: Word) []const value_mod.Instruction {
     if (w.body_bytecode == null or w.body_bytecode_len == 0) return &.{};
     const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-    return instruction_bytecode.deserializeQuotationInstructions(bytes, arena) catch &.{};
+    return instruction_bytecode.deserializeQuotationInstructions(bytes, arena, null) catch &.{};
 }
 
 // -- Module + word population ------------------------------------------
@@ -1245,6 +1245,7 @@ fn populateParameterSlots(
                 instruction_bytecode.deserializeQuotationInstructions(
                     p[0..row.default_quotation_bytecode_len],
                     arena,
+                    null,
                 ) catch return LoaderError.OutOfMemory
             else
                 &.{}
@@ -2811,6 +2812,7 @@ test "loadIntoContext: tagged slot reconstructs Value via VirtualType back-refer
         &inner_enc,
         .{ .symbol = "red" },
         testing.allocator,
+        null,
     );
 
     const tag_name = "color:red";
@@ -2948,7 +2950,7 @@ test "loadIntoContext: bytecode body decodes into compound action" {
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1, .column = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 1, .column = 3 },
     };
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &sample, testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &sample, testing.allocator, null);
 
     const w_name = "twiddle";
     const m_name = "demo";
@@ -3017,7 +3019,7 @@ test "loadIntoContext: nested quotation literal round-trips" {
 
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null);
 
     const w_name = "wrap";
     const m_name = "demo";

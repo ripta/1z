@@ -1033,7 +1033,7 @@ static const onez_image_module_t onez_image_modules_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 11,
+    .format_version = 12,
     .module_count = 1,
     .word_count = 2,
     .marker_pool_count = 2,

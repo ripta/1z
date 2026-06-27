@@ -2748,7 +2748,7 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize) I
             .quotation_body => |body| {
                 if (state.aot_mode) {
                     // Serialize the instruction body and record it for C emission.
-                    const serialized = serializeQuotationInstructions(body, std.heap.page_allocator) catch {
+                    const serialized = serializeQuotationInstructions(body, std.heap.page_allocator, null) catch {
                         state.not_compilable_reason = .non_serializable_literal;
                         return IrCodegenError.NotCompilable;
                     };
@@ -6505,8 +6505,11 @@ fn compileInstructions(
                 } else if (state.aot_mode and (val == .array or val == .hash)) {
                     // Array/hash literals: serialize to bytes, store in C
                     // preamble, and emit a callback to deserialize at runtime.
+                    // Pass the quotation-ID map so nested branch quotations carry
+                    // their compiled global ID; jitPushArray attaches the matching
+                    // code_ptr when reconstructing the composite at runtime.
                     var ser_buf: std.ArrayListUnmanaged(u8) = .{};
-                    serializeValueInto(&ser_buf, val, std.heap.page_allocator) catch {
+                    serializeValueInto(&ser_buf, val, std.heap.page_allocator, state.aot_quotation_id_map) catch {
                         state.not_compilable_reason = .non_serializable_literal;
                         return IrCodegenError.NotCompilable;
                     };
@@ -8980,7 +8983,7 @@ pub fn emitProgramC(
                     const maybe_bytes = if (method_slot_maps) |*sm|
                         ibc.serializeQuotationInstructionsForImage(q.instructions, allocator, sm)
                     else
-                        serializeQuotationInstructions(q.instructions, allocator);
+                        serializeQuotationInstructions(q.instructions, allocator, null);
                     const bytes = maybe_bytes catch |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
                         error.NotEncodable => {
@@ -11386,7 +11389,7 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(data_ptr);
     const alloc = ctx.quotationAllocator();
-    const instructions = deserializeQuotationInstructions(src[0..data_len], alloc) catch {
+    const instructions = deserializeQuotationInstructions(src[0..data_len], alloc, null) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
@@ -11410,7 +11413,10 @@ export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callcon
     const src: [*]const u8 = @ptrFromInt(data_ptr);
     const alloc = ctx.quotationAllocator();
     var offset: usize = 0;
-    const val = deserializeValueAt(src[0..data_len], &offset, alloc) catch {
+    // Attach compiled code_ptrs to quotations nested in the composite, indexed by
+    // the build-time quotation_id stamped into the serialized form.
+    const qfns: ?[]const ?*const anyopaque = if (ctx.aot_quotation_fns) |fns| fns.table[0..fns.size] else null;
+    const val = deserializeValueAt(src[0..data_len], &offset, alloc, qfns) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };

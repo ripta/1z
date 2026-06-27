@@ -57,7 +57,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 11;
+pub const format_version: u32 = 12;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -1362,7 +1362,7 @@ fn emitParameterDescriptionsStorage(
         try emitCStringLiteral(out, allocator, param.name);
         try out.appendSlice(allocator, ";\n");
 
-        const bytes = instruction_bytecode.serializeQuotationInstructions(param.default_quotation.instructions, allocator) catch |err| switch (err) {
+        const bytes = instruction_bytecode.serializeQuotationInstructions(param.default_quotation.instructions, allocator, null) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NotEncodable => return error.NotEncodable,
         };
@@ -3718,7 +3718,7 @@ fn emitWordBodyBytecode(
                 error.NotEncodable => continue,
             }
         else
-            instruction_bytecode.serializeQuotationInstructions(body, allocator) catch |err| switch (err) {
+            instruction_bytecode.serializeQuotationInstructions(body, allocator, null) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 // A user word body may push a slot-encodable literal (i.e., a mutable_map holding
                 // struct instances, a struct instance, a nested array of them) that the by-value
@@ -4244,7 +4244,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 11") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 12") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
@@ -5331,7 +5331,7 @@ test "emitImageC: structural bytecode round-trips through decoder" {
         try bytes.append(testing.allocator, v);
     }
 
-    const decoded = try instruction_bytecode.deserializeQuotationInstructions(bytes.items, testing.allocator);
+    const decoded = try instruction_bytecode.deserializeQuotationInstructions(bytes.items, testing.allocator, null);
     defer {
         for (decoded) |instr| {
             switch (instr.op) {
