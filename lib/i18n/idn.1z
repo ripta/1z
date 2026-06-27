@@ -20,11 +20,10 @@ use "bytes" ;
 \ uidna_* lives in the ICU common library: libicucore on macOS, libicuuc
 \ elsewhere. Both export unsuffixed symbol names.
 
-sys-info "os" @get "macos" = [
-  "icucore" lib-open
-] [
-  "icuuc" lib-open
-] if
+target-os choose{
+  macos: [ "icucore" lib-open ]
+  linux: [ "icuuc" lib-open ]
+}
 
 ffi-def{
   (uidna-open-uts46):      "uidna_openUTS46" ffi{ u32 inout-i32 -> ptr }

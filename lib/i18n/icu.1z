@@ -6,6 +6,10 @@
 \ macOS: loads libicucore (single system library, all ICU symbols)
 \ Linux: loads libicuuc + libicui18n (separate libraries)
 \ All platforms use unsuffixed symbol names.
+\
+\ The library is chosen at parse time via the `target-os` accessor, so only the
+\ build target's branch reaches an AOT binary. A cross-build to an unenumerated
+\ target such as `freestanding` fails at the accessor by construction.
 
 use "ffi" ;
 
@@ -15,11 +19,10 @@ use "ffi" ;
 \ On Linux, it's split into libicuuc (core) and libicui18n (formatting).
 \ Both platforms export symbols without version suffixes.
 
-sys-info "os" @get "macos" = [
-  "icucore" lib-open
-] [
-  "icuuc" lib-open
-] if
+target-os choose{
+  macos: [ "icucore" lib-open ]
+  linux: [ "icuuc" lib-open ]
+}
 
 ffi-def{
   (u-error-name):    "u_errorName" ffi{ i32 -> cstring }

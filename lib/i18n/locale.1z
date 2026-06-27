@@ -9,11 +9,10 @@ use "i18n/icu" ;
 
 \ --- Library loading and FFI bindings ---
 
-sys-info "os" @get "macos" = [
-  "icucore" lib-open
-] [
-  "icuuc" lib-open
-] if
+target-os choose{
+  macos: [ "icucore" lib-open ]
+  linux: [ "icuuc" lib-open ]
+}
 
 ffi-def{
   (uloc-for-language-tag):  "uloc_forLanguageTag" ffi{ cstring ptr i32 out-i32 inout-i32 -> i32 }
