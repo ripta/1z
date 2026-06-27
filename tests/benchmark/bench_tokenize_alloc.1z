@@ -1,0 +1,82 @@
+\ Benchmark: per-token structural cost and allocation attribution for the 1z
+\ tokenizer hot path, the workload the linter exposes.
+\
+\ `lib/lint.1z` tokenizes each file with `1z-tokenize #collect`. This driver
+\ runs that exact path and measures the *marginal* per-token cost: the same
+\ representative chunk tokenized at 1x and 8x size, with the per-token figure
+\ read off as (metric_large - metric_small) / (tokens_large - tokens_small).
+\ Fixed setup (lexer construction, prelude) cancels in the difference.
+\
+\ Run under `--benchmark` so the in-language `benchmark` hash carries
+\ `total_allocations` / `total_bytes` (absent otherwise -- the alloc/byte rows
+\ then read "n/a"). Run under `--benchmark=verbose` to also dump the CLI
+\ "Allocation Profile (top 10 by net bytes)", which attributes the per-token
+\ allocation to the words that retain it.
+\
+\ NOTE: tokenization is currently O(n^2) in input size -- the `rest #len`
+\ codepoint tail-walk in the doc-comment / comment rules of lib/1z-tokens.1z --
+\ so the 1x-to-8x marginal is *inflated* by that quadratic growth rather than a
+\ pure linear per-token cost. That inflation is the pre-fix baseline this
+\ benchmark records for the lexer optimization work to measure against.
+
+use "scanner" ;
+use "lexer" ;
+use "1z-tokens" ;
+use { repeat: } "strings" ;
+
+\ Representative chunk: stack effects, symbols, brace prefixes, strings,
+\ numbers, a doc comment, a line comment, virtual types -- the same shape
+\ bench_tokenize_scaling.1z uses.
+chunk: ( -- str ) const [
+  "double: ( n -- n ) [ 2 * ] ;\nH{ kind: word: match: [ foo ] }\n\\ a doc\nx: const [ 42 0xFF 3.14 ] ;\nv: virtual{ fixnum } ;\n"
+] ;
+
+count-tokens: ( str -- n ) [ 1z-tokenize #collect #len ] ;
+
+\ Sources are rebuilt per call (cheap, and always outside the timed quotation).
+src-small: ( -- str ) [ chunk 1 repeat ] ;
+src-large: ( -- str ) [ chunk 8 repeat ] ;
+
+delta-tok: ( -- n ) [ src-large count-tokens src-small count-tokens - ] ;
+
+\ Benchmark tokenizing `src` and read one stat key; f when the key is absent
+\ (i.e. when not run under --benchmark). Counts are deterministic, so re-running
+\ benchmark per key yields identical structural figures.
+bench-key: ( src key -- value ) [
+  swap [ count-tokens drop ] curry benchmark  \ key hash
+  swap 2dup @has? [ @get ] [ 2drop f ] if
+] ;
+
+>na: ( x -- str ) [ dup f = [ drop "n/a" ] [ >string ] if ] ;
+
+per-token-str: ( vsmall vlarge -- str ) [
+  over f = over f = or [ 2drop "n/a" ] [
+    swap - delta-tok /
+    >string
+  ] if
+] ;
+
+report-metric: ( key -- ) [
+  dup >string print "  " print   \ key   (label printed)
+  dup src-small swap bench-key   \ key vsmall
+  over src-large swap bench-key  \ key vsmall vlarge
+  "small=" print over >na print
+  "  large=" print dup >na print
+  "  per-token=" print per-token-str print-line
+  drop
+] ;
+
+\ warm
+src-large count-tokens drop
+
+"=== tokenizer per-token marginal cost (1x vs 8x chunk) ===" print-line
+"tokens: small=" src-small count-tokens >string #append
+"  large=" #append src-large count-tokens >string #append
+"  delta=" #append delta-tok >string #append print-line
+"" print-line
+
+"total_instructions" report-metric
+"call_word" report-metric
+"push_literal" report-metric
+"total_allocations" report-metric
+"total_bytes" report-metric

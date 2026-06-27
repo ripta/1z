@@ -1,0 +1,8 @@
+=== tokenizer per-token marginal cost (1x vs 8x chunk) ===
+tokens: small=58  large=464  delta=406
+
+total_instructions  small=61282  large=489353  per-token=1054
+call_word  small=40418  large=322798  per-token=695
+push_literal  small=20864  large=166555  per-token=358
+total_allocations  small=43251  large=345539  per-token=744
+total_bytes  small=99615568  large=794234584  per-token=1710884

@@ -1,0 +1,53 @@
+=== tokenizer per-token marginal cost (1x vs 8x chunk) ===
+tokens: small=58  large=464  delta=406
+
+total_instructions  small=61282  large=489353  per-token=1054
+call_word  small=40418  large=322798  per-token=695
+push_literal  small=20864  large=166555  per-token=358
+total_allocations  small=43251  large=345539  per-token=744
+total_bytes  small=99615568  large=794234584  per-token=1710884
+
+=== Benchmark Results ===
+Timing:
+  Prelude load:    5.390 ms
+    Parse:         4.719 ms
+    Execute:       459.000 us
+  User code:       2080.125 ms
+  Total:           2085.515 ms
+
+Prelude Inventory:
+  Dictionary:      426
+  Dispatch (user): 297
+  Dispatch (native): 207
+  Type values:     34
+  Enum entries:    4
+  Pragma entries:  8
+  Virtual types:   11
+  Struct types:    12
+
+Instructions:
+  push_literal:    1,482,345
+  call_word:       2,870,298
+  Total:           4,352,643
+
+Stack:
+  Peak depth:      18
+  Task stack peak: 0 B
+
+Memory:
+  Allocations:     5,016,312
+  Total bytes:     11025.14 MB
+  Peak live:       33.83 MB
+  Live backings:   77 (peak 77)
+
+Allocation Profile (top 10 by net bytes):
+  if                   +1049.69 MB  (276,631 calls)
+  dip                  +629.36 MB  (50,106 calls)
+  2dup                 +353.29 MB  (60,588 calls)
+  call                 -309.98 MB  (52,697 calls)
+  keep                 +289.35 MB  (6,816 calls)
+  do                   +255.39 MB  (3,124 calls)
+  peek                 -244.61 MB  (31,098 calls)
+  >char                +242.27 MB  (12,993 calls)
+  while                +240.17 MB  (3,124 calls)
+  (tab)                +224.44 MB  (7,242 calls)
