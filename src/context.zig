@@ -480,6 +480,7 @@ pub const Context = struct {
     image_tagged_slots: ?[*]?*const value_mod.Value = null,
     image_mutable_map_slots: ?[*]?*value_mod.MutableMap = null,
     image_struct_instance_slots: ?[*]?*value_mod.StructInstance = null,
+    image_vector_slots: ?[*]?*value_mod.Vector = null,
     image_protocoldescriptor_slots: ?[*]?*const value_mod.ProtocolDescriptor = null,
     image_constraintcombinator_slots: ?[*]?*const value_mod.ConstraintCombinator = null,
     image_typevalue_slot_count: u32 = 0,
@@ -489,6 +490,7 @@ pub const Context = struct {
     image_tagged_slot_count: u32 = 0,
     image_mutable_map_slot_count: u32 = 0,
     image_struct_instance_slot_count: u32 = 0,
+    image_vector_slot_count: u32 = 0,
     image_protocoldescriptor_slot_count: u32 = 0,
     image_constraintcombinator_slot_count: u32 = 0,
     /// AOT method-dispatch replay table, stashed by `loadIntoContext` and
@@ -912,6 +914,7 @@ pub const Context = struct {
         ctx.image_tagged_slots = parent.image_tagged_slots;
         ctx.image_mutable_map_slots = parent.image_mutable_map_slots;
         ctx.image_struct_instance_slots = parent.image_struct_instance_slots;
+        ctx.image_vector_slots = parent.image_vector_slots;
         ctx.image_typevalue_slot_count = parent.image_typevalue_slot_count;
         ctx.image_struct_type_slot_count = parent.image_struct_type_slot_count;
         ctx.image_marker_slot_count = parent.image_marker_slot_count;
@@ -919,6 +922,7 @@ pub const Context = struct {
         ctx.image_tagged_slot_count = parent.image_tagged_slot_count;
         ctx.image_mutable_map_slot_count = parent.image_mutable_map_slot_count;
         ctx.image_struct_instance_slot_count = parent.image_struct_instance_slot_count;
+        ctx.image_vector_slot_count = parent.image_vector_slot_count;
 
         // Inherit AOT-emitted quotation code pointer table so quotation
         // literals constructed in the task ctx via `jitPushQuotation`

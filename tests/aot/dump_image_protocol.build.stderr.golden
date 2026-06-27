@@ -219,6 +219,17 @@ typedef struct onez_image_struct_instance_description {
     uint32_t       fields_bytecode_len;
 } onez_image_struct_instance_description_t;
 
+/* One frozen vector. The loader allocates a fresh empty Vector,         */
+/* decodes the element values from elements_bytecode (a u32 count        */
+/* followed by each element), and patches onez_image_vector_slots[slot]. */
+/* Vectors are mutable, so freeze-time aliasing is preserved across the  */
+/* boundary.                                                             */
+typedef struct onez_image_vector_description {
+    uint32_t    slot;                 /* index into onez_image_vector_slots */
+    const uint8_t *elements_bytecode;
+    uint32_t       elements_bytecode_len;
+} onez_image_vector_description_t;
+
 /* One required method of a protocol. The effect index points into       */
 /* onez_image_stack_effects_storage[]; 0 means no declared effect.        */
 typedef struct onez_image_protocol_method {
@@ -301,6 +312,7 @@ typedef struct onez_image_header {
     uint32_t tagged_slot_count;
     uint32_t mutable_map_slot_count;
     uint32_t struct_instance_slot_count;
+    uint32_t vector_slot_count;
     uint32_t protocoldescriptor_slot_count;
     uint32_t constraintcombinator_slot_count;
     uint32_t dispatch_entry_slot_count;
@@ -316,6 +328,7 @@ typedef struct onez_image_header {
     const struct onez_image_tagged_description *tagged_descriptions;
     const struct onez_image_mutable_map_description *mutable_map_descriptions;
     const struct onez_image_struct_instance_description *struct_instance_descriptions;
+    const struct onez_image_vector_description *vector_descriptions;
     const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
     const struct onez_image_constraintcombinator_description *constraintcombinator_descriptions;
     const struct onez_image_dispatch_entry_description *dispatch_entry_descriptions;
@@ -1020,7 +1033,7 @@ static const onez_image_module_t onez_image_modules_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 10,
+    .format_version = 11,
     .module_count = 1,
     .word_count = 2,
     .marker_pool_count = 2,
@@ -1033,6 +1046,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .tagged_slot_count = 8,
     .mutable_map_slot_count = 0,
     .struct_instance_slot_count = 0,
+    .vector_slot_count = 0,
     .protocoldescriptor_slot_count = 1,
     .constraintcombinator_slot_count = 0,
     .dispatch_entry_slot_count = 0,
@@ -1048,6 +1062,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .tagged_descriptions = onez_image_tagged_descriptions_storage,
     .mutable_map_descriptions = NULL,
     .struct_instance_descriptions = NULL,
+    .vector_descriptions = NULL,
     .protocoldescriptor_descriptions = onez_image_protocoldescriptor_descriptions_storage,
     .constraintcombinator_descriptions = NULL,
     .dispatch_entry_descriptions = NULL,

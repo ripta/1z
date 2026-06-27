@@ -479,6 +479,7 @@ export fn onez_load_runtime_image(
     tagged_slots_ptr: ?*anyopaque,
     mutable_map_slots_ptr: ?*anyopaque,
     struct_instance_slots_ptr: ?*anyopaque,
+    vector_slots_ptr: ?*anyopaque,
     protocoldescriptor_slots_ptr: ?*anyopaque,
     constraintcombinator_slots_ptr: ?*anyopaque,
 ) c_int {
@@ -488,6 +489,7 @@ export fn onez_load_runtime_image(
     _ = tagged_slots_ptr;
     _ = mutable_map_slots_ptr;
     _ = struct_instance_slots_ptr;
+    _ = vector_slots_ptr;
     _ = protocoldescriptor_slots_ptr;
     _ = constraintcombinator_slots_ptr;
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;

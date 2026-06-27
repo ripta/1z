@@ -146,7 +146,17 @@ pub fn classifyValue(val: Value) Classification {
         // at load and shared by every push site that referenced it, so
         // identity matches the in-process AOT behavior.
         .mutable_map => Classification.structural_unit,
-        .vector, .byte_array, .set => Classification.blobOf(.dynamic_container),
+        // An empty mutable vector is structural via the runtime image's
+        // vector slot table: it is allocated once at load and shared by every
+        // push site that referenced it, so identity (and runtime mutation)
+        // matches the in-process AOT behavior. A populated vector stays a blob
+        // for now -- element serialization is a follow-on milestone -- so it
+        // falls back exactly as before this change.
+        .vector => |v| if (v.list.items.len == 0)
+            Classification.structural_unit
+        else
+            Classification.blobOf(.dynamic_container),
+        .byte_array, .set => Classification.blobOf(.dynamic_container),
         .parameter => Classification.blobOf(.parameter_runtime_state),
         .bignum => Classification.blobOf(.bignum),
         .template => Classification.blobOf(.template),
@@ -540,7 +550,7 @@ test "classifyValue: quotation with blob literal is blob" {
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .quotation = q }).path);
 }
 
-test "classifyValue: hash, vector, byte_array, set are blob; mutable_map is structural" {
+test "classifyValue: hash is blob; mutable_map and empty vector are structural" {
     var ht = value_mod.HashTable{};
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .hash = &ht }).path);
     try testing.expectEqual(BlobReason.mutable_map, classifyValue(.{ .hash = &ht }).reason);
@@ -549,10 +559,11 @@ test "classifyValue: hash, vector, byte_array, set are blob; mutable_map is stru
     defer mm.header.release();
     try testing.expectEqual(ImagePath.structural, classifyValue(.{ .mutable_map = mm }).path);
 
+    // An empty vector is structural via the vector slot table; a populated
+    // vector stays a blob until element serialization lands.
     const vec = try value_mod.Vector.create(testing.allocator);
     defer vec.header.release();
-    try testing.expectEqual(ImagePath.blob, classifyValue(.{ .vector = vec }).path);
-    try testing.expectEqual(BlobReason.dynamic_container, classifyValue(.{ .vector = vec }).reason);
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .vector = vec }).path);
 }
 
 test "classifyValue: parameter is blob" {
@@ -584,6 +595,19 @@ test "classifyValue: struct_instance with a blob field is blob" {
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
     const c = classifyValue(.{ .struct_instance = &si });
     try testing.expectEqual(ImagePath.blob, c.path);
+}
+
+test "classifyValue: empty vector is structural" {
+    var vec = value_mod.Vector{ .header = undefined, .list = .{} };
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .vector = &vec }).path);
+}
+
+test "classifyValue: populated vector is blob (empty-only milestone)" {
+    var elems = [_]Value{ .{ .fixnum = 1 }, .{ .symbol = "two" } };
+    var vec = value_mod.Vector{ .header = undefined, .list = .{ .items = &elems, .capacity = elems.len } };
+    const c = classifyValue(.{ .vector = &vec });
+    try testing.expectEqual(ImagePath.blob, c.path);
+    try testing.expectEqual(BlobReason.dynamic_container, c.reason);
 }
 
 test "classifyModuleWord: native and host_callback return null" {

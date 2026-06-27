@@ -87,6 +87,7 @@ const StructInstance = value_mod.StructInstance;
 const Marker = value_mod.Marker;
 const Parameter = value_mod.Parameter;
 const MutableMap = value_mod.MutableMap;
+const Vector = value_mod.Vector;
 
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
@@ -111,6 +112,7 @@ pub const SlotEncodingMaps = struct {
     tagged_slot_index: *const std.AutoHashMapUnmanaged(TaggedKey, u32),
     mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const MutableMap, u32),
     struct_instance_slot_index: *const std.AutoHashMapUnmanaged(*const StructInstance, u32),
+    vector_slot_index: *const std.AutoHashMapUnmanaged(*const Vector, u32),
 };
 
 /// Key for the tagged slot map, mirrored from `aot_image_emit.TaggedSlotKey`
@@ -139,6 +141,8 @@ pub const SlotResolutionTables = struct {
     mutable_map_slot_count: u32,
     struct_instance_slots: ?[*]?*StructInstance,
     struct_instance_slot_count: u32,
+    vector_slots: ?[*]?*Vector,
+    vector_slot_count: u32,
 };
 
 /// Op tags. Stored in the bytecode stream.
@@ -186,6 +190,14 @@ const value_tag_mutable_map_slot: u8 = 16;
 /// shared at freeze time must stay shared at runtime) across an AOT freeze
 /// boundary.
 const value_tag_struct_instance_slot: u8 = 17;
+
+/// Slot-indexed `vector` literal used in image-mode bytecode. Carries a
+/// `u32 slot_index` resolved through `SlotResolutionTables.vector_slots`.
+/// Preserves the identity of a freeze-time mutable vector (vectors are
+/// mutable, so an alias shared at freeze time must stay shared at runtime)
+/// across an AOT freeze boundary. The loader allocates one empty `Vector`
+/// per slot; element serialization is added in a follow-on milestone.
+const value_tag_vector_slot: u8 = 18;
 
 /// Serialize an instruction slice into a freshly allocated byte buffer.
 /// Caller owns the returned slice.
@@ -414,6 +426,11 @@ pub fn serializeValueIntoForImage(
         .struct_instance => |si| {
             const slot = maps.struct_instance_slot_index.get(si) orelse return error.NotEncodable;
             try buf.append(allocator, value_tag_struct_instance_slot);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot));
+        },
+        .vector => |v| {
+            const slot = maps.vector_slot_index.get(v) orelse return error.NotEncodable;
+            try buf.append(allocator, value_tag_vector_slot);
             try buf.appendSlice(allocator, std.mem.asBytes(&slot));
         },
         .array => |elems| {
@@ -738,6 +755,15 @@ pub fn deserializeValueAtForImage(
             const table = tables.struct_instance_slots orelse return error.OutOfMemory;
             const si = table[slot] orelse return error.OutOfMemory;
             break :blk .{ .struct_instance = si };
+        },
+        value_tag_vector_slot => blk: {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slot = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            if (slot >= tables.vector_slot_count) return error.OutOfMemory;
+            const table = tables.vector_slots orelse return error.OutOfMemory;
+            const v = table[slot] orelse return error.OutOfMemory;
+            break :blk .{ .vector = v };
         },
         value_tag_array => blk: {
             if (offset.* + 4 > data.len) return error.OutOfMemory;
@@ -1171,6 +1197,8 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
     defer mm_idx.deinit(alloc);
     var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
     defer sx_idx.deinit(alloc);
+    var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
+    defer vx_idx.deinit(alloc);
     try sx_idx.put(alloc, &si, 0);
 
     const enc = SlotEncodingMaps{
@@ -1181,6 +1209,7 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
         .tagged_slot_index = &tg_idx,
         .mutable_map_slot_index = &mm_idx,
         .struct_instance_slot_index = &sx_idx,
+        .vector_slot_index = &vx_idx,
     };
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -1204,6 +1233,8 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
         .mutable_map_slot_count = 0,
         .struct_instance_slots = &si_slots,
         .struct_instance_slot_count = 1,
+        .vector_slots = null,
+        .vector_slot_count = 0,
     };
 
     var offset: usize = 0;
@@ -1242,6 +1273,8 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
     defer mm_idx.deinit(alloc);
     var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
     defer sx_idx.deinit(alloc);
+    var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
+    defer vx_idx.deinit(alloc);
 
     const enc = SlotEncodingMaps{
         .typevalue_slot_index = &tv_idx,
@@ -1251,6 +1284,7 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
         .tagged_slot_index = &tg_idx,
         .mutable_map_slot_index = &mm_idx,
         .struct_instance_slot_index = &sx_idx,
+        .vector_slot_index = &vx_idx,
     };
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
@@ -1273,6 +1307,8 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
         .mutable_map_slot_count = 0,
         .struct_instance_slots = null,
         .struct_instance_slot_count = 0,
+        .vector_slots = null,
+        .vector_slot_count = 0,
     };
 
     var offset: usize = 0;

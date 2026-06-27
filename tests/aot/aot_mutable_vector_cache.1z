@@ -1,0 +1,19 @@
+\ A module-private mutable-vector cache reachable at freeze time is carried into
+\ the runtime-image AOT binary and reconstructed by the loader, matching the
+\ interpreter. The cache is empty at freeze (`V{ }`) and routes through the new
+\ vector slot table: the parse-time-folded literal becomes a vector_slot push,
+\ and the loader allocates one live `Vector` per slot so every call to `(cache)`
+\ shares the same backing. Runtime mutation through that shared backing must
+\ persist across calls -- the persistence is what requires a slot, not a fresh
+\ value per push.
+
+\ Module-private empty mutable-vector cache, memoized once and shared by every
+\ call -- the same shape as the `M{ }` registries in lib/flags.1z, lib/lint.1z.
+(cache): ( -- vec ) V{ } ;
+
+get-cached: ( -- n/f ) [ (cache) dup #empty? [ drop f ] [ 0 #nth ] if ] ;
+set-cached: ( n -- ) [ (cache) swap #push! drop ] ;
+
+get-cached .  \ f  -- empty at freeze
+42 set-cached
+get-cached .  \ 42 -- runtime mutation persisted through the shared backing

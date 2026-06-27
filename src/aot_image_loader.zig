@@ -247,6 +247,17 @@ pub const StructInstanceDescription = extern struct {
     fields_bytecode_len: u32,
 };
 
+/// Zig mirror of `onez_image_vector_description_t`. One row per slot in
+/// `onez_image_vector_slots[]`. The loader allocates a fresh empty `*Vector`,
+/// decodes the element values from `elements_bytecode` (a `u32` count
+/// followed by each element), and patches the slot. Only empty vectors are
+/// encoded for now; populated vectors are a follow-on milestone.
+pub const VectorDescription = extern struct {
+    slot: u32,
+    elements_bytecode: ?[*]const u8,
+    elements_bytecode_len: u32,
+};
+
 /// Zig mirror of `onez_image_protocol_method_t`. One required method of a
 /// protocol; `stack_effect_idx` indexes the image's stack-effect table and
 /// 0 means the method has no declared effect.
@@ -333,6 +344,7 @@ pub const Header = extern struct {
     tagged_slot_count: u32,
     mutable_map_slot_count: u32,
     struct_instance_slot_count: u32,
+    vector_slot_count: u32,
     protocoldescriptor_slot_count: u32,
     constraintcombinator_slot_count: u32,
     dispatch_entry_slot_count: u32,
@@ -348,6 +360,7 @@ pub const Header = extern struct {
     tagged_descriptions: ?[*]const TaggedDescription,
     mutable_map_descriptions: ?[*]const MutableMapDescription,
     struct_instance_descriptions: ?[*]const StructInstanceDescription,
+    vector_descriptions: ?[*]const VectorDescription,
     protocoldescriptor_descriptions: ?[*]const ProtocolDescriptorDescription,
     constraintcombinator_descriptions: ?[*]const ConstraintCombinatorDescription,
     dispatch_entry_descriptions: ?[*]const DispatchEntryDescription,
@@ -402,6 +415,12 @@ pub const MutableMapSlotTable = [*]?*value_mod.MutableMap;
 /// preserved.
 pub const StructInstanceSlotTable = [*]?*value_mod.StructInstance;
 
+/// Slot table for `.vector` pointers. Each entry is allocated by the loader
+/// via `Vector.create(arena)`; elements are populated from the matching
+/// description row's bytecode. The compiled-code helper retains the pointer
+/// before pushing so the cache's strong reference is preserved.
+pub const VectorSlotTable = [*]?*value_mod.Vector;
+
 /// Slot table for `*ProtocolDescriptor` pointers at protocol-bounded call
 /// sites. Each slot is populated by the loader: a same-named protocol from
 /// the runtime context's registry when one exists, a descriptor
@@ -427,6 +446,7 @@ pub const SlotTables = struct {
     tagged: ?TaggedSlotTable = null,
     mutable_maps: ?MutableMapSlotTable = null,
     struct_instances: ?StructInstanceSlotTable = null,
+    vectors: ?VectorSlotTable = null,
     protocol_descriptors: ?ProtocolDescriptorSlotTable = null,
     constraint_combinators: ?ConstraintCombinatorSlotTable = null,
 };
@@ -510,6 +530,8 @@ pub fn loadIntoContext(
     ctx.image_mutable_map_slot_count = header.mutable_map_slot_count;
     ctx.image_struct_instance_slots = slots.struct_instances;
     ctx.image_struct_instance_slot_count = header.struct_instance_slot_count;
+    ctx.image_vector_slots = slots.vectors;
+    ctx.image_vector_slot_count = header.vector_slot_count;
     ctx.image_protocoldescriptor_slots = slots.protocol_descriptors;
     ctx.image_protocoldescriptor_slot_count = header.protocoldescriptor_slot_count;
     ctx.image_constraintcombinator_slots = slots.constraint_combinators;
@@ -536,6 +558,11 @@ pub fn loadIntoContext(
     // mutable-map slots exist, since a struct field may reference a map.
     try allocateStructInstanceSlots(ctx, header, slots.struct_instances);
 
+    // Vector slots allocate alongside struct instances and before any
+    // content decode: a frozen composite may hold a vector, so every vector
+    // pointer must be live before an entry referencing it is deserialized.
+    try allocateVectorSlots(ctx, header, slots.vectors);
+
     // Mutable_map slots populate before tagged slots so a tagged
     // inner value carrying a `.mutable_map` resolves correctly.
     try populateMutableMapSlots(ctx, header, slots.mutable_maps);
@@ -544,6 +571,10 @@ pub fn loadIntoContext(
     // so a field that references a `.mutable_map` (or another struct
     // instance, already allocated above) resolves correctly.
     try populateStructInstanceFields(ctx, header, slots.struct_instances);
+
+    // Vector elements decode after the other slot tables are live (empty
+    // for now; a non-empty vector is rejected at freeze time).
+    try populateVectorElements(ctx, header, slots.vectors);
 
     // Tagged slot population runs last because each row's inner
     // bytecode may reference the typevalue, struct-type, marker,
@@ -585,6 +616,8 @@ fn imageSlotTables(ctx: *const Context) instruction_bytecode.SlotResolutionTable
         .mutable_map_slot_count = ctx.image_mutable_map_slot_count,
         .struct_instance_slots = ctx.image_struct_instance_slots,
         .struct_instance_slot_count = ctx.image_struct_instance_slot_count,
+        .vector_slots = ctx.image_vector_slots,
+        .vector_slot_count = ctx.image_vector_slot_count,
     };
 }
 
@@ -1278,6 +1311,8 @@ fn populateMutableMapSlots(
         .mutable_map_slot_count = ctx.image_mutable_map_slot_count,
         .struct_instance_slots = ctx.image_struct_instance_slots,
         .struct_instance_slot_count = ctx.image_struct_instance_slot_count,
+        .vector_slots = ctx.image_vector_slots,
+        .vector_slot_count = ctx.image_vector_slot_count,
     };
 
     // Pass 1: allocate every slot's map and patch the slot table before
@@ -1418,6 +1453,62 @@ fn populateStructInstanceFields(
     }
 }
 
+/// Allocate one empty `*Vector` per vector slot and patch the slot table
+/// before any element is decoded, so a forward reference from a lower slot to
+/// a higher one resolves regardless of slot ordering. Each vector's initial
+/// refcount of 1 is donated to the slot; the arena frees everything wholesale
+/// at `Context.deinit`, so no explicit release is needed.
+fn allocateVectorSlots(
+    ctx: *Context,
+    header: *const Header,
+    slots: ?VectorSlotTable,
+) LoaderError!void {
+    if (header.vector_slot_count == 0) return;
+    const descs = header.vector_descriptions orelse return;
+    const slot_table = slots orelse return;
+    const arena = ctx.quotationAllocator();
+
+    var i: u32 = 0;
+    while (i < header.vector_slot_count) : (i += 1) {
+        const row = descs[i];
+        if (row.slot >= header.vector_slot_count) return LoaderError.BadSlotIndex;
+        const vec = value_mod.Vector.create(arena) catch return LoaderError.OutOfMemory;
+        slot_table[row.slot] = vec;
+    }
+}
+
+/// Second pass over the vector description table: decode each row's element
+/// blob into the vector allocated by `allocateVectorSlots`. The blob is a
+/// `u32` element count; only the empty case is encoded for now, so a non-zero
+/// count is rejected. Element decoding is a follow-on milestone.
+fn populateVectorElements(
+    ctx: *Context,
+    header: *const Header,
+    slots: ?VectorSlotTable,
+) LoaderError!void {
+    // `ctx` is unused while only empty vectors are encoded; the follow-on
+    // milestone reads `ctx.quotationAllocator()` to decode elements.
+    _ = ctx;
+    if (header.vector_slot_count == 0) return;
+    const descs = header.vector_descriptions orelse return;
+    const slot_table = slots orelse return;
+
+    var i: u32 = 0;
+    while (i < header.vector_slot_count) : (i += 1) {
+        const row = descs[i];
+        _ = slot_table[row.slot] orelse return LoaderError.BadSlotIndex;
+
+        const bytes = if (row.elements_bytecode) |p|
+            if (row.elements_bytecode_len > 0) p[0..row.elements_bytecode_len] else &[_]u8{}
+        else
+            &[_]u8{};
+
+        if (bytes.len < @sizeOf(u32)) return LoaderError.OutOfMemory;
+        const elem_count = std.mem.bytesToValue(u32, bytes[0..@sizeOf(u32)]);
+        if (elem_count != 0) return LoaderError.BadSlotIndex;
+    }
+}
+
 /// Walk the tagged description table and patch
 /// `onez_image_tagged_slots[]`. For each row, recover the tag's
 /// `*const VirtualType` by reading the typevalue slot at
@@ -1453,6 +1544,8 @@ fn populateTaggedSlots(
         .mutable_map_slot_count = ctx.image_mutable_map_slot_count,
         .struct_instance_slots = ctx.image_struct_instance_slots,
         .struct_instance_slot_count = ctx.image_struct_instance_slot_count,
+        .vector_slots = ctx.image_vector_slots,
+        .vector_slot_count = ctx.image_vector_slot_count,
     };
 
     var i: u32 = 0;
@@ -2122,6 +2215,8 @@ fn emptyHeader() Header {
         .mutable_map_descriptions = null,
         .struct_instance_slot_count = 0,
         .struct_instance_descriptions = null,
+        .vector_slot_count = 0,
+        .vector_descriptions = null,
         .protocoldescriptor_slot_count = 0,
         .protocoldescriptor_descriptions = null,
         .constraintcombinator_slot_count = 0,
@@ -2766,6 +2861,8 @@ test "populateMutableMapSlots: lower slot forward-references a higher slot" {
     defer tg_index.deinit(testing.allocator);
     var si_index: std.AutoHashMapUnmanaged(*const value_mod.StructInstance, u32) = .{};
     defer si_index.deinit(testing.allocator);
+    var vx_index: std.AutoHashMapUnmanaged(*const value_mod.Vector, u32) = .{};
+    defer vx_index.deinit(testing.allocator);
 
     const enc_maps = instruction_bytecode.SlotEncodingMaps{
         .typevalue_slot_index = &tv_index,
@@ -2775,6 +2872,7 @@ test "populateMutableMapSlots: lower slot forward-references a higher slot" {
         .tagged_slot_index = &tg_index,
         .mutable_map_slot_index = &mm_index,
         .struct_instance_slot_index = &si_index,
+        .vector_slot_index = &vx_index,
     };
 
     const one: u32 = 1;

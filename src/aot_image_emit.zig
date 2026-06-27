@@ -57,7 +57,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 10;
+pub const format_version: u32 = 11;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -109,6 +109,12 @@ pub const ImageEmissionStats = struct {
     /// freshly-allocated `*StructInstance` populated from the row's
     /// serialized field bytes.
     struct_instance_slot_count: u32 = 0,
+    /// Number of distinct `*Vector` pointers reachable through compiled word
+    /// bodies or frozen composite values. Emitted as
+    /// `onez_image_vector_slots[]` and patched at load time with a
+    /// freshly-allocated empty `*Vector`. Element serialization is a follow-on
+    /// milestone; only empty vectors are encodable for now.
+    vector_slot_count: u32 = 0,
     /// Number of distinct `*ProtocolDescriptor` pointers from protocol-bounded
     /// call sites. Emitted as `onez_image_protocoldescriptor_slots[]` and
     /// patched at load time by name lookup in the runtime context.
@@ -279,6 +285,7 @@ pub fn emitImageCFromCollection(
     try emitTaggedSlotTable(out, allocator, effect_table);
     try emitMutableMapSlotTable(out, allocator, effect_table);
     try emitStructInstanceSlotTable(out, allocator, effect_table);
+    try emitVectorSlotTable(out, allocator, effect_table);
     try emitMarkerDescriptionsStorage(out, allocator, effect_table);
     try emitParameterDescriptionsStorage(out, allocator, effect_table);
     try emitStructTypeSlotTable(out, allocator, struct_plans_items);
@@ -287,6 +294,7 @@ pub fn emitImageCFromCollection(
     try emitTaggedDescriptionsStorage(out, allocator, effect_table, struct_index);
     try emitMutableMapDescriptionsStorage(out, allocator, effect_table, struct_index);
     try emitStructInstanceDescriptionsStorage(out, allocator, effect_table, struct_index);
+    try emitVectorDescriptionsStorage(out, allocator, effect_table);
     try emitProtocolDescriptorSlotTable(out, allocator, effect_table);
     try emitProtocolDescriptorStorage(out, allocator, effect_table);
     try emitConstraintCombinatorSlotTable(out, allocator, effect_table);
@@ -309,6 +317,7 @@ pub fn emitImageCFromCollection(
     stats.tagged_slot_count = effect_table.taggedSlotCount();
     stats.mutable_map_slot_count = effect_table.mutableMapSlotCount();
     stats.struct_instance_slot_count = effect_table.structInstanceSlotCount();
+    stats.vector_slot_count = effect_table.vectorSlotCount();
     stats.protocoldescriptor_slot_count = effect_table.protocolSlotCount();
     stats.constraintcombinator_slot_count = effect_table.combinatorSlotCount();
     return stats;
@@ -401,6 +410,15 @@ pub const StackEffectTable = struct {
     /// Indices are 0-based with no sentinel.
     struct_instance_slots: std.ArrayListUnmanaged(*const value_mod.StructInstance) = .{},
     struct_instance_slot_index: std.AutoHashMapUnmanaged(*const value_mod.StructInstance, u32) = .{},
+    /// Distinct `*Vector` pointers reached from compiled word bodies and from inside frozen
+    /// composite values. Each unique freeze-time vector gets its own slot; the loader allocates a
+    /// fresh `Vector` per slot, so every freeze-time reference shares one runtime pointer (vectors
+    /// are mutable, so aliasing and runtime mutation must be preserved). Element serialization is a
+    /// follow-on milestone; for now only empty vectors are encodable.
+    ///
+    /// Indices are 0-based with no sentinel.
+    vector_slots: std.ArrayListUnmanaged(*const value_mod.Vector) = .{},
+    vector_slot_index: std.AutoHashMapUnmanaged(*const value_mod.Vector, u32) = .{},
     /// Distinct `*ProtocolDescriptor` pointers reached from protocol-bounded call sites in
     /// AOT-compiled word bodies or from `.protocol` annotations in serialized stack effects.
     ///
@@ -441,6 +459,8 @@ pub const StackEffectTable = struct {
         self.mutable_map_slot_index.deinit(self.allocator);
         self.struct_instance_slots.deinit(self.allocator);
         self.struct_instance_slot_index.deinit(self.allocator);
+        self.vector_slots.deinit(self.allocator);
+        self.vector_slot_index.deinit(self.allocator);
         self.protocol_slots.deinit(self.allocator);
         self.protocol_slot_index.deinit(self.allocator);
         self.combinator_slots.deinit(self.allocator);
@@ -520,6 +540,16 @@ pub const StackEffectTable = struct {
         return idx;
     }
 
+    /// Intern a `*Vector` pointer. Returns the assigned 0-based slot
+    /// index; identical pointers collapse to the same slot.
+    fn internVector(self: *StackEffectTable, v: *const value_mod.Vector) Allocator.Error!u32 {
+        if (self.vector_slot_index.get(v)) |idx| return idx;
+        const idx: u32 = @intCast(self.vector_slots.items.len);
+        try self.vector_slots.append(self.allocator, v);
+        try self.vector_slot_index.put(self.allocator, v, idx);
+        return idx;
+    }
+
     /// Intern a `*ProtocolDescriptor` pointer. Returns the assigned
     /// 0-based slot index; identical pointers collapse to the same slot.
     pub fn internProtocol(self: *StackEffectTable, pd: *const value_mod.ProtocolDescriptor) Allocator.Error!u32 {
@@ -580,6 +610,10 @@ pub const StackEffectTable = struct {
         return @intCast(self.struct_instance_slots.items.len);
     }
 
+    fn vectorSlotCount(self: *const StackEffectTable) u32 {
+        return @intCast(self.vector_slots.items.len);
+    }
+
     fn protocolSlotCount(self: *const StackEffectTable) u32 {
         return @intCast(self.protocol_slots.items.len);
     }
@@ -629,6 +663,12 @@ pub const StackEffectTable = struct {
     /// null when the pointer has not been interned.
     pub fn lookupStructInstanceSlot(self: *const StackEffectTable, si: *const value_mod.StructInstance) ?u32 {
         return self.struct_instance_slot_index.get(si);
+    }
+
+    /// Look up the 0-based vector slot index for `v`. Returns null when
+    /// the pointer has not been interned.
+    pub fn lookupVectorSlot(self: *const StackEffectTable, v: *const value_mod.Vector) ?u32 {
+        return self.vector_slot_index.get(v);
     }
 
     /// Look up the 0-based protocol slot index for `pd`. Returns
@@ -849,6 +889,13 @@ fn internValueTypeLiterals(
             for (si.fields) |field| {
                 try internValueTypeLiterals(struct_plans, struct_index, effect_table, field);
             }
+        },
+        .vector => |v| {
+            // Only empty vectors are encodable for now; a populated vector is
+            // left un-interned so it falls through to the catch-all rather than
+            // failing image emission. Element interning arrives with element
+            // serialization in the follow-on milestone.
+            if (v.list.items.len == 0) _ = try effect_table.internVector(v);
         },
         .array => |elems| {
             for (elems) |elem| {
@@ -1421,6 +1468,7 @@ fn emitTaggedDescriptionsStorage(
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
+        .vector_slot_index = &table.vector_slot_index,
     };
 
     for (table.tagged_slots.items, 0..) |entry, i| {
@@ -1527,6 +1575,7 @@ fn emitMutableMapDescriptionsStorage(
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
+        .vector_slot_index = &table.vector_slot_index,
     };
 
     for (table.mutable_map_slots.items, 0..) |m, i| {
@@ -1628,6 +1677,7 @@ fn emitStructInstanceDescriptionsStorage(
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
+        .vector_slot_index = &table.vector_slot_index,
     };
 
     for (table.struct_instance_slots.items, 0..) |si, i| {
@@ -1665,6 +1715,87 @@ fn emitStructInstanceDescriptionsStorage(
         try writeStructInstanceDescBodySym(out, allocator, i);
         try out.appendSlice(allocator, ", .fields_bytecode_len = sizeof(");
         try writeStructInstanceDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ") },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+fn writeVectorDescBodySym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_vector_desc_{d}_data", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+/// Emit `onez_image_vector_slots[]`: one NULL pointer per distinct
+/// `*Vector` reached through compiled word bodies or nested inside a frozen
+/// composite value. The loader allocates a fresh `Vector` per slot at image
+/// load and patches each entry with the runtime pointer. No-op when no
+/// vectors have been interned.
+fn emitVectorSlotTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) Allocator.Error!void {
+    if (table.vectorSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "__attribute__((used)) struct onez_vector *onez_image_vector_slots[");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{table.vectorSlotCount()}) catch unreachable);
+    try out.appendSlice(allocator, "] = {\n");
+    var i: u32 = 0;
+    while (i < table.vectorSlotCount()) : (i += 1) {
+        try out.appendSlice(allocator, "    NULL, /* slot ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, " (filled by the loader). */\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
+/// Emit `onez_image_vector_descriptions_storage[]`: one row per slot in
+/// `onez_image_vector_slots[]`. Each row carries the element values in
+/// image-mode bytecode (a `u32` count followed by each element). Only the
+/// empty case is encodable for now: a non-empty vector returns
+/// `error.NotEncodable` so it falls back to the catch-all rather than being
+/// silently truncated; populated vectors are a follow-on milestone. No-op
+/// when no vectors have been interned.
+fn emitVectorDescriptionsStorage(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    table: *const StackEffectTable,
+) ImageEmitError!void {
+    if (table.vectorSlotCount() == 0) return;
+    var num_buf: [32]u8 = undefined;
+
+    for (table.vector_slots.items, 0..) |v, i| {
+        const elem_count: u32 = @intCast(v.list.items.len);
+        if (elem_count != 0) return error.NotEncodable;
+
+        var elements_buf: std.ArrayListUnmanaged(u8) = .{};
+        defer elements_buf.deinit(allocator);
+        try elements_buf.appendSlice(allocator, std.mem.asBytes(&elem_count));
+
+        try out.appendSlice(allocator, "static const uint8_t ");
+        try writeVectorDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = {");
+        for (elements_buf.items, 0..) |byte, bi| {
+            if (bi > 0) try out.append(allocator, ',');
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{byte}) catch unreachable);
+        }
+        try out.appendSlice(allocator, "};\n");
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_vector_description_t onez_image_vector_descriptions_storage[] = {\n");
+    for (table.vector_slots.items, 0..) |_, i| {
+        try out.appendSlice(allocator, "    { .slot = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, ", .elements_bytecode = ");
+        try writeVectorDescBodySym(out, allocator, i);
+        try out.appendSlice(allocator, ", .elements_bytecode_len = sizeof(");
+        try writeVectorDescBodySym(out, allocator, i);
         try out.appendSlice(allocator, ") },\n");
     }
     try out.appendSlice(allocator, "};\n\n");
@@ -1988,6 +2119,7 @@ fn emitDispatchEntryTable(
         .tagged_slot_index = &table.tagged_slot_index,
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
+        .vector_slot_index = &table.vector_slot_index,
     };
 
     var rows: std.ArrayListUnmanaged(DispatchEntryRow) = .{};
@@ -3264,6 +3396,17 @@ fn emitTypeDeclarations(
         \\    uint32_t       fields_bytecode_len;
         \\} onez_image_struct_instance_description_t;
         \\
+        \\/* One frozen vector. The loader allocates a fresh empty Vector,         */
+        \\/* decodes the element values from elements_bytecode (a u32 count        */
+        \\/* followed by each element), and patches onez_image_vector_slots[slot]. */
+        \\/* Vectors are mutable, so freeze-time aliasing is preserved across the  */
+        \\/* boundary.                                                             */
+        \\typedef struct onez_image_vector_description {
+        \\    uint32_t    slot;                 /* index into onez_image_vector_slots */
+        \\    const uint8_t *elements_bytecode;
+        \\    uint32_t       elements_bytecode_len;
+        \\} onez_image_vector_description_t;
+        \\
         \\/* One required method of a protocol. The effect index points into       */
         \\/* onez_image_stack_effects_storage[]; 0 means no declared effect.        */
         \\typedef struct onez_image_protocol_method {
@@ -3346,6 +3489,7 @@ fn emitTypeDeclarations(
         \\    uint32_t tagged_slot_count;
         \\    uint32_t mutable_map_slot_count;
         \\    uint32_t struct_instance_slot_count;
+        \\    uint32_t vector_slot_count;
         \\    uint32_t protocoldescriptor_slot_count;
         \\    uint32_t constraintcombinator_slot_count;
         \\    uint32_t dispatch_entry_slot_count;
@@ -3361,6 +3505,7 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_tagged_description *tagged_descriptions;
         \\    const struct onez_image_mutable_map_description *mutable_map_descriptions;
         \\    const struct onez_image_struct_instance_description *struct_instance_descriptions;
+        \\    const struct onez_image_vector_description *vector_descriptions;
         \\    const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
         \\    const struct onez_image_constraintcombinator_description *constraintcombinator_descriptions;
         \\    const struct onez_image_dispatch_entry_description *dispatch_entry_descriptions;
@@ -3516,6 +3661,7 @@ fn emitWordBodyBytecode(
         .tagged_slot_index = &effect_table.tagged_slot_index,
         .mutable_map_slot_index = &effect_table.mutable_map_slot_index,
         .struct_instance_slot_index = &effect_table.struct_instance_slot_index,
+        .vector_slot_index = &effect_table.vector_slot_index,
     };
 
     var emitted_any = false;
@@ -3945,6 +4091,7 @@ fn emitHeader(
     const tagged_slot_count: u32 = effect_table.taggedSlotCount();
     const mutable_map_slot_count: u32 = effect_table.mutableMapSlotCount();
     const struct_instance_slot_count: u32 = effect_table.structInstanceSlotCount();
+    const vector_slot_count: u32 = effect_table.vectorSlotCount();
     const protocoldescriptor_slot_count: u32 = effect_table.protocolSlotCount();
     const constraintcombinator_slot_count: u32 = effect_table.combinatorSlotCount();
 
@@ -3961,6 +4108,7 @@ fn emitHeader(
     const tagged_descs_ref: []const u8 = if (tagged_slot_count > 0) "onez_image_tagged_descriptions_storage" else "NULL";
     const mutable_map_descs_ref: []const u8 = if (mutable_map_slot_count > 0) "onez_image_mutable_map_descriptions_storage" else "NULL";
     const struct_instance_descs_ref: []const u8 = if (struct_instance_slot_count > 0) "onez_image_struct_instance_descriptions_storage" else "NULL";
+    const vector_descs_ref: []const u8 = if (vector_slot_count > 0) "onez_image_vector_descriptions_storage" else "NULL";
     const protocoldescriptor_descs_ref: []const u8 = if (protocoldescriptor_slot_count > 0) "onez_image_protocoldescriptor_descriptions_storage" else "NULL";
     const constraintcombinator_descs_ref: []const u8 = if (constraintcombinator_slot_count > 0) "onez_image_constraintcombinator_descriptions_storage" else "NULL";
     const dispatch_entry_descs_ref: []const u8 = if (stats.dispatch_entry_slot_count > 0) "onez_image_dispatch_entry_descriptions_storage" else "NULL";
@@ -3994,6 +4142,8 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{mutable_map_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .struct_instance_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{struct_instance_slot_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .vector_slot_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{vector_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .protocoldescriptor_slot_count = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{protocoldescriptor_slot_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .constraintcombinator_slot_count = ");
@@ -4024,6 +4174,8 @@ fn emitHeader(
     try out.appendSlice(allocator, mutable_map_descs_ref);
     try out.appendSlice(allocator, ",\n    .struct_instance_descriptions = ");
     try out.appendSlice(allocator, struct_instance_descs_ref);
+    try out.appendSlice(allocator, ",\n    .vector_descriptions = ");
+    try out.appendSlice(allocator, vector_descs_ref);
     try out.appendSlice(allocator, ",\n    .protocoldescriptor_descriptions = ");
     try out.appendSlice(allocator, protocoldescriptor_descs_ref);
     try out.appendSlice(allocator, ",\n    .constraintcombinator_descriptions = ");
@@ -4075,7 +4227,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 10") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 11") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
