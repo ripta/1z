@@ -112,8 +112,8 @@ pub const ImageEmissionStats = struct {
     /// Number of distinct `*Vector` pointers reachable through compiled word
     /// bodies or frozen composite values. Emitted as
     /// `onez_image_vector_slots[]` and patched at load time with a
-    /// freshly-allocated empty `*Vector`. Element serialization is a follow-on
-    /// milestone; only empty vectors are encodable for now.
+    /// freshly-allocated `*Vector` whose elements are decoded from the row's
+    /// serialized element bytes.
     vector_slot_count: u32 = 0,
     /// Number of distinct `*ProtocolDescriptor` pointers from protocol-bounded
     /// call sites. Emitted as `onez_image_protocoldescriptor_slots[]` and
@@ -294,7 +294,7 @@ pub fn emitImageCFromCollection(
     try emitTaggedDescriptionsStorage(out, allocator, effect_table, struct_index);
     try emitMutableMapDescriptionsStorage(out, allocator, effect_table, struct_index);
     try emitStructInstanceDescriptionsStorage(out, allocator, effect_table, struct_index);
-    try emitVectorDescriptionsStorage(out, allocator, effect_table);
+    try emitVectorDescriptionsStorage(out, allocator, effect_table, struct_index);
     try emitProtocolDescriptorSlotTable(out, allocator, effect_table);
     try emitProtocolDescriptorStorage(out, allocator, effect_table);
     try emitConstraintCombinatorSlotTable(out, allocator, effect_table);
@@ -413,8 +413,7 @@ pub const StackEffectTable = struct {
     /// Distinct `*Vector` pointers reached from compiled word bodies and from inside frozen
     /// composite values. Each unique freeze-time vector gets its own slot; the loader allocates a
     /// fresh `Vector` per slot, so every freeze-time reference shares one runtime pointer (vectors
-    /// are mutable, so aliasing and runtime mutation must be preserved). Element serialization is a
-    /// follow-on milestone; for now only empty vectors are encodable.
+    /// are mutable, so aliasing and runtime mutation must be preserved).
     ///
     /// Indices are 0-based with no sentinel.
     vector_slots: std.ArrayListUnmanaged(*const value_mod.Vector) = .{},
@@ -891,11 +890,10 @@ fn internValueTypeLiterals(
             }
         },
         .vector => |v| {
-            // Only empty vectors are encodable for now; a populated vector is
-            // left un-interned so it falls through to the catch-all rather than
-            // failing image emission. Element interning arrives with element
-            // serialization in the follow-on milestone.
-            if (v.list.items.len == 0) _ = try effect_table.internVector(v);
+            _ = try effect_table.internVector(v);
+            for (v.list.items) |elem| {
+                try internValueTypeLiterals(struct_plans, struct_index, effect_table, elem);
+            }
         },
         .array => |elems| {
             for (elems) |elem| {
@@ -1756,26 +1754,45 @@ fn emitVectorSlotTable(
 
 /// Emit `onez_image_vector_descriptions_storage[]`: one row per slot in
 /// `onez_image_vector_slots[]`. Each row carries the element values in
-/// image-mode bytecode (a `u32` count followed by each element). Only the
-/// empty case is encodable for now: a non-empty vector returns
-/// `error.NotEncodable` so it falls back to the catch-all rather than being
-/// silently truncated; populated vectors are a follow-on milestone. No-op
-/// when no vectors have been interned.
+/// image-mode bytecode (a `u32` count followed by each serialized element).
+/// Elements are encoded with `serializeValueIntoForImage`, the same path the
+/// mutable-map and struct-instance emitters use, so nested type-carriers /
+/// structs / maps resolve through the slot tables. An element that cannot be
+/// encoded returns `error.NotEncodable` so the whole vector falls back to the
+/// catch-all rather than being silently truncated. No-op when no vectors have
+/// been interned.
 fn emitVectorDescriptionsStorage(
     out: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
     table: *const StackEffectTable,
+    struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
 ) ImageEmitError!void {
     if (table.vectorSlotCount() == 0) return;
     var num_buf: [32]u8 = undefined;
 
+    const slot_maps: instruction_bytecode.SlotEncodingMaps = .{
+        .typevalue_slot_index = &table.type_slot_index,
+        .struct_type_slot_index = struct_index,
+        .marker_slot_index = &table.marker_slot_index,
+        .parameter_slot_index = &table.parameter_slot_index,
+        .tagged_slot_index = &table.tagged_slot_index,
+        .mutable_map_slot_index = &table.mutable_map_slot_index,
+        .struct_instance_slot_index = &table.struct_instance_slot_index,
+        .vector_slot_index = &table.vector_slot_index,
+    };
+
     for (table.vector_slots.items, 0..) |v, i| {
         const elem_count: u32 = @intCast(v.list.items.len);
-        if (elem_count != 0) return error.NotEncodable;
 
         var elements_buf: std.ArrayListUnmanaged(u8) = .{};
         defer elements_buf.deinit(allocator);
         try elements_buf.appendSlice(allocator, std.mem.asBytes(&elem_count));
+        for (v.list.items) |elem| {
+            instruction_bytecode.serializeValueIntoForImage(&elements_buf, elem, allocator, &slot_maps) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.NotEncodable => return error.NotEncodable,
+            };
+        }
 
         try out.appendSlice(allocator, "static const uint8_t ");
         try writeVectorDescBodySym(out, allocator, i);

@@ -1,0 +1,21 @@
+\ A module-private mutable-vector cache populated at freeze time is carried into
+\ the runtime-image AOT binary with its elements and reconstructed by the loader,
+\ matching the interpreter. The cache is seeded `V{ 10 20 30 }` at freeze and
+\ routes through the vector slot table: the parse-time-folded literal becomes a
+\ vector_slot push whose elements serialize into the slot's description, and the
+\ loader allocates one live `Vector` per slot and decodes the elements back into
+\ it. Both the freeze-time contents and later runtime mutation through the shared
+\ backing must survive into the binary and persist across calls.
+
+(cache): ( -- vec ) V{ 10 20 30 } ;
+
+nth-cached:  ( i -- n ) [ (cache) swap #nth ] ;
+len-cached:  ( -- n )   [ (cache) #len ] ;
+push-cached: ( n -- )   [ (cache) swap #push! drop ] ;
+
+0 nth-cached .  \ 10 -- freeze-time element survived
+2 nth-cached .  \ 30
+len-cached .    \ 3
+40 push-cached
+len-cached .    \ 4  -- runtime mutation persisted through the shared backing
+3 nth-cached .  \ 40 -- the pushed element is in the same backing

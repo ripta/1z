@@ -195,8 +195,8 @@ const value_tag_struct_instance_slot: u8 = 17;
 /// `u32 slot_index` resolved through `SlotResolutionTables.vector_slots`.
 /// Preserves the identity of a freeze-time mutable vector (vectors are
 /// mutable, so an alias shared at freeze time must stay shared at runtime)
-/// across an AOT freeze boundary. The loader allocates one empty `Vector`
-/// per slot; element serialization is added in a follow-on milestone.
+/// across an AOT freeze boundary. The loader allocates one `Vector` per slot
+/// and decodes its elements from the slot's description.
 const value_tag_vector_slot: u8 = 18;
 
 /// Serialize an instruction slice into a freshly allocated byte buffer.

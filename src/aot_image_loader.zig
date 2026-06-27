@@ -250,8 +250,7 @@ pub const StructInstanceDescription = extern struct {
 /// Zig mirror of `onez_image_vector_description_t`. One row per slot in
 /// `onez_image_vector_slots[]`. The loader allocates a fresh empty `*Vector`,
 /// decodes the element values from `elements_bytecode` (a `u32` count
-/// followed by each element), and patches the slot. Only empty vectors are
-/// encoded for now; populated vectors are a follow-on milestone.
+/// followed by each element), and patches the slot.
 pub const VectorDescription = extern struct {
     slot: u32,
     elements_bytecode: ?[*]const u8,
@@ -572,8 +571,9 @@ pub fn loadIntoContext(
     // instance, already allocated above) resolves correctly.
     try populateStructInstanceFields(ctx, header, slots.struct_instances);
 
-    // Vector elements decode after the other slot tables are live (empty
-    // for now; a non-empty vector is rejected at freeze time).
+    // Vector elements decode after the other slot tables are live, so an
+    // element that references a map, struct instance, or another vector
+    // resolves through the already-patched slot tables.
     try populateVectorElements(ctx, header, slots.vectors);
 
     // Tagged slot population runs last because each row's inner
@@ -1479,24 +1479,26 @@ fn allocateVectorSlots(
 
 /// Second pass over the vector description table: decode each row's element
 /// blob into the vector allocated by `allocateVectorSlots`. The blob is a
-/// `u32` element count; only the empty case is encoded for now, so a non-zero
-/// count is rejected. Element decoding is a follow-on milestone.
+/// `u32` element count followed by each element, decoded through
+/// `deserializeValueAtForImage` (the same path the mutable-map and
+/// struct-instance loaders use), so slot-encoded elements resolve against the
+/// already-live slot tables. Each decoded value is appended directly; the
+/// vector's destroy callback releases the elements symmetrically.
 fn populateVectorElements(
     ctx: *Context,
     header: *const Header,
     slots: ?VectorSlotTable,
 ) LoaderError!void {
-    // `ctx` is unused while only empty vectors are encoded; the follow-on
-    // milestone reads `ctx.quotationAllocator()` to decode elements.
-    _ = ctx;
     if (header.vector_slot_count == 0) return;
     const descs = header.vector_descriptions orelse return;
     const slot_table = slots orelse return;
+    const arena = ctx.quotationAllocator();
+    const slot_tables = imageSlotTables(ctx);
 
     var i: u32 = 0;
     while (i < header.vector_slot_count) : (i += 1) {
         const row = descs[i];
-        _ = slot_table[row.slot] orelse return LoaderError.BadSlotIndex;
+        const vec = slot_table[row.slot] orelse return LoaderError.BadSlotIndex;
 
         const bytes = if (row.elements_bytecode) |p|
             if (row.elements_bytecode_len > 0) p[0..row.elements_bytecode_len] else &[_]u8{}
@@ -1504,8 +1506,20 @@ fn populateVectorElements(
             &[_]u8{};
 
         if (bytes.len < @sizeOf(u32)) return LoaderError.OutOfMemory;
-        const elem_count = std.mem.bytesToValue(u32, bytes[0..@sizeOf(u32)]);
-        if (elem_count != 0) return LoaderError.BadSlotIndex;
+        var offset: usize = 0;
+        const elem_count = std.mem.bytesToValue(u32, bytes[offset .. offset + @sizeOf(u32)]);
+        offset += @sizeOf(u32);
+
+        var e: u32 = 0;
+        while (e < elem_count) : (e += 1) {
+            const value = instruction_bytecode.deserializeValueAtForImage(
+                bytes,
+                &offset,
+                arena,
+                &slot_tables,
+            ) catch return LoaderError.OutOfMemory;
+            vec.list.append(arena, value) catch return LoaderError.OutOfMemory;
+        }
     }
 }
 
