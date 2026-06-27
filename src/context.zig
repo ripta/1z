@@ -113,7 +113,7 @@ pub const Context = struct {
     benchmark: ?*BenchmarkStats = null,
     /// Current source file name for error reporting (defaults to "<repl>")
     current_source: []const u8 = "<repl>",
-    /// Tail call target for TCO — set by executeInstructions, consumed by executeQuotation
+    /// Tail call target for TCO, which is set by executeInstructions and consumed by executeQuotation
     tail_call_instructions: ?[]const Instruction = null,
     /// Module whose deps frame should be pushed for the tail call target.
     /// Set alongside tail_call_instructions when the tail-called word has a source_module.
