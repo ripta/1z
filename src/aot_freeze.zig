@@ -791,6 +791,24 @@ fn discoverReachableWords(
         };
     }
 
+    // Phase 4: collect quotations buried in composite literals which the main BFS never walks into.
+    //
+    // Only the quotation bodies are collected into the manifest, so the compiler attempts to
+    // compile each and a `code_ptr` can later be attached to the ones that do. The words those
+    // bodies call are deliberately NOT added to the discovered set: they remain ordinary runtime-
+    // image words that run interpreted exactly as they did before composite discovery.
+    //
+    // Promoting them into the discovered set would reroute their AOT handling, e.g., a generic
+    // getter through the dispatch-callback path, a `const` through a placeholder-effect body.
+    try collectCompositeQuotations(entry_instrs, &result.quotation_bodies, &quotation_seen, temp_allocator);
+    for (result.defs.items) |def| {
+        const body = switch (def.action) {
+            .compound => |c| c,
+            .native, .host_callback => continue,
+        };
+        try collectCompositeQuotations(body, &result.quotation_bodies, &quotation_seen, temp_allocator);
+    }
+
     return result;
 }
 
@@ -926,6 +944,84 @@ fn collectCallWords(
                     else => {},
                 }
             },
+        }
+    }
+}
+
+/// Walk a discovered instruction stream looking for composite literal `push_literal` values
+/// (`.array`, `.hash`, `.vector`) that bury branch quotations. `case` / `cond` tables are a
+/// single `.array`. The lexer's `H{ ... match: [ ... ] }` rules a single `.hash`.
+///
+/// The buried quotation bodies are collected into the compilation manifest; the words those
+/// bodies call are intentionally left undiscovered.
+///
+/// This is the second discovery pass. The main BFS (`collectCallWords`) collects quotations
+/// reachable through direct calls and nested quotation *literals* but never descends into
+/// composite values, so this fills that gap. Nested quotation literals are descended into
+/// here only to find composites buried inside them; the literals themselves were already
+/// collected by the main BFS.
+fn collectCompositeQuotations(instrs: []const Instruction, quotation_bodies: *std.ArrayListUnmanaged([]const Instruction), quotation_seen: *std.AutoHashMapUnmanaged(usize, void), allocator: Allocator) Allocator.Error!void {
+    for (instrs) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| switch (val) {
+                .quotation => |q| try collectCompositeQuotations(q.instructions, quotation_bodies, quotation_seen, allocator),
+                .array, .hash, .vector => try collectQuotationsInValue(val, quotation_bodies, quotation_seen, allocator),
+                else => {},
+            },
+            else => {},
+        }
+    }
+}
+
+/// Recurse through a composite literal Value (`.array`, `.hash`, `.vector`) to
+/// reach every `.quotation` element buried inside it, collecting each body into
+/// the freeze manifest under the same pointer-identity dedupe scheme
+/// `collectCallWords` uses for direct quotation literals. A newly-seen body is
+/// then scanned for further nested quotations -- in literals or deeper
+/// composites -- via `collectNestedQuotations`. Composites nest arbitrarily (an
+/// array of hashes whose values are quotations, and so on), so the walk is fully
+/// recursive. Hash keys are strings, so only values are inspected. Freeze-time
+/// literal composites are parse-constructed and acyclic, matching the
+/// acyclic-instruction-tree assumption the discovery already relies on, so no
+/// cycle guard is needed.
+fn collectQuotationsInValue(val: Value, quotation_bodies: *std.ArrayListUnmanaged([]const Instruction), quotation_seen: *std.AutoHashMapUnmanaged(usize, void), allocator: Allocator) Allocator.Error!void {
+    switch (val) {
+        .quotation => |q| {
+            const ptr_key = @intFromPtr(q.instructions.ptr);
+            const qgop = try quotation_seen.getOrPut(allocator, ptr_key);
+            if (!qgop.found_existing) {
+                try quotation_bodies.append(allocator, q.instructions);
+                try collectNestedQuotations(q.instructions, quotation_bodies, quotation_seen, allocator);
+            }
+        },
+        .array => |items| {
+            for (items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, allocator);
+        },
+        .hash => |h| {
+            var it = h.iterator();
+            while (it.next()) |entry| try collectQuotationsInValue(entry.value_ptr.*, quotation_bodies, quotation_seen, allocator);
+        },
+        .vector => |v| {
+            for (v.list.items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, allocator);
+        },
+        else => {},
+    }
+}
+
+/// Collect every quotation nested inside a body that was itself reached through a
+/// composite. Unlike `collectCompositeQuotations`, which descends into quotation
+/// literals only to find composites, this collects the quotation literals too,
+/// because a body buried in a composite was never visited by the main BFS.
+fn collectNestedQuotations(
+    instrs: []const Instruction,
+    quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
+    quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    allocator: Allocator,
+) Allocator.Error!void {
+    for (instrs) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| try collectQuotationsInValue(val, quotation_bodies, quotation_seen, allocator),
+            else => {},
         }
     }
 }
@@ -3000,6 +3096,139 @@ test "collectCallWords records calls inside nested quotations with quotation_pat
     // Outer instruction index 1 is the quotation literal we recursed into.
     try testing.expectEqual(@as(u32, 1), entry.quotation_path[0]);
     try testing.expectEqualStrings("inner-noop", entry.pending.native_name);
+}
+
+test "collectCompositeQuotations collects a quotation nested in an array literal" {
+    const allocator = testing.allocator;
+
+    // A `case` / `cond` branch table parses to a single `.array` push_literal;
+    // its branch quotation is invisible to the main BFS and is found only by
+    // the composite walk.
+    const inner_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "inner-noop" }, .line = 1 },
+    };
+    const elems = [_]Value{
+        .{ .quotation = .{ .instructions = inner_instrs } },
+    };
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .array = &elems } }, .line = 1 },
+    };
+
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+
+    // The nested quotation body joins the compilation manifest, deduped by
+    // instruction-pointer identity.
+    try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
+    try testing.expectEqual(@intFromPtr(inner_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
+}
+
+test "collectCompositeQuotations collects a quotation nested in a hash literal" {
+    const allocator = testing.allocator;
+
+    // The lexer's `H{ ... match: [ ... ] }` rules are a single `.hash`; the
+    // dispatched quotation is stored as a value under the `match:` symbol key.
+    const inner_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "inner-noop" }, .line = 1 },
+    };
+    var hash = value_mod.HashTable{};
+    defer hash.deinit(allocator);
+    try hash.put(allocator, "match", .{ .quotation = .{ .instructions = inner_instrs } });
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .hash = &hash } }, .line = 1 },
+    };
+
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+
+    try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
+    try testing.expectEqual(@intFromPtr(inner_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
+}
+
+test "collectCompositeQuotations collects a quotation nested in a nested composite" {
+    const allocator = testing.allocator;
+
+    // A quotation buried two levels deep (a hash whose value is an array
+    // holding the quotation) proves the walk is fully recursive, not one level.
+    const inner_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "inner-noop" }, .line = 1 },
+    };
+    const arr_elems = [_]Value{
+        .{ .quotation = .{ .instructions = inner_instrs } },
+    };
+    var hash = value_mod.HashTable{};
+    defer hash.deinit(allocator);
+    try hash.put(allocator, "match", .{ .array = &arr_elems });
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .hash = &hash } }, .line = 1 },
+    };
+
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+
+    try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
+    try testing.expectEqual(@intFromPtr(inner_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
+}
+
+test "collectCompositeQuotations does not collect a top-level quotation literal" {
+    const allocator = testing.allocator;
+
+    // A bare quotation literal (not inside a composite) is the main BFS's job,
+    // not this pass's. Descending into it must only look for composites, never
+    // collect the literal itself, so the two passes do not double-collect.
+    const inner_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "inner-noop" }, .line = 1 },
+    };
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner_instrs } } }, .line = 1 },
+    };
+
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+
+    try testing.expectEqual(@as(usize, 0), quotation_bodies.items.len);
+}
+
+test "collectCompositeQuotations dedupes a quotation reached twice" {
+    const allocator = testing.allocator;
+
+    // The same body referenced by two array elements is collected once, under
+    // the shared pointer-identity dedupe.
+    const inner_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "inner-noop" }, .line = 1 },
+    };
+    const elems = [_]Value{
+        .{ .quotation = .{ .instructions = inner_instrs } },
+        .{ .quotation = .{ .instructions = inner_instrs } },
+    };
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .array = &elems } }, .line = 1 },
+    };
+
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+
+    try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
 }
 
 test "collectCallWords classifies an unresolved name with .not_in_dictionary" {
