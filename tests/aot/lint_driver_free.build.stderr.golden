@@ -1,9 +1,13 @@
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: 3 words could not be compiled to C
-  word '(lint-rule-with-context)': NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word '(lexer-step)': NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-  word '(try-rules)': NC.13: word body underflows the abstract stack (row-variable effects)
-      hint: blocked until row-variable stack regions can be modeled
-AOT interpreter fallbacks: 237 total (native=225 per-op-native=3 compound-uncompiled=7 quotation=2)
+Error: --interpreter-fallback=false rejects compound-fallback dispatch; 3 call sites still route through the interpreter
+  '(suppressed?)' -> '#any' (line 219)
+      callee uncompiled: NC.19: defines a helper word inside its body that AOT compilation cannot discover
+      hint: move the helper into a private{ } block at module scope
+  'onez_q_33' -> '#any' (line 219)
+      callee uncompiled: NC.19: defines a helper word inside its body that AOT compilation cannot discover
+      hint: move the helper into a private{ } block at module scope
+  'onez_q_54' -> '(raw>word-info)' (line 238)
+      callee uncompiled: NC.19: defines a helper word inside its body that AOT compilation cannot discover
+      hint: move the helper into a private{ } block at module scope
+AOT interpreter fallbacks: 253 total (native=245 per-op-native=3 compound-uncompiled=3 quotation=2)
+  static-check: jitInterpretedCall=3/3 jitNativeWordCall=248/248 jitCallQuotation=2/2 (matches build-time inventory)

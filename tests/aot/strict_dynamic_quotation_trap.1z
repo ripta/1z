@@ -1,0 +1,7 @@
+\ A case branch whose body is itself uncompilable interpreter-free (it
+\ constructs a quotation at runtime via `>quotation`). The branch quotation is
+\ discovered in the composite table and assigned a slot, but its body has no
+\ compiled code_ptr, so dispatching to it cannot fall back to an absent
+\ interpreter. The compiled dynamic `call` aborts cleanly at runtime with a
+\ defined error rather than re-entering an absent interpreter.
+1 { { 1 [ "double" >quotation call ] } } case

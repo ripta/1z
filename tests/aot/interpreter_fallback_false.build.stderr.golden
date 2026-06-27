@@ -36,5 +36,5 @@ Error: --interpreter-fallback=false rejects compound-fallback dispatch; 5 call s
   'choose{' -> '(choose-scan)' (line 175)
       callee uncompiled: NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
-AOT interpreter fallbacks: 233 total (native=222 compound-uncompiled=5 quotation=6)
-  static-check: jitInterpretedCall=5/5 jitNativeWordCall=222/222 jitCallQuotation=6/6 (matches build-time inventory)
+AOT interpreter fallbacks: 239 total (native=228 compound-uncompiled=5 quotation=6)
+  static-check: jitInterpretedCall=5/5 jitNativeWordCall=228/228 jitCallQuotation=6/6 (matches build-time inventory)

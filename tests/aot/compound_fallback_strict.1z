@@ -2,7 +2,8 @@
 \ --interpreter-fallback=false mode, a compiled caller that dispatches
 \ to an uncompiled compound callee must fail the build with a diagnostic
 \ that names the caller, the callee, the line, and the callee's
-\ NotCompilableReason. `bi` carries row-variable parameter effects, so
-\ its body still fails to compile (NC.13). Calling it from compiled
-\ code must surface as a build error rather than a runtime fallback.
-1 [ 2 + ] [ 3 + ] bi . .
+\ NotCompilableReason. `#any` defines a helper word inside its body that
+\ AOT compilation cannot discover (NC.19), so its body cannot compile.
+\ Calling it from compiled code must surface as a build error rather than
+\ a runtime fallback.
+{ 1 2 3 } [ 2 > ] #any .

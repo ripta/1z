@@ -1911,6 +1911,10 @@ const CompileState = struct {
     overflow_error_fn: c.ir_ref = c.IR_UNUSED,
     div_zero_error_fn: c.ir_ref = c.IR_UNUSED,
     underflow_error_fn: c.ir_ref = c.IR_UNUSED,
+    /// Defined runtime trap for an interpreter-free dynamic quotation call
+    /// reaching a null code_ptr. Replaces the interpreter fallback the strict
+    /// path cannot use; only emitted in AOT interpreter-free mode.
+    null_code_ptr_error_fn: c.ir_ref = c.IR_UNUSED,
     append_word_trace_frame_fn: c.ir_ref = c.IR_UNUSED,
     append_builtin_trace_frame_fn: c.ir_ref = c.IR_UNUSED,
     /// Pre-loaded interpreter Context pointer from JitContext. In AOT mode,
@@ -4758,23 +4762,48 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
             if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
         },
         .raw_at_slot => |s| {
-            {
-                const elem_addr = liveSlotAddr(state, s);
+            const elem_addr = liveSlotAddr(state, s);
 
-                // Check tag is quotation
-                const quotation_tag_const = emitTagConst(ctx, .quotation);
-                emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, bail_status);
+            // Check tag is quotation
+            const quotation_tag_const = emitTagConst(ctx, .quotation);
+            emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, bail_status);
 
-                // Load code_ptr from the quotation's payload
-                const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
-                const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
-                const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+            // Load code_ptr from the quotation's payload
+            const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
+            const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
+            const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
 
-                // Null-check code_ptr
-                const null_addr = c.ir_const_addr(ctx, 0);
-                const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
-                const if_null = c._ir_IF(ctx, is_null);
+            // Null-check code_ptr (defined before any branch so it dominates
+            // the hot-path call).
+            const null_addr = c.ir_const_addr(ctx, 0);
+            const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+            const if_null = c._ir_IF(ctx, is_null);
 
+            if (state.aot_mode and state.interpreter_free) {
+                // Interpreter-free: a runtime quotation lacking a compiled
+                // code_ptr cannot fall back to an absent interpreter. The
+                // cold branch is a defined runtime trap (sets a pending
+                // error and returns), so it RETURNs rather than merging.
+                // Because only the hot mainline flushes, no pre-flush
+                // snapshot/restore is needed (the legacy dual-flush dance
+                // existed only to keep both branches flushing from the same
+                // state). 338.1/338.2 guarantee a real code_ptr for the
+                // literal branch quotations a dispatcher selects, so the
+                // trap is reachable only by genuinely uncompiled
+                // runtime-synthesized quotations.
+                c._ir_IF_TRUE_cold(ctx, if_null);
+                emitErrorReturn(state, state.null_code_ptr_error_fn);
+
+                c._ir_IF_FALSE(ctx, if_null);
+                flushToPhysicalStack(state, stack, sp.*);
+
+                const new_sp_const = c.ir_const_addr(ctx, sp.*);
+                const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
+                c._ir_STORE(ctx, state.sp_ptr, new_sp);
+
+                const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val);
+                emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+            } else {
                 // Both branches flush the pending abstract stack
                 // to physical memory, but flushToPhysicalStack
                 // mutates the shared `stack`/`sp` state, resetting
@@ -4853,19 +4882,15 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 if (sp.* < info.input_count) return IrCodegenError.StackUnderflow;
                 sp.* = sp.* - info.input_count + info.output_count;
                 resetStackToPhysical(stack, sp.*);
-            } else if (state.aot_mode and state.interpreter_free) {
-                // Strict AOT: the cold path above re-enters the
-                // interpreter when the runtime quotation has no
-                // compiled code_ptr, which fatals at runtime in
-                // an interpreter-free binary. Reject the build
-                // instead of compiling a path that cannot run.
-                state.not_compilable_reason = .abstract_stack_underflow;
-                return IrCodegenError.NotCompilable;
             } else {
                 // Unresolved quotation effect (row variables).
                 // Reload physical sp and insert row_region so
                 // subsequent instructions above the region can
-                // continue compiling.
+                // continue compiling. Interpreter-free builds reach
+                // here too: the dispatch above emits a defined trap on
+                // a null code_ptr instead of an interpreter fallback,
+                // so the runtime-depth row-rebase is legal with no
+                // absent interpreter to re-enter.
                 reloadBaseAfterDynamicCall(state);
                 sp.* = 1;
                 stack[0] = .{ .row_region = state.nextRowId() };
@@ -7495,6 +7520,7 @@ pub fn emitWordC(
     const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
+    const null_code_ptr_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNullCodePtrError"), proto_1arg);
     const append_word_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_append_named_trace_frame"), proto_4arg);
     const append_builtin_trace_frame_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitAppendBuiltinTraceFrame"), proto_3arg);
 
@@ -7557,6 +7583,7 @@ pub fn emitWordC(
         .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
+        .null_code_ptr_error_fn = null_code_ptr_error_fn,
         .append_word_trace_frame_fn = append_word_trace_frame_fn,
         .append_builtin_trace_frame_fn = append_builtin_trace_frame_fn,
     };
@@ -7592,6 +7619,7 @@ pub fn emitWordC(
         "extern int32_t jitOverflowError(uintptr_t ctx);\n" ++
         "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n" ++
         "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n" ++
+        "extern int32_t jitNullCodePtrError(uintptr_t ctx);\n" ++
         "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t line);\n" ++
         "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t line);\n" ++
         "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n\n";
@@ -7870,6 +7898,7 @@ fn emitWordCAotPass(
     const overflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitOverflowError"), proto_1arg);
     const div_zero_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitDivisionByZeroError"), proto_1arg);
     const underflow_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitStackUnderflowError"), proto_1arg);
+    const null_code_ptr_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNullCodePtrError"), proto_1arg);
     const bail_status = c.ir_const_i32(&ctx, 1);
     const ok_status = c.ir_const_i32(&ctx, 0);
     const error_propagate_status = c.ir_const_i32(&ctx, 2);
@@ -7988,6 +8017,7 @@ fn emitWordCAotPass(
         .overflow_error_fn = overflow_error_fn,
         .div_zero_error_fn = div_zero_error_fn,
         .underflow_error_fn = underflow_error_fn,
+        .null_code_ptr_error_fn = null_code_ptr_error_fn,
         .append_word_trace_frame_fn = c.IR_UNUSED,
         .append_builtin_trace_frame_fn = c.IR_UNUSED,
         .aot_mode = true,
@@ -9141,6 +9171,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitOverflowError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitStackUnderflowError(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitNullCodePtrError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t line);\n");
     try out.appendSlice(allocator, "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n");
@@ -11531,6 +11562,10 @@ export fn jitStackUnderflowError(ctx_raw: usize) callconv(.c) i32 {
 
 export fn jitTypeMismatchError(ctx_raw: usize) callconv(.c) i32 {
     return setJitError(ctx_raw, error.TypeMismatch);
+}
+
+export fn jitNullCodePtrError(ctx_raw: usize) callconv(.c) i32 {
+    return setJitError(ctx_raw, error.NullCodePtr);
 }
 
 const ModuleWordHit = struct {
@@ -14407,6 +14442,63 @@ test "emitWordCAot quotation call emits code_ptr dispatch" {
     try testing.expect(std.mem.indexOf(u8, source, "jitCallCodePtr") != null);
     // Cold path: interpreter fallback via jitCallQuotation
     try testing.expect(std.mem.indexOf(u8, source, "jitCallQuotation") != null);
+}
+
+test "emitWordCAot interpreter-free quotation call traps instead of interpreter fallback" {
+    // A word that calls a runtime quotation parameter, compiled in
+    // interpreter-free mode. The cold (null code_ptr) branch must become a
+    // defined trap via jitNullCodePtrError instead of an interpreter fallback
+    // via jitCallQuotation, while the hot path still dispatches through
+    // jitCallCodePtr. The parameter carries a concrete ( -- ) effect so the
+    // word compiles cleanly (no trailing row), making the assertions meaningful
+    // rather than skipped on NotCompilable.
+    const empty_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{},
+        .outputs = &[_]StackEffectParam{},
+    };
+    const effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "quot", .quotation_effect = &empty_effect },
+        },
+        .outputs = &[_]StackEffectParam{},
+    };
+
+    const instrs = makeInstructions(.{"call"});
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    const source = try emitWordCAot(
+        &instrs,
+        1,
+        0,
+        "apply",
+        null,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        &effect,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        true, // interpreter_free
+    );
+    defer testing.allocator.free(source);
+
+    // Hot path: compiled quotation dispatch via jitCallCodePtr.
+    try testing.expect(std.mem.indexOf(u8, source, "jitCallCodePtr") != null);
+    // Cold path is a defined trap, not an interpreter fallback.
+    try testing.expect(std.mem.indexOf(u8, source, "jitNullCodePtrError") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitCallQuotation") == null);
 }
 
 test "emitProgramC generates complete C source" {

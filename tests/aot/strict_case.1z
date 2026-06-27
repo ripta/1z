@@ -1,5 +1,8 @@
-\ Strict-mode rejection of `case`: same shape as `cond`, dispatches on
-\ a quotation extracted from an array at runtime. The strict build
-\ must reject the compound fallback rather than producing a binary
-\ that calls the interpreter at runtime.
-1 { { 1 [ "match" print-line ] } } case
+\ Interpreter-free AOT dispatch through `case`. The branch quotations are buried
+\ in a composite `{ ... }` literal, discovered and code_ptr-attached by the freeze
+\ pass; the compiled `case` selects a branch at runtime and calls its quotation
+\ directly via the attached code_ptr. The former strict-mode rejection of this
+\ dynamic call is lifted: a null code_ptr traps cleanly, so the runtime-depth
+\ row-rebase dispatch runs interpreter-free. Output matches the interpreter.
+2 { { 1 [ 100 ] } { 2 [ 200 ] } { 3 [ 300 ] } } case .
+9 { { 1 [ 100 ] } [ 999 ] } case .

@@ -759,6 +759,11 @@ export fn jitTypeMismatchError(ctx_raw: usize) callconv(.c) i32 {
     return 2;
 }
 
+export fn jitNullCodePtrError(ctx_raw: usize) callconv(.c) i32 {
+    _ = ctx_raw;
+    return 2;
+}
+
 test "freestanding literal helpers push string and symbol values" {
     var stack: [4]Value align(16) = undefined;
     var handle = OnezHandle{

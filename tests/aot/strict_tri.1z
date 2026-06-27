@@ -1,5 +1,7 @@
-\ Strict-mode rejection of `tri`: shares `bi`'s shape with three
-\ row-variable quotation parameters. Compiling its body requires
-\ reifying abstract quotations, so the strict build must reject the
-\ compound fallback at `__entry__` -> `tri`.
+\ Interpreter-free AOT dispatch through `tri`: a row-variable combinator with
+\ three quotation parameters. The former strict-mode rejection of the dynamic
+\ quotation call is lifted, so the compiled body dispatches to each parameter
+\ quotation via its attached code_ptr (the caller's literal quotations compile).
+\ A parameter with no compiled code_ptr would trap; here all three compile, so
+\ the body runs interpreter-free and matches the interpreter.
 1 [ 2 + ] [ 3 + ] [ 4 + ] tri . . .
