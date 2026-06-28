@@ -5291,6 +5291,11 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     // In JIT mode (ir_emit), terminal_return branches still
     // get END for well-formed END/MERGE structure.
     if (if (state.aot_mode) exitFallsThrough(true_exit_kind) else true_exit_kind != .loop_diverged) {
+        // A quotation pushed by this arm and left unconsumed escapes the merge
+        // as a value; reify it before the flush so the shared slot is actually
+        // written. flushToPhysicalStack skips quotation_body entries, so without
+        // this the merge would rewrite a raw_at_slot over an unwritten slot.
+        try materializeQuotations(state, stack, sp.*, true);
         flushToPhysicalStack(state, stack, sp.*);
         // Persist the physical sp so a row-aware merge can reload
         // it. A branch that collapsed to a fresh row moved base_idx
@@ -5344,6 +5349,13 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     // terminal_return branches participate in MERGE.
     const true_diverged = if (state.aot_mode) !exitFallsThrough(true_exit_kind) else true_exit_kind == .loop_diverged;
     const false_diverged = if (state.aot_mode) !exitFallsThrough(false_exit_kind) else false_exit_kind == .loop_diverged;
+
+    // Reify a quotation escaping the false arm before its flush, mirroring the
+    // true arm above. The IF_FALSE block is still current here. Skip a diverged
+    // arm: nothing survives it, and AOT must not emit into dead post-RETURN code.
+    if (!false_diverged) {
+        try materializeQuotations(state, saved_stack, false_sp, true);
+    }
 
     if (true_diverged and false_diverged) {
         state.exit_kind = mergeNonFallthroughExitKinds(true_exit_kind, false_exit_kind);
@@ -16154,6 +16166,62 @@ test "epilogue reifies an escaping quotation output instead of bailing" {
     defer testing.allocator.free(source);
     try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_make_quot") != null);
+}
+
+test "branch merge reifies an escaping quotation arm instead of bailing" {
+    // `( flag -- q ) [ [ [ 10 ] ] [ [ 20 ] ] if ]` selects a quotation [10]/[20]
+    // through `if` and leaves it unconsumed: each arm pushes a quotation that
+    // escapes the merge. The merge now materializes the surviving quotation_body
+    // into a concrete runtime value via onez_push_quotation on both paths instead
+    // of rewriting a raw_at_slot over an unwritten slot.
+    const inner_10 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 1 },
+    };
+    const inner_20 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 20 } }, .line = 1 },
+    };
+    const true_quot = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner_10 } } }, .line = 1 },
+    };
+    const false_quot = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner_20 } } }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = true_quot } } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_quot } } }, .line = 1 },
+        .{ .op = .{ .call_word = "if" }, .line = 1 },
+    };
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    const source = try emitWordCAot(
+        &instrs,
+        1,
+        1,
+        "pick-quot",
+        null,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+    );
+    defer testing.allocator.free(source);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_pick_quot") != null);
 }
 
 test "mergedVariableArity: concrete arms reset, opaque-row arms accumulate" {

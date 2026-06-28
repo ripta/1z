@@ -1,0 +1,8 @@
+\ A quotation survives an if-merge: the chosen arm pushes a quotation [10]/[20]
+\ without calling it, so it escapes the merge as the word output. The merge reifies
+\ each arm's surviving quotation into the shared slot (closing the stale-raw_at_slot
+\ hazard) and the result is callable interpreter-free.
+pick-quot: ( flag -- q ) [ [ [ 10 ] ] [ [ 20 ] ] if ] ;
+
+t pick-quot call .
+f pick-quot call .

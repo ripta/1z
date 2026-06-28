@@ -1,0 +1,8 @@
+\ The same branch-merge quotation escape under --emit-runtime-image. The inner
+\ [ 10 ] / [ 20 ] bodies compile, so the reified value carries a real code_ptr and
+\ runs without the interpreter; this fixture confirms the runtime-image artifact
+\ class produces the same result as the interpreter-free build.
+pick-quot: ( flag -- q ) [ [ [ 10 ] ] [ [ 20 ] ] if ] ;
+
+t pick-quot call .
+f pick-quot call .
