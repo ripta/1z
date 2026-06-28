@@ -1,0 +1,2 @@
+Error: quotation body 'onez_q_0' could not be compiled to native code
+      hint: rebuild with --emit-runtime-image to run this quotation body under the interpreter

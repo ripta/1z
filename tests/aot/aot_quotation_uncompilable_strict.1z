@@ -1,0 +1,8 @@
+\ A word returns a quotation whose own body cannot be compiled to native code: it
+\ defines a helper word inside the body, which AOT compilation cannot discover.
+\ Under strict interpreter-free AOT there is no interpreter to run the escaping
+\ body and no runtime image to carry it, so the build fails with a quotation-body
+\ diagnostic that points at --emit-runtime-image.
+make-q: ( -- q ) [ [ drop helper: [ 7 ] ; helper ] ] ;
+
+0 make-q call drop

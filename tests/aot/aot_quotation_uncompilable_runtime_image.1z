@@ -1,0 +1,7 @@
+\ The same escaping quotation with a non-compilable body. Under --emit-runtime-image
+\ the escaping body is reified to a null-code_ptr Value carrying its own serialized
+\ instructions, the interpreter is force-linked, and the value runs interpreted at
+\ its call site, printing 7.
+make-q: ( -- q ) [ [ drop helper: [ 7 ] ; helper ] ] ;
+
+0 make-q call .

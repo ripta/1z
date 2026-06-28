@@ -2853,14 +2853,24 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         } else if (err == error.UncompiledQuotations) {
             for (codegen_diagnostics.uncompiled_quotations) |q| {
                 if (q.method_body_reason) |reason| {
+                    const noun: []const u8 = if (q.reification) "quotation body" else "method body";
                     err_writer.print(
-                        "Error: method body '{s}' could not be compiled to native code\n",
-                        .{q.c_name},
+                        "Error: {s} '{s}' could not be compiled to native code\n",
+                        .{ noun, q.c_name },
                     ) catch {};
                     const h: []const u8 = switch (reason) {
-                        .needs_runtime_image => "rebuild with --emit-runtime-image to run this method body under the interpreter",
-                        .interpreter_locked => "the interpreter is locked off; drop --lock-interpreter-setting or --interpreter-fallback=false so this method body can run",
-                        .non_serializable => "the method body embeds a value that cannot be serialized into the runtime image",
+                        .needs_runtime_image => if (q.reification)
+                            "rebuild with --emit-runtime-image to run this quotation body under the interpreter"
+                        else
+                            "rebuild with --emit-runtime-image to run this method body under the interpreter",
+                        .interpreter_locked => if (q.reification)
+                            "the interpreter is locked off; drop --lock-interpreter-setting or --interpreter-fallback=false so this quotation body can run"
+                        else
+                            "the interpreter is locked off; drop --lock-interpreter-setting or --interpreter-fallback=false so this method body can run",
+                        .non_serializable => if (q.reification)
+                            "the quotation body embeds a value that cannot be serialized into the runtime image"
+                        else
+                            "the method body embeds a value that cannot be serialized into the runtime image",
                     };
                     err_writer.print("      hint: {s}\n", .{h}) catch {};
                 } else {

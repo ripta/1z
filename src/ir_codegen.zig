@@ -209,10 +209,14 @@ pub const MethodBodyUncompilableReason = enum {
 pub const UncompiledQuotation = struct {
     quotation_id: u32,
     c_name: []const u8,
-    /// Set when this quotation is a `method{` dispatch body; selects the
-    /// method-body-specific diagnostic and its hint. Null for ordinary
-    /// literal quotations, which keep the generic message.
+    /// Set when this quotation is a `method{` dispatch body or a reified escaping
+    /// quotation; selects the interpreter-run diagnostic and its hint. Null for
+    /// ordinary non-reified literal quotations, which keep the generic message.
     method_body_reason: ?MethodBodyUncompilableReason = null,
+    /// True when this entry is a reified (escaping/consumed) literal quotation
+    /// rather than a `method{` dispatch body, so the diagnostic says "quotation
+    /// body" while sharing the method-body hint table.
+    reification: bool = false,
 };
 
 pub const PicStats = struct {
@@ -2728,6 +2732,13 @@ fn resolveOperandPair(entry_a: StackEntry, entry_b: StackEntry, state: *CompileS
 
 const AotQuotationLiteral = struct {
     data: []const u8,
+    /// Global quotation_id when this literal reifies a quotation that *escapes* a
+    /// word body as an output (word-output, branch-merge, loop-carry), else
+    /// maxInt(u32). `materializeQuotations` records it only for escape positions so
+    /// the AOT manifest pass can apply the reification policy (Option C) to an
+    /// escaping body whose own body did not compile, without disturbing consumed
+    /// (callback) reifications, which keep their existing handling.
+    escape_q_id: u32 = std.math.maxInt(u32),
 };
 
 const AotArrayLiteral = struct {
@@ -2750,7 +2761,7 @@ const deserializeValueAt = ibc.deserializeValueAt;
 ///
 /// In AOT mode, quotation bodies are serialized to byte arrays and pushed
 /// via the jitPushQuotation callback, avoiding dangling instruction pointers.
-fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize) IrCodegenError!void {
+fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, escape: bool) IrCodegenError!void {
     const ctx = state.ctx;
     const base_addr = state.base_addr;
     for (0..sp) |qi| {
@@ -2765,8 +2776,16 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize) I
 
                     const lit_id = if (state.aot_quotation_literals) |lits| lits.items.len else 0;
 
+                    // Look up the global quotation_id for this body. Recorded on the
+                    // literal so the manifest pass knows this quotation is reified.
+                    const q_id: usize = if (state.aot_quotation_id_map) |m|
+                        m.get(@intFromPtr(body.ptr)) orelse std.math.maxInt(u32)
+                    else
+                        std.math.maxInt(u32);
+
                     if (state.aot_quotation_literals) |lits| {
-                        lits.append(std.heap.page_allocator, .{ .data = serialized }) catch {
+                        const escape_id: u32 = if (escape) @intCast(q_id) else std.math.maxInt(u32);
+                        lits.append(std.heap.page_allocator, .{ .data = serialized, .escape_q_id = escape_id }) catch {
                             state.not_compilable_reason = .non_serializable_literal;
                             return IrCodegenError.NotCompilable;
                         };
@@ -2798,11 +2817,6 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize) I
                     const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
 
-                    // Look up the global quotation_id for this body.
-                    const q_id: usize = if (state.aot_quotation_id_map) |m|
-                        m.get(@intFromPtr(body.ptr)) orelse std.math.maxInt(u32)
-                    else
-                        std.math.maxInt(u32);
                     const q_id_const = c.ir_const_addr(ctx, q_id);
 
                     const call_result = c._ir_CALL_5(ctx, c.IR_I32, push_fn, ctx_val, sym_ref, data_len_const, dest_addr, q_id_const);
@@ -3239,8 +3253,9 @@ fn emitEpilogue(
 
     // Reification: quotations produced by a word can be output into a concrete runtime value before
     // the flush. This skips quotation bodies, but also means the quotation is written into the
-    // physical slit.
-    try materializeQuotations(state, stack, sp);
+    // physical slit. This is an escape position (word-output), so the reification is recorded for
+    // the manifest pass's Option C policy.
+    try materializeQuotations(state, stack, sp, true);
 
     // Epilogue: can't materialize a symbolic row as a word result
     for (0..sp) |i| {
@@ -3341,7 +3356,7 @@ fn emitResolvedNativeCallback(
     if (resolved.is_native) {
         if (sp.* < resolved.input_count) return IrCodegenError.StackUnderflow;
 
-        try materializeQuotations(state, stack, sp.*);
+        try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
         const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -3385,7 +3400,7 @@ fn emitDynamicRowFallback(state: *CompileState, stack: []StackEntry, sp: *usize,
 /// preserved suffix and abstract slots `1..=preserve` map to the top `preserve` physical slots.
 /// `preserve == 0` is the plain collapse to `sp == 1`.
 fn emitDynamicRowFallbackPreserving(state: *CompileState, stack: []StackEntry, sp: *usize, name: []const u8, resolved: ResolvedWord, line: usize, preserve: usize) IrCodegenError!bool {
-    try materializeQuotations(state, stack, sp.*);
+    try materializeQuotations(state, stack, sp.*, false);
     flushToPhysicalStack(state, stack, sp.*);
 
     const ctx_val = emitCallbackPreamble(state, sp.*);
@@ -4197,7 +4212,7 @@ fn tryEmitInlineStructFieldSet(
     // raw bytes for the field copy. After flush every entry [0..sp) is a
     // raw_at_slot indexing its own position; row_region cannot reach this
     // path because the dispatch site already gates it.
-    materializeQuotations(state, stack, sp.*) catch return false;
+    materializeQuotations(state, stack, sp.*, false) catch return false;
     flushToPhysicalStack(state, stack, sp.*);
 
     const instance_slot = sp.* - 4;
@@ -4694,7 +4709,7 @@ fn emitStructNativeTail(ec: EmitCtx, effective_in: u8, effective_out: u8) IrCode
 
     if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
-    try materializeQuotations(state, stack, sp.*);
+    try materializeQuotations(state, stack, sp.*, false);
     flushToPhysicalStack(state, stack, sp.*);
     const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -5674,7 +5689,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             return IrCodegenError.StackUnderflow;
         }
 
-        try materializeQuotations(state, stack, sp.*);
+        try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
         const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -5714,7 +5729,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             return .stop;
         }
 
-        try materializeQuotations(state, stack, sp.*);
+        try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
         _ = emitCallbackPreamble(state, sp.*);
 
@@ -5740,7 +5755,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             return .stop;
         }
 
-        try materializeQuotations(state, stack, sp.*);
+        try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
         const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -5773,7 +5788,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         // interpreter's behavior.
         if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
-        try materializeQuotations(state, stack, sp.*);
+        try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
         _ = emitCallbackPreamble(state, sp.*);
 
@@ -5791,7 +5806,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
 
         if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
 
-        try materializeQuotations(state, stack, sp.*);
+        try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
         _ = emitCallbackPreamble(state, sp.*);
 
@@ -6142,7 +6157,7 @@ fn emitErrorHandlerCall(ec: EmitCtx, callback_fn: c.ir_ref, frame_kind: BuiltinT
 
     if (sp.* < 2) return IrCodegenError.StackUnderflow;
 
-    try materializeQuotations(state, stack, sp.*);
+    try materializeQuotations(state, stack, sp.*, false);
     flushToPhysicalStack(state, stack, sp.*);
     const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -6177,7 +6192,7 @@ fn emitIntrinsicGet(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     if (sp.* < 1) return IrCodegenError.StackUnderflow;
 
-    try materializeQuotations(state, stack, sp.*);
+    try materializeQuotations(state, stack, sp.*, false);
     flushToPhysicalStack(state, stack, sp.*);
     const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -6197,7 +6212,7 @@ fn emitIntrinsicWithParameter(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     if (sp.* < 3) return IrCodegenError.StackUnderflow;
 
-    try materializeQuotations(state, stack, sp.*);
+    try materializeQuotations(state, stack, sp.*, false);
     flushToPhysicalStack(state, stack, sp.*);
     const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -6265,7 +6280,7 @@ fn emitIteratorOp(ec: EmitCtx, opcode: IteratorOpcode) IrCodegenError!ControlFlo
     const effects = iteratorEffects(opcode);
     if (sp.* < effects.inputs) return IrCodegenError.StackUnderflow;
 
-    try materializeQuotations(state, stack, sp.*);
+    try materializeQuotations(state, stack, sp.*, false);
     flushToPhysicalStack(state, stack, sp.*);
     const ctx_val = emitCallbackPreamble(state, sp.*);
 
@@ -6778,7 +6793,7 @@ fn compileInstructions(
                         if (extractPrecedingLiteralDepth(instructions, idx)) |count| {
                             const effective_in = count + 1;
                             if (sp.* < effective_in) return IrCodegenError.StackUnderflow;
-                            try materializeQuotations(state, stack, sp.*);
+                            try materializeQuotations(state, stack, sp.*, false);
                             flushToPhysicalStack(state, stack, sp.*);
                             const ctx_val = emitCallbackPreamble(state, sp.*);
                             emitNativeWordCall(state, ctx_val, name, resolved, instr.line);
@@ -9012,6 +9027,16 @@ pub fn emitProgramC(
             .struct_instance_slot_index = &coll.effect_table.struct_instance_slot_index,
             .vector_slot_index = &coll.effect_table.vector_slot_index,
         } else null;
+        // Quotation ids reified at an *escape* position (a quotation produced as a
+        // word output). An escaping body that did not compile carries a null
+        // `code_ptr`, so it can only run interpreted; this distinguishes it from a
+        // merely-inlined or consumed-callback uncompiled quotation, which keep their
+        // existing handling.
+        var escaping_ids: std.AutoHashMapUnmanaged(u32, void) = .{};
+        defer escaping_ids.deinit(allocator);
+        for (quotation_literals.items) |lit| {
+            if (lit.escape_q_id != std.math.maxInt(u32)) try escaping_ids.put(allocator, lit.escape_q_id, {});
+        }
         var uncompiled_q: std.ArrayListUnmanaged(UncompiledQuotation) = .{};
         defer uncompiled_q.deinit(allocator);
         for (quotations) |q| {
@@ -9040,6 +9065,27 @@ pub fn emitProgramC(
                         .quotation_id = q.quotation_id,
                         .c_name = q.c_name,
                         .method_body_reason = if (!emit_runtime_image) .needs_runtime_image else .interpreter_locked,
+                    });
+                }
+                continue;
+            }
+            // An escaping quotation whose body did not compile (Option C). The
+            // reified Value carries a null `code_ptr`, so it can only run via the
+            // interpreter. When the interpreter can be linked (default, auto,
+            // fallback=true, or a runtime image) it is force-linked and the Value
+            // runs interpreted at its `call` site; the serialized body travels
+            // inside the Value itself, so no separate interpreter-run-bodies entry
+            // is needed (unlike method dispatch). Only strict interpreter-free has
+            // nothing to run it, so the build fails pointing at --emit-runtime-image.
+            if (!q.compiled and escaping_ids.contains(q.quotation_id)) {
+                if (can_link_interpreter) {
+                    force_interpreter_linked = true;
+                } else {
+                    try uncompiled_q.append(allocator, .{
+                        .quotation_id = q.quotation_id,
+                        .c_name = q.c_name,
+                        .method_body_reason = if (!emit_runtime_image) .needs_runtime_image else .interpreter_locked,
+                        .reification = true,
                     });
                 }
                 continue;
@@ -14696,6 +14742,48 @@ test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
     try testing.expectEqualStrings("onez_q_1", diag.uncompiled_quotations[0].c_name);
     try testing.expectEqual(@as(u32, 1), diag.uncompiled_quotations[0].quotation_id);
     testing.allocator.free(diag.uncompiled_quotations);
+}
+
+test "emitProgramC applies Option C to an escaping uncompiled quotation" {
+    // [ t + ] has an inferable effect (1,1) but fails compilation (t pushes a
+    // boolean, not a numeric operand for +). A word that returns it escapes the
+    // uncompilable quotation as a word output, so the epilogue reifies it.
+    const bad_instrs = makeInstructions(.{ "t", "+" });
+    const main_instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &bad_instrs } } }, .line = 1 },
+    };
+    const words = [_]AotWordDesc{
+        .{ .name = "main", .instructions = &main_instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    // Strict interpreter-free: the escaping null-code_ptr quotation has nothing to
+    // run it, so the build fails with the reification diagnostic pointing at
+    // --emit-runtime-image.
+    {
+        var quotations = [_]AotQuotationDesc{
+            .{ .quotation_id = 0, .instructions = &bad_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
+        };
+        var diag: CodegenDiagnostics = .{};
+        const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .false, true, test_aot_metadata, &diag, null, false, testing.allocator);
+        try testing.expectError(error.UncompiledQuotations, result);
+        try testing.expectEqual(@as(usize, 1), diag.uncompiled_quotations.len);
+        try testing.expectEqualStrings("onez_q_0", diag.uncompiled_quotations[0].c_name);
+        try testing.expect(diag.uncompiled_quotations[0].reification);
+        try testing.expectEqual(MethodBodyUncompilableReason.needs_runtime_image, diag.uncompiled_quotations[0].method_body_reason.?);
+        testing.allocator.free(diag.uncompiled_quotations);
+    }
+
+    // Interpreter linkable (default .auto): the escaping quotation runs interpreted
+    // via its self-carried body, so the build proceeds with no UncompiledQuotations.
+    {
+        var quotations = [_]AotQuotationDesc{
+            .{ .quotation_id = 0, .instructions = &bad_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
+        };
+        var diag: CodegenDiagnostics = .{};
+        const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+        defer testing.allocator.free(source);
+        try testing.expectEqual(@as(usize, 0), diag.uncompiled_quotations.len);
+    }
 }
 
 test "emitProgramC no quotation table when quotations empty" {
