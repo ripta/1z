@@ -176,6 +176,7 @@ fn nativeMakeCallbackIter(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const quotation = switch (val) {
         .quotation => |q| q,
+        .closure => |c| c.asQuotation(),
         else => {
             helpers.setTypeMismatchError(ctx, "quotation", val);
             return error.TypeMismatch;
@@ -198,6 +199,7 @@ fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
     const step_val = try ctx.stack.pop();
     const cleanup_quotation = switch (cleanup_val) {
         .quotation => |q| q,
+        .closure => |c| c.asQuotation(),
         else => {
             helpers.setTypeMismatchError(ctx, "quotation", cleanup_val);
             return error.TypeMismatch;
@@ -205,6 +207,7 @@ fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
     };
     const step_quotation = switch (step_val) {
         .quotation => |q| q,
+        .closure => |c| c.asQuotation(),
         else => {
             helpers.setTypeMismatchError(ctx, "quotation", step_val);
             return error.TypeMismatch;

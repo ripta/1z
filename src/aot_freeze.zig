@@ -280,6 +280,8 @@ pub const FreezeOptions = struct {
     /// applied; callers (CLI build, embedded host) pick a class that
     /// matches the artifact they intend to produce.
     artifact_class: ArtifactClass = .interpreter_free_aot,
+    /// True under `--interpreter-fallback=false`, with or without `--lock-interpreter-setting`.
+    strict_interpreter_free: bool = false,
 };
 
 pub fn freezeModuleGraphOpts(
@@ -327,7 +329,7 @@ pub fn freezeModuleGraphOpts(
     // Phase 2: Discover all reachable compound words via BFS.
     // The entry file's local frame is still on the stack, so lookupWord
     // finds entry-file definitions and their imports.
-    var discovered = discoverReachableWords(ctx, entry_instrs, diagnostics, options.artifact_class, allocator) catch |err| {
+    var discovered = discoverReachableWords(ctx, entry_instrs, diagnostics, options.artifact_class, options.strict_interpreter_free, allocator) catch |err| {
         ctx.popPragmaFrame();
         ctx.popLocalFrame();
         return switch (err) {
@@ -642,6 +644,7 @@ fn discoverReachableWords(
     entry_instrs: []const Instruction,
     diagnostics: *FreezeDiagnostics,
     artifact_class: ArtifactClass,
+    strict_interpreter_free: bool,
     result_allocator: Allocator,
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!DiscoveredWords {
     const temp_allocator = ctx.quotationAllocator();
@@ -689,6 +692,20 @@ fn discoverReachableWords(
 
     // Seed worklist from entry instructions
     collectCallWords(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
+        freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
+        result.names.deinit(temp_allocator);
+        result.defs.deinit(temp_allocator);
+        result.native_names.deinit(temp_allocator);
+        result.native_defs.deinit(temp_allocator);
+        result.quotation_bodies.deinit(temp_allocator);
+        result.pending_call_targets.deinit(temp_allocator);
+        return err;
+    };
+
+    // promote callees of composite-nested quotations in the entry instructions before draining,
+    // so a runtime-selected dispatch, e.g., `H{ ... match: [ ... ] }`, has its branch quot
+    // callees compile.
+    if (strict_interpreter_free) collectCompositeQuotationsPromoting(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
         freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
         result.names.deinit(temp_allocator);
         result.defs.deinit(temp_allocator);
@@ -1003,6 +1020,100 @@ fn collectQuotationsInValue(val: Value, quotation_bodies: *std.ArrayListUnmanage
         },
         .vector => |v| {
             for (v.list.items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, allocator);
+        },
+        else => {},
+    }
+}
+
+/// Promoting variant of `collectCompositeQuotations`.
+///
+/// Collects each composite-nested quotation body AND seeds the BFS worklist with the words that
+/// body calls, so the ongoing drain compiles those callees and a runtime-selected dispatch of
+/// the quotation has a real `code_ptr`.
+///
+/// Used only for the *entry* instructions. A composite-nested quotation dispatched at runtime
+/// calls library words, e.g. `advance`,  that are reachable only through the dynamic dispatch,
+/// so the static BFS never discovers them and the quotation fails to compile with
+/// `.unresolvable_word`.
+///
+/// Scoped to entry composites deliberately.
+///
+/// Promoting callees of composites buried in *word bodies* pulls module-cached generic-dispatch
+/// entries and effect-less consts into the discovered set, which reroutes their AOT handling
+/// and trips the non-prelude must-compile backstop.
+fn collectCompositeQuotationsPromoting(
+    ctx: *const Context,
+    instrs: []const Instruction,
+    caller_name: []const u8,
+    worklist: *std.ArrayListUnmanaged([]const u8),
+    seen: *std.StringHashMapUnmanaged(void),
+    quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
+    quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
+    quotation_path: *std.ArrayListUnmanaged(u32),
+    diagnostics: *FreezeDiagnostics,
+    artifact_class: ArtifactClass,
+    allocator: Allocator,
+    path_allocator: Allocator,
+) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
+    for (instrs) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| switch (val) {
+                .quotation => |q| try collectCompositeQuotationsPromoting(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
+                .array, .hash, .vector => try collectQuotationsInValuePromoting(ctx, val, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
+                else => {},
+            },
+            else => {},
+        }
+    }
+}
+
+/// Recurse through a composite literal Value to reach every nested `.quotation`.
+///
+/// The companion to `collectQuotationsInValue` for the promoting (entry-scope) walk.
+fn collectQuotationsInValuePromoting(
+    ctx: *const Context,
+    val: Value,
+    caller_name: []const u8,
+    worklist: *std.ArrayListUnmanaged([]const u8),
+    seen: *std.StringHashMapUnmanaged(void),
+    quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
+    quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
+    quotation_path: *std.ArrayListUnmanaged(u32),
+    diagnostics: *FreezeDiagnostics,
+    artifact_class: ArtifactClass,
+    allocator: Allocator,
+    path_allocator: Allocator,
+) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
+    switch (val) {
+        .quotation => |q| {
+            const ptr_key = @intFromPtr(q.instructions.ptr);
+            const qgop = try quotation_seen.getOrPut(allocator, ptr_key);
+            if (!qgop.found_existing) {
+                try quotation_bodies.append(allocator, q.instructions);
+                // Seed this branch quotation's callees so they compile. A
+                // banned native inside it (e.g. `>quotation`) is NOT promoted
+                // to a build rejection here: the quotation stays uncompiled
+                // (pass 1b leaves it a null `code_ptr`) and a runtime-selected
+                // dispatch of it traps cleanly via the interpreter-free `call`
+                // path, preserving the designed runtime-trap semantics rather
+                // than failing the build on a quotation that may never run.
+                collectCallWords(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.DisallowedDynamicFeature, error.DisallowedNativeInterpreterDependency => {},
+                };
+            }
+        },
+        .array => |items| {
+            for (items) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+        },
+        .hash => |h| {
+            var it = h.iterator();
+            while (it.next()) |entry| try collectQuotationsInValuePromoting(ctx, entry.value_ptr.*, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+        },
+        .vector => |v| {
+            for (v.list.items) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         else => {},
     }
@@ -3953,7 +4064,7 @@ test "discoverReachableWords includes reached generic's method bodies and exclud
     defer allocator.free(entry_instrs);
 
     var diagnostics: FreezeDiagnostics = .{};
-    var result = try discoverReachableWords(&ctx, entry_instrs, &diagnostics, .runtime_image_aot, allocator);
+    var result = try discoverReachableWords(&ctx, entry_instrs, &diagnostics, .runtime_image_aot, false, allocator);
     defer freePendingCallTargetPaths(&result.pending_call_targets, allocator);
 
     try testing.expect(quotationBodiesContain(result.quotation_bodies.items, area_body_a));

@@ -2,4 +2,4 @@ Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls b
 Error: 1 word could not be compiled to C
   word 'bad-loop': NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
-AOT interpreter fallbacks: 1 total (compound-uncompiled=1)
+AOT interpreter fallbacks: 2 total (compound-uncompiled=2)

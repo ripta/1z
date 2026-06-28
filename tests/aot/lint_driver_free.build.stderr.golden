@@ -9,5 +9,5 @@ Error: --interpreter-fallback=false rejects compound-fallback dispatch; 3 call s
   'onez_q_54' -> '(raw>word-info)' (line 238)
       callee uncompiled: NC.19: defines a helper word inside its body that AOT compilation cannot discover
       hint: move the helper into a private{ } block at module scope
-AOT interpreter fallbacks: 253 total (native=245 per-op-native=3 compound-uncompiled=3 quotation=2)
-  static-check: jitInterpretedCall=3/3 jitNativeWordCall=248/248 jitCallQuotation=2/2 (matches build-time inventory)
+AOT interpreter fallbacks: 308 total (native=299 per-op-native=3 compound-uncompiled=3 quotation=3)
+  static-check: jitInterpretedCall=3/3 jitNativeWordCall=302/302 jitCallQuotation=3/3 (matches build-time inventory)

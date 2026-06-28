@@ -2619,6 +2619,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var freeze_result = aot_freeze.freezeModuleGraphOpts(ctx, source, &freeze_diagnostics, allocator, .{
         .compile_all_prelude = compile_all_prelude,
         .artifact_class = inferFreezeArtifactClass(interpreter_fallback, emit_runtime_image_flag),
+        .strict_interpreter_free = interpreter_fallback == .false,
     }) catch |err| {
         if (err == error.MissingStackEffects) {
             for (freeze_diagnostics.missing_stack_effects) |name| {

@@ -2171,6 +2171,13 @@ pub const InferredEffect = struct {
 /// Maximum depth of the mini-stack used during quotation effect inference. Quotation bodies are typically short.
 const max_mini_stack_depth = 64;
 
+/// Largest input arity the compile-to-discover effect search tries for a composite-nested quotation
+/// whose effect `inferQuotationEffect` cannot derive.
+///
+/// Runtime-dispatched branch quotations take only a handful of inputs. The smallest arity that compiles
+/// is taken as the effect.
+const max_discovered_quotation_arity = 4;
+
 /// Entry in the lightweight mini-stack used during quotation effect inference.
 /// Tracks whether a position holds a known quotation body (for resolving
 /// `call` and `if` within the body) or an opaque value.
@@ -4801,22 +4808,35 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
             const elem_addr = liveSlotAddr(state, s);
 
             if (state.aot_mode and state.interpreter_free) {
-                // Interpreter-free: dispatch the value at the slot through a
-                // single unified runtime helper. jitCallValue inspects the tag
-                // -- a quotation calls its code_ptr (and traps cleanly on a null
-                // code_ptr, since there is no interpreter to fall back to), and
-                // a closure (the compiled form of a curry/compose result over
-                // already-compiled bases) pushes its captured prefix and calls
-                // each base in turn. This subsumes the former tag-check /
-                // null-check / cold-trap structure and is the only place a
-                // runtime-selected dispatch can encounter a closure.
+                // Interpreter-free.
+                //
+                // Dispatch the value at the slot through a single unified runtime helper.
+                // jitCallValue inspects the tag, a quotation calls its code_ptr, and
+                // a closure, pushes its captured prefix and calls each base in turn.
+                //
+                // This subsumes the former tag-check / null-check / cold-trap structure and is
+                // the only place a runtime-selected dispatch can encounter a closure.
+                //
+                // The call arg's entry may be a `.raw_at_slot = s` whose `s` differs from its
+                // logical position after a preceding `pick-n` / `swap` (a cross-slot reference).
+                //
+                // Handing jitCallValue a pointer to slot `s` and then flushing only the remaining
+                // stack is unsafe: the flush can overwrite slot `s`, e.g., the swapped-down sibling,
+                // before the runtime dereferences the pointer.
+                //
+                // Materialize the call arg to its natural top slot by including it in the flush,
+                // then dispatch on that slot. The by-value path below avoids this because it LOADs
+                // the code_ptr into an SSA temp before flushing.
+                sp.* += 1;
                 flushToPhysicalStack(state, stack, sp.*);
+                sp.* -= 1;
+                const arg_addr = liveSlotAddr(state, sp.*);
 
                 const new_sp_const = c.ir_const_addr(ctx, sp.*);
                 const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
                 c._ir_STORE(ctx, state.sp_ptr, new_sp);
 
-                const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, elem_addr);
+                const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, arg_addr);
                 emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
             } else {
                 // Check tag is quotation. A closure reaching here (JIT or
@@ -7779,6 +7799,11 @@ const EmitWordCAotPassResult = struct {
     /// shape, so pass 2 should rebase the loop entry around the row and emit the
     /// row-aware back-edge instead of ordinary recursion.
     row_aware_self_loop: bool = false,
+    /// The abstract stack depth left by the body, i.e. the output count a successful compile settled on.
+    ///
+    /// Used by the compile-to-discover effect search for composite-nested quotations whose effect
+    /// `inferQuotationEffect` can't derive, e.g., a body using a row-variable combinator like `dip`.
+    discovered_output: u8 = 0,
 };
 
 fn emitWordCAotPass(
@@ -8167,9 +8192,11 @@ fn emitWordCAotPass(
     // branches leave different depths, and propagated through pass-through rows.
     const returns_row = state.variable_arity;
 
+    const discovered_output: u8 = if (sp > 255) 255 else @intCast(sp);
+
     // Discovery pass: skip C emission, let the caller re-run with the peak.
     if (known_peak == null) {
-        return .{ .body = null, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected };
+        return .{ .body = null, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output };
     }
 
     // Build the source-lines side table for the patched `ir_emit_c.c` so
@@ -8202,7 +8229,7 @@ fn emitWordCAotPass(
     }
 
     const body = try ir_mod.emitC(&ctx, c_name.ptr, allocator, source_lines_ptr);
-    return .{ .body = body, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected };
+    return .{ .body = body, .peak_stack_depth = state.peak_sp, .returns_row = returns_row, .row_aware_self_loop = state.row_aware_loop_detected, .discovered_output = discovered_output };
 }
 
 /// Append an `asm("name")` declaration attribute to `out` so the C compiler renames the linker symbol
@@ -8785,7 +8812,34 @@ pub fn emitProgramC(
     var compilable_quotation_ids: std.AutoHashMapUnmanaged(u32, void) = .{};
     defer compilable_quotation_ids.deinit(allocator);
     for (quotations) |*q| {
-        const effect = q.inferred_effect orelse continue;
+        const effect = q.inferred_effect orelse blk: {
+            // Compile-to-discover: `inferQuotationEffect` could not derive an effect for this
+            // quotation, e.g., its body uses a row-variable combinator like `dip`, which
+            // inference can't thread but codegen can via the row machinery.
+            //
+            // Find the smallest input arity for which the body compiles, reusing the codegen's
+            // own abstract-stack tracking, and take the depth it settles on as the output count.
+            // This lets a composite-nested quotation dispatched at runtime (`jitCallValue`)
+            // compiled instead of left a null `code_ptr`.
+            //
+            // Gated on strict interpreter-free: only there does a null `code_ptr` trap rather
+            // than fall back to the interpreter, so only there is it worth compiling these
+            // quotations (and risking a mis-derived arity); fallback-capable builds run them
+            // interpreted.
+            if (!strict_interpreter_free) continue;
+            var found: ?InferredEffect = null;
+            var ic: u8 = 0;
+            while (ic <= max_discovered_quotation_arity) : (ic += 1) {
+                var dreason: ?NotCompilableReason = null;
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, null, null, null, allocator, null, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, false) catch continue;
+                if (dres.body) |b| allocator.free(b);
+                found = .{ .input_count = ic, .output_count = dres.discovered_output };
+                break;
+            }
+            const e = found orelse continue;
+            q.inferred_effect = e;
+            break :blk e;
+        };
         const trial = emitWordCAotWithCName(
             q.instructions,
             effect.input_count,
@@ -14183,6 +14237,31 @@ test "compile inline struct-field-set field 1" {
     try testing.expect(values[0] == .struct_instance);
     try testing.expectEqual(@as(i64, 42), fields[0].fixnum);
     try testing.expectEqual(@as(i64, 123), fields[1].fixnum);
+}
+
+test "emitWordCAotPass reports discovered_output as the body's final depth" {
+    // The compile-to-discover effect search reads `discovered_output` to learn
+    // the output count a successful compile settled on. Verify it reflects the
+    // final abstract stack depth for a couple of fixed-depth intrinsic bodies.
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+    var reason: ?NotCompilableReason = null;
+
+    // [ dup ]: input 1 -> output 2
+    const dup_instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+    };
+    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, null, &reason, null, null, null, null, null, null, null, false, null, false, false);
+    if (dup_res.body) |b| testing.allocator.free(b);
+    try testing.expectEqual(@as(u8, 2), dup_res.discovered_output);
+
+    // [ drop ]: input 1 -> output 0
+    const drop_instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+    };
+    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, null, &reason, null, null, null, null, null, null, null, false, null, false, false);
+    if (drop_res.body) |b| testing.allocator.free(b);
+    try testing.expectEqual(@as(u8, 0), drop_res.discovered_output);
 }
 
 test "inline struct-field-set returns error_propagate on non-struct value" {
