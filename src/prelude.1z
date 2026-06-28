@@ -1131,20 +1131,33 @@ word-info: struct{ name: string stack-effect: any doc: any markers: array native
 \\ Return an array of word-info structs for every word in the dictionary.
 all-words: ( -- array ) [ native.all-words [ (raw>word-info) ] #map #collect ] ;
 
-\\ Snapshot the topmost local frame into an importable module. Intended for
-\\ capturing private helpers defined inside a quotation: define the helpers as
-\\ ordinary `name: [ ... ] ;` definitions, then `[ ... local-scope ] call import`
-\\ routes them into the consuming module's private deps.
+\\ Snapshot the topmost local frame into an importable module.
+\\
+\\ Intended for capturing private helpers defined inside a quotation: define the helpers as ordinary
+\\
+\\     name: [ ... ] ;
+\\
+\\ definitions, which then
+\\
+\\     [ ... local-scope ] call import
+\\
+\\ routes into the consuming module's private deps.
 local-scope: ( -- module ) [ native.local-scope ] ;
 
-\\ Run a quotation in a fresh local frame, snapshot that frame, and import
-\\ the snapshot into the consuming module's deps. The body's `name: [ ... ] ;`
-\\ definitions become private helpers visible to the module's own public
-\\ words but not to importers.
+\\ Run a quotation in a fresh local frame, snapshot that frame, and import the snapshot into the
+\\ consuming module's deps.
+\\
+\\ The body's
+\\
+\\     name: [ ... ] ;
+\\
+\\ definitions become private helpers visible to the module's own public words but not to importers.
 import-locals: ( quotation -- ) [ [ local-scope ] compose call import ] ;
 
-\\ Block-syntax sugar over `import-locals`. Inside `private{ ... }`, ordinary
-\\ `name: [ ... ] ;` definitions become private helpers of the enclosing module:
+\\ Block-syntax sugar over `import-locals`.
+\\
+\\ Inside `private{ ... }`, ordinary `name: [ ... ] ;` definitions become private helpers of the
+\\ enclosing module:
 \\
 \\   private{
 \\     (helper): [ ... ] ;

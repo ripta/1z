@@ -4781,7 +4781,6 @@ fn emitIntrinsicVirtualStructUnwrap(ec: EmitCtx) IrCodegenError!ControlFlow {
 fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
     const state = ec.state;
     const ctx = state.ctx;
-    const bail_status = state.bail_status;
     const stack = ec.stack;
     const sp = ec.sp;
 
@@ -4836,21 +4835,36 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, arg_addr);
                 emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
             } else {
-                // Check tag is quotation. A closure reaching here (JIT or
-                // AOT-with-fallback mode) is not a quotation, so it bails to the
-                // interpreter, which runs its instruction body.
+                // The slot value may be a compiled quotation, i.e., direct hot-path, an uncompiled
+                // quotation, or a closure from curry/compose.
+                //
+                // Only a compiled quotation takes the direct call. Everything else routes through
+                // jit_call_quotation, which runs an uncompiled quot's body and unwraps a closure.
+                //
+                // A non-quotation tag used to RETURN bail_status, but in AOT auto / runtime-image
+                // mode there is no JIT re-run to catch a bail, so a closure surfaced as a hard
+                // unknown runtime error.
                 const quotation_tag_const = emitTagConst(ctx, .quotation);
-                emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, bail_status);
+                const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, state.tag_offset_const);
+                const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
+                const is_not_quotation = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), tag_val, quotation_tag_const);
 
-                // Load code_ptr from the quotation's payload
+                // Load code_ptr from the payload.
+                //
+                // For a non-quotation value this reads within the 40-byte Value and is harmless
+                // because the OR below forces the soft path, so the loaded value is never called.
                 const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
                 const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
                 const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
 
-                // Null-check code_ptr (defined before any branch so it dominates
-                // the hot-path call).
+                // Take the soft path for an uncompiled quotation (null code_ptr) or any non-
+                // quotation / closure.
+                //
+                // The direct hot-path is reached only when this is a quotation with a real
+                // code_ptr, so the call below is always a valid compiled-quotation pointer.
                 const null_addr = c.ir_const_addr(ctx, 0);
-                const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+                const code_ptr_is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+                const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_OR, c.IR_BOOL), code_ptr_is_null, is_not_quotation);
                 const if_null = c._ir_IF(ctx, is_null);
 
                 // Both branches flush the pending abstract stack
@@ -4945,7 +4959,44 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 stack[0] = .{ .row_region = state.nextRowId() };
             }
         },
-        .i64_ref, .f64_ref, .bool_ref, .row_region => {
+        .row_region => {
+            // Runtime-selected quotation dispatch over a symbolic row.
+            //
+            // The value to call is the live physical top, but its abstract slot is opaque, since
+            // the row models an unknown-depth region. There's no static slot to load a code_ptr
+            // from and thus no compiled hot-path.
+            //
+            // Interpreter-free builds cannot run such a call, because there's no interpreter to
+            // reënter; they keep the NC.8 bail. A row-context jitCallValue path would be needed
+            // to lift it.
+            if (state.aot_mode and state.interpreter_free) {
+                state.not_compilable_reason = .quotation_reification;
+                return IrCodegenError.NotCompilable;
+            }
+
+            // Soft-dispatch the live top through the interpreter, mirroring the .raw_at_slot
+            // cold path: jitCallQuotation pops the live top and runs it whether or not it was
+            // compiled.
+            //
+            // sp.* is 0 here, representing the row was the popped top. The +1/-1 widens the flush
+            // and stores sp_ptr just past the quotation at the live top. Afterward the region
+            // stays opaque reëstablish a fresh row exactly as the unresolved-effect branch does.
+            sp.* += 1;
+            flushToPhysicalStack(state, stack, sp.*);
+            const ctx_val = emitCallbackPreamble(state, sp.*);
+            sp.* -= 1;
+            const call_quot_fn = if (state.aot_mode)
+                state.call_quotation_fn
+            else
+                c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
+            state.noteAotFallbackEmission(.quotation, "<quotation>", 0, ec.line);
+            const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
+            emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+            reloadBaseAfterDynamicCall(state);
+            sp.* = 1;
+            stack[0] = .{ .row_region = state.nextRowId() };
+        },
+        .i64_ref, .f64_ref, .bool_ref => {
             state.not_compilable_reason = .quotation_reification;
             return IrCodegenError.NotCompilable;
         },
