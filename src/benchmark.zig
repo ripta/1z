@@ -630,6 +630,7 @@ const VariantHistogramWalker = struct {
                 for (items) |item| try self.walkValue(alloc, stats, item);
             },
             .quotation => |quot| try self.walkInstructionSlice(alloc, stats, quot.instructions),
+            .closure => |c| try self.walkInstructionSlice(alloc, stats, c.instructions),
             .hash => |h| {
                 const ptr_key = @intFromPtr(h);
                 if (!try enterPointer(&self.hashes, alloc, ptr_key)) return;

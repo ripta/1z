@@ -130,6 +130,7 @@ pub fn classifyValue(val: Value) Classification {
         },
 
         .quotation => |q| classifyInstructions(q.instructions),
+        .closure => |c| classifyInstructions(c.instructions),
 
         .tagged => |t| classifyValue(t.inner.*),
 

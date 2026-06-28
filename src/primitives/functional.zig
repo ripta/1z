@@ -5,6 +5,8 @@ const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 const HashTable = value_mod.HashTable;
 const Quotation = value_mod.Quotation;
+const Closure = value_mod.Closure;
+const Segment = value_mod.Segment;
 const benchmark_mod = @import("../benchmark.zig");
 const BenchmarkStats = benchmark_mod.BenchmarkStats;
 const BenchmarkReport = @import("../benchmark_report.zig").BenchmarkReport(Value);
@@ -29,15 +31,53 @@ pub const primitives = [_]Primitive{
     .{ .name = "print-benchmark-report", .stack_effect = "report --", .doc = "Print benchmark results as a formatted table.", .func = nativePrintBenchmarkReport },
 };
 
+/// The callable instruction body of a quotation or closure, or null for a
+/// non-callable value.
+fn callableInstrs(val: Value) ?[]const Instruction {
+    return switch (val) {
+        .quotation => |q| q.instructions,
+        .closure => |c| c.instructions,
+        else => null,
+    };
+}
+
+/// Decompose a callable into closure segments when every base it covers is
+/// already compiled (has a `code_ptr`), or null otherwise. A plain compiled
+/// quotation is a single capture-free segment; a closure carries its own
+/// segments. The returned captures borrow the constituent values -- the owning
+/// references live in the new closure's `instructions` (registered for release
+/// at teardown), and `jitCallClosure` retains each capture when it pushes it.
+fn segmentsOf(alloc: std.mem.Allocator, val: Value) !?[]const Segment {
+    return switch (val) {
+        .quotation => |q| if (q.code_ptr) |cp| blk: {
+            const segs = try alloc.alloc(Segment, 1);
+            segs[0] = .{ .captures = &.{}, .base_code_ptr = cp };
+            break :blk segs;
+        } else null,
+        .closure => |c| c.segments,
+        else => null,
+    };
+}
+
 /// curry ( x quot -- quot' ) - Partially apply a value to a quotation
 /// Example: 5 [ + ] curry creates [ 5 + ]
+///
+/// When the base quotation is already compiled, the result is a closure that
+/// carries the base's `code_ptr` and `x` as a captured prefix, so it is callable
+/// in an interpreter-free AOT binary (push-then-call). Otherwise it is a plain
+/// quotation, unchanged from before.
 pub fn nativeCurry(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
+    const quot_val = try ctx.stack.pop();
+    const base_instrs = callableInstrs(quot_val) orelse {
+        helpers.setTypeMismatchError(ctx, "quotation", quot_val);
+        container_backing.releaseValue(quot_val);
+        return error.TypeMismatch;
+    };
     const x = try ctx.stack.pop();
 
     // Allocate new instruction array: 1 (for push x) + original length
     const alloc = ctx.quotationAllocator();
-    const new_instrs = try alloc.alloc(Instruction, 1 + quot.instructions.len);
+    const new_instrs = try alloc.alloc(Instruction, 1 + base_instrs.len);
 
     // First instruction: push the value x.
     // x came from a pop (transfer); embedding here is also a transfer,
@@ -47,36 +87,81 @@ pub fn nativeCurry(ctx: *Context) anyerror!void {
     // Copy original quotation instructions. Container literals shared
     // with the source quotation gain a second owner (this new slice
     // will also be registered for release at teardown), so retain each.
-    @memcpy(new_instrs[1..], quot.instructions);
+    @memcpy(new_instrs[1..], base_instrs);
     container_backing.retainInstructionsContainerLiterals(new_instrs[1..]);
 
     try ctx.registerQuotationContainerLiterals(new_instrs);
 
     // Curried quotation has no effect - effect validation happens at parameter attachment time
-    try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });
+    if (try segmentsOf(alloc, quot_val)) |base_segments| {
+        const new_segments = try prependCapture(alloc, base_segments, x);
+        const cl = try alloc.create(Closure);
+        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = new_segments };
+        try ctx.stack.push(.{ .closure = cl });
+    } else {
+        try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });
+    }
+}
+
+/// Prepend a captured value to the first segment of a closure body. The first
+/// base runs after `x` and the segment's existing captures are on the stack.
+fn prependCapture(alloc: std.mem.Allocator, segs: []const Segment, x: Value) ![]const Segment {
+    const new_segs = try alloc.alloc(Segment, segs.len);
+    const first = segs[0];
+    const new_caps = try alloc.alloc(Value, 1 + first.captures.len);
+    new_caps[0] = x;
+    @memcpy(new_caps[1..], first.captures);
+    new_segs[0] = .{ .captures = new_caps, .base_code_ptr = first.base_code_ptr };
+    @memcpy(new_segs[1..], segs[1..]);
+    return new_segs;
 }
 
 /// compose ( quot1 quot2 -- quot' ) - Concatenate two quotations
 /// Example: [ 2 * ] [ 3 + ] compose creates [ 2 * 3 + ]
+///
+/// When both bases are compiled, the result is a closure whose segments are the
+/// two bases' segments in order, callable interpreter-free. If either base lacks
+/// a `code_ptr`, the result is a plain quotation, unchanged from before.
 pub fn nativeCompose(ctx: *Context) anyerror!void {
-    const quot2 = try popQuotation(ctx);
-    const quot1 = try popQuotation(ctx);
+    const quot2_val = try ctx.stack.pop();
+    const instrs2 = callableInstrs(quot2_val) orelse {
+        helpers.setTypeMismatchError(ctx, "quotation", quot2_val);
+        container_backing.releaseValue(quot2_val);
+        return error.TypeMismatch;
+    };
+    const quot1_val = try ctx.stack.pop();
+    const instrs1 = callableInstrs(quot1_val) orelse {
+        helpers.setTypeMismatchError(ctx, "quotation", quot1_val);
+        container_backing.releaseValue(quot1_val);
+        return error.TypeMismatch;
+    };
 
     // Allocate new instruction array: quot1.len + quot2.len
     const alloc = ctx.quotationAllocator();
-    const new_instrs = try alloc.alloc(Instruction, quot1.instructions.len + quot2.instructions.len);
+    const new_instrs = try alloc.alloc(Instruction, instrs1.len + instrs2.len);
 
     // Copy quot1 then quot2; container literals shared with the source
     // quotations gain a second owner under this new registration, so
     // retain each copied literal.
-    @memcpy(new_instrs[0..quot1.instructions.len], quot1.instructions);
-    @memcpy(new_instrs[quot1.instructions.len..], quot2.instructions);
+    @memcpy(new_instrs[0..instrs1.len], instrs1);
+    @memcpy(new_instrs[instrs1.len..], instrs2);
     container_backing.retainInstructionsContainerLiterals(new_instrs);
 
     try ctx.registerQuotationContainerLiterals(new_instrs);
 
     // Composed quotation has no effect - effect validation happens at parameter attachment time
-    try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });
+    const s1 = try segmentsOf(alloc, quot1_val);
+    const s2 = try segmentsOf(alloc, quot2_val);
+    if (s1 != null and s2 != null) {
+        const new_segments = try alloc.alloc(Segment, s1.?.len + s2.?.len);
+        @memcpy(new_segments[0..s1.?.len], s1.?);
+        @memcpy(new_segments[s1.?.len..], s2.?);
+        const cl = try alloc.create(Closure);
+        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = new_segments };
+        try ctx.stack.push(.{ .closure = cl });
+    } else {
+        try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });
+    }
 }
 
 /// Execute a quotation and return benchmark results as a hash.
@@ -479,4 +564,76 @@ fn writeDashes(writer: anytype, count: usize) !void {
     while (i < count) : (i += 1) {
         try writer.writeAll("-");
     }
+}
+
+test "curry over a compiled base produces a closure carrying the base code_ptr" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const dummy_code: *const anyopaque = @ptrFromInt(0x1000);
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{}, .code_ptr = dummy_code } });
+    try nativeCurry(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .closure);
+    const cl = result.closure;
+    try std.testing.expectEqual(@as(usize, 1), cl.segments.len);
+    try std.testing.expectEqual(@as(usize, 1), cl.segments[0].captures.len);
+    try std.testing.expectEqual(@as(i64, 7), cl.segments[0].captures[0].fixnum);
+    try std.testing.expectEqual(dummy_code, cl.segments[0].base_code_ptr);
+}
+
+test "curry over an uncompiled base produces a plain quotation" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{} } });
+    try nativeCurry(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .quotation);
+}
+
+test "compose over compiled bases produces a closure with both segments in order" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const code_a: *const anyopaque = @ptrFromInt(0x1000);
+    const code_b: *const anyopaque = @ptrFromInt(0x2000);
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{}, .code_ptr = code_a } });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{}, .code_ptr = code_b } });
+    try nativeCompose(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .closure);
+    const cl = result.closure;
+    try std.testing.expectEqual(@as(usize, 2), cl.segments.len);
+    try std.testing.expectEqual(code_a, cl.segments[0].base_code_ptr);
+    try std.testing.expectEqual(code_b, cl.segments[1].base_code_ptr);
+}
+
+test "nested curry prepends a capture to the first segment" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const dummy_code: *const anyopaque = @ptrFromInt(0x1000);
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{}, .code_ptr = dummy_code } });
+    try nativeCurry(&ctx);
+
+    const inner = try ctx.stack.pop();
+    try ctx.stack.push(.{ .fixnum = 9 });
+    try ctx.stack.push(inner);
+    try nativeCurry(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .closure);
+    const cl = result.closure;
+    try std.testing.expectEqual(@as(usize, 1), cl.segments.len);
+    try std.testing.expectEqual(@as(usize, 2), cl.segments[0].captures.len);
+    try std.testing.expectEqual(@as(i64, 9), cl.segments[0].captures[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 7), cl.segments[0].captures[1].fixnum);
+    try std.testing.expectEqual(dummy_code, cl.segments[0].base_code_ptr);
 }

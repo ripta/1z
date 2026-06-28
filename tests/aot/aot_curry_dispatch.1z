@@ -1,0 +1,14 @@
+\ Curry/compose closures over already-compiled bases, dispatched at runtime in an
+\ interpreter-free AOT binary. `apply` calls a quotation parameter it cannot see
+\ the body of, so each closure reaches the compiled dynamic-dispatch path; the
+\ closure pushes its captured prefix and jumps to the compiled base.
+apply: ( x q -- y ) [ call ] ;
+
+\ curry: [ + ] is a compiled base; capturing 10 yields [ 10 + ], applied to 5 -> 15.
+5 10 [ + ] curry apply .
+
+\ compose: two compiled bases [ 1 + ] then [ 2 * ], applied to 6 -> (6+1)*2 = 14.
+6 [ 1 + ] [ 2 * ] compose apply .
+
+\ nested curry: 20 then 10 captured over [ + ] -> [ 10 20 + ], called -> 30.
+10 20 [ + ] curry curry call .

@@ -353,6 +353,16 @@ pub fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocato
             try buf.appendSlice(allocator, std.mem.asBytes(&q_id));
             try serializeInstructionsInto(buf, q.instructions, allocator, qid_map);
         },
+        .closure => |cl| {
+            // A closure (a runtime curry/compose result) serializes as its plain
+            // instruction body: the captures are already encoded as leading
+            // push_literals and nested compiled bodies reattach their code_ptr on
+            // deserialize. Runtime-image fidelity for closures is deferred; this
+            // arm keeps a stray closure from breaking serialization.
+            try buf.append(allocator, value_tag_quotation);
+            try buf.appendSlice(allocator, std.mem.asBytes(&quotation_id_sentinel));
+            try serializeInstructionsInto(buf, cl.instructions, allocator, qid_map);
+        },
         .array => |elems| {
             try buf.append(allocator, value_tag_array);
             const elem_count: u32 = @intCast(elems.len);

@@ -1,0 +1,15 @@
+=== curry/compose closures ===
+Stack: [ ]
+PASS: curry captures one value
+Stack: [ ]
+PASS: compose runs both bases
+Stack: [ ]
+PASS: nested curry captures two values
+Stack: [ ]
+Stack: [ ]
+PASS: closure dispatched through a word param
+Stack: [ ]
+PASS: closure captures a container value
+Stack: [ ]
+PASS: curry result is a quotation
+Stack: [ ]

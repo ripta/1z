@@ -644,6 +644,7 @@ const ValueLayout = struct {
             .hash, .vector, .byte_array, .set, .mutable_map, .stream, .resource, .parameter, .module, .marker, .struct_type, .struct_instance, .benchmark_report, .task, .channel, .iterator, .type_val, .sandbox_spec, .error_value, .bignum => .ptr,
             .string, .symbol, .array, .doc_string, .template => .slice,
             .tagged => .dual_ptr,
+            .closure => .ptr,
             .quotation, .stack_effect => .inline_,
         };
     }
@@ -1905,6 +1906,11 @@ const CompileState = struct {
     /// uintptr_t which cannot be called directly; this callback casts and
     /// dispatches.
     call_code_ptr_fn: c.ir_ref = c.IR_UNUSED,
+    /// jitCallValue callback ref: the unified interpreter-free dispatcher for a
+    /// runtime-selected `call`. Given the slot's Value pointer it calls a
+    /// quotation's code_ptr (trapping on null) or pushes a closure's captured
+    /// prefix and calls each compiled base. Only wired in AOT mode.
+    call_value_fn: c.ir_ref = c.IR_UNUSED,
     /// Error-reporting callbacks that set jit_pending_error and return 2.
     /// Used to replace bail_status returns with proper error propagation.
     type_mismatch_error_fn: c.ir_ref = c.IR_UNUSED,
@@ -4764,46 +4770,42 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
         .raw_at_slot => |s| {
             const elem_addr = liveSlotAddr(state, s);
 
-            // Check tag is quotation
-            const quotation_tag_const = emitTagConst(ctx, .quotation);
-            emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, bail_status);
-
-            // Load code_ptr from the quotation's payload
-            const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
-            const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
-            const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
-
-            // Null-check code_ptr (defined before any branch so it dominates
-            // the hot-path call).
-            const null_addr = c.ir_const_addr(ctx, 0);
-            const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
-            const if_null = c._ir_IF(ctx, is_null);
-
             if (state.aot_mode and state.interpreter_free) {
-                // Interpreter-free: a runtime quotation lacking a compiled
-                // code_ptr cannot fall back to an absent interpreter. The
-                // cold branch is a defined runtime trap (sets a pending
-                // error and returns), so it RETURNs rather than merging.
-                // Because only the hot mainline flushes, no pre-flush
-                // snapshot/restore is needed (the legacy dual-flush dance
-                // existed only to keep both branches flushing from the same
-                // state). 338.1/338.2 guarantee a real code_ptr for the
-                // literal branch quotations a dispatcher selects, so the
-                // trap is reachable only by genuinely uncompiled
-                // runtime-synthesized quotations.
-                c._ir_IF_TRUE_cold(ctx, if_null);
-                emitErrorReturn(state, state.null_code_ptr_error_fn);
-
-                c._ir_IF_FALSE(ctx, if_null);
+                // Interpreter-free: dispatch the value at the slot through a
+                // single unified runtime helper. jitCallValue inspects the tag
+                // -- a quotation calls its code_ptr (and traps cleanly on a null
+                // code_ptr, since there is no interpreter to fall back to), and
+                // a closure (the compiled form of a curry/compose result over
+                // already-compiled bases) pushes its captured prefix and calls
+                // each base in turn. This subsumes the former tag-check /
+                // null-check / cold-trap structure and is the only place a
+                // runtime-selected dispatch can encounter a closure.
                 flushToPhysicalStack(state, stack, sp.*);
 
                 const new_sp_const = c.ir_const_addr(ctx, sp.*);
                 const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, new_sp_const);
                 c._ir_STORE(ctx, state.sp_ptr, new_sp);
 
-                const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val);
+                const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, elem_addr);
                 emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
             } else {
+                // Check tag is quotation. A closure reaching here (JIT or
+                // AOT-with-fallback mode) is not a quotation, so it bails to the
+                // interpreter, which runs its instruction body.
+                const quotation_tag_const = emitTagConst(ctx, .quotation);
+                emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, bail_status);
+
+                // Load code_ptr from the quotation's payload
+                const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
+                const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
+                const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
+
+                // Null-check code_ptr (defined before any branch so it dominates
+                // the hot-path call).
+                const null_addr = c.ir_const_addr(ctx, 0);
+                const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
+                const if_null = c._ir_IF(ctx, is_null);
+
                 // Both branches flush the pending abstract stack
                 // to physical memory, but flushToPhysicalStack
                 // mutates the shared `stack`/`sp` state, resetting
@@ -7892,6 +7894,7 @@ fn emitWordCAotPass(
 
     const call_quotation_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitCallQuotation"), proto_1arg);
     const call_code_ptr_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitCallCodePtr"), proto_2arg);
+    const call_value_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitCallValue"), proto_2arg);
 
     // Error-reporting callbacks: set jit_pending_error and return 2.
     const type_mismatch_error_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitTypeMismatchError"), proto_1arg);
@@ -8027,6 +8030,7 @@ fn emitWordCAotPass(
         .aot_proto_2arg = proto_2arg,
         .call_quotation_fn = call_quotation_fn,
         .call_code_ptr_fn = call_code_ptr_fn,
+        .call_value_fn = call_value_fn,
         .preloaded_ctx_val = preloaded_ctx_val,
         .aot_string_literals = string_literals,
         .aot_quotation_literals = quotation_literals,
@@ -9167,6 +9171,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallCodePtr(uintptr_t jit_ctx, uintptr_t code_ptr);\n");
+    try out.appendSlice(allocator, "extern int32_t jitCallValue(uintptr_t jit_ctx, uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitOverflowError(uintptr_t ctx);\n");
     try out.appendSlice(allocator, "extern int32_t jitDivisionByZeroError(uintptr_t ctx);\n");
@@ -11135,6 +11140,58 @@ export fn jitCallCodePtr(jit_ctx_raw: usize, code_ptr_raw: usize) callconv(.c) i
     if (code_ptr_raw == 0) return 1;
     const func: *const fn (usize) callconv(.c) i32 = @ptrFromInt(code_ptr_raw);
     return func(jit_ctx_raw);
+}
+
+/// Unified interpreter-free dispatch for a runtime-selected `call`. Given the
+/// pointer to the Value at the dispatched slot, it runs whatever callable it
+/// holds without re-entering an interpreter:
+///   - a quotation: call its code_ptr, or set a defined null-code-ptr error and
+///     return 2 if the body was never compiled (the honest trap remainder);
+///   - a closure (a curry/compose result over compiled bases): push each
+///     segment's captured prefix onto the shared stack, then call that segment's
+///     base code_ptr, stopping on the first non-zero status.
+/// The captured values are pushed with a retain (the pushed stack slot becomes a
+/// new owner); the owning references live in the closure body's instructions.
+export fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i32 {
+    if (jit_ctx_raw == 0 or value_ptr_raw == 0) return 1;
+    const jit_ctx: *JitContext = @ptrFromInt(jit_ctx_raw);
+    const v: *const Value = @ptrFromInt(value_ptr_raw);
+    switch (v.*) {
+        .quotation => |q| {
+            const ptr = q.code_ptr orelse {
+                const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
+                ctx.jit_pending_error = error.NullCodePtr;
+                return 2;
+            };
+            const func: *const fn (usize) callconv(.c) i32 = @ptrFromInt(@intFromPtr(ptr));
+            return func(jit_ctx_raw);
+        },
+        .closure => |cl| {
+            const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
+            for (cl.segments) |seg| {
+                for (seg.captures) |cap| {
+                    container_backing.retainValue(cap);
+                    ctx.stack.push(cap) catch {
+                        ctx.jit_pending_error = error.OutOfMemory;
+                        return 2;
+                    };
+                }
+                // Pushes may have reallocated the stack buffer; refresh the
+                // shared view before handing control to the compiled base.
+                jit_ctx.items_ptr = ctx.stack.items.items.ptr;
+                jit_ctx.capacity = ctx.stack.items.capacity;
+                const func: *const fn (usize) callconv(.c) i32 = @ptrFromInt(@intFromPtr(seg.base_code_ptr));
+                const status = func(jit_ctx_raw);
+                if (status != 0) return status;
+            }
+            return 0;
+        },
+        else => {
+            const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
+            ctx.jit_pending_error = error.TypeMismatch;
+            return 2;
+        },
+    }
 }
 
 /// Push a string literal onto the stack. The string data is at `str_ptr`
@@ -14446,12 +14503,12 @@ test "emitWordCAot quotation call emits code_ptr dispatch" {
 
 test "emitWordCAot interpreter-free quotation call traps instead of interpreter fallback" {
     // A word that calls a runtime quotation parameter, compiled in
-    // interpreter-free mode. The cold (null code_ptr) branch must become a
-    // defined trap via jitNullCodePtrError instead of an interpreter fallback
-    // via jitCallQuotation, while the hot path still dispatches through
-    // jitCallCodePtr. The parameter carries a concrete ( -- ) effect so the
-    // word compiles cleanly (no trailing row), making the assertions meaningful
-    // rather than skipped on NotCompilable.
+    // interpreter-free mode. The dispatch goes through the unified jitCallValue
+    // helper, which handles both a quotation (calling its code_ptr, trapping
+    // cleanly on a null one) and a closure -- there is no interpreter fallback
+    // (jitCallQuotation) emitted. The parameter carries a concrete ( -- ) effect
+    // so the word compiles cleanly (no trailing row), making the assertions
+    // meaningful rather than skipped on NotCompilable.
     const empty_effect = StackEffect{
         .inputs = &[_]StackEffectParam{},
         .outputs = &[_]StackEffectParam{},
@@ -14494,11 +14551,10 @@ test "emitWordCAot interpreter-free quotation call traps instead of interpreter 
     );
     defer testing.allocator.free(source);
 
-    // Hot path: compiled quotation dispatch via jitCallCodePtr.
-    try testing.expect(std.mem.indexOf(u8, source, "jitCallCodePtr") != null);
-    // Cold path is a defined trap, not an interpreter fallback.
-    try testing.expect(std.mem.indexOf(u8, source, "jitNullCodePtrError") != null);
-    try testing.expect(std.mem.indexOf(u8, source, "jitCallQuotation") == null);
+    // Dispatch goes through the unified jitCallValue helper; no interpreter
+    // fallback (jitCallQuotation) is emitted.
+    try testing.expect(std.mem.indexOf(u8, source, "jitCallValue(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitCallQuotation(") == null);
 }
 
 test "emitProgramC generates complete C source" {

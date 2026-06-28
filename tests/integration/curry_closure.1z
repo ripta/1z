@@ -1,0 +1,22 @@
+use "testing" ;
+
+"curry/compose closures" test-section
+
+\ curry captures one value and applies the compiled base
+5 10 [ + ] curry call 15 "curry captures one value" assert=
+
+\ compose runs both bases left-to-right
+6 [ 1 + ] [ 2 * ] compose call 14 "compose runs both bases" assert=
+
+\ nested curry captures two values in order
+10 20 [ + ] curry curry call 30 "nested curry captures two values" assert=
+
+\ a closure dispatched through a word that cannot see its body
+apply: ( x q -- y ) [ call ] ;
+5 10 [ + ] curry apply 15 "closure dispatched through a word param" assert=
+
+\ a container-backed capture is retained correctly
+{ 1 2 3 } [ #len ] curry call 3 "closure captures a container value" assert=
+
+\ the closure still reports as a quotation to user code
+10 [ + ] curry quotation? t "curry result is a quotation" assert=

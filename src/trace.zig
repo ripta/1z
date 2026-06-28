@@ -184,6 +184,7 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
         .tagged => |t| try writer.print("<{s}>", .{t.tag.name}),
         .struct_instance => |si| try writer.print("<{s}>", .{si.struct_type.name}),
         .quotation => try writer.writeAll("<quotation>"),
+        .closure => try writer.writeAll("<quotation>"),
         .stream => try writer.writeAll("<stream>"),
         .resource => |r| try writer.print("<resource:{s}>", .{r.type_name}),
         .module => |m| try writer.print("<module:{s}>", .{m.name}),

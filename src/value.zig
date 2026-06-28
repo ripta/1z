@@ -235,6 +235,7 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
             }
             break :blk false;
         },
+        .closure => |c| valueContainsBorrowedBuffer(.{ .quotation = c.asQuotation() }),
         .hash => |h| blk: {
             var iter = h.iterator();
             while (iter.next()) |entry| {
@@ -921,6 +922,35 @@ pub const Quotation = struct {
     }
 };
 
+/// One step of a Closure: the captured values pushed before, and the compiled
+/// code_ptr of, one already-compiled base body. `curry`/`compose` decompose into
+/// an ordered list of these so the interpreter-free compiled `call` can push the
+/// captures and jump to each base in turn (push-then-call).
+pub const Segment = struct {
+    captures: []const Value,
+    base_code_ptr: *const anyopaque,
+};
+
+/// A Closure is the compiled form of a `curry`/`compose` result: a quotation
+/// whose body is an ordered list of segments over already-compiled bases. It is
+/// an internal optimization of a quotation, not a distinct user-visible type --
+/// it presents as a quotation everywhere (predicates, inspect, equality). The
+/// `instructions` field carries the full `[push captures] ++ base...` body so the
+/// interpreter can re-execute it; `segments` is the fast path used only by the
+/// compiled runtime-selected `call`.
+pub const Closure = struct {
+    instructions: []const Instruction,
+    effect: ?*const StackEffect = null,
+    segments: []const Segment,
+
+    /// View the closure body as a plain quotation for interpreter execution and
+    /// the reuse of quotation formatting/equality/hashing. `code_ptr` is null so
+    /// the interpreter runs `instructions` rather than dispatching a base.
+    pub fn asQuotation(self: *const Closure) Quotation {
+        return .{ .instructions = self.instructions, .effect = self.effect };
+    }
+};
+
 fn writeTemplateSegment(writer: anytype, seg: TemplateSegment) !void {
     // XXX(ripta): omg, ew
     switch (seg) {
@@ -982,6 +1012,7 @@ pub const Value = union(enum) {
     symbol: []const u8,
     array: []const Value,
     quotation: Quotation,
+    closure: *Closure,
     hash: *HashTable,
     vector: *Vector,
     byte_array: *ByteArray,
@@ -1057,6 +1088,7 @@ pub const Value = union(enum) {
                 }
                 try writer.writeAll("]");
             },
+            .closure => |c| try (Value{ .quotation = c.asQuotation() }).write(writer),
             // TODO(ripta): This is currently tightly-coupled to the internal
             // representation of HashTable, despite H{ } being a non-native
             // implementation in the prelude.
@@ -1221,6 +1253,7 @@ pub const Value = union(enum) {
                 return true;
             },
             .quotation => |a| a.eql(other.quotation),
+            .closure => |a| a.asQuotation().eql(other.closure.asQuotation()),
             // TODO(ripta): This is currently tightly-coupled to the internal
             // representation of HashTable, despite H{ } being a non-native
             // implementation in the prelude.
@@ -1372,6 +1405,20 @@ pub const Value = union(enum) {
             },
             .quotation => |quot| {
                 for (quot.instructions) |instr| {
+                    const line_hash = instr.line;
+                    hasher.update(std.mem.asBytes(&line_hash));
+                    switch (instr.op) {
+                        .push_literal => |v| {
+                            const v_hash = v.hashValue();
+                            hasher.update(std.mem.asBytes(&v_hash));
+                        },
+                        .call_word => |name| hasher.update(name),
+                        .call_word_direct => |slot| hasher.update(slot.name),
+                    }
+                }
+            },
+            .closure => |c| {
+                for (c.instructions) |instr| {
                     const line_hash = instr.line;
                     hasher.update(std.mem.asBytes(&line_hash));
                     switch (instr.op) {

@@ -114,6 +114,17 @@ const Quotation = struct {
     code_ptr: ?*const anyopaque = null,
 };
 
+const Segment = struct {
+    captures: []const Value,
+    base_code_ptr: *const anyopaque,
+};
+
+const Closure = struct {
+    instructions: []const Instruction,
+    effect: ?*const StackEffect = null,
+    segments: []const Segment,
+};
+
 const ImageParameterDescription = extern struct {
     name: [*]const u8,
     name_len: u32,
@@ -163,6 +174,7 @@ const Value = union(enum) {
     symbol: []const u8,
     array: []const Value,
     quotation: Quotation,
+    closure: *Closure,
     hash: *HashTable,
     vector: *Vector,
     byte_array: *ByteArray,
@@ -607,6 +619,40 @@ export fn jitCallCodePtr(jit_ctx_raw: usize, code_ptr_raw: usize) callconv(.c) i
     const func: *const fn (*JitContext) callconv(.c) i32 = @ptrFromInt(code_ptr_raw);
     const jit_ctx = contextFromJit(jit_ctx_raw) orelse return 1;
     return func(jit_ctx);
+}
+
+/// Unified interpreter-free dispatch for a runtime-selected `call`: run the
+/// callable at the slot's Value pointer. A quotation calls its code_ptr (or
+/// traps cleanly if it was never compiled); a closure pushes each segment's
+/// captured prefix and calls that segment's base. The fixed freestanding stack
+/// never reallocates, so no retain or buffer refresh is needed.
+export fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i32 {
+    if (value_ptr_raw == 0) return 1;
+    const jit_ctx = contextFromJit(jit_ctx_raw) orelse return 1;
+    const handle: *OnezHandle = @ptrCast(@alignCast(jit_ctx.ctx));
+    const v: *const Value = @ptrFromInt(value_ptr_raw);
+    switch (v.*) {
+        .quotation => |q| {
+            const ptr = q.code_ptr orelse return unsupported(handle, "uncompiled quotation call");
+            const func: *const fn (*JitContext) callconv(.c) i32 = @ptrFromInt(@intFromPtr(ptr));
+            return func(jit_ctx);
+        },
+        .closure => |cl| {
+            for (cl.segments) |seg| {
+                for (seg.captures) |cap| {
+                    const status = pushValue(handle, cap);
+                    if (status != 0) return status;
+                }
+                jit_ctx.items_ptr = handle.stack.ptr;
+                jit_ctx.capacity = handle.stack.len;
+                const func: *const fn (*JitContext) callconv(.c) i32 = @ptrFromInt(@intFromPtr(seg.base_code_ptr));
+                const status = func(jit_ctx);
+                if (status != 0) return status;
+            }
+            return 0;
+        },
+        else => return unsupported(handle, "call of non-quotation value"),
+    }
 }
 
 export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {

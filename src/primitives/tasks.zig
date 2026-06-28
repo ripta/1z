@@ -761,6 +761,25 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
 
         .quotation => |quot| .{ .quotation = try deepCopyQuotation(quot, alloc) },
 
+        .closure => |c| blk: {
+            const new_closure = try alloc.create(value_mod.Closure);
+            const copied = try deepCopyQuotation(c.asQuotation(), alloc);
+            const new_segments = try alloc.alloc(value_mod.Segment, c.segments.len);
+            for (c.segments, 0..) |seg, i| {
+                const new_caps = try alloc.alloc(Value, seg.captures.len);
+                for (seg.captures, 0..) |cap, j| {
+                    new_caps[j] = try deepCopyValue(cap, alloc);
+                }
+                new_segments[i] = .{ .captures = new_caps, .base_code_ptr = seg.base_code_ptr };
+            }
+            new_closure.* = .{
+                .instructions = copied.instructions,
+                .effect = copied.effect,
+                .segments = new_segments,
+            };
+            break :blk .{ .closure = new_closure };
+        },
+
         .hash => |h| blk: {
             const new_h = try alloc.create(value_mod.HashTable);
             new_h.* = .{};

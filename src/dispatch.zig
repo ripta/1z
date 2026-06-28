@@ -22,6 +22,9 @@ pub fn dispatchTypeName(val: Value) []const u8 {
         .symbol => "symbol",
         .array => "array",
         .quotation => "quotation",
+        // A closure is the compiled form of a curry/compose result; it presents
+        // as a quotation to user code and dispatch.
+        .closure => "quotation",
         .hash => "hash",
         .vector => "vector",
         .byte_array => "byte-array",
@@ -85,6 +88,9 @@ pub fn builtinTypeName(comptime tag: std.meta.Tag(Value)) []const u8 {
         .symbol => "symbol",
         .array => "array",
         .quotation => "quotation",
+        // Umbrella: a closure reuses the `quotation` builtin TypeValue (see
+        // initBuiltinTypeValues), so it dispatches identically to a quotation.
+        .closure => "quotation",
         .hash => "hash",
         .vector => "vector",
         .byte_array => "byte-array",

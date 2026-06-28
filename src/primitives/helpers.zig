@@ -227,6 +227,7 @@ pub fn valueTypeName(val: Value) []const u8 {
         .symbol => "symbol",
         .array => "array",
         .quotation => "quotation",
+        .closure => "quotation",
         .hash => "hash",
         .vector => "vector",
         .byte_array => "byte-array",
@@ -294,6 +295,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
         },
         .array => |items| std.fmt.allocPrint(allocator, "array[{d}]", .{items.len}),
         .quotation => |q| std.fmt.allocPrint(allocator, "quotation[{d}]", .{q.instructions.len}),
+        .closure => |c| std.fmt.allocPrint(allocator, "quotation[{d}]", .{c.instructions.len}),
         .hash => |h| std.fmt.allocPrint(allocator, "hash[{d}]", .{h.count()}),
         .vector => |v| std.fmt.allocPrint(allocator, "vector[{d}]", .{v.list.items.len}),
         .byte_array => |b| std.fmt.allocPrint(allocator, "byte-array[{d}]", .{b.slice().len}),
@@ -420,8 +422,22 @@ pub fn popBoolean(ctx: *Context) !bool {
     };
 }
 
+/// Pop a callable quotation. A closure (the compiled form of a curry/compose
+/// result) is accepted too, viewed as its plain instruction body so every
+/// quotation consumer (`call`, `dip`, `keep`, `bi`, ...) runs it by
+/// re-interpretation; the segment fast path is used only by the compiled
+/// runtime-selected `call`.
 pub fn popQuotation(ctx: *Context) !Quotation {
-    return popAs(.quotation, ctx);
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .quotation => |q| return q,
+        .closure => |c| return c.asQuotation(),
+        else => {
+            setTypeMismatchError(ctx, "quotation", val);
+            container_backing.releaseValue(val);
+            return error.TypeMismatch;
+        },
+    }
 }
 
 pub fn popSymbol(ctx: *Context) ![]const u8 {
