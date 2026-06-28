@@ -3612,14 +3612,11 @@ fn emitIndirectQuotCall(
 }
 
 /// Settle one branch of an if-over-row before its END so both branches leave the
-/// physical stack at a consistent height for the merge's sp reload. When the
-/// branch only ran abstractly-tracked ops above the incoming row, `base_idx` is
-/// unchanged and the physical sp must be stored from the abstract depth. When the
-/// branch collapsed to a fresh row mid-way (a row-introducing call), `base_idx`
-/// moved and the live runtime sp is already correct, so leave it.
-fn finalizeRowBranch(state: *CompileState, stack: []StackEntry, branch_sp: usize, entry_base_idx: c.ir_ref) void {
+/// physical stack at the same height for the merge's sp reload. Slot 0 is the row,
+/// so the depth is `base_idx + branch_sp` even when the branch collapsed mid-way
+/// and then pushed above the new row.
+fn finalizeRowBranch(state: *CompileState, stack: []StackEntry, branch_sp: usize) void {
     flushToPhysicalStack(state, stack, branch_sp);
-    if (state.base_idx != entry_base_idx) return;
     const sp_const = c.ir_const_addr(state.ctx, branch_sp);
     const new_sp = c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
     c._ir_STORE(state.ctx, state.sp_ptr, new_sp);
@@ -3688,7 +3685,7 @@ fn emitIfOverRow(
     var end_true: c.ir_ref = c.IR_UNUSED;
     var true_ends_on_row = false;
     if (exitFallsThrough(true_exit_kind)) {
-        finalizeRowBranch(state, stack, true_sp, saved_base_idx);
+        finalizeRowBranch(state, stack, true_sp);
         true_ends_on_row = hasRowRegion(stack, true_sp);
         end_true = c._ir_END(ctx);
     }
@@ -3711,7 +3708,7 @@ fn emitIfOverRow(
     const false_exit_kind = state.exit_kind;
     var false_ends_on_row = false;
     if (exitFallsThrough(false_exit_kind)) {
-        finalizeRowBranch(state, stack, false_sp, saved_base_idx);
+        finalizeRowBranch(state, stack, false_sp);
         false_ends_on_row = hasRowRegion(stack, false_sp);
     }
 

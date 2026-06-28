@@ -1,0 +1,30 @@
+\ Interpreter-free AOT of a recursive combinator that calls its quotation
+\ parameter (`over call`, effect unknown) and then self-recurses inside an `if`
+\ arm -- the `(any-loop)` / `(all-loop)` shape from `#any` / `#all`. The self
+\ call is reached after the dynamic `call` has collapsed the abstract stack to a
+\ row, so it compiles to ordinary recursion; the codegen must not leave a
+\ dangling loop frame. Exercised with both a plain predicate and a curry-closure
+\ predicate.
+any-loop: ( iter quot -- ? ) [
+  over #next?
+  dup option:some? [
+    option:some> over call
+    [ 2drop t ] [ any-loop ] if
+  ] [ drop 2drop f ] if
+] ;
+my-any: ( seq quot -- ? ) [ swap >iterator swap any-loop ] ;
+
+all-loop: ( iter quot -- ? ) [
+  over #next?
+  dup option:some? [
+    option:some> over call
+    [ all-loop ] [ 2drop f ] if
+  ] [ drop 2drop t ] if
+] ;
+my-all: ( seq quot -- ? ) [ swap >iterator swap all-loop ] ;
+
+{ 1 2 3 } [ 2 > ] my-any .
+{ 1 2 3 } [ 5 > ] my-any .
+{ 1 2 3 } 2 [ = ] curry my-any .
+{ 1 2 3 } [ 0 > ] my-all .
+{ 1 2 3 } [ 2 > ] my-all .
