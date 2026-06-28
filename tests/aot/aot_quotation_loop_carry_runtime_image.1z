@@ -1,0 +1,7 @@
+\ The same loop-carry quotation escape under --emit-runtime-image. The carried
+\ [ 7 ] body compiles, so the reified value carries a real code_ptr; this fixture
+\ confirms the runtime-image artifact class produces the same result as the
+\ interpreter-free build.
+carry-quot: ( -- q ) [ [ 7 ] 3 [ ] times ] ;
+
+carry-quot call .

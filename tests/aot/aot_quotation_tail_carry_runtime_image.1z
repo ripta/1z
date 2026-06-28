@@ -1,0 +1,7 @@
+\ The same self-tail-call quotation carry under --emit-runtime-image. The carried
+\ [ 42 ] body compiles, so the reified value carries a real code_ptr; this fixture
+\ confirms the runtime-image artifact class produces the same result as the
+\ interpreter-free build.
+acc: ( n q -- q ) [ over 0 > [ swap 1 - swap drop [ 42 ] acc ] [ nip ] if ] ;
+
+2 [ 0 ] acc call .

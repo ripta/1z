@@ -2997,6 +2997,12 @@ fn emitRowAwareSelfTailCall(state: *CompileState, stack: []StackEntry, sp: *usiz
         return IrCodegenError.NotCompilable;
     }
 
+    // Reify a literal quotation argument above the preserved row before the flush;
+    // see the matching note in the ordinary self-tail-call path. flushToPhysicalStack
+    // skips quotation_body, so without this resetStackToPhysicalPreservingRows below
+    // would rewrite it to a raw_at_slot over an unwritten slot.
+    try materializeQuotations(state, stack, sp.*, true);
+
     flushToPhysicalStack(state, stack, sp.*);
 
     const height_const = c.ir_const_addr(ctx, 1 + ic);
@@ -3835,6 +3841,11 @@ fn compilePredBodyLoop(
         .raw_at_slot => |s| .{ .slot = s },
         else => .unsupported,
     };
+
+    // Reify any quotation carried below the loop args before the header; see the
+    // matching note in emitIntrinsicTimes. body_source above already captured the
+    // loop's body quotation, so this acts only on the carried region.
+    try materializeQuotations(state, stack, sp.*, true);
 
     flushToPhysicalStack(state, stack, sp.*);
 
@@ -5980,6 +5991,13 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
 
     const initial_n = try requireI64(n_entry, state);
 
+    // A quotation carried in the loop-invariant region below the loop args is
+    // carried unchanged across the back-edge; reify it before the loop header so
+    // the slot is written once. flushToPhysicalStack skips quotation_body, and the
+    // back-edge invariance check compares only rows, so without this the carried
+    // entry would be rewritten to a raw_at_slot over an unwritten slot.
+    try materializeQuotations(state, stack, sp.*, true);
+
     // Flush user stack to physical memory before the loop
     flushToPhysicalStack(state, stack, sp.*);
 
@@ -6065,6 +6083,10 @@ fn emitIntrinsicLoop(ec: EmitCtx) IrCodegenError!ControlFlow {
     if (sp.* < 1) return IrCodegenError.StackUnderflow;
     sp.* -= 1;
     const pred_entry = stack[sp.*];
+
+    // Reify any quotation carried below the loop args before the header; see the
+    // matching note in emitIntrinsicTimes.
+    try materializeQuotations(state, stack, sp.*, true);
 
     // Flush user stack to physical memory before the loop
     flushToPhysicalStack(state, stack, sp.*);
@@ -6712,6 +6734,11 @@ fn compileInstructions(
                         state.not_compilable_reason = .nested_loop_conflict;
                         return IrCodegenError.NotCompilable;
                     }
+
+                    // Reify a literal quotation passed as a recursive-call argument
+                    // before the flush. flushToPhysicalStack skips quotation_body, so
+                    // without this the argument copy below would read an unwritten slot.
+                    try materializeQuotations(state, stack, sp.*, true);
 
                     // Flush symbolic stack to physical memory
                     flushToPhysicalStack(state, stack, sp.*);
@@ -16222,6 +16249,119 @@ test "branch merge reifies an escaping quotation arm instead of bailing" {
     defer testing.allocator.free(source);
     try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_pick_quot") != null);
+}
+
+test "loop carry reifies an escaping quotation before the loop header" {
+    // `( -- q ) [ [ 7 ] 3 [ ] times ]` carries the quotation [ 7 ] in the
+    // loop-invariant region below the `times` args. The loop entry now reifies it
+    // into a concrete runtime value via onez_push_quotation before the loop header,
+    // so the carried slot is written instead of being rewritten to a stale
+    // raw_at_slot.
+    const inner_7 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1 },
+    };
+    const empty_body = &[_]Instruction{};
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner_7 } } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = empty_body } } }, .line = 1 },
+        .{ .op = .{ .call_word = "times" }, .line = 1 },
+    };
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    const source = try emitWordCAot(
+        &instrs,
+        0,
+        1,
+        "carry-quot",
+        null,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+    );
+    defer testing.allocator.free(source);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_carry_quot") != null);
+}
+
+test "self-tail-call carry reifies an escaping quotation argument" {
+    // `( n q -- q ) [ over 0 > [ swap 1 - swap drop [ 42 ] acc ] [ swap drop ] if ]`
+    // replaces its quotation argument with a fresh literal [ 42 ] on each recursive
+    // self-tail-call, so the back-edge carries a quotation_body argument. The
+    // back-edge now reifies it via onez_push_quotation before the argument copy
+    // instead of copying from an unwritten slot. Uses only intrinsic ops so no
+    // resolver is needed.
+    const inner_42 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 1 },
+    };
+    const true_arm = &[_]Instruction{
+        .{ .op = .{ .call_word = "swap" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = "-" }, .line = 1 },
+        .{ .op = .{ .call_word = "swap" }, .line = 1 },
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner_42 } } }, .line = 1 },
+        .{ .op = .{ .call_word = "acc" }, .line = 1 },
+    };
+    const false_arm = &[_]Instruction{
+        .{ .op = .{ .call_word = "swap" }, .line = 1 },
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "over" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 },
+        .{ .op = .{ .call_word = ">" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = true_arm } } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = false_arm } } }, .line = 1 },
+        .{ .op = .{ .call_word = "if" }, .line = 1 },
+    };
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    const source = try emitWordCAot(
+        &instrs,
+        2,
+        1,
+        "acc",
+        null,
+        "acc",
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+    );
+    defer testing.allocator.free(source);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_acc") != null);
 }
 
 test "mergedVariableArity: concrete arms reset, opaque-row arms accumulate" {

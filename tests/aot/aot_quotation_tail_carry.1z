@@ -1,0 +1,9 @@
+\ A self-recursive word threads a quotation argument and, on each recursive
+\ self-tail-call, replaces it with a fresh literal quotation `[ 42 ]`. At the
+\ back-edge that new argument is a quotation_body (a literal), not the threaded
+\ input, so the argument copy would read an unwritten slot without reification.
+\ The base case returns the carried quotation, which is then called -- proving it
+\ survived the back-edges with a valid code_ptr.
+acc: ( n q -- q ) [ over 0 > [ swap 1 - swap drop [ 42 ] acc ] [ nip ] if ] ;
+
+2 [ 0 ] acc call .

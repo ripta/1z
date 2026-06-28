@@ -1,0 +1,10 @@
+\ A quotation sits in the loop-invariant region below a `times` loop whose body
+\ does not consume it, so it is carried unchanged across the back-edge and returned
+\ as the word output. Without reification the carried quotation_body is skipped by
+\ the loop's entry flush and later rewritten to a stale raw_at_slot; reifying it
+\ before the loop header writes the slot once so the carried value survives every
+\ iteration. Building interpreter-free proves the carried quotation's code_ptr was
+\ attached, since the `call` at the use site has no interpreter to fall back to.
+carry-quot: ( -- q ) [ [ 7 ] 3 [ ] times ] ;
+
+carry-quot call .
