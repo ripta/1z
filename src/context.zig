@@ -580,6 +580,11 @@ pub const Context = struct {
     /// Cache of TypeValues for resource types, keyed by resource type name.
     /// Lazily populated by `type-of` when encountering a resource.
     resource_type_values: std.StringHashMapUnmanaged(*value_mod.TypeValue) = .{},
+    /// Mapping from struct name to its canonical StructType, populated when a `struct{ }` is defined.
+    /// The runtime-image loader consults this so a compiled `make-struct-instance` reuses the same
+    /// StructType the interpreter (prelude) created, rather than allocating a second one whose
+    /// `type_val` would be unlinked, which would split struct dispatch identity.
+    struct_types_by_name: std.StringHashMapUnmanaged(*value_mod.StructType) = .{},
     /// Interned descriptors for parameterized types, keyed by
     /// (base TypeValue pointer, element TypeValue pointer).
     parameterized_type_descriptors: std.HashMapUnmanaged(
@@ -1127,6 +1132,7 @@ pub const Context = struct {
         self.dispatch_frames.deinit(self.allocator);
         self.builtin_type_values.deinit(self.allocator);
         self.resource_type_values.deinit(self.allocator);
+        self.struct_types_by_name.deinit(self.allocator);
         self.parameterized_type_descriptors.deinit(self.allocator);
         self.struct_descriptors.deinit(self.allocator);
         self.anonymous_union_type_values.deinit(self.allocator);
@@ -2655,6 +2661,23 @@ pub const Context = struct {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
         try self.resource_type_values.put(self.allocator, name, tv);
+    }
+
+    /// Register a struct type by name.
+    ///
+    /// Called when a `struct{ }` is defined so the runtime-image loader can recover the canonical
+    /// StructType for a compiled-construction instance.
+    pub fn registerStructType(self: *Context, name: []const u8, st: *value_mod.StructType) !void {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+        try self.struct_types_by_name.put(self.allocator, name, st);
+    }
+
+    /// Look up a struct type by name, or null if none is registered.
+    pub fn lookupStructTypeByName(self: *const Context, name: []const u8) ?*value_mod.StructType {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return self.struct_types_by_name.get(name);
     }
 
     /// Look up a resource TypeValue by name, creating and registering one if it does not exist yet.

@@ -440,31 +440,31 @@ bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.#
 \\ Resize a mutable sequence in place with an explicit fill value for growth.
 #resize!: ( seq n fill -- seq ) [ -rot> over #len over < [ [ swap ] dip swap native.#grow! ] [ [ swap drop ] dip native.#shrink! ] if ] ;
 
-\ Short-circuiting sequence predicates
-\\ Test whether any element satisfies the predicate. Short-circuits.
-#any: ( seq quot -- ? ) [
-  any-loop: ( iter quot -- ? ) [
-    over #next?
-    dup option:some? [
-      option:some> over call
-      [ 2drop t ] [ any-loop ] if
-    ] [ drop 2drop f ] if
-  ] ;
-  swap >iterator swap any-loop
+\\ Short-circuiting sequence predicates
+\\
+\\ Helpers lifted out of #any / #all so AOT compilation can discover them; defined at module scope
+\\ rather than in a `private{` block, since the prelude parses too deep for the parser coroutine
+\\ to reënter for a block here (cf. `(raw>constraint-info)`).
+(any-loop): ( iter quot -- ? ) [
+  over #next?
+  dup option:some? [
+    option:some> over call
+    [ 2drop t ] [ (any-loop) ] if
+  ] [ drop 2drop f ] if
 ] ;
+(all-loop): ( iter quot -- ? ) [
+  over #next?
+  dup option:some? [
+    option:some> over call
+    [ (all-loop) ] [ 2drop f ] if
+  ] [ drop 2drop t ] if
+] ;
+\\ Test whether any element satisfies the predicate. Short-circuits.
+#any: ( seq quot -- ? ) [ swap >iterator swap (any-loop) ] ;
 \\ Test whether no element satisfies the predicate.
 #none: ( seq quot -- ? ) [ #any not ] ;
 \\ Test whether all elements satisfy the predicate. Short-circuits.
-#all: ( seq quot -- ? ) [
-  all-loop: ( iter quot -- ? ) [
-    over #next?
-    dup option:some? [
-      option:some> over call
-      [ all-loop ] [ 2drop f ] if
-    ] [ drop 2drop t ] if
-  ] ;
-  swap >iterator swap all-loop
-] ;
+#all: ( seq quot -- ? ) [ swap >iterator swap (all-loop) ] ;
 
 \ Stack-shuffling
 \\ Drop the item at stack depth `n`, counting from the top (0 is the top item).
@@ -1089,37 +1089,42 @@ constraint-info>>: ( stack-effect-param -- constraint-info ) [
 \\ Structured word information for runtime introspection.
 word-info: struct{ name: string stack-effect: any doc: any markers: array native?: boolean body: any methods: array source-loc: any module: any provenance: any compiled?: boolean protocol: any } ;
 
+\ Helpers lifted out of `(raw>word-info)` so AOT compilation can discover them.
+\
+\ Defined at module scope alongside `(raw>constraint-info)` rather than in a `private{` block,
+\ which the prelude parses too deep to reënter here.
+
+(>param): ( raw -- param ) [
+  dup 0 #nth
+  over 1 #nth
+  2 pick-n 2 #nth (>stack-effect-info)
+  3 pick-n 3 #nth
+  make-stack-effect-param nip
+] ;
+(>stack-effect-info): ( raw -- info ) [
+  dup f = [ ] [
+    dup #first [ (>param) ] #map #collect
+    swap #last [ (>param) ] #map #collect
+    make-stack-effect-info
+  ] if
+] ;
+(>source-loc):    ( raw -- source-loc )          [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
+(>provenance):    ( raw -- provenance )          [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
+(>dispatch-prov): ( raw -- dispatch-provenance ) [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
+(>method-info):   ( raw -- method-info )         [ dup 0 #nth swap 1 #nth (>dispatch-prov) make-method-info ] ;
+
 \\ Convert a raw 12-element array from native.>word into a word-info struct.
 (raw>word-info): ( raw -- word-info ) [
-  >param: [
-    dup 0 #nth
-    over 1 #nth
-    2 pick-n 2 #nth >stack-effect-info
-    3 pick-n 3 #nth
-    make-stack-effect-param nip
-  ] ;
-  >stack-effect-info: [
-    dup f = [ ] [
-      dup #first [ >param ] #map #collect
-      swap #last [ >param ] #map #collect
-      make-stack-effect-info
-    ] if
-  ] ;
-  >source-loc:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-source-loc nip ] if ] ;
-  >provenance:    [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth make-provenance nip ] if ] ;
-  >dispatch-prov: [ dup f = [ ] [ dup 0 #nth over 1 #nth 2 pick-n 2 #nth 3 pick-n 3 #nth make-dispatch-provenance nip ] if ] ;
-  >method-info:   [ dup 0 #nth swap 1 #nth >dispatch-prov make-method-info ] ;
-
   dup 0 #nth
-  over 1 #nth >stack-effect-info
+  over 1 #nth (>stack-effect-info)
   2 pick-n 2 #nth
   3 pick-n 3 #nth
   4 pick-n 4 #nth
   5 pick-n 5 #nth
-  6 pick-n 6 #nth [ >method-info ] #map #collect
-  7 pick-n 7 #nth >source-loc
+  6 pick-n 6 #nth [ (>method-info) ] #map #collect
+  7 pick-n 7 #nth (>source-loc)
   8 pick-n 8 #nth
-  9 pick-n 9 #nth >provenance
+  9 pick-n 9 #nth (>provenance)
   10 pick-n 10 #nth
   11 pick-n 11 #nth (raw>constraint-info)
   make-word-info nip

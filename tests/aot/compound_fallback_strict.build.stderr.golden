@@ -1,6 +1,6 @@
 Error: --interpreter-fallback=false rejects compound-fallback dispatch; 1 call site still route through the interpreter
-  '__entry__' -> '#any' (line 9)
-      callee uncompiled: NC.19: defines a helper word inside its body that AOT compilation cannot discover
-      hint: move the helper into a private{ } block at module scope
-AOT interpreter fallbacks: 10 total (native=9 compound-uncompiled=1)
-  static-check: jitInterpretedCall=1/1 jitNativeWordCall=9/9 jitCallQuotation=0/0 (matches build-time inventory)
+  '__entry__' -> 'benchmark-report?' (line 8)
+      callee uncompiled: NC.11: instruction pre-scan rejected the word before compilation started
+      hint: blocked until the called word is in the AOT compilation set
+AOT interpreter fallbacks: 2 total (native=1 compound-uncompiled=1)
+  static-check: jitInterpretedCall=1/1 jitNativeWordCall=1/1 jitCallQuotation=0/0 (matches build-time inventory)

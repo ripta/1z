@@ -1,2 +1,2 @@
-Fatal: word '#all' requires interpreter fallback; rebuild with --interpreter-fallback=true
+Fatal: word 'benchmark-report?' requires interpreter fallback; rebuild with --interpreter-fallback=true
 error.interpreter-fallback-disabled

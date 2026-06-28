@@ -1,7 +1,4 @@
-Prelude compilation: 393/402 words compiled (97.8%)
-  word '#all' cannot be compiled
-      NC.19: defines a helper word inside its body that AOT compilation cannot discover
-      hint: move the helper into a private{ } block at module scope
+Prelude compilation: 404/410 words compiled (98.5%)
   word 'bytes-alloc-ptr' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
@@ -11,15 +8,9 @@ Prelude compilation: 393/402 words compiled (97.8%)
   word 'benchmark-report?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  word '(raw>word-info)' cannot be compiled
-      NC.19: defines a helper word inside its body that AOT compilation cannot discover
-      hint: move the helper into a private{ } block at module scope
   word '(choose-scan)' cannot be compiled
       NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
-  word '#any' cannot be compiled
-      NC.19: defines a helper word inside its body that AOT compilation cannot discover
-      hint: move the helper into a private{ } block at module scope
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
@@ -27,15 +18,16 @@ Prelude compilation: 393/402 words compiled (97.8%)
       NC.6: calls a word that is not available in the AOT compilation set
       hint: blocked until the AOT resolver includes this word
 Quotation bodies compiled: 0
-Inline PIC sites: 5/49 generic call sites preseeded
-AOT interpreter fallbacks: 254 total
-  native: 234
-  compound-uncompiled: 5
-  quotation: 15
+Inline PIC sites: 33/77 generic call sites preseeded
+AOT interpreter fallbacks: 315 total
+  native: 296
+  compound-uncompiled: 2
+  quotation: 17
   sites:
     native: provenance? -> native.struct-type-predicate (line 0)
     native: nan? -> = (line 421)
     quotation: run-benchmarks -> <quotation> (line 885)
+    quotation: (any-loop) -> <quotation> (line 451)
     native: quotation? -> = (line 385)
     native: unmake-descriptor-variant -> native.struct-instance-destructure (line 0)
     native: value>> -> native.struct-field-get (line 0)
@@ -48,9 +40,8 @@ AOT interpreter fallbacks: 254 total
     native: . -> inspect (line 697)
     native: >method-info -> native.hash-to-struct (line 0)
     native: >on -> native.enum-from-symbol (line 0)
-    native: all-words -> native.all-words (line 1132)
-    ... 238 more
-  static-check: jitInterpretedCall=5/5 jitNativeWordCall=234/234 jitCallQuotation=15/15 (matches build-time inventory)
+    ... 299 more
+  static-check: jitInterpretedCall=2/2 jitNativeWordCall=296/296 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter

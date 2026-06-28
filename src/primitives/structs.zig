@@ -140,6 +140,10 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     tv.* = .{ .name = name, .descriptor = frozen_desc };
     struct_type.type_val = tv;
 
+    // Record the canonical StructType so the runtime-image loader can reuse it
+    // for compiled-construction instances instead of allocating a second one.
+    try ctx.registerStructType(name, struct_type);
+
     // NAME: ( -- type ) - the struct type itself pushing a TypeValue
     const type_markers = try alloc.alloc(*Marker, 3);
     type_markers[0] = @constCast(&markers_mod.parse_time_marker);

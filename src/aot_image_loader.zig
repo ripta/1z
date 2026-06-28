@@ -951,6 +951,13 @@ fn populateTypeValueSlots(
                             if (tv.virtual_type) |vt| {
                                 if (vt.anon_struct) |as| break :blk @constCast(as);
                             }
+                            // A plain `struct{` carries no pointer to its StructType, so we gotta
+                            // recover the interpreter's canonical StructType by name.
+                            //
+                            // Reusing it keeps a single StructType shared between interpreter-defined
+                            // and compiled-construction instances, so that struct dispatch resolves
+                            // identically.
+                            if (ctx.lookupStructTypeByName(name)) |reused| break :blk reused;
                             break :blk null;
                         },
                         .virtual => |vdata| {
