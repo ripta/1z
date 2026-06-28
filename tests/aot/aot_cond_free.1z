@@ -1,0 +1,23 @@
+\ Interpreter-free (`--interpreter-fallback=false`) compilation of `cond`. The
+\ branch combinator pulls each test / body quotation out of the runtime branches
+\ array and `call`s it; in interpreter-free mode that dispatch over a symbolic
+\ row goes through `jitCallValue`. The branch quotations are entry composites, so
+\ strict discovery compiles them and they carry real `code_ptr`s at runtime.
+\ Output must match the interpreter (`positive` / `zero` / `negative`).
+5 dup {
+  { [ dup 0 > ] [ drop "positive" ] }
+  { [ dup 0 = ] [ drop "zero" ] }
+  [ drop "negative" ]
+} cond print-line
+
+0 dup {
+  { [ dup 0 > ] [ drop "positive" ] }
+  { [ dup 0 = ] [ drop "zero" ] }
+  [ drop "negative" ]
+} cond print-line
+
+-5 dup {
+  { [ dup 0 > ] [ drop "positive" ] }
+  { [ dup 0 = ] [ drop "zero" ] }
+  [ drop "negative" ]
+} cond print-line

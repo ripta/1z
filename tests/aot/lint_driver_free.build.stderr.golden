@@ -1,5 +1,7 @@
+AOT interpreter fallbacks: 325 total (native=319 per-op-native=3 quotation=3)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=322/322 jitCallQuotation=3/3 (matches build-time inventory)
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-Error: 1 word could not be compiled to C
-  word '(lint-rule-with-context)': NC.8: a quotation in abstract form must become a concrete runtime value
-      hint: blocked until quotation bodies can be compiled
-AOT interpreter fallbacks: 313 total (native=306 per-op-native=3 compound-uncompiled=1 quotation=3)
+artifact: interpreter
+interpreter: linked (--interpreter-fallback=false without --lock-interpreter-setting)
+jitInterpretedCall: not linked
+runtime-image: words=532 stack-effects=529 typevalue-slots=80 blob-present=true

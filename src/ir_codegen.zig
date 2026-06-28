@@ -4965,13 +4965,25 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
             // The value to call is the live physical top, but its abstract slot is opaque, since
             // the row models an unknown-depth region. There's no static slot to load a code_ptr
             // from and thus no compiled hot-path.
-            //
-            // Interpreter-free builds cannot run such a call, because there's no interpreter to
-            // reënter; they keep the NC.8 bail. A row-context jitCallValue path would be needed
-            // to lift it.
             if (state.aot_mode and state.interpreter_free) {
-                state.not_compilable_reason = .quotation_reification;
-                return IrCodegenError.NotCompilable;
+                // Interpreter-free dispatch of the live runtime top.
+                //
+                // The row arm is reached only when the popped top is the row itself, which the
+                // reaches-row collapse leaves at physical slot base_idx (the last
+                // reloadBaseAfterDynamicCall set base_idx = live_sp - 1 and nothing was pushed
+                // since), so base_addr already points at the value to call. Mirror the
+                // .raw_at_slot interpreter-free path with sp.* == 0: dispatch the value at
+                // liveSlotAddr(state, 0) through jitCallValue (which calls a quotation's code_ptr,
+                // runs a closure's segments, or traps cleanly on a null code_ptr -- no interpreter
+                // re-entry), logically popping it by storing sp_ptr = base_idx + 0.
+                const arg_addr = liveSlotAddr(state, 0);
+                c._ir_STORE(ctx, state.sp_ptr, state.base_idx);
+                const call_result = c._ir_CALL_2(ctx, c.IR_I32, state.call_value_fn, state.jit_ctx_ptr, arg_addr);
+                emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = ec.line } });
+                reloadBaseAfterDynamicCall(state);
+                sp.* = 1;
+                stack[0] = .{ .row_region = state.nextRowId() };
+                return .next;
             }
 
             // Soft-dispatch the live top through the interpreter, mirroring the .raw_at_slot

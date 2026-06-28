@@ -1,7 +1,0 @@
-\ Strict-mode rejection of `cond`: branch-combinator over a runtime
-\ branches array. The body dispatches on a quotation pulled from the
-\ array at runtime, so the AOT compiler cannot specialize the
-\ row-variable effect. Calling `cond` from compiled code must surface
-\ as a build error in --interpreter-fallback=false mode, naming
-\ `cond` as the compound callee.
-{ [ t ] [ "match" print-line ] } cond

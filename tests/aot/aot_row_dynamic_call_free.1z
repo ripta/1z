@@ -1,0 +1,56 @@
+\ Interpreter-free (`--interpreter-fallback=false`) dispatch of a closure and of
+\ a quotation over a symbolic row. Mirrors `aot_row_dynamic_call.1z` (auto mode)
+\ but builds with the interpreter locked out, exercising the interpreter-free
+\ analogue of the row dispatch: `check>> call` pulls a quotation out of a struct
+\ field and `call`s it where the value sits at the live top of an opaque row, so
+\ the `.row_region` arm dispatches it through `jitCallValue` with no interpreter
+\ to re-enter. The check quotation is a literal in a compiled word body, so it
+\ carries a real `code_ptr` at runtime. Output must match the interpreter.
+my-rule: struct{ id severity check fix } ;
+
+any-loop: ( iter quot -- ? ) [
+  over #next?
+  dup option:some? [
+    option:some> over call
+    [ 2drop t ] [ any-loop ] if
+  ] [ drop 2drop f ] if
+] ;
+my-any: ( seq quot -- ? ) [ swap >iterator swap any-loop ] ;
+
+\ Variable-arity condition: the curry-closure predicate exercises closure
+\ dispatch, and the call collapses the caller's stack to a row.
+my-suppressed?: ( rule-id suppressions -- bool ) [
+  dup f = [ 2drop f ] [ swap [ = ] curry my-any ] if
+] ;
+
+run-rule: ( rule ctx -- diags ) [
+  swap
+  dup id>> 2 pick-n 3 #nth my-suppressed? [
+    2drop { }
+  ] [
+    1 pick-n 0 #nth
+    2 pick-n 1 #nth
+    3 pick-n 2 #nth
+    4 pick-n 4 #nth
+    5 pick-n 5 #nth
+    5 pick-n check>> call
+    swap drop swap drop
+  ] if
+] ;
+
+\ The check quotation consumes the five pushed context fields and returns diags.
+make-check-rule: ( id -- rule ) [ "warn" [ 2drop 2drop drop { 42 } ] f make-my-rule ] ;
+
+driver: ( -- ) [
+  \ Not suppressed: ctx[3] holds no matching id, so the check runs.
+  "x" make-check-rule
+  { "p" "src" { } { } { } { } }
+  run-rule #len .
+
+  \ Suppressed: ctx[3] contains the rule id, so the true arm returns no diags.
+  "x" make-check-rule
+  { "p" "src" { } { "x" } { } { } }
+  run-rule #len .
+] ;
+
+driver
