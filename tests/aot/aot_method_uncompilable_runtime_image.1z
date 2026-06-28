@@ -1,11 +1,11 @@
 \ A reachable method{ body the IR backend cannot compile to native code: it
-\ returns a quotation value, which compiled code cannot reify. Under
-\ --emit-runtime-image the body is serialized and runs through the interpreter,
-\ so the replayed method result is observed -- the generic default would print
-\ -1.
+\ defines a helper word inside its body, which AOT compilation cannot discover.
+\ Under --emit-runtime-image the body is serialized and runs through the
+\ interpreter, so the replayed method result is observed -- the generic default
+\ would print -1.
 
 counter: virtual{ fixnum } ;
 bump:    generic ( c -- n ) [ drop -1 ] ;
-bump:    method{ counter } [ drop [ 7 ] ] ;
+bump:    method{ counter } [ drop helper: [ 7 ] ; helper ] ;
 
 0 >counter bump .

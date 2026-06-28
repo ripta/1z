@@ -1,0 +1,10 @@
+\ A word returns a quotation as its output. The escaping literal [ 7 ] is
+\ discovered and compiled by the freeze pass; the epilogue now reifies it into a
+\ concrete runtime Value with its compiled code_ptr attached instead of bailing,
+\ so the returned quotation builds and is callable natively interpreter-free.
+seven: ( -- q ) [ [ 7 ] ] ;
+\ The headline [ drop [ 7 ] ] shape: drops its input, returns [ 7 ].
+make-seven: ( x -- q ) [ drop [ 7 ] ] ;
+
+seven call .
+99 make-seven call .

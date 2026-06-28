@@ -1,4 +1,4 @@
-Prelude compilation: 391/402 words compiled (97.3%)
+Prelude compilation: 392/402 words compiled (97.5%)
   word '#all' cannot be compiled
       NC.19: defines a helper word inside its body that AOT compilation cannot discover
       hint: move the helper into a private{ } block at module scope
@@ -8,9 +8,6 @@ Prelude compilation: 391/402 words compiled (97.3%)
   word 'bytes-alloc-ptr' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
-  word '[]' cannot be compiled
-      NC.18: compilation failed without a categorized reason
-      hint: diagnostic gap; please report
   word 'bytes>ffi-ptr' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set

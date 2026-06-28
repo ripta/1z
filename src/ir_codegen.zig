@@ -3237,12 +3237,16 @@ fn emitEpilogue(
 
     if (sp != output_count) return IrCodegenError.StackShapeMismatch;
 
-    // The epilogue cannot materialize quotation bodies or symbolic rows as a
-    // word result.
+    // Reification: quotations produced by a word can be output into a concrete runtime value before
+    // the flush. This skips quotation bodies, but also means the quotation is written into the
+    // physical slit.
+    try materializeQuotations(state, stack, sp);
+
+    // Epilogue: can't materialize a symbolic row as a word result
     for (0..sp) |i| {
         switch (stack[i]) {
-            .quotation_body, .row_region => {
-                state.not_compilable_reason = .quotation_truthiness;
+            .row_region => {
+                state.not_compilable_reason = .abstract_stack_underflow;
                 return IrCodegenError.NotCompilable;
             },
             else => {},
@@ -16019,6 +16023,49 @@ test "row underflow: the same word is rejected in non-AOT (JIT) C emission" {
         IrCodegenError.StackUnderflow,
         emitWordC(&instrs, 1, 1, "reach-below", testing.allocator),
     );
+}
+
+test "epilogue reifies an escaping quotation output instead of bailing" {
+    // `( -- q ) [ [ 7 ] ]` returns a quotation as its output. The epilogue now
+    // materializes the escaping quotation_body into a concrete runtime value via
+    // onez_push_quotation rather than rejecting it as NotCompilable.
+    const inner_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner_body } } }, .line = 1 },
+    };
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    const source = try emitWordCAot(
+        &instrs,
+        0,
+        1,
+        "make-quot",
+        null,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+    );
+    defer testing.allocator.free(source);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_make_quot") != null);
 }
 
 test "mergedVariableArity: concrete arms reset, opaque-row arms accumulate" {

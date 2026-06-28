@@ -4,6 +4,6 @@
 
 counter: virtual{ fixnum } ;
 bump:    generic ( c -- n ) [ drop -1 ] ;
-bump:    method{ counter } [ drop [ 7 ] ] ;
+bump:    method{ counter } [ drop helper: [ 7 ] ; helper ] ;
 
 0 >counter bump drop
