@@ -164,6 +164,11 @@ pub fn build(b: *std.Build) void {
     });
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
     run_lib_unit_tests.setName("unit tests");
+    // `zig build` does not forward the ambient environment to a Run step, so the
+    // -Dtest-filter option is plumbed to the custom runner (which reads
+    // ONEZ_TEST_FILTER) explicitly. Same comma-separated substring semantics as
+    // the integration/fmt/aot/lsp filters.
+    if (test_filter) |filter| run_lib_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", filter);
 
     // Expose the unit-test binary at a stable path so external coverage
     // tooling such as kcov can wrap it. Installed under zig-out/test/ to keep
@@ -184,6 +189,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_freestanding_capi_unit_tests = b.addRunArtifact(freestanding_capi_unit_tests);
     run_freestanding_capi_unit_tests.setName("freestanding capi unit tests");
+    if (test_filter) |filter| run_freestanding_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", filter);
 
     // Hosted C-API (embedding library) unit tests. Exposed under its own
     // `capi-test` step rather than `test` because several tests load stdlib
@@ -199,6 +205,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_hosted_capi_unit_tests = b.addRunArtifact(hosted_capi_unit_tests);
     run_hosted_capi_unit_tests.setName("hosted capi unit tests");
+    if (test_filter) |filter| run_hosted_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", filter);
     const capi_test_step = b.step("capi-test", "Run hosted C-API embedding-library unit tests");
     capi_test_step.dependOn(&run_hosted_capi_unit_tests.step);
 

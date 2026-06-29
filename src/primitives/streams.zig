@@ -881,6 +881,15 @@ pub fn nativeChr(ctx: *Context) anyerror!void {
         return error.InvalidArgument;
     }
 
+    // ASCII codepoints are their own single-byte UTF-8 encoding; return the
+    // interned shared slice instead of allocating a fresh one-character string.
+    if (codepoint < 128) {
+        if (ctx.internedAsciiByte(@intCast(codepoint))) |shared| {
+            try ctx.stack.push(.{ .string = shared });
+            return;
+        }
+    }
+
     const alloc = ctx.quotationAllocator();
     var buf: [4]u8 = undefined;
     const len = std.unicode.utf8Encode(codepoint, &buf) catch return error.InvalidArgument;
@@ -936,4 +945,45 @@ pub fn clearNonBlockingFd(fd: std.posix.fd_t) void {
     var flags: std.c.O = @bitCast(@as(u32, @intCast(raw_flags)));
     flags.NONBLOCK = false;
     _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(flags)));
+}
+
+test ">char interns ASCII codepoints" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 65 });
+    try nativeChr(&ctx);
+    const a = try ctx.stack.pop();
+    try std.testing.expect(a == .string);
+    try std.testing.expectEqualStrings("A", a.string);
+
+    // The same ASCII codepoint returns the same shared slice, not a fresh dupe.
+    try ctx.stack.push(.{ .fixnum = 65 });
+    try nativeChr(&ctx);
+    const b = try ctx.stack.pop();
+    try std.testing.expectEqual(a.string.ptr, b.string.ptr);
+
+    // The tokenizer hot-path whitespace codepoints encode correctly.
+    try ctx.stack.push(.{ .fixnum = 9 });
+    try nativeChr(&ctx);
+    const tab = try ctx.stack.pop();
+    try std.testing.expectEqualStrings("\t", tab.string);
+    try std.testing.expectEqual(ctx.internedAsciiByte('\t').?.ptr, tab.string.ptr);
+}
+
+test ">char allocates fresh for non-ASCII codepoints" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // U+0100 is a 2-byte codepoint, outside the interned ASCII range.
+    try ctx.stack.push(.{ .fixnum = 0x100 });
+    try nativeChr(&ctx);
+    const a = try ctx.stack.pop();
+    try std.testing.expect(a == .string);
+    try std.testing.expectEqual(@as(usize, 2), a.string.len);
+
+    try ctx.stack.push(.{ .fixnum = 0x100 });
+    try nativeChr(&ctx);
+    const b = try ctx.stack.pop();
+    try std.testing.expect(a.string.ptr != b.string.ptr);
 }

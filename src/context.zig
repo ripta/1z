@@ -569,6 +569,14 @@ pub const Context = struct {
     /// variants (.tagged, .struct_instance, .resource) have entries here
     /// but callers should prefer the TypeValue embedded in those values.
     builtin_type_array: []?*value_mod.TypeValue = &.{},
+    /// Interned single-character strings for ASCII codepoints 0..127, each a
+    /// stable one-byte slice indexed by its byte value. `>char` and the
+    /// single-codepoint string accessors return the shared slice instead of
+    /// allocating a fresh single-character string per call, the dominant
+    /// allocation in the tokenizer hot path. Strings are immutable and
+    /// content-compared, so sharing is transparent. Allocated in the root
+    /// arena and inherited by-pointer by task contexts.
+    single_char_strings: []const []const u8 = &.{},
     /// Runtime-initialized dispatch wildcard TypeValue.
     dispatch_any_sentinel: ?*value_mod.TypeValue = null,
     /// Runtime-initialized unary dispatch sentinel TypeValue.
@@ -773,6 +781,31 @@ pub const Context = struct {
         }
     }
 
+    /// Pre-allocate the interned single-character strings for ASCII codepoints
+    /// 0..127. Each entry is a stable one-byte slice whose content is the byte
+    /// itself (ASCII is its own UTF-8 encoding), so `>char` / string `#nth` /
+    /// string `#first` can return a shared slice instead of duping. Allocated
+    /// in the arena like `builtin_type_array`; freed in bulk at deinit.
+    fn initSingleCharStrings(self: *Context) !void {
+        const alloc = self.arena.allocator();
+        const count = 128;
+        const bytes = try alloc.alloc(u8, count);
+        const table = try alloc.alloc([]const u8, count);
+        for (0..count) |b| {
+            bytes[b] = @intCast(b);
+            table[b] = bytes[b .. b + 1];
+        }
+        self.single_char_strings = table;
+    }
+
+    /// Return the interned one-byte string for an ASCII byte, or null when the
+    /// byte is outside the interned range or the table is unpopulated (in which
+    /// case the caller allocates a fresh string).
+    pub fn internedAsciiByte(self: *const Context, byte: u8) ?[]const u8 {
+        if (byte < self.single_char_strings.len) return self.single_char_strings[byte];
+        return null;
+    }
+
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
     pub fn init(allocator: Allocator) Context {
@@ -833,6 +866,10 @@ pub const Context = struct {
             std.debug.panic("Failed to init builtin type values: {any}", .{err});
         };
 
+        ctx.initSingleCharStrings() catch |err| {
+            std.debug.panic("Failed to init single-char strings: {any}", .{err});
+        };
+
         primitives.registerPrimitives(&ctx.dictionary, ctx.arena.allocator(), &ctx.next_dispatch_id) catch |err| {
             std.debug.panic("Failed to register primitives: {any}", .{err});
         };
@@ -890,6 +927,7 @@ pub const Context = struct {
             .program_args = parent.program_args,
             .static_ffi_libs = parent.static_ffi_libs,
             .builtin_type_array = parent.builtin_type_array,
+            .single_char_strings = parent.single_char_strings,
             .dispatch_any_sentinel = parent.dispatch_any_sentinel,
             .dispatch_unary_sentinel = parent.dispatch_unary_sentinel,
             .self_type_sentinel = parent.self_type_sentinel,

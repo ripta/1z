@@ -25,10 +25,12 @@ pub fn main() void {
     var leak_count: usize = 0;
     var total_log_err_count: usize = 0;
 
+    var ran_count: usize = 0;
     for (tests) |test_fn| {
         if (name_filter) |needle| {
-            if (std.mem.indexOf(u8, test_fn.name, needle) == null) continue;
+            if (!matchesFilter(test_fn.name, needle)) continue;
         }
+        ran_count += 1;
         testing.allocator_instance = .{};
         testing.log_level = .warn;
         log_err_count = 0;
@@ -67,8 +69,8 @@ pub fn main() void {
     }
 
     std.debug.print(
-        "Unit test summary: total={d} slow={d} failed={d} skipped={d} leaked={d}\n",
-        .{ tests.len, slow_count, fail_count, skip_count, leak_count },
+        "Unit test summary: ran={d} total={d} slow={d} failed={d} skipped={d} leaked={d}\n",
+        .{ ran_count, tests.len, slow_count, fail_count, skip_count, leak_count },
     );
     if (total_log_err_count != 0) {
         std.debug.print("Unit test logs: err_count={d}\n", .{total_log_err_count});
@@ -76,6 +78,19 @@ pub fn main() void {
     if (fail_count != 0 or leak_count != 0 or total_log_err_count != 0) {
         std.process.exit(1);
     }
+}
+
+/// Comma-separated substring filter: a test runs when its name contains any of
+/// the trimmed, non-empty comma-separated patterns. Mirrors `matchesFilter` in
+/// build.zig so -Dtest-filter behaves identically for unit and integration tests.
+fn matchesFilter(name: []const u8, filter: []const u8) bool {
+    var iter = std.mem.splitScalar(u8, filter, ',');
+    while (iter.next()) |pattern| {
+        const trimmed = std.mem.trim(u8, pattern, " \t");
+        if (trimmed.len == 0) continue;
+        if (std.mem.indexOf(u8, name, trimmed) != null) return true;
+    }
+    return false;
 }
 
 fn watchdogThread(name: []const u8, state: *TestState) void {

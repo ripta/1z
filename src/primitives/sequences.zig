@@ -321,6 +321,12 @@ fn nativeNthString(ctx: *Context) anyerror!void {
         setErrorContext(ctx, "index {d} out of bounds for string of length {d}", .{ idx, slen });
         return error.IndexOutOfBounds;
     };
+    if (cp_slice.len == 1) {
+        if (ctx.internedAsciiByte(cp_slice[0])) |shared| {
+            try ctx.stack.push(.{ .string = shared });
+            return;
+        }
+    }
     const result = ctx.quotationAllocator().dupe(u8, cp_slice) catch return error.OutOfMemory;
     try ctx.stack.push(.{ .string = result });
 }
@@ -385,6 +391,7 @@ fn nativeFirstString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
     var iter = SequenceIterator.init(val, alloc) orelse unreachable;
+    iter.single_char_cache = ctx.single_char_strings;
     const first = try iter.next() orelse {
         setErrorContext(ctx, "empty string", .{});
         return error.EmptySequence;
@@ -3333,6 +3340,45 @@ test ">byte-array rejects unrelated values" {
 
     try ctx.stack.push(.{ .fixnum = 42 });
     try std.testing.expectError(error.TypeMismatch, nativeToByteArray(&ctx));
+}
+
+test "string #nth interns single ASCII codepoint" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "hello" });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try nativeNthString(&ctx);
+    const e = try ctx.stack.pop();
+    try std.testing.expect(e == .string);
+    try std.testing.expectEqualStrings("e", e.string);
+    // Shares the interned 'e' slice instead of allocating a fresh one.
+    try std.testing.expectEqual(ctx.internedAsciiByte('e').?.ptr, e.string.ptr);
+}
+
+test "string #nth allocates fresh for multi-byte codepoint" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // "\xc3\xa1b": á (U+00E1) is a 2-byte codepoint, not interned.
+    try ctx.stack.push(.{ .string = "\xc3\xa1b" });
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try nativeNthString(&ctx);
+    const e = try ctx.stack.pop();
+    try std.testing.expect(e == .string);
+    try std.testing.expectEqual(@as(usize, 2), e.string.len);
+}
+
+test "string #first interns single ASCII codepoint" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "xyz" });
+    try nativeFirstString(&ctx);
+    const e = try ctx.stack.pop();
+    try std.testing.expect(e == .string);
+    try std.testing.expectEqualStrings("x", e.string);
+    try std.testing.expectEqual(ctx.internedAsciiByte('x').?.ptr, e.string.ptr);
 }
 
 test "#index-of-from basic ASCII" {

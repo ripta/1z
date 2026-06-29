@@ -1,0 +1,43 @@
+\ Benchmark: interned single-character strings.
+\
+\ `>char` and the single-codepoint string accessors return a shared one-byte
+\ slice for ASCII codepoints (0..127) instead of allocating a fresh string per
+\ call; non-ASCII codepoints still allocate a fresh UTF-8 string. This isolates
+\ that effect: the same iteration count over an ASCII codepoint (interned) and a
+\ non-ASCII codepoint (duped). The signal is total_bytes -- the ASCII loop pulls
+\ far fewer bytes from the arena than the non-ASCII loop.
+\
+\ Run under `--benchmark` so the `benchmark` hash carries total_allocations /
+\ total_bytes; the rows read "n/a" otherwise. Note total_allocations counts
+\ backing-allocator calls and is insensitive here (the arena batches its
+\ sub-allocations and refcounted churn dominates), which is exactly why the
+\ tokenizer-workload benchmark cannot see this lever; total_bytes is the column
+\ that moves.
+
+iters: ( -- fixnum ) const [ 500000 ] ;
+
+\ Benchmark `quot` and read one stat key; f when the key is absent (i.e. when
+\ not run under --benchmark). The loop body is deterministic, so re-running
+\ benchmark per key yields identical figures.
+bench-key: ( quot key -- value ) [
+  swap benchmark  \ key hash
+  swap 2dup @has? [ @get ] [ 2drop f ] if
+] ;
+
+>na: ( x -- str ) [ dup f = [ drop "n/a" ] [ >string ] if ] ;
+
+report: ( label quot -- ) [
+  swap print-line  \ quot
+  "  total_allocations=" print
+  dup "total_allocations" bench-key >na print-line  \ quot
+  "  total_bytes=" print
+  "total_bytes" bench-key >na print-line
+] ;
+
+"=== >char single-character interning: ASCII (interned) vs non-ASCII (duped) ===" print-line
+"iters: " print iters >string print-line
+"" print-line
+
+"ascii (codepoint 65, interned)" [ iters [ 65 >char drop ] times ] report
+"" print-line
+"wide  (codepoint 256, duped)" [ iters [ 256 >char drop ] times ] report

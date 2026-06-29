@@ -122,6 +122,11 @@ pub fn sequenceLength(val: Value) ?usize {
 pub const SequenceIterator = struct {
     kind: SequenceKind,
     allocator: Allocator,
+    /// Interned single-character strings (ASCII 0..127) for the `.string` kind.
+    /// When set, a single-byte codepoint yields the shared slice instead of a
+    /// fresh per-codepoint allocation. Defaults to empty, so callers that do
+    /// not thread the Context's table keep the duping behavior unchanged.
+    single_char_cache: []const []const u8 = &.{},
     // State for each sequence type
     state: union {
         string: struct {
@@ -195,6 +200,9 @@ pub const SequenceIterator = struct {
                 const cp_slice = remaining[0..cp_len];
                 self.state.string.byte_index += cp_len;
 
+                if (cp_len == 1 and cp_slice[0] < self.single_char_cache.len) {
+                    return Value{ .string = self.single_char_cache[cp_slice[0]] };
+                }
                 const char_str = self.allocator.dupe(u8, cp_slice) catch return error.OutOfMemory;
                 return Value{ .string = char_str };
             },

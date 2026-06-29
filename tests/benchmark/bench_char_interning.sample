@@ -1,0 +1,10 @@
+=== >char single-character interning: ASCII (interned) vs non-ASCII (duped) ===
+iters: 500000
+
+ascii (codepoint 65, interned)
+  total_allocations=5000012
+  total_bytes=600002400
+
+wide  (codepoint 256, duped)
+  total_allocations=5000008
+  total_bytes=601517920
