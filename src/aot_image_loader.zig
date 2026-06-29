@@ -618,6 +618,10 @@ fn imageSlotTables(ctx: *const Context) instruction_bytecode.SlotResolutionTable
         .struct_instance_slot_count = ctx.image_struct_instance_slot_count,
         .vector_slots = ctx.image_vector_slots,
         .vector_slot_count = ctx.image_vector_slot_count,
+        // Compiled-quotation table (registered before image load, so available
+        // here), so a quotation nested in a container slot value -- the lint
+        // registry's `check` quotations -- decodes with its compiled code_ptr.
+        .quotation_fns = if (ctx.aot_quotation_fns) |f| f.table[0..f.size] else null,
     };
 }
 
@@ -1304,24 +1308,7 @@ fn populateMutableMapSlots(
     // individual allocations.
     const arena = ctx.quotationAllocator();
 
-    const slot_tables: instruction_bytecode.SlotResolutionTables = .{
-        .typevalue_slots = ctx.image_typevalue_slots,
-        .typevalue_slot_count = ctx.image_typevalue_slot_count,
-        .struct_type_slots = ctx.image_struct_type_slots,
-        .struct_type_slot_count = ctx.image_struct_type_slot_count,
-        .marker_slots = ctx.image_marker_slots,
-        .marker_slot_count = ctx.image_marker_slot_count,
-        .parameter_slots = ctx.image_parameter_slots,
-        .parameter_slot_count = ctx.image_parameter_slot_count,
-        .tagged_slots = ctx.image_tagged_slots,
-        .tagged_slot_count = ctx.image_tagged_slot_count,
-        .mutable_map_slots = ctx.image_mutable_map_slots,
-        .mutable_map_slot_count = ctx.image_mutable_map_slot_count,
-        .struct_instance_slots = ctx.image_struct_instance_slots,
-        .struct_instance_slot_count = ctx.image_struct_instance_slot_count,
-        .vector_slots = ctx.image_vector_slots,
-        .vector_slot_count = ctx.image_vector_slot_count,
-    };
+    const slot_tables = imageSlotTables(ctx);
 
     // Pass 1: allocate every slot's map and patch the slot table before
     // any entry is decoded. A map entry may reference another mutable_map
@@ -1551,24 +1538,7 @@ fn populateTaggedSlots(
     const slot_table = slots orelse return;
     const arena = ctx.quotationAllocator();
 
-    const slot_tables: instruction_bytecode.SlotResolutionTables = .{
-        .typevalue_slots = ctx.image_typevalue_slots,
-        .typevalue_slot_count = ctx.image_typevalue_slot_count,
-        .struct_type_slots = ctx.image_struct_type_slots,
-        .struct_type_slot_count = ctx.image_struct_type_slot_count,
-        .marker_slots = ctx.image_marker_slots,
-        .marker_slot_count = ctx.image_marker_slot_count,
-        .parameter_slots = ctx.image_parameter_slots,
-        .parameter_slot_count = ctx.image_parameter_slot_count,
-        .tagged_slots = ctx.image_tagged_slots,
-        .tagged_slot_count = ctx.image_tagged_slot_count,
-        .mutable_map_slots = ctx.image_mutable_map_slots,
-        .mutable_map_slot_count = ctx.image_mutable_map_slot_count,
-        .struct_instance_slots = ctx.image_struct_instance_slots,
-        .struct_instance_slot_count = ctx.image_struct_instance_slot_count,
-        .vector_slots = ctx.image_vector_slots,
-        .vector_slot_count = ctx.image_vector_slot_count,
-    };
+    const slot_tables = imageSlotTables(ctx);
 
     var i: u32 = 0;
     while (i < header.tagged_slot_count) : (i += 1) {

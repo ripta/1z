@@ -291,10 +291,10 @@ pub fn emitImageCFromCollection(
     try emitStructTypeSlotTable(out, allocator, struct_plans_items);
     try emitStackEffectTable(out, allocator, effect_table);
     try emitTypeValueData(out, allocator, effect_table, struct_plans_items, struct_index);
-    try emitTaggedDescriptionsStorage(out, allocator, effect_table, struct_index);
-    try emitMutableMapDescriptionsStorage(out, allocator, effect_table, struct_index);
-    try emitStructInstanceDescriptionsStorage(out, allocator, effect_table, struct_index);
-    try emitVectorDescriptionsStorage(out, allocator, effect_table, struct_index);
+    try emitTaggedDescriptionsStorage(out, allocator, effect_table, struct_index, quotation_id_map);
+    try emitMutableMapDescriptionsStorage(out, allocator, effect_table, struct_index, quotation_id_map);
+    try emitStructInstanceDescriptionsStorage(out, allocator, effect_table, struct_index, quotation_id_map);
+    try emitVectorDescriptionsStorage(out, allocator, effect_table, struct_index, quotation_id_map);
     try emitProtocolDescriptorSlotTable(out, allocator, effect_table);
     try emitProtocolDescriptorStorage(out, allocator, effect_table);
     try emitConstraintCombinatorSlotTable(out, allocator, effect_table);
@@ -1454,6 +1454,7 @@ fn emitTaggedDescriptionsStorage(
     allocator: Allocator,
     table: *const StackEffectTable,
     struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
 ) ImageEmitError!void {
     if (table.taggedSlotCount() == 0) return;
     var num_buf: [32]u8 = undefined;
@@ -1467,6 +1468,7 @@ fn emitTaggedDescriptionsStorage(
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
+        .quotation_id_map = quotation_id_map,
     };
 
     for (table.tagged_slots.items, 0..) |entry, i| {
@@ -1561,6 +1563,7 @@ fn emitMutableMapDescriptionsStorage(
     allocator: Allocator,
     table: *const StackEffectTable,
     struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
 ) ImageEmitError!void {
     if (table.mutableMapSlotCount() == 0) return;
     var num_buf: [32]u8 = undefined;
@@ -1574,6 +1577,7 @@ fn emitMutableMapDescriptionsStorage(
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
+        .quotation_id_map = quotation_id_map,
     };
 
     for (table.mutable_map_slots.items, 0..) |m, i| {
@@ -1663,6 +1667,7 @@ fn emitStructInstanceDescriptionsStorage(
     allocator: Allocator,
     table: *const StackEffectTable,
     struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
 ) ImageEmitError!void {
     if (table.structInstanceSlotCount() == 0) return;
     var num_buf: [32]u8 = undefined;
@@ -1676,6 +1681,7 @@ fn emitStructInstanceDescriptionsStorage(
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
+        .quotation_id_map = quotation_id_map,
     };
 
     for (table.struct_instance_slots.items, 0..) |si, i| {
@@ -1766,6 +1772,7 @@ fn emitVectorDescriptionsStorage(
     allocator: Allocator,
     table: *const StackEffectTable,
     struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
 ) ImageEmitError!void {
     if (table.vectorSlotCount() == 0) return;
     var num_buf: [32]u8 = undefined;
@@ -1779,6 +1786,7 @@ fn emitVectorDescriptionsStorage(
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
+        .quotation_id_map = quotation_id_map,
     };
 
     for (table.vector_slots.items, 0..) |v, i| {
@@ -2137,6 +2145,7 @@ fn emitDispatchEntryTable(
         .mutable_map_slot_index = &table.mutable_map_slot_index,
         .struct_instance_slot_index = &table.struct_instance_slot_index,
         .vector_slot_index = &table.vector_slot_index,
+        .quotation_id_map = quotation_id_map,
     };
 
     var rows: std.ArrayListUnmanaged(DispatchEntryRow) = .{};

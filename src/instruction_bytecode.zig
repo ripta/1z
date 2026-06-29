@@ -118,6 +118,12 @@ pub const SlotEncodingMaps = struct {
     mutable_map_slot_index: *const std.AutoHashMapUnmanaged(*const MutableMap, u32),
     struct_instance_slot_index: *const std.AutoHashMapUnmanaged(*const StructInstance, u32),
     vector_slot_index: *const std.AutoHashMapUnmanaged(*const Vector, u32),
+    /// Build-time map from a quotation body's instruction pointer to its global
+    /// `quotation_id`. When supplied, `serializeValueIntoForImage` stamps each
+    /// nested `.quotation` with its ID so the loader can attach a compiled
+    /// `code_ptr` (the lint registry's `check` quotations rely on this); when
+    /// null, every quotation serializes with the sentinel.
+    quotation_id_map: ?*const QuotationIdMap = null,
 };
 
 /// Key for the tagged slot map, mirrored from `aot_image_emit.TaggedSlotKey`
@@ -148,6 +154,12 @@ pub const SlotResolutionTables = struct {
     struct_instance_slot_count: u32,
     vector_slots: ?[*]?*Vector,
     vector_slot_count: u32,
+    /// Runtime quotation-function table (`ctx.aot_quotation_fns.table[0..size]`).
+    /// When supplied, `deserializeValueAtForImage` attaches `table[id]` as the
+    /// `code_ptr` of each decoded nested `.quotation`, so a runtime-selected
+    /// dispatch of an image-decoded quotation runs compiled. Null leaves
+    /// `code_ptr` null, matching the pre-attachment behavior.
+    quotation_fns: ?[]const ?*const anyopaque = null,
 };
 
 /// Op tags. Stored in the bytecode stream.
@@ -487,11 +499,13 @@ pub fn serializeValueIntoForImage(
             }
         },
         .quotation => |q| {
-            // The image path carries no quotation-ID map, so write the sentinel;
-            // the u32 keeps tag 5's layout identical to the by-value path so a
+            // Stamp the quotation's global ID when a build-time map is supplied
+            // (so the loader can attach a compiled code_ptr), else the sentinel.
+            // The u32 keeps tag 5's layout identical to the by-value path so a
             // by-value-serialized body decoded by the image loader stays aligned.
             try buf.append(allocator, value_tag_quotation);
-            try buf.appendSlice(allocator, std.mem.asBytes(&quotation_id_sentinel));
+            const q_id: u32 = if (maps.quotation_id_map) |m| (m.get(@intFromPtr(q.instructions.ptr)) orelse quotation_id_sentinel) else quotation_id_sentinel;
+            try buf.appendSlice(allocator, std.mem.asBytes(&q_id));
             try serializeInstructionsIntoForImage(buf, q.instructions, allocator, maps);
         },
         else => try serializeValueInto(buf, val, allocator, null),
@@ -841,13 +855,19 @@ pub fn deserializeValueAtForImage(
             break :blk .{ .hash = h_ptr };
         },
         value_tag_quotation => blk: {
-            // Read+discard the quotation_id; the image path does not attach a
-            // compiled code_ptr to nested quotations (left null), matching prior
-            // behavior. The u32 is still consumed so the stream stays aligned.
+            // Read the quotation_id and attach the compiled code_ptr from the
+            // quotation-fn table when supplied (id != sentinel, in bounds), so a
+            // runtime-selected dispatch of an image-decoded quotation runs
+            // compiled; otherwise leave it null (the pre-attachment behavior).
             if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const q_id = std.mem.readInt(u32, data[offset.*..][0..4], .little);
             offset.* += 4;
             const nested = try deserializeInstructionsAtForImage(data, offset, allocator, tables);
-            break :blk .{ .quotation = .{ .instructions = nested } };
+            const code_ptr: ?*const anyopaque = if (tables.quotation_fns) |t|
+                (if (q_id != quotation_id_sentinel and q_id < t.len) t[q_id] else null)
+            else
+                null;
+            break :blk .{ .quotation = .{ .instructions = nested, .code_ptr = code_ptr } };
         },
         else => blk: {
             // Rewind one byte so the legacy decoder re-reads the tag.
@@ -1371,6 +1391,158 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
     try testing.expect(di[0].op.push_literal == .struct_type);
     try testing.expectEqual(&st, di[0].op.push_literal.struct_type);
     try testing.expectEqual(buf.items.len, offset);
+}
+
+test "image roundtrip: nested quotation carries id and compiled code_ptr" {
+    // The lint registry's `check` quotation is serialized through the image
+    // path inside a mutable_map / struct_instance slot. With a quotation-ID map
+    // at serialize and a quotation-fn table at deserialize, the decoded
+    // quotation carries the matching compiled function pointer.
+    const alloc = testing.allocator;
+    const inner = [_]Instruction{
+        .{ .op = .{ .call_word = "noop" }, .line = 1 },
+    };
+    const inner_slice: []const Instruction = &inner;
+    const q = Value{ .quotation = .{ .instructions = inner_slice } };
+
+    var tv_idx: std.AutoHashMapUnmanaged(*const TypeValue, u32) = .{};
+    defer tv_idx.deinit(alloc);
+    var st_idx: std.AutoHashMapUnmanaged(*const StructType, u32) = .{};
+    defer st_idx.deinit(alloc);
+    var mk_idx: std.AutoHashMapUnmanaged(*const Marker, u32) = .{};
+    defer mk_idx.deinit(alloc);
+    var pm_idx: std.AutoHashMapUnmanaged(*const Parameter, u32) = .{};
+    defer pm_idx.deinit(alloc);
+    var tg_idx: std.AutoHashMapUnmanaged(TaggedKey, u32) = .{};
+    defer tg_idx.deinit(alloc);
+    var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
+    defer mm_idx.deinit(alloc);
+    var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
+    defer sx_idx.deinit(alloc);
+    var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
+    defer vx_idx.deinit(alloc);
+
+    var qid_map = QuotationIdMap{};
+    defer qid_map.deinit(alloc);
+    try qid_map.put(alloc, @intFromPtr(inner_slice.ptr), 2);
+
+    const enc = SlotEncodingMaps{
+        .typevalue_slot_index = &tv_idx,
+        .struct_type_slot_index = &st_idx,
+        .marker_slot_index = &mk_idx,
+        .parameter_slot_index = &pm_idx,
+        .tagged_slot_index = &tg_idx,
+        .mutable_map_slot_index = &mm_idx,
+        .struct_instance_slot_index = &sx_idx,
+        .vector_slot_index = &vx_idx,
+        .quotation_id_map = &qid_map,
+    };
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(alloc);
+    try serializeValueIntoForImage(&buf, q, alloc, &enc);
+
+    // The encoded u32 immediately after the tag byte is the stamped id.
+    try testing.expectEqual(value_tag_quotation, buf.items[0]);
+    try testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, buf.items[1..5], .little));
+
+    const dummy_fn: *const anyopaque = @ptrFromInt(0x9abc);
+    const table = [_]?*const anyopaque{ null, null, dummy_fn };
+    const tables = SlotResolutionTables{
+        .typevalue_slots = null,
+        .typevalue_slot_count = 0,
+        .struct_type_slots = null,
+        .struct_type_slot_count = 0,
+        .marker_slots = null,
+        .marker_slot_count = 0,
+        .parameter_slots = null,
+        .parameter_slot_count = 0,
+        .tagged_slots = null,
+        .tagged_slot_count = 0,
+        .mutable_map_slots = null,
+        .mutable_map_slot_count = 0,
+        .struct_instance_slots = null,
+        .struct_instance_slot_count = 0,
+        .vector_slots = null,
+        .vector_slot_count = 0,
+        .quotation_fns = &table,
+    };
+
+    var offset: usize = 0;
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    defer freeDecodedValue(decoded);
+    try testing.expect(decoded == .quotation);
+    try testing.expectEqual(dummy_fn, decoded.quotation.code_ptr.?);
+    try testing.expectEqual(buf.items.len, offset);
+}
+
+test "image roundtrip: nested quotation decodes null code_ptr without a map or table" {
+    // Without a quotation-ID map at serialize and no fn table at deserialize,
+    // the image path stamps the sentinel and leaves code_ptr null -- the
+    // pre-attachment behavior every non-lint image fixture relies on.
+    const alloc = testing.allocator;
+    const inner = [_]Instruction{
+        .{ .op = .{ .call_word = "noop" }, .line = 1 },
+    };
+    const q = Value{ .quotation = .{ .instructions = &inner } };
+
+    var tv_idx: std.AutoHashMapUnmanaged(*const TypeValue, u32) = .{};
+    defer tv_idx.deinit(alloc);
+    var st_idx: std.AutoHashMapUnmanaged(*const StructType, u32) = .{};
+    defer st_idx.deinit(alloc);
+    var mk_idx: std.AutoHashMapUnmanaged(*const Marker, u32) = .{};
+    defer mk_idx.deinit(alloc);
+    var pm_idx: std.AutoHashMapUnmanaged(*const Parameter, u32) = .{};
+    defer pm_idx.deinit(alloc);
+    var tg_idx: std.AutoHashMapUnmanaged(TaggedKey, u32) = .{};
+    defer tg_idx.deinit(alloc);
+    var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
+    defer mm_idx.deinit(alloc);
+    var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
+    defer sx_idx.deinit(alloc);
+    var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
+    defer vx_idx.deinit(alloc);
+
+    const enc = SlotEncodingMaps{
+        .typevalue_slot_index = &tv_idx,
+        .struct_type_slot_index = &st_idx,
+        .marker_slot_index = &mk_idx,
+        .parameter_slot_index = &pm_idx,
+        .tagged_slot_index = &tg_idx,
+        .mutable_map_slot_index = &mm_idx,
+        .struct_instance_slot_index = &sx_idx,
+        .vector_slot_index = &vx_idx,
+    };
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(alloc);
+    try serializeValueIntoForImage(&buf, q, alloc, &enc);
+    try testing.expectEqual(quotation_id_sentinel, std.mem.readInt(u32, buf.items[1..5], .little));
+
+    const tables = SlotResolutionTables{
+        .typevalue_slots = null,
+        .typevalue_slot_count = 0,
+        .struct_type_slots = null,
+        .struct_type_slot_count = 0,
+        .marker_slots = null,
+        .marker_slot_count = 0,
+        .parameter_slots = null,
+        .parameter_slot_count = 0,
+        .tagged_slots = null,
+        .tagged_slot_count = 0,
+        .mutable_map_slots = null,
+        .mutable_map_slot_count = 0,
+        .struct_instance_slots = null,
+        .struct_instance_slot_count = 0,
+        .vector_slots = null,
+        .vector_slot_count = 0,
+    };
+
+    var offset: usize = 0;
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    defer freeDecodedValue(decoded);
+    try testing.expect(decoded == .quotation);
+    try testing.expect(decoded.quotation.code_ptr == null);
 }
 
 test "lowering: type_val push_literal becomes call_word" {

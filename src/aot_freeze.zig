@@ -982,7 +982,7 @@ fn collectCompositeQuotations(instrs: []const Instruction, quotation_bodies: *st
         switch (instr.op) {
             .push_literal => |val| switch (val) {
                 .quotation => |q| try collectCompositeQuotations(q.instructions, quotation_bodies, quotation_seen, allocator),
-                .array, .hash, .vector => try collectQuotationsInValue(val, quotation_bodies, quotation_seen, allocator),
+                .array, .hash, .vector, .mutable_map, .struct_instance => try collectQuotationsInValue(val, quotation_bodies, quotation_seen, allocator),
                 else => {},
             },
             else => {},
@@ -1020,6 +1020,19 @@ fn collectQuotationsInValue(val: Value, quotation_bodies: *std.ArrayListUnmanage
         },
         .vector => |v| {
             for (v.list.items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, allocator);
+        },
+        // Module-private mutable state serialized into the runtime image -- the
+        // lint registry's `(lint-registry-storage)` map holds rule struct
+        // instances whose `check` field is a quotation -- reaches the freeze
+        // discovery as a parse-time-folded `push_literal` in a word body. The
+        // quotations buried in it are dispatched at runtime (`check>> call`), so
+        // they must be collected here to compile and get a `code_ptr`.
+        .mutable_map => |m| {
+            var it = m.map.iterator();
+            while (it.next()) |entry| try collectQuotationsInValue(entry.value_ptr.*, quotation_bodies, quotation_seen, allocator);
+        },
+        .struct_instance => |si| {
+            for (si.fields) |field| try collectQuotationsInValue(field, quotation_bodies, quotation_seen, allocator);
         },
         else => {},
     }
@@ -3340,6 +3353,62 @@ test "collectCompositeQuotations dedupes a quotation reached twice" {
     try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
+}
+
+test "collectCompositeQuotations collects a quotation nested in a mutable_map literal" {
+    const allocator = testing.allocator;
+
+    // The lint registry `(lint-registry-storage)` is a parse-time-folded
+    // `.mutable_map` push_literal in a word body; its rule values hold the
+    // dispatched `check` quotations, which the composite walk must reach.
+    const inner_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "inner-noop" }, .line = 1 },
+    };
+    var map = value_mod.MutableMap{ .header = undefined, .map = .{} };
+    defer map.map.deinit(allocator);
+    try map.map.put(allocator, "rules", .{ .quotation = .{ .instructions = inner_instrs } });
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .mutable_map = &map } }, .line = 1 },
+    };
+
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+
+    try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
+    try testing.expectEqual(@intFromPtr(inner_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
+}
+
+test "collectCompositeQuotations collects a quotation in a struct_instance field" {
+    const allocator = testing.allocator;
+
+    // Each lint rule is a struct instance whose `check` field is a quotation;
+    // the walk reaches it through the struct-instance field values.
+    const inner_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "inner-noop" }, .line = 1 },
+    };
+    var st = value_mod.StructType{ .name = "lint-rule", .fields = &.{ "id", "check" } };
+    var fields = [_]Value{
+        .{ .string = "rule-id" },
+        .{ .quotation = .{ .instructions = inner_instrs } },
+    };
+    var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .struct_instance = &si } }, .line = 1 },
+    };
+
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+
+    try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
+    try testing.expectEqual(@intFromPtr(inner_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
 }
 
 test "collectCallWords classifies an unresolved name with .not_in_dictionary" {

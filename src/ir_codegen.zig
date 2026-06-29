@@ -9759,6 +9759,24 @@ pub fn emitProgramC(
     else
         "    void *rt = onez_init();\n");
 
+    // Register the compiled-quotation table before loading the runtime image.
+    // The image loader decodes module-private container slot values (mutable
+    // maps, struct instances, vectors), and a quotation buried in one -- e.g.
+    // the lint registry's `check` quotations -- attaches its compiled code_ptr
+    // from this table at decode time, so the table must be in place first.
+    if (quotations.len > 0) {
+        var max_q_id_pre: u32 = 0;
+        for (quotations) |q| {
+            if (q.quotation_id >= max_q_id_pre) max_q_id_pre = q.quotation_id;
+        }
+        var q_size_buf_pre: [20]u8 = undefined;
+        const q_size_str_pre = std.fmt.bufPrint(&q_size_buf_pre, "{d}", .{max_q_id_pre + 1}) catch unreachable;
+
+        try out.appendSlice(allocator, "    onez_runtime_register_quotations(rt, onez_quotation_table, ");
+        try out.appendSlice(allocator, q_size_str_pre);
+        try out.appendSlice(allocator, ");\n");
+    }
+
     // Image hookup: rehydrate module-private dictionary entries (and,
     // for runtime-image mode, blob TypeValues and bodies) before user
     // code runs. Emitted by `aot_image_emit.emitImageC` above when the
@@ -9994,18 +10012,9 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, size_str);
     try out.appendSlice(allocator, ");\n");
 
-    if (quotations.len > 0) {
-        var max_q_id: u32 = 0;
-        for (quotations) |q| {
-            if (q.quotation_id >= max_q_id) max_q_id = q.quotation_id;
-        }
-        var q_size_buf: [20]u8 = undefined;
-        const q_size_str = std.fmt.bufPrint(&q_size_buf, "{d}", .{max_q_id + 1}) catch unreachable;
-
-        try out.appendSlice(allocator, "    onez_runtime_register_quotations(rt, onez_quotation_table, ");
-        try out.appendSlice(allocator, q_size_str);
-        try out.appendSlice(allocator, ");\n");
-    }
+    // The compiled-quotation table is registered earlier, before the runtime
+    // image load, so container-slot quotation values decode with their
+    // code_ptr attached.
 
     // Replay the image's method dispatch entries now that both the image
     // surfaces (modules, typevalue slots) and the quotation-function table
@@ -14893,6 +14902,14 @@ test "emitProgramC quotation table with all compiled entries" {
 
     // Registration call in main
     try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_register_quotations(rt, onez_quotation_table, 3)") != null);
+
+    // The quotation table must be registered before the dispatch table so that,
+    // when a runtime image follows, container-slot quotation values decode with
+    // their code_ptr already attached. register_quotations now precedes
+    // register_compiled (which follows the image load).
+    const q_idx = std.mem.indexOf(u8, source, "onez_runtime_register_quotations(rt,").?;
+    const c_idx = std.mem.indexOf(u8, source, "onez_runtime_register_compiled(rt,").?;
+    try testing.expect(q_idx < c_idx);
 }
 
 test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
