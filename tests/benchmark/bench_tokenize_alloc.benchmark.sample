@@ -9,11 +9,11 @@ total_bytes  small=82694408  large=657493024  per-token=1415760
 
 === Benchmark Results ===
 Timing:
-  Prelude load:    5.988 ms
-    Parse:         5.220 ms
-    Execute:       539.000 us
-  User code:       1351.021 ms
-  Total:           1357.009 ms
+  Prelude load:    5.681 ms
+    Parse:         4.929 ms
+    Execute:       489.000 us
+  User code:       1370.353 ms
+  Total:           1376.034 ms
 
 Prelude Inventory:
   Dictionary:      434
@@ -26,28 +26,28 @@ Prelude Inventory:
   Struct types:    12
 
 Instructions:
-  push_literal:    961,697
-  call_word:       1,896,961
-  Total:           2,858,658
+  push_literal:    962,755
+  call_word:       1,899,222
+  Total:           2,861,977
 
 Stack:
   Peak depth:      19
   Task stack peak: 0 B
 
 Memory:
-  Allocations:     2,959,771
-  Total bytes:     9148.84 MB
-  Peak live:       15.57 MB
+  Allocations:     2,961,725
+  Total bytes:     9149.07 MB
+  Peak live:       15.58 MB
   Live backings:   78 (peak 78)
 
 Allocation Profile (top 10 by net bytes):
-  dip                  +985.38 MB  (50,391 calls)
-  if                   +884.54 MB  (166,016 calls)
-  keep                 +418.89 MB  (6,816 calls)
+  dip                  +984.64 MB  (50,422 calls)
+  if                   +879.49 MB  (166,464 calls)
+  keep                 +416.74 MB  (6,816 calls)
   do                   +381.72 MB  (3,124 calls)
   at-end?              +358.60 MB  (33,882 calls)
-  while                +356.14 MB  (3,124 calls)
+  while                +355.41 MB  (3,124 calls)
   >char                +355.19 MB  (7,171 calls)
   2dup                 +352.34 MB  (50,577 calls)
   (tab)                +319.54 MB  (5,183 calls)
-  call                 -217.74 MB  (32,320 calls)
+  call                 -217.02 MB  (32,320 calls)

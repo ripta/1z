@@ -1,0 +1,23 @@
+
+=== Word Profile (top 20 by total time) ===
+  Word                   Calls    Total time     Self time   Time/call
+  if                     373,095     2062.383 ms    433.795 ms    5.527 us
+  dip                    113,390      850.664 ms     68.301 ms    7.502 us
+  call                   72,820       739.202 ms    107.685 ms   10.151 us
+  (try-rules)            9,280        416.619 ms     15.218 ms   44.894 us
+  keep                   15,360       296.077 ms     11.834 ms   19.275 us
+  while                  7,040        222.361 ms     19.233 ms   31.585 us
+  at-end?                76,340       192.807 ms     33.515 ms    2.525 us
+  (bucket-for-scanner)   9,280        154.589 ms     15.000 ms   16.658 us
+  do                     7,040        145.581 ms      5.693 ms   20.679 us
+  whitespace?            11,360        72.123 ms     33.130 ms    6.348 us
+  (tab)                  11,680        58.935 ms     57.824 ms    5.045 us
+  =                      228,878       57.212 ms     57.212 ms      249 ns
+  peek                   44,320        53.410 ms     14.499 ms    1.205 us
+  2dup                   113,940       51.475 ms     27.251 ms      451 ns
+  (ws-not-newline?)      11,520        45.464 ms     21.237 ms    3.946 us
+  over                   358,191       44.221 ms     44.221 ms      123 ns
+  @get                   29,352        38.044 ms     38.044 ms    1.296 us
+  dup                    383,576       36.879 ms     36.879 ms       96 ns
+  nip                    87,200        35.908 ms     15.769 ms      411 ns
+  drop                   174,779       34.926 ms     34.926 ms      199 ns

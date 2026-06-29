@@ -482,6 +482,10 @@ benchmark-tokenize-alloc: release ## Record the tokenizer per-token cost and all
 	./$(ZIG_PREFIX)/bin/1z run --benchmark=verbose --compile=off tests/benchmark/bench_tokenize_alloc.1z > tests/benchmark/bench_tokenize_alloc.benchmark.sample
 	@cat tests/benchmark/bench_tokenize_alloc.sample
 
+benchmark-tokenize-profile: release ## Record the tokenizer per-word time-attribution profile
+	./$(ZIG_PREFIX)/bin/1z run --max-memory=2G --profile tests/benchmark/bench_tokenize_profile.1z > tests/benchmark/bench_tokenize_profile.profile.sample
+	@cat tests/benchmark/bench_tokenize_profile.profile.sample
+
 benchmark-expr: build ## Run the hosted expression pipeline benchmark and record the sample
 	./$(ZIG_PREFIX)/bin/1z run tests/benchmark/expr_pipeline.1z > tests/benchmark/expr_pipeline.sample
 	@cat tests/benchmark/expr_pipeline.sample

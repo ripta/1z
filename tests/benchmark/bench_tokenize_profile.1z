@@ -1,0 +1,35 @@
+\ Benchmark: per-word time attribution for the 1z tokenizer hot path.
+\
+\ Runs the exact `1z-tokenize #collect` path the linter's hot loop uses, under
+\ `--profile`, with no `benchmark`-harness calibration loops so the profile is a
+\ clean attribution of where tokenization spends wall time. A fixed moderate
+\ input is tokenized a fixed number of times; `--profile` reports per-word
+\ inclusive/exclusive time.
+\
+\ The signal this captures (post-first-character-dispatch): the residual
+\ per-token cost is the per-instruction interpreter dispatch floor (the combinator
+\ spine -- `if` / `dip` / `keep` / `while` -- and `call`) plus single-character
+\ string construction (`>char`, `(tab)`/`(lf)`/`(cr)`, string `#nth` / `#first`),
+\ not the once-per-token native iterator boundary. See the post-D re-measure
+\ finding.
+
+use "scanner" ;
+use "lexer" ;
+use "1z-tokens" ;
+use { repeat: } "strings" ;
+
+\ The same representative chunk bench_tokenize_alloc.1z / bench_tokenize_scaling.1z
+\ use: stack effects, symbols, brace prefixes, strings, numbers, comments.
+chunk: ( -- str ) const [
+  "double: ( n -- n ) [ 2 * ] ;\nH{ kind: word: match: [ foo ] }\n\\ a doc\nx: const [ 42 0xFF 3.14 ] ;\nv: virtual{ fixnum } ;\n"
+] ;
+
+count-tokens: ( str -- n ) [ 1z-tokenize #collect #len ] ;
+
+iters: ( -- fixnum ) const [ 20 ] ;
+
+\ Build the moderate source ONCE and `dup` it through the loop, so `repeat` does
+\ not dominate the profile (the bench_tokenize_scaling.1z hazard).
+chunk 8 repeat
+iters [ dup count-tokens drop ] times
+drop
