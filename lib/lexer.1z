@@ -8,21 +8,99 @@ use "char" ;
 \\ A token with a kind (symbol), value (string), and byte offset position.
 token: struct{ kind value pos } ;
 
-\\ A lexer holding an array of rule hashes. Each rule has `kind:` (symbol)
-\\ and `match:` (quotation with effect `( scanner -- new-scanner token | f )`).
-lexer: struct{ rules } ;
+\\ A lexer holding an array of rule hashes and a precomputed first-character
+\\ dispatch table.
+\\
+\\ Each rule is a hash with `kind:` (symbol) and `match:` (quotation with effect
+\\ `( scanner -- new-scanner token | f )`). A rule may also carry `first:`, a
+\\ string of the characters it can begin with; a rule without `first:` is a
+\\ fallback tried for every character. The `table` is built once from `rules` by
+\\ `(build-dispatch)` so a token consults only the rules plausible for its first
+\\ character instead of scanning the whole list.
+lexer: struct{ rules table } ;
 
-\\ Construct a lexer from an array of rules.
-<lexer>: ( rules -- lexer ) [ make-lexer ] ;
+\ --- Dispatch table construction ---
 
-\\ Try rules in order. First match wins.
+\ True if a rule applies to a given first character: it has no `first:`
+\ restriction (a fallback rule), or its `first:` string contains the character.
+(rule-matches-char?): ( rule char -- ? ) [
+  over first: @has?
+  [ swap first: @get swap #in? ]
+  [ 2drop t ]
+  if
+] ;
+
+\ Rules applicable to a given first character, in original order. Hand-rolled
+\ with `#each` and `#push!` rather than `curry #filter #collect`, which mis-slots
+\ to a source element under interpreter-free AOT compilation.
+(bucket-for): ( rules char -- bucket ) [
+  V{ } -rot> swap
+  [ dup 2 pick-n (rule-matches-char?) [ 2 pick-n swap #push! drop ] [ drop ] if ] #each
+  drop >array
+] ;
+
+\ Rules with no `first:` restriction, in original order.
+(fallback-rules): ( rules -- bucket ) [
+  V{ } swap
+  [ dup first: @has? not [ over swap #push! drop ] [ drop ] if ] #each
+  >array
+] ;
+
+\ Concatenation of every rule's `first:` string. Duplicate characters are
+\ harmless: a repeated character recomputes the same bucket.
+(all-first-chars): ( rules -- str ) [
+  "" [ dup first: @has? [ first: @get #append ] [ drop ] if ] #reduce
+] ;
+
+\ Fold step: record the bucket for one character into the by-char hash.
+(set-char-bucket): ( by-char char rules -- by-char ) [
+  over (bucket-for) @set
+] ;
+
+\ Map each declared first character to its ordered bucket of applicable rules.
+(build-by-char): ( rules -- by-char ) [
+  dup (all-first-chars)
+  swap [ (set-char-bucket) ] curry
+  [ H{ } ] dip
+  #reduce
+] ;
+
+\ Build the dispatch table: a hash mapping each declared first character to its
+\ bucket, plus the fallback bucket for any other character.
+(build-dispatch): ( rules -- table ) [
+  dup (build-by-char)
+  swap (fallback-rules)
+  H{ } swap fallback: swap @set
+  swap by-char: swap @set
+] ;
+
+\\ Construct a lexer from an array of rules, building its dispatch table.
+<lexer>: ( rules -- lexer ) [ dup (build-dispatch) make-lexer ] ;
+
+\ --- Tokenization ---
+
+\ Select the rules to try for the scanner's current character: the character's
+\ bucket if one is declared, otherwise the fallback bucket.
+(bucket-for-scanner): ( scanner table -- bucket ) [
+  swap peek
+  dup f = [
+    drop fallback: @get
+  ] [
+    over by-char: @get dup 2 pick-n @has?
+    [ swap @get nip ]
+    [ 2drop fallback: @get ]
+    if
+  ] if
+] ;
+
+\\ Try the rules in a bucket in order. First match wins.
 \\ Each rule's match quotation receives a scanner and returns one of:
 \\   new-scanner token  -- matched, emit token
-\\   new-scanner t      -- consumed input, no token (restart rules)
+\\   new-scanner t      -- consumed input, no token (restart from the new scanner)
 \\   f                  -- no match (try next rule)
-(try-rules): ( scanner rules -- new-scanner token ) [
+(try-bucket): ( scanner table bucket -- new-scanner token ) [
   dup #empty? [
-    drop
+    2drop
     \ scanner
     "unrecognized input at position " over position>> >string #append
     over peek dup [
@@ -32,32 +110,35 @@ lexer: struct{ rules } ;
     nip f swap EInvalidArgument make-error throw
   ] [
     dup #first match: @get
-    \ scanner rules match-quot
-    2 pick-n swap
-    \ scanner rules scanner match-quot
-    call
-    \ scanner rules (new-scanner token | new-scanner t | f)
+    \ scanner table bucket match-quot
+    3 pick-n swap call
+    \ scanner table bucket (new-scanner token | new-scanner t | f)
     dup f = [
       drop
       1 #drop
-      (try-rules)
+      (try-bucket)
     ] [
       dup t = [
-        \ consumed, no token: restart all rules with new scanner
-        \ stack: scanner rules new-scanner t
-        drop -rot> nip
-        \ new-scanner rules
-        over at-end? [ 2drop t ] [ (try-rules) ] if
+        \ consumed, no token: restart all rules with the new scanner via the table
+        \ stack: scanner table bucket new-scanner t
+        drop nip -rot> nip
+        \ new-scanner table
+        over at-end? [ 2drop t ] [ 2dup (bucket-for-scanner) (try-bucket) ] if
       ] [
-        \ scanner rules new-scanner token
-        [ nip nip ] dip
+        \ scanner table bucket new-scanner token
+        [ nip nip nip ] dip
       ] if
     ] if
   ] if
 ] ;
 
+\ Try rules for the scanner's current character.
+(try-rules): ( scanner table -- new-scanner token ) [
+  2dup (bucket-for-scanner) (try-bucket)
+] ;
+
 \\ Single step of the lexer iterator.
-(lexer-step): ( state rules -- option ) [
+(lexer-step): ( state table -- option ) [
   over 0 #nth
   dup at-end? [
     2drop drop option:none
@@ -77,7 +158,7 @@ lexer: struct{ rules } ;
 
 \\ Produce a lazy token iterator from a string and a lexer.
 tokenize: ( str lexer -- iterator ) [
-  rules>>
+  table>>
   swap <scanner> V{ } swap #push!
   swap [ (lexer-step) ] curry curry
   >iterator
@@ -114,7 +195,7 @@ inspect: method{ token } [
 
 \\ Built-in rule matching decimal integers and floats.
 number-rule: ( -- rule ) [
-  H{ kind: number: match: [ (number-match) ] }
+  H{ kind: number: first: "0123456789" match: [ (number-match) ] }
 ] ;
 
 \\ Match a letter followed by zero or more alphanumeric characters.
@@ -152,11 +233,18 @@ word-rule: ( -- rule ) [
   ] if
 ] ;
 
+\ Concatenate the first character of each candidate, for the rule's `first:`.
+(candidates-first-chars): ( array -- str ) [
+  "" [ #first #append ] #reduce
+] ;
+
 \\ Built-in rule matching any of the given exact strings (longest-first).
 symbols-rule: ( array -- rule ) [
   [ #len 0 swap - ] #sort-by
-  [ (symbols-match) ] curry
+  dup (candidates-first-chars)
+  swap [ (symbols-match) ] curry
   H{ kind: symbol: } match: <rot- @set
+  swap first: swap @set
 ] ;
 
 \\ Match one or more whitespace characters, consuming without producing a token.

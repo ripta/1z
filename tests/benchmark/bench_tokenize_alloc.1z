@@ -13,14 +13,14 @@
 \ "Allocation Profile (top 10 by net bytes)", which attributes the per-token
 \ allocation to the words that retain it.
 \
-\ NOTE: the `rest #len` codepoint tail-walks in the doc-comment / comment / open-brace
-\ rules of lib/1z-tokens.1z have been replaced with O(1) `peek` lookahead, so the
-\ former O(n^2) growth is gone and the 1x-to-8x marginal now reflects a near-linear
-\ per-token cost. The instruction / call_word marginals here are file-size-independent
-\ (a `#len` walk was a single counted call_word whose cost was Zig-side wall time, not
-\ instructions), so they barely move; the quadratic removal shows up in
-\ bench_tokenize_scaling.1z as flat ns/byte across the size sweep. This is the post-(b)
-\ baseline the first-character-dispatch work measures against.
+\ NOTE: this is the post-first-character-dispatch baseline. The generic lexer's
+\ (try-rules) no longer scans all ~14 rules linearly per token; it peeks the first
+\ character and tries only the rules plausible for it, so the per-token call_word
+\ and allocation marginals dropped about a third from the prior post-(b) baseline
+\ (call_word ~702 -> ~458, allocations ~745 -> ~438). An earlier change had already
+\ replaced the `rest #len` codepoint tail-walks in the doc-comment / comment /
+\ open-brace rules with O(1) `peek` lookahead, so tokenization is near-linear in
+\ file size; bench_tokenize_scaling.1z tracks that linearity across the size sweep.
 
 use "scanner" ;
 use "lexer" ;

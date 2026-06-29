@@ -106,7 +106,7 @@ PASS: third pos is 4
 Stack: [ ]
 === multi-byte word tokens ===
 Stack: [ ]
-Stack: [ "héllo wörld" lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (nonspace-match) ] kind: word: } } } ]
+Stack: [ "héllo wörld" lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (nonspace-match) ] kind: word: } } table: H{ by-char: H{ } fallback: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (nonspace-match) ] kind: word: } } } } ]
 Stack: [ { token{ kind: word: value: "héllo" pos: 0 } token{ kind: word: value: "wörld" pos: 6 } } ]
 PASS: multi-byte: two word tokens
 Stack: [ { token{ kind: word: value: "héllo" pos: 0 } token{ kind: word: value: "wörld" pos: 6 } } ]
@@ -125,7 +125,7 @@ Stack: [ ]
 === error includes position ===
 Stack: [ ]
 Stack: [ [ "ab!cd" [ ] make-vector ALPHA-RULE #push! >array <lexer> tokenize #collect ] ]
-Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } <error invalid-argument: unrecognized input at position 2: '!' [lexer:32:throw <- lexer:56:if <- lexer:65:(try-rules) <- lexer:75:if <- tests/integration/lexer.1z:941:call <- tests/integration/lexer.1z:153:#collect <- tests/integration/lexer.1z:154:recover]> ]
+Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } <error invalid-argument: unrecognized input at position 2: '!' [lexer:110:throw <- lexer:132:if <- lexer:146:(try-rules) <- lexer:156:if <- tests/integration/lexer.1z:941:call <- tests/integration/lexer.1z:153:#collect <- tests/integration/lexer.1z:154:recover]> ]
 PASS: error mentions position
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } ]
 === inspect ===
@@ -179,8 +179,8 @@ PASS: single letter
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } ]
 === symbols-rule longest match ===
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } H{ match: [ { "++" "+" } (symbols-match) ] kind: symbol: } ]
-Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } lexer{ rules: { H{ match: [ { "++" "+" } (symbols-match) ] kind: symbol: } } } ]
+Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } H{ kind: symbol: first: "++" match: [ { "++" "+" } (symbols-match) ] } ]
+Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } lexer{ rules: { H{ kind: symbol: first: "++" match: [ { "++" "+" } (symbols-match) ] } } table: H{ by-char: H{ +: { H{ kind: symbol: first: "++" match: [ { "++" "+" } (symbols-match) ] } } } fallback: { } } } ]
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } { token{ kind: symbol: value: "++" pos: 0 } } ]
 PASS: ++ yields one token (longest match)
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } { token{ kind: symbol: value: "++" pos: 0 } } ]
@@ -190,8 +190,8 @@ PASS: value is ++ not +
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } ]
 === symbols-rule multiple ===
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } ]
-Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } H{ match: [ { "(" ")" } (symbols-match) ] kind: symbol: } ]
-Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } lexer{ rules: { H{ match: [ { "(" ")" } (symbols-match) ] kind: symbol: } } } ]
+Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } H{ kind: symbol: first: "()" match: [ { "(" ")" } (symbols-match) ] } ]
+Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } lexer{ rules: { H{ kind: symbol: first: "()" match: [ { "(" ")" } (symbols-match) ] } } table: H{ by-char: H{ ): { H{ kind: symbol: first: "()" match: [ { "(" ")" } (symbols-match) ] } } (: { H{ kind: symbol: first: "()" match: [ { "(" ")" } (symbols-match) ] } } } fallback: { } } } ]
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } { token{ kind: symbol: value: "(" pos: 0 } token{ kind: symbol: value: ")" pos: 1 } } ]
 PASS: () yields two tokens
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } { token{ kind: symbol: value: "(" pos: 0 } token{ kind: symbol: value: ")" pos: 1 } } ]
@@ -202,14 +202,14 @@ Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } ]
 === skip-whitespace-rule ===
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } ]
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } " hello " ]
-Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } " hello " lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } } ]
+Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } " hello " lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } table: H{ by-char: H{ } fallback: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } } } ]
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } { token{ kind: word: value: "hello" pos: 1 } } ]
 PASS: whitespace skipped, one word token
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } { token{ kind: word: value: "hello" pos: 1 } } ]
 PASS: value is hello after skip
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } ]
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } "ab  cd" ]
-Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } "ab  cd" lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } } ]
+Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } "ab  cd" lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } table: H{ by-char: H{ } fallback: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } } } ]
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } { token{ kind: word: value: "ab" pos: 0 } token{ kind: word: value: "cd" pos: 4 } } ]
 PASS: two words with whitespace yields two tokens
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } { token{ kind: word: value: "ab" pos: 0 } token{ kind: word: value: "cd" pos: 4 } } ]
@@ -221,7 +221,7 @@ Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } ]
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } ]
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } "x + 42" ]
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } "x + 42" V{ H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } ]
-Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } "x + 42" lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] kind: number: } H{ match: [ { "+" } (symbols-match) ] kind: symbol: } } } ]
+Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } "x + 42" lexer{ rules: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } H{ kind: symbol: first: "+" match: [ { "+" } (symbols-match) ] } } table: H{ by-char: H{ 2: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } } 7: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } } 3: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } } 6: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } } 0: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } } 5: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } } 9: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } } 4: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } } +: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ kind: symbol: first: "+" match: [ { "+" } (symbols-match) ] } } 1: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } } 8: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } H{ match: [ (number-match) ] first: "0123456789" kind: number: } } } fallback: { H{ match: [ (skip-ws-match) ] kind: whitespace: } H{ match: [ (word-match) ] kind: word: } } } } ]
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } ]
 PASS: x + 42 yields three tokens
 Stack: [ V{ scanner{ str: "ab!cd" byte-cursor: 2 codepoint-pos: 2 } } { token{ kind: word: value: "x" pos: 0 } token{ kind: symbol: value: "+" pos: 2 } token{ kind: number: value: "42" pos: 4 } } ]

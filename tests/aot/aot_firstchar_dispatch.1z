@@ -1,0 +1,40 @@
+\ First-character dispatch in the generic lexer compiles interpreter-free.
+\
+\ Two rules declare `first:` ("a" and "b"), and a third is a fallback (no
+\ `first:`). Constructing the lexer runs (build-dispatch) at runtime, and
+\ tokenizing routes each character through (bucket-for-scanner): "a" reaches the
+\ a-rule's bucket, "b" the b-rule's, and any other character the fallback. The
+\ match bodies are simple inline single-character matchers (like aot_lexer_step)
+\ so the dispatched quotations compile to native code; building under
+\ --interpreter-fallback=false proves the dispatch-table construction and lookup
+\ compile interpreter-free.
+
+use "lexer" ;
+use "scanner" ;
+
+"abcab"
+V{ }
+H{ kind: a: first: "a" match: [
+    dup peek "a" = [
+      dup position>> swap advance swap
+      [ a: "a" ] dip make-token
+    ] [ drop f ] if
+  ]
+} #push!
+H{ kind: b: first: "b" match: [
+    dup peek "b" = [
+      dup position>> swap advance swap
+      [ b: "b" ] dip make-token
+    ] [ drop f ] if
+  ]
+} #push!
+H{ kind: other: match: [
+    dup peek dup f = [ 2drop f ] [
+      swap dup position>> swap advance
+      -rot> [ other: swap ] dip make-token
+    ] if
+  ]
+} #push!
+>array <lexer>
+tokenize #collect
+[ dup kind>> inspect " " #append over value>> #append print-line drop ] #each

@@ -1,8 +1,8 @@
 tokenize-scaling iters: 5
-tokenize-scaling mult=1  bytes=120  tokens=58  elapsed_ns=89742000
-tokenize-scaling mult=2  bytes=240  tokens=116  elapsed_ns=179775000
-tokenize-scaling mult=4  bytes=480  tokens=232  elapsed_ns=358570000
-tokenize-scaling mult=8  bytes=960  tokens=464  elapsed_ns=716691000
-tokenize-scaling mult=16  bytes=1920  tokens=928  elapsed_ns=1430242000
-tokenize-scaling mult=32  bytes=3840  tokens=1856  elapsed_ns=2873701000
-tokenize-scaling mult=64  bytes=7680  tokens=3712  elapsed_ns=5730167000
+tokenize-scaling mult=1  bytes=120  tokens=58  elapsed_ns=61878000
+tokenize-scaling mult=2  bytes=240  tokens=116  elapsed_ns=118126000
+tokenize-scaling mult=4  bytes=480  tokens=232  elapsed_ns=233939000
+tokenize-scaling mult=8  bytes=960  tokens=464  elapsed_ns=466483000
+tokenize-scaling mult=16  bytes=1920  tokens=928  elapsed_ns=937552000
+tokenize-scaling mult=32  bytes=3840  tokens=1856  elapsed_ns=1862201000
+tokenize-scaling mult=64  bytes=7680  tokens=3712  elapsed_ns=3715301000

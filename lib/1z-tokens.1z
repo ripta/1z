@@ -344,24 +344,39 @@ BRACE-PREFIXES: const [
 
 \ --- Public API ---
 
+\ Module-private cache holding the built lexer, populated once on first use so
+\ the first-character dispatch table is built once per process rather than per
+\ tokenization. Empty at freeze, so it serializes into an AOT runtime image.
+(1z-lexer-cache): ( -- vec ) V{ } ;
+
 \\ Construct a lexer configured for all 1z token types.
+\\
+\\ Each rule declares the first characters it can begin with via `first:` so the
+\\ generic lexer dispatches on the scanner's current character; the symbol and
+\\ word rules are fallbacks (no `first:`) tried for every character.
 <1z-lexer>: ( -- lexer ) [
-  V{ }
-  H{ kind: newline: match: [ (newline-match) ] } #push!
-  H{ kind: whitespace: match: [ (ws-match) ] } #push!
-  H{ kind: doc-comment: match: [ (doc-comment-match) ] } #push!
-  H{ kind: comment: match: [ (comment-match) ] } #push!
-  H{ kind: string: match: [ (string-match) ] } #push!
-  H{ kind: stack-effect: match: [ (stack-effect-match) ] } #push!
-  H{ kind: number: match: [ (1z-number-match) ] } #push!
-  H{ kind: semicolon: match: [ (semicolon-match) ] } #push!
-  H{ kind: open-bracket: match: [ (open-bracket-match) ] } #push!
-  H{ kind: close-bracket: match: [ (close-bracket-match) ] } #push!
-  H{ kind: close-brace: match: [ (close-brace-match) ] } #push!
-  H{ kind: open-brace: match: [ (open-brace-match) ] } #push!
-  H{ kind: symbol: match: [ (symbol-match) ] } #push!
-  H{ kind: word: match: [ (1z-word-match) ] } #push!
-  >array <lexer>
+  (1z-lexer-cache) dup #empty? [
+    drop
+    V{ }
+    H{ kind: newline: first: "\n" match: [ (newline-match) ] } #push!
+    H{ kind: whitespace: first: " \t" match: [ (ws-match) ] } #push!
+    H{ kind: doc-comment: first: "\\" match: [ (doc-comment-match) ] } #push!
+    H{ kind: comment: first: "\\" match: [ (comment-match) ] } #push!
+    H{ kind: string: first: "\"" match: [ (string-match) ] } #push!
+    H{ kind: stack-effect: first: "(" match: [ (stack-effect-match) ] } #push!
+    H{ kind: number: first: "-0123456789" match: [ (1z-number-match) ] } #push!
+    H{ kind: semicolon: first: ";" match: [ (semicolon-match) ] } #push!
+    H{ kind: open-bracket: first: "[" match: [ (open-bracket-match) ] } #push!
+    H{ kind: close-bracket: first: "]" match: [ (close-bracket-match) ] } #push!
+    H{ kind: close-brace: first: "}" match: [ (close-brace-match) ] } #push!
+    H{ kind: open-brace: first: "vspmeHVM{" match: [ (open-brace-match) ] } #push!
+    H{ kind: symbol: match: [ (symbol-match) ] } #push!
+    H{ kind: word: match: [ (1z-word-match) ] } #push!
+    >array <lexer>
+    (1z-lexer-cache) over #push! drop
+  ] [
+    #first
+  ] if
 ] ;
 
 \\ Tokenize a 1z source string into a lazy token iterator.
