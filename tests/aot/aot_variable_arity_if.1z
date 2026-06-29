@@ -1,0 +1,32 @@
+\ Genuine variable-arity words (declared `| f`), the shape of lib/lexer.1z's
+\ rule match words: an `if` whose two arms leave different concrete depths --
+\ two values on a "match", one `f` on a "no-match" -- built from fixed-output
+\ natives only, so the variability is structural rather than an artifact of a
+\ mis-modeled variable-arity callee. The `if` merge collapses the concrete
+\ unequal arms to a runtime row the caller reads, instead of rejecting them as
+\ a stack-shape mismatch (the old NC.13). Each word is compiled standalone (via
+\ quotation dispatch) and the program runs interpreter-free.
+
+\ Flat: a single `if` whose arms leave 2 (match) and 1 (no-match).
+classify-flat: ( n -- a b | f ) [ dup 0 > [ dup 100 + ] [ drop f ] if ] ;
+
+\ Nested (the lexer shape): an outer guard `if` whose false arm holds the inner
+\ unequal `if`. The inner if's row must propagate out through the outer merge.
+classify-nested: ( n -- a b | f ) [
+  dup 5 < [ drop f ] [
+    dup 10 > [ dup 100 + ] [ drop f ] if
+  ] if
+] ;
+
+\ Consumers dispatch the variable-arity word via a quotation (tail position) and
+\ branch on the row result, mirroring lib/lexer.1z's (try-rules). Distinguishing
+\ `f` (depth 1) from a two-value match requires the row's runtime depth to be
+\ correct, so the branch taken is itself the assertion that the arity varied.
+read-flat: ( n -- s ) [ [ classify-flat ] call dup f = [ drop "no" ] [ drop drop "match" ] if ] ;
+read-nested: ( n -- s ) [ [ classify-nested ] call dup f = [ drop "no" ] [ drop drop "match" ] if ] ;
+
+5 read-flat print-line
+0 read-flat print-line
+3 read-nested print-line
+7 read-nested print-line
+50 read-nested print-line

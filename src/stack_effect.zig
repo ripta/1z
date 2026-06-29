@@ -181,6 +181,21 @@ pub const StackEffect = struct {
         return result;
     }
 
+    /// True if the outputs declare an alternative arity with the `|` marker, e.g.:
+    ///
+    ///     ( scanner -- new-scanner token | f )
+    ///
+    /// The parser's way of recording a word whose output depth genuinely varies between branches.
+    ///
+    /// The `|` is stored as a literal output parameter, so its presence is the signal that the
+    /// declared concrete output count does not model the result.
+    pub fn hasAlternativeOutput(self: StackEffect) bool {
+        for (self.outputs) |param| {
+            if (std.mem.eql(u8, param.name, "|")) return true;
+        }
+        return false;
+    }
+
     /// True if every row variable in inputs also appears in outputs and vice versa.
     pub fn hasBalancedRowVariables(self: StackEffect) bool {
         const input_vars = self.inputRowVariableNames();
@@ -470,6 +485,35 @@ test "hasBalancedRowVariables" {
         .outputs = &[_]StackEffectParam{.{ .name = "y" }},
     };
     try std.testing.expect(no_row_vars.hasBalancedRowVariables());
+}
+
+test "hasAlternativeOutput" {
+    // `( scanner -- new-scanner token | f )`: the `|` marker is a literal
+    // output parameter, so the alternative is detected.
+    const alt = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "scanner" }},
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "new-scanner" },
+            .{ .name = "token" },
+            .{ .name = "|" },
+            .{ .name = "f" },
+        },
+    };
+    try std.testing.expect(alt.hasAlternativeOutput());
+
+    // A concrete single-output effect has no alternative.
+    const concrete = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "name" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "option" }},
+    };
+    try std.testing.expect(!concrete.hasAlternativeOutput());
+
+    // A `|` only in the inputs does not count as an alternative output.
+    const input_pipe = StackEffect{
+        .inputs = &[_]StackEffectParam{ .{ .name = "x" }, .{ .name = "|" } },
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+    try std.testing.expect(!input_pipe.hasAlternativeOutput());
 }
 
 test "hasAnyRowVariable using struct field" {

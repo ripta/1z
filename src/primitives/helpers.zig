@@ -153,6 +153,24 @@ pub fn valueMatchesType(ctx: *Context, val: Value, expected_tv: *const TypeValue
 
 const testing = std.testing;
 
+test "makeSimpleEffect records the | alternative marker as a literal output" {
+    // The AOT `if`-merge distinguishes a genuinely variable-arity word from a
+    // mis-modeled callee by detecting the `|` in the declared output. That
+    // detection relies on `|` parsing as a literal output parameter, so guard
+    // the parse here. `( name -- value t | f )` is `native.pragma-get-raw`'s
+    // declared effect, and the lexer's match words share the `... | f` shape.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const effect = try makeSimpleEffect(arena.allocator(), "name -- value t | f");
+    try testing.expectEqual(@as(usize, 4), effect.outputs.len);
+    try testing.expectEqualStrings("|", effect.outputs[2].name);
+    try testing.expect(effect.hasAlternativeOutput());
+
+    const concrete = try makeSimpleEffect(arena.allocator(), "name -- option");
+    try testing.expect(!concrete.hasAlternativeOutput());
+}
+
 test "valueMatchesType accepts values matching anonymous union members" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();

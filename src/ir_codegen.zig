@@ -3053,6 +3053,16 @@ fn collapseToFreshRow(state: *CompileState, stack: []StackEntry, sp: *usize) voi
     state.variable_arity = true;
 }
 
+/// True when the word currently being compiled declares a variable-arity output.
+///
+/// Used by the `if` merge to distinguish a word whose two concrete arms are genuine output
+/// alternatives from a word whose unequal arms are an artifact of a mismodeled callee, which
+/// must stay a compile-time stack-shape error.
+fn declaredAlternativeOutput(state: *const CompileState) bool {
+    const eff = state.stack_effect orelse return false;
+    return eff.hasAlternativeOutput();
+}
+
 fn settleRowAwareStack(state: *CompileState, stack: []StackEntry, sp: *usize, inputs: usize, outputs: usize) void {
     const sp_before = sp.*;
     const had_row = sp_before > 0 and stack[0].isRowRegion();
@@ -5481,13 +5491,26 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         state.recordBlockStart(ctx.unnamed_0.control);
         if (!symbolicShapeMatches(stack, sp.*, saved_stack, false_sp)) {
             const true_has_row = hasRowRegion(stack, sp.*);
-            // A row on either side means one branch left an opaque
-            // result; the two physical tops still agree, so rejoin
-            // to a single fresh row read from the live sp both
-            // paths stored. A genuine depth mismatch with no row
-            // is still a stack-effect error.
-            if (state.aot_mode and (true_has_row or false_has_row)) {
+
+            // A row on either side means one branch left an opaque result; the two physical tops
+            // still agree, so rejoin to a single fresh row read from the live sp both paths stored.
+            //
+            // A genuine depth mismatch with no row is still a stack-effect error, unless the word's
+            // declared output is itself variable-arity, in which case the two concrete arms are
+            // the genuine alternatives.
+            //
+            // The declared output is the only thing that distinguishes this case from a word whose
+            // unequal arms are an artifact of a mis-modeled variable-arity native call.
+            const declared_var_arity = declaredAlternativeOutput(state);
+            if (state.aot_mode and (true_has_row or false_has_row or declared_var_arity)) {
+                // Two concrete unequal arms collapsing to a row for the first time vary the output
+                // arity. Record it so callers read this word's result as a row rather than trusting
+                // the declared concrete count. Preëxisting has-row case keeps its prior behavior of
+                // not setting the flag here, so this is gated to the new no-row collapse.
+                if (!(true_has_row or false_has_row)) state.variable_arity = true;
+
                 reloadBaseAfterDynamicCall(state);
+
                 sp.* = 1;
                 stack[0] = .{ .row_region = state.nextRowId() };
                 state.exit_kind = saved_exit_kind;
