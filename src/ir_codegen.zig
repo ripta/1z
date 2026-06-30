@@ -5211,6 +5211,107 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
     return .next;
 }
 
+/// Inline ops admitted inside an `if` arm that the branchless `IR_COND`
+/// merge select may evaluate unconditionally. Every entry lowers to
+/// straight-line data flow with no store, no general call, and no
+/// deterministic trap. `+ - *` are included even though their i64 path
+/// emits an overflow guard: that guard deopts to the interpreter under
+/// JIT and produces the correct result, so evaluating a non-taken arm's
+/// arithmetic costs at most a spurious deopt. The trapping division
+/// family (`/ % div rem`), all control flow, and every other word are
+/// excluded.
+const branchless_arm_ops = std.StaticStringMap(void).initComptime(.{
+    .{ "+", {} },
+    .{ "-", {} },
+    .{ "*", {} },
+    .{ "<", {} },
+    .{ ">", {} },
+    .{ "=", {} },
+    .{ "dup", {} },
+    .{ "drop", {} },
+    .{ "swap", {} },
+    .{ "over", {} },
+    .{ "nip", {} },
+});
+
+/// Structural half of the branchless-merge precondition: true when every
+/// instruction in an `if` arm is a scalar literal or one of the admitted
+/// trap-free inline ops, so compiling the arm emits no store, no general
+/// call, no division/`rem`/`%`, and no nested control flow. This is the
+/// gate checked before emitting `IF`; the kind/shape half
+/// (`condSelectMergeKind`) runs on the compiled arms. A nested quotation
+/// literal disqualifies the arm: it only appears as the operand of a
+/// control-flow op (`if`/`call`/loops), none of which are admitted.
+fn armBodyBranchlessEligible(body: []const Instruction) bool {
+    for (body) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| switch (val) {
+                .fixnum, .float, .boolean => {},
+                else => return false,
+            },
+            .call_word, .call_word_direct => {
+                const name = instr.op.callTargetName() orelse return false;
+                if (!branchless_arm_ops.has(name)) return false;
+            },
+        }
+    }
+    return true;
+}
+
+/// Scalar kind a qualifying same-type `if` merge selects on. `f64` is
+/// deliberately absent: the gating benchmark measured a regression for
+/// floats, so a same-type `f64` merge takes the boxed fallback.
+const CondSelectKind = enum { i64, bool };
+
+/// Structural equality of two abstract-stack entries: same variant and
+/// same payload identity. Used to confirm the shared lower stack of two
+/// `if` arms is untouched so only the top needs selecting.
+fn stackEntryEql(a: StackEntry, b: StackEntry) bool {
+    return switch (a) {
+        .i64_ref => |r| b == .i64_ref and b.i64_ref == r,
+        .f64_ref => |r| b == .f64_ref and b.f64_ref == r,
+        .bool_ref => |r| b == .bool_ref and b.bool_ref == r,
+        .raw_at_slot => |s| b == .raw_at_slot and b.raw_at_slot == s,
+        .row_region => |id| b == .row_region and b.row_region == id,
+        .quotation_body => |body| b == .quotation_body and b.quotation_body.ptr == body.ptr and b.quotation_body.len == body.len,
+    };
+}
+
+/// Kind/shape half of the branchless-merge precondition, run on the two
+/// compiled arm stacks. Returns the scalar kind to select on when the
+/// arms are top-only same-kind `i64`/`bool`: equal depth (at least one
+/// entry), no `row_region` anywhere, the lower entries identical between
+/// the arms and to the untouched pre-`if` stack, and both tops the same
+/// unboxed scalar kind restricted to `i64_ref` or `bool_ref`. Any other
+/// shape (cross-type, `f64`/`f64`, a non-scalar top, a row, or a
+/// depth/lower-stack mismatch) returns null, taking the boxed fallback.
+fn condSelectMergeKind(
+    base: []const StackEntry,
+    base_sp: usize,
+    t_stack: []const StackEntry,
+    t_sp: usize,
+    f_stack: []const StackEntry,
+    f_sp: usize,
+) ?CondSelectKind {
+    if (t_sp != f_sp or t_sp == 0) return null;
+    const top = t_sp - 1;
+    if (base_sp != t_sp) return null;
+
+    // The shared lower stack must be the untouched pre-`if` stack on both
+    // arms, with no opaque row anywhere in scope.
+    for (0..top) |i| {
+        if (t_stack[i] == .row_region or f_stack[i] == .row_region) return null;
+        if (!stackEntryEql(t_stack[i], f_stack[i])) return null;
+        if (!stackEntryEql(t_stack[i], base[i])) return null;
+    }
+
+    return switch (t_stack[top]) {
+        .i64_ref => if (f_stack[top] == .i64_ref) .i64 else null,
+        .bool_ref => if (f_stack[top] == .bool_ref) .bool else null,
+        else => null,
+    };
+}
+
 // if: ( cond true-quot false-quot -- ... )   branch on truthiness
 fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     const state = ec.state;
@@ -13779,6 +13880,105 @@ test "compile if with non-compilable body fails" {
         .{ .op = .{ .call_word = "if" }, .line = 4 },
     };
     try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 0, 1, null, null, null, null, null));
+}
+
+test "armBodyBranchlessEligible: arithmetic, comparison, and shuffle arms qualify" {
+    const mul = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    };
+    const add = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+    const cmp = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = ">" }, .line = 1 },
+    };
+    const shuffle = [_]Instruction{
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    };
+    try testing.expect(armBodyBranchlessEligible(&mul));
+    try testing.expect(armBodyBranchlessEligible(&add));
+    try testing.expect(armBodyBranchlessEligible(&cmp));
+    try testing.expect(armBodyBranchlessEligible(&shuffle));
+    // An empty arm leaves the pre-`if` top unchanged; vacuously branchless.
+    try testing.expect(armBodyBranchlessEligible(&[_]Instruction{}));
+}
+
+test "armBodyBranchlessEligible: side-effecting, trapping, control-flow, and non-scalar arms reject" {
+    const side_effect = [_]Instruction{
+        .{ .op = .{ .call_word = "print" }, .line = 1 },
+    };
+    const divide = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = "/" }, .line = 1 },
+    };
+    const modulo = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 1 },
+        .{ .op = .{ .call_word = "%" }, .line = 1 },
+    };
+    const inner = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+    };
+    const nested_if = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner } } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner } } }, .line = 1 },
+        .{ .op = .{ .call_word = "if" }, .line = 1 },
+    };
+    const non_scalar_literal = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .string = "x" } }, .line = 1 },
+    };
+    try testing.expect(!armBodyBranchlessEligible(&side_effect));
+    try testing.expect(!armBodyBranchlessEligible(&divide));
+    try testing.expect(!armBodyBranchlessEligible(&modulo));
+    try testing.expect(!armBodyBranchlessEligible(&nested_if));
+    try testing.expect(!armBodyBranchlessEligible(&non_scalar_literal));
+}
+
+test "condSelectMergeKind: same-kind i64 and bool top-only pairs qualify" {
+    // Shared lower stack [raw_at_slot 0]; arms differ only at the selected top.
+    const base = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .raw_at_slot = 1 } };
+    const i64_true = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .i64_ref = 10 } };
+    const i64_false = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .i64_ref = 20 } };
+    try testing.expectEqual(@as(?CondSelectKind, .i64), condSelectMergeKind(&base, 2, &i64_true, 2, &i64_false, 2));
+
+    const bool_true = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .bool_ref = 10 } };
+    const bool_false = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .bool_ref = 20 } };
+    try testing.expectEqual(@as(?CondSelectKind, .bool), condSelectMergeKind(&base, 2, &bool_true, 2, &bool_false, 2));
+}
+
+test "condSelectMergeKind: cross-type, f64, non-scalar, row, and shape mismatches fall back" {
+    const base = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .raw_at_slot = 1 } };
+
+    // Cross-type top: i64 vs bool.
+    const i64_top = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .i64_ref = 10 } };
+    const bool_top = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .bool_ref = 20 } };
+    try testing.expectEqual(@as(?CondSelectKind, null), condSelectMergeKind(&base, 2, &i64_top, 2, &bool_top, 2));
+
+    // f64/f64 is excluded by the kind gate.
+    const f64_true = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .f64_ref = 10 } };
+    const f64_false = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .f64_ref = 20 } };
+    try testing.expectEqual(@as(?CondSelectKind, null), condSelectMergeKind(&base, 2, &f64_true, 2, &f64_false, 2));
+
+    // Non-scalar top: a raw_at_slot rather than an unboxed scalar.
+    const raw_top = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .raw_at_slot = 2 } };
+    try testing.expectEqual(@as(?CondSelectKind, null), condSelectMergeKind(&base, 2, &i64_top, 2, &raw_top, 2));
+
+    // A row in the shared lower stack disqualifies the merge.
+    const row_base = [_]StackEntry{ .{ .row_region = 7 }, .{ .raw_at_slot = 1 } };
+    const row_true = [_]StackEntry{ .{ .row_region = 7 }, .{ .i64_ref = 10 } };
+    const row_false = [_]StackEntry{ .{ .row_region = 7 }, .{ .i64_ref = 20 } };
+    try testing.expectEqual(@as(?CondSelectKind, null), condSelectMergeKind(&row_base, 2, &row_true, 2, &row_false, 2));
+
+    // Depth mismatch: arms produce different stack heights (not top-only).
+    const deep_false = [_]StackEntry{ .{ .raw_at_slot = 0 }, .{ .i64_ref = 20 }, .{ .i64_ref = 30 } };
+    try testing.expectEqual(@as(?CondSelectKind, null), condSelectMergeKind(&base, 2, &i64_top, 2, &deep_false, 3));
+
+    // Lower-stack mismatch: an arm rewrote a shared slot below the top.
+    const moved_false = [_]StackEntry{ .{ .raw_at_slot = 9 }, .{ .i64_ref = 20 } };
+    try testing.expectEqual(@as(?CondSelectKind, null), condSelectMergeKind(&base, 2, &i64_top, 2, &moved_false, 2));
 }
 
 test "compile float dup" {
