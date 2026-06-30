@@ -1,0 +1,24 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== cond-select merge ===
+Stack: [ ]
+PASS: clamp-sum over 1000
+Stack: [ ]
+PASS: bool-count over 10
+Stack: [ ]
+PASS: f64-pick truthy arm
+Stack: [ ]
+PASS: f64-pick falsy arm
+Stack: [ ]
+PASS: cross-pick i64 arm
+Stack: [ ]
+PASS: cross-pick bool arm
+Stack: [ ]
+all cond-select merge cases passed
+Stack: [ ]

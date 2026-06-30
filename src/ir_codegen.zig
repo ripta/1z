@@ -486,6 +486,10 @@ pub const CompiledWord = struct {
     code_ptr: *const anyopaque,
     jit_buf: JitBuffer,
     peak_stack_depth: u32 = 0,
+    /// Number of same-type `if` merges this word lowered to a branchless
+    /// `IR_COND` select instead of the boxed flush/`MERGE_2` path. Observable
+    /// so tests can confirm a qualifying merge took the fast path.
+    cond_select_count: u32 = 0,
 };
 
 fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
@@ -1801,6 +1805,9 @@ const CompileState = struct {
     /// (reach-below shuffles, indexed-row ops) leaves the declared count intact
     /// and does not set this.
     variable_arity: bool = false,
+    /// Count of same-type `if` merges lowered to a branchless `IR_COND` select.
+    /// Surfaced on the compiled result so tests can confirm the fast path fired.
+    cond_select_count: u32 = 0,
     error_handler_terminal: bool = false,
     not_compilable_reason: ?NotCompilableReason = null,
     dispatch_ptr: c.ir_ref = c.IR_UNUSED,
@@ -5212,14 +5219,18 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
 }
 
 /// Inline ops admitted inside an `if` arm that the branchless `IR_COND`
-/// merge select may evaluate unconditionally. Every entry lowers to
-/// straight-line data flow with no store, no general call, and no
-/// deterministic trap. `+ - *` are included even though their i64 path
-/// emits an overflow guard: that guard deopts to the interpreter under
-/// JIT and produces the correct result, so evaluating a non-taken arm's
-/// arithmetic costs at most a spurious deopt. The trapping division
-/// family (`/ % div rem`), all control flow, and every other word are
-/// excluded.
+/// merge select may evaluate unconditionally. Every entry is a pure
+/// intrinsic that lowers to straight-line value folds or an abstract
+/// stack reorder. `+ - *` are included even though their i64 path emits
+/// an overflow guard and a raw operand a tag-check guard: both are pure
+/// deopts the `ir` backend folds away when a trial arm is discarded, so
+/// evaluating a non-taken arm costs at most a spurious guard. `nip` is
+/// deliberately absent: it is a prelude word, not an intrinsic, so
+/// compiling it flushes the abstract stack to physical slots -- stores
+/// into the escaping stack array the backend cannot fold away, which
+/// corrupts the fallback path when a trial arm is discarded. The trapping
+/// division family (`/ % div rem`), all control flow, and every other
+/// word are excluded.
 const branchless_arm_ops = std.StaticStringMap(void).initComptime(.{
     .{ "+", {} },
     .{ "-", {} },
@@ -5231,7 +5242,21 @@ const branchless_arm_ops = std.StaticStringMap(void).initComptime(.{
     .{ "drop", {} },
     .{ "swap", {} },
     .{ "over", {} },
-    .{ "nip", {} },
+});
+
+/// Shuffle subset of `branchless_arm_ops`. On an unboxed scalar operand each
+/// is pure (`dup`/`over` share the ref, `drop` is a no-op, `swap` reorders
+/// abstractly), but on a `raw_at_slot` or row operand they instead emit a
+/// copy + retain, a release, or a row callback -- side effects the backend
+/// cannot fold away from a discarded trial. A shuffle-bearing arm therefore
+/// takes the fast path only when every entry it touches is a scalar ref; a
+/// pure literal/arithmetic/comparison arm needs no such restriction, which is
+/// what lets the fast path fire inside a compiled loop where operands are raw.
+const branchless_shuffle_ops = std.StaticStringMap(void).initComptime(.{
+    .{ "dup", {} },
+    .{ "drop", {} },
+    .{ "swap", {} },
+    .{ "over", {} },
 });
 
 /// Structural half of the branchless-merge precondition: true when every
@@ -5310,6 +5335,50 @@ fn condSelectMergeKind(
         .bool_ref => if (f_stack[top] == .bool_ref) .bool else null,
         else => null,
     };
+}
+
+/// True when an `if` arm contains a `branchless_shuffle_ops` op, whose purity
+/// hinges on its operand being an unboxed scalar.
+fn armBodyHasShuffleOp(body: []const Instruction) bool {
+    for (body) |instr| {
+        switch (instr.op) {
+            .call_word, .call_word_direct => {
+                const name = instr.op.callTargetName() orelse continue;
+                if (branchless_shuffle_ops.has(name)) return true;
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn isUnboxedScalar(e: StackEntry) bool {
+    return e == .i64_ref or e == .f64_ref or e == .bool_ref;
+}
+
+/// Guards the discardable trial compile against side effects that would survive
+/// a fallback. Arms with no shuffle op are pure on any operand and always pass.
+/// A shuffle-bearing arm passes only when every pre-`if` entry it could touch
+/// (the deeper of the two arms' inferred input depths) is an unboxed scalar, so
+/// `dup`/`over`/`drop`/`swap` lower to ref sharing or an abstract reorder rather
+/// than a copy/retain/release/callback the backend cannot fold away.
+fn condSelectArmsOperandSafe(
+    state: *CompileState,
+    stack: []const StackEntry,
+    sp: usize,
+    tb: []const Instruction,
+    fb: []const Instruction,
+) bool {
+    if (!armBodyHasShuffleOp(tb) and !armBodyHasShuffleOp(fb)) return true;
+    const resolver = if (state.resolver) |r| r else null;
+    const t_eff = (inferQuotationEffect(tb, resolver) catch return false) orelse return false;
+    const f_eff = (inferQuotationEffect(fb, resolver) catch return false) orelse return false;
+    const reach = @max(t_eff.input_count, f_eff.input_count);
+    if (reach > sp) return false;
+    for (sp - reach..sp) |i| {
+        if (!isUnboxedScalar(stack[i])) return false;
+    }
+    return true;
 }
 
 // if: ( cond true-quot false-quot -- ... )   branch on truthiness
@@ -5428,6 +5497,75 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     // the release precedes the branch bodies that overwrite it.
     if (cond_entry == .raw_at_slot) {
         emitReleaseSlot(state, cond_entry.raw_at_slot);
+    }
+
+    // Pre-branch branchless fast path: when both arms are pure, trap-free,
+    // single-value `i64`/`bool` expressions that only replace the top scalar,
+    // lower the merge to one `IR_COND` select over the two unboxed refs instead
+    // of boxing each arm and merging through the physical stack. `IR_COND` is a
+    // data-flow select with no control-flow merge, so both operands must be live
+    // in this one block -- the arms are compiled branchlessly from copies of the
+    // pre-`if` stack, then discarded if they do not qualify. The eligibility plus
+    // operand-safety gate keeps that discardable trial free of physical-stack
+    // stores / releases the backend cannot fold away. Any shape the precondition
+    // rejects (cross-type, `f64`, non-scalar, side-effecting / trapping, row,
+    // depth change) falls through to the unchanged boxed `IF` / `MERGE_2` path.
+    if (true_body) |tb| {
+        if (false_body) |fb| {
+            if (armBodyBranchlessEligible(tb) and armBodyBranchlessEligible(fb) and
+                condSelectArmsOperandSafe(state, stack, sp.*, tb, fb))
+            {
+                const base_sp = sp.*;
+                const saved_exit = state.exit_kind;
+                const saved_items_ptr = state.items_ptr;
+                const saved_base_addr = state.base_addr;
+                const saved_sp_val = state.sp_val;
+                const saved_base_idx = state.base_idx;
+
+                const t_copy = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
+                defer state.allocator.free(t_copy);
+                const f_copy = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
+                defer state.allocator.free(f_copy);
+
+                var t_sp = base_sp;
+                try compileInstructions(state, tb, t_copy, &t_sp);
+                var f_sp = base_sp;
+                try compileInstructions(state, fb, f_copy, &f_sp);
+
+                // The admitted op set never moves these, but restore them so a
+                // null-kind fall-through leaves the boxed path's own snapshots
+                // pristine.
+                state.exit_kind = saved_exit;
+                state.items_ptr = saved_items_ptr;
+                state.base_addr = saved_base_addr;
+                state.sp_val = saved_sp_val;
+                state.base_idx = saved_base_idx;
+
+                if (condSelectMergeKind(stack, base_sp, t_copy, t_sp, f_copy, f_sp)) |kind| {
+                    const top = t_sp - 1;
+                    const ir_ty: c_uint = switch (kind) {
+                        .i64 => c.IR_I64,
+                        .bool => c.IR_BOOL,
+                    };
+                    const a = switch (kind) {
+                        .i64 => t_copy[top].i64_ref,
+                        .bool => t_copy[top].bool_ref,
+                    };
+                    const b = switch (kind) {
+                        .i64 => f_copy[top].i64_ref,
+                        .bool => f_copy[top].bool_ref,
+                    };
+                    const sel = c.ir_fold3(ctx, c.IR_OPT(c.IR_COND, ir_ty), cond_ref, a, b);
+                    stack[top] = switch (kind) {
+                        .i64 => .{ .i64_ref = sel },
+                        .bool => .{ .bool_ref = sel },
+                    };
+                    sp.* = t_sp;
+                    state.cond_select_count += 1;
+                    return .next;
+                }
+            }
+        }
     }
 
     // Save stack state for the false branch
@@ -7069,50 +7207,6 @@ fn compileInstructions(
     }
 }
 
-/// Merge two stack entries from the true and false branches of an if.
-/// After an ir MERGE of two branches, a PHI node selects which branch's
-/// value to use based on which path was actually taken at runtime.
-/// For raw_at_slot merging is limited to same-slot cases: if both branches
-/// wrote to the same physical slot, no copy is needed since the taken branch
-/// already placed its value there.
-fn mergeEntries(
-    ctx: *c.ir_ctx,
-    true_entry: StackEntry,
-    false_entry: StackEntry,
-    slot: usize,
-    base_addr: c.ir_ref,
-) IrCodegenError!StackEntry {
-    switch (true_entry) {
-        .i64_ref => |true_ref| switch (false_entry) {
-            .i64_ref => |false_ref| return .{ .i64_ref = c._ir_PHI_2(ctx, c.IR_I64, true_ref, false_ref) },
-            else => return IrCodegenError.NotCompilable,
-        },
-        .f64_ref => |true_ref| switch (false_entry) {
-            .f64_ref => |false_ref| return .{ .f64_ref = c._ir_PHI_2(ctx, c.IR_DOUBLE, true_ref, false_ref) },
-            else => return IrCodegenError.NotCompilable,
-        },
-        .bool_ref => |true_ref| switch (false_entry) {
-            .bool_ref => |false_ref| return .{ .bool_ref = c._ir_PHI_2(ctx, c.IR_BOOL, true_ref, false_ref) },
-            else => return IrCodegenError.NotCompilable,
-        },
-        .raw_at_slot => |true_slot| switch (false_entry) {
-            .raw_at_slot => |false_slot| {
-                if (true_slot == slot and false_slot == slot) {
-                    return .{ .raw_at_slot = slot };
-                }
-                // Both wrote to physical slots but at different positions;
-                // the last write from the taken branch is at the correct
-                // location since only one branch executes. However, we
-                // can't statically know which, so copy to canonical slot.
-                _ = base_addr;
-                return IrCodegenError.NotCompilable;
-            },
-            else => return IrCodegenError.NotCompilable,
-        },
-        .quotation_body, .row_region => return IrCodegenError.NotCompilable,
-    }
-}
-
 /// Bundle of all inputs needed by a compiled function. Passed as a single
 /// pointer to avoid the aarch64 IR backend miscompilation with 4+ parameters.
 /// Uses extern struct for C-compatible layout with predictable field offsets.
@@ -7687,6 +7781,7 @@ fn compileWordPass(
                 .code_ptr = ptr,
                 .jit_buf = .{ .code = ptr, .size = size },
                 .peak_stack_depth = state.peak_sp,
+                .cond_select_count = state.cond_select_count,
             },
             .peak_stack_depth = state.peak_sp,
             .row_aware_self_loop = state.row_aware_loop_detected,
@@ -13930,11 +14025,30 @@ test "armBodyBranchlessEligible: side-effecting, trapping, control-flow, and non
     const non_scalar_literal = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .string = "x" } }, .line = 1 },
     };
+    // `nip` is trap-free but a prelude word, not an intrinsic: compiling it
+    // flushes the abstract stack to physical slots, so it is excluded.
+    const nip_arm = [_]Instruction{
+        .{ .op = .{ .call_word = "nip" }, .line = 1 },
+    };
     try testing.expect(!armBodyBranchlessEligible(&side_effect));
     try testing.expect(!armBodyBranchlessEligible(&divide));
     try testing.expect(!armBodyBranchlessEligible(&modulo));
     try testing.expect(!armBodyBranchlessEligible(&nested_if));
     try testing.expect(!armBodyBranchlessEligible(&non_scalar_literal));
+    try testing.expect(!armBodyBranchlessEligible(&nip_arm));
+}
+
+test "armBodyHasShuffleOp: detects shuffle ops, ignores pure value ops" {
+    const over_add = [_]Instruction{
+        .{ .op = .{ .call_word = "over" }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+    const pure = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    };
+    try testing.expect(armBodyHasShuffleOp(&over_add));
+    try testing.expect(!armBodyHasShuffleOp(&pure));
 }
 
 test "condSelectMergeKind: same-kind i64 and bool top-only pairs qualify" {
@@ -14043,6 +14157,244 @@ test "compile float if-else merge" {
     try testing.expectEqual(@as(usize, 1), sp);
     try testing.expect(values[0] == .float);
     try testing.expectEqual(@as(f64, 1.0), values[0].float);
+}
+
+// `x dup C < [ TRUE-ARM ] [ FALSE-ARM ] if`: the top-only same-type shape the
+// branchless `IR_COND` merge selects on. The condition is computed from a
+// duplicate of `x`, so `x` remains as the single top the arm replaces.
+const cond_select_true_mul = &[_]Instruction{
+    .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+    .{ .op = .{ .call_word = "*" }, .line = 1 },
+};
+const cond_select_false_mul = &[_]Instruction{
+    .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 1 },
+    .{ .op = .{ .call_word = "*" }, .line = 1 },
+};
+
+test "cond-select: qualifying i64 merge selects branchlessly (false arm)" {
+    // 4 dup 3 < -> false; false arm 5 * -> 20.
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 4 } }, .line = 1 },
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+        .{ .op = .{ .call_word = "<" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = cond_select_true_mul } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = cond_select_false_mul } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+    try testing.expectEqual(@as(u32, 1), result.cond_select_count);
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 20), values[0].fixnum);
+}
+
+test "cond-select: qualifying i64 merge selects branchlessly (true arm)" {
+    // 2 dup 3 < -> true; true arm 2 * -> 4.
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+        .{ .op = .{ .call_word = "<" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = cond_select_true_mul } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = cond_select_false_mul } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+    try testing.expectEqual(@as(u32, 1), result.cond_select_count);
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 4), values[0].fixnum);
+}
+
+test "cond-select: shuffle arm over scalar operands selects branchlessly" {
+    // 10 3 t [ over + ] [ over - ] if: arms read the sibling 10 and replace the
+    // top; both operands are scalar i64_refs, so the shuffle stays pure. cond t
+    // -> over + -> 3 + 10 = 13, leaving [ 10 13 ].
+    const over_add = &[_]Instruction{
+        .{ .op = .{ .call_word = "over" }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+    const over_sub = &[_]Instruction{
+        .{ .op = .{ .call_word = "over" }, .line = 1 },
+        .{ .op = .{ .call_word = "-" }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 10 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = over_add } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = over_sub } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 2, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+    try testing.expectEqual(@as(u32, 1), result.cond_select_count);
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 2), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 10), values[0].fixnum);
+    try testing.expect(values[1] == .fixnum);
+    try testing.expectEqual(@as(i64, 13), values[1].fixnum);
+}
+
+test "cond-select: bool merge feeding a follow-on i64 merge selects both" {
+    // 0 3 dup 5 < [ 2 > ] [ 8 > ] if  -> bool merge (3>2 = t)
+    //            [ 1 + ] [ 0 + ] if   -> i64 merge over the accumulator 0 (t -> 0+1)
+    const gt2 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = ">" }, .line = 1 },
+    };
+    const gt8 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 8 } }, .line = 1 },
+        .{ .op = .{ .call_word = ">" }, .line = 1 },
+    };
+    const inc = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+    const noinc = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 5 } }, .line = 1 },
+        .{ .op = .{ .call_word = "<" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = gt2 } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = gt8 } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inc } } }, .line = 5 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = noinc } } }, .line = 6 },
+        .{ .op = .{ .call_word = "if" }, .line = 7 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+    try testing.expectEqual(@as(u32, 2), result.cond_select_count);
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 1), values[0].fixnum);
+}
+
+test "cond-select: f64 merge falls back to the boxed path" {
+    // 1.0 dup 0.5 < -> false; false arm 1.5 * -> 1.5. f64 is excluded.
+    const mul2 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 2.0 } }, .line = 1 },
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    };
+    const mul1_5 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 1.5 } }, .line = 1 },
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .float = 1.0 } }, .line = 1 },
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .float = 0.5 } }, .line = 1 },
+        .{ .op = .{ .call_word = "<" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = mul2 } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = mul1_5 } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+    try testing.expectEqual(@as(u32, 0), result.cond_select_count);
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .float);
+    try testing.expectEqual(@as(f64, 1.5), values[0].float);
+}
+
+test "cond-select: cross-type i64/bool merge falls back to the boxed path" {
+    // 4 dup 3 < [ 2 * ] [ 1 > ] if: true arm yields i64, false arm yields bool.
+    const arm_mul = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = "*" }, .line = 1 },
+    };
+    const arm_gt = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = ">" }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 4 } }, .line = 1 },
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+        .{ .op = .{ .call_word = "<" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = arm_mul } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = arm_gt } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+    try testing.expectEqual(@as(u32, 0), result.cond_select_count);
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    // 4 < 3 is false; false arm 4 > 1 is true.
+    try testing.expect(values[0] == .boolean);
+    try testing.expectEqual(true, values[0].boolean);
+}
+
+test "cond-select: trapping arm disqualifies the fast path" {
+    // `/` is not an admitted branchless op, so the structural gate rejects.
+    // 8 dup 3 < [ 4 / ] [ 2 / ] if -> false; false arm 8 / 2 -> 4.
+    const div4 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 4 } }, .line = 1 },
+        .{ .op = .{ .call_word = "/" }, .line = 1 },
+    };
+    const div2 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .call_word = "/" }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 8 } }, .line = 1 },
+        .{ .op = .{ .call_word = "dup" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+        .{ .op = .{ .call_word = "<" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = div4 } } }, .line = 2 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = div2 } } }, .line = 3 },
+        .{ .op = .{ .call_word = "if" }, .line = 4 },
+    };
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+    try testing.expectEqual(@as(u32, 0), result.cond_select_count);
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [4]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, &values, &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .fixnum);
+    try testing.expectEqual(@as(i64, 4), values[0].fixnum);
 }
 
 test "compile float truthiness in if" {

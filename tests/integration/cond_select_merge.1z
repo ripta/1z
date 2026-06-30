@@ -1,0 +1,46 @@
+\ Branchless IR_COND merge select: same-type i64/bool `if` merges feeding scalar
+\ arithmetic, exercised under --compile=eager so the inner `if` codegen runs the
+\ fast path. f64 and cross-type merges must stay correct on the boxed fallback.
+use "testing" ;
+
+\ same-type i64 merge inside a compiled loop body (the if-in-loop shape).
+clamp-sum: ( n -- sum ) [
+  0
+  [ over 0 > ]
+  [ over dup 500 < [ 3 * ] [ 2 * ] if + swap 1 - swap ]
+  while
+  nip
+] ;
+
+\ same-type bool merge feeding a follow-on same-type i64 merge, in a loop.
+bool-count: ( n -- count ) [
+  0
+  [ over 0 > ]
+  [ over dup 5 < [ 2 > ] [ 8 > ] if [ 1 + ] [ 0 + ] if swap 1 - swap ]
+  while
+  nip
+] ;
+
+\ f64 same-type merge: excluded from the fast path, must match interpreted.
+f64-pick: ( x -- y ) [ dup 0.5 < [ 2.0 * ] [ 1.5 * ] if ] ;
+
+\ cross-type merge: i64 true arm, bool false arm; boxed fallback.
+cross-pick: ( x -- v ) [ dup 3 < [ 2 * ] [ 1 > ] if ] ;
+
+clamp-sum: compile!
+bool-count: compile!
+f64-pick: compile!
+cross-pick: compile!
+
+"cond-select merge" test-section
+
+1000 clamp-sum 1125750 "clamp-sum over 1000" assert=
+10 bool-count 4 "bool-count over 10" assert=
+
+2.0 f64-pick 3.0 "f64-pick truthy arm" assert=
+0.25 f64-pick 0.5 "f64-pick falsy arm" assert=
+
+2 cross-pick 4 "cross-pick i64 arm" assert=
+4 cross-pick t "cross-pick bool arm" assert=
+
+"all cond-select merge cases passed" print-line
