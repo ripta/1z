@@ -1,0 +1,27 @@
+\ Benchmark: clamp-sum loop (less-synthetic workload).
+\
+\ A compiled `while` loop sums a threshold-branched transform of each index. The
+\ inner `dup 500 < [ 3 * ] [ 2 * ] if` is a same-type i64 merge feeding
+\ arithmetic, living inside a compiled loop body -- the exact "if inside a loop"
+\ shape the branchless IR_COND select must stay correct in. Unlike the micro
+\ benchmark there is just one merge per iteration amid ordinary loop work, so it
+\ checks the optimization does not regress a realistic mix.
+\
+\ Run with ONEZ_PROTOTYPE_COND_SELECT unset (baseline) vs set (IR_COND select).
+\ Prints elapsed nanoseconds and a checksum (identical on/off proves correctness).
+
+use "time" ;
+
+clamp-sum: ( n -- sum ) [
+  0
+  [ over 0 > ]
+  [ over dup 500 < [ 3 * ] [ 2 * ] if + swap 1 - swap ]
+  while
+  nip
+] ;
+
+clamp-sum: compile!
+
+monotonic-nanos 80000000 clamp-sum swap monotonic-nanos swap -
+"clamp-sum ns=" print inspect print-line
+"clamp-sum sum=" print inspect print-line

@@ -1,0 +1,77 @@
+\ Benchmark: same-type if-merge feeding scalar arithmetic (micro).
+\
+\ Each word is a compiled `while` loop whose body runs several same-type `if`
+\ merges (i64/i64, f64/f64, bool/bool) whose merged top is immediately consumed
+\ by further scalar arithmetic. The loop body is JIT-compiled (run with
+\ --compile=eager), so the inner `if` codegen -- the box-on-each-arm +
+\ unbox-at-consumer round-trip the merge pays today -- executes every iteration.
+\
+\ Run the same file twice, once with ONEZ_PROTOTYPE_COND_SELECT unset (baseline,
+\ boxed merge) and once set (branchless IR_COND select); the env-gated codegen is
+\ the only difference. Each line prints elapsed nanoseconds (the measurement) and
+\ a checksum (must be identical on/off to prove the select is correct).
+
+use "time" ;
+
+\ i64/i64: four same-type merges per iteration, each feeding arithmetic.
+mb-i64: ( n -- sum ) [
+  0
+  [ over 0 > ]
+  [
+    over
+    dup 3 < [ 2 * ] [ 5 * ] if
+    dup 7 < [ 1 + ] [ 1 - ] if
+    dup 9 < [ 4 * ] [ 6 * ] if
+    dup 11 < [ 2 + ] [ 3 + ] if
+    + swap 1 - swap
+  ]
+  while
+  nip
+] ;
+
+\ f64/f64: float literals stay unboxed as f64_ref; +/*/> resolve as f64.
+mb-f64: ( n -- sum ) [
+  0.0
+  [ over 0.0 > ]
+  [
+    over
+    dup 3.0 < [ 2.0 * ] [ 1.5 * ] if
+    dup 7.0 < [ 1.0 + ] [ 1.0 - ] if
+    dup 9.0 < [ 1.25 * ] [ 0.75 * ] if
+    dup 11.0 < [ 2.0 + ] [ 3.0 + ] if
+    + swap 1.0 - swap
+  ]
+  while
+  nip
+] ;
+
+\ bool/bool: a same-type bool merge whose result feeds a follow-on `if`, plus the
+\ follow-on i64 merge that consumes it.
+mb-bool: ( n -- count ) [
+  0
+  [ over 0 > ]
+  [
+    over
+    dup 5 < [ 2 > ] [ 8 > ] if
+    [ 1 + ] [ 0 + ] if
+    swap 1 - swap
+  ]
+  while
+  nip
+] ;
+
+mb-i64: compile!
+mb-f64: compile!
+mb-bool: compile!
+
+monotonic-nanos 40000000 mb-i64 swap monotonic-nanos swap -
+"mb-i64 ns=" print inspect print-line
+"mb-i64 sum=" print inspect print-line
+
+monotonic-nanos 40000000.0 mb-f64 swap monotonic-nanos swap -
+"mb-f64 ns=" print inspect print-line
+"mb-f64 sum=" print inspect print-line
+
+monotonic-nanos 40000000 mb-bool swap monotonic-nanos swap -
+"mb-bool ns=" print inspect print-line
+"mb-bool count=" print inspect print-line
