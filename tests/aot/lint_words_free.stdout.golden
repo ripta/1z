@@ -1,0 +1,4 @@
+fooBar non-kebab
+foo-bar kebab
+foo--bar non-kebab
+lint-diagnostic{ rule-id: "circular-dependency" severity: warning: file: "a.1z" line: 3 column: 5 message: "circular dependency: a.1z -> b -> a.1z" }

@@ -734,17 +734,13 @@ make-lint-rule register-lint-rule
 ] ;
 
 (circular-record>diagnostic): ( record -- lint-diagnostic ) [
-  dup (circular-record-file)
-  1 pick-n (circular-record-line)
-  2 pick-n (circular-record-column)
-  3 pick-n (format-circular-record-message)
-  4 array-n swap drop
   "circular-dependency" warning:
-  2 pick-n 0 #nth
-  3 pick-n 1 #nth
-  4 pick-n 2 #nth
-  5 pick-n 3 #nth
+  2 pick-n (circular-record-file)
+  3 pick-n (circular-record-line)
+  4 pick-n (circular-record-column)
+  5 pick-n (format-circular-record-message)
   make-lint-diagnostic
+  nip
 ] ;
 
 (check-circular-dependency): ( path source tokens line-index semantic-context -- diagnostics ) [

@@ -1,0 +1,13 @@
+\ Interpreter-free (`--interpreter-fallback=false`) AOT run of the two lint
+\ words made AOT-compilable in this change: `(non-kebab-core?)` (tier 1) and
+\ `(circular-record>diagnostic)` (tier 3). Exercises them directly so the
+\ interpreter-free output can be compared against the interpreter, without the
+\ full lint pipeline (whose interpreter-free run is tracked separately).
+use "lint-rules/tier1" ;
+use "lint-rules/tier3" ;
+
+"fooBar" (non-kebab-core?) [ "fooBar non-kebab" ] [ "fooBar kebab" ] if print-line
+"foo-bar" (non-kebab-core?) [ "foo-bar non-kebab" ] [ "foo-bar kebab" ] if print-line
+"foo--bar" (non-kebab-core?) [ "foo--bar non-kebab" ] [ "foo--bar kebab" ] if print-line
+
+V{ "b" "a.1z" 3 5 } (circular-record>diagnostic) inspect print-line

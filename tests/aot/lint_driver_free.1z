@@ -1,8 +1,8 @@
 \ Interpreter-free (`--interpreter-fallback=false`) build of the standalone
 \ lint driver. This is a build-only fixture: the binary is not run yet.
 \
-\ The lexer / lint row-variable words -- `(lexer-step)`, `(try-rules)`,
-\ `(lint-rule-with-context)` -- all compile, the last one through the
+\ The lexer / lint row-variable words, i.e., `(lexer-step)`, `(try-rules)`,
+\ `(lint-rule-with-context)`, all compile. The last one through the
 \ interpreter-free runtime-selected dispatch over a symbolic row (`check>>
 \ call`). The lint rules live in module-private mutable-map state serialized
 \ into the runtime image; the quotations dispatched from it (`check>> call`,
@@ -10,11 +10,7 @@
 \ compilation and their own callees are promoted into the must-compile set, so
 \ they carry a real `code_ptr` instead of trapping at runtime with a null one.
 \
-\ The build currently FAILS: promoting those callees pulls two lint words into
-\ the must-compile set that do not yet compile interpreter-free --
-\ `(circular-record>diagnostic)` (a row-variable stack underflow) and
-\ `(non-kebab-core?)` (a polymorphic arithmetic operand). Once both compile,
-\ this flips to a run fixture matching interpreted `1z lint`.
+\ The build should SUCCEED.
 use "lint" ;
 use "lint-rules" ;
 { "tests/fixtures/lint/unused-import.1z" } run-lint [ 0 ] [ 1 ] if sys-exit

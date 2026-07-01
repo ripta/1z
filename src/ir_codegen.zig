@@ -3355,6 +3355,20 @@ fn cloneStackEntry(
             emitCopySlot(state.ctx, base_addr, s, dest_slot);
             // The copy is a second owning reference to the same backing.
             emitRetainSlot(state, dest_slot);
+            // When the source slot holds a quotation parameter with a tracked
+            // concrete effect, carry that effect to the copy so a later `call`
+            // on the copied quotation (the `over call` / `dup call` idiom in a
+            // combinator like `(any-loop)`) resolves its arity instead of
+            // collapsing the abstract stack to a row. A full slot map is a
+            // graceful degrade: on overflow the copy is simply untracked and the
+            // call falls back to the row path, exactly as before this change.
+            if (state.quotation_slots.findSlot(s)) |info| {
+                _ = state.quotation_slots.add(.{
+                    .slot = dest_slot,
+                    .input_count = info.input_count,
+                    .output_count = info.output_count,
+                });
+            }
             break :blk .{ .raw_at_slot = dest_slot };
         },
         .row_region => blk: {

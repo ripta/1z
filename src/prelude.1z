@@ -445,14 +445,14 @@ bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.#
 \\ Helpers lifted out of #any / #all so AOT compilation can discover them; defined at module scope
 \\ rather than in a `private{` block, since the prelude parses too deep for the parser coroutine
 \\ to reënter for a block here (cf. `(raw>constraint-info)`).
-(any-loop): ( iter quot -- ? ) [
+(any-loop): ( iter quot: ( elem -- ? ) -- ? ) [
   over #next?
   dup option:some? [
     option:some> over call
     [ 2drop t ] [ (any-loop) ] if
   ] [ drop 2drop f ] if
 ] ;
-(all-loop): ( iter quot -- ? ) [
+(all-loop): ( iter quot: ( elem -- ? ) -- ? ) [
   over #next?
   dup option:some? [
     option:some> over call
