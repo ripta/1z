@@ -1,7 +1,11 @@
-AOT interpreter fallbacks: 331 total (native=325 per-op-native=3 quotation=3)
-  static-check: jitInterpretedCall=0/0 jitNativeWordCall=328/328 jitCallQuotation=3/3 (matches build-time inventory)
 Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
-artifact: interpreter
-interpreter: linked (--interpreter-fallback=false without --lock-interpreter-setting)
-jitInterpretedCall: not linked
-runtime-image: words=544 stack-effects=541 typevalue-slots=80 blob-present=true
+Warning: 'while' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+Warning: 'while' parameter 'body' has row-variable effect; quotation call falls back to interpreter
+Warning: 'loop' parameter 'pred' has row-variable effect; quotation call falls back to interpreter
+Warning: 'keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Error: 2 words could not be compiled to C
+  word '(circular-record>diagnostic)': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word '(non-kebab-core?)': NC.1: arithmetic operand is not a fixnum or float
+      hint: blocked until polymorphic arithmetic can be compiled
+AOT interpreter fallbacks: 1342 total (native=1327 per-op-native=7 compound-uncompiled=3 quotation=5)

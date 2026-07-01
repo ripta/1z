@@ -291,7 +291,7 @@ use "conversions" ;
 
 \ --- Rule 12: open-brace (including compound forms) ---
 
-BRACE-PREFIXES: const [
+BRACE-PREFIXES: ( -- array ) const [
   { "virtual{" "struct{" "pragma{" "method{" "match{" "enum{" "H{" "V{" "M{" "{" }
 ] ;
 
