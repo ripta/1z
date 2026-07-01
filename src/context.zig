@@ -4632,8 +4632,24 @@ pub const Context = struct {
             return self.wordErrorCleanup(name, error.ParseError);
         }
 
-        // Try JIT-compiled dispatch before interpreter path
-        if (word.word_id) |wid| {
+        // Try JIT-compiled dispatch before interpreter path. A word that compiled
+        // to native and had its interpretable body dropped (an empty compound body)
+        // must dispatch compiled: interpreting the empty body is a silent no-op that
+        // leaks the caller's inputs. When its dictionary word_id is null but a
+        // compiled function exists in jit_dispatch, backfill the id so the compiled
+        // function runs. Restricted to empty bodies so real-bodied words -- including
+        // quotation-calling combinators -- stay on the interpreter path unchanged.
+        const effective_word_id: ?u32 = word.word_id orelse blk: {
+            const empty_body = switch (word.action) {
+                .compound => |b| b.len == 0,
+                else => false,
+            };
+            if (empty_body and self.runtime_image_loaded) {
+                break :blk backfillCompiledWordId(self, name);
+            }
+            break :blk null;
+        };
+        if (effective_word_id) |wid| {
             if (word.stack_effect) |effect| {
                 self.validateParameterEffects(&effect) catch |err| {
                     self.pushCallFrame(name, self.current_source, instr.line, instr.column);
@@ -5093,6 +5109,36 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
         }
         ancestor = anc.parent_context;
     }
+}
+
+/// A word that compiled to native in an AOT runtime image has its interpretable
+/// body dropped -- the runtime image serializes an empty body because the
+/// `code_ptr` is the intended execution path. If such a word is then reached
+/// through the interpreter (its startup-parsed dictionary entry carries
+/// `word_id = null` while the compiled function lives only in `jit_dispatch`),
+/// interpreting its empty body silently does nothing, corrupting the caller's
+/// stack. This resolves the word's real `word_id` from `jit_dispatch` (self +
+/// parent chain, the same scan `lookupAotCompiledWordLocked` and `executeCompiled`
+/// use) so it dispatches compiled, and writes the id back onto the live
+/// dictionary/frame slot via `propagateWordId` so the scan runs at most once per
+/// word.
+///
+/// The caller restricts this to empty-bodied words: a word with a real body is
+/// interpretable and must stay on the interpreter path. Gated on
+/// `runtime_image_loaded`, matching `lookupAotCompiledWordLocked`, so interpreter
+/// sessions never name-sweep `jit_dispatch`.
+fn backfillCompiledWordId(self: *Context, name: []const u8) ?u32 {
+    var ctx_opt: ?*const Context = self;
+    while (ctx_opt) |ctx| : (ctx_opt = ctx.parent_context) {
+        for (ctx.jit_dispatch.entries.items, 0..) |entry, idx| {
+            if (entry.code_ptr == null) continue;
+            if (!std.mem.eql(u8, entry.word_name, name)) continue;
+            const wid: u32 = @intCast(idx);
+            propagateWordId(self, name, wid);
+            return wid;
+        }
+    }
+    return null;
 }
 
 // =============================================================================
@@ -6210,6 +6256,39 @@ test "lookupWordForExecution: walks parent jit_dispatch for AOT-compiled-only wo
 }
 
 var fakeAotCodeMarker: u8 = 0;
+
+test "backfillCompiledWordId: resolves a compiled word_id from jit_dispatch and writes it back" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // A word whose compiled body was dropped is parsed into the dictionary with an
+    // empty body and a null word_id, while its compiled function lives in
+    // jit_dispatch. The backfill resolves the id and stamps it onto the slot.
+    try ctx.dictionary.put("compiled-word", .{
+        .name = "compiled-word",
+        .action = .{ .compound = &.{} },
+    });
+    try std.testing.expectEqual(@as(?u32, null), ctx.dictionary.get("compiled-word").?.word_id);
+
+    const fake_code: *const anyopaque = @ptrCast(&fakeAotCodeMarker);
+    const wid = try ctx.jit_dispatch.assignId("compiled-word");
+    ctx.jit_dispatch.setCodePtr(wid, fake_code);
+
+    try std.testing.expectEqual(@as(?u32, wid), backfillCompiledWordId(&ctx, "compiled-word"));
+    try std.testing.expectEqual(@as(?u32, wid), ctx.dictionary.get("compiled-word").?.word_id);
+}
+
+test "backfillCompiledWordId: no live compiled entry returns null" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // A registered-but-uncompiled entry (null code_ptr) is not a live match, so a
+    // genuinely empty-bodied no-op word without a compiled function stays put.
+    _ = try ctx.jit_dispatch.assignId("pending-word");
+
+    try std.testing.expectEqual(@as(?u32, null), backfillCompiledWordId(&ctx, "pending-word"));
+    try std.testing.expectEqual(@as(?u32, null), backfillCompiledWordId(&ctx, "absent-word"));
+}
 
 test "initForTask: inherits AOT runtime-image state from parent" {
     var parent = Context.init(std.testing.allocator);

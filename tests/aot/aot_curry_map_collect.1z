@@ -1,0 +1,64 @@
+\ Interpreter-free (`--interpreter-fallback=false`) coverage for the
+\ `[ word ] curry #map #collect` chain inside a compiled body, the shape at the
+\ heart of the `(lint-file)` runtime-selected dispatch. `curry` reconstructs the
+\ closure body as `[push ctx, call run-rule]`; when compiled `lint-all`'s `#map`
+\ runs that closure, the inner `call run-rule` dispatches `run-rule`'s compiled
+\ function, and `#collect` returns the mapped array (not a bare source element)
+\ so the trailing `{ } [ #append ] #reduce` flattens it correctly. Output must
+\ match the interpreter.
+\
+\ This exercises the dispatch path but does not by itself reproduce the mis-slot:
+\ that failure only surfaces in the full lint pipeline, where the mapped word
+\ compiled to native and had its interpretable body dropped from the runtime
+\ image, yet is reached through the interpreter with a null dictionary word_id --
+\ so its empty body runs as a no-op and leaks the caller's inputs.
+my-rule: struct{ id severity check fix } ;
+
+any-loop: ( iter quot -- ? ) [
+  over #next?
+  dup option:some? [
+    option:some> over call
+    [ 2drop t ] [ any-loop ] if
+  ] [ drop 2drop f ] if
+] ;
+my-any: ( seq quot -- ? ) [ swap >iterator swap any-loop ] ;
+
+my-suppressed?: ( rule-id suppressions -- bool ) [
+  dup f = [ 2drop f ] [ swap [ = ] curry my-any ] if
+] ;
+
+run-rule: ( rule ctx -- diags ) [
+  swap
+  dup id>> 2 pick-n 3 #nth my-suppressed? [
+    2drop { }
+  ] [
+    1 pick-n 0 #nth
+    2 pick-n 1 #nth
+    3 pick-n 2 #nth
+    4 pick-n 4 #nth
+    5 pick-n 5 #nth
+    5 pick-n check>> call
+    swap drop swap drop
+  ] if
+] ;
+
+\ The check quotation consumes the five pushed context fields and returns diags,
+\ building them through a nested `#map`/`#collect` as the real lint checks do.
+make-check-rule: ( id -- rule ) [ "warn" [ 2drop 2drop drop { 1 2 3 } [ dup + ] #map #collect ] f make-my-rule ] ;
+
+\ Compiled caller: map `run-rule` over a rules array through a curried closure that
+\ captures the shared context, then flatten the per-rule diagnostics.
+lint-all: ( rules ctx -- diags ) [
+  [ run-rule ] curry #map #collect
+  { } [ #append ] #reduce
+] ;
+
+driver: ( -- ) [
+  \ Two non-suppressed rules (ctx[3] is empty), so each check runs and yields three
+  \ diags; flattening the two `{ 2 4 6 }` results gives a length-6 array.
+  "a" make-check-rule "b" make-check-rule 2 array-n
+  { "p" "src" { } { } { } { } }
+  lint-all #len .
+] ;
+
+driver
