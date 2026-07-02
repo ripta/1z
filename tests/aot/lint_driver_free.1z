@@ -1,16 +1,19 @@
-\ Interpreter-free (`--interpreter-fallback=false`) build of the standalone
-\ lint driver. This is a build-only fixture: the binary is not run yet.
+\ Interpreter-free (`--interpreter-fallback=false`) run of the standalone lint
+\ driver. This is a run-and-match fixture: the binary builds, runs over a fixed
+\ fixture with ONEZ_STDLIB pointed at the standard library, and prints the same
+\ diagnostics as interpreted `1z lint tests/fixtures/lint/unused-import.1z`
+\ (the runtime-image `lint_driver.1z` golden), exiting 1 because lint found
+\ issues.
 \
 \ The lexer / lint row-variable words, i.e., `(lexer-step)`, `(try-rules)`,
 \ `(lint-rule-with-context)`, all compile. The last one through the
 \ interpreter-free runtime-selected dispatch over a symbolic row (`check>>
 \ call`). The lint rules live in module-private mutable-map state serialized
 \ into the runtime image; the quotations dispatched from it (`check>> call`,
-\ the lexer rule table's `match: @get ... call`) are now discovered for
-\ compilation and their own callees are promoted into the must-compile set, so
-\ they carry a real `code_ptr` instead of trapping at runtime with a null one.
-\
-\ The build should SUCCEED.
+\ the lexer rule table's `match: @get ... call`) are discovered for compilation
+\ and their own callees are promoted into the must-compile set, so they carry a
+\ real `code_ptr` instead of trapping at runtime with a null one. The lint
+\ checks themselves are dispatched as compiled `code_ptr`s.
 use "lint" ;
 use "lint-rules" ;
 { "tests/fixtures/lint/unused-import.1z" } run-lint [ 0 ] [ 1 ] if sys-exit

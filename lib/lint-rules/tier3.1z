@@ -118,8 +118,7 @@ use "char" ;
     (make-diag)
     swap drop 1 pick-n swap #push! drop
   ] #each
-  swap drop
-  [ drop drop drop drop ] dip
+  [ drop drop drop drop drop ] dip
 ] ;
 
 "doc-example-format" warning: [ (check-doc-example-format) ] f
