@@ -463,6 +463,9 @@ benchmark-scanner: build ## Run scanner vs direct benchmark across interpreter m
 benchmark-word-resolution: build ## Run word-resolution benchmark across interpreter modes
 	@scripts/benchmark-word-resolution.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/word_resolution.1z
 
+benchmark-interpreter-suite: release ## Record the interpreter-dispatch representative-suite baseline
+	@scripts/benchmark-interpreter-suite.sh ./$(ZIG_PREFIX)/bin/1z 7
+
 benchmark-protocol-dispatch: build ## Build and run the protocol-bounded dispatch benchmark under runtime-image AOT
 	./$(ZIG_PREFIX)/bin/1z build --emit-runtime-image tests/benchmark/protocol_dispatch_aot.1z -o tests/benchmark/protocol_dispatch_aot.aot
 	./tests/benchmark/protocol_dispatch_aot.aot > tests/benchmark/protocol_dispatch_aot.aot.sample
