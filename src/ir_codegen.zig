@@ -3480,6 +3480,49 @@ fn emitDynamicRowFallback(state: *CompileState, stack: []StackEntry, sp: *usize,
     return emitDynamicRowFallbackPreserving(state, stack, sp, name, resolved, line, 0);
 }
 
+/// Emit a call that reaches below the abstract frame but has a CONCRETE net
+/// effect (a fixed `effective_out`, not a row-returning callee). The call runs
+/// against the live stack exactly like the row-fallback path, but because the
+/// result depth is statically known, the abstract stack is re-established
+/// concretely rather than collapsed to an opaque row: the anchor is rebased to
+/// the `effective_out` results the call left at the physical top, so subsequent
+/// ops address them correctly instead of sp-relative off a spurious row. This is
+/// the reach-through-accumulator shape (`(push-non-kebab!)` inside a `#each`
+/// body): folding the invariant accumulator into a row is what mis-addressed a
+/// later store to a fixed outer slot.
+fn emitReachBelowConcrete(state: *CompileState, stack: []StackEntry, sp: *usize, name: []const u8, resolved: ResolvedWord, line: usize, effective_out: usize) IrCodegenError!bool {
+    try materializeQuotations(state, stack, sp.*, false);
+    flushToPhysicalStack(state, stack, sp.*);
+
+    const ctx_val = emitCallbackPreamble(state, sp.*);
+    if (resolved.is_native) {
+        emitNativeWordCall(state, ctx_val, name, resolved, line);
+    } else if (resolved.is_generic) {
+        emitAotGenericDispatch(state, resolved.dispatch_id, resolved.word_id, name, line);
+    } else {
+        emitAotWordCall(state, ctx_val, name, resolved, line);
+    }
+
+    if (exitFallsThrough(state.exit_kind)) {
+        // Rebase to the concrete result region the call left at the physical
+        // top: base_idx = live_sp - effective_out, so abstract slots
+        // 0..effective_out map to those results. The invariant slots the call
+        // reached but preserved (its outputs) stay concretely addressed.
+        const ctx = state.ctx;
+        const new_sp_val = c._ir_LOAD(ctx, c.IR_ADDR, state.sp_ptr);
+        const off_const = c.ir_const_addr(ctx, effective_out);
+        state.base_idx = c.ir_fold2(ctx, c.IR_OPT(c.IR_SUB, c.IR_ADDR), new_sp_val, off_const);
+        state.frame_base_idx = state.base_idx;
+        state.sp_val = new_sp_val;
+        refreshCachedStackPointer(state);
+        sp.* = effective_out;
+        for (0..effective_out) |i| stack[i] = .{ .raw_at_slot = i };
+        return true;
+    }
+
+    return false;
+}
+
 /// After the call keeps the callee's trailing `preserve` concrete outputs live above the collapsed
 /// row instead of folding them into it.
 ///
@@ -6180,10 +6223,17 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         // dispatch helper so a registered method runs, falling to
         // the word's default body on a miss.
         if (sp.* < effective_in) {
-            // A compound or generic word reaching below its
-            // declared inputs touches the implicit caller row;
-            // emit it against the live stack and collapse to a
-            // row. This is the `(file-use-targets) nip` shape.
+            // A compound or generic word reaching below its declared inputs
+            // touches the implicit caller region. When the callee has a concrete
+            // net effect and no row is live, re-establish the abstract stack
+            // concretely so a later store to an invariant outer slot stays
+            // correctly addressed; a genuinely row-returning callee, or one
+            // reaching past an existing row, collapses to an opaque row (the
+            // `(file-use-targets) nip` shape).
+            if (!resolved.returns_row and !hasRowRegion(stack, sp.*)) {
+                if (try emitReachBelowConcrete(state, stack, sp, name, resolved, line, effective_out)) return .next;
+                return .stop;
+            }
             if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line)) return .next;
             return .stop;
         }
