@@ -1,0 +1,21 @@
+\ Interpreter-free (`--interpreter-fallback=false`) coverage for the lazy-swap
+\ survivor invariant. `swap` relabels the abstract stack without moving memory,
+\ so `swap drop` (i.e. `nip`) on opaque values leaves the surviving value at a
+\ physical slot above the new top. The following `dip` pushes its quotation to
+\ that slot; before the fix the push clobbered the survivor and the word returned
+\ the quotation. The survivor here is a three-element vector and the dropped
+\ values are one-element vectors, so `#len` catches a value-level clobber, not
+\ just a depth error. Output must match the interpreter.
+mk1: ( -- v ) [ V{ 9 } ] ;
+mk3: ( -- v ) [ V{ 1 2 3 } ] ;
+
+probe: ( -- v ) [
+  mk1 mk1 mk3
+  \ stack: one(0) one(1) three(2)   (opaque vectors, distinct lengths)
+  swap drop
+  \ stack: one(0) three(1)          (the three-element survivor sits above sp)
+  [ drop ] dip
+  \ stack: three(0)                 (survivor preserved, not the dip quotation)
+] ;
+
+probe #len .

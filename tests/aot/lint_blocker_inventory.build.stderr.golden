@@ -4,4 +4,4 @@ Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls b
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: not linked
-runtime-image: words=542 stack-effects=540 typevalue-slots=80 blob-present=true
+runtime-image: words=544 stack-effects=542 typevalue-slots=80 blob-present=true

@@ -170,6 +170,15 @@ use "conversions" ;
   drop
 ] ;
 
+(push-non-kebab!): ( path source tokens line-index results stmt-start token -- path source tokens line-index results stmt-start ) [
+  "non-kebab-case" warning:
+  8 pick-n 6 pick-n 4 pick-n
+  "definition name is not kebab-case"
+  diag-at-token
+  3 pick-n swap #push! drop
+  drop
+] ;
+
 (push-comment-space!): ( path tokens line-index state pos -- path tokens line-index state ) [
   "comment-missing-space" warning:
   6 pick-n 5 pick-n 4 pick-n
@@ -291,12 +300,7 @@ make-lint-rule register-lint-rule
     \ stack: path(6) source(5) tokens(4) line-index(3) results(2) stmt-start?(1) token(0)
     dup definition-symbol? 2 pick-n and [
       dup value>> dup #len 1 - #take (non-kebab-core?) [
-        "non-kebab-case" warning:
-        8 pick-n 6 pick-n 4 pick-n
-        "definition name is not kebab-case"
-        diag-at-token
-        3 pick-n swap #push! drop
-        drop
+        (push-non-kebab!)
       ] [
         drop
       ] if
