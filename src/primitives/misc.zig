@@ -1069,7 +1069,12 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
     }
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
-        var j = anc.local_frames.items.len;
+        // Match `lookupWordLocked`'s bounded ancestor walk: a descendant only
+        // resolves an ancestor's stable scope (import frame and below), so back-
+        // writing a word_id into an ancestor's transient frame would land where
+        // resolution never looks.
+        const anc_cap = if (anc.import_frame_index) |idx| idx + 1 else 0;
+        var j = anc_cap;
         while (j > 0) {
             j -= 1;
             if (anc.local_frames.items[j].getPtr(name)) |entry| {

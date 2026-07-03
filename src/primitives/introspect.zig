@@ -925,11 +925,14 @@ fn nativeScopeFrames(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     var results: std.ArrayListUnmanaged(Value) = .{};
 
-    try collectScopeFrames(alloc, ctx, "", &results);
+    try collectScopeFrames(alloc, ctx, "", &results, false);
 
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
-        try collectScopeFrames(alloc, anc, "parent-", &results);
+        // A descendant task resolves only an ancestor's stable scope, so the
+        // dump stops at each ancestor's import frame rather than walking its
+        // task-private transient frames across the spawn boundary.
+        try collectScopeFrames(alloc, anc, "parent-", &results, true);
         ancestor = anc.parent_context;
     }
 
@@ -979,11 +982,17 @@ fn collectScopeFrames(
     source_ctx: *const Context,
     prefix: []const u8,
     results: *std.ArrayListUnmanaged(Value),
+    stable_only: bool,
 ) !void {
     const local_type = if (prefix.len > 0) "parent-local-frame" else "local-frame";
     const dict_type = if (prefix.len > 0) "parent-global-dict" else "global-dict";
 
-    var i = source_ctx.local_frames.items.len;
+    // For an ancestor context, cap the walk at the import frame: its transient
+    // frames are task-private and not resolvable from a descendant.
+    var i = if (stable_only)
+        (if (source_ctx.import_frame_index) |idx| idx + 1 else 0)
+    else
+        source_ctx.local_frames.items.len;
     while (i > 0) {
         i -= 1;
         const is_import = source_ctx.import_frame_index != null and i == source_ctx.import_frame_index.?;

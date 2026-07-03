@@ -1987,7 +1987,8 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            var j = ctx.local_frames.items.len;
+            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            var j = anc_cap;
             while (j > 0) {
                 j -= 1;
                 if (ctx.local_frames.items[j].get(name)) |def| return def;
@@ -2075,7 +2076,8 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| : (ancestor = ctx.parent_context) {
-            for (ctx.local_frames.items) |frame| {
+            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            for (ctx.local_frames.items[0..anc_cap]) |frame| {
                 if (frame.contains(name)) return null;
             }
         }
@@ -2116,7 +2118,8 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            var j = ctx.local_frames.items.len;
+            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            var j = anc_cap;
             while (j > 0) {
                 j -= 1;
                 if (ctx.local_frames.items[j].getPtr(name)) |def| {
@@ -2188,7 +2191,8 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            var j = ctx.local_frames.items.len;
+            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            var j = anc_cap;
             while (j > 0) {
                 j -= 1;
                 if (ctx.local_frames.items[j].get(name) != null) {
@@ -2229,7 +2233,11 @@ pub const Context = struct {
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
-            var j = ctx.local_frames.items.len;
+            // Only the ancestor's stable scope is resolvable from a descendant
+            // task; its transient frames are task-private execution state we do
+            // not walk across the spawn boundary.
+            const anc_cap = if (ctx.import_frame_index) |idx| idx + 1 else 0;
+            var j = anc_cap;
             while (j > 0) {
                 j -= 1;
                 trace_mod.traceDumpScopeFrame(&tw, "parent: ", j, ctx.local_frames.items[j].count(), null);
@@ -6139,6 +6147,116 @@ test "preResolveCallTarget: returns null when a loaded module carries the name a
     );
 
     try std.testing.expectEqual(@as(?*dict_mod.WordSlot, null), ctx.preResolveCallTarget("dep-claimed"));
+}
+
+test "lookupWordLocked: descendant reads ancestor stable scope, not transient frames" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // Frame 0 is the parent's import frame: its durable scope.
+    try parent.pushLocalFrame();
+    parent.import_frame_index = parent.local_frames.items.len - 1;
+    try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "stable-word", .{
+        .name = "stable-word",
+        .action = .{ .native = noop },
+    });
+
+    // A combinator frame above the import frame: transient execution state.
+    try parent.pushLocalFrame();
+    try parent.local_frames.items[parent.local_frames.items.len - 1].put(parent.allocator, "transient-word", .{
+        .name = "transient-word",
+        .action = .{ .native = noop },
+    });
+
+    var child = Context.init(std.testing.allocator);
+    defer child.deinit();
+    // Wire the ancestor link only for the lookups; restore null before deinit
+    // so each context frees its own root-owned allocators.
+    child.parent_context = &parent;
+    defer child.parent_context = null;
+
+    try std.testing.expect(child.lookupWordLocked("stable-word") != null);
+    try std.testing.expect(child.lookupWordLocked("transient-word") == null);
+}
+
+test "lookupWordStackEffectPtrLocked: descendant skips ancestor transient frames" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    const empty_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{},
+        .outputs = &[_]StackEffectParam{},
+    };
+
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    try parent.pushLocalFrame();
+    parent.import_frame_index = parent.local_frames.items.len - 1;
+    try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "stable-eff", .{
+        .name = "stable-eff",
+        .stack_effect = empty_effect,
+        .action = .{ .native = noop },
+    });
+
+    try parent.pushLocalFrame();
+    try parent.local_frames.items[parent.local_frames.items.len - 1].put(parent.allocator, "transient-eff", .{
+        .name = "transient-eff",
+        .stack_effect = empty_effect,
+        .action = .{ .native = noop },
+    });
+
+    var child = Context.init(std.testing.allocator);
+    defer child.deinit();
+    child.parent_context = &parent;
+    defer child.parent_context = null;
+
+    try std.testing.expect(child.lookupWordStackEffectPtrLocked("stable-eff") != null);
+    try std.testing.expect(child.lookupWordStackEffectPtrLocked("transient-eff") == null);
+}
+
+test "preResolveCallTarget: ancestor transient frame no longer blocks, stable frame still does" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    try parent.pushLocalFrame();
+    parent.import_frame_index = parent.local_frames.items.len - 1;
+    // A stable-scope binding on an ancestor must still veto pre-resolution.
+    try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "stable-claim", .{
+        .name = "stable-claim",
+        .action = .{ .native = noop },
+    });
+    // A transient-scope binding on an ancestor is task-private and must not.
+    try parent.pushLocalFrame();
+    try parent.local_frames.items[parent.local_frames.items.len - 1].put(parent.allocator, "transient-claim", .{
+        .name = "transient-claim",
+        .action = .{ .native = noop },
+    });
+
+    var child = Context.init(std.testing.allocator);
+    defer child.deinit();
+    try child.dictionary.put("stable-claim", .{ .name = "stable-claim", .action = .{ .native = noop } });
+    try child.dictionary.put("transient-claim", .{ .name = "transient-claim", .action = .{ .native = noop } });
+
+    child.parent_context = &parent;
+    defer child.parent_context = null;
+
+    // Shadowed by the ancestor's stable frame: not pre-resolvable.
+    try std.testing.expectEqual(@as(?*dict_mod.WordSlot, null), child.preResolveCallTarget("stable-claim"));
+    // Only in the ancestor's transient frame, which the descendant no longer
+    // reads: pre-resolves to the child's dictionary slot.
+    try std.testing.expectEqual(
+        child.dictionary.getSlot("transient-claim").?,
+        child.preResolveCallTarget("transient-claim").?,
+    );
 }
 
 test "lookupWordForExecution: finds a module-cache words entry on dictionary miss when an image is loaded" {
