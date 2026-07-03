@@ -5,6 +5,7 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
 PASS: task inherits outer dictionary
 Stack: [ ]
 PASS: task-local word not visible to sibling
@@ -16,4 +17,6 @@ Stack: [ ]
 PASS: independent stacks with yield
 Stack: [ ]
 PASS: per-task heap allocation works
+Stack: [ ]
+PASS: spawned quotation resolves enclosing quotation-local
 Stack: [ ]

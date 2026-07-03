@@ -86,9 +86,28 @@ test-per-task-alloc: ( -- ) [
   t "per-task heap allocation works" assert-true
 ] ;
 
+\ -- 6. Quotation-local captured across spawn --
+
+test-quo-local-across-spawn: ( -- ) [
+  [
+    \ `spawn-local` is defined inside a `call` combinator frame -- a transient
+    \ frame on the spawning task. The spawned quotation references it, so it
+    \ must resolve through the frame snapshot captured at spawn time.
+    [
+      spawn-local: ( -- n ) [ 7 ] ;
+      [
+        spawn-local 7 =
+        [ ] [ f "spawned task did not see enclosing quotation-local" EUserThrown make-error throw ] if
+      ] spawn drop
+    ] call
+  ] task-scope
+  t "spawned quotation resolves enclosing quotation-local" assert-true
+] ;
+
 test-dictionary-fallback
 test-local-def-no-leak
 test-dvar-isolation
 test-dvar-task-modify
 test-independent-stacks
 test-per-task-alloc
+test-quo-local-across-spawn
