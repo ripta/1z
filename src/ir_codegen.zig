@@ -1636,10 +1636,21 @@ const StackEntry = union(enum) {
     /// Captured instruction slice from a quotation literal. Never reaches
     /// finalization -- consumed by `if` at compile time.
     quotation_body: []const Instruction,
-    /// Opaque Value written to physical stack slot N. This is used for types
-    /// that can't be represented as IR scalars, i.e., anything other than
+    /// Opaque Value at abstract slot N, addressed off the sp-relative base
+    /// anchor (`base_addr`). Fixed frame offset while no row is live (`base_idx`
+    /// equals the frame anchor), and sp-relative once a collapse re-anchors
+    /// `base_idx` -- i.e. this is the row and the suffix above it. Used for
+    /// types that can't be represented as IR scalars, i.e. anything other than
     /// fixnum / boolean.
     raw_at_slot: usize,
+    /// Opaque Value at abstract slot N sitting *below* a row, addressed off the
+    /// stable frame anchor (`frame_base_addr`) rather than the sp-relative base.
+    /// This is the concrete-prefix entry: a loop-invariant slot whose physical
+    /// position is a fixed frame offset, unaffected by the unknown runtime
+    /// extent of the row above it. Behaves exactly like `raw_at_slot` at every
+    /// use site (an opaque Value at a slot); only the addressing anchor differs.
+    /// Produced only when a row collapse retains a concrete prefix beneath it.
+    frame_slot: usize,
     /// Opaque row region of unknown size inserted when a quotation call has
     /// unresolved row variables. Carries a RowId so that branch merge and
     /// loop back-edge checks can compare symbolic row identity. Operations
@@ -1647,17 +1658,22 @@ const StackEntry = union(enum) {
     /// exact positions within the region return NotCompilable.
     row_region: RowId,
 
-    /// Returns the slot index if this is a raw_at_slot.
+    /// Returns the abstract slot index for an opaque-value-at-slot entry
+    /// (`raw_at_slot` base-anchored, or `frame_slot` frame-anchored), null
+    /// otherwise. Callers that care about the addressing anchor must switch on
+    /// the variant; this only yields the index.
     fn slotIndex(self: StackEntry) ?usize {
         return switch (self) {
             .raw_at_slot => |s| s,
+            .frame_slot => |s| s,
             else => null,
         };
     }
 
-    /// Returns true if this is an opaque slot.
+    /// Returns true if this is an opaque value living at a physical slot
+    /// (either the sp-relative suffix or the frame-anchored prefix).
     fn isAtSlot(self: StackEntry) bool {
-        return self == .raw_at_slot;
+        return self == .raw_at_slot or self == .frame_slot;
     }
 
     /// Returns true if this entry is a symbolic row region.
@@ -1791,7 +1807,22 @@ const CompileState = struct {
     sp_ptr: c.ir_ref,
     capacity_param: c.ir_ref,
     sp_val: c.ir_ref,
+    /// Row-relative addressing anchor: abstract slot 0 maps to physical
+    /// `base_idx`. Re-anchored to the runtime `sp` whenever a row collapse
+    /// occurs, so it addresses the row and the sp-relative suffix above it.
     base_idx: c.ir_ref,
+    /// Stable frame anchor: the physical index of abstract slot 0 at word
+    /// entry (`sp_val - input_count`). Never re-anchored, so it addresses the
+    /// concrete prefix (`raw_at_slot` entries) at fixed frame offsets even
+    /// after a row collapse moves `base_idx`. Equal to `base_idx` whenever no
+    /// row is live, so prefix addressing is unchanged for words that never
+    /// collapse.
+    frame_base_idx: c.ir_ref,
+    /// Materialized `items_ptr + frame_base_idx * value_size`. Re-derived from a
+    /// fresh `items_ptr` alongside `base_addr` (a collapse or callback may
+    /// relocate the value buffer), so it must only be set via `liveBaseAddr` /
+    /// `refreshCachedStackPointer`, never cached independently.
+    frame_base_addr: c.ir_ref,
     value_size_const: c.ir_ref,
     dynamic_call_emitted: bool = false,
     /// Set when this word's compiled body produces a runtime output depth that
@@ -2683,9 +2714,9 @@ const AotStringLiteral = struct {
 fn requireI64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
     return switch (entry) {
         .i64_ref => |ref| ref,
-        .raw_at_slot => |s| {
+        .raw_at_slot, .frame_slot => {
             const ctx = state.ctx;
-            const elem_addr = liveSlotAddr(state, s);
+            const elem_addr = entrySlotAddr(state, entry);
             emitTagCheck(ctx, elem_addr, state.fixnum_tag_const, state.tag_offset_const, state.bail_status);
             return emitUnboxI64(ctx, elem_addr, state.payload_offset_const);
         },
@@ -2701,9 +2732,9 @@ fn requireI64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
 fn requireF64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
     return switch (entry) {
         .f64_ref => |ref| ref,
-        .raw_at_slot => |s| {
+        .raw_at_slot, .frame_slot => {
             const ctx = state.ctx;
-            const elem_addr = liveSlotAddr(state, s);
+            const elem_addr = entrySlotAddr(state, entry);
             emitTagCheck(ctx, elem_addr, state.float_tag_const, state.tag_offset_const, state.bail_status);
             return emitUnboxF64(ctx, elem_addr, state.payload_offset_const);
         },
@@ -2965,13 +2996,28 @@ fn resetStackToPhysical(stack: []StackEntry, sp: usize) void {
     }
 }
 
-/// Reset non-row stack entries to raw_at_slot identity, preserving
-/// row_region entries. Used after branch merge when the merged state
-/// must carry the symbolic row forward.
+/// The anchor-correct physical-identity entry for abstract slot `i` given the
+/// row position: a prefix slot *below* the row is `frame_slot` (frame-anchored,
+/// addressed off the stable `frame_base_addr`); the row and any slot above it,
+/// or every slot when no row is live, is `raw_at_slot` (addressed off the
+/// sp-relative `base_addr`). This keeps a prefix slot addressed off the fixed
+/// frame anchor after a collapse re-anchors the base.
+fn physicalIdentityEntry(i: usize, row_idx: ?usize) StackEntry {
+    if (row_idx) |ri| {
+        if (i < ri) return .{ .frame_slot = i };
+    }
+    return .{ .raw_at_slot = i };
+}
+
+/// Reset non-row stack entries to their physical-identity variant, preserving
+/// row_region entries. Used after branch merge when the merged state must carry
+/// the symbolic row forward. Entries below the row become `frame_slot` so they
+/// stay addressed off the fixed frame anchor rather than the re-anchored base.
 fn resetStackToPhysicalPreservingRows(stack: []StackEntry, sp: usize) void {
+    const row_idx = findRowRegionIndex(stack, sp);
     for (0..sp) |i| {
         if (stack[i] != .row_region) {
-            stack[i] = .{ .raw_at_slot = i };
+            stack[i] = physicalIdentityEntry(i, row_idx);
         }
     }
 }
@@ -3158,7 +3204,7 @@ fn planFlushMoves(stack: []const StackEntry, sp: usize, out: []MoveOp) usize {
             .i64_ref => |r| .{ .box_i64 = r },
             .f64_ref => |r| .{ .box_f64 = r },
             .bool_ref => |r| .{ .box_bool = r },
-            .raw_at_slot => |s| if (s == i) .none else .{ .copy = s },
+            .raw_at_slot, .frame_slot => |s| if (s == i) .none else .{ .copy = s },
             .quotation_body, .row_region => .none,
         };
         pending[i] = op[i] != .none;
@@ -3258,10 +3304,13 @@ fn flushToPhysicalStack(state: *CompileState, stack: []StackEntry, sp: usize) vo
 
     // The abstract stack now mirrors physical layout. `quotation_body` and
     // `row_region` entries are not materialized here, so leave them untouched.
+    // A materialized slot above a row must become `above_row` so it stays
+    // addressed off the re-anchored base, not the frame anchor.
+    const row_idx = findRowRegionIndex(stack, sp);
     for (0..sp) |i| {
         switch (stack[i]) {
             .quotation_body, .row_region => {},
-            else => stack[i] = .{ .raw_at_slot = i },
+            else => stack[i] = physicalIdentityEntry(i, row_idx),
         }
     }
 }
@@ -3351,7 +3400,7 @@ fn cloneStackEntry(
         .f64_ref => |ref| .{ .f64_ref = ref },
         .bool_ref => |ref| .{ .bool_ref = ref },
         .quotation_body => |body| .{ .quotation_body = body },
-        .raw_at_slot => |s| blk: {
+        .raw_at_slot, .frame_slot => |s| blk: {
             emitCopySlot(state.ctx, base_addr, s, dest_slot);
             // The copy is a second owning reference to the same backing.
             emitRetainSlot(state, dest_slot);
@@ -3369,7 +3418,10 @@ fn cloneStackEntry(
                     .output_count = info.output_count,
                 });
             }
-            break :blk .{ .raw_at_slot = dest_slot };
+            // The clone occupies the same region as its source: a frame-anchored
+            // prefix entry (below a row) clones to a prefix slot, a sp-relative
+            // suffix / no-row entry to a `raw_at_slot`.
+            break :blk if (entry == .frame_slot) StackEntry{ .frame_slot = dest_slot } else StackEntry{ .raw_at_slot = dest_slot };
         },
         .row_region => blk: {
             state.not_compilable_reason = .abstract_stack_underflow;
@@ -3555,7 +3607,7 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
     return switch (entry) {
         .bool_ref => |ref| ref,
         .i64_ref, .f64_ref => c.ir_const_bool(ctx, true),
-        .raw_at_slot => |s| emitSlotTruthiness(ctx, base_addr, s, state),
+        .raw_at_slot, .frame_slot => |s| emitSlotTruthiness(ctx, base_addr, s, state),
         // Quotations are always truthy
         .quotation_body => c.ir_const_bool(ctx, true),
         .row_region => {
@@ -4096,27 +4148,25 @@ fn tryEmitInlineTypedValidateAndPromote(
             }
             return false;
         },
-        .raw_at_slot => {},
+        .raw_at_slot, .frame_slot => {},
         .quotation_body, .row_region => return false,
     }
 
     const expected_tag_const = mapTypeNameToTagConst(state, expected_name) orelse return false;
 
-    const value_slot: usize = value_entry.slotIndex().?;
-
     sp.* -= 2;
 
     const ctx = state.ctx;
-    const base_addr = state.base_addr;
 
-    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, c.ir_const_addr(ctx, value_slot * ValueLayout.value_size));
+    const elem_addr = entrySlotAddr(state, value_entry);
     if (state.type_mismatch_error_fn != c.IR_UNUSED) {
         emitTagCheckOrError(state, elem_addr, expected_tag_const, state.type_mismatch_error_fn);
     } else {
         emitTagCheck(ctx, elem_addr, expected_tag_const, state.tag_offset_const, state.bail_status);
     }
 
-    stack[sp.*] = .{ .raw_at_slot = value_slot };
+    // Preserve the value's addressing region: a prefix value stays `frame_slot`.
+    stack[sp.*] = value_entry;
     sp.* += 1;
     return true;
 }
@@ -4831,7 +4881,10 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
             try compileInstructions(state, body, stack, sp);
             if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
         },
-        .raw_at_slot => |s| {
+        .raw_at_slot, .frame_slot => |s| {
+            // A `call` argument is the stack top; after a collapse that is a
+            // suffix / no-row `raw_at_slot` (base-anchored), never a below-row
+            // `frame_slot` prefix, so the base anchor is always correct here.
             const elem_addr = liveSlotAddr(state, s);
 
             if (state.aot_mode and state.interpreter_free) {
@@ -5311,6 +5364,7 @@ fn stackEntryEql(a: StackEntry, b: StackEntry) bool {
         .f64_ref => |r| b == .f64_ref and b.f64_ref == r,
         .bool_ref => |r| b == .bool_ref and b.bool_ref == r,
         .raw_at_slot => |s| b == .raw_at_slot and b.raw_at_slot == s,
+        .frame_slot => |s| b == .frame_slot and b.frame_slot == s,
         .row_region => |id| b == .row_region and b.row_region == id,
         .quotation_body => |body| b == .quotation_body and b.quotation_body.ptr == body.ptr and b.quotation_body.len == body.len,
     };
@@ -5494,7 +5548,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
             }
             return .next;
         },
-        .raw_at_slot => |s| emitSlotTruthiness(ctx, state.base_addr, s, state),
+        .raw_at_slot, .frame_slot => |s| emitSlotTruthiness(ctx, state.base_addr, s, state),
         .row_region => {
             if (state.aot_mode) {
                 try emitIfOverRow(state, stack, sp, true_entry, false_entry, true_body, false_body);
@@ -7696,6 +7750,10 @@ fn compileWordPass(
         .capacity_param = capacity_param,
         .sp_val = sp_val,
         .base_idx = base_idx,
+        // At word entry the frame anchor equals the base anchor; only a later
+        // row collapse re-anchors `base_idx`, leaving the frame anchor fixed.
+        .frame_base_idx = base_idx,
+        .frame_base_addr = base_addr,
         .value_size_const = value_size_const,
         .dispatch_ptr = dispatch_ptr,
         .resolver = resolver,
@@ -7949,6 +8007,10 @@ pub fn emitWordC(
         .capacity_param = capacity_param,
         .sp_val = sp_val,
         .base_idx = base_idx,
+        // At word entry the frame anchor equals the base anchor; only a later
+        // row collapse re-anchors `base_idx`, leaving the frame anchor fixed.
+        .frame_base_idx = base_idx,
+        .frame_base_addr = base_addr,
         .value_size_const = value_size_const,
         .jit_ctx_ptr = jit_ctx_ptr,
         .error_propagate_status = error_propagate_status,
@@ -8364,6 +8426,10 @@ fn emitWordCAotPass(
         .capacity_param = capacity_param,
         .sp_val = sp_val,
         .base_idx = base_idx,
+        // At word entry the frame anchor equals the base anchor; only a later
+        // row collapse re-anchors `base_idx`, leaving the frame anchor fixed.
+        .frame_base_idx = base_idx,
+        .frame_base_addr = base_addr,
         .value_size_const = value_size_const,
         .jit_ctx_ptr = jit_ctx_ptr,
         .resolver = resolver,
@@ -10636,10 +10702,11 @@ fn emitCallbackPostCheck(
     refreshCachedStackPointer(state);
 }
 
-/// Fresh items_ptr and the base address derived from it.
+/// Fresh items_ptr and the base addresses derived from it.
 const LiveBase = struct {
     items_ptr: c.ir_ref,
     base_addr: c.ir_ref,
+    frame_base_addr: c.ir_ref,
 };
 
 /// Derive the physical stack base address from the live JitContext.
@@ -10662,27 +10729,50 @@ fn liveBaseAddr(state: *CompileState) LiveBase {
     const fresh_items_ptr = c._ir_LOAD(ctx, c.IR_ADDR, state.jit_ctx_ptr);
     const base_byte_offset = c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), state.base_idx, state.value_size_const);
     const base_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), fresh_items_ptr, base_byte_offset);
-    return .{ .items_ptr = fresh_items_ptr, .base_addr = base_addr };
+    const frame_byte_offset = c.ir_fold2(ctx, c.IR_OPT(c.IR_MUL, c.IR_ADDR), state.frame_base_idx, state.value_size_const);
+    const frame_base_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), fresh_items_ptr, frame_byte_offset);
+    return .{ .items_ptr = fresh_items_ptr, .base_addr = base_addr, .frame_base_addr = frame_base_addr };
 }
 
-/// Address of physical stack slot `slot` relative to the region-current base:
-/// `base_addr + slot * value_size`, which is the materialized form of
-/// `items_ptr + (base_idx + slot) * value_size`. Centralizes the
-/// slot-byte-offset add duplicated across codegen. The base address is whatever
-/// was last derived from liveBaseAddr for the current barrier-free region.
+/// Address of an sp-relative slot (the row and its suffix): `base_addr + slot *
+/// value_size`, the materialized form of `items_ptr + (base_idx + slot) *
+/// value_size`. This is the anchor for `above_row` entries and, in the no-row
+/// case (where `frame_base_addr == base_addr`), for every entry.
 fn liveSlotAddr(state: *CompileState, slot: usize) c.ir_ref {
     const slot_byte_offset = c.ir_const_addr(state.ctx, slot * ValueLayout.value_size);
     return c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_addr, slot_byte_offset);
 }
 
-/// Re-LOAD items_ptr from the JitContext struct and recompute base_addr,
-/// updating state.items_ptr and state.base_addr so subsequent emissions use
-/// the fresh refs. Call this immediately after any IR call that may have
-/// moved ctx.stack.items (jitRefreshStack or jitEnsureStackCapacity).
+/// Address of a frame-anchored slot (the concrete prefix): `frame_base_addr +
+/// slot * value_size`. This is the anchor for `frame_slot` entries; it stays
+/// fixed across a row collapse, so a prefix slot below a row addresses its true
+/// physical position rather than a moving sp-relative one.
+fn frameSlotAddr(state: *CompileState, slot: usize) c.ir_ref {
+    const slot_byte_offset = c.ir_const_addr(state.ctx, slot * ValueLayout.value_size);
+    return c.ir_fold2(state.ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.frame_base_addr, slot_byte_offset);
+}
+
+/// Address of the physical slot backing an opaque-value entry, routed to the
+/// correct anchor: `raw_at_slot` (row and suffix) off the sp-relative base
+/// anchor, `frame_slot` (prefix) off the stable frame anchor. Panics on a
+/// non-slot entry; callers guard with `isAtSlot`.
+fn entrySlotAddr(state: *CompileState, entry: StackEntry) c.ir_ref {
+    return switch (entry) {
+        .raw_at_slot => |s| liveSlotAddr(state, s),
+        .frame_slot => |s| frameSlotAddr(state, s),
+        else => unreachable,
+    };
+}
+
+/// Re-LOAD items_ptr from the JitContext struct and recompute both base
+/// addresses, updating state so subsequent emissions use the fresh refs. Call
+/// this immediately after any IR call that may have moved ctx.stack.items
+/// (jitRefreshStack or jitEnsureStackCapacity).
 fn refreshCachedStackPointer(state: *CompileState) void {
     const live = liveBaseAddr(state);
     state.items_ptr = live.items_ptr;
     state.base_addr = live.base_addr;
+    state.frame_base_addr = live.frame_base_addr;
 }
 
 /// Emit a safepoint call at the current IR position. Loads the ctx field
@@ -12532,7 +12622,7 @@ fn checkFlushPlan(stack: []const StackEntry, sp: usize) !void {
     for (0..sp) |i| {
         const expected: i64 = switch (stack[i]) {
             .i64_ref, .f64_ref, .bool_ref => box_base + @as(i64, @intCast(i)),
-            .raw_at_slot => |s| @intCast(s),
+            .raw_at_slot, .frame_slot => |s| @intCast(s),
             .quotation_body, .row_region => continue,
         };
         try testing.expectEqual(expected, slots[i]);
@@ -16560,6 +16650,8 @@ test "nextRowId returns sequential ids" {
         .capacity_param = c.IR_UNUSED,
         .sp_val = c.IR_UNUSED,
         .base_idx = c.IR_UNUSED,
+        .frame_base_idx = c.IR_UNUSED,
+        .frame_base_addr = c.IR_UNUSED,
         .value_size_const = c.IR_UNUSED,
     };
     const id0 = state.nextRowId();
@@ -17187,6 +17279,8 @@ fn makeTestState() CompileState {
         .capacity_param = c.IR_UNUSED,
         .sp_val = c.IR_UNUSED,
         .base_idx = c.IR_UNUSED,
+        .frame_base_idx = c.IR_UNUSED,
+        .frame_base_addr = c.IR_UNUSED,
         .value_size_const = c.IR_UNUSED,
     };
 }
