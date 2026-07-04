@@ -167,6 +167,7 @@ pub const TypeDescriptor = extern struct {
     resource_kind: ?[*]const u8,
     resource_kind_len: u32,
     ffi_layout: u64,
+    type_param_position: u32,
 };
 
 /// Zig mirror of `onez_image_typevalue_t`. One row per slot in
@@ -1003,6 +1004,7 @@ fn populateTypeValueSlots(
         return LoaderError.OutOfMemory;
     const tv_reused = arena.alloc(bool, tv_count) catch
         return LoaderError.OutOfMemory;
+    const desc_rows_p2 = header.typedescriptors orelse return LoaderError.OutOfMemory;
     {
         var i: u32 = 0;
         while (i < tv_count) : (i += 1) {
@@ -1011,8 +1013,16 @@ fn populateTypeValueSlots(
                 return LoaderError.BadSlotIndex;
             }
             const name = nameSlice(row.name, row.name_len);
-            const existing = ctx.lookupTypeValueByName(name) orelse
-                findEnumVariantTypeValueByName(ctx, name);
+            // Type-parameter TypeValues are per-definition and non-interned: two
+            // definitions each minting `T` are distinct pointers. Bypass the
+            // reuse-by-name dedup so they are always allocated fresh, with
+            // identity carried solely by the slot table.
+            const is_type_param = desc_rows_p2[i].kind == 9;
+            const existing = if (is_type_param)
+                null
+            else
+                ctx.lookupTypeValueByName(name) orelse
+                    findEnumVariantTypeValueByName(ctx, name);
             if (existing) |reused| {
                 tv_out[i] = reused;
                 tv_reused[i] = true;
@@ -1089,9 +1099,36 @@ fn populateTypeValueSlots(
                     for (struct_types_out) |st| {
                         if (std.mem.eql(u8, st.name, tv.name)) {
                             st.type_val = tv;
+                            // The runtime StructType is allocated in Pass 1 with
+                            // empty field_types; copy the decoded field types
+                            // from the descriptor so field-typed validation (e.g.
+                            // an enum variant payload) sees the parameter slots.
+                            if (st.field_types.len == 0)
+                                st.field_types = desc.kind.struct_.field_types;
                             break;
                         }
                     }
+                    // Reconstruct the declared type-parameter projection from the
+                    // decoded field types, mirroring the interpreter's
+                    // `deriveStructTypeParams`. Done here (not in `decodeKindData`)
+                    // so every referenced parameter row has its descriptor
+                    // populated; `isTypeParameter` reads that kind.
+                    desc.kind.struct_.type_params =
+                        try Context.deriveStructTypeParams(arena, desc.kind.struct_.field_types);
+                },
+                .enum_ => {
+                    // Reconstruct the enum-level type-parameter projection from
+                    // the variants' payload TypeValues (each a virtual carrying
+                    // the parameters it binds), mirroring `deriveEnumTypeParams`.
+                    const variants = desc.kind.enum_.variants;
+                    var variant_tvs = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
+                    defer variant_tvs.deinit(arena);
+                    for (variants) |v| {
+                        if (v.type_val) |vtv| variant_tvs.append(arena, vtv) catch
+                            return LoaderError.OutOfMemory;
+                    }
+                    desc.kind.enum_.type_params =
+                        try Context.deriveEnumTypeParams(arena, variant_tvs.items);
                 },
                 .virtual => |vdata| {
                     const vt = arena.create(value_mod.VirtualType) catch
@@ -1109,10 +1146,18 @@ fn populateTypeValueSlots(
                         for (vdata.type_params, 0..) |t, idx| tp[idx] = t;
                         break :blk tp;
                     };
+                    // A parameterized wrapper's descriptor stores its base type as
+                    // `inner_type` and a non-empty `type_params`; the enum/struct
+                    // instantiation wrap needs the base link on the runtime
+                    // VirtualType. A plain virtual newtype has empty type_params and
+                    // no base.
+                    const base_type: ?*const value_mod.TypeValue =
+                        if (vdata.type_params.len > 0) vdata.inner_type else null;
                     vt.* = .{
                         .name = tv.name,
                         .inner_type = inner_name,
                         .anon_struct = vdata.anon_struct,
+                        .base_type = base_type,
                         .type_params = type_params_slice,
                         .type_val = tv,
                     };
@@ -1130,11 +1175,33 @@ fn populateTypeValueSlots(
                         it.name
                     else
                         "";
+                    // Recover a parameterized variant's binding tuple from its
+                    // base (`evdata.inner_type`, a virtual whose `type_params`
+                    // are the enum parameters it binds), mirroring the
+                    // define-time logic. The instantiation wrap needs it to
+                    // validate the variant payload against the bound tuple.
+                    const variant_type_params: ?[]*const value_mod.TypeValue = blk: {
+                        const base = evdata.inner_type orelse break :blk null;
+                        const base_desc = base.descriptor orelse break :blk null;
+                        const src = switch (base_desc.kind) {
+                            .virtual => |vd| vd.type_params,
+                            else => break :blk null,
+                        };
+                        if (src.len == 0) break :blk null;
+                        const tp = arena.alloc(*const value_mod.TypeValue, src.len) catch
+                            return LoaderError.OutOfMemory;
+                        for (src, 0..) |t, idx| tp[idx] = t;
+                        break :blk tp;
+                    };
+                    const variant_base_type: ?*const value_mod.TypeValue =
+                        if (variant_type_params != null) evdata.inner_type else null;
                     vt.* = .{
                         .name = tv.name,
                         .inner_type = inner_name,
                         .anon_struct = evdata.anon_struct,
                         .parent_type = evdata.parent,
+                        .base_type = variant_base_type,
+                        .type_params = variant_type_params,
                         .type_val = tv,
                     };
                     tv.virtual_type = vt;
@@ -1665,6 +1732,7 @@ fn decodeKindData(
             },
         },
         8 => .{ .union_ = {} },
+        9 => .{ .type_parameter = .{ .position = drow.type_param_position } },
         else => LoaderError.BadTypeKind,
     };
 }
@@ -2275,6 +2343,7 @@ fn zeroDescriptor() TypeDescriptor {
         .resource_kind = null,
         .resource_kind_len = 0,
         .ffi_layout = 0,
+        .type_param_position = 0,
     };
 }
 
@@ -2486,6 +2555,73 @@ test "loadIntoContext: struct TypeDescriptor with field-types resolves cross-ref
     try testing.expectEqual(@as(usize, 1), b_kind.struct_.field_types.len);
     try testing.expect(b_kind.struct_.field_types[0].? == .type);
     try testing.expectEqual(@as(*const value_mod.TypeValue, tv_a), b_kind.struct_.field_types[0].?.type);
+}
+
+test "loadIntoContext: type_parameter descriptor round-trips position and reconstructs struct type_params" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Slot 1: a type parameter `T` at position 5.
+    var param_desc = zeroDescriptor();
+    param_desc.kind = 9; // type_parameter
+    param_desc.type_param_position = 5;
+
+    // Slot 2: a struct `S` whose only field is typed by the parameter at slot 1.
+    var struct_desc = zeroDescriptor();
+    struct_desc.kind = 2; // struct_
+    const s_field_names = [_][*]const u8{"v".ptr};
+    const s_field_lens = [_]u32{1};
+    const s_field_slots = [_]u32{1}; // points at T
+    struct_desc.field_names = &s_field_names;
+    struct_desc.field_name_lens = &s_field_lens;
+    struct_desc.field_count = 1;
+    struct_desc.field_type_slots = &s_field_slots;
+    struct_desc.field_type_count = 1;
+
+    // Slot 3: a second parameter spelled `fixnum`, colliding with the builtin.
+    // The reuse-by-name dedup must be bypassed so it stays a fresh parameter.
+    var collide_desc = zeroDescriptor();
+    collide_desc.kind = 9; // type_parameter
+    collide_desc.type_param_position = 0;
+
+    const descriptors = [_]TypeDescriptor{ param_desc, struct_desc, collide_desc };
+    const t_name = "T";
+    const s_name = "S";
+    const fx_name = "fixnum";
+    const typevalues = [_]TypeValueRow{
+        .{ .name = t_name.ptr, .name_len = t_name.len, .slot = 1, .descriptor = &descriptors[0], .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = s_name.ptr, .name_len = s_name.len, .slot = 2, .descriptor = &descriptors[1], .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = fx_name.ptr, .name_len = fx_name.len, .slot = 3, .descriptor = &descriptors[2], .member_type_slots = null, .member_type_count = 0 },
+    };
+
+    var slot_storage: [4]?*const value_mod.TypeValue = .{ null, null, null, null };
+    var header = emptyHeader();
+    header.typevalue_slot_count = 4;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+
+    try loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null);
+
+    // The parameter round-trips: kind, position, and name all survive.
+    const tv_t = slot_storage[1] orelse return error.TestUnexpectedResult;
+    try testing.expect(value_mod.isTypeParameter(tv_t));
+    try testing.expectEqual(@as(?u32, 5), value_mod.typeParameterPosition(tv_t));
+    try testing.expectEqualStrings("T", tv_t.name);
+
+    // The struct's declared type_params projection is reconstructed from its
+    // field types and points at the same parameter TypeValue.
+    const tv_s = slot_storage[2] orelse return error.TestUnexpectedResult;
+    const s_kind = tv_s.descriptor.?.kind;
+    try testing.expect(s_kind == .struct_);
+    try testing.expectEqual(@as(usize, 1), s_kind.struct_.type_params.len);
+    try testing.expectEqual(@as(*const value_mod.TypeValue, tv_t), s_kind.struct_.type_params[0]);
+
+    // The `fixnum`-spelled parameter is NOT collapsed into the builtin fixnum
+    // TypeValue: the reuse-by-name path is bypassed for the parameter kind.
+    const tv_fx = slot_storage[3] orelse return error.TestUnexpectedResult;
+    try testing.expect(value_mod.isTypeParameter(tv_fx));
+    try testing.expect(tv_fx != ctx.lookupTypeValueByName("fixnum").?);
 }
 
 test "loadIntoContext: enum descriptor decodes variants and cross-references" {

@@ -2815,7 +2815,7 @@ fn emitTypeDescriptorRow(
     var num_buf: [32]u8 = undefined;
     // Zero-default descriptor for TypeValues with desc == null.
     if (tv.descriptor == null) {
-        try out.appendSlice(allocator, "    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0 },\n");
+        try out.appendSlice(allocator, "    { .numeric = 0, .exact = 0, .integer = 0, .mutable = 0, .kind = 0, ._pad = {0,0,0}, .field_names = NULL, .field_name_lens = NULL, .field_count = 0, .field_type_slots = NULL, .field_type_count = 0, .inner_type_slot = 0, .anon_struct_idx = 0xFFFFFFFFu, .type_param_slots = NULL, .type_param_count = 0, .parent_type_slot = 0, .variants = NULL, .variant_count = 0, .resource_kind = NULL, .resource_kind_len = 0, .ffi_layout = 0, .type_param_position = 0 },\n");
         return;
     }
     const desc = tv.descriptor.?;
@@ -2968,7 +2968,18 @@ fn emitTypeDescriptorRow(
     }
     try out.appendSlice(allocator, ", .ffi_layout = ");
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{ffi_layout}) catch unreachable);
-    try out.appendSlice(allocator, "u },\n");
+    try out.appendSlice(allocator, "u");
+
+    // type_param_position: a type parameter's only payload is its position in
+    // the defining type's parameter list, emitted inline; 0 for every other kind.
+    var type_param_position: u32 = 0;
+    switch (desc.kind) {
+        .type_parameter => |tp| type_param_position = tp.position,
+        else => {},
+    }
+    try out.appendSlice(allocator, ", .type_param_position = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{type_param_position}) catch unreachable);
+    try out.appendSlice(allocator, " },\n");
 }
 
 /// Emit per-TypeValue auxiliary strings: the name and (if present)
@@ -3348,6 +3359,8 @@ fn emitTypeDeclarations(
         \\    uint32_t    resource_kind_len;
         \\    /* ffi_struct: layout pointer-as-fixnum. */
         \\    uint64_t ffi_layout;
+        \\    /* type_parameter: position in the defining type's parameter list. */
+        \\    uint32_t type_param_position;
         \\} onez_image_typedescriptor_t;
         \\
         \\typedef struct onez_image_typevalue {
@@ -5192,6 +5205,49 @@ test "emitTypeValueData renders ffi_struct descriptor with ffi_layout" {
     try testing.expect(std.mem.indexOf(u8, out.items, ".ffi_layout = 42") != null);
     // kind index 7 is `ffi_struct` in the TypeKindData encoding.
     try testing.expect(std.mem.indexOf(u8, out.items, ".kind = 7") != null);
+}
+
+test "emitTypeValueData renders type_parameter descriptor with position" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // A bare parameter field forces the parameter TypeValue into its own
+    // descriptor row (interned via the struct's field types).
+    const param_tv = try value_mod.mintTypeParameter(arena, "T", 3);
+    const fields = try arena.dupe([]const u8, &.{"id"});
+    const field_types = try arena.dupe(?value_mod.ConstraintCombinator.Element, &.{.{ .type = param_tv }});
+    const struct_desc = try value_mod.createTypeDescriptor(arena, .{
+        .struct_ = .{ .fields = fields, .field_types = field_types },
+    }, .{});
+    const struct_tv = try arena.create(value_mod.TypeValue);
+    struct_tv.* = .{ .name = "boxed", .descriptor = struct_desc };
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .type_val = struct_tv } }, .line = 0, .column = 0 },
+    });
+
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "boxed", .{ .action = .{ .compound = instrs } });
+    {
+        const cache_alloc_demo = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc_demo, try cache_alloc_demo.dupe(u8, "demo"), .{ .module = m });
+    }
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
+
+    // kind index 9 is `type_parameter`; its position rides the descriptor row.
+    try testing.expect(std.mem.indexOf(u8, out.items, ".kind = 9") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".type_param_position = 3") != null);
 }
 
 test "emitImageC: structural compound emits body bytecode symbol" {

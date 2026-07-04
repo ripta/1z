@@ -1,0 +1,52 @@
+\ End-to-end exercise of type-level parameterization under runtime-image AOT.
+\ A parameterized struct base and a parameterized enum base each carry
+\ `type_parameter` TypeValues (kind 9) in their descriptors. Freezing the base
+\ type words serializes those parameter TypeValues; the runtime body reads their
+\ names back through the reloaded descriptor and constructs a bound instance.
+\ This confirms the parameter name and position round-trip and that identity is
+\ carried by the slot table (not collapsed by reuse-by-name dedup).
+
+\ --- Parameterized struct base ---
+person: struct{ id: T: age: U: } ;
+person(fixnum,string): M{
+  inner-type:  person
+  type-params: H{ T: fixnum U: string }
+  define:      [ define-parameterized-type ]
+} ;
+
+\ Declared parameter names survive the AOT boundary.
+person native.type-descriptor descriptor-type-params? unwrap-or-throw
+[ native.type-name ] #map #collect .
+
+\ A bound instance constructs and satisfies its predicate.
+42 "alice" make-person >person(fixnum,string) person(fixnum,string)? .
+
+\ The wrap boundary validates field types: a string in the fixnum-bound `id`
+\ slot is rejected. This guards the reloaded wrapper's base-type link, without
+\ which validation would silently pass.
+[ "x" "alice" make-person >person(fixnum,string) drop f ] [ drop t ] recover .
+
+\ --- Parameterized enum base ---
+okv: struct{ value: T: } ;
+errv: struct{ error: T: } ;
+outcome: enum{
+  ok: okv bind{ T: }
+  err: errv bind{ E: }
+} ;
+outcome(fixnum,string): M{
+  inner-type:  outcome
+  type-params: H{ T: fixnum E: string }
+  define:      [ define-parameterized-type ]
+} ;
+
+\ The enum declares two independent parameters, positionally mapped.
+outcome native.type-descriptor descriptor-type-params? unwrap-or-throw
+[ native.type-name ] #map #collect .
+
+\ Each parameter flows into the correct variant field at instantiation.
+42 make-outcome:ok >outcome(fixnum,string) outcome(fixnum,string)? .
+"boom" make-outcome:err >outcome(fixnum,string) outcome(fixnum,string)? .
+
+\ The variant payload is validated against the bound parameter: `ok` is bound to
+\ fixnum, so a string payload is rejected.
+[ "oops" make-outcome:ok >outcome(fixnum,string) drop f ] [ drop t ] recover .

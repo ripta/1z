@@ -3002,7 +3002,7 @@ pub const Context = struct {
     /// A field typed as a bare parameter hole, or as a parameterized type carrying parameter holes
     /// in its type_params, contributes its parameters. A parameter shared by several fields is
     /// returned once. Returns an empty slice for a concrete struct.
-    fn deriveStructTypeParams(alloc: std.mem.Allocator, field_types: []const ?value_mod.ConstraintCombinator.Element) ![]const *const value_mod.TypeValue {
+    pub fn deriveStructTypeParams(alloc: std.mem.Allocator, field_types: []const ?value_mod.ConstraintCombinator.Element) ![]const *const value_mod.TypeValue {
         var params = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
         errdefer params.deinit(alloc);
         for (field_types) |ft| {
