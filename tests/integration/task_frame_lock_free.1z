@@ -1,0 +1,41 @@
+use "testing" ;
+
+\ Exercises lock-free local-frame push/pop under concurrency. Combinator entry
+\ no longer takes the shared write lock, so descendants must still resolve
+\ ancestor-scope names correctly while the spawning task churns combinator
+\ frames on another worker. Run with `--threads=auto` (see the .flags sidecar).
+
+\ A top-level word lands in the stable import frame; descendants reach it by
+\ walking the parent_context chain.
+stable-top: ( -- n ) [ 314 ] ;
+
+\ Churn combinator frames: `call` and `if` each push and pop a transient local
+\ frame with no lock now guarding the operation.
+frame-churn: ( -- ) [
+  100 [
+    5 [ 1 + ] call drop
+    2 3 < [ 10 ] [ 20 ] if drop
+  ] times
+] ;
+
+[
+  \ `spawn-local` is defined inside a `call` combinator frame: a transient
+  \ quotation-local on the spawning task, captured into each descendant at
+  \ spawn time.
+  [
+    spawn-local: ( -- n ) [ 7 ] ;
+    50 [
+      [
+        \ Each descendant resolves a stable top-level word and the captured
+        \ transient quotation-local while the parent churns frames concurrently.
+        stable-top 314 =
+        [ ] [ f "descendant: stable-top resolved wrong" EUserThrown make-error throw ] if
+        spawn-local 7 =
+        [ ] [ f "descendant: spawn-local resolved wrong" EUserThrown make-error throw ] if
+      ] spawn drop
+      frame-churn
+    ] times
+  ] call
+] task-scope
+
+t "lock-free frame push/pop resolves ancestor scope under concurrency" assert-true

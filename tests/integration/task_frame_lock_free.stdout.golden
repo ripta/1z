@@ -1,0 +1,5 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: lock-free frame push/pop resolves ancestor scope under concurrency
+Stack: [ ]

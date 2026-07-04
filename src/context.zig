@@ -1384,24 +1384,19 @@ pub const Context = struct {
     // =========================================================================
 
     /// Push a new empty local frame onto the frame stack.
+    ///
+    /// No lock: a context's transient frames (those above `import_frame_index`)
+    /// are task-private. Only the owning task ever mutates them, and cross-task
+    /// resolution reads only an ancestor's stable scope, never its live
+    /// transient frames. The load-time import-frame push runs before any worker
+    /// pool exists, so it is uncontended too.
     pub fn pushLocalFrame(self: *Context) !void {
-        self.acquireSharedWrite();
-        defer self.releaseSharedWrite();
-        try self.pushLocalFrameLocked();
-    }
-
-    fn pushLocalFrameLocked(self: *Context) !void {
         try self.local_frames.append(self.allocator, LocalFrame{});
     }
 
-    /// Pop the top local frame from the frame stack.
+    /// Pop the top local frame from the frame stack. Lock-free for the same
+    /// reason as `pushLocalFrame`.
     pub fn popLocalFrame(self: *Context) void {
-        self.acquireSharedWrite();
-        defer self.releaseSharedWrite();
-        self.popLocalFrameLocked();
-    }
-
-    fn popLocalFrameLocked(self: *Context) void {
         if (self.local_frames.items.len > 0) {
             const last_idx = self.local_frames.items.len - 1;
             self.local_frames.items[last_idx].deinit(self.allocator);
@@ -1434,11 +1429,10 @@ pub const Context = struct {
     /// resolution when executing the module's own words.
     ///
     /// The module's own words take precedence over its dependencies.
+    /// No lock: a module-deps frame is a transient frame like a combinator
+    /// frame, task-private and never read cross-task.
     pub fn pushModuleDepsFrame(self: *Context, module: *const value_mod.Module) !void {
-        self.acquireSharedWrite();
-        defer self.releaseSharedWrite();
-
-        try self.pushLocalFrameLocked();
+        try self.local_frames.append(self.allocator, LocalFrame{});
         const frame_idx = self.local_frames.items.len - 1;
         var frame = &self.local_frames.items[frame_idx];
 
@@ -2572,7 +2566,13 @@ pub const Context = struct {
 
         var ancestor = self;
         while (true) {
-            var frame_idx = ancestor.local_frames.items.len;
+            // Self reads all its frames; an ancestor is read only through its
+            // stable scope (import frame and below), never its live transient
+            // frames, so this walk stays clear of another task's lockless
+            // combinator push/pop.
+            var frame_idx = if (ancestor == self)
+                ancestor.local_frames.items.len
+            else if (ancestor.import_frame_index) |idx| idx + 1 else 0;
             while (frame_idx > 0) {
                 frame_idx -= 1;
                 var frame_iter = ancestor.local_frames.items[frame_idx].iterator();
@@ -5129,7 +5129,13 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
     }
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
-        var j = anc.local_frames.items.len;
+        // Match `lookupWordLocked`'s bounded ancestor walk: a descendant only
+        // resolves an ancestor's stable scope (import frame and below), so
+        // back-writing a word_id into an ancestor's transient frame would land
+        // where resolution never looks, and would race the ancestor's lockless
+        // combinator push/pop.
+        const anc_cap = if (anc.import_frame_index) |idx| idx + 1 else 0;
+        var j = anc_cap;
         while (j > 0) {
             j -= 1;
             if (anc.local_frames.items[j].getPtr(name)) |entry| {
@@ -6256,6 +6262,92 @@ test "preResolveCallTarget: ancestor transient frame no longer blocks, stable fr
     try std.testing.expectEqual(
         child.dictionary.getSlot("transient-claim").?,
         child.preResolveCallTarget("transient-claim").?,
+    );
+}
+
+test "propagateWordId: back-writes ancestor stable slot, not transient frame" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // The import frame (stable scope) and a transient frame above it both bind
+    // the same name. A descendant's back-write must land on the stable slot.
+    try parent.pushLocalFrame();
+    parent.import_frame_index = parent.local_frames.items.len - 1;
+    try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "back-word", .{
+        .name = "back-word",
+        .action = .{ .native = noop },
+    });
+    try parent.pushLocalFrame();
+    try parent.local_frames.items[parent.local_frames.items.len - 1].put(parent.allocator, "back-word", .{
+        .name = "back-word",
+        .action = .{ .native = noop },
+    });
+
+    var child = Context.init(std.testing.allocator);
+    defer child.deinit();
+    child.parent_context = &parent;
+    defer child.parent_context = null;
+
+    propagateWordId(&child, "back-word", 4242);
+
+    try std.testing.expectEqual(
+        @as(?u32, 4242),
+        parent.local_frames.items[parent.import_frame_index.?].get("back-word").?.word_id,
+    );
+    try std.testing.expectEqual(
+        @as(?u32, null),
+        parent.local_frames.items[parent.local_frames.items.len - 1].get("back-word").?.word_id,
+    );
+}
+
+test "lookupTypeNameByDescriptorLocked: descendant reads ancestor stable type, not transient" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    const alloc = parent.arena.allocator();
+
+    const stable_desc = try value_mod.createBuiltinTypeDescriptor(alloc, .{});
+    const stable_tv = try alloc.create(value_mod.TypeValue);
+    stable_tv.* = .{ .name = "stable-type", .descriptor = stable_desc };
+    const stable_instrs = try alloc.alloc(Instruction, 1);
+    stable_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = stable_tv } }, .line = 0 };
+
+    const transient_desc = try value_mod.createBuiltinTypeDescriptor(alloc, .{});
+    const transient_tv = try alloc.create(value_mod.TypeValue);
+    transient_tv.* = .{ .name = "transient-type", .descriptor = transient_desc };
+    const transient_instrs = try alloc.alloc(Instruction, 1);
+    transient_instrs[0] = .{ .op = .{ .push_literal = .{ .type_val = transient_tv } }, .line = 0 };
+
+    try parent.pushLocalFrame();
+    parent.import_frame_index = parent.local_frames.items.len - 1;
+    try parent.local_frames.items[parent.import_frame_index.?].put(parent.allocator, "stable-type", .{
+        .name = "stable-type",
+        .action = .{ .compound = stable_instrs },
+    });
+    try parent.pushLocalFrame();
+    try parent.local_frames.items[parent.local_frames.items.len - 1].put(parent.allocator, "transient-type", .{
+        .name = "transient-type",
+        .action = .{ .compound = transient_instrs },
+    });
+
+    var child = Context.init(std.testing.allocator);
+    defer child.deinit();
+    child.parent_context = &parent;
+    defer child.parent_context = null;
+
+    // The stable-frame type resolves through the ancestor's import frame.
+    try std.testing.expectEqualStrings(
+        "stable-type",
+        child.lookupTypeNameByDescriptorLocked(stable_desc).?,
+    );
+    // The transient-frame type is above the import frame: not read cross-task.
+    try std.testing.expectEqual(
+        @as(?[]const u8, null),
+        child.lookupTypeNameByDescriptorLocked(transient_desc),
     );
 }
 
