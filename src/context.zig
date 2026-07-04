@@ -93,6 +93,24 @@ pub const ParameterFrame = std.StringHashMapUnmanaged(Value);
 pub const LocalFrame = std.StringHashMapUnmanaged(WordDefinition);
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 
+/// Compute the constant-per-word `ExecFlags` from a definition's markers and
+/// action. Called at definition finalization so the flags ride the by-value
+/// execution copy. Uses the same predicates the per-call sites use.
+fn computeExecFlags(def: WordDefinition) dict_mod.ExecFlags {
+    var flags: dict_mod.ExecFlags = .{};
+    for (def.markers) |mk| {
+        if (markers_mod.isGenericMarker(mk)) flags.is_generic = true;
+        if (mk == &markers_mod.recursive_non_tco_marker) flags.recursive_non_tco = true;
+        if (markers_mod.isStackRecursiveMarker(mk)) flags.stack_recursive = true;
+    }
+    flags.empty_compound_body = switch (def.action) {
+        .compound => |b| b.len == 0,
+        .native, .host_callback => false,
+    };
+    flags.skip_type_validation = flags.is_generic and flags.empty_compound_body;
+    return flags;
+}
+
 fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
     const has_generic = for (word.markers) |mk| {
         if (markers_mod.isGenericMarker(mk)) break true;
@@ -1696,6 +1714,7 @@ pub const Context = struct {
                 def.source_column = frame.column;
             }
         }
+        def.exec_flags = computeExecFlags(def);
 
         if (self.local_frames.items.len > 0) {
             const top_index = self.local_frames.items.len - 1;
@@ -1913,6 +1932,7 @@ pub const Context = struct {
                 def.source_column = frame.column;
             }
         }
+        def.exec_flags = computeExecFlags(def);
 
         try target_frame.put(self.allocator, name, def);
     }
@@ -6821,4 +6841,101 @@ test "initForTask: captures only frames above the parent's import frame" {
     try std.testing.expectEqual(@as(usize, 1), task_ctx.local_frames.items.len);
     try std.testing.expect(task_ctx.local_frames.items[0].get("transient-w") != null);
     try std.testing.expect(task_ctx.local_frames.items[0].get("stable-w") == null);
+}
+
+test "computeExecFlags: generic word with empty compound body" {
+    const def = WordDefinition{
+        .name = "gen-empty",
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
+        .action = .{ .compound = &.{} },
+    };
+    const flags = computeExecFlags(def);
+    try std.testing.expect(flags.is_generic);
+    try std.testing.expect(flags.empty_compound_body);
+    try std.testing.expect(flags.skip_type_validation);
+    try std.testing.expect(!flags.recursive_non_tco);
+    try std.testing.expect(!flags.stack_recursive);
+}
+
+test "computeExecFlags: recursive-non-tco plus stack-recursive with non-empty body" {
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    const def = WordDefinition{
+        .name = "rec",
+        .markers = &.{
+            @constCast(&markers_mod.recursive_non_tco_marker),
+            @constCast(&markers_mod.stack_recursive_marker),
+        },
+        .action = .{ .compound = &body },
+    };
+    const flags = computeExecFlags(def);
+    try std.testing.expect(flags.recursive_non_tco);
+    try std.testing.expect(flags.stack_recursive);
+    try std.testing.expect(!flags.is_generic);
+    try std.testing.expect(!flags.empty_compound_body);
+    try std.testing.expect(!flags.skip_type_validation);
+}
+
+test "computeExecFlags: plain compound word has no flags set" {
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    const def = WordDefinition{
+        .name = "plain",
+        .action = .{ .compound = &body },
+    };
+    const flags = computeExecFlags(def);
+    try std.testing.expect(!flags.is_generic);
+    try std.testing.expect(!flags.recursive_non_tco);
+    try std.testing.expect(!flags.stack_recursive);
+    try std.testing.expect(!flags.empty_compound_body);
+    try std.testing.expect(!flags.skip_type_validation);
+}
+
+test "computeExecFlags: native word has no flags set" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    const def = WordDefinition{
+        .name = "nat",
+        .action = .{ .native = noop },
+    };
+    const flags = computeExecFlags(def);
+    try std.testing.expect(!flags.is_generic);
+    try std.testing.expect(!flags.empty_compound_body);
+    try std.testing.expect(!flags.skip_type_validation);
+}
+
+test "computeExecFlags: generic word with non-empty body does not skip validation" {
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    const def = WordDefinition{
+        .name = "gen-nonempty",
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
+        .action = .{ .compound = &body },
+    };
+    const flags = computeExecFlags(def);
+    try std.testing.expect(flags.is_generic);
+    try std.testing.expect(!flags.empty_compound_body);
+    try std.testing.expect(!flags.skip_type_validation);
+}
+
+test "defineWord: exec_flags populated and recomputed on redefinition" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    try ctx.defineWord("w", .{
+        .name = "w",
+        .action = .{ .compound = &body },
+    });
+    const first = ctx.lookupWordForExecution("w") orelse return error.TestExpectedLookup;
+    try std.testing.expect(!first.exec_flags.is_generic);
+    try std.testing.expect(!first.exec_flags.skip_type_validation);
+
+    try ctx.defineWord("w", .{
+        .name = "w",
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
+        .action = .{ .compound = &.{} },
+    });
+    const second = ctx.lookupWordForExecution("w") orelse return error.TestExpectedLookup;
+    try std.testing.expect(second.exec_flags.is_generic);
+    try std.testing.expect(second.exec_flags.empty_compound_body);
+    try std.testing.expect(second.exec_flags.skip_type_validation);
 }

@@ -28,6 +28,22 @@ pub const WordProvenance = struct {
     role: []const u8,
 };
 
+/// Precomputed constant-per-word facts, a derived cache of `markers` and
+/// `action` populated at definition time. Distinct from the primary fields:
+/// these are recomputed whenever the definition is finalized.
+pub const ExecFlags = packed struct {
+    /// Word carries the generic marker.
+    is_generic: bool = false,
+    /// Word carries the recursive-non-tco marker.
+    recursive_non_tco: bool = false,
+    /// Word carries the stack-recursive marker.
+    stack_recursive: bool = false,
+    /// Compound word with an empty body.
+    empty_compound_body: bool = false,
+    /// Type-annotation validation is skippable (generic + empty body).
+    skip_type_validation: bool = false,
+};
+
 /// Word definition: either a native function or compound quotation.
 pub const WordDefinition = struct {
     /// The word itself.
@@ -67,6 +83,9 @@ pub const WordDefinition = struct {
     /// identity component of DispatchKey so that same-named words in
     /// different modules get separate dispatch entries.
     dispatch_id: u32 = 0,
+    /// Precomputed per-call facts. Derived cache; see `ExecFlags`. Populated at
+    /// definition finalization, defaults to the "nothing special" all-false case.
+    exec_flags: ExecFlags = .{},
     /// The action performed by this word: either a native function or a
     /// compound quotation. Unfortunate naming.
     action: union(enum) {
