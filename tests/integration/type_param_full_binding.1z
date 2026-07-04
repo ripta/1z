@@ -1,0 +1,53 @@
+use "testing" ;
+
+"full binding on a struct base" test-section
+
+person: struct{ id: T: age: U: } ;
+person(fixnum,string): M{
+  inner-type:  person
+  type-params: H{ T: fixnum U: string }
+  define:      [ define-parameterized-type ]
+} ;
+
+person(fixnum,string) native.type-name
+"person(fixnum,string)" "parameterized type word pushes a named TypeValue" assert=
+
+42 "alice" make-person >person(fixnum,string) person(fixnum,string)?
+"valid field types wrap and satisfy the predicate" assert-true
+
+"order-independent binding" test-section
+
+\ Same base and same positional result regardless of hash key order.
+person2(fixnum,string): M{
+  inner-type:  person
+  type-params: H{ U: string T: fixnum }
+  define:      [ define-parameterized-type ]
+} ;
+
+42 "bob" make-person >person2(fixnum,string) person2(fixnum,string)?
+"hash key order does not change positional binding" assert-true
+
+"wrap boundary rejects a wrong field type" test-section
+
+[ "x" "alice" make-person >person(fixnum,string) ]
+"id bound to fixnum rejects a string" assert-error
+
+[ 42 99 make-person >person(fixnum,string) ]
+"age bound to string rejects a fixnum" assert-error
+
+"definition-time binding errors" test-section
+
+[ "bad-unknown(x): M{ inner-type: person type-params: H{ Z: fixnum } define: [ define-parameterized-type ] } ;" eval-string ]
+"unknown type parameter key is rejected" assert-error
+
+[ "bad-value(x): M{ inner-type: person type-params: H{ T: 42 U: string } define: [ define-parameterized-type ] } ;" eval-string ]
+"non-TypeValue binding value is rejected" assert-error
+
+[ "bad-missing(x): M{ inner-type: person type-params: H{ T: fixnum } define: [ define-parameterized-type ] } ;" eval-string ]
+"missing parameter in full binding is rejected" assert-error
+
+"refinement path is unchanged" test-section
+
+array(fixnum): M{ inner-type: array element-type: fixnum define: [ define-parameterized-type ] } ;
+{ 1 2 3 } >array(fixnum) array(fixnum)?
+"element-type refinement still works" assert-true

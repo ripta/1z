@@ -1,0 +1,41 @@
+=== full binding on a struct base ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ "person(fixnum,string)" ]
+PASS: parameterized type word pushes a named TypeValue
+Stack: [ ]
+Stack: [ t ]
+PASS: valid field types wrap and satisfy the predicate
+Stack: [ ]
+=== order-independent binding ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: hash key order does not change positional binding
+Stack: [ ]
+=== wrap boundary rejects a wrong field type ===
+Stack: [ ]
+Stack: [ [ "x" "alice" make-person >person(fixnum,string) ] ]
+PASS: id bound to fixnum rejects a string
+Stack: [ ]
+Stack: [ [ 42 99 make-person >person(fixnum,string) ] ]
+PASS: age bound to string rejects a fixnum
+Stack: [ ]
+=== definition-time binding errors ===
+Stack: [ ]
+Stack: [ [ "bad-unknown(x): M{ inner-type: person type-params: H{ Z: fixnum } define: [ define-parameterized-type ] } ;" eval-string ] ]
+PASS: unknown type parameter key is rejected
+Stack: [ ]
+Stack: [ [ "bad-value(x): M{ inner-type: person type-params: H{ T: 42 U: string } define: [ define-parameterized-type ] } ;" eval-string ] ]
+PASS: non-TypeValue binding value is rejected
+Stack: [ ]
+Stack: [ [ "bad-missing(x): M{ inner-type: person type-params: H{ T: fixnum } define: [ define-parameterized-type ] } ;" eval-string ] ]
+PASS: missing parameter in full binding is rejected
+Stack: [ ]
+=== refinement path is unchanged ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: element-type refinement still works
+Stack: [ ]

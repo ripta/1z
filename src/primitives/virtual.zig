@@ -1076,6 +1076,35 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                         val = .{ .array = pa };
                     }
                 },
+                .struct_instance => |si| {
+                    // Validate each field bound to a type parameter against its
+                    // bound concrete type. The base struct's field-type slots
+                    // hold the parameter TypeValues, whose position indexes the
+                    // bound `type_params` tuple.
+                    const field_types: []const ?value_mod.ConstraintCombinator.Element = blk: {
+                        const base_desc = (vt.base_type orelse break :blk &.{}).descriptor orelse break :blk &.{};
+                        break :blk switch (base_desc.kind) {
+                            .struct_ => |sd| sd.field_types,
+                            else => &.{},
+                        };
+                    };
+                    for (si.fields, 0..) |field_val, i| {
+                        if (i >= field_types.len) continue;
+                        const element = field_types[i] orelse continue;
+                        const slot_tv = switch (element) {
+                            .type => |t| t,
+                            else => continue,
+                        };
+                        if (!value_mod.isTypeParameter(slot_tv)) continue;
+                        const pos = value_mod.typeParameterPosition(slot_tv) orelse continue;
+                        if (pos >= params.len) continue;
+                        const bound = params[pos];
+                        if (!helpers.valueMatchesType(ctx, field_val, bound)) {
+                            helpers.setErrorContext(ctx, ">{s} field '{s}' expects {s}, got {s}", .{ vt.name, si.struct_type.fields[i], bound.name, helpers.valueTypeName(field_val) });
+                            return error.TypeMismatch;
+                        }
+                    }
+                },
                 else => {},
             }
         }
@@ -1105,6 +1134,68 @@ pub fn defineParameterizedWrap(ctx: *Context, name: []const u8, vtype: *const Vi
         .provenance = vtypeProvenance(vtype, "wrap"),
         .action = .{ .compound = instrs },
     });
+}
+
+/// Return the type parameters declared by a base type, ordered by position.
+/// Only a struct base carries declared parameters; other kinds have none.
+fn declaredTypeParams(base_tv: *const value_mod.TypeValue) []const *const value_mod.TypeValue {
+    const desc = base_tv.descriptor orelse return &.{};
+    return switch (desc.kind) {
+        .struct_ => |sd| sd.type_params,
+        else => &.{},
+    };
+}
+
+/// Bind a base type's declared type parameters from a `type-params:` hash,
+/// producing the positional `type_params` tuple. The hash maps declared
+/// parameter names to concrete TypeValues. Full binding: every declared
+/// parameter must be present; unknown keys and non-TypeValue values are errors.
+fn bindTypeParams(
+    ctx: *Context,
+    base_tv: *const value_mod.TypeValue,
+    tp_val: Value,
+) anyerror![]*const value_mod.TypeValue {
+    const alloc = ctx.quotationAllocator();
+
+    const tp_hash = switch (tp_val) {
+        .hash => |h| h,
+        else => {
+            helpers.setTypeMismatchError(ctx, "hash", tp_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const declared = declaredTypeParams(base_tv);
+
+    // Every hash key must name a declared parameter on the base.
+    var it = tp_hash.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const known = for (declared) |p| {
+            if (std.mem.eql(u8, p.name, key)) break true;
+        } else false;
+        if (!known) {
+            helpers.setErrorContext(ctx, "define-parameterized-type: unknown type parameter '{s}' for base {s}", .{ key, base_tv.name });
+            return error.MissingField;
+        }
+    }
+
+    // Fill positionally; full binding requires every declared parameter.
+    const params = try alloc.alloc(*const value_mod.TypeValue, declared.len);
+    for (declared, 0..) |p, i| {
+        const bound_val = tp_hash.get(p.name) orelse {
+            helpers.setErrorContext(ctx, "define-parameterized-type: missing binding for type parameter '{s}' on base {s}", .{ p.name, base_tv.name });
+            return error.MissingField;
+        };
+        params[i] = switch (bound_val) {
+            .type_val => |tv| tv,
+            else => {
+                helpers.setTypeMismatchError(ctx, "type", bound_val);
+                return error.TypeMismatch;
+            },
+        };
+    }
+    return params;
 }
 
 /// define-parameterized-type ( name: descriptor markers -- ) - Define a parameterized
@@ -1149,18 +1240,6 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
         },
     };
 
-    const elem_type_val = desc_map.map.get("element-type") orelse {
-        helpers.setErrorContext(ctx, "define-parameterized-type descriptor missing 'element-type' field", .{});
-        return error.MissingField;
-    };
-    const elem_tv = switch (elem_type_val) {
-        .type_val => |tv| tv,
-        else => {
-            helpers.setTypeMismatchError(ctx, "type", elem_type_val);
-            return error.TypeMismatch;
-        },
-    };
-
     const name_val = try ctx.stack.pop();
     const name = switch (name_val) {
         .symbol => |s| s,
@@ -1170,8 +1249,26 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
         },
     };
 
-    const type_params = try alloc.alloc(*const value_mod.TypeValue, 1);
-    type_params[0] = elem_tv;
+    // A `type-params:` hash selects the generics branch (bind declared parameter
+    // slots on the base positionally); an `element-type:` TypeValue keeps the
+    // refinement branch (one constraint applied uniformly across a container).
+    const type_params: []*const value_mod.TypeValue = if (desc_map.map.get("type-params")) |tp_val|
+        try bindTypeParams(ctx, base_tv, tp_val)
+    else if (desc_map.map.get("element-type")) |elem_type_val| blk: {
+        const elem_tv = switch (elem_type_val) {
+            .type_val => |tv| tv,
+            else => {
+                helpers.setTypeMismatchError(ctx, "type", elem_type_val);
+                return error.TypeMismatch;
+            },
+        };
+        const params = try alloc.alloc(*const value_mod.TypeValue, 1);
+        params[0] = elem_tv;
+        break :blk params;
+    } else {
+        helpers.setErrorContext(ctx, "define-parameterized-type descriptor missing 'element-type' or 'type-params' field", .{});
+        return error.MissingField;
+    };
 
     const vtype = try alloc.create(VirtualType);
     vtype.* = .{
