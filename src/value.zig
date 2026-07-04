@@ -559,6 +559,7 @@ pub const TypeKind = enum {
     resource,
     ffi_struct,
     union_,
+    type_parameter,
 };
 
 /// TypeDescriptor carries a type's metadata in a closed-vocabulary,
@@ -586,6 +587,10 @@ pub const TypeKindData = union(TypeKind) {
     /// the descriptor itself has no extra kind-specific data beyond the
     /// universal flags inferred from the union members.
     union_: void,
+    /// A type parameter is a hole in a generic type definition. Its name rides
+    /// on `TypeValue.name`; the payload carries only its position in the
+    /// defining type's parameter list.
+    type_parameter: TypeParameterData,
 };
 
 /// ProtocolDescriptor carries a protocol's metadata: its name, the method
@@ -680,6 +685,13 @@ pub const FfiStructData = struct {
     ffi_layout: usize = 0,
 };
 
+/// TypeParameterData carries the metadata of a type parameter: its position in
+/// the defining type's parameter list. The parameter's name rides on the
+/// always-present `TypeValue.name`, so no name field is duplicated here.
+pub const TypeParameterData = struct {
+    position: u32 = 0,
+};
+
 /// Allocate a TypeDescriptor with the given kind payload and universal
 /// boolean flags. Producers that build kind-specific payloads
 /// progressively can pass `.{ .builtin = {} }` (or the eventual kind
@@ -712,6 +724,39 @@ pub fn destroyTypeDescriptor(allocator: std.mem.Allocator, desc: *TypeDescriptor
     allocator.destroy(desc);
 }
 
+pub fn createTypeParameterDescriptor(allocator: std.mem.Allocator, position: u32) !*TypeDescriptor {
+    return createTypeDescriptor(allocator, .{ .type_parameter = .{ .position = position } }, .{});
+}
+
+/// Mint a fresh type-parameter TypeValue for a generic definition's hole. Each
+/// call allocates a new descriptor and TypeValue, so per-definition parameters
+/// have distinct identity even when they share a spelling. The `name` slice is
+/// borrowed, matching how every other TypeValue stores its name; the caller
+/// owns the name's lifetime. Real callers pass `ctx.arena.allocator()`, so no
+/// manual free is needed.
+pub fn mintTypeParameter(allocator: std.mem.Allocator, name: []const u8, position: u32) !*TypeValue {
+    const desc = try createTypeParameterDescriptor(allocator, position);
+    const tv = try allocator.create(TypeValue);
+    tv.* = .{ .name = name, .descriptor = desc };
+    return tv;
+}
+
+/// True when the TypeValue is a type-parameter hole rather than a concrete type.
+pub fn isTypeParameter(tv: *const TypeValue) bool {
+    const desc = tv.descriptor orelse return false;
+    return desc.kind == .type_parameter;
+}
+
+/// The type parameter's position in its defining type's parameter list, or null
+/// when the TypeValue is not a type parameter.
+pub fn typeParameterPosition(tv: *const TypeValue) ?u32 {
+    const desc = tv.descriptor orelse return null;
+    return switch (desc.kind) {
+        .type_parameter => |d| d.position,
+        else => null,
+    };
+}
+
 /// Returns the stored symbol name for a TypeKindData variant. The 1z
 /// symbol-literal syntax `name:` produces a symbol whose stored name is
 /// `name` (the trailing colon is syntactic), so these strings omit the
@@ -727,6 +772,7 @@ pub fn typeKindSymbol(kind: TypeKindData) []const u8 {
         .resource => "resource-type",
         .ffi_struct => "ffi-struct-type",
         .union_ => "union-type",
+        .type_parameter => "type-parameter",
     };
 }
 
@@ -2060,6 +2106,7 @@ test "TypeKindData exhaustive switch over all variants" {
         .{ .resource = .{} },
         .{ .ffi_struct = .{} },
         .{ .union_ = {} },
+        .{ .type_parameter = .{} },
     };
     for (variants) |v| {
         const tag: TypeKind = switch (v) {
@@ -2072,6 +2119,7 @@ test "TypeKindData exhaustive switch over all variants" {
             .resource => .resource,
             .ffi_struct => .ffi_struct,
             .union_ => .union_,
+            .type_parameter => .type_parameter,
         };
         try std.testing.expectEqual(@as(TypeKind, v), tag);
     }
@@ -2157,4 +2205,50 @@ test "TypeValue carries TypeDescriptor pointer" {
     const tv = TypeValue{ .name = "fixnum", .descriptor = desc };
     try std.testing.expectEqualStrings("fixnum", tv.name);
     try std.testing.expect(tv.descriptor.?.numeric);
+}
+
+test "createTypeParameterDescriptor wires kind and position" {
+    const desc = try createTypeParameterDescriptor(std.testing.allocator, 3);
+    defer destroyTypeDescriptor(std.testing.allocator, desc);
+    try std.testing.expectEqual(TypeKind.type_parameter, @as(TypeKind, desc.kind));
+    try std.testing.expectEqual(@as(u32, 3), desc.kind.type_parameter.position);
+}
+
+test "mintTypeParameter carries name and position" {
+    const tv = try mintTypeParameter(std.testing.allocator, "T", 0);
+    defer {
+        destroyTypeDescriptor(std.testing.allocator, tv.descriptor.?);
+        std.testing.allocator.destroy(tv);
+    }
+    try std.testing.expectEqualStrings("T", tv.name);
+    try std.testing.expect(isTypeParameter(tv));
+    try std.testing.expectEqual(@as(?u32, 0), typeParameterPosition(tv));
+}
+
+test "mintTypeParameter yields a fresh identity per position" {
+    const t = try mintTypeParameter(std.testing.allocator, "T", 0);
+    defer {
+        destroyTypeDescriptor(std.testing.allocator, t.descriptor.?);
+        std.testing.allocator.destroy(t);
+    }
+    const u = try mintTypeParameter(std.testing.allocator, "U", 1);
+    defer {
+        destroyTypeDescriptor(std.testing.allocator, u.descriptor.?);
+        std.testing.allocator.destroy(u);
+    }
+    try std.testing.expect(t != u);
+    try std.testing.expectEqual(@as(?u32, 0), typeParameterPosition(t));
+    try std.testing.expectEqual(@as(?u32, 1), typeParameterPosition(u));
+}
+
+test "isTypeParameter is false for concrete and null-descriptor TypeValues" {
+    const builtin_desc = try createBuiltinTypeDescriptor(std.testing.allocator, .{});
+    defer destroyTypeDescriptor(std.testing.allocator, builtin_desc);
+    const builtin_tv = TypeValue{ .name = "fixnum", .descriptor = builtin_desc };
+    try std.testing.expect(!isTypeParameter(&builtin_tv));
+    try std.testing.expectEqual(@as(?u32, null), typeParameterPosition(&builtin_tv));
+
+    const null_tv = TypeValue{ .name = "opaque", .descriptor = null };
+    try std.testing.expect(!isTypeParameter(&null_tv));
+    try std.testing.expectEqual(@as(?u32, null), typeParameterPosition(&null_tv));
 }

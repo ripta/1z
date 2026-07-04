@@ -813,7 +813,7 @@ fn nativeTypeInfoString(ctx: *Context) anyerror!void {
             }
             try appendGeneratedWords(&buf, alloc, tv);
         },
-        .enum_variant, .resource, .ffi_struct, .sentinel, .union_ => {},
+        .enum_variant, .resource, .ffi_struct, .sentinel, .union_, .type_parameter => {},
     }
 
     try ctx.stack.push(.{ .string = try buf.toOwnedSlice(alloc) });

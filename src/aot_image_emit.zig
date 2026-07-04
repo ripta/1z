@@ -735,7 +735,7 @@ fn internDescriptorCrossRefs(
     desc: *const value_mod.TypeDescriptor,
 ) Allocator.Error!void {
     switch (desc.kind) {
-        .builtin, .sentinel, .union_, .resource => {},
+        .builtin, .sentinel, .union_, .resource, .type_parameter => {},
         .struct_ => |sd| {
             for (sd.field_types) |maybe| {
                 if (maybe) |element| {
@@ -2466,6 +2466,7 @@ fn typeKindIndex(kind: value_mod.TypeKindData) u8 {
         .resource => 6,
         .ffi_struct => 7,
         .union_ => 8,
+        .type_parameter => 9,
     };
 }
 
@@ -2599,7 +2600,10 @@ fn emitTypeDescriptorStrings(
     var num_buf: [32]u8 = undefined;
     const desc = tv.descriptor orelse return;
     switch (desc.kind) {
-        .builtin, .sentinel, .union_ => {},
+        // A type parameter's only payload is its position, emitted inline on the
+        // descriptor row; it needs no side arrays. Real serialization of the
+        // position lands with the rest of the generics AOT work.
+        .builtin, .sentinel, .union_, .type_parameter => {},
         .struct_ => |sd| {
             const tvs = try structFieldTypeValues(allocator, sd.field_types);
             defer if (tvs.len > 0) allocator.free(tvs);
