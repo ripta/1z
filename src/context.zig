@@ -2913,6 +2913,35 @@ pub const Context = struct {
         return desc;
     }
 
+    /// Collect the distinct type parameters referenced by a struct's field
+    /// types, ordered by first appearance. Only bare `.type` elements that are
+    /// type-parameter holes count; a parameter shared by several fields is
+    /// returned once. Returns an empty slice for a concrete struct.
+    fn deriveStructTypeParams(
+        alloc: std.mem.Allocator,
+        field_types: []const ?value_mod.ConstraintCombinator.Element,
+    ) ![]const *const value_mod.TypeValue {
+        var params = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
+        errdefer params.deinit(alloc);
+        for (field_types) |ft| {
+            const element = ft orelse continue;
+            const tv = switch (element) {
+                .type => |t| t,
+                else => continue,
+            };
+            if (!value_mod.isTypeParameter(tv)) continue;
+            const seen = for (params.items) |p| {
+                if (p == tv) break true;
+            } else false;
+            if (!seen) try params.append(alloc, tv);
+        }
+        if (params.items.len == 0) {
+            params.deinit(alloc);
+            return &.{};
+        }
+        return params.toOwnedSlice(alloc);
+    }
+
     pub fn getOrCreateStructDescriptor(
         self: *Context,
         fields: []const []const u8,
@@ -2934,11 +2963,18 @@ pub const Context = struct {
             for (field_types, 0..) |ft, i| buf[i] = ft;
             break :blk buf;
         } else &.{};
+
+        // Project the declared type parameters out of the field types, ordered by
+        // first appearance (which is position order). A parameter shared across
+        // several fields appears once. `field_types` stays the source of truth.
+        const type_params = try deriveStructTypeParams(alloc, owned_field_types);
+
         const desc = try value_mod.createTypeDescriptor(
             alloc,
             .{ .struct_ = .{
                 .fields = owned_fields,
                 .field_types = owned_field_types,
+                .type_params = type_params,
             } },
             .{ .mutable = mutable },
         );

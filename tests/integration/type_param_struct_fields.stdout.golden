@@ -1,0 +1,28 @@
+=== type parameter struct field declaration ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { <type:T> <type:U> } ]
+Stack: [ { "T" "U" } ]
+PASS: distinct type parameters named by field-type
+Stack: [ ]
+=== unbound type parameters are permissive ===
+Stack: [ ]
+PASS: unbound T accepts a string
+Stack: [ ]
+PASS: unbound U accepts a fixnum
+Stack: [ ]
+PASS: unbound T also accepts a fixnum
+Stack: [ ]
+PASS: hash constructor is permissive on parameters
+Stack: [ ]
+=== shared type parameter ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { <type:T> <type:T> } ]
+Stack: [ { "T" "T" } ]
+PASS: shared parameter appears in both field-type slots
+Stack: [ ]
+PASS: shared param accepts a fixnum in first
+Stack: [ ]
+PASS: shared param accepts a string in second
+Stack: [ ]

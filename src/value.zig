@@ -631,6 +631,12 @@ pub const ConstraintCombinator = struct {
 pub const StructData = struct {
     fields: []const []const u8 = &.{},
     field_types: []const ?ConstraintCombinator.Element = &.{},
+    /// Declared type parameters, ordered by position, for a generic struct
+    /// definition (e.g. `struct{ id: T: age: U: }`). Empty for a concrete
+    /// struct. Each entry is the same parameter TypeValue referenced by the
+    /// corresponding `field_types` slot, so `field_types` remains the source of
+    /// truth and this is the position-ordered projection of it.
+    type_params: []const *const TypeValue = &.{},
 };
 
 /// VirtualData carries the metadata of a virtual-defined type.

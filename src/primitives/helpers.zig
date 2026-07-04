@@ -136,6 +136,10 @@ pub fn valueMatchesType(ctx: *Context, val: Value, expected_tv: *const TypeValue
         if (expected_tv == any_tv) return true;
     }
 
+    // An unbound type parameter constrains nothing at base-field construction;
+    // real per-binding validation happens at the parameterized-type boundary.
+    if (value_mod.isTypeParameter(expected_tv)) return true;
+
     const actual_tv = resolveValueTypeValue(ctx, val) orelse return false;
     if (typeMatchesConstraint(actual_tv, expected_tv)) return true;
 

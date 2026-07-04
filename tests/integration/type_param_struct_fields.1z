@@ -1,0 +1,28 @@
+use "testing" ;
+
+"type parameter struct field declaration" test-section
+
+person: struct{ id: T: age: U: } ;
+
+person: native.type-descriptor descriptor-field-types? unwrap-or-throw
+[ native.type-name ] #map #collect
+{ "T" "U" } "distinct type parameters named by field-type" assert=
+
+"unbound type parameters are permissive" test-section
+
+"anything" 42 make-person id>> "anything" "unbound T accepts a string" assert=
+"anything" 42 make-person age>> 42 "unbound U accepts a fixnum" assert=
+42 "swapped" make-person id>> 42 "unbound T also accepts a fixnum" assert=
+
+H{ id: t age: f } >person id>> t "hash constructor is permissive on parameters" assert=
+
+"shared type parameter" test-section
+
+shared: struct{ first: T: second: T: } ;
+
+shared: native.type-descriptor descriptor-field-types? unwrap-or-throw
+[ native.type-name ] #map #collect
+{ "T" "T" } "shared parameter appears in both field-type slots" assert=
+
+1 "two" make-shared first>> 1 "shared param accepts a fixnum in first" assert=
+1 "two" make-shared second>> "two" "shared param accepts a string in second" assert=
