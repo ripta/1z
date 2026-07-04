@@ -1,0 +1,60 @@
+=== shared-spelling-independent ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { <type:T> <type:E> } ]
+Stack: [ { "T" "E" } ]
+PASS: enum declares two independent parameters T and E
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: fixnum flows into ok's value field
+Stack: [ ]
+Stack: [ t ]
+PASS: string flows into err's error field
+Stack: [ ]
+Stack: [ [ "oops" make-outcome:ok >outcome(fixnum,string) ] ]
+PASS: ok bound to fixnum rejects a string payload
+Stack: [ ]
+Stack: [ [ 99 make-outcome:err >outcome(fixnum,string) ] ]
+PASS: err bound to string rejects a fixnum payload
+Stack: [ ]
+=== renamed-internals ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: fixnum flows into crate's item, positionally through the U: slot
+Stack: [ ]
+Stack: [ [ "x" make-maybe-crate:full >maybe-crate(fixnum) ] ]
+PASS: full bound to fixnum rejects a string payload
+Stack: [ ]
+Stack: [ t ]
+PASS: a payload-free variant wraps with no validation
+Stack: [ ]
+=== shared-enum-level-parameter ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { <type:T> } ]
+Stack: [ { "T" } ]
+PASS: the enum shares a single parameter T across both variants
+Stack: [ ]
+Stack: [ ]
+Stack: [ t ]
+PASS: fixnum flows into left's value
+Stack: [ ]
+Stack: [ t ]
+PASS: fixnum flows into right's value
+Stack: [ ]
+Stack: [ [ "no" make-branch:right >branch(fixnum) ] ]
+PASS: a wrong-typed payload on the shared parameter is rejected
+Stack: [ ]
+=== unwrap recovers the variant ===
+Stack: [ ]
+Stack: [ t ]
+PASS: unmake recovers the underlying variant
+Stack: [ ]

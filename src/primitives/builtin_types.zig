@@ -423,8 +423,9 @@ fn nativeDescriptorParentRaw(ctx: *Context) anyerror!void {
 
 /// descriptor-type-params-raw ( descriptor -- array )
 /// struct_: returns the declared parameter holes. virtual: returns the bound
-/// `type_params` tuple (concrete types and still-open parameter holes). Throws on
-/// a descriptor with no parameters or an unsupported kind.
+/// `type_params` tuple (concrete types and still-open parameter holes). enum_:
+/// returns the enum's declared parameter holes. Throws on a descriptor with no
+/// parameters or an unsupported kind.
 fn nativeDescriptorTypeParamsRaw(ctx: *Context) anyerror!void {
     const desc = try popDescriptor(ctx);
     const alloc = ctx.quotationAllocator();
@@ -432,8 +433,9 @@ fn nativeDescriptorTypeParamsRaw(ctx: *Context) anyerror!void {
     const params: []const *const value_mod.TypeValue = switch (desc.kind) {
         .struct_ => |sd| sd.type_params,
         .virtual => |vd| vd.type_params,
+        .enum_ => |ed| ed.type_params,
         else => {
-            setKindMismatch(ctx, "struct or parameterized virtual", desc);
+            setKindMismatch(ctx, "struct, parameterized virtual, or enum", desc);
             return error.TypeMismatch;
         },
     };

@@ -11,6 +11,7 @@ const Marker = value_mod.Marker;
 const helpers = @import("helpers.zig");
 const markers_mod = @import("markers.zig");
 const structs = @import("structs.zig");
+const struct_field_spec = @import("struct_field_spec.zig");
 const virtual = @import("virtual.zig");
 const container_backing = @import("../container_backing.zig");
 
@@ -186,14 +187,20 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
         },
     };
 
-    if (variants_array.len % 2 != 0) {
-        helpers.setErrorContext(ctx, "enum variants must be name: type pairs (got odd count {d})", .{variants_array.len});
-        return error.ParseError;
-    }
-    const variants_slice = try alloc.alloc(value_mod.Variant, variants_array.len / 2);
+    // Normalize the collected variants into (bare-name, resolved-type) pairs. A
+    // parameterized variant base (`ok: result-value bind{ T: }`) contributes
+    // three collected values: the name symbol, the base type, and a `bind{ ... }`
+    // placeholder. One enum-level parameter map is shared across every variant,
+    // so the same symbol in two variants binds one enum parameter (enum-level
+    // sharing) while distinct symbols mint distinct enum parameters.
+    const NormalizedVariant = struct { name: []const u8, tv: *const value_mod.TypeValue };
+    var norm = std.ArrayListUnmanaged(NormalizedVariant){};
+    var enum_param_map = std.StringHashMapUnmanaged(*const value_mod.TypeValue){};
+    defer enum_param_map.deinit(alloc);
+    var next_param_pos: u32 = 0;
     {
         var vi: usize = 0;
-        while (vi < variants_array.len) : (vi += 2) {
+        while (vi < variants_array.len) {
             const variant_name_val = variants_array[vi];
             const raw_name = switch (variant_name_val) {
                 .symbol => |s| s,
@@ -206,21 +213,50 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 raw_name[0 .. raw_name.len - 1]
             else
                 raw_name;
+            if (vi + 1 >= variants_array.len) {
+                helpers.setErrorContext(ctx, "enum variant '{s}' is missing a type", .{raw_name});
+                return error.ParseError;
+            }
             const type_v = variants_array[vi + 1];
-            const tv_ptr = switch (type_v) {
+            const base_tv = switch (type_v) {
                 .type_val => |t| t,
                 else => {
                     helpers.setTypeMismatchError(ctx, "type", type_v);
                     return error.TypeMismatch;
                 },
             };
-            variants_slice[vi / 2] = .{ .name = bare_name, .type_val = tv_ptr };
+            var resolved_tv: *const value_mod.TypeValue = base_tv;
+            var advance: usize = 2;
+            if (vi + 2 < variants_array.len and markers_mod.isBindPlaceholder(variants_array[vi + 2])) {
+                const element = try struct_field_spec.combineBindPlaceholder(
+                    alloc,
+                    ctx,
+                    .{ .type = base_tv },
+                    variants_array[vi + 2].array,
+                    &enum_param_map,
+                    &next_param_pos,
+                    "enum",
+                );
+                resolved_tv = element.type;
+                advance = 3;
+            }
+            try norm.append(alloc, .{ .name = bare_name, .tv = resolved_tv });
+            vi += advance;
         }
     }
 
+    const variants_slice = try alloc.alloc(value_mod.Variant, norm.items.len);
+    const variant_tvs = try alloc.alloc(*const value_mod.TypeValue, norm.items.len);
+    for (norm.items, 0..) |nv, ni| {
+        variants_slice[ni] = .{ .name = nv.name, .type_val = nv.tv };
+        variant_tvs[ni] = nv.tv;
+    }
+    // Enum-level parameters ordered by first appearance across the variant bases.
+    const enum_type_params = try Context.deriveEnumTypeParams(alloc, variant_tvs);
+
     const enum_desc = try value_mod.createTypeDescriptor(
         alloc,
-        .{ .enum_ = .{ .variants = variants_slice } },
+        .{ .enum_ = .{ .variants = variants_slice, .type_params = enum_type_params } },
         .{},
     );
 
@@ -251,31 +287,9 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 
     const unit_tv = ctx.lookupBuiltinTypeValue("unit");
 
-    var i: usize = 0;
-    while (i < variants_array.len) : (i += 2) {
-        const variant_name_val = variants_array[i];
-        const raw_name = switch (variant_name_val) {
-            .symbol => |s| s,
-            else => {
-                helpers.setTypeMismatchError(ctx, "symbol", variant_name_val);
-                return error.TypeMismatch;
-            },
-        };
-
-        // Strip trailing colon to get the variant name
-        const variant_sym = if (raw_name.len > 1 and raw_name[raw_name.len - 1] == ':')
-            raw_name[0 .. raw_name.len - 1]
-        else
-            raw_name;
-
-        const type_val = variants_array[i + 1];
-        const tv = switch (type_val) {
-            .type_val => |t| t,
-            else => {
-                helpers.setTypeMismatchError(ctx, "type", type_val);
-                return error.TypeMismatch;
-            },
-        };
+    for (norm.items) |nv| {
+        const variant_sym = nv.name;
+        const tv = nv.tv;
 
         const full_name = try std.fmt.allocPrint(alloc, "{s}:{s}", .{ enum_name, variant_sym });
 
@@ -323,12 +337,31 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
             try generated_words.append(alloc, .{ .string = full_name });
             try generated_words.append(alloc, .{ .string = pred_name });
         } else {
-            // Data-carrying variant: look up the pre-defined StructType
-            const maker_name = try std.fmt.allocPrint(alloc, "make-{s}", .{tv.name});
+            // Data-carrying variant. Resolve the payload struct through the
+            // base: a concrete base is the struct itself; a parameterized base
+            // (`result-value bind{ T: }`) is a virtual whose root is the struct.
+            const root_struct = ctx.rootStructTypeValue(tv) orelse {
+                helpers.setErrorContext(ctx, "enum variant type must be unit or a struct type, got '{s}'", .{tv.name});
+                return error.TypeMismatch;
+            };
+            const maker_name = try std.fmt.allocPrint(alloc, "make-{s}", .{root_struct.name});
             const struct_type = structs.getStructTypeFromMaker(ctx, maker_name) orelse {
                 helpers.setErrorContext(ctx, "enum variant type must be unit or a struct type, got '{s}'", .{tv.name});
                 return error.TypeMismatch;
             };
+
+            // For a parameterized variant, carry the binding tuple: the variant
+            // base's own parameter positions mapped to enum parameters or
+            // concretes. The instantiation wrap substitutes and validates
+            // through it. Concrete variants carry no binding.
+            const variant_type_params: ?[]*const value_mod.TypeValue = switch (tv.descriptor.?.kind) {
+                .virtual => |vd| if (vd.type_params.len > 0)
+                    try alloc.dupe(*const value_mod.TypeValue, vd.type_params)
+                else
+                    null,
+                else => null,
+            };
+            const variant_base_type: ?*const value_mod.TypeValue = if (variant_type_params != null) tv else null;
 
             const vtype = try alloc.create(VirtualType);
             vtype.* = .{
@@ -336,6 +369,8 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                 .inner_type = full_name,
                 .parent_type = enum_tv,
                 .anon_struct = struct_type,
+                .base_type = variant_base_type,
+                .type_params = variant_type_params,
             };
             ctx.virtual_type_count += 1;
 

@@ -1,0 +1,93 @@
+use "testing" ;
+
+"shared-spelling-independent" test-section
+
+\ Variant structs reuse the same internal spelling T:, but the enum maps them to
+\ two independent parameters T (position 0) and E (position 1).
+okv: struct{ value: T: } ;
+errv: struct{ error: T: } ;
+outcome: enum{
+  ok: okv bind{ T: }
+  err: errv bind{ E: }
+} ;
+
+outcome native.type-descriptor descriptor-type-params? unwrap-or-throw
+[ native.type-name ] #map #collect
+{ "T" "E" } "enum declares two independent parameters T and E" assert=
+
+outcome(fixnum,string): M{
+  inner-type:  outcome
+  type-params: H{ T: fixnum E: string }
+  define:      [ define-parameterized-type ]
+} ;
+
+42 make-outcome:ok >outcome(fixnum,string) outcome(fixnum,string)?
+"fixnum flows into ok's value field" assert-true
+
+"boom" make-outcome:err >outcome(fixnum,string) outcome(fixnum,string)?
+"string flows into err's error field" assert-true
+
+[ "oops" make-outcome:ok >outcome(fixnum,string) ]
+"ok bound to fixnum rejects a string payload" assert-error
+
+[ 99 make-outcome:err >outcome(fixnum,string) ]
+"err bound to string rejects a fixnum payload" assert-error
+
+"renamed-internals" test-section
+
+\ The enum parameter name differs from the variant struct's internal name; the
+\ mapping is positional, not by name. crate spells its parameter U: internally.
+crate: struct{ item: U: } ;
+maybe-crate: enum{
+  full: crate bind{ T: }
+  empty: unit
+} ;
+maybe-crate(fixnum): M{
+  inner-type:  maybe-crate
+  type-params: H{ T: fixnum }
+  define:      [ define-parameterized-type ]
+} ;
+
+42 make-maybe-crate:full >maybe-crate(fixnum) maybe-crate(fixnum)?
+"fixnum flows into crate's item, positionally through the U: slot" assert-true
+
+[ "x" make-maybe-crate:full >maybe-crate(fixnum) ]
+"full bound to fixnum rejects a string payload" assert-error
+
+maybe-crate:empty >maybe-crate(fixnum) maybe-crate(fixnum)?
+"a payload-free variant wraps with no validation" assert-true
+
+"shared-enum-level-parameter" test-section
+
+\ One enum parameter is bound into multiple variants (same symbol within the
+\ enum definition = shared).
+lpay: struct{ value: A: } ;
+rpay: struct{ value: B: } ;
+branch: enum{
+  left: lpay bind{ T: }
+  right: rpay bind{ T: }
+} ;
+
+branch native.type-descriptor descriptor-type-params? unwrap-or-throw
+[ native.type-name ] #map #collect
+{ "T" } "the enum shares a single parameter T across both variants" assert=
+
+branch(fixnum): M{
+  inner-type:  branch
+  type-params: H{ T: fixnum }
+  define:      [ define-parameterized-type ]
+} ;
+
+1 make-branch:left >branch(fixnum) branch(fixnum)?
+"fixnum flows into left's value" assert-true
+
+2 make-branch:right >branch(fixnum) branch(fixnum)?
+"fixnum flows into right's value" assert-true
+
+[ "no" make-branch:right >branch(fixnum) ]
+"a wrong-typed payload on the shared parameter is rejected" assert-error
+
+"unwrap recovers the variant" test-section
+
+42 make-outcome:ok >outcome(fixnum,string) unmake-outcome(fixnum,string) outcome:ok?
+"unmake recovers the underlying variant" assert-true

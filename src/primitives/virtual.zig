@@ -1039,6 +1039,18 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 
     var val = try ctx.stack.pop();
 
+    // A parameterized enum base (`result(fixnum,string)`) wraps a tagged variant,
+    // not a bare value, so its payload validation substitutes the enum's bound
+    // tuple through each variant's own binding. Handle it separately.
+    if (vt.base_type) |base_tv| {
+        if (base_tv.descriptor) |bd| {
+            if (bd.kind == .enum_) {
+                try wrapParameterizedEnumVariant(ctx, vt, base_tv, val);
+                return;
+            }
+        }
+    }
+
     const actual_type: []const u8 = switch (val) {
         .struct_instance => |si| si.struct_type.name,
         .bignum => if (std.mem.eql(u8, vt.inner_type, "fixnum")) "fixnum" else "bignum",
@@ -1116,6 +1128,78 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 
     // `val` was popped (ownership transferred); the tagged becomes its
     // owner via pushMoved without an extra retain.
+    try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
+}
+
+/// Validate and re-tag a variant payload for a parameterized enum instantiation.
+///
+/// `vt` is the `result(fixnum,string)` wrapper (its `type_params` are the enum's
+/// bound tuple); `enum_tv` is the base enum. `val` must be a tagged variant of
+/// that enum. For each variant payload field slotted with a type parameter, the
+/// field type resolves through two levels: the variant's own binding tuple maps
+/// the variant base's parameter position to an enum-level parameter (or a
+/// concrete type), then the enum-level parameter's position indexes `vt`'s bound
+/// tuple. The field value is validated against the resolved concrete type. On
+/// success the whole variant is re-tagged with the parameterized enum type.
+fn wrapParameterizedEnumVariant(
+    ctx: *Context,
+    vt: *const VirtualType,
+    enum_tv: *const value_mod.TypeValue,
+    val: Value,
+) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const variant: *const VirtualType = switch (val) {
+        .tagged => |t| if (t.tag.parent_type == enum_tv)
+            t.tag
+        else {
+            helpers.setErrorContext(ctx, ">{s} expects a {s} variant, got {s}", .{ vt.name, enum_tv.name, t.tag.name });
+            return error.TypeMismatch;
+        },
+        else => {
+            helpers.setErrorContext(ctx, ">{s} expects a {s} variant, got {s}", .{ vt.name, enum_tv.name, helpers.valueTypeName(val) });
+            return error.TypeMismatch;
+        },
+    };
+
+    const enum_params: []const *const value_mod.TypeValue = vt.type_params orelse &.{};
+
+    if (variant.type_params) |variant_binding| {
+        const field_types: []const ?value_mod.ConstraintCombinator.Element =
+            if (variant.anon_struct) |st| st.field_types else &.{};
+        const inst: ?*const value_mod.StructInstance = switch (val.tagged.inner.*) {
+            .struct_instance => |si| si,
+            else => null,
+        };
+        if (inst) |si| {
+            for (si.fields, 0..) |field_val, i| {
+                if (i >= field_types.len) continue;
+                const element = field_types[i] orelse continue;
+                const slot_tv = switch (element) {
+                    .type => |t| t,
+                    else => continue,
+                };
+                if (!value_mod.isTypeParameter(slot_tv)) continue;
+                const p = value_mod.typeParameterPosition(slot_tv) orelse continue;
+                if (p >= variant_binding.len) continue;
+                const mapped = variant_binding[p];
+                const bound = if (value_mod.isTypeParameter(mapped)) blk: {
+                    const q = value_mod.typeParameterPosition(mapped) orelse continue;
+                    if (q >= enum_params.len) continue;
+                    break :blk enum_params[q];
+                } else mapped;
+                if (!helpers.valueMatchesType(ctx, field_val, bound)) {
+                    helpers.setErrorContext(ctx, ">{s} field '{s}' expects {s}, got {s}", .{ vt.name, si.struct_type.fields[i], bound.name, helpers.valueTypeName(field_val) });
+                    return error.TypeMismatch;
+                }
+            }
+        }
+    }
+
+    const inner = try alloc.create(Value);
+    inner.* = val;
+    // `val` was popped (ownership transferred); the tagged inherits it via
+    // pushMoved without an extra retain.
     try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 

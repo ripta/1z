@@ -2927,6 +2927,7 @@ pub const Context = struct {
         const desc = base_tv.descriptor orelse return .{ .declared = &.{}, .current = &.{} };
         switch (desc.kind) {
             .struct_ => |sd| return .{ .declared = sd.type_params, .current = sd.type_params },
+            .enum_ => |ed| return .{ .declared = ed.type_params, .current = ed.type_params },
             .virtual => |vd| {
                 const root = self.rootStructTypeValue(base_tv) orelse
                     return .{ .declared = &.{}, .current = vd.type_params };
@@ -3010,6 +3011,26 @@ pub const Context = struct {
                 .type => |t| t,
                 else => continue,
             };
+            try collectTypeParams(alloc, &params, tv);
+        }
+        if (params.items.len == 0) {
+            params.deinit(alloc);
+            return &.{};
+        }
+        return params.toOwnedSlice(alloc);
+    }
+
+    /// Collect the distinct enum-level type parameters referenced by a list of
+    /// variant type values, ordered by first appearance and deduped by pointer.
+    ///
+    /// A parameterized variant base (`result-value bind{ T: }`) is a virtual
+    /// type whose `type_params` tuple carries the enum parameters it binds;
+    /// walking those surfaces the enum's declared parameters. A concrete variant
+    /// base (a plain struct, or `unit`) contributes nothing.
+    pub fn deriveEnumTypeParams(alloc: std.mem.Allocator, variant_tvs: []const *const value_mod.TypeValue) ![]const *const value_mod.TypeValue {
+        var params = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
+        errdefer params.deinit(alloc);
+        for (variant_tvs) |tv| {
             try collectTypeParams(alloc, &params, tv);
         }
         if (params.items.len == 0) {
@@ -6029,6 +6050,64 @@ test "enum registry frame push/pop" {
     ctx.popTypeRegistryFrame();
     try std.testing.expect(ctx.lookupEnumVariants(size_tv) == null);
     try std.testing.expect(ctx.lookupEnumVariants(color_tv) != null);
+}
+
+test "deriveEnumTypeParams orders distinct parameters by first appearance" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const t = try value_mod.mintTypeParameter(alloc, "T", 0);
+    const e = try value_mod.mintTypeParameter(alloc, "E", 1);
+
+    // Two variant bases, each a virtual carrying one enum parameter.
+    const ok_desc = try value_mod.createTypeDescriptor(alloc, .{ .virtual = .{ .type_params = &.{t} } }, .{});
+    const ok_tv = try alloc.create(value_mod.TypeValue);
+    ok_tv.* = .{ .name = "okv(T)", .descriptor = ok_desc };
+    const err_desc = try value_mod.createTypeDescriptor(alloc, .{ .virtual = .{ .type_params = &.{e} } }, .{});
+    const err_tv = try alloc.create(value_mod.TypeValue);
+    err_tv.* = .{ .name = "errv(E)", .descriptor = err_desc };
+
+    const params = try Context.deriveEnumTypeParams(alloc, &.{ ok_tv, err_tv });
+    try std.testing.expectEqual(@as(usize, 2), params.len);
+    try std.testing.expect(params[0] == t);
+    try std.testing.expect(params[1] == e);
+}
+
+test "deriveEnumTypeParams shares a parameter used by several variants" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    const t = try value_mod.mintTypeParameter(alloc, "T", 0);
+    const left_desc = try value_mod.createTypeDescriptor(alloc, .{ .virtual = .{ .type_params = &.{t} } }, .{});
+    const left_tv = try alloc.create(value_mod.TypeValue);
+    left_tv.* = .{ .name = "lpay(T)", .descriptor = left_desc };
+    const right_desc = try value_mod.createTypeDescriptor(alloc, .{ .virtual = .{ .type_params = &.{t} } }, .{});
+    const right_tv = try alloc.create(value_mod.TypeValue);
+    right_tv.* = .{ .name = "rpay(T)", .descriptor = right_desc };
+
+    const params = try Context.deriveEnumTypeParams(alloc, &.{ left_tv, right_tv });
+    try std.testing.expectEqual(@as(usize, 1), params.len);
+    try std.testing.expect(params[0] == t);
+}
+
+test "resolveBaseParams returns an enum's declared type parameters" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    const alloc = ctx.arena.allocator();
+
+    const t = try value_mod.mintTypeParameter(alloc, "T", 0);
+    const e = try value_mod.mintTypeParameter(alloc, "E", 1);
+    const enum_desc = try value_mod.createTypeDescriptor(alloc, .{ .enum_ = .{ .type_params = &.{ t, e } } }, .{});
+    const enum_tv = try alloc.create(value_mod.TypeValue);
+    enum_tv.* = .{ .name = "outcome", .descriptor = enum_desc };
+
+    const base = ctx.resolveBaseParams(enum_tv);
+    try std.testing.expectEqual(@as(usize, 2), base.declared.len);
+    try std.testing.expectEqual(@as(usize, 2), base.current.len);
+    try std.testing.expect(base.declared[0] == t);
+    try std.testing.expect(base.current[1] == e);
 }
 
 // =============================================================================

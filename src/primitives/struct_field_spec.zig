@@ -120,7 +120,12 @@ pub fn parse(
 /// unbound-parameter count; a mismatch is a parse-time error naming the base.
 /// Routes through the same `getOrCreateParameterizedTypeDescriptor` interning
 /// core as the descriptor binding surface.
-fn combineBindPlaceholder(
+///
+/// Shared with the enum definition path (`enums.zig`), where a variant base
+/// `result-value bind{ T: }` binds the same way a struct field slot does. The
+/// caller owns the per-definition `type_params` map + `next_param_pos`, so an
+/// enum's map is shared across all its variants (enum-level parameter sharing).
+pub fn combineBindPlaceholder(
     allocator: Allocator,
     ctx: *Context,
     base_element: value_mod.ConstraintCombinator.Element,

@@ -657,6 +657,11 @@ pub const VirtualData = struct {
 /// EnumData carries the metadata of an enum-defined type.
 pub const EnumData = struct {
     variants: []const Variant = &.{},
+    /// Declared enum-level type parameters, ordered by position, for a generic
+    /// enum definition (e.g. `enum{ ok: result-value bind{ T: } ... }`). Empty
+    /// for a concrete enum. Each parameter is minted once per enum definition
+    /// and shared across the variants that bind it.
+    type_params: []const *const TypeValue = &.{},
 };
 
 /// Variant pairs a variant name with its inner-type, mirroring the
