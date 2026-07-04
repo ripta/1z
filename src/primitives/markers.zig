@@ -217,6 +217,27 @@ pub fn isDynamicMarker(mk: *const Marker) bool {
 /// Dispatch wildcard for `method{`, not a type -- no value has type `any`.
 pub const any_marker: Marker = .{ .name = "any" };
 
+/// Sentinel heading a `bind{ ... }` placeholder array. `bind{` runs during a
+/// definition's `parse-values-until` collection, before the field/variant parser
+/// sees the collected values. It cannot reach the base type (already drained into
+/// the collection array), so it emits a placeholder array
+/// `{ &bind_placeholder_marker params... }`. The field/variant parser recognizes
+/// the sentinel, combines the placeholder with the adjacent base type, and never
+/// lets the array reach a real field slot.
+pub const bind_placeholder_marker: Marker = .{ .name = "bind-placeholder" };
+
+/// True when a value is a `bind{ ... }` placeholder array (headed by the
+/// sentinel). An empty body still yields `{ &bind_placeholder_marker }`.
+pub fn isBindPlaceholder(value: value_mod.Value) bool {
+    return switch (value) {
+        .array => |arr| arr.len >= 1 and switch (arr[0]) {
+            .marker => |mk| mk == &bind_placeholder_marker,
+            else => false,
+        },
+        else => false,
+    };
+}
+
 /// Protocol self-type marker for type signatures.
 pub const self_marker: Marker = .{ .name = "self" };
 

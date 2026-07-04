@@ -1,0 +1,39 @@
+=== bind{ in struct field slots ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { <type:T> <type:U> } ]
+Stack: [ { "T" "U" } ]
+PASS: nested declares T and U
+Stack: [ ]
+Stack: [ { <type:box(T)> <type:couple(T,U)> } ]
+Stack: [ { "box(T)" "couple(T,U)" } ]
+PASS: field types are the bound parameterized bases
+Stack: [ ]
+=== shared parameter across bare and bind slots ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ { <type:T> } ]
+Stack: [ { "T" } ]
+PASS: bare T: and bind{ T: } share one parameter
+Stack: [ ]
+=== count mismatch ===
+Stack: [ ]
+Stack: [ [ "bad: struct{ x: box bind{ T: U: } } ;" eval-string ] ]
+PASS: binding two parameters to a one-parameter base throws
+Stack: [ ]
+=== permissive parse-time body ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { <type:box(bignum)> } ]
+Stack: [ { "box(bignum)" } ]
+PASS: parse-time conditional selects bignum
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ { <type:box(fixnum)> } ]
+Stack: [ { "box(fixnum)" } ]
+PASS: parse-time conditional selects fixnum
+Stack: [ ]

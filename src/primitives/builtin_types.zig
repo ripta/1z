@@ -34,6 +34,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "descriptor-inner-type-raw", .func = nativeDescriptorInnerTypeRaw, .stack_effect = "descriptor -- type" },
     .{ .name = "descriptor-parent-raw", .func = nativeDescriptorParentRaw, .stack_effect = "descriptor -- type" },
     .{ .name = "descriptor-variants-raw", .func = nativeDescriptorVariantsRaw, .stack_effect = "descriptor -- array" },
+    .{ .name = "descriptor-type-params-raw", .func = nativeDescriptorTypeParamsRaw, .stack_effect = "descriptor -- array" },
     .{ .name = "descriptor-resource-kind-raw", .func = nativeDescriptorResourceKindRaw, .stack_effect = "descriptor -- string" },
     .{ .name = "descriptor-ffi-layout-raw", .func = nativeDescriptorFfiLayoutRaw, .stack_effect = "descriptor -- fixnum" },
 };
@@ -418,6 +419,32 @@ fn nativeDescriptorParentRaw(ctx: *Context) anyerror!void {
         },
     };
     try ctx.stack.push(.{ .type_val = @constCast(tv) });
+}
+
+/// descriptor-type-params-raw ( descriptor -- array )
+/// struct_: returns the declared parameter holes. virtual: returns the bound
+/// `type_params` tuple (concrete types and still-open parameter holes). Throws on
+/// a descriptor with no parameters or an unsupported kind.
+fn nativeDescriptorTypeParamsRaw(ctx: *Context) anyerror!void {
+    const desc = try popDescriptor(ctx);
+    const alloc = ctx.quotationAllocator();
+
+    const params: []const *const value_mod.TypeValue = switch (desc.kind) {
+        .struct_ => |sd| sd.type_params,
+        .virtual => |vd| vd.type_params,
+        else => {
+            setKindMismatch(ctx, "struct or parameterized virtual", desc);
+            return error.TypeMismatch;
+        },
+    };
+    if (params.len == 0) {
+        helpers.setErrorContext(ctx, "descriptor has no type parameters", .{});
+        return error.TypeMismatch;
+    }
+
+    const out = try alloc.alloc(value_mod.Value, params.len);
+    for (params, 0..) |p, i| out[i] = .{ .type_val = @constCast(p) };
+    try ctx.stack.push(.{ .array = out });
 }
 
 /// descriptor-variants-raw ( descriptor -- array )

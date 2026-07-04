@@ -1,0 +1,46 @@
+use "testing" ;
+
+"bind{ in struct field slots" test-section
+
+box:    struct{ item: A: } ;
+couple: struct{ left: A: right: B: } ;
+nested: struct{ v: box bind{ T: } p: couple bind{ T: U: } } ;
+
+\ Declared parameters of nested are [T, U] in first-appearance order: the shared
+\ T appears first (in v), then U appears in p.
+nested native.type-descriptor descriptor-type-params? unwrap-or-throw
+[ native.type-name ] #map #collect
+{ "T" "U" } "nested declares T and U" assert=
+
+\ Each field type is its base parameterized by the bound tuple.
+nested native.type-descriptor descriptor-field-types? unwrap-or-throw
+[ native.type-name ] #map #collect
+{ "box(T)" "couple(T,U)" } "field types are the bound parameterized bases" assert=
+
+"shared parameter across bare and bind slots" test-section
+
+\ A bare `T:` field and a `bind{ T: }` reference share one per-definition parameter.
+mixed: struct{ a: T: b: box bind{ T: } } ;
+mixed native.type-descriptor descriptor-type-params? unwrap-or-throw
+[ native.type-name ] #map #collect
+{ "T" } "bare T: and bind{ T: } share one parameter" assert=
+
+"count mismatch" test-section
+
+[ "bad: struct{ x: box bind{ T: U: } } ;" eval-string ]
+"binding two parameters to a one-parameter base throws" assert-error
+
+"permissive parse-time body" test-section
+
+\ The body runs at parse time, so a conditional can compute the bound type.
+WIDE?: parse-time const [ t ] ;
+wide: struct{ w: box bind{ WIDE? [ bignum ] [ fixnum ] if } } ;
+wide native.type-descriptor descriptor-field-types? unwrap-or-throw
+[ native.type-name ] #map #collect
+{ "box(bignum)" } "parse-time conditional selects bignum" assert=
+
+NARROW?: parse-time const [ f ] ;
+narrow: struct{ w: box bind{ NARROW? [ bignum ] [ fixnum ] if } } ;
+narrow native.type-descriptor descriptor-field-types? unwrap-or-throw
+[ native.type-name ] #map #collect
+{ "box(fixnum)" } "parse-time conditional selects fixnum" assert=

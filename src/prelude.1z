@@ -25,6 +25,12 @@ S{: parse-time [ "}" parse-until make-set ] ;
 \\ Mutable map literal syntax.
 M{: parse-time [ "}" parse-until make-mutable-map: emit-call ] ;
 
+\\ Bind type parameters onto a base type in a struct field or enum variant slot.
+\\
+\\ Reads a `}`-delimited body, executes it at parse time, and packages the resulting type values
+\\ into a placeholder that the field/variant parser combines with the base type immediately before it.
+bind{: parse-time [ "}" bind-until ] ;
+
 \ Built-in type values
 fixnum:    M{ type: builtin-type: numeric: t exact: t integer: t mutable: f define: [ define-builtin-type ] } ;
 bignum:    M{ type: builtin-type: numeric: t exact: t integer: t mutable: f define: [ define-builtin-type ] } ;
@@ -1214,6 +1220,15 @@ descriptor-inner-type?: ( descriptor -- option ) [
 \\ Parent type for an enum-variant descriptor, or option:none.
 descriptor-parent?: ( descriptor -- option ) [
   [ native.descriptor-parent-raw >option:some ] [ drop option:none ] recover
+] ;
+
+\\ Declared or bound type parameters of a struct or parameterized descriptor, or option:none
+\\ when the descriptor declares none.
+\\
+\\ Struct descriptors return their declared parameter holes. Parameterized virtual descriptors
+\\ return the bound tuple (i.e., a mix of concrete types and still-open parameter holes).
+descriptor-type-params?: ( descriptor -- option ) [
+  [ native.descriptor-type-params-raw >option:some ] [ drop option:none ] recover
 ] ;
 
 \\ Variants of an enum descriptor as an array of descriptor-variant structs,

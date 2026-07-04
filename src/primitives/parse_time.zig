@@ -7,6 +7,7 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 
 const helpers = @import("helpers.zig");
+const markers = @import("markers.zig");
 const Primitive = @import("types.zig").Primitive;
 
 const popString = helpers.popString;
@@ -16,6 +17,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "parse-until", .stack_effect = "delimiter -- quotation", .doc = "Read tokens until delimiter, return as quotation.", .func = nativeParseUntil, .parse_time_only = true },
     .{ .name = "parse-tokens-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, return as string array.", .func = nativeParseTokensUntil, .parse_time_only = true },
     .{ .name = "parse-values-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Return as array.", .func = nativeParseValuesUntil, .parse_time_only = true },
+    .{ .name = "bind-until", .stack_effect = "delimiter -- placeholder", .doc = "Read a bind{ ... } body until delimiter, execute it at parse time, and package the resulting type values into a binding placeholder array for the enclosing field/variant parser.", .func = nativeBindUntil, .parse_time_only = true },
     .{ .name = "parse-types-until", .stack_effect = "delimiter -- array", .doc = "Read tokens until delimiter, executing parse-time words. Unknown tokens are errors.", .func = nativeParseTypesUntil, .parse_time_only = true },
     .{ .name = "parse-token", .stack_effect = "-- string", .doc = "Read one raw token from the tokenizer, skipping comments and whitespace.", .func = nativeParseToken, .parse_time_only = true },
     .{ .name = "peek-token", .stack_effect = "-- string", .doc = "Return the next token without consuming it. Repeated calls return the same token until parse-token or another consuming primitive advances past it.", .func = nativePeekToken, .parse_time_only = true },
@@ -172,6 +174,40 @@ pub fn nativeParseUntil(ctx: *Context) anyerror!void {
     const quot = parser.parseQuotationUntil(ctx.quotationAllocator(), tokenizer, ctx, delimiter, 0) catch return error.OutOfMemory;
 
     try ctx.stack.push(.{ .quotation = quot });
+}
+
+/// bind-until ( delimiter -- placeholder ) - Read a `bind{ ... }` body up to the
+/// delimiter, execute it at parse time, and package the resulting stack values
+/// into a placeholder array headed by `bind_placeholder_marker`.
+///
+/// The base type this binds is not on the stack: it was already drained into the
+/// enclosing definition's `parse-values-until` collection array before `bind{`
+/// ran. So the placeholder carries only the body's parameters; the field/variant
+/// parser combines it with the adjacent base.
+fn nativeBindUntil(ctx: *Context) anyerror!void {
+    const delimiter = try popString(ctx);
+    const tokenizer = ctx.parse_tokenizer.?;
+    const alloc = ctx.quotationAllocator();
+
+    const quot = parser.parseQuotationUntil(alloc, tokenizer, ctx, delimiter, 0) catch return error.OutOfMemory;
+
+    // The body runs with full data-stack access, so permissive contents
+    // (`choose`, `if`, arithmetic) work. Each value it leaves is one positional
+    // parameter: a `.symbol` for `T:`, or a `.type_val` for a concrete/computed type.
+    const pre = ctx.stack.depth();
+    try ctx.executeQuotation(quot);
+    const post = ctx.stack.depth();
+    const n = post - pre;
+
+    const placeholder = try alloc.alloc(Value, n + 1);
+    placeholder[0] = .{ .marker = @constCast(&markers.bind_placeholder_marker) };
+    // The stack holds the body's results in reverse source order; fill the tail
+    // so `placeholder[1]` is the first-pushed (leftmost) value, position 0.
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        placeholder[n - i] = try ctx.stack.pop();
+    }
+    try ctx.stack.push(.{ .array = placeholder });
 }
 
 /// parse-tokens-until ( delimiter -- array ) - Read tokens until delimiter, return as string array

@@ -1083,7 +1083,7 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                     // bound `type_params` tuple.
                     const field_types: []const ?value_mod.ConstraintCombinator.Element = blk: {
                         const base = vt.base_type orelse break :blk &.{};
-                        const root = rootStructTypeValue(base) orelse break :blk &.{};
+                        const root = ctx.rootStructTypeValue(base) orelse break :blk &.{};
                         break :blk switch (root.descriptor.?.kind) {
                             .struct_ => |sd| sd.field_types,
                             else => &.{},
@@ -1137,50 +1137,8 @@ pub fn defineParameterizedWrap(ctx: *Context, name: []const u8, vtype: *const Vi
     });
 }
 
-/// Walk a base TypeValue to the struct that ultimately backs it, following
-/// `.virtual` descriptors through their inner type. Returns the struct's
-/// TypeValue, or null when the root is not a struct (e.g. a refinement base
-/// like `array`, whose root is a builtin).
-fn rootStructTypeValue(tv: *const value_mod.TypeValue) ?*const value_mod.TypeValue {
-    var cur = tv;
-    while (true) {
-        const desc = cur.descriptor orelse return null;
-        switch (desc.kind) {
-            .struct_ => return cur,
-            .virtual => |vd| cur = vd.inner_type orelse return null,
-            else => return null,
-        }
-    }
-}
-
-/// Resolve a base type's parameter view for binding: the `declared` list carries
-/// the canonical parameter names and positions (from the root struct), and
-/// `current` carries the base's present bound/unbound tuple. For a bare struct
-/// the two coincide (every slot unbound). For a partially-bound virtual base,
-/// `current` is the wrapper's `type_params` and `declared` is the root struct's.
-/// Both are position-indexed identically, so `declared.len == current.len` and a
-/// declared index maps directly to a current index.
-const BaseParams = struct {
-    declared: []const *const value_mod.TypeValue,
-    current: []const *const value_mod.TypeValue,
-};
-
-fn resolveBaseParams(base_tv: *const value_mod.TypeValue) BaseParams {
-    const desc = base_tv.descriptor orelse return .{ .declared = &.{}, .current = &.{} };
-    switch (desc.kind) {
-        .struct_ => |sd| return .{ .declared = sd.type_params, .current = sd.type_params },
-        .virtual => |vd| {
-            const root = rootStructTypeValue(base_tv) orelse
-                return .{ .declared = &.{}, .current = vd.type_params };
-            const declared = switch (root.descriptor.?.kind) {
-                .struct_ => |sd| sd.type_params,
-                else => &[_]*const value_mod.TypeValue{},
-            };
-            return .{ .declared = declared, .current = vd.type_params };
-        },
-        else => return .{ .declared = &.{}, .current = &.{} },
-    }
-}
+// `rootStructTypeValue` and `resolveBaseParams` moved to `Context` so
+// `struct_field_spec.parse` can share the same base-parameter resolution.
 
 /// Bind a base type's type parameters from a `type-params:` hash, producing the
 /// positional `type_params` tuple. The hash maps parameter names to concrete
@@ -1204,7 +1162,7 @@ fn bindTypeParams(
         },
     };
 
-    const base = resolveBaseParams(base_tv);
+    const base = ctx.resolveBaseParams(base_tv);
 
     // Every hash key must name a declared parameter that is still unbound.
     var it = tp_hash.iterator();
@@ -1321,7 +1279,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
         .name = name,
         // A struct-backed virtual base wraps values of the root struct, not the
         // wrapper, so the wrap type-check compares against the root struct name.
-        .inner_type = if (rootStructTypeValue(base_tv)) |root| root.name else base_tv.name,
+        .inner_type = if (ctx.rootStructTypeValue(base_tv)) |root| root.name else base_tv.name,
         .base_type = base_tv,
         .type_params = type_params,
     };

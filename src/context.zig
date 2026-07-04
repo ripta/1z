@@ -2892,6 +2892,54 @@ pub const Context = struct {
         self.protocol_satisfies_cache.put(self.allocator, key, value) catch {};
     }
 
+    /// Walk a base TypeValue to the struct that ultimately backs it, following virtual descriptors
+    /// through to their inner type.
+    ///
+    /// Returns the struct's TypeValue, or null when the root is not a struct. `self` is unused.
+    /// The method form keeps the parameter-binding helpers.
+    pub fn rootStructTypeValue(_: *const Context, tv: *const value_mod.TypeValue) ?*const value_mod.TypeValue {
+        var cur = tv;
+        while (true) {
+            const desc = cur.descriptor orelse return null;
+            switch (desc.kind) {
+                .struct_ => return cur,
+                .virtual => |vd| cur = vd.inner_type orelse return null,
+                else => return null,
+            }
+        }
+    }
+
+    /// A base type's parameter view for binding:
+    ///
+    /// - the `declared` list carries the canonical parameter names and positions; and
+    /// - `current` carries the base's present bound/unbound tuple.
+    ///
+    /// For a bare struct the two coïncide.
+    ///
+    /// For a partially-bound virtual base, `current` is the wrapper's `type_params` and
+    /// `declared` is the root struct's.
+    pub const BaseParams = struct {
+        declared: []const *const value_mod.TypeValue,
+        current: []const *const value_mod.TypeValue,
+    };
+
+    pub fn resolveBaseParams(self: *const Context, base_tv: *const value_mod.TypeValue) BaseParams {
+        const desc = base_tv.descriptor orelse return .{ .declared = &.{}, .current = &.{} };
+        switch (desc.kind) {
+            .struct_ => |sd| return .{ .declared = sd.type_params, .current = sd.type_params },
+            .virtual => |vd| {
+                const root = self.rootStructTypeValue(base_tv) orelse
+                    return .{ .declared = &.{}, .current = vd.type_params };
+                const declared = switch (root.descriptor.?.kind) {
+                    .struct_ => |sd| sd.type_params,
+                    else => &[_]*const value_mod.TypeValue{},
+                };
+                return .{ .declared = declared, .current = vd.type_params };
+            },
+            else => return .{ .declared = &.{}, .current = &.{} },
+        }
+    }
+
     pub fn getOrCreateParameterizedTypeDescriptor(
         self: *Context,
         base: *const value_mod.TypeValue,
@@ -2923,14 +2971,37 @@ pub const Context = struct {
         return desc;
     }
 
-    /// Collect the distinct type parameters referenced by a struct's field
-    /// types, ordered by first appearance. Only bare `.type` elements that are
-    /// type-parameter holes count; a parameter shared by several fields is
+    /// Collect the distinct type parameters referenced by a type, ordered by first appearance,
+    /// appending into `params` and deduped by pointer.
+    ///
+    /// A bare type-parameter hole is collected directly; a parameterized virtual type is walked so
+    /// parameters buried in its type_params tuple are surfaced too.
+    ///
+    /// Concrete types contribute nothing.
+    fn collectTypeParams(alloc: std.mem.Allocator, params: *std.ArrayListUnmanaged(*const value_mod.TypeValue), tv: *const value_mod.TypeValue) !void {
+        if (value_mod.isTypeParameter(tv)) {
+            const seen = for (params.items) |p| {
+                if (p == tv) break true;
+            } else false;
+            if (!seen) try params.append(alloc, tv);
+            return;
+        }
+        const desc = tv.descriptor orelse return;
+        switch (desc.kind) {
+            .virtual => |vd| {
+                for (vd.type_params) |p| try collectTypeParams(alloc, params, p);
+            },
+            else => {},
+        }
+    }
+
+    /// Collect the distinct type parameters referenced by a struct's field types, ordered by first
+    /// appearance.
+    ///
+    /// A field typed as a bare parameter hole, or as a parameterized type carrying parameter holes
+    /// in its type_params, contributes its parameters. A parameter shared by several fields is
     /// returned once. Returns an empty slice for a concrete struct.
-    fn deriveStructTypeParams(
-        alloc: std.mem.Allocator,
-        field_types: []const ?value_mod.ConstraintCombinator.Element,
-    ) ![]const *const value_mod.TypeValue {
+    fn deriveStructTypeParams(alloc: std.mem.Allocator, field_types: []const ?value_mod.ConstraintCombinator.Element) ![]const *const value_mod.TypeValue {
         var params = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
         errdefer params.deinit(alloc);
         for (field_types) |ft| {
@@ -2939,11 +3010,7 @@ pub const Context = struct {
                 .type => |t| t,
                 else => continue,
             };
-            if (!value_mod.isTypeParameter(tv)) continue;
-            const seen = for (params.items) |p| {
-                if (p == tv) break true;
-            } else false;
-            if (!seen) try params.append(alloc, tv);
+            try collectTypeParams(alloc, &params, tv);
         }
         if (params.items.len == 0) {
             params.deinit(alloc);
