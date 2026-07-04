@@ -42,6 +42,10 @@ pub const ExecFlags = packed struct {
     empty_compound_body: bool = false,
     /// Type-annotation validation is skippable (generic + empty body).
     skip_type_validation: bool = false,
+    /// Some input parameter carries a quotation effect worth validating.
+    has_param_effects: bool = false,
+    /// Some input parameter carries a type annotation worth validating.
+    has_type_annotations: bool = false,
 };
 
 /// Word definition: either a native function or compound quotation.

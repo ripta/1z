@@ -108,6 +108,12 @@ fn computeExecFlags(def: WordDefinition) dict_mod.ExecFlags {
         .native, .host_callback => false,
     };
     flags.skip_type_validation = flags.is_generic and flags.empty_compound_body;
+    if (def.stack_effect) |eff| {
+        for (eff.inputs) |param| {
+            if (param.quotation_effect != null) flags.has_param_effects = true;
+            if (param.type_annotation != null) flags.has_type_annotations = true;
+        }
+    }
     return flags;
 }
 
@@ -4831,11 +4837,13 @@ pub const Context = struct {
         };
         if (effective_word_id) |wid| {
             if (word.stack_effect) |effect| {
-                self.validateParameterEffects(&effect) catch |err| {
-                    self.pushCallFrame(name, self.current_source, instr.line, instr.column);
-                    return self.wordErrorCleanup(name, err);
-                };
-                if (!word.exec_flags.skip_type_validation) {
+                if (word.exec_flags.has_param_effects) {
+                    self.validateParameterEffects(&effect) catch |err| {
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        return self.wordErrorCleanup(name, err);
+                    };
+                }
+                if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
                     self.validateTypeAnnotations(&effect) catch |err| {
                         self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                         return self.wordErrorCleanup(name, err);
@@ -4881,9 +4889,11 @@ pub const Context = struct {
         self.traceWordExecution(name, instr);
 
         if (word.stack_effect) |effect| {
-            self.validateParameterEffects(&effect) catch |err|
-                return self.wordErrorCleanup(name, err);
-            if (!word.exec_flags.skip_type_validation) {
+            if (word.exec_flags.has_param_effects) {
+                self.validateParameterEffects(&effect) catch |err|
+                    return self.wordErrorCleanup(name, err);
+            }
+            if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
                 self.validateTypeAnnotations(&effect) catch |err|
                     return self.wordErrorCleanup(name, err);
             }
@@ -6891,6 +6901,58 @@ test "computeExecFlags: generic word with non-empty body does not skip validatio
     try std.testing.expect(flags.is_generic);
     try std.testing.expect(!flags.empty_compound_body);
     try std.testing.expect(!flags.skip_type_validation);
+}
+
+test "computeExecFlags: input with a quotation effect sets has_param_effects only" {
+    const quot_effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+    const inputs = [_]StackEffectParam{.{ .name = "q", .quotation_effect = &quot_effect }};
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    const def = WordDefinition{
+        .name = "with-quot",
+        .stack_effect = .{ .inputs = &inputs, .outputs = &.{} },
+        .action = .{ .compound = &body },
+    };
+    const flags = computeExecFlags(def);
+    try std.testing.expect(flags.has_param_effects);
+    try std.testing.expect(!flags.has_type_annotations);
+}
+
+test "computeExecFlags: input with a type annotation sets has_type_annotations only" {
+    const dummy_tv = value_mod.TypeValue{ .name = "dummy", .descriptor = null };
+    const inputs = [_]StackEffectParam{.{ .name = "n", .type_annotation = .{ .type = &dummy_tv } }};
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    const def = WordDefinition{
+        .name = "with-type",
+        .stack_effect = .{ .inputs = &inputs, .outputs = &.{} },
+        .action = .{ .compound = &body },
+    };
+    const flags = computeExecFlags(def);
+    try std.testing.expect(flags.has_type_annotations);
+    try std.testing.expect(!flags.has_param_effects);
+}
+
+test "computeExecFlags: plain untyped inputs set neither validation flag" {
+    const inputs = [_]StackEffectParam{ .{ .name = "a" }, .{ .name = "b" } };
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    const def = WordDefinition{
+        .name = "untyped",
+        .stack_effect = .{ .inputs = &inputs, .outputs = &.{} },
+        .action = .{ .compound = &body },
+    };
+    const flags = computeExecFlags(def);
+    try std.testing.expect(!flags.has_param_effects);
+    try std.testing.expect(!flags.has_type_annotations);
+}
+
+test "computeExecFlags: no stack effect sets neither validation flag" {
+    const body = [_]Instruction{.{ .op = .{ .call_word = "noop" }, .line = 0 }};
+    const def = WordDefinition{
+        .name = "no-effect",
+        .action = .{ .compound = &body },
+    };
+    const flags = computeExecFlags(def);
+    try std.testing.expect(!flags.has_param_effects);
+    try std.testing.expect(!flags.has_type_annotations);
 }
 
 test "defineWord: exec_flags populated and recomputed on redefinition" {
