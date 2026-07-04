@@ -1,0 +1,33 @@
+use "testing" ;
+
+\ Combinator-entry contention benchmark for the frame-lock removal.
+\
+\ This spawns many tasks that each churn combinator frames concurrently. Under
+\ the shared write lock, every combinator frame push / pop across all workers
+\ serializes on one global lock; after 349.4 the transient push / pop takes no
+\ lock.
+\
+\ Run under `--threads=auto --compile=off` and compare the benchmark `user_ns`
+\ before vs after the lock removal.
+
+\\ `call` and `if` each push and pop a transient local frame. `times` drives the
+\\ inner loop, itself a combinator. Each task issues a long, tight run of frame
+\\ operations; running roughly two such tasks per worker keeps every worker
+\\ hammering the frame-entry path in parallel, which is what contends on the
+\\ shared lock in the pre-349.4 build. The task count is kept low so scheduler /
+\\ spawn overhead does not swamp the frame-lock signal.
+churn: ( -- ) [
+  1500 [
+    5 [ 1 + ] call drop
+    2 3 < [ 10 ] [ 20 ] if drop
+    7 [ 2 * ] call drop
+  ] times
+] ;
+
+[
+  28 [
+    [ churn ] spawn drop
+  ] times
+] task-scope
+
+t "combinator contention benchmark completed" assert-true
