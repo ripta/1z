@@ -36,5 +36,8 @@ lower: ( node: expr-node -- quotation ) [
       (BINOP-QUOTS) swap @get  \ ( [ L R ] [op] )
       compose                  \ ( [ L R op ] )
     ]
+    expr-node:invoke: [  \ ( callee args )
+      drop drop f "invoke lowering not yet implemented" throw
+    ]
   }
 ] ;

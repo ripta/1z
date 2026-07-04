@@ -15,12 +15,16 @@ unop-node: struct{ op operand } ;
 \\ A binary-operator node: an operator string and its left and right operand nodes.
 binop-node: struct{ op left right } ;
 
+\\ An invoke node: a callee word name and the list of argument-expression nodes.
+invoke-node: struct{ callee args } ;
+
 \\ The tagged union of expression node kinds. Dispatch over it with `match{`,
 \\ which forces every site to handle each variant or fail at parse time.
 expr-node: enum{
-  lit:   lit-node
-  unop:  unop-node
-  binop: binop-node
+  lit:    lit-node
+  unop:   unop-node
+  binop:  binop-node
+  invoke: invoke-node
 } ;
 
 \\ Wrap a scalar value as a literal node. The value is left untyped so any
@@ -34,6 +38,11 @@ unop: ( op: string operand: expr-node -- expr-node ) [ make-expr-node:unop ] ;
 \\ operand nodes.
 binop: ( op: string left: expr-node right: expr-node -- expr-node ) [ make-expr-node:binop ] ;
 
+\\ Build an invoke node from a callee word name and its list of
+\\ argument-expression nodes. The node kind is `invoke` rather than `call` to
+\\ avoid shadowing the `call` combinator that executes quotations.
+invoke: ( callee: string args -- expr-node ) [ make-expr-node:invoke ] ;
+
 \\ True when the node is a scalar literal; returns f for any other value.
 lit?: ( expr-node -- bool ) [ expr-node:lit? ] ;
 
@@ -42,3 +51,6 @@ unop?: ( expr-node -- bool ) [ expr-node:unop? ] ;
 
 \\ True when the node is a binary-operator node; returns f for any other value.
 binop?: ( expr-node -- bool ) [ expr-node:binop? ] ;
+
+\\ True when the node is an invoke node; returns f for any other value.
+invoke?: ( expr-node -- bool ) [ expr-node:invoke? ] ;

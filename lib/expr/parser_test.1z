@@ -9,27 +9,30 @@ use "expr/ast" ;
 \ Extract a literal node's value, throwing on any other node kind.
 lit-value: ( expr-node -- value ) [
   match{
-    expr-node:lit:   [ ]
-    expr-node:unop:  [ drop drop f "expected lit, got unop" throw ]
-    expr-node:binop: [ drop drop drop f "expected lit, got binop" throw ]
+    expr-node:lit:    [ ]
+    expr-node:unop:   [ drop drop f "expected lit, got unop" throw ]
+    expr-node:binop:  [ drop drop drop f "expected lit, got binop" throw ]
+    expr-node:invoke: [ drop drop f "expected lit, got invoke" throw ]
   }
 ] ;
 
 \ Extract a unary node's operator and operand, throwing on any other node kind.
 unop-parts: ( expr-node -- op operand ) [
   match{
-    expr-node:lit:   [ drop f "expected unop, got lit" throw ]
-    expr-node:unop:  [ ]
-    expr-node:binop: [ drop drop drop f "expected unop, got binop" throw ]
+    expr-node:lit:    [ drop f "expected unop, got lit" throw ]
+    expr-node:unop:   [ ]
+    expr-node:binop:  [ drop drop drop f "expected unop, got binop" throw ]
+    expr-node:invoke: [ drop drop f "expected unop, got invoke" throw ]
   }
 ] ;
 
 \ Extract a binary node's operator and operands, throwing on any other node kind.
 binop-parts: ( expr-node -- op left right ) [
   match{
-    expr-node:lit:   [ drop f "expected binop, got lit" throw ]
-    expr-node:unop:  [ drop drop f "expected binop, got unop" throw ]
-    expr-node:binop: [ ]
+    expr-node:lit:    [ drop f "expected binop, got lit" throw ]
+    expr-node:unop:   [ drop drop f "expected binop, got unop" throw ]
+    expr-node:binop:  [ ]
+    expr-node:invoke: [ drop drop f "expected binop, got invoke" throw ]
   }
 ] ;
 

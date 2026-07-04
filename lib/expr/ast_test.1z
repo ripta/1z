@@ -6,9 +6,10 @@ use "expr/ast" ;
 \\ Extract a literal node's value, throwing on any other node kind.
 expr-lit-value: ( expr-node -- value ) [
   match{
-    expr-node:lit:   [ ]
-    expr-node:unop:  [ drop drop f "expected lit, got unop" throw ]
-    expr-node:binop: [ drop drop drop f "expected lit, got binop" throw ]
+    expr-node:lit:    [ ]
+    expr-node:unop:   [ drop drop f "expected lit, got unop" throw ]
+    expr-node:binop:  [ drop drop drop f "expected lit, got binop" throw ]
+    expr-node:invoke: [ drop drop f "expected lit, got invoke" throw ]
   }
 ] ;
 
@@ -36,9 +37,10 @@ test-binop-predicate: ( -- ) [
 
 test-lit-value: ( -- ) [
   42 lit match{
-    expr-node:lit:   [ ]
-    expr-node:unop:  [ drop drop f throw ]
-    expr-node:binop: [ drop drop drop f throw ]
+    expr-node:lit:    [ ]
+    expr-node:unop:   [ drop drop f throw ]
+    expr-node:binop:  [ drop drop drop f throw ]
+    expr-node:invoke: [ drop drop f throw ]
   } 42 "lit unwraps to its value" assert=
 ] ;
 
@@ -53,6 +55,7 @@ test-unop-payload: ( -- ) [
       7 "unop carries its operand" assert=
     ]
     expr-node:binop: [ drop drop drop f throw ]
+    expr-node:invoke: [ drop drop f throw ]
   }
 ] ;
 
@@ -69,6 +72,7 @@ test-binop-payload: ( -- ) [
       4 "binop right operand" assert=  \ ( op )
       "+" "binop operator" assert=     \ ( )
     ]
+    expr-node:invoke: [ drop drop f throw ]
   }
 ] ;
 
@@ -89,6 +93,7 @@ test-binop-nested: ( -- ) [
       binop? "outer binop left is itself a binop" assert-true
       "+" "outer binop operator" assert=
     ]
+    expr-node:invoke: [ drop drop f throw ]
   }
 ] ;
 
@@ -102,4 +107,63 @@ test-binop-alias-matches-raw: ( -- ) [
   "*" 5 lit 6 lit binop
   "*" 5 lit 6 lit make-expr-node:binop
   = "binop alias equals raw make" assert-true
+] ;
+
+"invoke node" test-section
+
+\ Build an invoke node with a single literal argument, used across the tests.
+one-arg-invoke: ( -- expr-node ) [ "add1" 2 lit 1 array-n invoke ] ;
+
+test-invoke-predicate: ( -- ) [
+  one-arg-invoke invoke? "invoke node is an invoke" assert-true
+  one-arg-invoke lit? "invoke node is not a lit" assert-false
+  one-arg-invoke unop? "invoke node is not a unop" assert-false
+  one-arg-invoke binop? "invoke node is not a binop" assert-false
+  42 lit invoke? "lit node is not an invoke" assert-false
+  "-" 42 lit unop invoke? "unop node is not an invoke" assert-false
+  "+" 1 lit 2 lit binop invoke? "binop node is not an invoke" assert-false
+] ;
+
+test-invoke-payload: ( -- ) [
+  "add1" 2 lit 3 lit 2 array-n invoke match{
+    expr-node:lit:    [ drop f throw ]
+    expr-node:unop:   [ drop drop f throw ]
+    expr-node:binop:  [ drop drop drop f throw ]
+    expr-node:invoke: [  \ ( callee args )
+      dup #len 2 "invoke carries two arguments" assert=
+      0 #nth expr-lit-value 2 "invoke first argument" assert=  \ ( callee )
+      "add1" "invoke carries its callee name" assert=
+    ]
+  }
+] ;
+
+test-invoke-arg-nesting: ( -- ) [
+  "f" "+" 1 lit 2 lit binop 1 array-n invoke match{
+    expr-node:lit:    [ drop f throw ]
+    expr-node:unop:   [ drop drop f throw ]
+    expr-node:binop:  [ drop drop drop f throw ]
+    expr-node:invoke: [  \ ( callee args )
+      dup #len 1 "invoke carries one argument" assert=
+      0 #nth binop? "invoke argument is itself a binop" assert-true
+      drop
+    ]
+  }
+] ;
+
+test-invoke-zero-args: ( -- ) [
+  "now" 0 array-n invoke match{
+    expr-node:lit:    [ drop f throw ]
+    expr-node:unop:   [ drop drop f throw ]
+    expr-node:binop:  [ drop drop drop f throw ]
+    expr-node:invoke: [  \ ( callee args )
+      #len 0 "zero-argument invoke has empty arg list" assert=
+      "now" "zero-argument invoke carries its callee" assert=
+    ]
+  }
+] ;
+
+test-invoke-alias-matches-raw: ( -- ) [
+  "g" 0 array-n invoke
+  "g" 0 array-n make-expr-node:invoke
+  = "invoke alias equals raw make" assert-true
 ] ;
