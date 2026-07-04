@@ -95,7 +95,7 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 
 /// Compute the constant-per-word `ExecFlags` from a definition's markers and
 /// action. Called at definition finalization so the flags ride the by-value
-/// execution copy. Uses the same predicates the per-call sites use.
+/// execution copy that `executeResolvedWord` reads on the hot path.
 fn computeExecFlags(def: WordDefinition) dict_mod.ExecFlags {
     var flags: dict_mod.ExecFlags = .{};
     for (def.markers) |mk| {
@@ -109,18 +109,6 @@ fn computeExecFlags(def: WordDefinition) dict_mod.ExecFlags {
     };
     flags.skip_type_validation = flags.is_generic and flags.empty_compound_body;
     return flags;
-}
-
-fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
-    const has_generic = for (word.markers) |mk| {
-        if (markers_mod.isGenericMarker(mk)) break true;
-    } else false;
-    if (!has_generic) return false;
-
-    return switch (word.action) {
-        .compound => |instrs| instrs.len == 0,
-        .native, .host_callback => false,
-    };
 }
 
 /// PragmaRegistration holds metadata for a registered pragma key.
@@ -1451,6 +1439,33 @@ pub const Context = struct {
         }
     }
 
+    /// Build the frame `WordDefinition` for a module dep/word entry. The
+    /// synthesized definition carries computed `exec_flags` so the hot
+    /// `executeResolvedWord` path reads correct bits for module-frame words,
+    /// which are resolved here rather than through the definition finalization
+    /// points.
+    fn moduleWordFrameDef(
+        name: []const u8,
+        mod_word: value_mod.ModuleWord,
+        module: *const value_mod.Module,
+    ) WordDefinition {
+        var def: WordDefinition = .{
+            .name = name,
+            .stack_effect = mod_word.stack_effect,
+            .markers = mod_word.markers,
+            .source_module = mod_word.source_module orelse module,
+            .capability = mod_word.capability,
+            .dispatch_id = mod_word.dispatch_id,
+            .action = switch (mod_word.action) {
+                .compound => |instrs| .{ .compound = instrs },
+                .native => |func| .{ .native = func },
+                .host_callback => |host| .{ .host_callback = host },
+            },
+        };
+        def.exec_flags = computeExecFlags(def);
+        return def;
+    }
+
     /// Push a local frame populated with a module's deps and words.
     /// This makes the module's dependencies available for late-binding
     /// resolution when executing the module's own words.
@@ -1465,36 +1480,12 @@ pub const Context = struct {
 
         var dep_iter = module.deps.iterator();
         while (dep_iter.next()) |entry| {
-            try frame.put(self.allocator, entry.key_ptr.*, .{
-                .name = entry.key_ptr.*,
-                .stack_effect = entry.value_ptr.*.stack_effect,
-                .markers = entry.value_ptr.*.markers,
-                .source_module = entry.value_ptr.*.source_module orelse module,
-                .capability = entry.value_ptr.*.capability,
-                .dispatch_id = entry.value_ptr.*.dispatch_id,
-                .action = switch (entry.value_ptr.*.action) {
-                    .compound => |instrs| .{ .compound = instrs },
-                    .native => |func| .{ .native = func },
-                    .host_callback => |host| .{ .host_callback = host },
-                },
-            });
+            try frame.put(self.allocator, entry.key_ptr.*, moduleWordFrameDef(entry.key_ptr.*, entry.value_ptr.*, module));
         }
 
         var word_iter = module.words.iterator();
         while (word_iter.next()) |entry| {
-            try frame.put(self.allocator, entry.key_ptr.*, .{
-                .name = entry.key_ptr.*,
-                .stack_effect = entry.value_ptr.*.stack_effect,
-                .markers = entry.value_ptr.*.markers,
-                .source_module = entry.value_ptr.*.source_module orelse module,
-                .capability = entry.value_ptr.*.capability,
-                .dispatch_id = entry.value_ptr.*.dispatch_id,
-                .action = switch (entry.value_ptr.*.action) {
-                    .compound => |instrs| .{ .compound = instrs },
-                    .native => |func| .{ .native = func },
-                    .host_callback => |host| .{ .host_callback = host },
-                },
-            });
+            try frame.put(self.allocator, entry.key_ptr.*, moduleWordFrameDef(entry.key_ptr.*, entry.value_ptr.*, module));
         }
 
         if (self.trace.trace_modules.deps) {
@@ -2058,7 +2049,7 @@ pub const Context = struct {
         mod_word: value_mod.ModuleWord,
         module: *const value_mod.Module,
     ) WordDefinition {
-        return .{
+        var def: WordDefinition = .{
             .name = name,
             .stack_effect = mod_word.stack_effect,
             .markers = mod_word.markers,
@@ -2077,6 +2068,11 @@ pub const Context = struct {
                 .host_callback => |host| .{ .host_callback = host },
             },
         };
+        // Module-cache words are synthesized fresh on each lookup rather than
+        // stored through the finalization points, so compute the flags here so
+        // `executeResolvedWord` reads correct bits for module-private words.
+        def.exec_flags = computeExecFlags(def);
+        return def;
     }
 
     /// Resolve a parse-time call reference to a stable dictionary slot
@@ -4828,11 +4824,7 @@ pub const Context = struct {
         // function runs. Restricted to empty bodies so real-bodied words -- including
         // quotation-calling combinators -- stay on the interpreter path unchanged.
         const effective_word_id: ?u32 = word.word_id orelse blk: {
-            const empty_body = switch (word.action) {
-                .compound => |b| b.len == 0,
-                else => false,
-            };
-            if (empty_body and self.runtime_image_loaded) {
+            if (word.exec_flags.empty_compound_body and self.runtime_image_loaded) {
                 break :blk backfillCompiledWordId(self, name);
             }
             break :blk null;
@@ -4843,7 +4835,7 @@ pub const Context = struct {
                     self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                     return self.wordErrorCleanup(name, err);
                 };
-                if (!shouldSkipTypeAnnotationValidation(word)) {
+                if (!word.exec_flags.skip_type_validation) {
                     self.validateTypeAnnotations(&effect) catch |err| {
                         self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                         return self.wordErrorCleanup(name, err);
@@ -4891,21 +4883,14 @@ pub const Context = struct {
         if (word.stack_effect) |effect| {
             self.validateParameterEffects(&effect) catch |err|
                 return self.wordErrorCleanup(name, err);
-            if (!shouldSkipTypeAnnotationValidation(word)) {
+            if (!word.exec_flags.skip_type_validation) {
                 self.validateTypeAnnotations(&effect) catch |err|
                     return self.wordErrorCleanup(name, err);
             }
         }
 
         if (word.action == .compound) {
-            const has_generic = blk: {
-                for (word.markers) |mk| {
-                    if (markers_mod.isGenericMarker(mk)) break :blk true;
-                }
-                break :blk false;
-            };
-
-            if (has_generic) {
+            if (word.exec_flags.is_generic) {
                 const pic_entry = if (pic_table) |pt| pt.get(idx) else null;
                 const dispatched = dispatch_helpers.tryDispatchGenericById(self, word.dispatch_id, pic_entry) catch |err|
                     return self.wordErrorCleanup(name, err);
@@ -4922,16 +4907,8 @@ pub const Context = struct {
             }
 
             if (!self.allow_all_recursion) {
-                const has_non_tco = for (word.markers) |mk| {
-                    if (mk == &markers_mod.recursive_non_tco_marker) break true;
-                } else false;
-
-                if (has_non_tco) {
-                    const has_stack_recursive = for (word.markers) |mk| {
-                        if (markers_mod.isStackRecursiveMarker(mk)) break true;
-                    } else false;
-
-                    if (!has_stack_recursive) {
+                if (word.exec_flags.recursive_non_tco) {
+                    if (!word.exec_flags.stack_recursive) {
                         self.pending_error_message = "word has recursive-non-tco marker but lacks stack-recursive marker";
                         return self.wordErrorCleanup(name, error.NonTailRecursion);
                     }
@@ -6938,4 +6915,31 @@ test "defineWord: exec_flags populated and recomputed on redefinition" {
     try std.testing.expect(second.exec_flags.is_generic);
     try std.testing.expect(second.exec_flags.empty_compound_body);
     try std.testing.expect(second.exec_flags.skip_type_validation);
+}
+
+test "wordDefFromModuleWord: synthesized definition carries computed exec_flags" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+
+    // A generic, empty-bodied module word must skip type validation, matching
+    // computeExecFlags rather than the all-false default.
+    const gen_def = Context.wordDefFromModuleWord("gen", .{
+        .source_module = &module,
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
+        .action = .{ .compound = &.{} },
+    }, &module);
+    try std.testing.expect(gen_def.exec_flags.is_generic);
+    try std.testing.expect(gen_def.exec_flags.empty_compound_body);
+    try std.testing.expect(gen_def.exec_flags.skip_type_validation);
+
+    // A plain native module word has no flags set.
+    const nat_def = Context.wordDefFromModuleWord("nat", .{
+        .source_module = &module,
+        .action = .{ .native = noop },
+    }, &module);
+    try std.testing.expect(!nat_def.exec_flags.is_generic);
+    try std.testing.expect(!nat_def.exec_flags.empty_compound_body);
+    try std.testing.expect(!nat_def.exec_flags.skip_type_validation);
 }
