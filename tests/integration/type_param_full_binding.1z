@@ -43,9 +43,6 @@ person2(fixnum,string): M{
 [ "bad-value(x): M{ inner-type: person type-params: H{ T: 42 U: string } define: [ define-parameterized-type ] } ;" eval-string ]
 "non-TypeValue binding value is rejected" assert-error
 
-[ "bad-missing(x): M{ inner-type: person type-params: H{ T: fixnum } define: [ define-parameterized-type ] } ;" eval-string ]
-"missing parameter in full binding is rejected" assert-error
-
 "refinement path is unchanged" test-section
 
 array(fixnum): M{ inner-type: array element-type: fixnum define: [ define-parameterized-type ] } ;

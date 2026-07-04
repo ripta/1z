@@ -1,0 +1,48 @@
+use "testing" ;
+
+"partial binding leaves parameters open" test-section
+
+person: struct{ id: T: age: U: } ;
+
+\ Bind only U; T stays open.
+precise-person: M{
+  inner-type:  person
+  type-params: H{ U: float }
+  define:      [ define-parameterized-type ]
+} ;
+
+precise-person native.type-name
+"precise-person" "partial binding defines a named type" assert=
+
+\ The bound slot (age: U -> float) is validated; the open slot (id: T) is permissive.
+"anything" 3.14 make-person >precise-person precise-person?
+"open T accepts any id while bound U accepts a float age" assert-true
+
+[ "anything" "notfloat" make-person >precise-person ]
+"bound U rejects a non-float age" assert-error
+
+"completing a partial binding" test-section
+
+\ Complete the open T using the partially-bound type as the base.
+named-precise-person: M{
+  inner-type:  precise-person
+  type-params: H{ T: string }
+  define:      [ define-parameterized-type ]
+} ;
+
+named-precise-person native.type-name
+"named-precise-person" "completing the binding defines a named type" assert=
+
+"alice" 3.14 make-person >named-precise-person named-precise-person?
+"fully bound type validates both fields" assert-true
+
+[ 42 3.14 make-person >named-precise-person ]
+"completed T rejects a non-string id" assert-error
+
+"monotonic narrowing" test-section
+
+[ "rebind-u(x): M{ inner-type: precise-person type-params: H{ U: string } define: [ define-parameterized-type ] } ;" eval-string ]
+"rebinding an already-bound parameter is rejected" assert-error
+
+[ "unknown-on-partial(x): M{ inner-type: precise-person type-params: H{ Z: fixnum } define: [ define-parameterized-type ] } ;" eval-string ]
+"unknown key on a partial base is rejected" assert-error

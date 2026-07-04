@@ -1082,8 +1082,9 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                     // hold the parameter TypeValues, whose position indexes the
                     // bound `type_params` tuple.
                     const field_types: []const ?value_mod.ConstraintCombinator.Element = blk: {
-                        const base_desc = (vt.base_type orelse break :blk &.{}).descriptor orelse break :blk &.{};
-                        break :blk switch (base_desc.kind) {
+                        const base = vt.base_type orelse break :blk &.{};
+                        const root = rootStructTypeValue(base) orelse break :blk &.{};
+                        break :blk switch (root.descriptor.?.kind) {
                             .struct_ => |sd| sd.field_types,
                             else => &.{},
                         };
@@ -1136,20 +1137,58 @@ pub fn defineParameterizedWrap(ctx: *Context, name: []const u8, vtype: *const Vi
     });
 }
 
-/// Return the type parameters declared by a base type, ordered by position.
-/// Only a struct base carries declared parameters; other kinds have none.
-fn declaredTypeParams(base_tv: *const value_mod.TypeValue) []const *const value_mod.TypeValue {
-    const desc = base_tv.descriptor orelse return &.{};
-    return switch (desc.kind) {
-        .struct_ => |sd| sd.type_params,
-        else => &.{},
-    };
+/// Walk a base TypeValue to the struct that ultimately backs it, following
+/// `.virtual` descriptors through their inner type. Returns the struct's
+/// TypeValue, or null when the root is not a struct (e.g. a refinement base
+/// like `array`, whose root is a builtin).
+fn rootStructTypeValue(tv: *const value_mod.TypeValue) ?*const value_mod.TypeValue {
+    var cur = tv;
+    while (true) {
+        const desc = cur.descriptor orelse return null;
+        switch (desc.kind) {
+            .struct_ => return cur,
+            .virtual => |vd| cur = vd.inner_type orelse return null,
+            else => return null,
+        }
+    }
 }
 
-/// Bind a base type's declared type parameters from a `type-params:` hash,
-/// producing the positional `type_params` tuple. The hash maps declared
-/// parameter names to concrete TypeValues. Full binding: every declared
-/// parameter must be present; unknown keys and non-TypeValue values are errors.
+/// Resolve a base type's parameter view for binding: the `declared` list carries
+/// the canonical parameter names and positions (from the root struct), and
+/// `current` carries the base's present bound/unbound tuple. For a bare struct
+/// the two coincide (every slot unbound). For a partially-bound virtual base,
+/// `current` is the wrapper's `type_params` and `declared` is the root struct's.
+/// Both are position-indexed identically, so `declared.len == current.len` and a
+/// declared index maps directly to a current index.
+const BaseParams = struct {
+    declared: []const *const value_mod.TypeValue,
+    current: []const *const value_mod.TypeValue,
+};
+
+fn resolveBaseParams(base_tv: *const value_mod.TypeValue) BaseParams {
+    const desc = base_tv.descriptor orelse return .{ .declared = &.{}, .current = &.{} };
+    switch (desc.kind) {
+        .struct_ => |sd| return .{ .declared = sd.type_params, .current = sd.type_params },
+        .virtual => |vd| {
+            const root = rootStructTypeValue(base_tv) orelse
+                return .{ .declared = &.{}, .current = vd.type_params };
+            const declared = switch (root.descriptor.?.kind) {
+                .struct_ => |sd| sd.type_params,
+                else => &[_]*const value_mod.TypeValue{},
+            };
+            return .{ .declared = declared, .current = vd.type_params };
+        },
+        else => return .{ .declared = &.{}, .current = &.{} },
+    }
+}
+
+/// Bind a base type's type parameters from a `type-params:` hash, producing the
+/// positional `type_params` tuple. The hash maps parameter names to concrete
+/// TypeValues and may cover any subset of the base's still-unbound parameters
+/// (partial binding). Bound slots on the base are carried through unchanged;
+/// unbound slots not named in the hash stay unbound. Unknown keys, keys naming
+/// an already-bound parameter (monotonic narrowing), and non-TypeValue values
+/// are parse-time errors.
 fn bindTypeParams(
     ctx: *Context,
     base_tv: *const value_mod.TypeValue,
@@ -1165,35 +1204,42 @@ fn bindTypeParams(
         },
     };
 
-    const declared = declaredTypeParams(base_tv);
+    const base = resolveBaseParams(base_tv);
 
-    // Every hash key must name a declared parameter on the base.
+    // Every hash key must name a declared parameter that is still unbound.
     var it = tp_hash.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
-        const known = for (declared) |p| {
-            if (std.mem.eql(u8, p.name, key)) break true;
-        } else false;
-        if (!known) {
+        const idx = for (base.declared, 0..) |p, i| {
+            if (std.mem.eql(u8, p.name, key)) break i;
+        } else {
             helpers.setErrorContext(ctx, "define-parameterized-type: unknown type parameter '{s}' for base {s}", .{ key, base_tv.name });
+            return error.MissingField;
+        };
+        if (!value_mod.isTypeParameter(base.current[idx])) {
+            helpers.setErrorContext(ctx, "define-parameterized-type: type parameter '{s}' is already bound on base {s}", .{ key, base_tv.name });
             return error.MissingField;
         }
     }
 
-    // Fill positionally; full binding requires every declared parameter.
-    const params = try alloc.alloc(*const value_mod.TypeValue, declared.len);
-    for (declared, 0..) |p, i| {
-        const bound_val = tp_hash.get(p.name) orelse {
-            helpers.setErrorContext(ctx, "define-parameterized-type: missing binding for type parameter '{s}' on base {s}", .{ p.name, base_tv.name });
-            return error.MissingField;
-        };
-        params[i] = switch (bound_val) {
-            .type_val => |tv| tv,
-            else => {
-                helpers.setTypeMismatchError(ctx, "type", bound_val);
-                return error.TypeMismatch;
-            },
-        };
+    // Copy the base's current tuple, binding any unbound slot named in the hash.
+    const params = try alloc.alloc(*const value_mod.TypeValue, base.current.len);
+    for (base.current, 0..) |cur, i| {
+        if (value_mod.isTypeParameter(cur)) {
+            if (tp_hash.get(cur.name)) |bound_val| {
+                params[i] = switch (bound_val) {
+                    .type_val => |tv| tv,
+                    else => {
+                        helpers.setTypeMismatchError(ctx, "type", bound_val);
+                        return error.TypeMismatch;
+                    },
+                };
+            } else {
+                params[i] = cur;
+            }
+        } else {
+            params[i] = cur;
+        }
     }
     return params;
 }
@@ -1273,7 +1319,9 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     const vtype = try alloc.create(VirtualType);
     vtype.* = .{
         .name = name,
-        .inner_type = base_tv.name,
+        // A struct-backed virtual base wraps values of the root struct, not the
+        // wrapper, so the wrap type-check compares against the root struct name.
+        .inner_type = if (rootStructTypeValue(base_tv)) |root| root.name else base_tv.name,
         .base_type = base_tv,
         .type_params = type_params,
     };

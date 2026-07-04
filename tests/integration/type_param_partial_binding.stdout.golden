@@ -1,0 +1,33 @@
+=== partial binding leaves parameters open ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ "precise-person" ]
+PASS: partial binding defines a named type
+Stack: [ ]
+Stack: [ t ]
+PASS: open T accepts any id while bound U accepts a float age
+Stack: [ ]
+Stack: [ [ "anything" "notfloat" make-person >precise-person ] ]
+PASS: bound U rejects a non-float age
+Stack: [ ]
+=== completing a partial binding ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ "named-precise-person" ]
+PASS: completing the binding defines a named type
+Stack: [ ]
+Stack: [ t ]
+PASS: fully bound type validates both fields
+Stack: [ ]
+Stack: [ [ 42 3.14 make-person >named-precise-person ] ]
+PASS: completed T rejects a non-string id
+Stack: [ ]
+=== monotonic narrowing ===
+Stack: [ ]
+Stack: [ [ "rebind-u(x): M{ inner-type: precise-person type-params: H{ U: string } define: [ define-parameterized-type ] } ;" eval-string ] ]
+PASS: rebinding an already-bound parameter is rejected
+Stack: [ ]
+Stack: [ [ "unknown-on-partial(x): M{ inner-type: precise-person type-params: H{ Z: fixnum } define: [ define-parameterized-type ] } ;" eval-string ] ]
+PASS: unknown key on a partial base is rejected
+Stack: [ ]

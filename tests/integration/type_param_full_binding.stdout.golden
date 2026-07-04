@@ -30,9 +30,6 @@ Stack: [ ]
 Stack: [ [ "bad-value(x): M{ inner-type: person type-params: H{ T: 42 U: string } define: [ define-parameterized-type ] } ;" eval-string ] ]
 PASS: non-TypeValue binding value is rejected
 Stack: [ ]
-Stack: [ [ "bad-missing(x): M{ inner-type: person type-params: H{ T: fixnum } define: [ define-parameterized-type ] } ;" eval-string ] ]
-PASS: missing parameter in full binding is rejected
-Stack: [ ]
 === refinement path is unchanged ===
 Stack: [ ]
 Stack: [ ]
