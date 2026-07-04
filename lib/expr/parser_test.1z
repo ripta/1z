@@ -36,6 +36,17 @@ binop-parts: ( expr-node -- op left right ) [
   }
 ] ;
 
+\ Extract an invoke node's callee name and argument array, throwing on any other
+\ node kind.
+invoke-parts: ( expr-node -- callee args ) [
+  match{
+    expr-node:lit:    [ drop f "expected invoke, got lit" throw ]
+    expr-node:unop:   [ drop drop f "expected invoke, got unop" throw ]
+    expr-node:binop:  [ drop drop drop f "expected invoke, got binop" throw ]
+    expr-node:invoke: [ ]
+  }
+] ;
+
 "parse shape" test-section
 
 test-single-number: ( -- ) [
@@ -119,6 +130,58 @@ test-unary-minus-in-expr: ( -- ) [
   "+" "-5 + 3: binary op is +" assert=
 ] ;
 
+"calls" test-section
+
+test-call-single-arg: ( -- ) [
+  "add1(41)" parse-expr invoke-parts  \ callee args
+  dup #len 1 "add1(41): one argument" assert=
+  0 #nth lit-value 41 "add1(41): argument value is 41" assert=
+  "add1" "add1(41): callee name" assert=
+] ;
+
+test-call-multi-arg: ( -- ) [
+  "max(1 + 2, 3 + 4)" parse-expr invoke-parts  \ callee args
+  dup #len 2 "max(...): two arguments" assert=
+  dup 0 #nth binop-parts  \ callee args op left right
+  lit-value 2 "max arg0 right is 2" assert=
+  lit-value 1 "max arg0 left is 1" assert=
+  "+" "max arg0 op is +" assert=
+  \ callee args
+  1 #nth binop-parts  \ callee op left right
+  lit-value 4 "max arg1 right is 4" assert=
+  lit-value 3 "max arg1 left is 3" assert=
+  "+" "max arg1 op is +" assert=
+  \ callee
+  "max" "max(...): callee name" assert=
+] ;
+
+test-call-zero-arg: ( -- ) [
+  "now()" parse-expr invoke-parts  \ callee args
+  #len 0 "now(): zero arguments" assert=
+  "now" "now(): callee name" assert=
+] ;
+
+test-call-nested: ( -- ) [
+  "f(g(3))" parse-expr invoke-parts  \ callee args
+  dup #len 1 "f(g(3)): one argument" assert=
+  0 #nth invoke-parts  \ callee inner-callee inner-args
+  #len 1 "f(g(3)): inner call has one argument" assert=
+  "g" "f(g(3)): inner callee is g" assert=
+  "f" "f(g(3)): outer callee is f" assert=
+] ;
+
+test-call-precedence: ( -- ) [
+  "f(1 + 2) * g(3)" parse-expr binop-parts  \ op left right
+  invoke-parts                              \ op left inner-callee inner-args
+  #len 1 "f(1 + 2) * g(3): right call has one argument" assert=
+  "g" "f(1 + 2) * g(3): right callee is g" assert=
+  \ op left
+  invoke-parts  \ op left-callee left-args
+  #len 1 "f(1 + 2) * g(3): left call has one argument" assert=
+  "f" "f(1 + 2) * g(3): left callee is f" assert=
+  "*" "f(1 + 2) * g(3): outer op is *" assert=
+] ;
+
 "sub-lexer" test-section
 
 test-tokenize-expr: ( -- ) [
@@ -145,4 +208,16 @@ test-leading-operator-throws: ( -- ) [
 
 test-unclosed-paren-throws: ( -- ) [
   [ "(1" parse-expr ] "unclosed paren throws" assert-error
+] ;
+
+test-bare-identifier-throws: ( -- ) [
+  [ "foo" parse-expr ] "bare identifier throws" assert-error
+] ;
+
+test-unclosed-call-throws: ( -- ) [
+  [ "foo(" parse-expr ] "unclosed call throws" assert-error
+] ;
+
+test-missing-comma-throws: ( -- ) [
+  [ "foo(1 2)" parse-expr ] "missing argument comma throws" assert-error
 ] ;

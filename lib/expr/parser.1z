@@ -12,7 +12,7 @@ use "lexer" ;
 use "conversions" ;
 use "strings" ;
 use "expr/ast" ;
-use { ARITHMETIC-OPS: UNARY-MINUS-BP: <pratt>: parse-pratt: parse-right: next-token: parse-complete: } "pratt/arith" ;
+use { ARITHMETIC-OPS: UNARY-MINUS-BP: <pratt>: parse-pratt: parse-right: next-token: peek-token: parse-complete: } "pratt/arith" ;
 
 \\ The lexer that splits an expression body into number and punctuation tokens,
 \\ skipping whitespace. Exposed for reuse by hosted-language header parsers.
@@ -20,7 +20,8 @@ EXPR-LEXER: const [
   V{ }
   skip-whitespace-rule #push!
   number-rule #push!
-  { "+" "-" "*" "/" "(" ")" } symbols-rule #push!
+  word-rule #push!
+  { "+" "-" "*" "/" "(" ")" "," } symbols-rule #push!
   >array <lexer>
 ] ;
 
@@ -52,6 +53,32 @@ private{
     (throw-invalid-argument)
   ] ;
 
+  \ A word token must be a call, so it must be followed by '('. A word standing
+  \ alone is a bare identifier, which is a parse error today.
+  (expected-open-paren): ( token/f -- ) [
+    dup f = [
+      drop "expected '(' after identifier at end of input"
+    ] [
+      dup value>> swap pos>>
+      "expected '(' after identifier, got '" <rot-
+      #append "' at byte " #append
+      swap >string #append
+    ] if
+    (throw-invalid-argument)
+  ] ;
+
+  (expected-comma-or-close): ( token/f -- ) [
+    dup f = [
+      drop "expected ',' or ')' in argument list at end of input"
+    ] [
+      dup value>> swap pos>>
+      "expected ',' or ')' in argument list, got '" <rot-
+      #append "' at byte " #append
+      swap >string #append
+    ] if
+    (throw-invalid-argument)
+  ] ;
+
   \ Wrap a number token's resolved scalar value as a literal node.
   (parse-literal): ( token -- expr-node ) [
     value>> resolve-literal
@@ -70,21 +97,82 @@ private{
     drop nip nip
   ] ;
 
+  \ Parse one argument list item and the delimiter that follows it, accumulating
+  \ each argument node into `acc`. On ')' the accumulator is returned as an array;
+  \ on ',' the loop continues with the next argument.
+  (parse-args-loop): stack-recursive ( parser tokens acc -- args ) [
+    1 pick-n 3 pick-n 0 parse-pratt
+    \ parser tokens acc argnode
+    over swap #push! drop
+    \ parser tokens acc
+    1 pick-n next-token
+    \ parser tokens acc tok/f
+    dup f = [ (expected-comma-or-close) ] when
+    dup value>> ")" = [
+      drop >array nip nip
+    ] [
+      dup value>> "," = [
+        drop (parse-args-loop)
+      ] [
+        (expected-comma-or-close)
+      ] if
+    ] if
+  ] ;
+
+  \ Parse a comma-separated argument list up to and including the closing ')'.
+  \ The opening '(' has already been consumed. An immediate ')' yields no
+  \ arguments. Returns the argument nodes as an array.
+  (parse-args): ( parser tokens -- args ) [
+    dup peek-token
+    \ parser tokens tok/f
+    dup f = [ (expected-comma-or-close) ] when
+    dup value>> ")" = [
+      drop
+      dup next-token drop
+      2drop V{ } >array
+    ] [
+      drop
+      V{ } (parse-args-loop)
+    ] if
+  ] ;
+
+  \ Parse a call `name( args )` from a word token. The token's value is the callee
+  \ name. A word token not followed by '(' is a bare identifier, a parse error.
+  (parse-call): ( parser tokens word-token -- expr-node ) [
+    value>>
+    \ parser tokens callee
+    -rot>
+    \ callee parser tokens
+    dup next-token
+    \ callee parser tokens open-tok
+    dup f = [ (expected-open-paren) ] when
+    dup value>> "(" = not [ (expected-open-paren) ] when
+    drop
+    \ callee parser tokens
+    (parse-args)
+    \ callee args
+    invoke
+  ] ;
+
   (expr-prefix): ( token parser tokens -- expr-node ) [
     <rot-
     \ parser tokens token
     dup kind>> number: = [
       (parse-literal) nip nip
     ] [
-      dup value>> "(" = [
-        drop (parse-group)
+      dup kind>> word: = [
+        (parse-call)
       ] [
-        dup value>> "-" = [
-          drop
-          swap UNARY-MINUS-BP parse-pratt
-          "-" swap unop
+        dup value>> "(" = [
+          drop (parse-group)
         ] [
-          (unexpected-expression)
+          dup value>> "-" = [
+            drop
+            swap UNARY-MINUS-BP parse-pratt
+            "-" swap unop
+          ] [
+            (unexpected-expression)
+          ] if
         ] if
       ] if
     ] if
