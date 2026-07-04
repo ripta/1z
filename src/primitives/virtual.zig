@@ -1182,7 +1182,7 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     };
     ctx.virtual_type_count += 1;
 
-    const desc = try ctx.getOrCreateParameterizedTypeDescriptor(base_tv, elem_tv);
+    const desc = try ctx.getOrCreateParameterizedTypeDescriptor(base_tv, type_params);
 
     const tv = try alloc.create(value_mod.TypeValue);
     tv.* = .{ .name = name, .descriptor = desc };

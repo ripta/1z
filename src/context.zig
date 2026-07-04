@@ -134,19 +134,28 @@ pub const TypeRegistryFrame = struct {
 
 pub const ParameterizedTypeKey = struct {
     base: *const value_mod.TypeValue,
-    element: *const value_mod.TypeValue,
+    /// Ordered parameter tuple bound to the base. Position is significant, so
+    /// the tuple is compared positionally and never sorted.
+    params: []const *const value_mod.TypeValue,
 };
 
 pub const ParameterizedTypeKeyContext = struct {
     pub fn hash(_: @This(), key: ParameterizedTypeKey) u64 {
         var h = std.hash.Wyhash.init(0);
         h.update(std.mem.asBytes(&@intFromPtr(key.base)));
-        h.update(std.mem.asBytes(&@intFromPtr(key.element)));
+        h.update(std.mem.asBytes(&key.params.len));
+        for (key.params) |param| {
+            h.update(std.mem.asBytes(&@intFromPtr(param)));
+        }
         return h.final();
     }
 
     pub fn eql(_: @This(), a: ParameterizedTypeKey, b: ParameterizedTypeKey) bool {
-        return a.base == b.base and a.element == b.element;
+        if (a.base != b.base or a.params.len != b.params.len) return false;
+        for (a.params, b.params) |a_param, b_param| {
+            if (a_param != b_param) return false;
+        }
+        return true;
     }
 };
 
@@ -2642,19 +2651,19 @@ pub const Context = struct {
     pub fn lookupParameterizedTypeDescriptor(
         self: *const Context,
         base: *const value_mod.TypeValue,
-        element: *const value_mod.TypeValue,
+        params: []const *const value_mod.TypeValue,
     ) ?*value_mod.TypeDescriptor {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        return self.lookupParameterizedTypeDescriptorLocked(base, element);
+        return self.lookupParameterizedTypeDescriptorLocked(base, params);
     }
 
     fn lookupParameterizedTypeDescriptorLocked(
         self: *const Context,
         base: *const value_mod.TypeValue,
-        element: *const value_mod.TypeValue,
+        params: []const *const value_mod.TypeValue,
     ) ?*value_mod.TypeDescriptor {
-        const key = ParameterizedTypeKey{ .base = base, .element = element };
+        const key = ParameterizedTypeKey{ .base = base, .params = params };
         if (self.parameterized_type_descriptors.get(key)) |desc| return desc;
 
         var ancestor = self.parent_context;
@@ -2886,28 +2895,29 @@ pub const Context = struct {
     pub fn getOrCreateParameterizedTypeDescriptor(
         self: *Context,
         base: *const value_mod.TypeValue,
-        element: *const value_mod.TypeValue,
+        params: []const *const value_mod.TypeValue,
     ) !*value_mod.TypeDescriptor {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
 
-        if (self.lookupParameterizedTypeDescriptorLocked(base, element)) |desc| return desc;
+        if (self.lookupParameterizedTypeDescriptorLocked(base, params)) |desc| return desc;
 
         const alloc = self.quotationAllocator();
-        const type_params = try alloc.alloc(*const value_mod.TypeValue, 1);
-        type_params[0] = element;
+        // One durable copy backs both the descriptor's type_params and the
+        // interning key, so the stored key outlives the caller's slice.
+        const owned_params = try alloc.dupe(*const value_mod.TypeValue, params);
         const desc = try value_mod.createTypeDescriptor(
             alloc,
             .{ .virtual = .{
                 .inner_type = base,
-                .type_params = type_params,
+                .type_params = owned_params,
             } },
             .{},
         );
 
         try self.parameterized_type_descriptors.put(
             self.allocator,
-            .{ .base = base, .element = element },
+            .{ .base = base, .params = owned_params },
             desc,
         );
         return desc;
@@ -5584,12 +5594,34 @@ test "parameterized type descriptor interning reuses descriptor for same key" {
     const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
     const string_tv = ctx.lookupBuiltinTypeValue("string").?;
 
-    const desc1 = try ctx.getOrCreateParameterizedTypeDescriptor(array_tv, fixnum_tv);
-    const desc2 = try ctx.getOrCreateParameterizedTypeDescriptor(array_tv, fixnum_tv);
+    const desc1 = try ctx.getOrCreateParameterizedTypeDescriptor(array_tv, &.{fixnum_tv});
+    const desc2 = try ctx.getOrCreateParameterizedTypeDescriptor(array_tv, &.{fixnum_tv});
     try std.testing.expect(desc1 == desc2);
 
-    const desc3 = try ctx.getOrCreateParameterizedTypeDescriptor(array_tv, string_tv);
+    const desc3 = try ctx.getOrCreateParameterizedTypeDescriptor(array_tv, &.{string_tv});
     try std.testing.expect(desc1 != desc3);
+}
+
+test "parameterized type descriptor interning distinguishes multi-parameter tuples" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const pair_tv = ctx.lookupBuiltinTypeValue("array").?;
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+
+    // Same base and same tuple reuse the descriptor.
+    const desc_fs = try ctx.getOrCreateParameterizedTypeDescriptor(pair_tv, &.{ fixnum_tv, string_tv });
+    const desc_fs2 = try ctx.getOrCreateParameterizedTypeDescriptor(pair_tv, &.{ fixnum_tv, string_tv });
+    try std.testing.expect(desc_fs == desc_fs2);
+
+    // Position is significant: swapping the tuple order yields a distinct key.
+    const desc_sf = try ctx.getOrCreateParameterizedTypeDescriptor(pair_tv, &.{ string_tv, fixnum_tv });
+    try std.testing.expect(desc_fs != desc_sf);
+
+    // Arity is significant: a one-element tuple differs from a two-element one.
+    const desc_f = try ctx.getOrCreateParameterizedTypeDescriptor(pair_tv, &.{fixnum_tv});
+    try std.testing.expect(desc_fs != desc_f);
 }
 
 test "struct descriptor interning reuses descriptor for same shape" {
