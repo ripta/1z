@@ -1,0 +1,14 @@
+=== enum flags ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ H{ log-level: <level:warn warn:> } ]
+PASS: valid enum variant converts to the variant
+Stack: [ H{ log-level: <level:warn warn:> } ]
+PASS: converted value is a level variant
+Stack: [ ]
+Stack: [ H{ log-level: <level:info info:> } ]
+PASS: enum =form converts
+Stack: [ ]
+All enum flag tests complete!
+Stack: [ ]

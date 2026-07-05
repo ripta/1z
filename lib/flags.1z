@@ -26,9 +26,7 @@ flag-registry: ( -- registry: mutable-map ) M{ } ;
 \ define-flag's body where AOT discovery could not see it.
 flag-order: ( -- order: mutable-map ) M{ n: 0 } ;
 
-\ flag{
-\
-\ Defines a command-line flag.
+\\ Defines a command-line flag.
 flag{: parse-time [
   "}" parse-until make-hash
   M{ type: struct-descriptor: }
@@ -36,9 +34,7 @@ flag{: parse-time [
   [ define-flag ] define: swap @set!
 ] ;
 
-\ define-flag ( name fields markers -- )
-\
-\ Registers the flag in the global registry.
+\\ Registers the flag in the global registry.
 define-flag: ( name fields markers -- ) [
   \ The declared flag type lives under the descriptor's "fields" hash. A symbol
   \ there (the dropped `type: integer:` form) is a loud definition-time error.
@@ -78,8 +74,8 @@ private{
     [ is-positional-flag ] #filter #collect
   ] ;
 
-  \ True when the flag named key declares short as its short alias. The short
-  \ alias lives under the descriptor's fields hash, like every declared field.
+  \\ True when the flag named key declares short as its short alias. The short
+  \\ alias lives under the descriptor's fields hash, like every declared field.
   flag-short-matches?: ( key short -- ? ) [
     swap flag-registry swap @get
     "descriptor" @get "fields" @get
@@ -168,8 +164,8 @@ private{
   \ Store value under name in the result map. @set! is ( map key value -- map ).
   store-value: ( name value -- ) [ pf-result get -rot> @set! drop ] ;
 
-  \ A flag consumes a following value when it declares a type other than
-  \ boolean. A presence flag has no type; a boolean flag (future) is presence.
+  \\ A flag consumes a following value when it declares a type other than
+  \\ boolean. A presence flag has no type; a boolean flag (future) is presence.
   flag-takes-value?: ( name -- ? ) [
     flag-registry swap @get
     "descriptor" @get "fields" @get
@@ -179,7 +175,7 @@ private{
     if
   ] ;
 
-  \ Store the =-form value only when the name is a registered flag.
+  \\ Store the =-form value only when the name is a registered flag.
   (store-eq): ( name value -- ) [
     over flag-registry swap @has?
     [ store-value ]
@@ -187,12 +183,12 @@ private{
     if
   ] ;
 
-  \ Consume the token following idx as name's value and return idx+2. A missing
-  \ token prints help and exits. next is bounds-checked before #nth, which throws
-  \ on an out-of-bounds index. The exit is inlined rather than delegated so the
-  \ terminal sys-exit is visible to the AOT stack-effect checker, which otherwise
-  \ models the branch as returning and reports an underflow against the other
-  \ branch's result.
+  \\ Consume the token following idx as name's value and return idx+2. A missing
+  \\ token prints help and exits. next is bounds-checked before #nth, which throws
+  \\ on an out-of-bounds index. The exit is inlined rather than delegated so the
+  \\ terminal sys-exit is visible to the AOT stack-effect checker, which otherwise
+  \\ models the branch as returning and reports an underflow against the other
+  \\ branch's result.
   consume-value: ( name idx -- idx' ) [
     ++
     dup pf-args get #len >=
@@ -212,10 +208,10 @@ private{
     if
   ] ;
 
-  \ A bare --name that is not itself a registered flag. When name is no-<base>
-  \ and <base> is a boolean (presence) flag, set base false. Otherwise the
-  \ unknown flag is ignored, matching prior behavior. An exact flag-name match
-  \ never reaches here, so a flag literally named no-cache wins over stripping.
+  \\ A bare --name that is not itself a registered flag. When name is no-<base>
+  \\ and <base> is a boolean (presence) flag, set base false. Otherwise the
+  \\ unknown flag is ignored, matching prior behavior. An exact flag-name match
+  \\ never reaches here, so a flag literally named no-cache wins over stripping.
   process-no-flag: ( name -- ) [
     dup "no-" #starts-with?
     [
@@ -233,7 +229,7 @@ private{
     if
   ] ;
 
-  \ Long flag: --name, --name=value, or --name value (value flag consumes next).
+  \\ Long flag: --name, --name=value, or --name value (value flag consumes next).
   process-long: ( arg idx -- idx' ) [
     swap 2 over #len #slice
     dup "=" split-once?
@@ -259,8 +255,8 @@ private{
     if
   ] ;
 
-  \ Short flag: -o (presence) or -o value (value flag consumes next). No = or
-  \ attached form.
+  \\ Short flag: -o (presence) or -o value (value flag consumes next). No = or
+  \\ attached form.
   process-short-arg: ( arg idx -- idx' ) [
     swap 1 over #len #slice
     find-flag-by-short
@@ -290,8 +286,8 @@ private{
     if
   ] ;
 
-  \ Dispatch one non-terminator argument and return the index to continue from.
-  \ A value flag advances by two, having swallowed the following token.
+  \\ Dispatch one non-terminator argument and return the index to continue from.
+  \\ A value flag advances by two, having swallowed the following token.
   process-arg: ( arg idx -- idx' ) [
     over "--" #starts-with?
     [ process-long ]
@@ -304,10 +300,10 @@ private{
     if
   ] ;
 
-  \ Apply one argument's effect and return the index to continue from. Returning
-  \ the next index (rather than the loop hardcoding idx 1 +) is the seam a value
-  \ flag uses to swallow the following token by returning idx 2 +. When term is
-  \ true the arg is a post-terminator positional and bypasses dash dispatch.
+  \\ Apply one argument's effect and return the index to continue from. Returning
+  \\ the next index (rather than the loop hardcoding idx 1 +) is the seam a value
+  \\ flag uses to swallow the following token by returning idx 2 +. When term is
+  \\ true the arg is a post-terminator positional and bypasses dash dispatch.
   dispatch-arg: ( arg idx term -- idx' term ) [
     dup
     [ [ swap process-positional ++ ] dip ]
@@ -315,9 +311,9 @@ private{
     if
   ] ;
 
-  \ Walk args by index, threading (args idx term). A bare "--" while not yet
-  \ terminated is consumed, not stored, and flips term to true; thereafter every
-  \ arg is routed to process-positional through dispatch-arg's terminated branch.
+  \\ Walk args by index, threading (args idx term). A bare "--" while not yet
+  \\ terminated is consumed, not stored, and flips term to true; thereafter every
+  \\ arg is routed to process-positional through dispatch-arg's terminated branch.
   process-args: stack-recursive ( args idx term -- ) [
     1 pick-n 3 pick-n #len >=
     [
@@ -361,9 +357,9 @@ private{
     ] #each
   ] ;
 
-  \ Convert a raw flag value to its declared type. A boolean value is only
-  \ string-parsed: a presence-true or a --no- false is already a boolean and
-  \ passes through. Unknown or string types pass through unchanged.
+  \\ Convert a raw flag value to its declared type. A boolean value is only
+  \\ string-parsed: a presence-true or a --no- false is already a boolean and
+  \\ passes through. Unknown or string types pass through unchanged.
   convert-flag-value: ( value type -- value' ) [
     dup fixnum =
     [ drop parse-integer ]
@@ -379,12 +375,85 @@ private{
     if
   ] ;
 
-  \ Convert value by type, returning option:some(value') or option:none on a bad
-  \ value. recover is the terminal operation in this word and the parsers throw a
-  \ clean stack, so the handler is just [ drop option:none ], matching the prelude
-  \ #nth? / receive? idiom. Keeping recover terminal here also keeps it AOT-safe.
+  \\ Convert value by type, returning option:some(value') or option:none on a bad
+  \\ value. recover is the terminal operation in this word and the parsers throw a
+  \\ clean stack, so the handler is just [ drop option:none ], matching the prelude
+  \\ #nth? / receive? idiom. Keeping recover terminal here also keeps it AOT-safe.
   try-convert-flag-value: ( value type -- opt ) [
     [ convert-flag-value >option:some ] [ drop option:none ] recover
+  ] ;
+
+  \\ True when the declared TypeValue is an enum type. descriptor-kind yields the
+  \\ enum-descriptor symbol for an enum, and something else for every scalar type.
+  enum-type?: ( type -- ? ) [
+    native.type-descriptor native.descriptor-kind
+    enum-descriptor: =
+  ] ;
+
+  \\ Short variant name from a full "enum:variant" symbol: color:red -> "red".
+  \\ enum-variants returns fully-qualified symbols; the user types the short name.
+  \\ Every enum variant name carries exactly one colon, so the split always hits.
+  variant-short-name: ( full: symbol -- short: string ) [
+    >string ":" split-once? option:some> #last
+  ] ;
+
+  \\ The enum's short variant names, in definition order, as strings.
+  enum-short-names: ( type -- names: array ) [
+    native.type-name >symbol enum-variants
+    [ variant-short-name ] #map #collect
+  ] ;
+
+  \\ ", "-joined short names for the out-of-set error listing.
+  enum-valid-values: ( type -- string ) [ enum-short-names ", " #join ] ;
+
+  \\ Is the raw string argument a valid short variant name of the enum type? The
+  \\ membership check is throw-free, so the enum path avoids the try-convert
+  \\ recover idiom, whose clean-stack precondition an enum conversion cannot meet.
+  enum-member?: ( value type -- ? ) [ enum-short-names swap #in? ] ;
+
+  \\ Full listing error message for an out-of-set enum argument.
+  enum-invalid-message: ( key type value -- string ) [
+    "Error: invalid value \"" swap #append "\" for --" #append
+    2 pick-n sym-to-str #append
+    swap enum-valid-values
+    " (valid values: " swap #append ")" #append
+    #append nip
+  ] ;
+
+  \\ Convert a provided enum flag to its variant, or print the listing error and
+  \\ exit. Membership is checked first, so >symbol and enum-from-symbol cannot
+  \\ throw. The error branch ends in sys-exit so the AOT checker treats it as
+  \\ non-returning, matching the check-required pattern.
+  apply-enum-conversion: ( key type value -- ) [
+    dup 2 pick-n enum-member?
+    [ >symbol swap native.enum-from-symbol store-value ]
+    [
+      enum-invalid-message
+      stderr swap stream-write-string drop
+      stderr "\n" >bytes stream-write drop
+      1 sys-exit
+    ]
+    if
+  ] ;
+
+  \\ Convert a provided scalar flag through the type parsers, or print a one-line
+  \\ error and exit. Same ( key type value -- ) shape as apply-enum-conversion so
+  \\ the apply-conversions branches balance. The error branch ends in sys-exit.
+  apply-scalar-conversion: ( key type value -- ) [
+    over try-convert-flag-value
+    dup option:some?
+    [ option:some> nip store-value ]
+    [
+      drop
+      over pf-result get swap @get
+      "Error: invalid value \"" swap #append "\" for --" #append
+      2 pick-n sym-to-str #append
+      nip nip
+      stderr swap stream-write-string drop
+      stderr "\n" >bytes stream-write drop
+      1 sys-exit
+    ]
+    if
   ] ;
 
   apply-conversions: ( -- ) [
@@ -398,23 +467,9 @@ private{
         [
           "type" @get
           over pf-result get swap @get
-          swap try-convert-flag-value
-          dup option:some?
-          [ option:some>
-            swap pf-result get -rot> swap @set! drop
-          ]
-          \ Bad value: print a one-line error to stderr and exit; no usage help.
-          \ The branch ends in sys-exit so the AOT stack-effect checker treats it
-          \ as non-returning, matching the check-required pattern.
-          [ drop
-            dup pf-result get swap @get
-            "Error: invalid value \"" swap #append
-            "\" for --" #append
-            swap sym-to-str #append
-            stderr swap stream-write-string drop
-            stderr "\n" >bytes stream-write drop
-            1 sys-exit
-          ]
+          over enum-type?
+          [ apply-enum-conversion ]
+          [ apply-scalar-conversion ]
           if
         ]
         [ 2drop ]
@@ -450,7 +505,7 @@ private{
   pf-args:      parameter{ [ { } ] } ;
 }
 
-\ Parses command-line arguments according to registered flags.
+\\ Parses command-line arguments according to registered flags.
 parse-flags: ( args: array description: string -- result: hash ) [
   swap
   [ ] make-mutable-map

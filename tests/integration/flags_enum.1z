@@ -1,0 +1,23 @@
+\ Enum-typed CLI flags: a flag declared type: <enum> converts its raw string
+\ argument to the enum variant. The enum must be defined before the flag that
+\ references it (parse-time ordering). Each test file runs as its own process,
+\ so the global flag-registry starts empty here.
+
+use "testing" ;
+use "flags" ;
+
+"enum flags" test-section
+
+level: enum{ debug: unit info: unit warn: unit error: unit } ;
+log-level: flag{ type: level description: "Log level" } ;
+
+\ --name value: a valid variant name converts to the variant value.
+{ "--log-level" "warn" } "p" parse-flags
+dup "log-level" @get level:warn "valid enum variant converts to the variant" assert=
+"log-level" @get level? "converted value is a level variant" assert-true
+
+\ --name=value: the =form converts the same way.
+{ "--log-level=info" } "p" parse-flags
+"log-level" @get level:info "enum =form converts" assert=
+
+"All enum flag tests complete!" print-line

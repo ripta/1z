@@ -1,0 +1,11 @@
+\ An out-of-set enum argument prints a one-line error to stderr that lists the
+\ valid variant names, then exits 1. The clean-exit path cannot be asserted
+\ inline because it exits the process, so it is verified through the .exitcode
+\ and .stderr.golden sidecars.
+
+use "flags" ;
+
+level: enum{ debug: unit info: unit warn: unit error: unit } ;
+log-level: flag{ type: level description: "Log level" } ;
+
+{ "--log-level" "lowd" } "Bad enum program" parse-flags drop
