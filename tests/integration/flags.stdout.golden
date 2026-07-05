@@ -3,6 +3,7 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
 Stack: [ H{ verbose: f name: "Alice" help: f } ]
 PASS: positional arg parsed
 Stack: [ H{ verbose: f name: "Alice" help: f } ]
@@ -13,6 +14,25 @@ PASS: long flag --verbose sets value
 Stack: [ ]
 Stack: [ H{ verbose: f name: "Bob" help: f } ]
 PASS: second call positional starts fresh
+Stack: [ ]
+Stack: [ H{ verbose: t name: "Alice" target: "web01" help: f } ]
+PASS: loop: first positional
+Stack: [ H{ verbose: t name: "Alice" target: "web01" help: f } ]
+PASS: loop: second positional after flag
+Stack: [ H{ verbose: t name: "Alice" target: "web01" help: f } ]
+PASS: loop: interleaved flag still set
+Stack: [ ]
+Stack: [ H{ verbose: t name: "Alice" target: "web01" help: f } ]
+PASS: term: first positional
+Stack: [ H{ verbose: t name: "Alice" target: "web01" help: f } ]
+PASS: term: positional after --
+Stack: [ H{ verbose: t name: "Alice" target: "web01" help: f } ]
+PASS: term: flag before -- still set
+Stack: [ ]
+Stack: [ H{ verbose: f name: "Alice" target: "-weird" help: f } ]
+PASS: dash-pos: first positional
+Stack: [ H{ verbose: f name: "Alice" target: "-weird" help: f } ]
+PASS: dash-pos: dash token captured as positional
 Stack: [ ]
 All flags tests complete!
 Stack: [ ]

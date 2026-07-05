@@ -8,6 +8,7 @@ use "flags" ;
 help:    flag{ description: "Show help" short: "h" } ;
 verbose: flag{ description: "Verbose mode" short: "v" } ;
 name:    required positional flag{ type: string: description: "Your name" } ;
+target:  positional flag{ type: string: description: "Target host" } ;
 
 { "Alice" } "Test program" parse-flags
 dup "name" @get "Alice" "positional arg parsed" assert=
@@ -21,5 +22,23 @@ dup "name" @get "Alice" "positional arg parsed" assert=
 \ first call's index, confirming per-call state is fresh.
 { "Bob" } "Test program" parse-flags
 "name" @get "Bob" "second call positional starts fresh" assert=
+
+\ The index-driven loop fills two positionals across an interleaved flag.
+{ "Alice" "--verbose" "web01" } "Test program" parse-flags
+dup "name" @get "Alice" "loop: first positional" assert=
+dup "target" @get "web01" "loop: second positional after flag" assert=
+"verbose" @get t "loop: interleaved flag still set" assert=
+
+\ "--" terminates flag processing; the flag before it still applies.
+{ "Alice" "--verbose" "--" "web01" } "Test program" parse-flags
+dup "name" @get "Alice" "term: first positional" assert=
+dup "target" @get "web01" "term: positional after --" assert=
+"verbose" @get t "term: flag before -- still set" assert=
+
+\ A positional beginning with "-" after "--" is captured, not parsed. If "--"
+\ were stored, target would be "--" and this would fail.
+{ "Alice" "--" "-weird" } "Test program" parse-flags
+dup "name" @get "Alice" "dash-pos: first positional" assert=
+"target" @get "-weird" "dash-pos: dash token captured as positional" assert=
 
 "All flags tests complete!" print-line

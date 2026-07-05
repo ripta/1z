@@ -204,6 +204,40 @@ private{
     if
   ] ;
 
+  \ Apply one argument's effect and return the index to continue from. Returning
+  \ the next index (rather than the loop hardcoding idx 1 +) is the seam a value
+  \ flag uses to swallow the following token by returning idx 2 +. When term is
+  \ true the arg is a post-terminator positional and bypasses dash dispatch.
+  dispatch-arg: ( arg idx term -- idx' term ) [
+    dup
+    [ [ swap process-positional ++ ] dip ]
+    [ [ swap process-arg ++ ] dip ]
+    if
+  ] ;
+
+  \ Walk args by index, threading (args idx term). A bare "--" while not yet
+  \ terminated is consumed, not stored, and flips term to true; thereafter every
+  \ arg is routed to process-positional through dispatch-arg's terminated branch.
+  process-args: stack-recursive ( args idx term -- ) [
+    1 pick-n 3 pick-n #len >=
+    [
+      drop 2drop
+    ]
+    [
+      2 pick-n 2 pick-n #nth
+      dup "--" = 2 pick-n not and
+      [
+        drop drop ++ t
+      ]
+      [
+        -rot> dispatch-arg
+      ]
+      if
+      process-args
+    ]
+    if
+  ] ;
+
   check-required: ( -- ) [
     flag-registry @keys
     [
@@ -293,7 +327,7 @@ parse-flags: ( args: array description: string -- result: hash ) [
           drop pf-desc get print-help 0 sys-exit
         ] when
 
-        [ process-arg ] #each
+        0 f process-args
 
         check-required
         apply-conversions
