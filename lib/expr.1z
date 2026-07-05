@@ -4,10 +4,29 @@ use "strings" ;
 "expr/ast" load reexport
 "expr/parser" load reexport
 "expr/lower" load reexport
+"expr/fn" load reexport
 
 \\ Inline arithmetic expression syntax (`+ - * /`, parens, unary minus).
 \\ `expr{ 1 + 2 * 3 }` is equivalent to `1 2 3 * +`.
 expr{: parse-time [
   "}" parse-tokens-until " " #join  \ raw body tokens -> source string
   parse-expr emit-expr              \ AST -> inline postfix instructions
+] ;
+
+private{
+  \ Placeholder for the fn-decl lowering step. Parsing (parse-fn) is complete;
+  \ lowering an fn-decl to an ordinary word definition is not yet implemented.
+  (lower-fn-decl): ( fn-decl -- ) [
+    drop f "fn lowering is not yet implemented" throw
+  ] ;
+}
+
+\\ Hosted function-definition sugar: `fn name(params) = rhs ;` defines an
+\\ ordinary word whose body is the arithmetic expression `rhs`. Reads tokens up
+\\ to the terminating `;`, parses the `name(params)` header and the `=`-separated
+\\ RHS, then lowers the declaration to a word definition.
+fn: parse-time [
+  ";" parse-tokens-until " " #join  \ raw body tokens -> source string
+  parse-fn
+  (lower-fn-decl)
 ] ;

@@ -13,6 +13,7 @@ lit-value: ( expr-node -- value ) [
     expr-node:unop:   [ drop drop f "expected lit, got unop" throw ]
     expr-node:binop:  [ drop drop drop f "expected lit, got binop" throw ]
     expr-node:invoke: [ drop drop f "expected lit, got invoke" throw ]
+    expr-node:ref:    [ drop f "expected lit, got ref" throw ]
   }
 ] ;
 
@@ -23,6 +24,7 @@ unop-parts: ( expr-node -- op operand ) [
     expr-node:unop:   [ ]
     expr-node:binop:  [ drop drop drop f "expected unop, got binop" throw ]
     expr-node:invoke: [ drop drop f "expected unop, got invoke" throw ]
+    expr-node:ref:    [ drop f "expected unop, got ref" throw ]
   }
 ] ;
 
@@ -33,6 +35,7 @@ binop-parts: ( expr-node -- op left right ) [
     expr-node:unop:   [ drop drop f "expected binop, got unop" throw ]
     expr-node:binop:  [ ]
     expr-node:invoke: [ drop drop f "expected binop, got invoke" throw ]
+    expr-node:ref:    [ drop f "expected binop, got ref" throw ]
   }
 ] ;
 
@@ -44,6 +47,18 @@ invoke-parts: ( expr-node -- callee args ) [
     expr-node:unop:   [ drop drop f "expected invoke, got unop" throw ]
     expr-node:binop:  [ drop drop drop f "expected invoke, got binop" throw ]
     expr-node:invoke: [ ]
+    expr-node:ref:    [ drop f "expected invoke, got ref" throw ]
+  }
+] ;
+
+\ Extract a reference node's identifier name, throwing on any other node kind.
+ref-name: ( expr-node -- name ) [
+  match{
+    expr-node:lit:    [ drop f "expected ref, got lit" throw ]
+    expr-node:unop:   [ drop drop f "expected ref, got unop" throw ]
+    expr-node:binop:  [ drop drop drop f "expected ref, got binop" throw ]
+    expr-node:invoke: [ drop drop f "expected ref, got invoke" throw ]
+    expr-node:ref:    [ ]
   }
 ] ;
 
@@ -210,8 +225,15 @@ test-unclosed-paren-throws: ( -- ) [
   [ "(1" parse-expr ] "unclosed paren throws" assert-error
 ] ;
 
-test-bare-identifier-throws: ( -- ) [
-  [ "foo" parse-expr ] "bare identifier throws" assert-error
+test-bare-identifier-parses-ref: ( -- ) [
+  "foo" parse-expr ref-name "foo" "bare identifier parses to a ref node" assert=
+] ;
+
+test-ref-in-expression: ( -- ) [
+  "a + 1" parse-expr binop-parts  \ op left right
+  lit-value 1 "a + 1: right operand is 1" assert=
+  ref-name "a" "a + 1: left operand is a ref to a" assert=
+  "+" "a + 1: operator is +" assert=
 ] ;
 
 test-unclosed-call-throws: ( -- ) [

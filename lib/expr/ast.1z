@@ -18,6 +18,11 @@ binop-node: struct{ op left right } ;
 \\ An invoke node: a callee word name and the list of argument-expression nodes.
 invoke-node: struct{ callee args } ;
 
+\\ A bare-identifier reference node, carrying the identifier name. A word used
+\\ without a following call, such as an fn parameter referenced in its body. Bare
+\\ identifiers are otherwise a parse error, reserved for exactly this use.
+ref-node: struct{ name } ;
+
 \\ The tagged union of expression node kinds. Dispatch over it with `match{`,
 \\ which forces every site to handle each variant or fail at parse time.
 expr-node: enum{
@@ -25,6 +30,7 @@ expr-node: enum{
   unop:   unop-node
   binop:  binop-node
   invoke: invoke-node
+  ref:    ref-node
 } ;
 
 \\ Wrap a scalar value as a literal node. The value is left untyped so any
@@ -43,6 +49,9 @@ binop: ( op: string left: expr-node right: expr-node -- expr-node ) [ make-expr-
 \\ avoid shadowing the `call` combinator that executes quotations.
 invoke: ( callee: string args -- expr-node ) [ make-expr-node:invoke ] ;
 
+\\ Build a bare-identifier reference node from an identifier name.
+ref: ( name: string -- expr-node ) [ >expr-node:ref ] ;
+
 \\ True when the node is a scalar literal; returns f for any other value.
 lit?: ( expr-node -- bool ) [ expr-node:lit? ] ;
 
@@ -54,3 +63,6 @@ binop?: ( expr-node -- bool ) [ expr-node:binop? ] ;
 
 \\ True when the node is an invoke node; returns f for any other value.
 invoke?: ( expr-node -- bool ) [ expr-node:invoke? ] ;
+
+\\ True when the node is a bare-identifier reference; returns f for any other value.
+ref?: ( expr-node -- bool ) [ expr-node:ref? ] ;

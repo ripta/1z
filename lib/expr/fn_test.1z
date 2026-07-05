@@ -1,0 +1,120 @@
+\ Unit tests for lib/expr/fn.1z.
+
+use "testing" ;
+use "sequences" ;
+use "expr/fn" ;
+use "expr/ast" ;
+
+\ Extract a binary node's operator and operands, throwing on any other node kind.
+binop-parts: ( expr-node -- op left right ) [
+  match{
+    expr-node:lit:    [ drop f "expected binop, got lit" throw ]
+    expr-node:unop:   [ drop drop f "expected binop, got unop" throw ]
+    expr-node:binop:  [ ]
+    expr-node:invoke: [ drop drop f "expected binop, got invoke" throw ]
+    expr-node:ref:    [ drop f "expected binop, got ref" throw ]
+  }
+] ;
+
+\ Extract an invoke node's callee name and argument array, throwing on any other
+\ node kind.
+invoke-parts: ( expr-node -- callee args ) [
+  match{
+    expr-node:lit:    [ drop f "expected invoke, got lit" throw ]
+    expr-node:unop:   [ drop drop f "expected invoke, got unop" throw ]
+    expr-node:binop:  [ drop drop drop f "expected invoke, got binop" throw ]
+    expr-node:invoke: [ ]
+    expr-node:ref:    [ drop f "expected invoke, got ref" throw ]
+  }
+] ;
+
+"single argument" test-section
+
+test-single-arg-name: ( -- ) [
+  "square(x) = x * x" parse-fn name>> "square" "square(x): name is square" assert=
+] ;
+
+test-single-arg-params: ( -- ) [
+  "square(x) = x * x" parse-fn params>>
+  dup #len 1 "square(x): one parameter" assert=
+  0 #nth "x" "square(x): parameter is x" assert=
+] ;
+
+test-single-arg-rhs: ( -- ) [
+  "square(x) = x * x" parse-fn rhs>> binop-parts  \ op left right
+  ref? "square(x): rhs right operand is a parameter ref" assert-true
+  ref? "square(x): rhs left operand is a parameter ref" assert-true
+  "*" "square(x): rhs is a '*' binop" assert=
+] ;
+
+"multiple arguments" test-section
+
+test-multi-arg-name: ( -- ) [
+  "hypot2(a, b) = a * a + b * b" parse-fn name>> "hypot2" "hypot2: name is hypot2" assert=
+] ;
+
+test-multi-arg-params: ( -- ) [
+  "hypot2(a, b) = a * a + b * b" parse-fn params>>
+  dup #len 2 "hypot2: two parameters" assert=
+  dup 0 #nth "a" "hypot2: first parameter is a" assert=
+  1 #nth "b" "hypot2: second parameter is b" assert=
+] ;
+
+test-multi-arg-rhs: ( -- ) [
+  "hypot2(a, b) = a * a + b * b" parse-fn rhs>> binop-parts  \ op left right
+  2drop "+" "hypot2: rhs is a '+' binop" assert=
+] ;
+
+"unspaced header punctuation" test-section
+
+test-unspaced-header: ( -- ) [
+  "add(a,b) = a + b" parse-fn params>>
+  dup #len 2 "add(a,b): two parameters without internal spacing" assert=
+  dup 0 #nth "a" "add(a,b): first parameter is a" assert=
+  1 #nth "b" "add(a,b): second parameter is b" assert=
+] ;
+
+"zero arguments" test-section
+
+test-zero-arg-name: ( -- ) [
+  "answer() = 1 + 2" parse-fn name>> "answer" "answer(): name is answer" assert=
+] ;
+
+test-zero-arg-params: ( -- ) [
+  "answer() = 1 + 2" parse-fn params>> #len 0 "answer(): no parameters" assert=
+] ;
+
+"nested RHS" test-section
+
+test-nested-rhs-call: ( -- ) [
+  "f(x) = g(h(x))" parse-fn rhs>> invoke-parts  \ callee args
+  #len 1 "f(x)=g(h(x)): outer call has one argument" assert=
+  "g" "f(x)=g(h(x)): outer callee is g" assert=
+] ;
+
+test-nested-rhs-inner: ( -- ) [
+  "f(x) = g(h(x))" parse-fn rhs>> invoke-parts  \ callee args
+  swap drop 0 #nth invoke-parts                 \ inner-callee inner-args
+  #len 1 "f(x)=g(h(x)): inner call has one argument" assert=
+  "h" "f(x)=g(h(x)): inner callee is h" assert=
+] ;
+
+test-nested-rhs-params: ( -- ) [
+  "f(x) = g(h(x))" parse-fn params>>
+  dup #len 1 "f(x): one parameter" assert=
+  0 #nth "x" "f(x): parameter is x" assert=
+] ;
+
+"error handling" test-section
+
+test-missing-equals-throws: ( -- ) [
+  [ "square(x) x * x" parse-fn ] "missing '=' throws" assert-error
+] ;
+
+test-missing-open-paren-throws: ( -- ) [
+  [ "square = x" parse-fn ] "header with no '(' throws" assert-error
+] ;
+
+test-dangling-comma-throws: ( -- ) [
+  [ "f(a,) = a" parse-fn ] "dangling comma in parameter list throws" assert-error
+] ;

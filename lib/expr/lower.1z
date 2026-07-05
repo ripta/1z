@@ -45,6 +45,11 @@ lower: ( node: expr-node -- quotation ) [
       \ path instead, which emits an ordinary call_word via emit-call.
       drop drop f "a call cannot be lowered to a quotation value; use emit-expr" throw
     ]
+    expr-node:ref: [  \ ( name )
+      \ A bare identifier has no meaning without a binding context; only the fn
+      \ surface, which binds parameters, can lower a reference.
+      drop f "a bare identifier reference cannot be lowered without a parameter binding" throw
+    ]
   }
 ] ;
 
@@ -75,6 +80,11 @@ emit-expr: ( node: expr-node -- ) [
     expr-node:invoke: [    \ ( callee args )
       [ emit-expr ] #each  \ emit each argument in source order, then ( callee )
       >symbol emit-call    \ emit the call
+    ]
+    expr-node:ref: [  \ ( name )
+      \ A bare identifier is only meaningful inside an fn body, where parameters
+      \ are bound; in a plain expression it is an error.
+      drop f "a bare identifier reference is only valid in an fn body" throw
     ]
   }
 ] ;

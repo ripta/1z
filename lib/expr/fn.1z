@@ -1,0 +1,94 @@
+\ lib/expr/fn.1z: parser for the hosted function-definition sugar.
+\
+\ Parses a `name(params) = rhs` declaration into an fn-decl. The `name(params)`
+\ header is lexed with the same punctuation-splitting sub-lexer the RHS uses
+\ (EXPR-LEXER / tokenize-expr from expr/parser), so `square(a, b)` needs no
+\ internal spacing. The RHS is delegated verbatim to expr/parser's parse-expr.
+\ Lowering the fn-decl to an ordinary word definition lives elsewhere; this
+\ module only parses.
+
+use "strings" ;
+use "sequences" ;
+use "lexer" ;
+use "expr/parser" ;
+use "expr/ast" ;
+
+\\ A parsed hosted function declaration: the word name, its ordered parameter
+\\ names, and the right-hand-side expression node.
+fn-decl: struct{ name params rhs } ;
+
+private{
+  (throw-fn-error): ( message -- ) [
+    f swap EInvalidArgument make-error throw
+  ] ;
+
+  \ Parse the comma-separated parameter names between '(' and ')'. `idx` points
+  \ at the token expected to be either ')' (only with an empty accumulator, the
+  \ zero-parameter case) or a parameter word. Mirrors (parse-args-loop) in
+  \ expr/parser, collecting identifier strings instead of expression nodes.
+  (parse-fn-params): stack-recursive ( tokens idx acc -- params ) [
+    2 pick-n 2 pick-n #nth
+    \ tokens idx acc tok
+    dup value>> ")" = [
+      drop
+      \ ')' closes the list here. Valid only as an empty list; reaching it with a
+      \ non-empty accumulator means the list ended on a dangling ','.
+      dup #len 0 = [
+        >array nip nip
+      ] [
+        "fn header: unexpected ',' before ')' in parameter list" (throw-fn-error)
+      ] if
+    ] [
+      dup kind>> word: = not [ "fn header: expected parameter name" (throw-fn-error) ] when
+      value>>
+      \ tokens idx acc pname
+      over swap #push! drop
+      \ tokens idx acc
+      2 pick-n 2 pick-n 1 + #nth
+      \ tokens idx acc tok2
+      dup value>> ")" = [
+        drop >array nip nip
+      ] [
+        dup value>> "," = [
+          drop
+          swap 2 + swap
+          (parse-fn-params)
+        ] [
+          "fn header: expected ',' or ')' in parameter list" (throw-fn-error)
+        ] if
+      ] if
+    ] if
+  ] ;
+
+  \ Parse a `name(params)` header string into the name and an array of parameter
+  \ names. Lexed with EXPR-LEXER, so punctuation need not be spaced.
+  (parse-fn-header): ( header: string -- name params ) [
+    tokenize-expr #collect
+    \ tokens
+    dup #len 3 < [ "fn header: expected name '(' ')'" (throw-fn-error) ] when
+    dup dup #len 1 - #nth value>> ")" = not [ "fn header: expected ')' at end of header" (throw-fn-error) ] when
+    dup 0 #nth dup kind>> word: = not [ "fn header: expected function name" (throw-fn-error) ] when
+    value>> swap
+    \ name tokens
+    dup 1 #nth value>> "(" = not [ "fn header: expected '(' after function name" (throw-fn-error) ] when
+    \ name tokens
+    2 V{ } (parse-fn-params)
+    \ name params
+  ] ;
+}
+
+\\ Parse a hosted function declaration source string, of the form
+\\ `name(params) = rhs`, into an fn-decl. The header is lexed with the shared
+\\ punctuation-splitting sub-lexer; the RHS is parsed by expr/parser's
+\\ parse-expr. Throws on a missing '=' or a malformed header.
+parse-fn: ( source: string -- fn-decl ) [
+  "=" split-once
+  \ { header rhs }
+  dup 1 #nth trim parse-expr
+  \ arr rhs
+  swap 0 #nth trim (parse-fn-header)
+  \ rhs name params
+  <rot-
+  \ name params rhs
+  make-fn-decl
+] ;

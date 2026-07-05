@@ -53,20 +53,6 @@ private{
     (throw-invalid-argument)
   ] ;
 
-  \ A word token must be a call, so it must be followed by '('. A word standing
-  \ alone is a bare identifier, which is a parse error today.
-  (expected-open-paren): ( token/f -- ) [
-    dup f = [
-      drop "expected '(' after identifier at end of input"
-    ] [
-      dup value>> swap pos>>
-      "expected '(' after identifier, got '" <rot-
-      #append "' at byte " #append
-      swap >string #append
-    ] if
-    (throw-invalid-argument)
-  ] ;
-
   (expected-comma-or-close): ( token/f -- ) [
     dup f = [
       drop "expected ',' or ')' in argument list at end of input"
@@ -136,22 +122,32 @@ private{
     ] if
   ] ;
 
-  \ Parse a call `name( args )` from a word token. The token's value is the callee
-  \ name. A word token not followed by '(' is a bare identifier, a parse error.
+  \ Parse a word token in prefix position. A word followed by '(' is a call
+  \ `name( args )`. A word not followed by '(' is a bare identifier, returned as a
+  \ reference node; the following token is only peeked, never consumed.
   (parse-call): ( parser tokens word-token -- expr-node ) [
     value>>
     \ parser tokens callee
     -rot>
     \ callee parser tokens
-    dup next-token
-    \ callee parser tokens open-tok
-    dup f = [ (expected-open-paren) ] when
-    dup value>> "(" = not [ (expected-open-paren) ] when
-    drop
-    \ callee parser tokens
-    (parse-args)
-    \ callee args
-    invoke
+    dup peek-token
+    \ callee parser tokens tok/f
+    dup f = [
+      \ end of input after the identifier: a bare reference
+      drop 2drop ref
+    ] [
+      value>> "(" = [
+        \ a call: consume '(' and parse the argument list
+        dup next-token drop
+        \ callee parser tokens
+        (parse-args)
+        \ callee args
+        invoke
+      ] [
+        \ any other following token: a bare reference, left unconsumed
+        2drop ref
+      ] if
+    ] if
   ] ;
 
   (expr-prefix): ( token parser tokens -- expr-node ) [
