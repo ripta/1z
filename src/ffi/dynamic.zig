@@ -134,6 +134,27 @@ fn allocPrintZ(alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype
     return buf[0..str.len :0];
 }
 
+/// Function type of the platform errno fetcher: returns a pointer to the thread-local errno slot,
+/// i.e., `__errno_location` on glibc/musl, `__error` on macOS.
+const ErrnoLocationFn = *const fn () callconv(.c) *c_int;
+
+/// The platform errno fetcher, resolved at link time via `std.c._errno`, a comptime-selected extern
+/// mapping to the right per-platform symbol.
+///
+/// Null on freestanding builds, which have no libc.
+const errno_location_fn: ?ErrnoLocationFn = if (is_freestanding) null else std.c._errno;
+
+/// Read the current thread's `errno`.
+///
+/// Must be called immediately after the failing libc call, before any other libc call on the same
+/// thread clobbers the slot.
+///
+/// Returns 0 on freestanding builds.
+pub fn readErrno() c_int {
+    const fetch = errno_location_fn orelse return 0;
+    return fetch().*;
+}
+
 /// lib-open ( path-or-name -- dylib ) - Opens a dynamic library and returns a resource handle to it.
 ///
 /// The argument can be either an explicit path (e.g., "./libfoo.so" or "C:\foo.dll")
@@ -1302,6 +1323,13 @@ test "ffi-ptr+len>borrowed-bytes wraps source memory without copying" {
 
     result.byte_array.slice()[2] = 77;
     try std.testing.expectEqual(@as(u8, 77), items[2]);
+}
+
+test "readErrno reflects errno after a deliberate libc failure" {
+    if (is_freestanding) return;
+    // close(-1) fails and sets errno = EBADF; read it back immediately.
+    _ = std.c.close(-1);
+    try std.testing.expectEqual(@as(c_int, @intFromEnum(std.c.E.BADF)), readErrno());
 }
 
 /// Call a foreign close function via libffi with the signature (ptr -> void).
