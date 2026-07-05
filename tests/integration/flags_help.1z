@@ -1,0 +1,20 @@
+\ Help output for typed, value-bearing flags. --help prints a usage block to
+\ stderr and exits 0. Each line shows the flag's label (with a type placeholder
+\ for value flags) and its description, aligned in a column, with (default: X)
+\ where a default is declared. A boolean flag shows neither placeholder nor
+\ default. Flags list in registration order, not hash order.
+\
+\ The enum type is defined before the flag that references it (parse-time
+\ ordering). Each test file runs as its own process, so the registry starts empty.
+
+use "flags" ;
+
+level: enum{ debug: unit info: unit warn: unit error: unit } ;
+
+output:    flag{ type: string short: "o" description: "Output path" } ;
+count:     flag{ type: fixnum default: 1 description: "Repetitions" } ;
+log-level: flag{ type: level default: level:warn description: "Log level" } ;
+verbose:   flag{ type: boolean short: "v" description: "Verbose output" } ;
+input:     required positional flag{ type: string description: "Input file" } ;
+
+{ "--help" } "My tool." parse-flags

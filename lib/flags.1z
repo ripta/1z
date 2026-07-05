@@ -91,11 +91,17 @@ private{
     [ is-positional-flag ] #filter #collect
   ] ;
 
-  \\ True when the flag named key declares short as its short alias. The short
-  \\ alias lives under the descriptor's fields hash, like every declared field.
+  \\ A flag's declared fields hash, where type, short, description, and default all
+  \\ live. The registry entry's "descriptor" is the flag{ } wrapper whose own "type"
+  \\ is always struct-descriptor:; the declared fields sit one level down under
+  \\ "fields". Every reader that wants a declared field dives through here.
+  flag-fields: ( name -- fields: hash ) [
+    flag-registry swap @get "descriptor" @get "fields" @get
+  ] ;
+
+  \\ True when the flag named key declares short as its short alias.
   flag-short-matches?: ( key short -- ? ) [
-    swap flag-registry swap @get
-    "descriptor" @get "fields" @get
+    swap flag-fields
     dup "short" @has?
     [ "short" @get = ]
     [ 2drop f ]
@@ -111,41 +117,105 @@ private{
     if
   ] ;
 
-  print-flag-help: ( name: symbol -- ) [
-    dup flag-registry swap @get
-    dup "markers" @get
-    swap "descriptor" @get
+  \\ Definition order recorded by define-flag, so help lists flags as declared.
+  flag-order-value: ( name -- order: fixnum ) [
+    flag-registry swap @get "order" @get
+  ] ;
 
-    swap positional [ = ] curry #filter #count 0 >
+  \\ The value suffix for a value flag: =<string>, =<fixnum>, =<level>. The type
+  \\ name is the declared TypeValue's own name.
+  flag-value-suffix: ( name -- suffix: string ) [
+    flag-fields "type" @get native.type-name
+    "=<" swap #append ">" #append
+  ] ;
+
+  \\ Append ", -<short>" when the flag declares a short alias, else leave the label.
+  append-short: ( label name -- label' ) [
+    dup flag-fields "short" @has?
+    [ flag-fields "short" @get ", -" swap #append #append ]
+    [ drop ]
+    if
+  ] ;
+
+  \\ The left column for one flag. A positional is <name>; a value flag is
+  \\ --name=<type>, -short; a boolean (presence) flag is --name, -short. Positional
+  \\ is checked first because a typed positional also reports flag-takes-value?.
+  flag-label: ( name -- label: string ) [
+    dup is-positional-flag
+    [ sym-to-str "  <" swap #append ">" #append ]
     [
-      over sym-to-str
-      "  <" swap #append ">" #append
-      swap dup "description" @has?
-      [ "description" @get "  " swap #append #append ]
-      [ drop ]
-      if
-      nip
-    ]
-    [
-      over sym-to-str
-      "  --" swap #append
-      over dup "short" @has?
+      dup flag-takes-value?
       [
-        "short" @get
-        ", -" swap #append
-        #append
+        dup sym-to-str "  --" swap #append
+        over flag-value-suffix #append
+        swap append-short
       ]
-      [ drop ]
+      [
+        dup sym-to-str "  --" swap #append
+        swap append-short
+      ]
       if
-      swap dup "description" @has?
-      [ "description" @get "  " swap #append #append ]
-      [ drop ]
-      if
-      nip
     ]
     if
+  ] ;
 
-    stderr swap stream-write-string drop
+  \\ Render a typed default for display: an enum variant shows its short name, every
+  \\ other value uses >string. >string on a variant would print <enum:variant ...>.
+  render-default: ( value type -- string ) [
+    dup enum-type?
+    [ drop >symbol >string ]
+    [ drop >string ]
+    if
+  ] ;
+
+  \\ The (default: X) suffix for a value flag that declares one, else "". Reads the
+  \\ default and its type from the flag's fields and renders per render-default.
+  flag-default-suffix: ( name -- suffix: string ) [
+    dup flag-takes-value?
+    over flag-fields "default" @has?
+    and
+    [
+      dup flag-fields "default" @get
+      swap flag-fields "type" @get render-default
+      " (default: " swap #append ")" #append
+    ]
+    [ drop "" ]
+    if
+  ] ;
+
+  \\ The right column for one flag: its description, plus (default: X) when a default
+  \\ is declared. A boolean flag never shows a default, matching the presence model.
+  flag-help-text: ( name -- text: string ) [
+    dup flag-fields dup "description" @has?
+    [ "description" @get ]
+    [ drop "" ]
+    if
+    swap flag-default-suffix
+    #append
+  ] ;
+
+  \\ Print one flag's line to stderr, padding the label to width so descriptions
+  \\ align in a column. A flag with no help text prints just its label, with no
+  \\ trailing padding.
+  print-flag-line: ( name width -- ) [
+    swap dup flag-label
+    swap flag-help-text
+
+    dup #len 0 =
+    [
+      drop nip
+      stderr swap stream-write-string drop
+    ]
+    [
+      [
+        dup #len
+        2 pick-n swap - " " swap repeat
+        #append nip
+      ] dip
+      #append
+      stderr swap stream-write-string drop
+    ]
+    if
     stderr "\n" >bytes stream-write drop
   ] ;
 
@@ -155,7 +225,14 @@ private{
     stderr "\n" >bytes stream-write drop
 
     flag-registry @keys
-    [ print-flag-help ] #each
+    [ flag-order-value ] #sort-by
+
+    dup [ flag-label #len ] #map #collect
+    0 [ max ] #reduce
+    4 +
+
+    swap [ over print-flag-line ] #each
+    drop
   ] ;
 
   mth-src: parameter{ [ [ ] make-mutable-map ] } ;

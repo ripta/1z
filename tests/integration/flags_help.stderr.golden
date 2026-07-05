@@ -1,0 +1,6 @@
+Usage: My tool.
+  --output=<string>, -o    Output path
+  --count=<fixnum>         Repetitions (default: 1)
+  --log-level=<level>      Log level (default: warn)
+  --verbose, -v            Verbose output
+  <input>                  Input file
