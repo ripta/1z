@@ -1,5 +1,10 @@
 \ lib/effect.1z - Stack effect value utilities
 
+\\ Parse a stack-effect body string, with no surrounding parens, into a
+\\ stack-effect value. The body is the inner form, e.g. "a b -- result". This is
+\\ the runtime analog of the parse-time `(` word, which reads from the tokenizer.
+parse-stack-effect: ( source: string -- stack-effect ) [ native.parse-stack-effect ] ;
+
 \ Convert a raw 3-element param array to a stack-effect-param struct.
 \ Recursively converts nested effects.
 (raw>param): ( raw -- param ) [

@@ -1,0 +1,87 @@
+\ Runtime-equivalence tests for the hosted `fn name(params) = rhs ;` lowering.
+\ Each generated word is compared to a hand-written 1z equivalent or a known value.
+
+use "testing" ;
+use "expr" ;
+use "expr/fn_fixture" ;
+
+\ Words defined with the fn sugar.
+fn square(x) = x * x ;
+fn hypot2(a, b) = a * a + b * b ;
+fn shifted(x) = (x + 1) * (x + 1) ;
+fn negated(x) = -x ;
+fn answer() = 42 ;
+fn callsdbl(x) = dbl(x) ;
+fn usesfwd(x) = fwd(x) ;
+
+\ Hand-written equivalents and callees.
+h-square:  ( x -- n )   [ dup * ] ;
+h-hypot2:  ( a b -- n ) [ dup * swap dup * + ] ;
+h-shifted: ( x -- n )   [ 1 + dup * ] ;
+dbl: ( n -- n ) [ 2 * ] ;
+fwd: ( n -- n ) [ 3 + ] ;
+
+"unary" test-section
+
+test-square-parity: ( -- ) [
+  9 square 9 h-square "square matches dup *" assert=
+  9 square 81 "square of 9 is 81" assert=
+] ;
+
+test-negated: ( -- ) [
+  5 negated -5 "negated of 5 is -5" assert=
+] ;
+
+"multi-argument" test-section
+
+test-hypot2-parity: ( -- ) [
+  3 4 hypot2 3 4 h-hypot2 "hypot2 matches hand-written" assert=
+  3 4 hypot2 25 "hypot2 of 3 and 4 is 25" assert=
+] ;
+
+test-hypot2-argument-order: ( -- ) [
+  \ Parameters are bound by header position, not stack juggling.
+  5 12 hypot2 169 "hypot2 of 5 and 12 is 169" assert=
+] ;
+
+"nested right-hand side" test-section
+
+test-shifted-parity: ( -- ) [
+  4 shifted 4 h-shifted "shifted matches hand-written" assert=
+  4 shifted 25 "shifted of 4 is 25" assert=
+] ;
+
+"zero argument" test-section
+
+test-answer: ( -- ) [
+  answer 42 "zero-arg word returns its constant" assert=
+] ;
+
+"right-hand-side calls" test-section
+
+test-calls-defined-word: ( -- ) [
+  5 callsdbl 10 "RHS call reaches a defined word" assert=
+] ;
+
+test-calls-forward-reference: ( -- ) [
+  \ fwd is defined after usesfwd; the call still resolves.
+  5 usesfwd 8 "RHS call resolves a forward-referenced callee" assert=
+] ;
+
+"auto-derived stack effect" test-section
+
+test-unary-effect: ( -- ) [
+  square: >word-info stack-effect>> >string
+  "( x -- result )" "unary effect uses the parameter name" assert=
+] ;
+
+test-multi-arg-effect: ( -- ) [
+  hypot2: >word-info stack-effect>> >string
+  "( a b -- result )" "multi-arg effect uses both parameter names" assert=
+] ;
+
+"module loading" test-section
+
+test-fn-in-module: ( -- ) [
+  3 cube 27 "an fn-defined word is importable from a module" assert=
+] ;

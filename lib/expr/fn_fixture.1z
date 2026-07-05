@@ -1,0 +1,6 @@
+\ lib/expr/fn_fixture.1z: fixture module for the fn module-loading test. Defines a
+\ word with the hosted `fn` sugar so a test can confirm it is importable.
+
+use "expr" ;
+
+fn cube(x) = x * x * x ;

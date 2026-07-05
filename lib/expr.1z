@@ -1,6 +1,7 @@
 \ lib/expr.1z: the parse-time expr{ } form, plus the re-exported parse/lower pipeline.
 
 use "strings" ;
+use "sequences" ;
 "expr/ast" load reexport
 "expr/parser" load reexport
 "expr/lower" load reexport
@@ -14,10 +15,47 @@ expr{: parse-time [
 ] ;
 
 private{
-  \ Placeholder for the fn-decl lowering step. Parsing (parse-fn) is complete;
-  \ lowering an fn-decl to an ordinary word definition is not yet implemented.
+  \ Build the runtime binding fragment for one parameter. The fragment, run with
+  \ the parameter's incoming value on top of the stack, defines a local word of
+  \ that name that pushes the value: `:name swap ;` calls the `;` definer with the
+  \ name below the value, so the local pushes the value on every reference.
+  (bind-one): ( name -- quot ) [
+    >symbol [ swap ] curry ";" >quotation compose
+  ] ;
+
+  \ Build the binding preamble: a quotation that binds each parameter, in reverse
+  \ header order, to a per-invocation local word. The last parameter is bound
+  \ first because it sits on top of the stack. Each fragment is prepended so the
+  \ composed order runs the last parameter's fragment first.
+  (bind-preamble): ( params -- quot ) [
+    [ ] [ (bind-one) swap compose ] #reduce
+  ] ;
+
+  \ Lower a parsed fn-decl to an ordinary word definition. Builds the body as a
+  \ quotation value and the auto-derived `( params -- result )` effect, then leaves
+  \ `:name effect body` on the stack and emits a call to `;` so the definition runs
+  \ at statement time in the enclosing scope, exactly like a hand-written word.
+  \
+  \ The body is `[ [ <bind params> <rhs> ] call ]`: the inner `call` gives each
+  \ invocation its own local frame, so the parameter bindings are per-invocation
+  \ and gone once the frame pops.
   (lower-fn-decl): ( fn-decl -- ) [
-    drop f "fn lowering is not yet implemented" throw
+    dup params>> (bind-preamble)  \ decl preamble
+    over rhs>> lower              \ decl preamble rhs-quot
+    compose                       \ decl inner
+    [ call ] curry                \ decl body
+    swap                          \ body decl
+    dup name>> >symbol            \ body decl :name
+    swap params>>                 \ body :name params
+    \ Build the "p1 p2 -- result" effect body and parse it. The raw native is
+    \ called directly, and the string is built with native sequence ops, because a
+    \ private word invoked at parse time cannot resolve plain `use`-imported
+    \ library words such as the `parse-stack-effect` wrapper or `#join`.
+    "" [ #append " " #append ] #reduce  \ body :name "p1 p2 "
+    "-- result" #append                 \ body :name "p1 p2 -- result"
+    native.parse-stack-effect           \ body :name effect
+    <rot-                               \ :name effect body
+    ";" >symbol emit-call
   ] ;
 }
 

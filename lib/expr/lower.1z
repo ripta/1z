@@ -39,16 +39,17 @@ lower: ( node: expr-node -- quotation ) [
       compose                  \ ( [ L R op ] )
     ]
     expr-node:invoke: [  \ ( callee args )
-      \ A call cannot be lowered to a self-contained quotation value: the only
-      \ callable value is a quotation, and no runtime facility builds "call the
-      \ word named by this string". Calls lower through the parse-time emit-expr
-      \ path instead, which emits an ordinary call_word via emit-call.
-      drop drop f "a call cannot be lowered to a quotation value; use emit-expr" throw
+      \ Lower each argument to a quotation, concatenate them in source order, then
+      \ append a call to the callee. `>quotation` builds a bare `call_word` even
+      \ for a not-yet-defined word, so forward references resolve like ordinary 1z.
+      [ lower ] #map #collect  \ ( callee [q1 q2 ...] )
+      [ ] [ compose ] #reduce  \ ( callee [ q1 q2 ... ] )
+      swap >quotation compose  \ ( [ q1 q2 ... callee ] )
     ]
     expr-node:ref: [  \ ( name )
-      \ A bare identifier has no meaning without a binding context; only the fn
-      \ surface, which binds parameters, can lower a reference.
-      drop f "a bare identifier reference cannot be lowered without a parameter binding" throw
+      \ A parameter reference lowers to a call of the bound local word. The fn
+      \ surface binds each parameter to a local word that pushes its value.
+      >quotation
     ]
   }
 ] ;

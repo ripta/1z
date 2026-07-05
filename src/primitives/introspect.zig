@@ -45,6 +45,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "word-source", .func = nativeWordSource },
     .{ .name = "quotation>effect", .func = nativeQuotationToEffect },
     .{ .name = "quotation>opcodes", .func = nativeQuotationToOpcodes },
+    .{ .name = "parse-stack-effect", .func = nativeParseStackEffect, .stack_effect = "string -- stack-effect" },
 };
 
 const StackEffectParam = @import("../stack_effect.zig").StackEffectParam;
@@ -1063,6 +1064,20 @@ fn nativeQuotationToEffect(ctx: *Context) anyerror!void {
     } else {
         try ctx.stack.push(.{ .boolean = false });
     }
+}
+
+/// parse-stack-effect ( string -- stack-effect ) - Build a stack-effect value
+/// from an effect body string with no surrounding parens, e.g. "a b -- result".
+/// The runtime analog of the parse-time `(` word, which reads from the tokenizer
+/// instead of a string.
+fn nativeParseStackEffect(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const raw = try helpers.popString(ctx);
+    // makeSimpleEffect aliases parameter names into `raw`, so the backing memory
+    // must outlive the popped string. Dupe into the quotation allocator.
+    const owned = try alloc.dupe(u8, raw);
+    const effect = try helpers.makeSimpleEffect(alloc, owned);
+    try ctx.stack.push(.{ .stack_effect = effect });
 }
 
 /// quotation>opcodes ( quotation -- array ) - Return instruction pairs as raw [symbol, value] arrays.

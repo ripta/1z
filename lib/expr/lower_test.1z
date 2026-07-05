@@ -3,6 +3,7 @@
 use "testing" ;
 use "expr/ast" ;
 use "expr/lower" ;
+use "expr/parser" ;
 
 "literal lowering" test-section
 
@@ -70,3 +71,37 @@ test-unary-minus-in-expr-lowers: ( -- ) [
   binop lower call
   5 -1 * 3 + "unary minus inside binop parity" assert=
 ] ;
+
+"reference lowering" test-section
+
+dbl: ( n -- n ) [ 2 * ] ;
+
+test-ref-lowers-to-call: ( -- ) [
+  \ A bare identifier lowers to a call of the word of that name.
+  5 "dbl" parse-expr lower call
+  5 dbl "ref lowers to a call of the named word" assert=
+] ;
+
+"invoke lowering" test-section
+
+addtwo: ( a b -- c ) [ + ] ;
+
+test-invoke-lowers-to-call: ( -- ) [
+  \ addtwo(3, 4)  =>  3 4 addtwo
+  "addtwo(3, 4)" parse-expr lower call
+  3 4 addtwo "invoke lowers to args then call" assert=
+] ;
+
+test-invoke-nested-arg-lowers: ( -- ) [
+  \ addtwo(1 + 2, 3)  =>  1 2 + 3 addtwo
+  "addtwo(1 + 2, 3)" parse-expr lower call
+  1 2 + 3 addtwo "invoke with a nested argument lowers correctly" assert=
+] ;
+
+test-invoke-zero-arg-lowers: ( -- ) [
+  \ answer()  =>  answer
+  "answer()" parse-expr lower call
+  answer "zero-arg invoke lowers to a bare call" assert=
+] ;
+
+answer: ( -- n ) [ 42 ] ;
