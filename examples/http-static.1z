@@ -1,0 +1,71 @@
+\ Static file HTTP server.
+\
+\ Serves files from a directory over HTTP/1.1, one green thread per
+\ connection. The whole serving path lives in lib/net/http.1z; this
+\ program only parses flags and calls serve-static.
+\
+\ Usage:
+\   1z examples/http-static.1z [--host H] [--port N] [--dir D]
+\
+\ Flags (with defaults):
+\   --host, -H   127.0.0.1   address to bind
+\   --port, -p   8080        port to listen on
+\   --dir,  -d   .           directory to serve
+\   --help, -h               print this usage and exit
+
+use "net/http" ;
+use "conversions" ;
+use "strings" ;
+
+\ Mutable config seeded with defaults, overwritten as flags are parsed.
+config: ( -- c: mutable-map ) M{ host: "127.0.0.1" port: 8080 dir: "." } ;
+
+usage: ( -- ) [
+  "Usage: 1z examples/http-static.1z [--host H] [--port N] [--dir D]" eprint-line
+] ;
+
+\ Store an option value into config, preserving the args/index below it.
+set-opt: ( key value -- ) [ [ config ] 2dip @set! drop ] ;
+
+\ Read the argument following index i without consuming args/i.
+next-val: ( args i -- args i value ) [ 2dup 1 + #nth ] ;
+
+\ Dispatch a single flag at index i, returning the advanced index.
+handle: ( args i -- args i' ) [
+  2dup #nth
+  dup "--help" = over "-h" = or
+  [ drop usage 0 sys-exit ]
+  [ dup "--port" = over "-p" = or
+    [ drop next-val parse-integer "port" swap set-opt 2 + ]
+    [ dup "--host" = over "-H" = or
+      [ drop next-val "host" swap set-opt 2 + ]
+      [ dup "--dir" = over "-d" = or
+        [ drop next-val "dir" swap set-opt 2 + ]
+        [ "unknown option: " swap #append eprint-line usage 1 sys-exit ]
+        if
+      ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+parse-loop: ( args i -- args i ) [
+  2dup swap #len <
+  [ handle parse-loop ]
+  [ ]
+  if
+] ;
+
+command-line-args 0 parse-loop 2drop
+
+"Serving " config "dir" @get #append
+" on http://" #append config "host" @get #append
+":" #append config "port" @get >string #append
+print-line
+
+config "host" @get
+config "port" @get
+config "dir" @get
+serve-static
