@@ -30,6 +30,19 @@
 \   1 + 2 * 3  ->  [ 1 2 3 * + ]
 \   20 / 4 / 2 ->  [ 20 4 / 2 / ]
 \   -5 + 3     ->  [ 5 -1 * 3 + ]
+\
+\ Call overhead is measured in three tiers at the end, mirroring the scalar
+\ tiers but for name(...) call syntax:
+\   - parser overhead   (parse-expr on call sources)
+\   - full parse-time   (tokenize + parse + emit-expr, via eval-string)
+\   - runtime overhead  (inline expr{ f(x) } vs hand-written direct 1z)
+\ Calls have no standalone lowering row: `lower` throws on invoke nodes by
+\ design (a call cannot be a self-contained quotation value), so calls lower
+\ only through the parse-time emit-expr path. That emission is parse-time-only
+\ (emit-body / emit-call), so its cost is folded into the full-parse-time tier
+\ rather than measured as a separate runtime loop. At runtime, emit-call emits an
+\ ordinary call_word, so an inline call expr{ } is byte-identical to hand-written
+\ 1z and should show parity.
 
 use "expr" ;
 use "sequences" ;
@@ -60,6 +73,29 @@ GEN-NEG:   [ expr{ -5 + 3 } ] ;
 DIR-SMALL: [ 1 2 3 * + ] ;
 DIR-DIV:   [ 20 4 / 2 / ] ;
 DIR-NEG:   [ 5 -1 * 3 + ] ;
+
+\ Call helpers. sub2 is non-commutative, so the runtime rows also confirm
+\ left-to-right argument order. They must be in scope for both expr{ } emission
+\ and eval-string parsing, so they are defined at top level.
+add1: ( n -- n )   [ 1 + ] ;
+dbl:  ( n -- n )   [ 2 * ] ;
+sub2: ( a b -- c ) [ - ] ;
+
+\ Call sources for the parser tier, plus a non-call baseline of comparable token
+\ count so the incremental cost of call syntax is visible.
+CALL-SINGLE-SRC: const [ "add1(2 * 3)" ] ;
+CALL-MULTI-SRC:  const [ "sub2(1 + 2, 3 + 4)" ] ;
+CALL-NESTED-SRC: const [ "add1(dbl(sub2(1, 2)))" ] ;
+
+\ Inline call expr{ } words vs their hand-written direct-1z equivalents. Parse +
+\ emit happen at definition time, so the timed loop is execution-only. emit-call
+\ emits an ordinary call_word, so each pair should be identical at runtime.
+GEN-CALL1: [ expr{ add1(2 * 3) } ] ;
+DIR-CALL1: [ 2 3 * add1 ] ;
+GEN-CALL2: [ expr{ sub2(10, 3) } ] ;
+DIR-CALL2: [ 10 3 sub2 ] ;
+GEN-CALL3: [ expr{ add1(dbl(3)) } ] ;
+DIR-CALL3: [ 3 dbl add1 ] ;
 
 "--- parser overhead (parse-expr: tokenize + Pratt parse) ---" print-line
 [
@@ -106,4 +142,40 @@ nl
   "call direct   1 2 3 * +" [ [ 1 2 3 * + ] call drop ] benchmark-auto
   "call gen-quot 20 / 4 / 2" [ DIV-QUOT call drop ] benchmark-auto
   "call direct   20 4 / 2 /" [ [ 20 4 / 2 / ] call drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- calls: parser overhead (parse-expr on call sources) ---" print-line
+[
+  "parse call single (add1)" [ CALL-SINGLE-SRC parse-expr drop ] benchmark-auto
+  "parse call multi  (sub2)" [ CALL-MULTI-SRC parse-expr drop ] benchmark-auto
+  "parse call nested (3 dp)" [ CALL-NESTED-SRC parse-expr drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+\ Full parse-time cost of a call expr{ }: eval-string re-runs tokenize + parse +
+\ emit-expr + execute each iteration. This is the only way to exercise the call
+\ emission (emit-expr) in a loop, since it is parse-time-only. It cannot cleanly
+\ separate emit from parse; the expr{ } row minus the direct-1z row isolates the
+\ expr{ } tokenize+parse+emit overhead, as both execute the same tiny work.
+"--- calls: full parse-time via eval-string (tokenize + parse + emit) ---" print-line
+[
+  "eval expr{ } call   add1(2*3)" [ "expr{ add1(2 * 3) }" eval-string drop ] benchmark-auto
+  "eval direct  call   2 3 * add1" [ "2 3 * add1" eval-string drop ] benchmark-auto
+  "eval expr{ } scalar 1 + 2 * 3" [ "expr{ 1 + 2 * 3 }" eval-string drop ] benchmark-auto
+  "eval direct  scalar 1 2 3 * +" [ "1 2 3 * +" eval-string drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- calls: runtime inline expr{ f(x) } vs direct 1z ---" print-line
+[
+  "gen-call add1(2 * 3)" [ GEN-CALL1 drop ] benchmark-auto
+  "direct   2 3 * add1" [ DIR-CALL1 drop ] benchmark-auto
+  "gen-call sub2(10, 3)" [ GEN-CALL2 drop ] benchmark-auto
+  "direct   10 3 sub2" [ DIR-CALL2 drop ] benchmark-auto
+  "gen-call add1(dbl(3))" [ GEN-CALL3 drop ] benchmark-auto
+  "direct   3 dbl add1" [ DIR-CALL3 drop ] benchmark-auto
 ] run-benchmarks
