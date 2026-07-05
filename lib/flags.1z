@@ -5,7 +5,7 @@
 \   use conversions ;
 \
 \   help: flag{ description: "Show help" short: "h" } ;
-\   number: required positional flag{ type: integer: description: "Number to check" } ;
+\   number: required positional flag{ type: fixnum description: "Number to check" } ;
 \
 \   command-line-args "Check if a number is prime." parse-flags
 \   "number" @get ...
@@ -40,6 +40,17 @@ flag{: parse-time [
 \
 \ Registers the flag in the global registry.
 define-flag: ( name fields markers -- ) [
+  \ The declared flag type lives under the descriptor's "fields" hash. A symbol
+  \ there (the dropped `type: integer:` form) is a loud definition-time error.
+  over "fields" @get
+  dup "type" @has?
+  [ "type" @get symbol?
+    [ f "flags: type: requires a TypeValue, not a symbol" EInvalidArgument make-error throw ]
+    when
+  ]
+  [ drop ]
+  if
+
   [ ] make-mutable-map
   swap markers: swap @set!
   swap descriptor: swap @set!
@@ -267,11 +278,11 @@ private{
       dup flag-registry swap @has?
       [
         dup flag-registry swap @get
-        "descriptor" @get
+        "descriptor" @get "fields" @get
         dup "type" @has?
         [
           "type" @get
-          dup integer: =
+          dup fixnum =
           [
             drop
             dup pf-result get swap @get

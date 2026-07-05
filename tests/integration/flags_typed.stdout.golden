@@ -1,0 +1,13 @@
+=== typed flags ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ H{ count: 42 } ]
+PASS: type: fixnum converts a positional to a number
+Stack: [ H{ count: 42 } ]
+PASS: converted value is a fixnum, not a string
+Stack: [ ]
+Stack: [ [ bad: H{ fields: H{ type: fixnum: } } { } define-flag ] ]
+PASS: a symbol under type: is rejected
+Stack: [ ]
+All typed flags tests complete!
+Stack: [ ]

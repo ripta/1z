@@ -1,0 +1,23 @@
+\ Typed CLI flags: a real TypeValue under type: drives conversion, and a symbol
+\ under type: (the dropped `type: integer:` form) is rejected at definition time.
+
+use "testing" ;
+use "flags" ;
+
+"typed flags" test-section
+
+\ A single positional keeps its index stable regardless of registry hash order.
+count: required positional flag{ type: fixnum description: "A count" } ;
+
+\ type: fixnum converts the raw string argument to a real fixnum.
+{ "42" } "Typed program" parse-flags
+dup "count" @get 42 "type: fixnum converts a positional to a number" assert=
+"count" @get type-of fixnum "converted value is a fixnum, not a string" assert=
+
+\ A symbol under type: is a loud definition-time error. The direct define-flag
+\ call reproduces the descriptor that `flag{ ... } ;` builds, whose fields hash
+\ carries the declared type. The dropped `type: integer:` form lands here.
+[ bad: H{ fields: H{ type: fixnum: } } { } define-flag ]
+"a symbol under type: is rejected" assert-error
+
+"All typed flags tests complete!" print-line

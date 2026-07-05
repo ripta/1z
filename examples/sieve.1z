@@ -5,7 +5,7 @@ use "flags" ;
 use "ranges" ;
 
 help: flag{ description: "Show help" short: "h" } ;
-number: required positional flag{ type: integer: description: "Number to check" } ;
+number: required positional flag{ type: fixnum description: "Number to check" } ;
 
 sieve: ( candidates -- primes ) [
   dup #len 0 =
