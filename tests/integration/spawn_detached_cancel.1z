@@ -1,0 +1,31 @@
+use "testing" ;
+use "time" ;
+
+\ Scope cancellation reaches a detached task. A spawned task T runs an inner
+\ task-scope that spawn-detached's a sleeper with a cleanup handler recording
+\ into a shared vector. T is blocked on the inner scope, waiting for the
+\ detached task to drain. Cancelling T must walk the inner scope's detached
+\ list and cancel the sleeper. If it did not, the inner scope would wait on the
+\ sleeper for ~100000 ms and this test would hang. The vector length proves the
+\ detached task's cleanup ran, i.e. cancellation reached it.
+
+test-cancel-reaches-detached: ( -- ) [
+  V{ }
+  dup
+  [
+    [
+      [
+        dup [ 99 #push! drop ] curry
+        [ [ 100000 milliseconds sleep ] swap cleanup ] curry
+        spawn-detached
+        drop
+      ] curry task-scope
+    ] curry spawn
+    10 milliseconds sleep
+    dup cancel-task drop
+  ] curry
+  task-scope
+  #len 1 "cleanup ran on cancelled detached task" assert=
+] ;
+
+test-cancel-reaches-detached

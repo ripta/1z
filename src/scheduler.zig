@@ -922,10 +922,25 @@ pub const Scheduler = struct {
             task.blocked_on_process_key = null;
             self.run_queue.append(self.allocator, task) catch {};
         } else if (task.blocked_on_scope) |scope| {
-            scope.children_mu.lock();
-            defer scope.children_mu.unlock();
-            for (scope.children.items) |child| {
-                self.cancelTask(child);
+            {
+                scope.children_mu.lock();
+                defer scope.children_mu.unlock();
+                for (scope.children.items) |child| {
+                    self.cancelTask(child);
+                }
+            }
+            // Detached tasks are not in `children`, so cancel them through
+            // their own list. Two sequential locked blocks avoid holding both
+            // mutexes at once. `cancelTask` reroutes a detached task by its
+            // blocked state and never re-enters this scope's `detached_mu`, so
+            // there is no re-entrancy; `removeDetached` at the task's own
+            // completion blocks until this walk finishes.
+            {
+                scope.detached_mu.lock();
+                defer scope.detached_mu.unlock();
+                for (scope.detached.items) |detached_task| {
+                    self.cancelTask(detached_task);
+                }
             }
         } else {
             self.wakeSleepingTask(task);
@@ -1066,9 +1081,31 @@ pub const Scheduler = struct {
             self.peak_task_stack_usage = task.peak_stack_usage;
         }
 
+        // A detached failure is isolated from siblings, so it never surfaces
+        // through scope-exit propagation. Log it before `reapTask` frees the
+        // context arena that owns the error strings, so an unhandled crash
+        // (such as a server handler bug) is not silent.
+        if (task.getStatus() == .failed) logUnhandledDetachedFailure(task);
+
         self.maybeWakeScopeWaiter(scope);
         self.reapTask(task);
         self.notifyOwnerTaskDone();
+    }
+
+    /// Emit a one-line stderr diagnostic for an unhandled detached-task
+    /// failure. Combines the scheduler caps-prefix convention with the
+    /// `ErrorObject` `<error TYPE: MSG>` self-rendering. No task id is printed,
+    /// so the line is stable across schedulings. `.cancelled` detached tasks
+    /// do not reach here; that is expected shutdown, not a failure.
+    fn logUnhandledDetachedFailure(task: *const Task) void {
+        var tw = trace.TraceWriter.init();
+        const error_type = if (task.error_obj) |eo| eo.error_type else "task-error";
+        const message = if (task.error_obj) |eo| eo.message else "task failed without error details";
+        if (task.name) |name| {
+            tw.print("DETACHED-TASK-FAILED \"{s}\": <error {s}: {s}>\n", .{ name, error_type, message });
+        } else {
+            tw.print("DETACHED-TASK-FAILED: <error {s}: {s}>\n", .{ error_type, message });
+        }
     }
 
     /// Wake the scope waiter once both tracked and detached tasks have

@@ -1,0 +1,18 @@
+use "testing" ;
+use "time" ;
+
+\ An unhandled detached failure is logged to stderr and isolated from siblings.
+\ A detached task throws an uncaught error. A tracked sibling sleeps briefly and
+\ completes. The sibling must survive: a detached failure does not fire sibling
+\ cancellation. The reap of the failed detached task emits a one-line
+\ DETACHED-TASK-FAILED diagnostic to stderr (see the .stderr.golden sidecar).
+
+test-detached-failure-isolated: ( -- ) [
+  [
+    [ f "boom" test-error: make-error throw ] spawn-detached
+    [ 20 milliseconds sleep ] spawn await
+  ] task-scope
+  t "tracked sibling survived unhandled detached failure" assert-true
+] ;
+
+test-detached-failure-isolated
