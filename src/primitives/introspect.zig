@@ -605,6 +605,20 @@ fn nativeLocalScope(ctx: *Context) anyerror!void {
     const module = try alloc.create(Module);
     module.* = .{ .name = "<local-scope>", .words = .{}, .importable = true };
 
+    // Capture ambient imported words into deps so the synthesized module is
+    // self-contained. Without this, a private{ } word entered by a tail call
+    // cannot resolve its module's use-imports: TCO drops the caller's deps
+    // frame, and <local-scope>'s own frame otherwise lacks the imports.
+    // Iterate outermost-first so innermost-scope entries take precedence.
+    for (ctx.local_frames.items) |*frame| {
+        var dep_iter = frame.iterator();
+        while (dep_iter.next()) |entry| {
+            if (entry.value_ptr.*.imported) {
+                try module.deps.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+            }
+        }
+    }
+
     var iter = ctx.local_frames.items[ctx.local_frames.items.len - 1].iterator();
     while (iter.next()) |entry| {
         try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));

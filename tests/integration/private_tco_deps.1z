@@ -1,0 +1,11 @@
+use "testing" ;
+
+"tail-call into a private word resolving a use-imported dep" test-section
+
+\ Regression for the TCO-drops-private-word-module-deps defect. public-tail is
+\ entered by a tail call ([ ... ] call), so its module-deps frame is loop-owned
+\ and dropped when it tail-calls the private (call-dep). (call-dep) references
+\ from-a, use-imported by the library. local-scope must capture from-a into the
+\ private module's deps so it still resolves after the frame drops.
+use "tco_private_deps_lib.1z" ;
+[ public-tail ] call "from-a" "private word tail-called resolves module use-import" assert=

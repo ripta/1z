@@ -1,0 +1,14 @@
+\ Regression fixture: a public word tail-calls a private helper that references
+\ a use-imported word. Mirrors lib/net/server.1z's serve-forever/serve-loop.
+\
+\ When public-tail is itself entered by a tail call, its module-deps frame is
+\ loop-owned and dropped when it tail-calls (call-dep). (call-dep)'s source
+\ module is the ephemeral <local-scope>, so local-scope must capture from-a into
+\ that module's deps for the reference to still resolve after the frame drops.
+use "mod_a.1z" ;
+
+private{
+  (call-dep): [ from-a ] ;
+}
+
+public-tail: [ (call-dep) ] ;

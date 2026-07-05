@@ -1,0 +1,4 @@
+=== tail-call into a private word resolving a use-imported dep ===
+Stack: [ ]
+PASS: private word tail-called resolves module use-import
+Stack: [ ]
