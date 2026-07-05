@@ -10,19 +10,24 @@ parse-quotation: ( -- quotation ) [
   [ ] [ "quotation" throw-type-error ] if
 ] ;
 
-\\ Hash literal syntax.
+\\ Hash literal syntax. Hashes are immutable, so the parser can bake the
+\\ parse-time result into a shared literal.
 H{: parse-time [ "}" parse-until make-hash ] ;
 
-\\ Vector literal syntax.
+\\ Vector literal syntax. Vectors are mutable, so emit the constructor call and
+\\ create a fresh vector each time this code runs.
 V{: parse-time [ "}" parse-until make-vector: emit-call ] ;
 
-\\ Byte array literal syntax.
+\\ Byte array literal syntax. Byte arrays are mutable, so emit the constructor
+\\ call and create a fresh byte array each time this code runs.
 B{: parse-time [ "}" parse-until make-byte-array: emit-call ] ;
 
-\\ Set literal syntax.
+\\ Set literal syntax. Sets are immutable, so the parser can bake the
+\\ parse-time result into a shared literal.
 S{: parse-time [ "}" parse-until make-set ] ;
 
-\\ Mutable map literal syntax.
+\\ Mutable map literal syntax. Mutable maps need runtime construction; a baked
+\\ parse-time literal would be shared across invocations and leak mutations.
 M{: parse-time [ "}" parse-until make-mutable-map: emit-call ] ;
 
 \\ Bind type parameters onto a base type in a struct field or enum variant slot.

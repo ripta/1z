@@ -1,4 +1,5 @@
-Hash literal syntax.
+Hash literal syntax. Hashes are immutable, so the parser can bake the
+parse-time result into a shared literal.
 H{ [<marker:parse-time>] \compound
 
 Stack: [ ]
