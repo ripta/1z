@@ -44,6 +44,7 @@ pub const registry_entries = [_]RegistryEntry{
 pub const primitives = [_]Primitive{
     .{ .name = "task-scope", .stack_effect = "quot --", .doc = "Run quotation in a structured concurrency scope. Waits for every child task to reach a terminal status regardless of which worker each child ran on. When task-scope returns, normally or by re-throwing a child's error, every child has reached terminal status and its registered cleanup handler has run to completion.", .func = nativeTaskScope },
     .{ .name = "spawn", .stack_effect = "quot -- task", .doc = "Spawn a new task from a quotation. The task is pinned to the worker with the fewest active tasks at spawn time for its entire lifetime.", .func = nativeSpawn },
+    .{ .name = "spawn-detached", .stack_effect = "quot --", .doc = "Spawn a fire-and-forget task reaped at its own completion, not at scope exit, so a long-running scope stays bounded in memory. The task is isolated from sibling cancellation and pushes no handle. The scope still waits for in-flight detached tasks before returning.", .func = nativeSpawnDetached },
     .{ .name = "spawn-named", .stack_effect = "quot name -- task", .doc = "Spawn a named task from a quotation.", .func = nativeSpawnNamed },
     .{ .name = "task-self", .stack_effect = "-- task", .doc = "Push the current task handle.", .func = nativeTaskSelf },
     .{ .name = "yield", .stack_effect = "--", .doc = "Voluntarily yield the current task.", .func = nativeYield },
@@ -270,6 +271,33 @@ fn nativeSpawnNamed(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .task = task });
 }
 
+/// spawn-detached ( quot -- )
+///
+/// Must be called within a `task-scope`. Spawns a fire-and-forget task that
+/// is tracked in the scope's separate detached list rather than its
+/// children, so its failure is isolated from siblings. The task is reaped at
+/// its own completion instead of at scope exit, so a long-running scope that
+/// fires off many detached tasks stays bounded in memory. The scope still
+/// waits for all in-flight detached tasks to finish before it returns. No
+/// task handle is pushed: a detached task may be freed the moment it
+/// completes, so there is nothing safe to hand back.
+fn nativeSpawnDetached(ctx: *Context) anyerror!void {
+    const quot = try helpers.popQuotation(ctx);
+
+    const scheduler = ctx.scheduler orelse {
+        ctx.pending_error_message = "spawn-detached must be called within a task-scope";
+        return error.InvalidState;
+    };
+
+    const current = scheduler.current_task orelse {
+        ctx.pending_error_message = "spawn-detached must be called from a running task";
+        return error.InvalidState;
+    };
+
+    const scope = current.scope;
+    _ = try spawnDetachedOnPool(ctx, scheduler, scope, quot);
+}
+
 /// Allocate a child task on the least-loaded worker, attach it to the
 /// given scope, and either enqueue locally or push to the target worker's
 /// cross-thread external queue. The active-tasks counter on the target is
@@ -296,6 +324,37 @@ fn spawnTaskOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot
     // Legacy single-scheduler path (used by standalone schedulers in tests).
     const task = try allocateTask(ctx, scheduler, scope, quot);
     try scope.addChild(task);
+    try scheduler.enqueue(task);
+    return task;
+}
+
+/// Like `spawnTaskOnPool`, but registers the task in the scope's detached
+/// list instead of its children and marks it detached, so the scheduler
+/// reaps it at its own completion. The target's active-tasks counter is
+/// still incremented so the pool stays alive while the detached task runs
+/// and a top-level scope waits for it. `detached` and `addDetached` are set
+/// before enqueue, so the task cannot start before it is fully registered.
+fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, quot: Quotation) !*Task {
+    if (ctx.worker_pool) |pool| {
+        const target = pool.pickLeastLoaded();
+        _ = target.active_tasks.fetchAdd(1, .release);
+        errdefer _ = target.active_tasks.fetchSub(1, .release);
+
+        const task = try allocateTask(ctx, &target.scheduler, scope, quot);
+        task.detached = true;
+        try scope.addDetached(task);
+        if (&target.scheduler == scheduler) {
+            try target.scheduler.enqueue(task);
+        } else {
+            try target.enqueueExternal(task);
+        }
+        return task;
+    }
+
+    // Legacy single-scheduler path (used by standalone schedulers in tests).
+    const task = try allocateTask(ctx, scheduler, scope, quot);
+    task.detached = true;
+    try scope.addDetached(task);
     try scheduler.enqueue(task);
     return task;
 }

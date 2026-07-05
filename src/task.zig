@@ -165,6 +165,10 @@ pub const Task = struct {
     peak_stack_usage: usize = 0,
     /// Task that is waiting for this task to complete (via await).
     awaiting_task: ?*Task = null,
+    /// Set for a fire-and-forget task spawned with `spawn-detached`. A
+    /// detached task is tracked in its scope's `detached` list, isolated
+    /// from sibling cancellation, and reaped at its own completion.
+    detached: bool = false,
 
     pub inline fn getStatus(self: *const Task) TaskStatus {
         return self.status.load(.acquire);
@@ -234,6 +238,24 @@ pub const TaskScope = struct {
     active_children: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// Atomic flag set when a child fails and sibling cancellation triggers.
     cancellation_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Fire-and-forget detached tasks. Not in `children`, so they are never
+    /// walked by sibling cancellation or `firstFailedChildError`. Reaped at
+    /// their own completion, so this holds only in-flight detached tasks.
+    detached: std.ArrayListUnmanaged(*Task) = .{},
+    /// Guards `detached` against concurrent appends from spawns on other
+    /// worker threads and the reap removal on the owning worker. Kept
+    /// separate from `children_mu` so detached reaping never contends with
+    /// the sibling-cancellation walk over `children`.
+    detached_mu: std.Thread.Mutex = .{},
+    /// Atomic count of detached tasks that have not yet finished. Drives
+    /// scope-exit waiting alongside `active_children`.
+    detached_active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// One-shot claim so exactly one worker wakes the scope waiter when both
+    /// `active_children` and `detached_active` reach zero. Without it the
+    /// last tracked child and the last detached task completing concurrently
+    /// on different workers could both observe the drained state and
+    /// double-wake the waiter.
+    waiter_woken: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(allocator: Allocator) TaskScope {
         return .{
@@ -246,6 +268,7 @@ pub const TaskScope = struct {
 
     pub fn deinit(self: *TaskScope) void {
         self.children.deinit(self.allocator);
+        self.detached.deinit(self.allocator);
     }
 
     pub fn addChild(self: *TaskScope, task: *Task) !void {
@@ -253,6 +276,30 @@ pub const TaskScope = struct {
         defer self.children_mu.unlock();
         try self.children.append(self.allocator, task);
         _ = self.active_children.fetchAdd(1, .release);
+    }
+
+    /// Register a detached task. Mirrors `addChild` but tracks the task in
+    /// the separate `detached` list and counter, so it stays out of the
+    /// sibling-cancellation and first-error paths.
+    pub fn addDetached(self: *TaskScope, task: *Task) !void {
+        self.detached_mu.lock();
+        defer self.detached_mu.unlock();
+        try self.detached.append(self.allocator, task);
+        _ = self.detached_active.fetchAdd(1, .release);
+    }
+
+    /// Remove a detached task from the list at its own completion. Order in
+    /// `detached` is not load-bearing, so `swapRemove` is used. The scan is
+    /// bounded by the in-flight detached count.
+    pub fn removeDetached(self: *TaskScope, task: *Task) void {
+        self.detached_mu.lock();
+        defer self.detached_mu.unlock();
+        for (self.detached.items, 0..) |t, i| {
+            if (t == task) {
+                _ = self.detached.swapRemove(i);
+                return;
+            }
+        }
     }
 
     /// Check if all children have finished (completed, failed, or cancelled).
@@ -372,6 +419,52 @@ test "active children counter and allChildrenDone" {
     // Second child finishes
     _ = scope.active_children.fetchSub(1, .release);
     try std.testing.expect(scope.allChildrenDone());
+}
+
+test "addDetached and removeDetached track the detached counter and list" {
+    var scope = TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    var t0 = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.pending),
+        .ctx = undefined,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    var t1 = Task{
+        .id = 2,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.pending),
+        .ctx = undefined,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+
+    try std.testing.expectEqual(@as(u32, 0), scope.detached_active.load(.acquire));
+
+    try scope.addDetached(&t0);
+    try scope.addDetached(&t1);
+    try std.testing.expectEqual(@as(u32, 2), scope.detached_active.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 2), scope.detached.items.len);
+
+    // Detached tasks stay out of the tracked-children path.
+    try std.testing.expectEqual(@as(usize, 0), scope.children.items.len);
+    try std.testing.expect(scope.allChildrenDone());
+
+    // Reaping one removes it from the list; the counter is decremented
+    // separately by the scheduler at reap time.
+    scope.removeDetached(&t0);
+    try std.testing.expectEqual(@as(usize, 1), scope.detached.items.len);
+    try std.testing.expectEqual(&t1, scope.detached.items[0]);
+
+    // Removing a task that is not present is a no-op.
+    scope.removeDetached(&t0);
+    try std.testing.expectEqual(@as(usize, 1), scope.detached.items.len);
+
+    scope.removeDetached(&t1);
+    try std.testing.expectEqual(@as(usize, 0), scope.detached.items.len);
 }
 
 test "cancellation requested flag" {

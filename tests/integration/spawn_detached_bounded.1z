@@ -1,0 +1,25 @@
+\ Bounded-memory regression for spawn-detached.
+\
+\ Spawn many detached tasks inside one still-open scope under a low memory
+\ cap. Each detached task is reaped at its own completion, so its task
+\ struct, context, and arena are freed and steady-state memory stays
+\ bounded. The two `yield`s let the just-spawned task run to completion and
+\ be reaped before the next iteration, so at most a couple of tasks are ever
+\ live and peak memory is a few MB, well under the 8 MB cap set in the
+\ `.flags` sidecar.
+\
+\ Before reaping existed, every completed child was retained until scope
+\ exit. 16000 retained tasks hold roughly 16 MB of context and task structs,
+\ so a regression back to that behavior exhausts the cap around the halfway
+\ point and the run dies with a memory-limit error instead of printing the
+\ marker. The harness runs integration tests single-worker by default, which
+\ makes the reap-before-next-spawn pacing deterministic.
+
+[
+  16000 [
+    [ 1 1 + drop ] spawn-detached
+    yield yield
+  ] times
+] task-scope
+
+"bounded" print-line

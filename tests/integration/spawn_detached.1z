@@ -1,0 +1,32 @@
+use "testing" ;
+
+\ spawn-detached fires a task that is reaped at its own completion rather
+\ than at scope exit, and pushes no handle. The scope still waits for every
+\ in-flight detached task to finish before it returns.
+
+test-empty-detached: ( -- ) [
+  [ [ ] spawn-detached ] task-scope
+  t "empty spawn-detached scope completes" assert-true
+] ;
+
+\ Each detached task sends one value into a buffered channel created in the
+\ outer scope. The buffer holds all of them, so senders never block. The
+\ inner scope waits for its detached list to drain, so by the time it
+\ returns every send has happened; draining the channel afterwards must find
+\ all 16 values. A broken wait would leave the channel short and the receive
+\ loop would hang.
+test-scope-waits-for-detached: ( -- ) [
+  [
+    16 <buffered-channel>
+    dup [
+      16 [ dup [ 1 swap send ] curry spawn-detached ] times
+      drop
+    ] curry task-scope
+    0 16 [ over receive + ] times
+    nip
+    16 "inner scope waited for all detached sends" assert=
+  ] task-scope
+] ;
+
+test-empty-detached
+test-scope-waits-for-detached

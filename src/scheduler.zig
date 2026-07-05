@@ -207,11 +207,7 @@ pub const Scheduler = struct {
 
     pub fn deinit(self: *Scheduler) void {
         for (self.finished_tasks.items) |t| {
-            task_mod.coroDestroy(t);
-            task_mod.releaseTaskResult(t);
-            t.ctx.deinit();
-            self.allocator.destroy(t.ctx);
-            self.allocator.destroy(t);
+            self.reapTask(t);
         }
         self.finished_tasks.deinit(self.allocator);
         for (self.channels.items) |ch| {
@@ -282,6 +278,33 @@ pub const Scheduler = struct {
         self.all_tasks_mu.lock();
         defer self.all_tasks_mu.unlock();
         try self.all_tasks.append(self.allocator, task);
+    }
+
+    /// Remove a task from `all_tasks` before it is freed early. Holds only
+    /// this scheduler's `all_tasks_mu`, the same single-lock discipline as
+    /// `trackTask`, so it respects the ascending-order lock convention the
+    /// pool-wide diagnostic dumps rely on. Without this, a dump iterating
+    /// `all_tasks` would dereference a freed detached task.
+    fn untrackTask(self: *Scheduler, task: *Task) void {
+        self.all_tasks_mu.lock();
+        defer self.all_tasks_mu.unlock();
+        for (self.all_tasks.items, 0..) |t, i| {
+            if (t == task) {
+                _ = self.all_tasks.swapRemove(i);
+                return;
+            }
+        }
+    }
+
+    /// Free a completed task's coroutine, result, context, and struct. Run
+    /// on the owning worker for a detached task at its own completion, and
+    /// for tracked tasks at `deinit`.
+    fn reapTask(self: *Scheduler, task: *Task) void {
+        task_mod.coroDestroy(task);
+        task_mod.releaseTaskResult(task);
+        task.ctx.deinit();
+        self.allocator.destroy(task.ctx);
+        self.allocator.destroy(task);
     }
 
     fn drainOwnedExternal(self: *Scheduler) void {
@@ -955,7 +978,12 @@ pub const Scheduler = struct {
     /// 3. If all children in the scope are done and the scope is being awaited, re-enqueue the scope waiter.
     /// 4. Track the finished task for resource cleanup in deinit.
     fn handleTaskDone(self: *Scheduler, task: *Task) void {
-        const prev_children = task.scope.active_children.fetchSub(1, .acq_rel);
+        if (task.detached) {
+            self.handleDetachedTaskDone(task);
+            return;
+        }
+
+        _ = task.scope.active_children.fetchSub(1, .acq_rel);
 
         if (task.awaiting_task) |awaiter| {
             self.wakeTask(awaiter) catch {};
@@ -1003,17 +1031,7 @@ pub const Scheduler = struct {
             }
         }
 
-        // Only the worker that decremented `active_children` to zero is
-        // allowed to wake the scope waiter. Reading `waiting_task` here is
-        // race-free because under M:N two completing children could both
-        // observe `allChildrenDone()` true if both checked after both
-        // decrements; the unique-winner guard prevents a double-wake.
-        if (prev_children == 1) {
-            if (task.scope.waiting_task) |scope_waiter| {
-                task.scope.waiting_task = null;
-                self.wakeTask(scope_waiter) catch {};
-            }
-        }
+        self.maybeWakeScopeWaiter(task.scope);
 
         if (task.peak_stack_usage > self.peak_task_stack_usage) {
             self.peak_task_stack_usage = task.peak_stack_usage;
@@ -1024,6 +1042,49 @@ pub const Scheduler = struct {
         // `pickLeastLoaded` decisions reflect the freed slot. No-op when
         // the scheduler is standalone or unowned.
         self.notifyOwnerTaskDone();
+    }
+
+    /// Reap a completed detached task on its owning worker.
+    ///
+    /// A detached task is isolated: its failure does not fire sibling
+    /// cancellation and it is not a `firstFailedChildError` candidate, so
+    /// the tracked-child failure path is skipped entirely. It is removed
+    /// from both the scope's `detached` list and the scheduler's `all_tasks`
+    /// list while it is still counted in `detached_active`, so the scope
+    /// cannot be observed drained (and freed by the woken waiter) mid-way.
+    /// Only then is `detached_active` decremented; `maybeWakeScopeWaiter` is
+    /// the last access to `scope`. `reapTask` and `notifyOwnerTaskDone`
+    /// touch only the task and this scheduler.
+    fn handleDetachedTaskDone(self: *Scheduler, task: *Task) void {
+        const scope = task.scope;
+
+        scope.removeDetached(task);
+        self.untrackTask(task);
+        _ = scope.detached_active.fetchSub(1, .acq_rel);
+
+        if (task.peak_stack_usage > self.peak_task_stack_usage) {
+            self.peak_task_stack_usage = task.peak_stack_usage;
+        }
+
+        self.maybeWakeScopeWaiter(scope);
+        self.reapTask(task);
+        self.notifyOwnerTaskDone();
+    }
+
+    /// Wake the scope waiter once both tracked and detached tasks have
+    /// drained. The `waiter_woken` claim guarantees a single wake even when
+    /// the last tracked child and the last detached task complete
+    /// concurrently on different workers. Top-level scopes have no
+    /// `waiting_task`; they terminate via the pool's `active_tasks` /
+    /// `poolHasAliveTasks` path, so this is a no-op for them.
+    fn maybeWakeScopeWaiter(self: *Scheduler, scope: *TaskScope) void {
+        if (scope.active_children.load(.acquire) != 0) return;
+        if (scope.detached_active.load(.acquire) != 0) return;
+        if (scope.waiter_woken.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
+        if (scope.waiting_task) |scope_waiter| {
+            scope.waiting_task = null;
+            self.wakeTask(scope_waiter) catch {};
+        }
     }
 };
 

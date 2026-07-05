@@ -1,0 +1,6 @@
+Stack: [ ]
+Stack: [ ]
+PASS: empty spawn-detached scope completes
+Stack: [ ]
+PASS: inner scope waited for all detached sends
+Stack: [ ]
