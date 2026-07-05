@@ -1,6 +1,7 @@
 Usage: My tool.
   --output=<string>, -o    Output path
   --count=<fixnum>         Repetitions (default: 1)
+  --scale=<float>          Scale factor (default: 0.5)
   --log-level=<level>      Log level (default: warn)
   --verbose, -v            Verbose output
   <input>                  Input file

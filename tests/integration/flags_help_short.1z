@@ -1,0 +1,11 @@
+\ The -h short alias triggers the same usage block as --help. print-help writes
+\ to stderr and exits 0. A representative pair of flags (a value flag with a short
+\ alias and a boolean flag) is enough to confirm the -h trigger path; the
+\ all-types formatting is covered by flags_help.1z.
+
+use "flags" ;
+
+output: flag{ type: string short: "o" description: "Output path" } ;
+verbose: flag{ type: boolean short: "v" description: "Verbose output" } ;
+
+{ "-h" } "My tool." parse-flags

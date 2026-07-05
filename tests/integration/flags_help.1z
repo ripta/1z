@@ -13,6 +13,7 @@ level: enum{ debug: unit info: unit warn: unit error: unit } ;
 
 output:    flag{ type: string short: "o" description: "Output path" } ;
 count:     flag{ type: fixnum default: 1 description: "Repetitions" } ;
+scale:     flag{ type: float default: 0.5 description: "Scale factor" } ;
 log-level: flag{ type: level default: level:warn description: "Log level" } ;
 verbose:   flag{ type: boolean short: "v" description: "Verbose output" } ;
 input:     required positional flag{ type: string description: "Input file" } ;

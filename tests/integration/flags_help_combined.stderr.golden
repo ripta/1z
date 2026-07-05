@@ -1,0 +1,4 @@
+Usage: My tool.
+  --output=<string>, -o    Output path
+  --verbose, -v            Verbose output
+  <input>                  Input file

@@ -617,7 +617,10 @@ parse-flags: ( args: array description: string -- result: hash ) [
       pf-pos-state [
         dup pf-args [
 
-          dup { "--help" } = over { "-h" } = or
+          \ Help triggers when --help or -h appears anywhere in the args, not
+          \ only as the sole argument. A value flag whose value is literally
+          \ --help therefore triggers help instead of consuming it as the value.
+          dup "--help" #in? over "-h" #in? or
           [
             drop pf-desc get print-help 0 sys-exit
           ] when

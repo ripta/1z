@@ -1,0 +1,12 @@
+\ Help triggers when --help appears among other arguments, not only as the sole
+\ argument. Here --help follows a boolean flag and a positional, yet the usage
+\ block still prints and the process exits 0. Under the old whole-array match this
+\ printed nothing; this is the regression test for scan-based detection.
+
+use "flags" ;
+
+output:  flag{ type: string short: "o" description: "Output path" } ;
+verbose: flag{ type: boolean short: "v" description: "Verbose output" } ;
+input:   positional flag{ type: string description: "Input file" } ;
+
+{ "--verbose" "input.txt" "--help" } "My tool." parse-flags
