@@ -68,3 +68,52 @@ test-parse-expr-lower-reachable: ( -- ) [
   "1 + 2" parse-expr lower call
   1 2 + "parse-expr lower call yields the value" assert=
 ] ;
+
+"calls" test-section
+
+\ Helper words for call parity. `sub2` is non-commutative, so it also verifies
+\ left-to-right argument order.
+add1:   ( n -- n )   [ 1 + ] ;
+dbl:    ( n -- n )   [ 2 * ] ;
+sub2:   ( a b -- c ) [ - ] ;
+answer: ( -- n )     [ 42 ] ;
+
+test-call-single-arg: ( -- ) [
+  expr{ add1(41) } 41 add1 "add1(41) matches 41 add1" assert=
+] ;
+
+test-call-arg-is-expression: ( -- ) [
+  expr{ add1(2 * 3) } 2 3 * add1 "add1(2 * 3) matches 2 3 * add1" assert=
+] ;
+
+test-call-multi-arg-order: ( -- ) [
+  expr{ sub2(10, 3) } 10 3 sub2 "sub2(10, 3) matches 10 3 sub2 (left-to-right)" assert=
+] ;
+
+test-call-multi-arg-expressions: ( -- ) [
+  expr{ sub2(1 + 2, 3 + 4) } 1 2 + 3 4 + sub2 "sub2(1 + 2, 3 + 4) matches 1 2 + 3 4 + sub2" assert=
+] ;
+
+test-call-zero-arg: ( -- ) [
+  expr{ answer() } answer "answer() matches answer" assert=
+] ;
+
+test-call-nested: ( -- ) [
+  expr{ add1(dbl(3)) } 3 dbl add1 "add1(dbl(3)) matches 3 dbl add1" assert=
+] ;
+
+test-call-precedence: ( -- ) [
+  expr{ add1(1 + 2) * dbl(3) } 1 2 + add1 3 dbl * "f(1 + 2) * g(3) matches 1 2 + f 3 g *" assert=
+] ;
+
+test-call-inside-arithmetic: ( -- ) [
+  expr{ add1(3) + 2 } 3 add1 2 + "add1(3) + 2 matches 3 add1 2 +" assert=
+] ;
+
+\ A call resolves through ordinary lookup, so a callee defined after the expr{
+\ use still works: the emitted call_word is resolved at run time.
+test-call-forward-reference: ( -- ) [
+  expr{ fwd7(5) } 5 fwd7 "fwd7(5) resolves a forward-referenced callee" assert=
+] ;
+
+fwd7: ( n -- n ) [ 2 + ] ;

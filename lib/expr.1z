@@ -9,5 +9,5 @@ use "strings" ;
 \\ `expr{ 1 + 2 * 3 }` is equivalent to `1 2 3 * +`.
 expr{: parse-time [
   "}" parse-tokens-until " " #join  \ raw body tokens -> source string
-  parse-expr lower emit-body        \ AST -> quotation -> spliced inline
+  parse-expr emit-expr              \ AST -> inline postfix instructions
 ] ;

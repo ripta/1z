@@ -1,5 +1,7 @@
 \ lib/expr/lower.1z: lower an expr-node AST to a quotation that computes its value.
 
+use "strings" ;
+use "sequences" ;
 use "expr/ast" ;
 
 private{
@@ -37,7 +39,42 @@ lower: ( node: expr-node -- quotation ) [
       compose                  \ ( [ L R op ] )
     ]
     expr-node:invoke: [  \ ( callee args )
-      drop drop f "invoke lowering not yet implemented" throw
+      \ A call cannot be lowered to a self-contained quotation value: the only
+      \ callable value is a quotation, and no runtime facility builds "call the
+      \ word named by this string". Calls lower through the parse-time emit-expr
+      \ path instead, which emits an ordinary call_word via emit-call.
+      drop drop f "a call cannot be lowered to a quotation value; use emit-expr" throw
+    ]
+  }
+] ;
+
+\\ Emit an expr-node AST as inline 1z instructions in postfix, left-to-right
+\\ order. Operands and arguments are emitted before their operator or callee, so
+\\ evaluation is left-to-right, matching source reading order and equivalent
+\\ hand-written 1z. `expr{ f(1) + 2 }` emits `1 f 2 +`.
+\\
+\\ Emission uses the parse-time emit-body / emit-call splicing, so emit-expr must
+\\ run inside a parse-time word (expr{). A call lowers to an ordinary call_word
+\\ by name via emit-call, so it resolves through normal 1z lookup, including
+\\ forward references, exactly like hand-written code.
+emit-expr: ( node: expr-node -- ) [
+  match{
+    expr-node:lit: [       \ ( value )
+      [ ] curry emit-body  \ splice `push value`
+    ]
+    expr-node:unop: [  \ ( op operand )
+      \ Only unary minus exists; discard the operator and negate by `-1 *`.
+      nip emit-expr
+      [ -1 * ] emit-body
+    ]
+    expr-node:binop: [   \ ( op left right )
+      swap emit-expr     \ emit left, then ( op right )
+      emit-expr          \ emit right, then ( op )
+      >symbol emit-call  \ emit the operator word
+    ]
+    expr-node:invoke: [    \ ( callee args )
+      [ emit-expr ] #each  \ emit each argument in source order, then ( callee )
+      >symbol emit-call    \ emit the call
     ]
   }
 ] ;
