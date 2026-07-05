@@ -1,0 +1,22 @@
+=== default flags ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ H{ name: "anon" count: 7 } ]
+PASS: absent fixnum flag yields its default
+Stack: [ H{ name: "anon" count: 7 } ]
+PASS: absent string flag yields its default
+Stack: [ ]
+Stack: [ H{ name: "bob" count: 3 } ]
+PASS: present fixnum flag overrides its default
+Stack: [ H{ name: "bob" count: 3 } ]
+PASS: present string flag overrides its default
+Stack: [ ]
+Stack: [ [ bad: H{ fields: H{ default: "oops" type: <type:fixnum> } } { } define-flag ] ]
+PASS: default not matching type: is rejected
+Stack: [ ]
+Stack: [ [ bad: H{ fields: H{ default: 5 type: <type:fixnum> } } required 1array define-flag ] ]
+PASS: required + default is rejected
+Stack: [ ]
+All default flags tests complete!
+Stack: [ ]

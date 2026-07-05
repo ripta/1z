@@ -1,0 +1,34 @@
+\ Typed default: values. An absent flag yields its declared default. A default
+\ whose type mismatches the declared type, or a required flag carrying a
+\ default, is rejected at definition time.
+
+use "testing" ;
+use "flags" ;
+
+"default flags" test-section
+
+count: flag{ type: fixnum default: 7 description: "A count" } ;
+name: flag{ type: string default: "anon" description: "A name" } ;
+
+\ An absent flag yields its default.
+{ } "Default program" parse-flags
+dup "count" @get 7 "absent fixnum flag yields its default" assert=
+"name" @get "anon" "absent string flag yields its default" assert=
+
+\ A provided value overrides the default.
+{ "--count" "3" "--name" "bob" } "Default program" parse-flags
+dup "count" @get 3 "present fixnum flag overrides its default" assert=
+"name" @get "bob" "present string flag overrides its default" assert=
+
+\ A default whose type does not match the declared type is a definition-time
+\ error. The direct define-flag call reproduces the descriptor that
+\ `flag{ ... } ;` builds.
+[ bad: H{ fields: H{ type: fixnum default: "oops" } } { } define-flag ]
+"default not matching type: is rejected" assert-error
+
+\ A required flag carrying a default is a definition-time error. The default
+\ matches the type, so only the required+default conflict fires.
+[ bad: H{ fields: H{ type: fixnum default: 5 } } required 1array define-flag ]
+"required + default is rejected" assert-error
+
+"All default flags tests complete!" print-line

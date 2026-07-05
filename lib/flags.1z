@@ -47,6 +47,23 @@ define-flag: ( name fields markers -- ) [
   [ drop ]
   if
 
+  \ A required flag and a default: contradict each other. markers is on top; the
+  \ declared default lives under the descriptor's "fields" hash.
+  over "fields" @get "default" @has?
+  over required #in?
+  and
+  [ f "flags: a required flag cannot declare a default" EInvalidArgument make-error throw ] when
+
+  \ A declared default: must match the declared type:. Only checked when both are
+  \ present. The symbol guard above ran, so type here is a real TypeValue.
+  over "fields" @get
+  dup "type" @has? over "default" @has? and
+  [ dup "default" @get swap "type" @get instance-of? not
+    [ f "flags: default value does not match the declared type" EInvalidArgument make-error throw ] when
+  ]
+  [ drop ]
+  if
+
   [ ] make-mutable-map
   swap markers: swap @set!
   swap descriptor: swap @set!
@@ -490,7 +507,14 @@ private{
         "markers" @get
         positional [ = ] curry #filter #count 0 >
         [ drop ]
-        [ pf-result get swap f @set! drop ]
+        [
+          dup flag-registry swap @get
+          "descriptor" @get "fields" @get
+          dup "default" @has?
+          [ "default" @get store-value ]
+          [ drop pf-result get swap f @set! drop ]
+          if
+        ]
         if
       ]
       if
