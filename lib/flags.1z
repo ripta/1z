@@ -64,12 +64,8 @@ define-flag: ( name fields markers -- ) [
   flag-order swap n: swap @set! drop
 ] ;
 
-\ Private local scope for parse-flags: helpers, dynamic parameters, and the
-\ per-call positional state. Hoisted to module scope so the toolchain can
-\ discover them; pf-pos-state is a parameter bound fresh per call rather than a
-\ shared map, so positional indexing does not leak across invocations.
 private{
-  sym-to-str: ( name: symbol -- string ) [ >string dup #len 1 - 0 swap #slice ] ;
+  sym-to-str: ( name: symbol -- string ) [ >string ] ;
 
   is-positional-flag: ( name: symbol -- ? ) [
     flag-registry swap @get
@@ -82,27 +78,24 @@ private{
     [ is-positional-flag ] #filter #collect
   ] ;
 
-  find-flag-by-short: ( short: string -- name ) [
-    flag-registry @keys
-    f swap
-    [
-      dup flag-registry swap @get
-      "descriptor" @get
-      dup "short" @has?
-      [
-        "short" @get
-        [ [ over ] dip ] dip
-        =
-        [ nip ]
-        [ drop ]
-        if
-      ]
-      [
-        drop drop
-      ]
-      if
-    ] #each
-    nip
+  \ True when the flag named key declares short as its short alias. The short
+  \ alias lives under the descriptor's fields hash, like every declared field.
+  flag-short-matches?: ( key short -- ? ) [
+    swap flag-registry swap @get
+    "descriptor" @get "fields" @get
+    dup "short" @has?
+    [ "short" @get = ]
+    [ 2drop f ]
+    if
+  ] ;
+
+  find-flag-by-short: ( short: string -- name/f ) [
+    flag-registry @keys swap
+    [ flag-short-matches? ] curry #filter #collect
+    dup #len 0 =
+    [ drop f ]
+    [ #first ]
+    if
   ] ;
 
   print-flag-help: ( name: symbol -- ) [
@@ -172,11 +165,92 @@ private{
     if
   ] ;
 
-  process-short-flag: ( short: string -- ) [
+  \ Store value under name in the result map. @set! is ( map key value -- map ).
+  store-value: ( name value -- ) [ pf-result get -rot> @set! drop ] ;
+
+  \ A flag consumes a following value when it declares a type other than
+  \ boolean. A presence flag has no type; a boolean flag (future) is presence.
+  flag-takes-value?: ( name -- ? ) [
+    flag-registry swap @get
+    "descriptor" @get "fields" @get
+    dup "type" @has?
+    [ "type" @get boolean = not ]
+    [ drop f ]
+    if
+  ] ;
+
+  \ Store the =-form value only when the name is a registered flag.
+  (store-eq): ( name value -- ) [
+    over flag-registry swap @has?
+    [ store-value ]
+    [ 2drop ]
+    if
+  ] ;
+
+  \ Consume the token following idx as name's value and return idx+2. A missing
+  \ token prints help and exits. next is bounds-checked before #nth, which throws
+  \ on an out-of-bounds index. The exit is inlined rather than delegated so the
+  \ terminal sys-exit is visible to the AOT stack-effect checker, which otherwise
+  \ models the branch as returning and reports an underflow against the other
+  \ branch's result.
+  consume-value: ( name idx -- idx' ) [
+    ++
+    dup pf-args get #len >=
+    [
+      drop
+      "Error: flag --" swap #append " requires a value" #append
+      stderr swap stream-write-string drop
+      stderr "\n" >bytes stream-write drop
+      pf-desc get print-help
+      1 sys-exit
+    ]
+    [
+      dup pf-args get swap #nth
+      swap [ store-value ] dip
+      ++
+    ]
+    if
+  ] ;
+
+  \ Long flag: --name, --name=value, or --name value (value flag consumes next).
+  process-long: ( arg idx -- idx' ) [
+    swap 2 over #len #slice
+    dup "=" split-once?
+    dup option:some?
+    [
+      nip option:some>
+      dup #first swap #last
+      (store-eq)
+      ++
+    ]
+    [
+      drop
+      dup flag-registry swap @has?
+      [
+        dup flag-takes-value?
+        [ swap consume-value ]
+        [ process-named-flag ++ ]
+        if
+      ]
+      [ drop ++ ]
+      if
+    ]
+    if
+  ] ;
+
+  \ Short flag: -o (presence) or -o value (value flag consumes next). No = or
+  \ attached form.
+  process-short-arg: ( arg idx -- idx' ) [
+    swap 1 over #len #slice
     find-flag-by-short
     dup f =
-    [ drop ]
-    [ pf-result get swap t @set! drop ]
+    [ drop ++ ]
+    [
+      dup flag-takes-value?
+      [ swap consume-value ]
+      [ process-named-flag ++ ]
+      if
+    ]
     if
   ] ;
 
@@ -195,21 +269,15 @@ private{
     if
   ] ;
 
-  process-arg: ( arg -- ) [
-    dup "--" #starts-with?
+  \ Dispatch one non-terminator argument and return the index to continue from.
+  \ A value flag advances by two, having swallowed the following token.
+  process-arg: ( arg idx -- idx' ) [
+    over "--" #starts-with?
+    [ process-long ]
     [
-      2 over #len #slice
-      process-named-flag
-    ]
-    [
-      dup "-" #starts-with?
-      [
-        1 over #len #slice
-        process-short-flag
-      ]
-      [
-        process-positional
-      ]
+      over "-" #starts-with?
+      [ process-short-arg ]
+      [ swap process-positional ++ ]
       if
     ]
     if
@@ -222,7 +290,7 @@ private{
   dispatch-arg: ( arg idx term -- idx' term ) [
     dup
     [ [ swap process-positional ++ ] dip ]
-    [ [ swap process-arg ++ ] dip ]
+    [ [ process-arg ] dip ]
     if
   ] ;
 
@@ -318,9 +386,12 @@ private{
     ] #each
   ] ;
 
+  \ Parameter is bound fresh per call rather than a shared map, so positional indexing doesn't
+  \ leak across invocations.
+  pf-pos-state: parameter{ [ [ ] make-mutable-map idx: 0 @set! ] } ;
   pf-result:    parameter{ [ [ ] make-mutable-map ] } ;
   pf-desc:      parameter{ [ "" ] } ;
-  pf-pos-state: parameter{ [ [ ] make-mutable-map idx: 0 @set! ] } ;
+  pf-args:      parameter{ [ { } ] } ;
 }
 
 \ Parses command-line arguments according to registered flags.
@@ -332,20 +403,22 @@ parse-flags: ( args: array description: string -- result: hash ) [
     swap pf-desc [
       [ ] make-mutable-map idx: 0 @set!
       pf-pos-state [
+        dup pf-args [
 
-        dup { "--help" } = over { "-h" } = or
-        [
-          drop pf-desc get print-help 0 sys-exit
-        ] when
+          dup { "--help" } = over { "-h" } = or
+          [
+            drop pf-desc get print-help 0 sys-exit
+          ] when
 
-        0 f process-args
+          0 f process-args
 
-        check-required
-        apply-conversions
-        set-defaults
+          check-required
+          apply-conversions
+          set-defaults
 
-        pf-result get mmap-to-hash
+          pf-result get mmap-to-hash
 
+        ] with-parameter
       ] with-parameter
     ] with-parameter
   ] with-parameter

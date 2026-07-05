@@ -1,10 +1,29 @@
 === typed flags ===
 Stack: [ ]
 Stack: [ ]
-Stack: [ H{ count: 42 } ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ H{ output: f level: f count: 42 } ]
 PASS: type: fixnum converts a positional to a number
-Stack: [ H{ count: 42 } ]
+Stack: [ H{ output: f level: f count: 42 } ]
 PASS: converted value is a fixnum, not a string
+Stack: [ ]
+Stack: [ H{ output: "out.txt" level: f count: 42 } ]
+PASS: long value flag consumes next arg
+Stack: [ ]
+Stack: [ H{ output: "path.txt" level: f count: 42 } ]
+PASS: long value flag =form
+Stack: [ ]
+Stack: [ H{ output: "a=b" level: f count: 42 } ]
+PASS: =form splits on first = only
+Stack: [ ]
+Stack: [ H{ output: "short.txt" level: f count: 42 } ]
+PASS: short value flag consumes next arg
+Stack: [ ]
+Stack: [ H{ level: 7 output: f count: 42 } ]
+PASS: fixnum value flag converts next arg
+Stack: [ H{ level: 7 output: f count: 42 } ]
+PASS: fixnum value flag yields a fixnum
 Stack: [ ]
 Stack: [ [ bad: H{ fields: H{ type: fixnum: } } { } define-flag ] ]
 PASS: a symbol under type: is rejected

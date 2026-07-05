@@ -1,0 +1,8 @@
+\ A value flag whose value is missing prints help and exits non-zero. Here
+\ --count is the last token, so there is no following argument to consume.
+
+use "flags" ;
+
+count: flag{ type: fixnum description: "A count" } ;
+
+{ "--count" } "Missing value program" parse-flags drop
