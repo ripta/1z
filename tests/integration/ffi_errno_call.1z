@@ -1,0 +1,89 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to get the shared library extension for the host OS.
+toy-lib-ext: ( -- ext ) [
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
+] ;
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy" #append toy-lib-ext #append
+] ;
+
+\ Bindings exercising the errno convention. toy_set_errno sets errno and
+\ returns -1; toy_set_errno_ptr sets errno and returns NULL. Errnos chosen
+\ from the set with identical Linux/macOS values: EACCES=13, ENOENT=2, EPERM=1.
+toy-lib-path lib-open ffi-def{
+  toy-add-ok:  "toy_add" H{ errno: neg1: } ffi{ i32 i32 -> i32 }
+  toy-set-e:   "toy_set_errno" H{ errno: neg1: } ffi{ i32 -> i32 }
+  toy-set-neg: "toy_set_errno" H{ errno: neg: } ffi{ i32 -> i32 }
+  toy-set-p:   "toy_set_errno_ptr" H{ errno: null: } ffi{ i32 -> ptr }
+} call "errno-mod" swap >module import
+
+\ === Success return does not trigger an errno fetch ===
+"errno success path" test-section
+
+2 3 toy-add-ok 5 "non-sentinel return succeeds normally" assert=
+
+\ === neg1: sentinel raises EPosixError with structured data ===
+"neg1 sentinel raises posix-error" test-section
+
+[ 13 toy-set-e ] [
+  dup error-type: @get posix-error: "neg1 failure raises posix-error" assert=
+  dup data: @get name: @get eacces: "errno name normalized to eacces" assert=
+  dup data: @get errno: @get 13 "raw errno integer reaches consumer" assert=
+  message: @get #len 0 > "strerror message is non-empty" assert-true
+] recover
+
+\ === null: sentinel raises on a NULL pointer return ===
+"null sentinel raises posix-error" test-section
+
+[ 2 toy-set-p ] [
+  dup error-type: @get posix-error: "null failure raises posix-error" assert=
+  data: @get name: @get enoent: "null-return errno name enoent" assert=
+] recover
+
+\ === neg: sentinel raises on a negative return ===
+"neg sentinel raises posix-error" test-section
+
+[ 1 toy-set-neg ] [
+  dup error-type: @get posix-error: "neg failure raises posix-error" assert=
+  data: @get name: @get eperm: "neg-return errno name eperm" assert=
+] recover
+
+\ === Thread-local errno isolation across concurrent tasks ===
+\ Each task runs its own failing call; the synchronous fetch keeps one task's
+\ errno from bleeding into another. Tasks are awaited last-spawned first.
+"errno isolation under concurrent tasks" test-section
+
+[
+  [ [ 13 toy-set-e ] [ data: @get name: @get ] recover ] spawn
+  [ [ 2 toy-set-e ] [ data: @get name: @get ] recover ] spawn
+  [ [ 1 toy-set-e ] [ data: @get name: @get ] recover ] spawn
+  await eperm: "task 3 sees its own errno" assert=
+  await enoent: "task 2 sees its own errno" assert=
+  await eacces: "task 1 sees its own errno" assert=
+] task-scope
+
+\ === Per-binding capability gate ===
+"per-binding capability gate" test-section
+
+toy-lib-path lib-open ffi-def{
+  toy-add-sys: "toy_add" H{ cap: system: } ffi{ i32 i32 -> i32 }
+} call "cap-mod" swap >module import
+
+[ sandbox{ ffi } [ 2 3 toy-add-sys ] with-sandbox ]
+"system-cap binding denied without system grant" assert-error
+
+sandbox{ ffi system } [ 2 3 toy-add-sys ] with-sandbox
+5 "system-cap binding allowed with system grant" assert=
+
+\ === An unknown cap symbol fails at bind time ===
+"unknown capability rejected at bind" test-section
+
+[ toy-lib-path lib-open ffi-def{
+    toy-bad-cap: "toy_add" H{ cap: bogus: } ffi{ i32 i32 -> i32 }
+  } call drop
+]
+"unknown FFI capability rejected" assert-error

@@ -1,0 +1,44 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== errno success path ===
+Stack: [ ]
+PASS: non-sentinel return succeeds normally
+Stack: [ ]
+=== neg1 sentinel raises posix-error ===
+Stack: [ ]
+PASS: neg1 failure raises posix-error
+PASS: errno name normalized to eacces
+PASS: raw errno integer reaches consumer
+PASS: strerror message is non-empty
+Stack: [ ]
+=== null sentinel raises posix-error ===
+Stack: [ ]
+PASS: null failure raises posix-error
+PASS: null-return errno name enoent
+Stack: [ ]
+=== neg sentinel raises posix-error ===
+Stack: [ ]
+PASS: neg failure raises posix-error
+PASS: neg-return errno name eperm
+Stack: [ ]
+=== errno isolation under concurrent tasks ===
+Stack: [ ]
+PASS: task 3 sees its own errno
+PASS: task 2 sees its own errno
+PASS: task 1 sees its own errno
+Stack: [ ]
+=== per-binding capability gate ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ [ sandbox{ ffi } [ 2 3 toy-add-sys ] with-sandbox ] ]
+PASS: system-cap binding denied without system grant
+Stack: [ ]
+Stack: [ 5 ]
+PASS: system-cap binding allowed with system grant
+Stack: [ ]
+=== unknown capability rejected at bind ===
+Stack: [ ]
+Stack: [ [ toy-lib-path lib-open [ [ ] make-mutable-map swap "toy-bad-cap" "toy_add" ffi-sig{ params: { "i32" "i32" } return-type: "i32" errno: f cap: bogus: } (build-ffi-entry) drop ] call drop ] ]
+PASS: unknown FFI capability rejected
+Stack: [ ]

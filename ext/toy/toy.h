@@ -55,4 +55,7 @@ toy_vec2 toy_vec2_add(toy_vec2 a, toy_vec2 b);
 int toy_sum_variadic(int count, ...);
 double toy_sum_doubles(int count, ...);
 
+int toy_set_errno(int e);
+void *toy_set_errno_ptr(int e);
+
 #endif

@@ -1,5 +1,6 @@
 const std = @import("std");
 const FfiStructLayout = @import("struct_layout.zig").FfiStructLayout;
+const Capability = @import("../primitives/types.zig").Capability;
 
 pub const FfiTypeTag = enum {
     i8,
@@ -45,11 +46,23 @@ pub const FfiType = struct {
     }
 };
 
+/// Failure sentinel for the opt-in errno convention. `.none` means the binding
+/// does not participate; the other values select which return value signals
+/// failure and triggers a synchronous errno fetch.
+pub const ErrnoSentinel = enum {
+    none,
+    neg1,
+    null_ptr,
+    neg,
+};
+
 pub const FfiSignature = struct {
     param_types: []const FfiType,
     return_type: FfiType,
     n_fixed_params: ?usize = null,
     variadic_type: ?FfiType = null,
+    errno_sentinel: ErrnoSentinel = .none,
+    capability: Capability = .ffi,
 
     pub fn isVariadic(self: FfiSignature) bool {
         return self.n_fixed_params != null;

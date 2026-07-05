@@ -77,12 +77,19 @@ pub const c_ffi = if (is_freestanding) struct {
 } else @cImport({
     @cInclude("ffi.h");
 });
+
 const Context = @import("../context.zig").Context;
 const helpers = @import("../primitives/helpers.zig");
 const error_mapping = @import("../primitives/error_mapping.zig");
-const RegistryEntry = @import("../primitives/types.zig").RegistryEntry;
+
+const types_mod = @import("../primitives/types.zig");
+const RegistryEntry = types_mod.RegistryEntry;
+const SandboxSpec = types_mod.SandboxSpec;
+const Capability = types_mod.Capability;
+const HashTable = value_mod.HashTable;
 
 const container_backing = @import("../container_backing.zig");
+
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const BigIntManaged = value_mod.BigIntManaged;
@@ -97,6 +104,7 @@ const FfiType = signature.FfiType;
 const FfiTypeTag = signature.FfiTypeTag;
 const FfiSignature = signature.FfiSignature;
 const VariadicSpec = signature.VariadicSpec;
+const ErrnoSentinel = signature.ErrnoSentinel;
 
 const struct_layout = @import("struct_layout.zig");
 const FfiStructLayout = struct_layout.FfiStructLayout;
@@ -106,7 +114,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "lib-symbol", .func = nativeLibSymbol, .capability = .ffi },
     .{ .name = "bind-sig", .func = nativeBindSig, .capability = .ffi },
     .{ .name = "bind-close", .func = nativeBindClose, .capability = .ffi },
-    .{ .name = "ffi-call", .func = nativeFfiCall, .capability = .ffi },
+    .{ .name = "ffi-call", .func = nativeFfiCall, .capability = .none },
     .{ .name = "ffi-callback", .func = nativeFfiCallback, .capability = .ffi },
     .{ .name = "bytes-raw-ptr", .func = nativeBytesRawPtr, .capability = .ffi },
     .{ .name = "ffi-ptr+len>bytes", .func = nativeFfiPtrLenToBytes, .capability = .ffi, .stack_effect = "resource n -- byte-array" },
@@ -153,6 +161,111 @@ const errno_location_fn: ?ErrnoLocationFn = if (is_freestanding) null else std.c
 pub fn readErrno() c_int {
     const fetch = errno_location_fn orelse return 0;
     return fetch().*;
+}
+
+const StrerrorFn = *const fn (c_int) callconv(.c) [*:0]const u8;
+
+/// The libc `strerror`, resolved at link time.
+///
+/// Null on freestanding builds, which have no libc.
+/// Unreachable in freestanding builds.
+const strerror_fn: ?StrerrorFn = if (is_freestanding) null else @extern(StrerrorFn, .{ .name = "strerror" });
+
+/// Check the binding's declared capability against the active sandbox.
+/// Bindings that declare nothing keep the `.ffi` default.
+fn checkBindingCapability(ctx: *Context, sig: *const FfiSignature) !void {
+    if (ctx.active_sandbox) |sandbox| {
+        if (!sandbox.allows(sig.capability)) {
+            helpers.setErrorContext(ctx, "FFI binding requires capability '{s}' which is not granted by the active sandbox", .{sig.capability.displayName()});
+            return error.PermissionDenied;
+        }
+    }
+}
+
+/// Test a scalar/pointer return value against the binding's failure sentinel.
+/// The integer interpretation mirrors marshalReturn: signed tags read `as_i64`,
+/// unsigned tags read `as_u64`, pointer-like tags read the address. Float, void,
+/// and struct returns never signal errno failure.
+fn sentinelMatches(sentinel: ErrnoSentinel, return_type: FfiType, ret: *const ReturnStorage) bool {
+    switch (return_type.tag) {
+        .i8, .i16, .i32, .i64, .isize_type => {
+            const v = ret.as_i64;
+            return switch (sentinel) {
+                .none => false,
+                .neg1 => v == -1,
+                .neg => v < 0,
+                .null_ptr => v == 0,
+            };
+        },
+        .u8, .u16, .u32, .u64, .usize_type => {
+            const v = ret.as_u64;
+            return switch (sentinel) {
+                .none, .neg1, .neg => false,
+                .null_ptr => v == 0,
+            };
+        },
+        .bool_type => {
+            const v: u8 = @truncate(ret.as_u64);
+            return sentinel == .null_ptr and v == 0;
+        },
+        .ptr, .cstring, .cstring_retained, .cstring_owned => {
+            const addr = @intFromPtr(ret.as_ptr);
+            return switch (sentinel) {
+                .none, .neg => false,
+                .neg1 => addr == std.math.maxInt(usize),
+                .null_ptr => addr == 0,
+            };
+        },
+        .f32, .f64, .void_type, .struct_type => return false,
+    }
+}
+
+/// Build the portable errno name symbol: `"e"` ++ lowercase of the `std.c.E`
+/// tag name (e.g. `EACCES` -> `eacces`). Falls back to `e<decimal>` for an
+/// errno with no named enum tag. The result is owned by `alloc`.
+fn errnoName(alloc: std.mem.Allocator, e: c_int) ![]const u8 {
+    const E = std.c.E;
+    const Tag = @typeInfo(E).@"enum".tag_type;
+    if (std.math.cast(Tag, e)) |tag_val| {
+        if (std.enums.tagName(E, @enumFromInt(tag_val))) |name| {
+            const buf = try alloc.alloc(u8, name.len + 1);
+            buf[0] = 'e';
+            for (name, 0..) |c, i| buf[i + 1] = std.ascii.toLower(c);
+            return buf;
+        }
+    }
+    return std.fmt.allocPrint(alloc, "e{d}", .{e});
+}
+
+/// Raise `EPosixError` (`posix-error:`) for a failing errno-convention call.
+/// The error carries `data` `H{ errno: <int> name: <symbol> }` (raw platform
+/// integer plus portable name) and a `strerror`-derived message. Stashes the
+/// error and returns `error.UserThrown`, mirroring `throw`.
+fn raisePosixError(ctx: *Context, e: c_int) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const name = try errnoName(alloc, e);
+
+    const hash = try alloc.create(HashTable);
+    hash.* = HashTable{};
+    errdefer container_backing.releaseValue(.{ .hash = hash });
+    try hash.put(alloc, try alloc.dupe(u8, "errno"), .{ .fixnum = @as(i64, e) });
+    try hash.put(alloc, try alloc.dupe(u8, "name"), .{ .symbol = name });
+
+    const data_ptr = try alloc.create(Value);
+    data_ptr.* = .{ .hash = hash };
+
+    const message: []const u8 = if (strerror_fn) |strerror|
+        try alloc.dupe(u8, std.mem.span(strerror(e)))
+    else
+        try alloc.dupe(u8, "posix error");
+
+    ctx.thrown_error = try value_mod.boxErrorObject(alloc, .{
+        .error_type = try alloc.dupe(u8, "posix-error"),
+        .message = message,
+        .data = data_ptr,
+    });
+    return error.UserThrown;
 }
 
 /// lib-open ( path-or-name -- dylib ) - Opens a dynamic library and returns a resource handle to it.
@@ -390,6 +503,11 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
         return error.FFITypeMismatch;
     }
 
+    // Extract the opt-in errno sentinel (field 2) and the per-binding
+    // capability (field 3) from the ffi-sig struct.
+    const errno_sentinel = try parseErrnoSentinelField(ctx, si.fields[2]);
+    const capability = try parseCapabilityField(ctx, si.fields[3]);
+
     // Store final signature
     const sig = try alloc.create(FfiSignature);
     sig.* = .{
@@ -397,10 +515,60 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
         .return_type = return_type,
         .n_fixed_params = if (variadic_spec != null) param_types.len else null,
         .variadic_type = if (variadic_spec) |vs| vs.typed else null,
+        .errno_sentinel = errno_sentinel,
+        .capability = capability,
     };
 
     ffi_fn.ffi_signature = sig;
     try ctx.stack.push(ffi_fn_val);
+}
+
+/// Parse the ffi-sig `errno` field into an ErrnoSentinel. `f` (boolean false)
+/// means no errno convention. A symbol is matched against the closed set the
+/// binding surface already validated at parse time; anything else is rejected.
+fn parseErrnoSentinelField(ctx: *Context, val: Value) !ErrnoSentinel {
+    switch (val) {
+        .boolean => |b| {
+            if (!b) return .none;
+            helpers.setErrorContext(ctx, "ffi-sig errno field must be a sentinel symbol or f", .{});
+            return error.FFITypeMismatch;
+        },
+        .symbol => |s| {
+            if (std.mem.eql(u8, s, "neg1")) return .neg1;
+            if (std.mem.eql(u8, s, "null")) return .null_ptr;
+            if (std.mem.eql(u8, s, "neg")) return .neg;
+            helpers.setErrorContext(ctx, "invalid FFI errno sentinel '{s}': expected neg1, null, or neg", .{s});
+            return error.FFITypeMismatch;
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol or f for ffi-sig errno", val);
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// Parse the ffi-sig `cap` field into a Capability. `f` (boolean false) means
+/// the default `.ffi` gate. A symbol maps through the shared sandbox capability
+/// vocabulary; an unknown capability name fails at bind time.
+fn parseCapabilityField(ctx: *Context, val: Value) !Capability {
+    switch (val) {
+        .boolean => |b| {
+            if (!b) return .ffi;
+            helpers.setErrorContext(ctx, "ffi-sig cap field must be a capability symbol or f", .{});
+            return error.FFITypeMismatch;
+        },
+        .symbol => |s| {
+            if (std.mem.eql(u8, s, "none")) return .none;
+            return SandboxSpec.fromString(s) orelse {
+                helpers.setErrorContext(ctx, "unknown FFI capability '{s}'", .{s});
+                return error.FFITypeMismatch;
+            };
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "symbol or f for ffi-sig cap", val);
+            return error.TypeMismatch;
+        },
+    }
 }
 
 /// Map an FfiTypeTag to the corresponding libffi type descriptor.
@@ -502,6 +670,10 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         return error.FFICallFailed;
     };
 
+    // Per-binding sandbox gate: the binding's declared capability, not the
+    // coarse `.ffi` native gate, decides whether this call is allowed.
+    try checkBindingCapability(ctx, sig);
+
     if (sig.isVariadic()) {
         return nativeFfiCallVariadic(ctx, ffi_fn, sig);
     }
@@ -599,6 +771,15 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         if (nargs > 0) arg_ptrs.ptr else null,
     );
 
+    // errno must be read before any other libc call can clobber the
+    // thread-local. The sentinel test only reads ret_storage (pure integer
+    // compares), so it runs before the fetch without touching errno.
+    const posix_errno: ?c_int =
+        if (sig.errno_sentinel != .none and sentinelMatches(sig.errno_sentinel, sig.return_type, &ret_storage))
+            readErrno()
+        else
+            null;
+
     if (ctx.callback_error) |err| {
         ctx.callback_error = null;
         if (ctx.callback_error_context) |ectx| {
@@ -607,6 +788,8 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         }
         return err;
     }
+
+    if (posix_errno) |e| return raisePosixError(ctx, e);
 
     // Push out-param and inout-param values in parameter order (first deepest)
     for (sig.param_types, 0..) |param_type, pi| {
@@ -843,6 +1026,14 @@ fn nativeFfiCallVariadic(ctx: *Context, ffi_fn: *Resource, sig: *const FfiSignat
         if (n_total > 0) arg_ptrs.ptr else null,
     );
 
+    // errno must be read before any other libc call can clobber the
+    // thread-local (see nativeFfiCall).
+    const posix_errno: ?c_int =
+        if (sig.errno_sentinel != .none and sentinelMatches(sig.errno_sentinel, sig.return_type, &ret_storage))
+            readErrno()
+        else
+            null;
+
     if (ctx.callback_error) |err| {
         ctx.callback_error = null;
         if (ctx.callback_error_context) |ectx| {
@@ -851,6 +1042,8 @@ fn nativeFfiCallVariadic(ctx: *Context, ffi_fn: *Resource, sig: *const FfiSignat
         }
         return err;
     }
+
+    if (posix_errno) |e| return raisePosixError(ctx, e);
 
     // Push out-param values for fixed params
     for (sig.param_types[0..n_fixed], 0..) |param_type, pi| {
@@ -1330,6 +1523,66 @@ test "readErrno reflects errno after a deliberate libc failure" {
     // close(-1) fails and sets errno = EBADF; read it back immediately.
     _ = std.c.close(-1);
     try std.testing.expectEqual(@as(c_int, @intFromEnum(std.c.E.BADF)), readErrno());
+}
+
+test "sentinelMatches interprets return by type and sentinel" {
+    const i32_ret = FfiType{ .tag = .i32 };
+    const ptr_ret = FfiType{ .tag = .ptr };
+    const u32_ret = FfiType{ .tag = .u32 };
+    const f64_ret = FfiType{ .tag = .f64 };
+
+    // Signed integer: -1 matches neg1 and neg but not null.
+    var neg_one = ReturnStorage{ .as_i64 = -1 };
+    try std.testing.expect(sentinelMatches(.neg1, i32_ret, &neg_one));
+    try std.testing.expect(sentinelMatches(.neg, i32_ret, &neg_one));
+    try std.testing.expect(!sentinelMatches(.null_ptr, i32_ret, &neg_one));
+    try std.testing.expect(!sentinelMatches(.none, i32_ret, &neg_one));
+
+    // Signed integer: 0 matches null only.
+    var zero = ReturnStorage{ .as_i64 = 0 };
+    try std.testing.expect(sentinelMatches(.null_ptr, i32_ret, &zero));
+    try std.testing.expect(!sentinelMatches(.neg1, i32_ret, &zero));
+
+    // Signed integer: a successful positive return matches nothing.
+    var pos = ReturnStorage{ .as_i64 = 5 };
+    try std.testing.expect(!sentinelMatches(.neg1, i32_ret, &pos));
+    try std.testing.expect(!sentinelMatches(.neg, i32_ret, &pos));
+
+    // Pointer: NULL matches null; MAP_FAILED (all-ones) matches neg1.
+    var null_ptr = ReturnStorage{ .as_ptr = null };
+    try std.testing.expect(sentinelMatches(.null_ptr, ptr_ret, &null_ptr));
+    try std.testing.expect(!sentinelMatches(.neg1, ptr_ret, &null_ptr));
+    var map_failed = ReturnStorage{ .as_u64 = std.math.maxInt(usize) };
+    try std.testing.expect(sentinelMatches(.neg1, ptr_ret, &map_failed));
+    try std.testing.expect(!sentinelMatches(.null_ptr, ptr_ret, &map_failed));
+
+    // Unsigned: neg1/neg never match; null matches 0.
+    var u_zero = ReturnStorage{ .as_u64 = 0 };
+    try std.testing.expect(sentinelMatches(.null_ptr, u32_ret, &u_zero));
+    var u_max = ReturnStorage{ .as_u64 = std.math.maxInt(u32) };
+    try std.testing.expect(!sentinelMatches(.neg1, u32_ret, &u_max));
+
+    // Float returns never signal errno failure.
+    var f = ReturnStorage{ .as_f64 = -1.0 };
+    try std.testing.expect(!sentinelMatches(.neg1, f64_ret, &f));
+    try std.testing.expect(!sentinelMatches(.neg, f64_ret, &f));
+}
+
+test "errnoName normalizes known and unknown errnos" {
+    const alloc = std.testing.allocator;
+
+    const eacces = try errnoName(alloc, @intFromEnum(std.c.E.ACCES));
+    defer alloc.free(eacces);
+    try std.testing.expectEqualStrings("eacces", eacces);
+
+    const ebadf = try errnoName(alloc, @intFromEnum(std.c.E.BADF));
+    defer alloc.free(ebadf);
+    try std.testing.expectEqualStrings("ebadf", ebadf);
+
+    // An errno with no named tag falls back to e<decimal>.
+    const unknown = try errnoName(alloc, 31337);
+    defer alloc.free(unknown);
+    try std.testing.expectEqualStrings("e31337", unknown);
 }
 
 /// Call a foreign close function via libffi with the signature (ptr -> void).

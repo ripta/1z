@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <errno.h>
 
 int toy_add(int a, int b) {
     return a + b;
@@ -196,4 +197,14 @@ double toy_sum_doubles(int count, ...) {
     }
     va_end(args);
     return sum;
+}
+
+int toy_set_errno(int e) {
+    errno = e;
+    return -1;
+}
+
+void *toy_set_errno_ptr(int e) {
+    errno = e;
+    return NULL;
 }
