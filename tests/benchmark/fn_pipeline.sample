@@ -1,0 +1,43 @@
+--- header lex (tokenize-expr on name(params), by arity) ---
+Name                            Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+-----------------------------   -----   ----------   ------------   -----------   ----------
+lex header 0-arg  answer()          8   190.878 ms      23.859 ms         5,728           15
+lex header 1-arg  square(x)         6   157.007 ms      26.167 ms         6,609           15
+lex header 2-arg  hypot2(a,b)       6   207.760 ms      34.626 ms         8,851           15
+lex header 4-arg  poly(a..d)        4   193.586 ms      48.396 ms        12,871           15
+
+--- parse: full parse-fn vs RHS-only parse-expr (difference is the header) ---
+Name                     Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+----------------------   -----   ----------   ------------   -----------   ----------
+parse-fn   square(x)         2   114.341 ms      57.170 ms        13,330           27
+parse-expr x * x             6   162.326 ms      27.054 ms         6,029           26
+parse-fn   hypot2(a,b)       2   170.862 ms      85.431 ms        21,422           32
+parse-expr a*a + b*b         4   193.676 ms      48.419 ms        11,802           31
+parse-fn   shifted(x)        2   178.746 ms      89.373 ms        22,758           37
+parse-expr (x+1)*(x+1)       2   117.827 ms      58.913 ms        15,213           36
+
+--- RHS lowering (lower: AST -> quotation, AST precomputed) ---
+Name                        Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+-------------------------   -----   ----------   ------------   -----------   ----------
+lower square RHS  x * x       212   197.685 ms     932.476 us            40            5
+lower hypot2 RHS  a*a+b*b      44   100.299 ms       2.279 ms            96            7
+
+--- full parse-time via eval-string (tokenize + parse-fn + lower + emit + define) ---
+Name                               Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+--------------------------------   -----   ----------   ------------   -----------   ----------
+eval fn     efn1(x)=x*x                2   116.547 ms      58.273 ms        12,999           27
+eval direct ehw1: dup *            1,418   133.099 ms      93.863 us             5            2
+eval fn     efn2(a,b)=a*a+b*b          2   176.920 ms      88.460 ms        21,171           32
+eval direct ehw2: dup*swap dup*+   1,190   135.518 ms     113.880 us             5            2
+
+--- runtime: generated fn word vs hand-written 1z ---
+Name                   Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack
+------------------   -------   ----------   ------------   -----------   ----------
+gen  9 square          5,256   200.937 ms      38.230 us            13            2
+dir  9 h-square       92,584   198.749 ms       2.146 us             5            2
+gen  5 12 hypot2       1,619   102.351 ms      63.218 us            23            3
+dir  5 12 h-hypot2    46,666   198.330 ms       4.249 us            10            3
+gen  4 shifted         2,483   100.070 ms      40.302 us            17            3
+dir  4 h-shifted      34,163   101.994 ms       2.985 us             7            2
+gen  answer           67,493   100.103 ms       1.483 us             5            1
+dir  h-answer        202,898   198.543 ms         978 ns             3            1

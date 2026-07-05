@@ -1,0 +1,138 @@
+\ Hosted function-definition benchmark (fn name(params) = rhs ;).
+\
+\ Measures the cost of the fn sugar in tiers, reusing the expr{ } benchmarking
+\ substrate:
+\   - header lex     (tokenize-expr on name(params) headers)
+\   - full parse     (parse-fn) against RHS-only parse (parse-expr)
+\   - RHS lowering   (lower, AST precomputed)
+\   - full parse-time (tokenize + parse-fn + lower + emit + define, via eval-string)
+\   - runtime        of a generated definition against equivalent hand-written 1z
+\
+\ Isolation, mirroring expr_pipeline.1z: the parse and lex rows call parse-fn /
+\ parse-expr / tokenize-expr directly on `const` sources, so their timed loop
+\ excludes later stages. The lowering rows operate on ASTs built once via the
+\ public AST constructors, so their loop pays no parse cost. The runtime rows
+\ call words defined once at parse time, so their loop is execution-only.
+\
+\ Header parse cost is read as the difference between the full parse-fn rows and
+\ the RHS-only parse-expr rows: parse-fn does everything parse-expr does on the
+\ RHS, plus splitting on `=` and lexing/parsing the `name(params)` header. The
+\ header-lex rows report the shared punctuation-splitting sub-lexer cost on its
+\ own. The fn-specific lowering (bind-preamble, compose, curry, effect parse, and
+\ the emit-call that defines the word) is private and parse-time-only, so it
+\ cannot be timed as a standalone runtime loop; it is folded into the full
+\ parse-time tier via eval-string, exactly as the call pipeline folds emit-expr.
+\
+\ The runtime tier is the load-bearing comparison. Unlike an inline expr{ }, which
+\ splices flat 1z at parse time and matches direct 1z exactly, a generated fn word
+\ body is `[ [ <bind params> <rhs> ] call ]`: each call opens its own local frame,
+\ binds every parameter to a per-invocation local word, and runs the lowered RHS
+\ as a curry / compose quotation. So a generated definition is expected to carry
+\ measurable overhead over hand-written 1z, and the runtime rows quantify it.
+\
+\ The RHS ASTs are built with the public constructors (ref / binop) rather than
+\ parse-fn, because a const body that runs the parser currently fails to resolve
+\ the Pratt parser's module-private prefix handler across the const force; a
+\ constructor-built AST is identical to what parse-fn's RHS parse produces. Unlike
+\ the scalar expr pipeline's literal-only ASTs, these carry parameter ref nodes;
+\ lower's ref arm is `>quotation`, so lowering a ref-bearing AST needs no word
+\ resolution.
+
+use "expr" ;
+use "sequences" ;
+use "lexer" ;
+\ materializing the lazy token stream via #collect needs (lexer-step) in scope
+
+\ Headers of increasing arity, for the header-lex rows.
+HDR-0: const [ "answer()" ] ;
+HDR-1: const [ "square(x)" ] ;
+HDR-2: const [ "hypot2(a, b)" ] ;
+HDR-4: const [ "poly(a, b, c, d)" ] ;
+
+\ Full declaration sources (header = rhs), for the parse-fn rows.
+DECL-1:    const [ "square(x) = x * x" ] ;
+DECL-2:    const [ "hypot2(a, b) = a * a + b * b" ] ;
+DECL-NEST: const [ "shifted(x) = (x + 1) * (x + 1)" ] ;
+
+\ The RHS strings alone, for the parse-expr rows. parse-fn minus parse-expr on the
+\ matching RHS isolates the header-parse contribution.
+RHS-1:    const [ "x * x" ] ;
+RHS-2:    const [ "a * a + b * b" ] ;
+RHS-NEST: const [ "(x + 1) * (x + 1)" ] ;
+
+\ RHS ASTs built once via constructors, so the lowering rows pay no parse cost.
+\   square:  x * x
+\   hypot2:  a * a + b * b
+RHS-AST-1: const [ "*" "x" ref "x" ref binop ] ;
+RHS-AST-2: const [ "+" "*" "a" ref "a" ref binop "*" "b" ref "b" ref binop binop ] ;
+
+\ Generated definitions and their hand-written equivalents. Parse + lower + define
+\ happen once, at parse time, so the runtime rows time execution only.
+fn square(x) = x * x ;
+fn hypot2(a, b) = a * a + b * b ;
+fn shifted(x) = (x + 1) * (x + 1) ;
+fn answer() = 42 ;
+
+h-square:  ( x -- n )   [ dup * ] ;
+h-hypot2:  ( a b -- n ) [ dup * swap dup * + ] ;
+h-shifted: ( x -- n )   [ 1 + dup * ] ;
+h-answer:  ( -- n )     [ 42 ] ;
+
+"--- header lex (tokenize-expr on name(params), by arity) ---" print-line
+[
+  "lex header 0-arg  answer()" [ HDR-0 tokenize-expr #collect drop ] benchmark-auto
+  "lex header 1-arg  square(x)" [ HDR-1 tokenize-expr #collect drop ] benchmark-auto
+  "lex header 2-arg  hypot2(a,b)" [ HDR-2 tokenize-expr #collect drop ] benchmark-auto
+  "lex header 4-arg  poly(a..d)" [ HDR-4 tokenize-expr #collect drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- parse: full parse-fn vs RHS-only parse-expr (difference is the header) ---" print-line
+[
+  "parse-fn   square(x)" [ DECL-1 parse-fn drop ] benchmark-auto
+  "parse-expr x * x" [ RHS-1 parse-expr drop ] benchmark-auto
+  "parse-fn   hypot2(a,b)" [ DECL-2 parse-fn drop ] benchmark-auto
+  "parse-expr a*a + b*b" [ RHS-2 parse-expr drop ] benchmark-auto
+  "parse-fn   shifted(x)" [ DECL-NEST parse-fn drop ] benchmark-auto
+  "parse-expr (x+1)*(x+1)" [ RHS-NEST parse-expr drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- RHS lowering (lower: AST -> quotation, AST precomputed) ---" print-line
+[
+  "lower square RHS  x * x" [ RHS-AST-1 lower drop ] benchmark-auto
+  "lower hypot2 RHS  a*a+b*b" [ RHS-AST-2 lower drop ] benchmark-auto
+] run-benchmarks
+
+nl
+
+\ Full parse-time cost of the sugar: eval-string re-runs tokenize + parse-fn +
+\ lower-fn-decl + emit + define each iteration. This is the only way to exercise
+\ the parse-time-only lowering (emit-call) in a loop. The hand-written baseline
+\ row runs the same eval-string machinery on a plain definition of equal size, so
+\ its difference from the fn row isolates the fn tokenize + parse + lower + emit
+\ overhead. Distinct word names avoid colliding with the runtime-tier words;
+\ eval-string is `string --`, so a bare definition is stack-neutral.
+"--- full parse-time via eval-string (tokenize + parse-fn + lower + emit + define) ---" print-line
+[
+  "eval fn     efn1(x)=x*x" [ "fn efn1(x) = x * x ;" eval-string ] benchmark-auto
+  "eval direct ehw1: dup *" [ "ehw1: ( x -- n ) [ dup * ] ;" eval-string ] benchmark-auto
+  "eval fn     efn2(a,b)=a*a+b*b" [ "fn efn2(a, b) = a * a + b * b ;" eval-string ] benchmark-auto
+  "eval direct ehw2: dup*swap dup*+" [ "ehw2: ( a b -- n ) [ dup * swap dup * + ] ;" eval-string ] benchmark-auto
+] run-benchmarks
+
+nl
+
+"--- runtime: generated fn word vs hand-written 1z ---" print-line
+[
+  "gen  9 square" [ 9 square drop ] benchmark-auto
+  "dir  9 h-square" [ 9 h-square drop ] benchmark-auto
+  "gen  5 12 hypot2" [ 5 12 hypot2 drop ] benchmark-auto
+  "dir  5 12 h-hypot2" [ 5 12 h-hypot2 drop ] benchmark-auto
+  "gen  4 shifted" [ 4 shifted drop ] benchmark-auto
+  "dir  4 h-shifted" [ 4 h-shifted drop ] benchmark-auto
+  "gen  answer" [ answer drop ] benchmark-auto
+  "dir  h-answer" [ h-answer drop ] benchmark-auto
+] run-benchmarks
