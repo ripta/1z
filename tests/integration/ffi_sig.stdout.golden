@@ -1,78 +1,78 @@
 Stack: [ ]
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "i32" "i32" } return-type: "i32" } ]
+Stack: [ ffi-sig{ params: { "i32" "i32" } return-type: "i32" errno: f cap: f } ]
 PASS: ffi{ produces ffi-sig
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "i32" "i32" } return-type: "i32" } ]
+Stack: [ ffi-sig{ params: { "i32" "i32" } return-type: "i32" errno: f cap: f } ]
 PASS: params field
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "i32" "i32" } return-type: "i32" } ]
+Stack: [ ffi-sig{ params: { "i32" "i32" } return-type: "i32" errno: f cap: f } ]
 PASS: return-type field
 Stack: [ ]
-Stack: [ ffi-sig{ params: { } return-type: "ptr:toy-counter" } ]
+Stack: [ ffi-sig{ params: { } return-type: "ptr:toy-counter" errno: f cap: f } ]
 PASS: no params
 Stack: [ ]
-Stack: [ ffi-sig{ params: { } return-type: "ptr:toy-counter" } ]
+Stack: [ ffi-sig{ params: { } return-type: "ptr:toy-counter" errno: f cap: f } ]
 PASS: ptr:name return type
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "ptr" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "ptr" } return-type: "void" errno: f cap: f } ]
 PASS: void return params
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "ptr" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "ptr" } return-type: "void" errno: f cap: f } ]
 PASS: explicit void return
 Stack: [ ]
-Stack: [ ffi-sig{ params: { } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { } return-type: "void" errno: f cap: f } ]
 PASS: empty sig params
 Stack: [ ]
-Stack: [ ffi-sig{ params: { } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { } return-type: "void" errno: f cap: f } ]
 PASS: no arrow defaults to void
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "cstring" } return-type: "cstring" } ]
+Stack: [ ffi-sig{ params: { "cstring" } return-type: "cstring" errno: f cap: f } ]
 PASS: cstring param
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "cstring" } return-type: "cstring" } ]
+Stack: [ ffi-sig{ params: { "cstring" } return-type: "cstring" errno: f cap: f } ]
 PASS: cstring return
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "i64" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "i64" } return-type: "void" errno: f cap: f } ]
 PASS: i64 token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "u32" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "u32" } return-type: "void" errno: f cap: f } ]
 PASS: u32 token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "u64" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "u64" } return-type: "void" errno: f cap: f } ]
 PASS: u64 token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "f64" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "f64" } return-type: "void" errno: f cap: f } ]
 PASS: f64 token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "cstring-retained" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "cstring-retained" } return-type: "void" errno: f cap: f } ]
 PASS: cstring-retained token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "cstring-owned" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "cstring-owned" } return-type: "void" errno: f cap: f } ]
 PASS: cstring-owned token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "i8" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "i8" } return-type: "void" errno: f cap: f } ]
 PASS: i8 token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "i16" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "i16" } return-type: "void" errno: f cap: f } ]
 PASS: i16 token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "u16" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "u16" } return-type: "void" errno: f cap: f } ]
 PASS: u16 token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "usize" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "usize" } return-type: "void" errno: f cap: f } ]
 PASS: usize token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "isize" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "isize" } return-type: "void" errno: f cap: f } ]
 PASS: isize token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "f32" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "f32" } return-type: "void" errno: f cap: f } ]
 PASS: f32 token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "bool" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "bool" } return-type: "void" errno: f cap: f } ]
 PASS: bool token
 Stack: [ ]
-Stack: [ ffi-sig{ params: { "ptr:my-thing" } return-type: "void" } ]
+Stack: [ ffi-sig{ params: { "ptr:my-thing" } return-type: "void" errno: f cap: f } ]
 PASS: ptr:name preserved
 Stack: [ ]
 Stack: [ <resource:dylib> ]
@@ -87,12 +87,12 @@ Stack: [ <resource:dylib> <resource:ffi-fn> ]
 PASS: bind-sig returns resource
 Stack: [ <resource:dylib> ]
 Stack: [ ]
-Stack: [ [ toy-lib-path lib-open dup ffi-sig{ params: { "i32" } return-type: "i32" } bind-sig swap resource-close ] ]
+Stack: [ [ toy-lib-path lib-open dup ffi-sig{ params: { "i32" } return-type: "i32" errno: f cap: f } bind-sig swap resource-close ] ]
 PASS: bind-sig rejects non-ffi-fn
 Stack: [ ]
-Stack: [ [ toy-lib-path lib-open dup "toy_add" lib-symbol dup resource-close ffi-sig{ params: { "i32" "i32" } return-type: "i32" } bind-sig swap resource-close ] ]
+Stack: [ [ toy-lib-path lib-open dup "toy_add" lib-symbol dup resource-close ffi-sig{ params: { "i32" "i32" } return-type: "i32" errno: f cap: f } bind-sig swap resource-close ] ]
 PASS: bind-sig rejects closed ffi-fn
 Stack: [ ]
-Stack: [ [ toy-lib-path lib-open dup "toy_add" lib-symbol { "banana" } "i32" make-ffi-sig bind-sig swap resource-close ] ]
+Stack: [ [ toy-lib-path lib-open dup "toy_add" lib-symbol { "banana" } "i32" f f make-ffi-sig bind-sig swap resource-close ] ]
 PASS: bind-sig rejects unknown type
 Stack: [ ]

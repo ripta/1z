@@ -1,0 +1,30 @@
+Stack: [ ]
+Stack: [ ]
+=== ffi-sig default errno/cap ===
+Stack: [ ]
+PASS: unannotated sig errno defaults to f
+Stack: [ ]
+PASS: unannotated sig cap defaults to f
+Stack: [ ]
+=== annotated ffi-def{ binds and calls ===
+Stack: [ ]
+Stack: [ ]
+PASS: annotated binding still calls correctly
+Stack: [ ]
+PASS: bare binding alongside annotated
+Stack: [ ]
+=== other sentinels parse ===
+Stack: [ ]
+Stack: [ ]
+PASS: null: and neg: sentinels parse without error
+Stack: [ ]
+=== invalid sentinel rejected ===
+Stack: [ ]
+Stack: [ [ "ffi-def{ bad: "toy_add" H{ errno: bogus: } ffi{ i32 i32 -> i32 } }" eval-string ] ]
+PASS: unknown errno sentinel rejected
+Stack: [ ]
+=== mutable options rejected ===
+Stack: [ ]
+Stack: [ [ "ffi-def{ bad2: "toy_add" M{ errno: neg1: } ffi{ i32 i32 -> i32 } }" eval-string ] ]
+PASS: M{ options hash rejected
+Stack: [ ]

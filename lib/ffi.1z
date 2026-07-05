@@ -1,10 +1,23 @@
 \ lib/ffi.1z - FFI signature descriptor and convenience wrappers
 
-ffi-sig: struct{ params: array return-type: string } ;
+ffi-sig: struct{
+  params:      array
+  return-type: string
+  errno:       any
+  cap: any
+} ;
 
 \\ Parse-time word for FFI signature descriptors.
-\\ ffi{ i32 i32 -> i32 } produces an ffi-sig with params { "i32" "i32" } and return-type "i32".
-\\ If no -> is present, return type defaults to "void".
+\\
+\\ The form:
+\\
+\\     ffi{ i32 i32 -> i32 }
+\\
+\\ produces an ffi-sig with params { "i32" "i32" } and return-type i32.
+\\
+\\ If no `->` is present, then the return type defaults to "void".
+\\ The errno and cap fields default to f.
+\\ The form `ffi-def{` populates them from an options hash.
 ffi{: parse-time [
   (read-ffi-params): ( accum -- params return-type ) [
     peek-token
@@ -29,7 +42,7 @@ ffi{: parse-time [
     ] if
   ] ;
 
-  { } (read-ffi-params) make-ffi-sig
+  { } (read-ffi-params) f f make-ffi-sig
 ] ;
 
 \\ Parse-time word for FFI struct layout descriptors.
@@ -75,6 +88,39 @@ ffi-callback: ( quotation sig -- ffi-callback ) [ native.ffi-callback ] ;
 \\ dangling if the byte array is resized or freed.
 bytes>ffi-ptr+len: ( byte-array -- resource fixnum ) [ native.bytes-raw-ptr ] ;
 
+\\ True iff sym is one of the errno failure sentinels: neg1, null, or neg.
+(valid-errno-sentinel?): ( sym -- bool ) [
+  dup neg1: = over null: = or swap neg: = or
+] ;
+
+\\ Read the errno sentinel from a binding's options hash, validating it
+\\ against the closed set. Returns f when the key is absent.
+(option-errno): ( hash -- errno ) [
+  dup errno: @has? [
+    errno: @get
+    dup (valid-errno-sentinel?) [ ] [
+      f "FFI binding errno sentinel must be neg1:, null:, or neg:" EInvalidArgument make-error throw
+    ] if
+  ] [ drop f ] if
+] ;
+
+\\ Read the cap symbol from a binding's options hash, verbatim.
+\\ Capability validation happens at bind time. Returns f when absent.
+(option-cap): ( hash -- cap ) [
+  dup cap: @has? [ cap: @get ] [ drop f ] if
+] ;
+
+\\ Rebuild an ffi-sig, folding in errno/cap from a binding's options hash.
+\\ ffi-sig is immutable, so this reconstructs rather than mutates in place.
+(apply-ffi-options): ( hash sig -- sig ) [
+  over (option-errno)                \ hash sig errno
+  <rot- (option-cap)                 \ sig errno cap
+  <rot-                              \ errno cap sig
+  [ params>> ] [ return-type>> ] bi  \ errno cap params return-type
+  2swap                              \ params return-type errno cap
+  make-ffi-sig
+] ;
+
 \\ Build one FFI binding entry in the accumulator mutable map.
 \\ Looks up the C symbol in the dylib, binds the signature, curries
 \\ into a self-contained [ ffi-call ] quotation, and stores it by name.
@@ -96,7 +142,15 @@ ffi-def{: parse-time [
       drop
       parse-token dup #len 1 - 0 swap #slice
       parse-literal
-      parse-literal
+      peek-token dup "H{" = [
+        drop parse-literal parse-literal (apply-ffi-options)
+      ] [
+        "M{" = [
+          f "FFI binding options must be an immutable H{ } hash" EInvalidArgument make-error throw
+        ] [
+          parse-literal
+        ] if
+      ] if
       [ (build-ffi-entry) ] curry curry curry
       compose
       (read-ffi-def)

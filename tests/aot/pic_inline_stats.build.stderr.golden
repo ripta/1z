@@ -4,7 +4,7 @@ Inline PIC sites: 1/2 generic call sites preseeded
 AOT interpreter fallbacks: 3 total
   native: 3
   sites:
-    native: . -> inspect (line 703)
+    native: . -> inspect (line 708)
     native: nth-elem -> #nth (line 5)
     native: nth-elem -> #nth (line 5)
   static-check: jitInterpretedCall=0/0 jitNativeWordCall=3/3 jitCallQuotation=0/0 (matches build-time inventory)

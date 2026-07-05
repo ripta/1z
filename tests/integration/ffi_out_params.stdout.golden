@@ -58,7 +58,7 @@ Stack: [ <resource:dylib> <resource:ffi-fn> 3.75 ]
 PASS: toy_f32_out(1.5, 2.25)
 Stack: [ <resource:dylib> <resource:ffi-fn> ]
 Stack: [ <resource:dylib> ]
-Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_add" lib-symbol ffi-sig{ params: { "i32" } return-type: "out-i32" } bind-sig drop swap resource-close ] ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_add" lib-symbol ffi-sig{ params: { "i32" } return-type: "out-i32" errno: f cap: f } bind-sig drop swap resource-close ] ]
 PASS: out-param as return type rejected
 Stack: [ <resource:dylib> ]
 Stack: [ ]

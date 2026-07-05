@@ -15,7 +15,7 @@ PASS: toy counter after 3 increments
 Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> <resource:toy-counter> ]
 Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> ]
 Stack: [ <resource:dylib> ]
-Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_open" ffi-sig{ params: { } return-type: "ptr:toy-counter" } bound-symbol ffi-call over "toy_close" ffi-sig{ params: { "ptr" } return-type: "void" } bound-symbol over swap bind-close dup resource-close swap "toy_read" ffi-sig{ params: { "ptr:toy-counter" } return-type: "i32" } bound-symbol ffi-call ] ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_open" ffi-sig{ params: { } return-type: "ptr:toy-counter" errno: f cap: f } bound-symbol ffi-call over "toy_close" ffi-sig{ params: { "ptr" } return-type: "void" errno: f cap: f } bound-symbol over swap bind-close dup resource-close swap "toy_read" ffi-sig{ params: { "ptr:toy-counter" } return-type: "i32" errno: f cap: f } bound-symbol ffi-call ] ]
 PASS: use-after-close after resource-close via bind-close
 Stack: [ <resource:dylib> ]
 Stack: [ <resource:dylib> <resource:ffi-fn> ]
@@ -38,7 +38,7 @@ Stack: [ <resource:dylib> ]
 Stack: [ <resource:dylib> [ toy-lib-path lib-open "toy_close" native.lib-symbol "test" <test-resource> swap native.bind-close ] ]
 PASS: bind-close without sig throws ffi-call-failed
 Stack: [ <resource:dylib> ]
-Stack: [ <resource:dylib> [ toy-lib-path lib-open "toy_add" native.lib-symbol ffi-sig{ params: { "i32" "i32" } return-type: "i32" } native.bind-sig "test" <test-resource> swap native.bind-close ] ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open "toy_add" native.lib-symbol ffi-sig{ params: { "i32" "i32" } return-type: "i32" errno: f cap: f } native.bind-sig "test" <test-resource> swap native.bind-close ] ]
 PASS: bind-close with wrong sig throws ffi-type-mismatch
 Stack: [ <resource:dylib> ]
 Stack: [ ]

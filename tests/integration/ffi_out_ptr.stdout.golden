@@ -61,7 +61,7 @@ PASS: full lifecycle counter
 Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> <resource:toy-counter> ]
 Stack: [ <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:ffi-fn> <resource:dylib> ]
 Stack: [ <resource:dylib> ]
-Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_open_out" lib-symbol ffi-sig{ params: { "ptr" } return-type: "out-ptr" } bind-sig drop swap resource-close ] ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_open_out" lib-symbol ffi-sig{ params: { "ptr" } return-type: "out-ptr" errno: f cap: f } bind-sig drop swap resource-close ] ]
 PASS: out-ptr as return type rejected
 Stack: [ <resource:dylib> ]
 Stack: [ ]

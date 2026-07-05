@@ -152,7 +152,7 @@ use-after-close: "bind-sig rejects closed ffi-fn" assert-error-type
 [
   toy-lib-path lib-open
   dup "toy_add" lib-symbol
-  { "banana" } "i32" make-ffi-sig bind-sig
+  { "banana" } "i32" f f make-ffi-sig bind-sig
   swap resource-close
 ]
 ffi-type-mismatch: "bind-sig rejects unknown type" assert-error-type

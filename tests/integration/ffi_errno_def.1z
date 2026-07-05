@@ -1,0 +1,50 @@
+use "testing" ;
+use "ffi" ;
+
+\\ Helper to get the shared library extension for the host OS.
+toy-lib-ext: ( -- ext ) [
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
+] ;
+
+\\ Helper to get the shared library path for the toy library.
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy" #append toy-lib-ext #append
+] ;
+
+\ === ffi-sig errno/cap fields default to f ===
+"ffi-sig default errno/cap" test-section
+
+ffi{ i32 -> i32 } errno>> f "unannotated sig errno defaults to f" assert=
+ffi{ i32 -> i32 } cap>> f "unannotated sig cap defaults to f" assert=
+
+\ === Annotated and bare entries parse and still bind correctly ===
+"annotated ffi-def{ binds and calls" test-section
+
+toy-lib-path lib-open ffi-def{
+  toy-add-e: "toy_add" H{ errno: neg1: cap: system: } ffi{ i32 i32 -> i32 }
+  toy-strlen-b: "toy_strlen" ffi{ cstring -> i32 }
+} call "toy-e" swap >module import
+
+3 4 toy-add-e 7 "annotated binding still calls correctly" assert=
+"hello" toy-strlen-b 5 "bare binding alongside annotated" assert=
+
+\ === null: and neg: sentinels also parse ===
+"other sentinels parse" test-section
+
+toy-lib-path lib-open ffi-def{
+  toy-open-n: "toy_open" H{ errno: null: } ffi{ -> ptr:toy-counter }
+  toy-read-g: "toy_read" H{ errno: neg: cap: io/fs: } ffi{ ptr:toy-counter -> i32 }
+} call drop
+t t "null: and neg: sentinels parse without error" assert=
+
+\ === Invalid errno sentinel rejected at module load ===
+"invalid sentinel rejected" test-section
+
+[ "ffi-def{ bad: \"toy_add\" H{ errno: bogus: } ffi{ i32 i32 -> i32 } }" eval-string ]
+"unknown errno sentinel rejected" assert-error
+
+\ === M{ options rejected ===
+"mutable options rejected" test-section
+
+[ "ffi-def{ bad2: \"toy_add\" M{ errno: neg1: } ffi{ i32 i32 -> i32 } }" eval-string ]
+"M{ options hash rejected" assert-error

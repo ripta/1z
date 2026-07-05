@@ -8,10 +8,10 @@ Stack: [ <resource:dylib> <resource:ffi-fn> 14 ]
 PASS: toy_double_inout inout (doubled)
 Stack: [ <resource:dylib> <resource:ffi-fn> ]
 Stack: [ <resource:dylib> ]
-Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_add" lib-symbol ffi-sig{ params: { "i32" } return-type: "inout-i32" } bind-sig drop swap resource-close ] ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_add" lib-symbol ffi-sig{ params: { "i32" } return-type: "inout-i32" errno: f cap: f } bind-sig drop swap resource-close ] ]
 PASS: inout-param as return type rejected
 Stack: [ <resource:dylib> ]
-Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_apply2" lib-symbol [ + ] ffi-sig{ params: { "inout-i32" } return-type: "i32" } ffi-callback drop swap resource-close ] ]
+Stack: [ <resource:dylib> [ toy-lib-path lib-open dup "toy_apply2" lib-symbol [ + ] ffi-sig{ params: { "inout-i32" } return-type: "i32" errno: f cap: f } ffi-callback drop swap resource-close ] ]
 PASS: inout-param in callback rejected
 Stack: [ <resource:dylib> ]
 Stack: [ ]

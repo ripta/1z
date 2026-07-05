@@ -30,7 +30,7 @@ prelude-flow: ( -- ) [
 ] ;
 
 ffi-flow: ( -- ) [
-  { "i32" "i32" } "void" make-ffi-sig
+  { "i32" "i32" } "void" f f make-ffi-sig
   dup expect-ffi-sig
   dup params>> expect-array
   return-type>> expect-string
