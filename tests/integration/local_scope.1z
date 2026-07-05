@@ -47,13 +47,15 @@ public "cleaned" "use brings in the public word" assert=
 
 "use versus load inside the captured quotation" test-section
 
-\ A `use` inside the quotation escapes to the import frame (parse-time import),
-\ so the captured module holds only the runtime definition, not the use'd words.
+\ A `use` inside the quotation is a parse-time import. Its words are captured
+\ into the module's private deps, keeping the module self-contained, but they do
+\ not enter its public words. `@keys` and `@has?` read only words, so the
+\ captured module's public surface is just the lone runtime definition.
 captured: [ (only-me): [ 1 ] ;
   use "testing" shadow-ok ;
   local-scope
 ] call ;
-captured @keys #len 1 "use'd words escape the capture" assert=
+captured @keys #len 1 "use'd words stay in private deps, off the public surface" assert=
 captured (only-me): @has? t "captured module holds the lone helper" assert=
 
 "top-level guard" test-section

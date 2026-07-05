@@ -40,7 +40,7 @@ Stack: [ ]
 === use versus load inside the captured quotation ===
 Stack: [ ]
 Stack: [ ]
-PASS: use'd words escape the capture
+PASS: use'd words stay in private deps, off the public surface
 Stack: [ ]
 PASS: captured module holds the lone helper
 Stack: [ ]
