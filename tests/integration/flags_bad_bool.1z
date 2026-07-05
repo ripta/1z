@@ -1,0 +1,9 @@
+\ A bad boolean spelling prints a one-line error to stderr and exits 1. No usage
+\ help is printed. The clean-exit path cannot be asserted inline because it exits
+\ the process, so it is verified through the .exitcode and .stderr.golden sidecars.
+
+use "flags" ;
+
+verbose: flag{ type: boolean description: "Verbose" } ;
+
+{ "--verbose=ture" } "Bad boolean program" parse-flags drop

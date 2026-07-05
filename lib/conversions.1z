@@ -11,11 +11,31 @@ digit?: ( str -- ? ) [
 
 \ Parse integer from string, supporting all bases and separators
 \ "123" -> 123, "-42" -> -42, "0xFF" -> 255, "0o777" -> 511, "0b101" -> 5
+\ Both failure branches drop the leftover string or value before throwing, so
+\ the stack is clean when the error propagates. That lets a caller catch the
+\ throw with the [ risky >option:some ] [ drop option:none ] recover idiom.
 parse-integer: ( str -- n ) [
   resolve-literal
   [ dup type-of dup fixnum = swap bignum = or
-    [ "not an integer" throw ] unless
+    [ drop "not an integer" throw ] unless
   ]
-  [ "invalid integer" throw ]
+  [ drop "invalid integer" throw ]
+  if
+] ;
+
+\ Parse a float from a string. "0.25" -> 0.25, "5" -> 5.0. Throws on non-numeric.
+parse-float: ( str -- f ) [ >float ] ;
+
+\ Parse a boolean from a string using the flag spelling table. Case-insensitive.
+\ true/t/1/yes -> t ; false/f/0/no -> f ; any other spelling throws.
+parse-boolean: ( str -- ? ) [
+  lowercase
+  dup { "true" "t" "1" "yes" } swap #in?
+  [ drop t ]
+  [ dup { "false" "f" "0" "no" } swap #in?
+    [ drop f ]
+    [ drop "invalid boolean" throw ]
+    if
+  ]
   if
 ] ;

@@ -1,0 +1,58 @@
+\ Float and boolean flag conversions: the boolean spelling table, the
+\ --flag=bool and --no-flag false forms, exact-match precedence over no-
+\ stripping, and float conversion. Each test file runs as its own process, so
+\ the global flag-registry starts empty here.
+
+use "testing" ;
+use "flags" ;
+use "conversions" ;
+
+"boolean and float flag conversions" test-section
+
+\ A boolean presence flag with a short alias, a second boolean flag, a flag
+\ literally named no-cache (to test precedence), and a float value flag.
+verbose:  flag{ type: boolean short: "v" description: "Verbose output" } ;
+cache:    flag{ type: boolean description: "Use cache" } ;
+no-cache: flag{ type: boolean description: "Literal no-cache flag" } ;
+ratio:    flag{ type: float description: "Ratio" } ;
+
+\ Bare --verbose is presence-true.
+{ "--verbose" } "p" parse-flags "verbose" @get t "bare boolean flag is true" assert=
+
+\ Every true spelling, plus a mixed-case one.
+{ "--verbose=true" } "p" parse-flags "verbose" @get t "=true" assert=
+{ "--verbose=t" } "p" parse-flags "verbose" @get t "=t" assert=
+{ "--verbose=1" } "p" parse-flags "verbose" @get t "=1" assert=
+{ "--verbose=yes" } "p" parse-flags "verbose" @get t "=yes" assert=
+{ "--verbose=TRUE" } "p" parse-flags "verbose" @get t "=TRUE case-insensitive" assert=
+
+\ Every false spelling, plus a mixed-case one.
+{ "--verbose=false" } "p" parse-flags "verbose" @get f "=false" assert=
+{ "--verbose=f" } "p" parse-flags "verbose" @get f "=f" assert=
+{ "--verbose=0" } "p" parse-flags "verbose" @get f "=0" assert=
+{ "--verbose=no" } "p" parse-flags "verbose" @get f "=no" assert=
+{ "--verbose=No" } "p" parse-flags "verbose" @get f "=No case-insensitive" assert=
+
+\ --no-verbose sets the boolean false.
+{ "--no-verbose" } "p" parse-flags "verbose" @get f "--no-verbose sets false" assert=
+
+\ Exact-match precedence: --no-cache hits the literal no-cache flag, not a
+\ cache-false stripping, so no-cache is true and cache keeps its default false.
+{ "--no-cache" } "p" parse-flags
+dup "no-cache" @get t "--no-cache matches the literal flag" assert=
+"cache" @get f "cache stays default false" assert=
+
+\ Float conversion.
+{ "--ratio=0.25" } "p" parse-flags
+dup "ratio" @get 0.25 "float =form converts" assert=
+"ratio" @get type-of float "ratio value is a float" assert=
+
+"conversion words" test-section
+
+\ parse-boolean directly: valid spellings and a bad spelling.
+"YES" parse-boolean t "parse-boolean is case-insensitive" assert=
+"0" parse-boolean f "parse-boolean 0 is false" assert=
+[ "ture" parse-boolean ] "parse-boolean throws on a bad spelling" assert-error
+[ "abc" parse-float ] "parse-float throws on a non-numeric string" assert-error
+
+"All conversion flag tests complete!" print-line

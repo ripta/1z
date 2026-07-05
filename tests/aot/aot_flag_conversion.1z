@@ -1,0 +1,14 @@
+\ Typed flag conversion compiled under interpreter-free AOT: a fixnum flag and a
+\ boolean flag are registered and parsed. apply-conversions routes each value
+\ through try-convert-flag-value, whose recover-based conversion must compile and
+\ run without an interpreter fallback. The converted fixnum reads back as a
+\ number and the boolean =false form reads back as f.
+
+use "flags" ;
+
+count: flag{ type: fixnum description: "A count" } ;
+verbose: flag{ type: boolean description: "Verbose" } ;
+
+{ "--count" "7" "--verbose=false" } "Test program" parse-flags
+dup "count" @get .
+"verbose" @get .

@@ -1,0 +1,52 @@
+=== boolean and float flag conversions ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: bare boolean flag is true
+Stack: [ ]
+PASS: =true
+Stack: [ ]
+PASS: =t
+Stack: [ ]
+PASS: =1
+Stack: [ ]
+PASS: =yes
+Stack: [ ]
+PASS: =TRUE case-insensitive
+Stack: [ ]
+PASS: =false
+Stack: [ ]
+PASS: =f
+Stack: [ ]
+PASS: =0
+Stack: [ ]
+PASS: =no
+Stack: [ ]
+PASS: =No case-insensitive
+Stack: [ ]
+PASS: --no-verbose sets false
+Stack: [ ]
+Stack: [ H{ cache: f no-cache: t ratio: f verbose: f } ]
+PASS: --no-cache matches the literal flag
+Stack: [ H{ cache: f no-cache: t ratio: f verbose: f } ]
+PASS: cache stays default false
+Stack: [ ]
+Stack: [ H{ cache: f ratio: 0.25 no-cache: f verbose: f } ]
+PASS: float =form converts
+Stack: [ H{ cache: f ratio: 0.25 no-cache: f verbose: f } ]
+PASS: ratio value is a float
+Stack: [ ]
+=== conversion words ===
+Stack: [ ]
+PASS: parse-boolean is case-insensitive
+Stack: [ ]
+PASS: parse-boolean 0 is false
+Stack: [ ]
+PASS: parse-boolean throws on a bad spelling
+Stack: [ ]
+PASS: parse-float throws on a non-numeric string
+Stack: [ ]
+All conversion flag tests complete!
+Stack: [ ]

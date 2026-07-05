@@ -212,6 +212,27 @@ private{
     if
   ] ;
 
+  \ A bare --name that is not itself a registered flag. When name is no-<base>
+  \ and <base> is a boolean (presence) flag, set base false. Otherwise the
+  \ unknown flag is ignored, matching prior behavior. An exact flag-name match
+  \ never reaches here, so a flag literally named no-cache wins over stripping.
+  process-no-flag: ( name -- ) [
+    dup "no-" #starts-with?
+    [
+      3 over #len #slice
+      dup flag-registry swap @has?
+      [ dup flag-takes-value? not
+        [ pf-result get swap f @set! drop ]
+        [ drop ]
+        if
+      ]
+      [ drop ]
+      if
+    ]
+    [ drop ]
+    if
+  ] ;
+
   \ Long flag: --name, --name=value, or --name value (value flag consumes next).
   process-long: ( arg idx -- idx' ) [
     swap 2 over #len #slice
@@ -232,7 +253,7 @@ private{
         [ process-named-flag ++ ]
         if
       ]
-      [ drop ++ ]
+      [ process-no-flag ++ ]
       if
     ]
     if
@@ -340,6 +361,32 @@ private{
     ] #each
   ] ;
 
+  \ Convert a raw flag value to its declared type. A boolean value is only
+  \ string-parsed: a presence-true or a --no- false is already a boolean and
+  \ passes through. Unknown or string types pass through unchanged.
+  convert-flag-value: ( value type -- value' ) [
+    dup fixnum =
+    [ drop parse-integer ]
+    [ dup float =
+      [ drop parse-float ]
+      [ boolean =
+        [ dup string? [ parse-boolean ] when ]
+        [ ]
+        if
+      ]
+      if
+    ]
+    if
+  ] ;
+
+  \ Convert value by type, returning option:some(value') or option:none on a bad
+  \ value. recover is the terminal operation in this word and the parsers throw a
+  \ clean stack, so the handler is just [ drop option:none ], matching the prelude
+  \ #nth? / receive? idiom. Keeping recover terminal here also keeps it AOT-safe.
+  try-convert-flag-value: ( value type -- opt ) [
+    [ convert-flag-value >option:some ] [ drop option:none ] recover
+  ] ;
+
   apply-conversions: ( -- ) [
     pf-result get @keys
     [
@@ -350,15 +397,24 @@ private{
         dup "type" @has?
         [
           "type" @get
-          dup fixnum =
-          [
-            drop
-            dup pf-result get swap @get
-            parse-integer
-            swap
-            pf-result get -rot> swap @set! drop
+          over pf-result get swap @get
+          swap try-convert-flag-value
+          dup option:some?
+          [ option:some>
+            swap pf-result get -rot> swap @set! drop
           ]
-          [ 2drop ]
+          \ Bad value: print a one-line error to stderr and exit; no usage help.
+          \ The branch ends in sys-exit so the AOT stack-effect checker treats it
+          \ as non-returning, matching the check-required pattern.
+          [ drop
+            dup pf-result get swap @get
+            "Error: invalid value \"" swap #append
+            "\" for --" #append
+            swap sym-to-str #append
+            stderr swap stream-write-string drop
+            stderr "\n" >bytes stream-write drop
+            1 sys-exit
+          ]
           if
         ]
         [ 2drop ]
