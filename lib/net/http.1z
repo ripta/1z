@@ -83,6 +83,15 @@ with-max-request-body: ( size quot -- ) [ max-request-body swap with-parameter ]
   "content-length" "0" @get-or parse-integer max-request-body get >
 ] ;
 
+\ True when the request declares Transfer-Encoding: chunked. The header value is
+\ a case-insensitive comma-separated token list. A chunked body is not
+\ Content-Length framed, so the eager body read cannot frame it; such a request
+\ is rejected with 411 rather than desynchronizing the stream.
+(chunked-request?): ( headers -- chunked? ) [
+  "transfer-encoding" "" @get-or lowercase "," split
+  [ trim ] #map #collect "chunked" #in?
+] ;
+
 \ Read exactly Content-Length bytes of the request body from a stream. A
 \ missing content-length header yields an empty body and reads nothing. A
 \ stream that reaches EOF before content-length bytes have arrived is a
@@ -129,7 +138,7 @@ status-reasons: ( -- reasons: hash ) H{
   "301" "Moved Permanently" "302" "Found" "304" "Not Modified" "307" "Temporary Redirect" "308" "Permanent Redirect"
   "400" "Bad Request" "401" "Unauthorized" "403" "Forbidden" "404" "Not Found"
   "405" "Method Not Allowed" "406" "Not Acceptable" "408" "Request Timeout" "409" "Conflict"
-  "410" "Gone" "413" "Content Too Large" "415" "Unsupported Media Type" "422" "Unprocessable Content" "429" "Too Many Requests"
+  "410" "Gone" "411" "Length Required" "413" "Content Too Large" "415" "Unsupported Media Type" "422" "Unprocessable Content" "429" "Too Many Requests"
   "500" "Internal Server Error" "501" "Not Implemented" "502" "Bad Gateway" "503" "Service Unavailable" "504" "Gateway Timeout"
 } ;
 
@@ -202,6 +211,11 @@ content-too-large: ( -- response ) [
   413 dup reason-for "text/plain; charset=utf-8" "413 Content Too Large" <response>
 ] ;
 
+\\ Construct a 411 Length Required response.
+length-required: ( -- response ) [
+  411 dup reason-for "text/plain; charset=utf-8" "411 Length Required" <response>
+] ;
+
 \\ Construct an error response with text/plain body.
 error-response: ( status reason message -- response ) [
   "text/plain; charset=utf-8" swap <response>
@@ -218,26 +232,33 @@ error-response: ( status reason message -- response ) [
   addr-host-port       \ ( stream sh sp uh rh rp )
   5 pick-n             \ ( stream sh sp uh rh rp stream' )
   (read-request-wire)  \ ( stream sh sp uh rh rp m p q v h )
-  dup (body-too-large?)
-  [            \ over cap: reject with 413 and close; do not read the body or dispatch
+  dup (chunked-request?)
+  [            \ chunked body: reject with 411 and close; the eager read cannot frame it
     10 drop-n  \ ( stream )
-    dup content-too-large send-response
+    dup length-required send-response
   ]
-  [                                    \ within cap: read body eagerly, build request, dispatch; ends ( stream )
-    dup 11 pick-n (read-request-body)  \ append body
-    7 pick-n                           \ append rh
-    7 pick-n                           \ append rp
-    12 pick-n                          \ append sh
-    12 pick-n                          \ append sp
-    f "" ""                            \ TLS sentinels
-    make-request                       \ ( stream sh sp uh rh rp request )
-    1 drop-at                          \ drop rp
-    1 drop-at                          \ drop rh
-    2 drop-at                          \ drop sp
-    2 drop-at                          \ drop sh; stack now ( stream uh request )
-    swap                               \ ( stream request uh )
-    2keep                              \ user handler runs with ( stream request ); restored
-    drop                               \ ( stream )
+  [ dup (body-too-large?)
+    [            \ over cap: reject with 413 and close; do not read the body or dispatch
+      10 drop-n  \ ( stream )
+      dup content-too-large send-response
+    ]
+    [                                    \ within cap: read body eagerly, build request, dispatch; ends ( stream )
+      dup 11 pick-n (read-request-body)  \ append body
+      7 pick-n                           \ append rh
+      7 pick-n                           \ append rp
+      12 pick-n                          \ append sh
+      12 pick-n                          \ append sp
+      f "" ""                            \ TLS sentinels
+      make-request                       \ ( stream sh sp uh rh rp request )
+      1 drop-at                          \ drop rp
+      1 drop-at                          \ drop rh
+      2 drop-at                          \ drop sp
+      2 drop-at                          \ drop sh; stack now ( stream uh request )
+      swap                               \ ( stream request uh )
+      2keep                              \ user handler runs with ( stream request ); restored
+      drop                               \ ( stream )
+    ]
+    if
   ]
   if
   stream-close

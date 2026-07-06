@@ -236,6 +236,32 @@ Stack: [ ]
 Stack: [ f ]
 PASS: 50 bytes equal to a 50-byte cap is allowed
 Stack: [ ]
+=== chunked-request?: plain chunked is chunked ===
+Stack: [ ]
+PASS: chunked value is chunked
+Stack: [ ]
+=== chunked-request?: multi-token list with chunked ===
+Stack: [ ]
+PASS: gzip, chunked is chunked
+Stack: [ ]
+=== chunked-request?: case-insensitive ===
+Stack: [ ]
+PASS: uppercase Chunked is chunked
+Stack: [ ]
+=== chunked-request?: absent header is not chunked ===
+Stack: [ ]
+PASS: missing transfer-encoding not chunked
+Stack: [ ]
+=== chunked-request?: non-chunked encoding is not chunked ===
+Stack: [ ]
+PASS: gzip alone not chunked
+Stack: [ ]
+=== length-required: builds a 411 response ===
+Stack: [ ]
+PASS: 411 status
+Stack: [ response{ status: 411 reason: "Length Required" headers: H{ content-type: "text/plain; charset=utf-8" } body: "411 Length Required" } ]
+PASS: 411 reason
+Stack: [ ]
 === reason-for: known status code ===
 Stack: [ ]
 PASS: 200 reason
@@ -388,4 +414,8 @@ Stack: [ ]
 PASS: within cap status
 PASS: within cap blank
 PASS: within cap body echoes name
+Stack: [ ]
+=== serve: chunked request gets 411 ===
+Stack: [ ]
+PASS: chunked request gets 411
 Stack: [ ]

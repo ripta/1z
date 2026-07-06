@@ -190,6 +190,25 @@ t "50 bytes over a 5-byte bound cap" assert=
 50 [ H{ "content-length" "50" } (body-too-large?) ] with-max-request-body
 f "50 bytes equal to a 50-byte cap is allowed" assert=
 
+"chunked-request?: plain chunked is chunked" test-section
+H{ "transfer-encoding" "chunked" } (chunked-request?) t "chunked value is chunked" assert=
+
+"chunked-request?: multi-token list with chunked" test-section
+H{ "transfer-encoding" "gzip, chunked" } (chunked-request?) t "gzip, chunked is chunked" assert=
+
+"chunked-request?: case-insensitive" test-section
+H{ "transfer-encoding" "Chunked" } (chunked-request?) t "uppercase Chunked is chunked" assert=
+
+"chunked-request?: absent header is not chunked" test-section
+H{ } (chunked-request?) f "missing transfer-encoding not chunked" assert=
+
+"chunked-request?: non-chunked encoding is not chunked" test-section
+H{ "transfer-encoding" "gzip" } (chunked-request?) f "gzip alone not chunked" assert=
+
+"length-required: builds a 411 response" test-section
+length-required dup status>> 411 "411 status" assert=
+reason>> "Length Required" "411 reason" assert=
+
 "reason-for: known status code" test-section
 200 reason-for "OK" "200 reason" assert=
 404 reason-for "Not Found" "404 reason" assert=
@@ -468,6 +487,28 @@ port>> 9999 "serve config port" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
   dup stream-read-line "" "within cap blank" assert=
   stream-read-line "alice" "within cap body echoes name" assert=
+
+  await drop
+  swap drop
+  close
+] task-scope
+
+"serve: chunked request gets 411" test-section
+[
+  39498
+  dup "127.0.0.1" swap make-addr:tcp 128 listen
+
+  dup [
+    accept
+    "127.0.0.1" 39498 [
+      drop "should-not-run" "text/plain; charset=utf-8" ok send-response
+    ] (serve-dispatch)
+  ] curry spawn
+
+  "127.0.0.1" 3 pick-n make-addr:tcp connect
+  dup "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 411 Length Required" "chunked request gets 411" assert=
+  stream-close
 
   await drop
   swap drop
