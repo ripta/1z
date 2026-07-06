@@ -218,6 +218,24 @@ Stack: [ ]
 Stack: [ ]
 PASS: truncated body throws
 Stack: [ ]
+=== max-request-body: within default cap is not too large ===
+Stack: [ ]
+PASS: 50 bytes under default cap
+Stack: [ ]
+=== max-request-body: missing content-length is not too large ===
+Stack: [ ]
+PASS: missing content-length not too large
+Stack: [ ]
+=== max-request-body: over a bound cap is too large ===
+Stack: [ ]
+Stack: [ t ]
+PASS: 50 bytes over a 5-byte bound cap
+Stack: [ ]
+=== max-request-body: equal to the cap is not too large ===
+Stack: [ ]
+Stack: [ f ]
+PASS: 50 bytes equal to a 50-byte cap is allowed
+Stack: [ ]
 === reason-for: known status code ===
 Stack: [ ]
 PASS: 200 reason
@@ -278,6 +296,12 @@ Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> <stream pipe(wr) write> 
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
 Stack: [ <stream pipe(rd) read> ]
 PASS: 405 status line
+Stack: [ ]
+=== content-too-large: builds a 413 response ===
+Stack: [ ]
+PASS: 413 status
+Stack: [ response{ status: 413 reason: "Content Too Large" headers: H{ content-type: "text/plain; charset=utf-8" } body: "413 Content Too Large" } ]
+PASS: 413 reason
 Stack: [ ]
 === error-response: convenience constructor ===
 Stack: [ ]
@@ -354,4 +378,14 @@ PASS: is-tls? sentinel under plaintext
 PASS: tls-version sentinel under plaintext
 PASS: tls-cipher sentinel under plaintext
 PASS: populated-fields status
+Stack: [ ]
+=== serve: oversized request body gets 413 ===
+Stack: [ ]
+PASS: oversized body gets 413
+Stack: [ ]
+=== serve: request body within cap dispatches to handler ===
+Stack: [ ]
+PASS: within cap status
+PASS: within cap blank
+PASS: within cap body echoes name
 Stack: [ ]

@@ -68,6 +68,21 @@ read-headers-loop: ( stream headers -- headers ) [
   5 drop-at
 ] ;
 
+\\ Maximum number of bytes the server reads for a request body. A request whose
+\\ Content-Length exceeds this cap is answered with 413 Content Too Large and the
+\\ connection is closed, rather than reading the oversized body. Bind it
+\\ dynamically with `with-max-request-body`.
+max-request-body: parameter{ [ 1048576 ] } ;
+
+\\ Run `quot` with the maximum request body size bound to `size` bytes.
+with-max-request-body: ( size quot -- ) [ max-request-body swap with-parameter ] ;
+
+\ True when the request's declared Content-Length exceeds the max-request-body
+\ cap. A missing content-length reads as 0 and is never too large.
+(body-too-large?): ( headers -- too-large? ) [
+  "content-length" "0" @get-or parse-integer max-request-body get >
+] ;
+
 \ Read exactly Content-Length bytes of the request body from a stream. A
 \ missing content-length header yields an empty body and reads nothing. A
 \ stream that reaches EOF before content-length bytes have arrived is a
@@ -182,6 +197,11 @@ method-not-allowed: ( -- response ) [
   405 dup reason-for "text/plain; charset=utf-8" "405 Method Not Allowed" <response>
 ] ;
 
+\\ Construct a 413 Content Too Large response.
+content-too-large: ( -- response ) [
+  413 dup reason-for "text/plain; charset=utf-8" "413 Content Too Large" <response>
+] ;
+
 \\ Construct an error response with text/plain body.
 error-response: ( status reason message -- response ) [
   "text/plain; charset=utf-8" swap <response>
@@ -194,24 +214,32 @@ error-response: ( status reason message -- response ) [
 \ ( stream request ), and closes the stream. The eager body read keeps the
 \ stream positioned at the next request regardless of what the handler does.
 (serve-dispatch): ( stream addr server-host server-port user-handler -- ) [
-  3 <rot-n                           \ ( stream sh sp uh addr )
-  addr-host-port                     \ ( stream sh sp uh rh rp )
-  5 pick-n                           \ ( stream sh sp uh rh rp stream' )
-  (read-request-wire)                \ ( stream sh sp uh rh rp m p q v h )
-  dup 11 pick-n (read-request-body)  \ append body
-  7 pick-n                           \ append rh
-  7 pick-n                           \ append rp
-  12 pick-n                          \ append sh
-  12 pick-n                          \ append sp
-  f "" ""                            \ TLS sentinels
-  make-request                       \ ( stream sh sp uh rh rp request )
-  1 drop-at                          \ drop rp
-  1 drop-at                          \ drop rh
-  2 drop-at                          \ drop sp
-  2 drop-at                          \ drop sh; stack now ( stream uh request )
-  swap                               \ ( stream request uh )
-  2keep                              \ user handler runs with ( stream request ); restored
-  drop                               \ ( stream )
+  3 <rot-n             \ ( stream sh sp uh addr )
+  addr-host-port       \ ( stream sh sp uh rh rp )
+  5 pick-n             \ ( stream sh sp uh rh rp stream' )
+  (read-request-wire)  \ ( stream sh sp uh rh rp m p q v h )
+  dup (body-too-large?)
+  [            \ over cap: reject with 413 and close; do not read the body or dispatch
+    10 drop-n  \ ( stream )
+    dup content-too-large send-response
+  ]
+  [                                    \ within cap: read body eagerly, build request, dispatch; ends ( stream )
+    dup 11 pick-n (read-request-body)  \ append body
+    7 pick-n                           \ append rh
+    7 pick-n                           \ append rp
+    12 pick-n                          \ append sh
+    12 pick-n                          \ append sp
+    f "" ""                            \ TLS sentinels
+    make-request                       \ ( stream sh sp uh rh rp request )
+    1 drop-at                          \ drop rp
+    1 drop-at                          \ drop rh
+    2 drop-at                          \ drop sp
+    2 drop-at                          \ drop sh; stack now ( stream uh request )
+    swap                               \ ( stream request uh )
+    2keep                              \ user handler runs with ( stream request ); restored
+    drop                               \ ( stream )
+  ]
+  if
   stream-close
 ] ;
 

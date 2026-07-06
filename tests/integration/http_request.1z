@@ -176,6 +176,20 @@ path>> "/b" "second request parses after first body consumed" assert=
 "read-request: truncated body throws EUnexpectedEOF" test-section
 [ <pipe> dup "POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc" stream-write drop stream-close read-request ] unexpected-eof: "truncated body throws" assert-error-type
 
+"max-request-body: within default cap is not too large" test-section
+H{ "content-length" "50" } (body-too-large?) f "50 bytes under default cap" assert=
+
+"max-request-body: missing content-length is not too large" test-section
+H{ } (body-too-large?) f "missing content-length not too large" assert=
+
+"max-request-body: over a bound cap is too large" test-section
+5 [ H{ "content-length" "50" } (body-too-large?) ] with-max-request-body
+t "50 bytes over a 5-byte bound cap" assert=
+
+"max-request-body: equal to the cap is not too large" test-section
+50 [ H{ "content-length" "50" } (body-too-large?) ] with-max-request-body
+f "50 bytes equal to a 50-byte cap is allowed" assert=
+
 "reason-for: known status code" test-section
 200 reason-for "OK" "200 reason" assert=
 404 reason-for "Not Found" "404 reason" assert=
@@ -219,6 +233,10 @@ stream-read-line "404 Not Found" "404 body" assert=
 method-not-allowed send-response
 stream-close
 stream-read-line "HTTP/1.1 405 Method Not Allowed" "405 status line" assert=
+
+"content-too-large: builds a 413 response" test-section
+content-too-large dup status>> 413 "413 status" assert=
+reason>> "Content Too Large" "413 reason" assert=
 
 "error-response: convenience constructor" test-section
 <pipe> dup
@@ -401,6 +419,55 @@ port>> 9999 "serve config port" assert=
   dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "populated-fields status" assert=
   stream-close
+
+  await drop
+  swap drop
+  close
+] task-scope
+
+"serve: oversized request body gets 413" test-section
+[
+  39496
+  dup "127.0.0.1" swap make-addr:tcp 128 listen
+
+  \ Bind a tiny cap around spawn so the connection task snapshots it.
+  5 [
+    dup [
+      accept
+      "127.0.0.1" 39496 [
+        drop "should-not-run" "text/plain; charset=utf-8" ok send-response
+      ] (serve-dispatch)
+    ] curry spawn
+  ] with-max-request-body
+
+  "127.0.0.1" 3 pick-n make-addr:tcp connect
+  dup "POST / HTTP/1.1\r\nContent-Length: 20\r\n\r\naaaaaaaaaaaaaaaaaaaa" stream-write drop
+  dup stream-read-line "HTTP/1.1 413 Content Too Large" "oversized body gets 413" assert=
+  stream-close
+
+  await drop
+  swap drop
+  close
+] task-scope
+
+"serve: request body within cap dispatches to handler" test-section
+[
+  39497
+  dup "127.0.0.1" swap make-addr:tcp 128 listen
+
+  dup [
+    accept
+    "127.0.0.1" 39497 [
+      body>> read-form "name" @get #first "text/plain; charset=utf-8" ok send-response
+    ] (serve-dispatch)
+  ] curry spawn
+
+  "127.0.0.1" 3 pick-n make-addr:tcp connect
+  dup "POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nname=alice" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "within cap status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "within cap blank" assert=
+  stream-read-line "alice" "within cap body echoes name" assert=
 
   await drop
   swap drop
