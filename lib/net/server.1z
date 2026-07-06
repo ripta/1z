@@ -28,7 +28,7 @@ serve-loop: ( handler on-error server -- ) [
   dup accept                        \ handler on-error server stream addr
   4 pick-n curry curry              \ handler on-error server [stream addr handler...]
   2 pick-n [ recover ] curry curry  \ handler on-error server [[stream addr handler...] on-error recover]
-  spawn drop                        \ handler on-error server
+  spawn-detached                    \ handler on-error server
   serve-loop
 ] ;
 

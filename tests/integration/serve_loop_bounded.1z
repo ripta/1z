@@ -1,0 +1,67 @@
+\ Bounded-memory regression for the server accept loop.
+\
+\ serve-loop spawns one handler task per accepted connection. It now uses
+\ spawn-detached, so each handler task is reaped at its own completion and the
+\ never-exiting serve-forever scope stays bounded no matter how many connections
+\ it serves. This test drives the real serve-forever -> serve-loop path with real
+\ localhost sockets and runs many sequential client round trips under a low
+\ memory cap. Each client writes a line and reads the echo, which forces a yield
+\ to the server so the handler runs to completion and is reaped before the next
+\ connection. Memory stays flat at a few MB, well under the cap in the `.flags`
+\ sidecar.
+\
+\ Before spawn-detached, serve-loop used `spawn drop` and every completed handler
+\ task was retained in the scope until it exited. serve-forever never exits, so
+\ the retained tasks accumulate at roughly 285 KB each and a regression back to
+\ that behavior exhausts the cap partway through the loop and dies with a
+\ memory-limit error instead of printing the marker.
+\
+\ The client dials with raw primitives (socket + native.connect + fd>stream)
+\ rather than the library `connect`. The library `connect` runs a Happy-Eyeballs
+\ race that spawns its own tasks per call, and those tasks leak until the process
+\ exits (see spec/bugs/20260705-connect-happy-eyeballs-task-leak.md). Using it
+\ here would leak on the client side and mask the server-side fix under test.
+\
+\ NOTE: this is a fixed-port socket test, so it carries some inherent flakiness
+\ (port reuse, listen-before-connect timing). If it proves very flaky, it can be
+\ temporarily disabled here or, in the future, marked as a flaky test.
+
+use "net" ;
+use "net/tcp" ;
+use "net/server" ;
+use "time" ;
+
+[
+  echo-handler: ( stream -- ) [
+    dup stream-read-line
+    over swap stream-write drop
+    stream-close
+  ] ;
+
+  \ Dial one connection with raw primitives, no library `connect`.
+  dial: ( raddr -- stream ) [
+    dup socket dup [ swap native.connect ] dip fd>stream
+  ] ;
+
+  <server-config>
+  "127.0.0.1" >>host
+  39422 >>port
+  [ drop echo-handler ] >>handler
+
+  [ serve-forever ] curry spawn
+
+  100 milliseconds sleep
+
+  "127.0.0.1" 39422 make-addr:tcp resolve #first
+  2000 [
+    dup dial
+    dup "ping\n" stream-write drop
+    dup stream-read-line drop
+    stream-close
+  ] times
+  drop
+
+  cancel-task
+] task-scope
+
+"bounded" print-line
