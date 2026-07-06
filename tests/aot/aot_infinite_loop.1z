@@ -1,0 +1,16 @@
+\ Regression for the AOT no-exit-loop hang.
+\
+\ A word whose every path loops back is an infinite loop with no return, the
+\ shape of a server accept loop (lib/net/server.1z serve-loop). AOT emits it as
+\ a native for(;;). Before the fix, the finalize emitted an unreachable trailing
+\ RETURN after the loop, and the vendored ir_emit_c backend hung generating C
+\ for that dead code, so the build never terminated.
+\
+\ Compiling interpreter-free proves the loop emits to native C with no fallback.
+\ The word is referenced through an escaping quotation and dropped, so it is
+\ compiled but never entered and the program itself terminates.
+
+loop-forever: ( n -- ) [ 1 + loop-forever ] ;
+
+[ loop-forever ] drop
+"ok" print-line

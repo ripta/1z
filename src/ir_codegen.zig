@@ -8547,7 +8547,16 @@ fn emitWordCAotPass(
     }
 
     if (state.exit_kind == .loop_diverged) {
-        c._ir_RETURN(&ctx, ok_status);
+        // Every path loops back. In this case, the word is an infinite loop with no return, e.g.,
+        // a server accept loop, so we'll need to emit no trailing RETURN.
+        //
+        // The loop never falls through, so a return is unreachable, and ir_emit_c backend hangs
+        // generating C for that dead code after the no-exit loop.
+        //
+        // Leaving the loop as the function's final construct lets ir_emit_c emit a native `for(;;)`.
+        //
+        // The JIT path still emits an unreachable RETURN because ir_jit_compile folds it away;
+        // only ir_emit_c chokes on it.
     } else if (state.exit_kind == .terminal_return) {
         // Terminal control flow already emitted the return.
     } else if (state.error_handler_terminal) {
