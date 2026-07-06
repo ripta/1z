@@ -18,19 +18,17 @@ start-server: ( config -- server ) [
   listen
 ] ;
 
-\\ Repeatedly accept connections and spawn one handler task per connection.
-\\ Must be called inside task-scope. This is public rather than a private
-\\ helper because serve-forever reaches it by a tail call. A private word runs
-\\ in an import-less local scope, and the tail call drops serve-forever's frame
-\\ that would otherwise resolve accept; a public word keeps net/server's import
-\\ scope, so accept resolves.
-serve-loop: ( handler on-error server -- ) [
-  dup accept                        \ handler on-error server stream addr
-  4 pick-n curry curry              \ handler on-error server [stream addr handler...]
-  2 pick-n [ recover ] curry curry  \ handler on-error server [[stream addr handler...] on-error recover]
-  spawn-detached                    \ handler on-error server
-  serve-loop
-] ;
+private{
+  \\ Repeatedly accept connections and spawn one handler task per connection.
+  \\ Must be called inside task-scope.
+  serve-loop: ( handler on-error server -- ) [
+    dup accept                        \ handler on-error server stream addr
+    4 pick-n curry curry              \ handler on-error server [stream addr handler...]
+    2 pick-n [ recover ] curry curry  \ handler on-error server [[stream addr handler...] on-error recover]
+    spawn-detached                    \ handler on-error server
+    serve-loop
+  ] ;
+}
 
 \ Run a server forever: start, then loop accepting connections.
 \ Each connection spawns a task that runs the handler with the stream
