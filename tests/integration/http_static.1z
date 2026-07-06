@@ -1,102 +1,77 @@
+\ End-to-end regression for the real serve-static path.
+\
+\ Drives the path:
+\
+\   serve-static -> serve -> serve-forever -> serve-loop -> (serve-dispatch) -> static-file-handler
+\
+\ with real localhost sockets. Every server test used to hand-roll a one-shot accept loop and call
+\ static-file-handler directly, so the high-level entry points were never actually run.
+\
+\ One long-lived server serves every request below, so this also proves serve-loop actually loops
+\ rather than handling a single connection. Each response carries `Connection: close`, so the
+\ client opens a fresh connection per request.
+\
+\ NOTE: this is a fixed-port socket test, so it carries some inherent flakiness from port reuse,
+\       and listen-before-connect timing. As such, the .zon sidecar marks it serial.
+
 use "testing" ;
 use "net/http" ;
 use "net" ;
 use "net/tcp" ;
-use "net/server" ;
 use "time" ;
 
-make-http-server-task: ( host port handler -- task ) [
-  [ swap dup -rot> dup read-request <rot- call stream-close ] curry
-  <server-config> swap >>handler swap >>port swap >>host
-  [
-    dup start-server
-    swap handler>>
-    over accept drop
-    swap call
-    close
-  ] curry spawn
-] ;
-
-"serve-static: missing file returns 404" test-section
 [
-  "127.0.0.1" 39410 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
+  "127.0.0.1" 39410 "tests/integration/http_static_root"
+  [ serve-static ] curry curry curry spawn
   100 milliseconds sleep
 
+  "serve-static: serves index.html at root with correct headers and body" test-section
   "127.0.0.1" 39410 make-addr:tcp connect
-  dup "GET /nope.txt HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
-  stream-read-line "HTTP/1.1 404 Not Found" "missing status" assert=
-
-  cancel-task
-] task-scope
-
-"serve-static: serves index.html at root with correct headers and body" test-section
-[
-  "127.0.0.1" 39411 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
-  100 milliseconds sleep
-
-  "127.0.0.1" 39411 make-addr:tcp connect
   dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "index status" assert=
   dup read-headers
   dup "content-type" @get "text/html; charset=utf-8" "index content-type" assert=
   "content-length" @get "15" "index content-length" assert=
-  stream-read-line "<h1>hello</h1>" "index body" assert=
+  dup stream-read-line "<h1>hello</h1>" "index body" assert=
+  stream-close
 
-  cancel-task
-] task-scope
-
-"serve-static: serves css file with correct headers and body" test-section
-[
-  "127.0.0.1" 39412 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
-  100 milliseconds sleep
-
-  "127.0.0.1" 39412 make-addr:tcp connect
+  "serve-static: serves css file with correct headers and body" test-section
+  "127.0.0.1" 39410 make-addr:tcp connect
   dup "GET /style.css HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "css status" assert=
   dup read-headers
   dup "content-type" @get "text/css; charset=utf-8" "css content-type" assert=
   "content-length" @get "21" "css content-length" assert=
-  stream-read-line "body { color: red; }" "css body" assert=
+  dup stream-read-line "body { color: red; }" "css body" assert=
+  stream-close
 
-  cancel-task
-] task-scope
-
-"serve-static: serves index.html for trailing-slash directory" test-section
-[
-  "127.0.0.1" 39414 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
-  100 milliseconds sleep
-
-  "127.0.0.1" 39414 make-addr:tcp connect
-  dup "GET /subdir/ HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
-  stream-read-line "HTTP/1.1 200 OK" "subdir index status" assert=
-
-  cancel-task
-] task-scope
-
-"serve-static: directory traversal blocked" test-section
-[
-  "127.0.0.1" 39413 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
-  100 milliseconds sleep
-
-  "127.0.0.1" 39413 make-addr:tcp connect
-  dup "GET /../../../etc/passwd HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
-  stream-read-line "HTTP/1.1 404 Not Found" "traversal blocked" assert=
-
-  cancel-task
-] task-scope
-
-"serve-static: no-extension file gets application/octet-stream" test-section
-[
-  "127.0.0.1" 39415 "tests/integration/http_static_root" [ static-file-handler ] curry make-http-server-task
-  100 milliseconds sleep
-
-  "127.0.0.1" 39415 make-addr:tcp connect
+  "serve-static: no-extension file gets application/octet-stream" test-section
+  "127.0.0.1" 39410 make-addr:tcp connect
   dup "GET /noext HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "noext status" assert=
   dup read-headers
   dup "content-type" @get "application/octet-stream" "noext content-type" assert=
   "content-length" @get "14" "noext content-length" assert=
-  stream-read-line "binary content" "noext body" assert=
+  dup stream-read-line "binary content" "noext body" assert=
+  stream-close
+
+  "serve-static: serves index.html for trailing-slash directory" test-section
+  "127.0.0.1" 39410 make-addr:tcp connect
+  dup "GET /subdir/ HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "subdir index status" assert=
+  stream-close
+
+  "serve-static: missing file returns 404" test-section
+  "127.0.0.1" 39410 make-addr:tcp connect
+  dup "GET /nope.txt HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 404 Not Found" "missing status" assert=
+  stream-close
+
+  "serve-static: directory traversal blocked" test-section
+  "127.0.0.1" 39410 make-addr:tcp connect
+  dup "GET /../../../etc/passwd HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 404 Not Found" "traversal blocked" assert=
+  stream-close
 
   cancel-task
 ] task-scope
