@@ -95,28 +95,31 @@ and writes it in a single call. The wire format is HTTP/1.1 with
 
 ## Reading Form Bodies
 
-`read-form: ( stream length -- form )` decodes an
-`application/x-www-form-urlencoded` body of exactly `length` bytes into a
-hash of decoded keys to decoded values. The caller looks up
-`Content-Length` from the request headers and passes the length
-explicitly:
+The dispatch layer reads the request body eagerly, before the handler runs. It
+reads exactly `Content-Length` bytes off the stream and attaches them to the
+request's `body` field. This keeps the stream positioned at the start of the
+next request regardless of what the handler does with the body. A handler
+consumes the attached bytes rather than reading the stream itself.
+
+`read-form: ( body -- form )` decodes an `application/x-www-form-urlencoded`
+body into a hash of decoded keys to decoded values. A handler passes the
+request's attached body:
 
 ```
 use "net/http" ;
 
 \ inside a handler with ( stream request -- )
-2dup headers>> "content-length" @get >fixnum   \ stack: stream request stream length
-read-form                                      \ stack: stream request form
+dup body>> read-form                           \ stack: stream request form
 ```
 
-`read-form` throws `EUnexpectedEOF` if the stream reaches EOF before
-`length` bytes are available; this catches a truncated body before the
-next pipelined request gets eaten as form bytes. It throws
-`EInvalidArgument` on malformed percent sequences.
+`read-form` throws `EInvalidArgument` on malformed percent sequences. A
+truncated body is caught earlier, when the dispatch layer reads it: a stream
+that reaches EOF before `Content-Length` bytes are available throws
+`EUnexpectedEOF`.
 
 Empty segments and segments without `=` follow the WHATWG
-`application/x-www-form-urlencoded` parser: empty segments are dropped,
-bare keys produce empty values.
+`application/x-www-form-urlencoded` parser: empty segments are dropped, bare
+keys produce empty values.
 
 ## Routing
 

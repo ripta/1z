@@ -80,7 +80,7 @@ query-string>> "" "empty query string" assert=
 [ <pipe> dup "GET /\r\n\r\n" stream-write drop stream-close read-request ] malformed-request: "too few parts" assert-error-type
 
 "make-request: socket-derived fields round-trip" test-section
-"GET" "/" "" "HTTP/1.1" H{ }
+"GET" "/" "" "HTTP/1.1" H{ } B{ }
 "192.0.2.1" 54321 "example.com" 8443 t "TLSv1.3" "TLS_AES_128_GCM_SHA256"
 make-request
 dup remote-addr>> "192.0.2.1" "remote-addr round-trip" assert=
@@ -104,75 +104,77 @@ dup tls-version>> "" "sentinel tls-version" assert=
 tls-cipher>> "" "sentinel tls-cipher" assert=
 
 "read-form: empty body" test-section
-<pipe> dup "" stream-write drop
-stream-close
-0 read-form
+"" >bytes read-form
 @keys #len 0 "empty body has no entries" assert=
 
 "read-form: single pair" test-section
-<pipe> dup "name=alice" stream-write drop
-stream-close
-10 read-form
+"name=alice" >bytes read-form
 "name" @get { "alice" } "single pair value" assert=
 
 "read-form: multiple pairs" test-section
-<pipe> dup "a=1&b=2&c=3" stream-write drop
-stream-close
-11 read-form
+"a=1&b=2&c=3" >bytes read-form
 dup "a" @get { "1" } "first pair" assert=
 dup "b" @get { "2" } "second pair" assert=
 "c" @get { "3" } "third pair" assert=
 
 "read-form: percent-decoded key" test-section
-<pipe> dup "na%6De=alice" stream-write drop
-stream-close
-12 read-form
+"na%6De=alice" >bytes read-form
 "name" @get { "alice" } "percent-decoded key" assert=
 
 "read-form: percent-decoded value" test-section
-<pipe> dup "name=al%69ce" stream-write drop
-stream-close
-12 read-form
+"name=al%69ce" >bytes read-form
 "name" @get { "alice" } "percent-decoded value" assert=
 
 "read-form: + decodes to space" test-section
-<pipe> dup "q=hello+world" stream-write drop
-stream-close
-13 read-form
+"q=hello+world" >bytes read-form
 "q" @get { "hello world" } "+ decodes to space" assert=
 
 "read-form: %2B decodes to literal +" test-section
-<pipe> dup "q=a%2Bb" stream-write drop
-stream-close
-7 read-form
+"q=a%2Bb" >bytes read-form
 "q" @get { "a+b" } "%2B decodes to literal +" assert=
 
 "read-form: repeated keys accumulate" test-section
-<pipe> dup "tag=a&tag=b" stream-write drop
-stream-close
-11 read-form
+"tag=a&tag=b" >bytes read-form
 "tag" @get { "a" "b" } "repeated key collects values in order" assert=
 
 "read-form: bare key has empty value" test-section
-<pipe> dup "flag" stream-write drop
-stream-close
-4 read-form
+"flag" >bytes read-form
 dup "flag" @get { "" } "bare key value" assert=
 @keys #len 1 "bare key creates one entry" assert=
 
 "read-form: stray ampersand skipped" test-section
-<pipe> dup "a=1&&b=2" stream-write drop
-stream-close
-8 read-form
+"a=1&&b=2" >bytes read-form
 dup @keys #len 2 "stray & does not create empty entry" assert=
 dup "a" @get { "1" } "stray & a entry" assert=
 "b" @get { "2" } "stray & b entry" assert=
 
-"read-form: short body throws EUnexpectedEOF" test-section
-[ <pipe> dup "abc" stream-write drop stream-close 10 read-form ] unexpected-eof: "short body throws" assert-error-type
-
 "read-form: malformed percent throws EInvalidArgument" test-section
-[ <pipe> dup "a=%" stream-write drop stream-close 3 read-form ] invalid-argument: "malformed % throws" assert-error-type
+[ "a=%" >bytes read-form ] invalid-argument: "malformed % throws" assert-error-type
+
+"read-request: eagerly attaches the body" test-section
+<pipe> dup "POST /submit HTTP/1.1\r\nContent-Length: 10\r\n\r\nname=alice" stream-write drop
+stream-close
+read-request
+dup method>> "POST" "attached-body method" assert=
+body>> read-form "name" @get { "alice" } "attached body decodes" assert=
+
+"read-request: missing content-length yields empty body" test-section
+<pipe> dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+stream-close
+read-request
+body>> #len 0 "missing content-length has empty body" assert=
+
+"read-request: eager body read leaves stream at next request" test-section
+<pipe> dup "POST /a HTTP/1.1\r\nContent-Length: 10\r\n\r\nname=aliceGET /b HTTP/1.1\r\nHost: x\r\n\r\n" stream-write drop
+stream-close
+dup read-request
+dup path>> "/a" "first request path" assert=
+body>> read-form "name" @get { "alice" } "first body decodes" assert=
+read-request
+path>> "/b" "second request parses after first body consumed" assert=
+
+"read-request: truncated body throws EUnexpectedEOF" test-section
+[ <pipe> dup "POST / HTTP/1.1\r\nContent-Length: 10\r\n\r\nabc" stream-write drop stream-close read-request ] unexpected-eof: "truncated body throws" assert-error-type
 
 "reason-for: known status code" test-section
 200 reason-for "OK" "200 reason" assert=

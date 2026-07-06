@@ -113,10 +113,8 @@ private{
   \ Decode the POST body, persist the entry when name and message are
   \ both non-empty, then render the updated page.
   (handle-post): ( stream request db -- ) [
-    \ ( stream request db ) -- pull a stream-and-length copy off for read-form.
-    2 pick-n
-    2 pick-n headers>> "content-length" "0" @get-or parse-integer
-    read-form
+    \ ( stream request db ) -- decode the body the dispatch layer attached.
+    1 pick-n body>> read-form
     \ ( stream request db form )
     dup "name" (form-value)
     over "message" (form-value)

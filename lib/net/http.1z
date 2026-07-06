@@ -7,6 +7,7 @@
 \ `lib/net/http/router.1z`. See `docs/guides/http.md` for an overview.
 
 use "strings" ;
+use "conversions" ;
 use "os/path" ;
 use "mimetype" ;
 use "net/server" ;
@@ -14,7 +15,7 @@ use "data/url" ;
 
 EMalformedRequest: ( -- err: symbol ) [ malformed-request: ] ;
 
-request: struct{ method path query-string version headers
+request: struct{ method path query-string version headers body
   remote-addr remote-port server-name server-port
   is-tls? tls-version tls-cipher
 } ;
@@ -67,29 +68,42 @@ read-headers-loop: ( stream headers -- headers ) [
   5 drop-at
 ] ;
 
-\\ Read and parse an HTTP request line and headers from a stream. The returned
-\\ request rides sentinel defaults for the socket-derived fields; the server
-\\ path overrides them when dispatching to a handler.
-read-request: ( stream -- request ) [
-  (read-request-wire)
-  "" 0 "" 0 f "" ""
-  make-request
-] ;
-
-\\ Read and decode an application/x-www-form-urlencoded body of `length`
-\\ bytes from a stream. Returns a hash mapping each decoded key to an
-\\ array of decoded values, accumulating in the order they appeared.
-\\ Throws EUnexpectedEOF if the stream reaches EOF before `length` bytes
-\\ have been read; throws EInvalidArgument on malformed percent sequences.
-\\ Empty segments and pairs without `=` follow the WHATWG
-\\ application/x-www-form-urlencoded parser: empty segments are dropped;
-\\ a bare key produces an empty-string value.
-read-form: ( stream length -- form ) [
+\ Read exactly Content-Length bytes of the request body from a stream. A
+\ missing content-length header yields an empty body and reads nothing. A
+\ stream that reaches EOF before content-length bytes have arrived is a
+\ framing violation and throws EUnexpectedEOF. Reading the body eagerly here
+\ keeps the stream positioned at the start of the next request regardless of
+\ what the handler does with the body.
+(read-request-body): ( headers stream -- body ) [
+  swap "content-length" "0" @get-or parse-integer
   dup [ stream-read(exact) ] dip
   over #len over =
-  [ drop bytes> decode-query ]
-  [ 2drop f "unexpected EOF reading form body" EUnexpectedEOF make-error throw ]
+  [ drop ]
+  [ 2drop f "unexpected EOF reading request body" EUnexpectedEOF make-error throw ]
   if
+] ;
+
+\\ Read and parse an HTTP request line, headers, and body from a stream. The
+\\ returned request rides sentinel defaults for the socket-derived fields; the
+\\ server path overrides them when dispatching to a handler.
+read-request: ( stream -- request ) [
+  dup (read-request-wire)
+  dup 6 pick-n (read-request-body)
+  "" 0 "" 0 f "" ""
+  make-request
+  nip
+] ;
+
+\\ Decode an application/x-www-form-urlencoded body into a hash mapping each
+\\ decoded key to an array of decoded values, accumulating in the order they
+\\ appeared. The body bytes are the ones the dispatch layer read eagerly and
+\\ attached to the request, so a handler calls `request body>> read-form`.
+\\ Throws EInvalidArgument on malformed percent sequences. Empty segments and
+\\ pairs without `=` follow the WHATWG application/x-www-form-urlencoded
+\\ parser: empty segments are dropped; a bare key produces an empty-string
+\\ value.
+read-form: ( body -- form ) [
+  bytes> decode-query
 ] ;
 
 response: struct{ status reason headers body } ;
@@ -175,27 +189,29 @@ error-response: ( status reason message -- response ) [
 
 \ Per-connection dispatch. Invoked by serve-loop with ( stream addr ) and the
 \ curried context ( server-host server-port user-handler ). Reads the wire
-\ request fields, populates the socket-derived fields from the addr and the
-\ server config, calls the user handler with ( stream request ), and closes
-\ the stream.
+\ request fields and the request body eagerly, populates the socket-derived
+\ fields from the addr and the server config, calls the user handler with
+\ ( stream request ), and closes the stream. The eager body read keeps the
+\ stream positioned at the next request regardless of what the handler does.
 (serve-dispatch): ( stream addr server-host server-port user-handler -- ) [
-  3 <rot-n             \ ( stream sh sp uh addr )
-  addr-host-port       \ ( stream sh sp uh rh rp )
-  5 pick-n             \ ( stream sh sp uh rh rp stream' )
-  (read-request-wire)  \ ( stream sh sp uh rh rp m p q v h )
-  6 pick-n             \ append rh
-  6 pick-n             \ append rp
-  11 pick-n            \ append sh
-  11 pick-n            \ append sp
-  f "" ""              \ TLS sentinels
-  make-request         \ ( stream sh sp uh rh rp request )
-  1 drop-at            \ drop rp
-  1 drop-at            \ drop rh
-  2 drop-at            \ drop sp
-  2 drop-at            \ drop sh; stack now ( stream uh request )
-  swap                 \ ( stream request uh )
-  2keep                \ user handler runs with ( stream request ); restored
-  drop                 \ ( stream )
+  3 <rot-n                           \ ( stream sh sp uh addr )
+  addr-host-port                     \ ( stream sh sp uh rh rp )
+  5 pick-n                           \ ( stream sh sp uh rh rp stream' )
+  (read-request-wire)                \ ( stream sh sp uh rh rp m p q v h )
+  dup 11 pick-n (read-request-body)  \ append body
+  7 pick-n                           \ append rh
+  7 pick-n                           \ append rp
+  12 pick-n                          \ append sh
+  12 pick-n                          \ append sp
+  f "" ""                            \ TLS sentinels
+  make-request                       \ ( stream sh sp uh rh rp request )
+  1 drop-at                          \ drop rp
+  1 drop-at                          \ drop rh
+  2 drop-at                          \ drop sp
+  2 drop-at                          \ drop sh; stack now ( stream uh request )
+  swap                               \ ( stream request uh )
+  2keep                              \ user handler runs with ( stream request ); restored
+  drop                               \ ( stream )
   stream-close
 ] ;
 

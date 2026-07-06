@@ -3,6 +3,6 @@ Stack: [ ]
 Stack: [ unix-addr{ path: "/sock" } ]
 PASS: unix-addr path>> dispatches
 Stack: [ ]
-Stack: [ request{ method: "GET" path: "/index" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+Stack: [ request{ method: "GET" path: "/index" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 PASS: request path>> dispatches
 Stack: [ ]

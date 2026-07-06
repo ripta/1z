@@ -6,7 +6,7 @@ use "net/cgi" ;
 
 "(cgi-request): empty env produces sentinel-defaulted request" test-section
 
-H{ } (cgi-request)
+H{ } B{ } (cgi-request)
 dup method>> "" "method default" assert=
 dup path>> "" "path default" assert=
 dup query-string>> "" "query-string default" assert=
@@ -28,7 +28,7 @@ H{
   "PATH_INFO" "/posts/2026"
   "QUERY_STRING" "tag=zig&tag=lang"
   "SERVER_PROTOCOL" "HTTP/1.1"
-} (cgi-request)
+} B{ } (cgi-request)
 dup method>> "POST" "method from REQUEST_METHOD" assert=
 dup path>> "/cgi-bin/blog/posts/2026" "path stitched from SCRIPT_NAME + PATH_INFO" assert=
 dup query-string>> "tag=zig&tag=lang" "query-string from QUERY_STRING" assert=
@@ -41,7 +41,7 @@ H{
   "HTTP_USER_AGENT" "Mozilla/5.0"
   "HTTP_ACCEPT_ENCODING" "gzip"
   "HTTP_X_FORWARDED_FOR" "192.0.2.1"
-} (cgi-request) headers>>
+} B{ } (cgi-request) headers>>
 dup "host" @get "example.com" "HTTP_HOST -> host" assert=
 dup "user-agent" @get "Mozilla/5.0" "HTTP_USER_AGENT -> user-agent" assert=
 dup "accept-encoding" @get "gzip" "HTTP_ACCEPT_ENCODING -> accept-encoding" assert=
@@ -55,28 +55,28 @@ H{
   "PATH" "/usr/bin"
   "REQUEST_METHOD" "GET"
   "SERVER_PORT" "80"
-} (cgi-request) headers>>
+} B{ } (cgi-request) headers>>
 dup "host" @get "example.com" "HTTP_HOST lifted" assert=
 @keys #len 1 "only HTTP_* keys lifted" assert=
 
 "(cgi-request): header values pass through verbatim" test-section
 
-H{ "HTTP_X_CUSTOM" "  spaces around  " } (cgi-request) headers>>
+H{ "HTTP_X_CUSTOM" "  spaces around  " } B{ } (cgi-request) headers>>
 "x-custom" @get "  spaces around  " "value not trimmed by translator" assert=
 
 "(cgi-request): SCRIPT_NAME alone populates path" test-section
 
-H{ "SCRIPT_NAME" "/cgi-bin/blog" } (cgi-request)
+H{ "SCRIPT_NAME" "/cgi-bin/blog" } B{ } (cgi-request)
 path>> "/cgi-bin/blog" "missing PATH_INFO defaults empty" assert=
 
 "(cgi-request): PATH_INFO alone populates path" test-section
 
-H{ "PATH_INFO" "/posts/2026" } (cgi-request)
+H{ "PATH_INFO" "/posts/2026" } B{ } (cgi-request)
 path>> "/posts/2026" "missing SCRIPT_NAME defaults empty" assert=
 
 "(cgi-request): trailing-slash SCRIPT_NAME plus leading-slash PATH_INFO yields literal //" test-section
 
-H{ "SCRIPT_NAME" "/cgi-bin/blog/" "PATH_INFO" "/posts" } (cgi-request)
+H{ "SCRIPT_NAME" "/cgi-bin/blog/" "PATH_INFO" "/posts" } B{ } (cgi-request)
 path>> "/cgi-bin/blog//posts" "no normalization across the seam" assert=
 
 "(cgi-request): socket-derived fields populate from CGI env vars" test-section
@@ -86,7 +86,7 @@ H{
   "REMOTE_PORT" "54321"
   "SERVER_NAME" "example.com"
   "SERVER_PORT" "8443"
-} (cgi-request)
+} B{ } (cgi-request)
 dup remote-addr>> "192.0.2.1" "remote-addr from REMOTE_ADDR" assert=
 dup remote-port>> 54321 "remote-port from REMOTE_PORT" assert=
 dup server-name>> "example.com" "server-name from SERVER_NAME" assert=
@@ -94,39 +94,39 @@ server-port>> 8443 "server-port from SERVER_PORT" assert=
 
 "(cgi-request): missing REMOTE_PORT defaults to sentinel 0" test-section
 
-H{ "REMOTE_ADDR" "192.0.2.1" } (cgi-request)
+H{ "REMOTE_ADDR" "192.0.2.1" } B{ } (cgi-request)
 remote-port>> 0 "missing REMOTE_PORT" assert=
 
 "(cgi-request): missing SERVER_PORT defaults to sentinel 0" test-section
 
-H{ "SERVER_NAME" "example.com" } (cgi-request)
+H{ "SERVER_NAME" "example.com" } B{ } (cgi-request)
 server-port>> 0 "missing SERVER_PORT" assert=
 
 "(cgi-request): TLS off by default" test-section
 
-H{ } (cgi-request)
+H{ } B{ } (cgi-request)
 dup is-tls?>> f "is-tls? false when HTTPS absent" assert=
 dup tls-version>> "" "tls-version empty when HTTPS absent" assert=
 tls-cipher>> "" "tls-cipher empty when HTTPS absent" assert=
 
 "(cgi-request): HTTPS=on signals TLS" test-section
 
-H{ "HTTPS" "on" } (cgi-request)
+H{ "HTTPS" "on" } B{ } (cgi-request)
 is-tls?>> t "is-tls? true when HTTPS=on" assert=
 
 "(cgi-request): HTTPS=ON signals TLS (case-insensitive)" test-section
 
-H{ "HTTPS" "ON" } (cgi-request)
+H{ "HTTPS" "ON" } B{ } (cgi-request)
 is-tls?>> t "is-tls? true when HTTPS=ON" assert=
 
 "(cgi-request): HTTPS=off does not signal TLS" test-section
 
-H{ "HTTPS" "off" } (cgi-request)
+H{ "HTTPS" "off" } B{ } (cgi-request)
 is-tls?>> f "is-tls? false when HTTPS=off" assert=
 
 "(cgi-request): empty HTTPS does not signal TLS" test-section
 
-H{ "HTTPS" "" } (cgi-request)
+H{ "HTTPS" "" } B{ } (cgi-request)
 is-tls?>> f "is-tls? false when HTTPS empty" assert=
 
 "(cgi-request): SSL_PROTOCOL and SSL_CIPHER fill TLS fields when HTTPS=on" test-section
@@ -135,7 +135,7 @@ H{
   "HTTPS" "on"
   "SSL_PROTOCOL" "TLSv1.3"
   "SSL_CIPHER" "TLS_AES_128_GCM_SHA256"
-} (cgi-request)
+} B{ } (cgi-request)
 dup is-tls?>> t "is-tls? true" assert=
 dup tls-version>> "TLSv1.3" "tls-version from SSL_PROTOCOL" assert=
 tls-cipher>> "TLS_AES_128_GCM_SHA256" "tls-cipher from SSL_CIPHER" assert=
@@ -145,7 +145,7 @@ tls-cipher>> "TLS_AES_128_GCM_SHA256" "tls-cipher from SSL_CIPHER" assert=
 H{
   "SSL_PROTOCOL" "TLSv1.3"
   "SSL_CIPHER" "TLS_AES_128_GCM_SHA256"
-} (cgi-request)
+} B{ } (cgi-request)
 dup is-tls?>> f "is-tls? false without HTTPS=on" assert=
 dup tls-version>> "" "tls-version empty without HTTPS=on" assert=
 tls-cipher>> "" "tls-cipher empty without HTTPS=on" assert=
@@ -167,7 +167,7 @@ H{
   "HTTPS" "on"
   "SSL_PROTOCOL" "TLSv1.3"
   "SSL_CIPHER" "TLS_AES_128_GCM_SHA256"
-} (cgi-request)
+} B{ } (cgi-request)
 dup method>> "POST" "method" assert=
 dup path>> "/cgi-bin/blog/posts/2026" "path" assert=
 dup query-string>> "preview=1" "query-string" assert=
@@ -183,10 +183,10 @@ tls-cipher>> "TLS_AES_128_GCM_SHA256" "tls-cipher" assert=
 
 "(cgi-request): malformed SERVER_PORT throws" test-section
 
-[ H{ "SERVER_PORT" "not-a-number" } (cgi-request) ]
+[ H{ "SERVER_PORT" "not-a-number" } B{ } (cgi-request) ]
 "malformed SERVER_PORT throws" assert-error
 
 "(cgi-request): malformed REMOTE_PORT throws" test-section
 
-[ H{ "REMOTE_PORT" "not-a-number" } (cgi-request) ]
+[ H{ "REMOTE_PORT" "not-a-number" } B{ } (cgi-request) ]
 "malformed REMOTE_PORT throws" assert-error

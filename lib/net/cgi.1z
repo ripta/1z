@@ -85,13 +85,16 @@ private{
     if
   ] ;
 
-  \ Build the request from the live CGI environment and call the handler
-  \ with ( stream request -- ). The stream is restored on the stack so
-  \ cgi-run can close it after recover. Either env parsing or the handler
-  \ may throw; cgi-run wraps this call in recover.
+  \ Build the request from the live CGI environment, read the request body
+  \ eagerly from stdin, and call the handler with ( stream request -- ). The
+  \ stream is restored on the stack so cgi-run can close it after recover.
+  \ Either env parsing or the handler may throw; cgi-run wraps this call in
+  \ recover.
   (cgi-dispatch): ( stream handler -- stream ) [
     swap
-    environ (cgi-request)
+    environ
+    dup (cgi-headers) 2 pick-n (read-request-body)
+    (cgi-request)
     <rot-
     2keep
     drop
@@ -112,23 +115,27 @@ private{
   ] ;
 }
 
-\\ Populate the http.1z request struct from a CGI environment hash. Wire
-\\ fields default to empty strings when their env vars are missing; the
-\\ socket-derived ports default to 0; TLS state rides f and empty-string
-\\ sentinels. A present but malformed REMOTE_PORT or SERVER_PORT throws so
-\\ cgi-run can surface it as a CGI 500.
-(cgi-request): ( env -- request ) [
+\\ Populate the http.1z request struct from a CGI environment hash and the
+\\ eagerly-read request body. Wire fields default to empty strings when their
+\\ env vars are missing; the socket-derived ports default to 0; TLS state
+\\ rides f and empty-string sentinels. The body is the byte-array the caller
+\\ read from stdin. A present but malformed REMOTE_PORT or SERVER_PORT throws
+\\ so cgi-run can surface it as a CGI 500.
+(cgi-request): ( env body -- request ) [
+  swap
   dup "REQUEST_METHOD" "" @get-or
   over (cgi-path)
   2 pick-n "QUERY_STRING" "" @get-or
   3 pick-n "SERVER_PROTOCOL" "" @get-or
   4 pick-n (cgi-headers)
-  5 pick-n "REMOTE_ADDR" "" @get-or
-  6 pick-n "REMOTE_PORT" (cgi-port)
-  7 pick-n "SERVER_NAME" "" @get-or
-  8 pick-n "SERVER_PORT" (cgi-port)
-  9 pick-n (cgi-tls)
-  12 drop-at
+  6 pick-n
+  6 pick-n "REMOTE_ADDR" "" @get-or
+  7 pick-n "REMOTE_PORT" (cgi-port)
+  8 pick-n "SERVER_NAME" "" @get-or
+  9 pick-n "SERVER_PORT" (cgi-port)
+  10 pick-n (cgi-tls)
+  13 drop-at
+  13 drop-at
   make-request
 ] ;
 

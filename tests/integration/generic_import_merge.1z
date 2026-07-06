@@ -15,5 +15,5 @@ use "net/http" ;
 "/sock" make-unix-addr
 path>> "/sock" "unix-addr path>> dispatches" assert=
 
-"GET" "/index" "" "HTTP/1.1" H{ } "" 0 "" 0 f "" "" make-request
+"GET" "/index" "" "HTTP/1.1" H{ } B{ } "" 0 "" 0 f "" "" make-request
 path>> "/index" "request path>> dispatches" assert=

@@ -96,8 +96,8 @@ path-only-handler: ( stream request -- ) [
 \ body via `read-form`. Emits a deterministic line-oriented response
 \ body so byte-equivalence asserts the whole pipeline matches.
 portable-handler: ( stream request -- ) [
-  \ Read form body using content-length from headers.
-  over over headers>> "content-length" @get parse-integer read-form
+  \ Decode the body the dispatch layer attached to the request.
+  dup body>> read-form
   \ ( stream request form )
 
   \ Accumulate the body string.
@@ -128,61 +128,61 @@ portable-handler: ( stream request -- ) [
 \ ---------------------------------------------------------------
 
 "path: SCRIPT_NAME + PATH_INFO" test-section
-"GET" "/cgi-bin/blog/posts/2026" "" "HTTP/1.1" H{ }
+"GET" "/cgi-bin/blog/posts/2026" "" "HTTP/1.1" H{ } B{ }
 "" 0 "" 0 f "" ""
 make-request
 [ path-only-handler ] curry
 "" swap (run-http)
 (normalize-prefix)
-H{ "SCRIPT_NAME" "/cgi-bin/blog" "PATH_INFO" "/posts/2026" } (cgi-request)
+H{ "SCRIPT_NAME" "/cgi-bin/blog" "PATH_INFO" "/posts/2026" } B{ } (cgi-request)
 [ path-only-handler ] curry
 "" swap (run-cgi)
 "path round-trip: SCRIPT_NAME + PATH_INFO" assert=
 
 "path: SCRIPT_NAME only" test-section
-"GET" "/cgi-bin/blog" "" "HTTP/1.1" H{ }
+"GET" "/cgi-bin/blog" "" "HTTP/1.1" H{ } B{ }
 "" 0 "" 0 f "" ""
 make-request
 [ path-only-handler ] curry
 "" swap (run-http)
 (normalize-prefix)
-H{ "SCRIPT_NAME" "/cgi-bin/blog" } (cgi-request)
+H{ "SCRIPT_NAME" "/cgi-bin/blog" } B{ } (cgi-request)
 [ path-only-handler ] curry
 "" swap (run-cgi)
 "path round-trip: SCRIPT_NAME only" assert=
 
 "path: PATH_INFO only" test-section
-"GET" "/posts/2026" "" "HTTP/1.1" H{ }
+"GET" "/posts/2026" "" "HTTP/1.1" H{ } B{ }
 "" 0 "" 0 f "" ""
 make-request
 [ path-only-handler ] curry
 "" swap (run-http)
 (normalize-prefix)
-H{ "PATH_INFO" "/posts/2026" } (cgi-request)
+H{ "PATH_INFO" "/posts/2026" } B{ } (cgi-request)
 [ path-only-handler ] curry
 "" swap (run-cgi)
 "path round-trip: PATH_INFO only" assert=
 
 "path: both empty" test-section
-"GET" "" "" "HTTP/1.1" H{ }
+"GET" "" "" "HTTP/1.1" H{ } B{ }
 "" 0 "" 0 f "" ""
 make-request
 [ path-only-handler ] curry
 "" swap (run-http)
 (normalize-prefix)
-H{ } (cgi-request)
+H{ } B{ } (cgi-request)
 [ path-only-handler ] curry
 "" swap (run-cgi)
 "path round-trip: both empty" assert=
 
 "path: trailing slash plus leading slash yields literal //" test-section
-"GET" "/cgi-bin/blog//posts" "" "HTTP/1.1" H{ }
+"GET" "/cgi-bin/blog//posts" "" "HTTP/1.1" H{ } B{ }
 "" 0 "" 0 f "" ""
 make-request
 [ path-only-handler ] curry
 "" swap (run-http)
 (normalize-prefix)
-H{ "SCRIPT_NAME" "/cgi-bin/blog/" "PATH_INFO" "/posts" } (cgi-request)
+H{ "SCRIPT_NAME" "/cgi-bin/blog/" "PATH_INFO" "/posts" } B{ } (cgi-request)
 [ path-only-handler ] curry
 "" swap (run-cgi)
 "path round-trip: literal //" assert=
@@ -200,6 +200,7 @@ H{ "user-agent" "Mozilla/5.0"
   "content-type" "application/x-www-form-urlencoded"
   "content-length" "10"
 }
+"name=alice" >bytes
 "192.0.2.1" 54321 "example.com" 80
 f "" ""
 make-request
@@ -219,7 +220,7 @@ H{
   "REMOTE_PORT" "54321"
   "SERVER_NAME" "example.com"
   "SERVER_PORT" "80"
-} (cgi-request)
+} "name=alice" >bytes (cgi-request)
 [ portable-handler ] curry
 "name=alice" swap (run-cgi)
 "comprehensive round-trip" assert=

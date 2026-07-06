@@ -3,10 +3,10 @@ Stack: [ ]
 Stack: [ ]
 === path: SCRIPT_NAME + PATH_INFO ===
 Stack: [ ]
-Stack: [ "GET" "/cgi-bin/blog/posts/2026" "" "HTTP/1.1" H{ } ]
-Stack: [ "GET" "/cgi-bin/blog/posts/2026" "" "HTTP/1.1" H{ } "" 0 "" 0 f "" "" ]
-Stack: [ request{ method: "GET" path: "/cgi-bin/blog/posts/2026" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
-Stack: [ [ request{ method: "GET" path: "/cgi-bin/blog/posts/2026" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
+Stack: [ "GET" "/cgi-bin/blog/posts/2026" "" "HTTP/1.1" H{ } B{ } ]
+Stack: [ "GET" "/cgi-bin/blog/posts/2026" "" "HTTP/1.1" H{ } B{ } "" 0 "" 0 f "" "" ]
+Stack: [ request{ method: "GET" path: "/cgi-bin/blog/posts/2026" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+Stack: [ [ request{ method: "GET" path: "/cgi-bin/blog/posts/2026" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
 Stack: [ "HTTP/1.1 200 OK
 Connection: close
 Content-Length: 24
@@ -24,13 +24,13 @@ Connection: close
 Content-Length: 24
 content-type: text/plain; charset=utf-8
 
-/cgi-bin/blog/posts/2026" request{ method: "" path: "/cgi-bin/blog/posts/2026" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+/cgi-bin/blog/posts/2026" request{ method: "" path: "/cgi-bin/blog/posts/2026" query-string: "" version: "" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 24
 content-type: text/plain; charset=utf-8
 
-/cgi-bin/blog/posts/2026" [ request{ method: "" path: "/cgi-bin/blog/posts/2026" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
+/cgi-bin/blog/posts/2026" [ request{ method: "" path: "/cgi-bin/blog/posts/2026" query-string: "" version: "" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 24
@@ -46,10 +46,10 @@ PASS: path round-trip: SCRIPT_NAME + PATH_INFO
 Stack: [ ]
 === path: SCRIPT_NAME only ===
 Stack: [ ]
-Stack: [ "GET" "/cgi-bin/blog" "" "HTTP/1.1" H{ } ]
-Stack: [ "GET" "/cgi-bin/blog" "" "HTTP/1.1" H{ } "" 0 "" 0 f "" "" ]
-Stack: [ request{ method: "GET" path: "/cgi-bin/blog" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
-Stack: [ [ request{ method: "GET" path: "/cgi-bin/blog" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
+Stack: [ "GET" "/cgi-bin/blog" "" "HTTP/1.1" H{ } B{ } ]
+Stack: [ "GET" "/cgi-bin/blog" "" "HTTP/1.1" H{ } B{ } "" 0 "" 0 f "" "" ]
+Stack: [ request{ method: "GET" path: "/cgi-bin/blog" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+Stack: [ [ request{ method: "GET" path: "/cgi-bin/blog" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
 Stack: [ "HTTP/1.1 200 OK
 Connection: close
 Content-Length: 13
@@ -67,13 +67,13 @@ Connection: close
 Content-Length: 13
 content-type: text/plain; charset=utf-8
 
-/cgi-bin/blog" request{ method: "" path: "/cgi-bin/blog" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+/cgi-bin/blog" request{ method: "" path: "/cgi-bin/blog" query-string: "" version: "" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 13
 content-type: text/plain; charset=utf-8
 
-/cgi-bin/blog" [ request{ method: "" path: "/cgi-bin/blog" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
+/cgi-bin/blog" [ request{ method: "" path: "/cgi-bin/blog" query-string: "" version: "" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 13
@@ -89,10 +89,10 @@ PASS: path round-trip: SCRIPT_NAME only
 Stack: [ ]
 === path: PATH_INFO only ===
 Stack: [ ]
-Stack: [ "GET" "/posts/2026" "" "HTTP/1.1" H{ } ]
-Stack: [ "GET" "/posts/2026" "" "HTTP/1.1" H{ } "" 0 "" 0 f "" "" ]
-Stack: [ request{ method: "GET" path: "/posts/2026" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
-Stack: [ [ request{ method: "GET" path: "/posts/2026" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
+Stack: [ "GET" "/posts/2026" "" "HTTP/1.1" H{ } B{ } ]
+Stack: [ "GET" "/posts/2026" "" "HTTP/1.1" H{ } B{ } "" 0 "" 0 f "" "" ]
+Stack: [ request{ method: "GET" path: "/posts/2026" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+Stack: [ [ request{ method: "GET" path: "/posts/2026" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
 Stack: [ "HTTP/1.1 200 OK
 Connection: close
 Content-Length: 11
@@ -110,13 +110,13 @@ Connection: close
 Content-Length: 11
 content-type: text/plain; charset=utf-8
 
-/posts/2026" request{ method: "" path: "/posts/2026" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+/posts/2026" request{ method: "" path: "/posts/2026" query-string: "" version: "" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 11
 content-type: text/plain; charset=utf-8
 
-/posts/2026" [ request{ method: "" path: "/posts/2026" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
+/posts/2026" [ request{ method: "" path: "/posts/2026" query-string: "" version: "" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 11
@@ -132,10 +132,10 @@ PASS: path round-trip: PATH_INFO only
 Stack: [ ]
 === path: both empty ===
 Stack: [ ]
-Stack: [ "GET" "" "" "HTTP/1.1" H{ } ]
-Stack: [ "GET" "" "" "HTTP/1.1" H{ } "" 0 "" 0 f "" "" ]
-Stack: [ request{ method: "GET" path: "" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
-Stack: [ [ request{ method: "GET" path: "" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
+Stack: [ "GET" "" "" "HTTP/1.1" H{ } B{ } ]
+Stack: [ "GET" "" "" "HTTP/1.1" H{ } B{ } "" 0 "" 0 f "" "" ]
+Stack: [ request{ method: "GET" path: "" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+Stack: [ [ request{ method: "GET" path: "" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
 Stack: [ "HTTP/1.1 200 OK
 Connection: close
 Content-Length: 0
@@ -153,13 +153,13 @@ Connection: close
 Content-Length: 0
 content-type: text/plain; charset=utf-8
 
-" request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+" request{ method: "" path: "" query-string: "" version: "" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 0
 content-type: text/plain; charset=utf-8
 
-" [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
+" [ request{ method: "" path: "" query-string: "" version: "" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 0
@@ -175,10 +175,10 @@ PASS: path round-trip: both empty
 Stack: [ ]
 === path: trailing slash plus leading slash yields literal // ===
 Stack: [ ]
-Stack: [ "GET" "/cgi-bin/blog//posts" "" "HTTP/1.1" H{ } ]
-Stack: [ "GET" "/cgi-bin/blog//posts" "" "HTTP/1.1" H{ } "" 0 "" 0 f "" "" ]
-Stack: [ request{ method: "GET" path: "/cgi-bin/blog//posts" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
-Stack: [ [ request{ method: "GET" path: "/cgi-bin/blog//posts" query-string: "" version: "HTTP/1.1" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
+Stack: [ "GET" "/cgi-bin/blog//posts" "" "HTTP/1.1" H{ } B{ } ]
+Stack: [ "GET" "/cgi-bin/blog//posts" "" "HTTP/1.1" H{ } B{ } "" 0 "" 0 f "" "" ]
+Stack: [ request{ method: "GET" path: "/cgi-bin/blog//posts" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+Stack: [ [ request{ method: "GET" path: "/cgi-bin/blog//posts" query-string: "" version: "HTTP/1.1" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
 Stack: [ "HTTP/1.1 200 OK
 Connection: close
 Content-Length: 20
@@ -196,13 +196,13 @@ Connection: close
 Content-Length: 20
 content-type: text/plain; charset=utf-8
 
-/cgi-bin/blog//posts" request{ method: "" path: "/cgi-bin/blog//posts" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
+/cgi-bin/blog//posts" request{ method: "" path: "/cgi-bin/blog//posts" query-string: "" version: "" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 20
 content-type: text/plain; charset=utf-8
 
-/cgi-bin/blog//posts" [ request{ method: "" path: "/cgi-bin/blog//posts" query-string: "" version: "" headers: H{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
+/cgi-bin/blog//posts" [ request{ method: "" path: "/cgi-bin/blog//posts" query-string: "" version: "" headers: H{ } body: B{ } remote-addr: "" remote-port: 0 server-name: "" server-port: 0 is-tls?: f tls-version: "" tls-cipher: "" } path-only-handler ] ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 20
@@ -220,10 +220,11 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ "POST" "/cgi-bin/blog/posts/2026" "tag=zig&debug=1" "HTTP/1.1" ]
 Stack: [ "POST" "/cgi-bin/blog/posts/2026" "tag=zig&debug=1" "HTTP/1.1" H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } ]
-Stack: [ "POST" "/cgi-bin/blog/posts/2026" "tag=zig&debug=1" "HTTP/1.1" H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } "192.0.2.1" 54321 "example.com" 80 ]
-Stack: [ "POST" "/cgi-bin/blog/posts/2026" "tag=zig&debug=1" "HTTP/1.1" H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } "192.0.2.1" 54321 "example.com" 80 f "" "" ]
-Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&debug=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 80 is-tls?: f tls-version: "" tls-cipher: "" } ]
-Stack: [ [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&debug=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 80 is-tls?: f tls-version: "" tls-cipher: "" } portable-handler ] ]
+Stack: [ "POST" "/cgi-bin/blog/posts/2026" "tag=zig&debug=1" "HTTP/1.1" H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } B{ 0x6E 0x61 0x6D 0x65 0x3D 0x61 0x6C 0x69 0x63 0x65 } ]
+Stack: [ "POST" "/cgi-bin/blog/posts/2026" "tag=zig&debug=1" "HTTP/1.1" H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } B{ 0x6E 0x61 0x6D 0x65 0x3D 0x61 0x6C 0x69 0x63 0x65 } "192.0.2.1" 54321 "example.com" 80 ]
+Stack: [ "POST" "/cgi-bin/blog/posts/2026" "tag=zig&debug=1" "HTTP/1.1" H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } B{ 0x6E 0x61 0x6D 0x65 0x3D 0x61 0x6C 0x69 0x63 0x65 } "192.0.2.1" 54321 "example.com" 80 f "" "" ]
+Stack: [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&debug=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } body: B{ 0x6E 0x61 0x6D 0x65 0x3D 0x61 0x6C 0x69 0x63 0x65 } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 80 is-tls?: f tls-version: "" tls-cipher: "" } ]
+Stack: [ [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&debug=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } body: B{ 0x6E 0x61 0x6D 0x65 0x3D 0x61 0x6C 0x69 0x63 0x65 } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 80 is-tls?: f tls-version: "" tls-cipher: "" } portable-handler ] ]
 Stack: [ "HTTP/1.1 200 OK
 Connection: close
 Content-Length: 95
@@ -256,7 +257,7 @@ query=tag=zig&debug=1
 ua=Mozilla/5.0
 remote=192.0.2.1
 name=alice
-" request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&debug=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 80 is-tls?: f tls-version: "" tls-cipher: "" } ]
+" request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&debug=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } body: B{ 0x6E 0x61 0x6D 0x65 0x3D 0x61 0x6C 0x69 0x63 0x65 } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 80 is-tls?: f tls-version: "" tls-cipher: "" } ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 95
@@ -267,7 +268,7 @@ query=tag=zig&debug=1
 ua=Mozilla/5.0
 remote=192.0.2.1
 name=alice
-" [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&debug=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 80 is-tls?: f tls-version: "" tls-cipher: "" } portable-handler ] ]
+" [ request{ method: "POST" path: "/cgi-bin/blog/posts/2026" query-string: "tag=zig&debug=1" version: "HTTP/1.1" headers: H{ user-agent: "Mozilla/5.0" content-type: "application/x-www-form-urlencoded" content-length: "10" } body: B{ 0x6E 0x61 0x6D 0x65 0x3D 0x61 0x6C 0x69 0x63 0x65 } remote-addr: "192.0.2.1" remote-port: 54321 server-name: "example.com" server-port: 80 is-tls?: f tls-version: "" tls-cipher: "" } portable-handler ] ]
 Stack: [ "Status: 200 OK
 Connection: close
 Content-Length: 95
