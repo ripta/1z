@@ -567,3 +567,73 @@ port>> 9999 "serve config port" assert=
   swap drop
   close
 ] task-scope
+
+"send-response: default disposition outside the server is close" test-section
+<pipe> dup 200 "OK" "text/plain; charset=utf-8" "hi" <response> send-response stream-close
+dup stream-read-line drop
+stream-read-line "Connection: close" "unbound default closes" assert=
+
+"send-response: keep-alive cell emits keep-alive" test-section
+t (make-disposition-cell) connection-disposition [
+  <pipe> dup 200 "OK" "text/plain; charset=utf-8" "hi" <response> send-response stream-close
+  dup stream-read-line drop
+  stream-read-line "Connection: keep-alive" "keep-alive cell" assert=
+] with-parameter
+
+"send-response: close cell emits close" test-section
+f (make-disposition-cell) connection-disposition [
+  <pipe> dup 200 "OK" "text/plain; charset=utf-8" "hi" <response> send-response stream-close
+  dup stream-read-line drop
+  stream-read-line "Connection: close" "close cell" assert=
+] with-parameter
+
+"disable-keep-alive: flips the cell and emits close" test-section
+t (make-disposition-cell) connection-disposition [
+  disable-keep-alive
+  (read-disposition) f "cell flipped to close" assert=
+  <pipe> dup 200 "OK" "text/plain; charset=utf-8" "hi" <response> send-response stream-close
+  dup stream-read-line drop
+  stream-read-line "Connection: close" "close emitted after disable" assert=
+] with-parameter
+
+"send-response: response Connection: close header forces close" test-section
+t (make-disposition-cell) connection-disposition [
+  <pipe> dup
+  200 dup reason-for
+  H{ "content-type" "text/plain; charset=utf-8" "connection" "close" } "body" make-response
+  send-response stream-close
+  dup stream-read-line drop
+  dup stream-read-line "Connection: close" "header forces close" assert=
+  dup stream-read-line drop
+  dup stream-read-line "content-type: text/plain; charset=utf-8" "content-type present" assert=
+  stream-read-line "" "no duplicate connection header" assert=
+  (read-disposition) f "header flipped the cell" assert=
+] with-parameter
+
+"serve-connection: handler disable-keep-alive closes the connection" test-section
+[
+  39501
+  dup "127.0.0.1" swap make-addr:tcp 128 listen
+
+  dup [
+    accept
+    "127.0.0.1" 39501 [
+      disable-keep-alive
+      path>> "text/plain; charset=utf-8" ok send-response
+    ] (serve-dispatch)
+  ] curry spawn
+
+  "127.0.0.1" 3 pick-n make-addr:tcp connect
+  dup "GET /one HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "forced-close status" assert=
+  dup stream-read-line "Connection: close" "forced-close header" assert=
+  dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "forced-close blank" assert=
+  dup 4 stream-read(exact) bytes> "/one" "forced-close body" assert=
+  dup stream-read-line f "connection closed after forced close" assert=
+
+  stream-close
+  await drop
+  swap drop
+  close
+] task-scope

@@ -168,9 +168,11 @@ reason-for: ( status -- reason ) [
   [ @get ] [ 2drop "Unknown" ] if
 ] ;
 
-\\ Format response headers hash as HTTP header lines.
+\\ Format response headers hash as HTTP header lines. The `connection` key is
+\\ filtered out: send-response emits the Connection header itself from the loop's
+\\ disposition, so a handler-set connection header must not be double-emitted.
 format-response-headers: ( headers -- string ) [
-  dup @keys "" format-headers-loop
+  dup @keys [ >string "connection" = not ] #filter #collect "" format-headers-loop
 ] ;
 
 format-headers-loop: ( headers keys accum -- string ) [
@@ -192,12 +194,49 @@ format-headers-loop: ( headers keys accum -- string ) [
 \\ `send-response` call site produces a CGI-shaped status line instead.
 response-status-line-prefix: parameter{ [ "HTTP/1.1 " ] } ;
 
+\\ Connection-disposition cell bound by the server loop around each handler.
+\\ Holds the mutable cell whose "keep-alive?" flag decides the emitted Connection
+\\ header and whether the loop serves another request. Unbound outside the
+\\ server, so a standalone send-response defaults to close.
+connection-disposition: parameter{ [ f ] } ;
+
+\ Build a fresh disposition cell with the given initial keep-alive? flag.
+(make-disposition-cell): ( keep-alive? -- cell ) [
+  M{ } swap "keep-alive?" swap @set!
+] ;
+
+\ Read the bound cell's keep-alive? flag. f when unbound (outside the server).
+(read-disposition): ( -- keep-alive? ) [
+  connection-disposition get
+  dup mutable-map? [ "keep-alive?" @get ] [ drop f ] if
+] ;
+
+\\ Force the current connection to close after this response. Flips the loop's
+\\ disposition cell; a no-op outside a server connection. Does not close the
+\\ stream immediately.
+disable-keep-alive: ( -- ) [
+  connection-disposition get
+  dup mutable-map? [ "keep-alive?" f @set! drop ] [ drop ] if
+] ;
+
+\ True when the response carries a `Connection: close` header, by which a handler
+\ forces the connection to close.
+(response-forces-close?): ( response -- forces? ) [
+  headers>> "connection" "" @get-or lowercase "close" =
+] ;
+
 \\ Write a complete HTTP response to a stream.
 \\ Builds the full response as a single string and writes it in one call.
+\\ The emitted Connection header reflects the loop's disposition cell: a handler
+\\ forces close via `disable-keep-alive` or a response `Connection: close` header.
+\\ Outside the server the cell is unbound, so the default is close.
 send-response: ( stream response -- ) [
   response-status-line-prefix get over status>> >string #append
   " " #append over reason>> #append "\r\n" #append
-  "Connection: close\r\n" #append
+  over (response-forces-close?)
+  [ disable-keep-alive "Connection: close\r\n" ]
+  [ (read-disposition) [ "Connection: keep-alive\r\n" ] [ "Connection: close\r\n" ] if ]
+  if #append
   "Content-Length: " #append over body>> #len >string #append "\r\n" #append
   over headers>> format-response-headers #append
   "\r\n" #append
@@ -242,11 +281,22 @@ error-response: ( status reason message -- response ) [
 ] ;
 
 private{
+  \ Run the user handler with ( stream request ) under a fresh disposition cell
+  \ bound to `init?`, then return the cell's final keep-alive? flag. The cell read
+  \ happens inside the binding, since with-parameter pops the binding on return.
+  (dispatch-under-disposition): ( stream request handler init? -- keep-alive? ) [
+    [ curry curry [ (read-disposition) ] compose ] dip
+    (make-disposition-cell)
+    connection-disposition <rot-
+    with-parameter
+  ] ;
+
   \ Handle one request on a persistent connection. The bottom six items are the
   \ connection context, shared across every request on the connection, and are
   \ left intact for the next loop iteration; only the five wire fields on top are
-  \ consumed. Returns whether the connection should keep going: t after a normal
-  \ dispatch, f after a framing rejection that closes the connection.
+  \ consumed. Returns whether the connection should keep going: the negotiated
+  \ keep-alive? after a normal dispatch, f after a framing rejection that closes
+  \ the connection.
   (handle-request): ( stream sh sp uh rh rp m p q v h -- stream sh sp uh rh rp keep? ) [
     dup (chunked-request?)
     [           \ chunked body: reject with 411 and close; the eager read cannot frame it
@@ -268,8 +318,8 @@ private{
         12 pick-n                          \ append sp
         f "" ""                            \ TLS sentinels
         make-request                       \ ( stream sh sp uh rh rp request )
-        6 pick-n swap 4 pick-n call        \ user handler runs with ( stream-copy request )
-        t
+        6 pick-n swap 4 pick-n             \ ( ... stream-copy request handler )
+        t (dispatch-under-disposition)     \ ( ... keep-alive? ); 362.4 replaces t with request negotiation
       ]
       if
     ]

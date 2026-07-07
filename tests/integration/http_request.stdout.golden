@@ -448,3 +448,37 @@ PASS: second status
 PASS: second blank
 PASS: second body
 Stack: [ ]
+=== send-response: default disposition outside the server is close ===
+Stack: [ ]
+Stack: [ <stream pipe(rd) read> ]
+Stack: [ <stream pipe(rd) read> ]
+PASS: unbound default closes
+Stack: [ ]
+=== send-response: keep-alive cell emits keep-alive ===
+Stack: [ ]
+PASS: keep-alive cell
+Stack: [ ]
+=== send-response: close cell emits close ===
+Stack: [ ]
+PASS: close cell
+Stack: [ ]
+=== disable-keep-alive: flips the cell and emits close ===
+Stack: [ ]
+PASS: cell flipped to close
+PASS: close emitted after disable
+Stack: [ ]
+=== send-response: response Connection: close header forces close ===
+Stack: [ ]
+PASS: header forces close
+PASS: content-type present
+PASS: no duplicate connection header
+PASS: header flipped the cell
+Stack: [ ]
+=== serve-connection: handler disable-keep-alive closes the connection ===
+Stack: [ ]
+PASS: forced-close status
+PASS: forced-close header
+PASS: forced-close blank
+PASS: forced-close body
+PASS: connection closed after forced close
+Stack: [ ]

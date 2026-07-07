@@ -8,8 +8,8 @@
 \ static-file-handler directly, so the high-level entry points were never actually run.
 \
 \ One long-lived server serves every request below, so this also proves serve-loop actually loops
-\ rather than handling a single connection. Each response carries `Connection: close`, so the
-\ client opens a fresh connection per request.
+\ rather than handling a single connection. Each request opens a fresh connection and reads exactly
+\ its Content-Length body, so the client does not depend on the connection disposition.
 \
 \ NOTE: this is a fixed-port socket test, so it carries some inherent flakiness from port reuse,
 \       and listen-before-connect timing. As such, the .zon sidecar marks it serial.
