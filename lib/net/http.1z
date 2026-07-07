@@ -1,10 +1,12 @@
 \ lib/net/http.1z - HTTP/1.1 server library.
 \
-\ Exposes a `request` value (wire-derived, socket-derived, and TLS-derived
-\ fields), a `response` value, and the `serve` entry point that accepts
-\ connections and dispatches them to a user-supplied `( stream request -- )`
-\ handler. `serve-static` serves a directory of files; routing lives in
-\ `lib/net/http/router.1z`. See `docs/guides/http.md` for an overview.
+\ Exposes a `request` value (wire-derived, socket-derived, and TLS-derived fields), a `response`
+\ value, and the `serve` entry point that accepts connections and dispatches them to a user-supplied
+\ `( stream request -- )` handler.
+\
+\ `serve-static` serves a directory of files. Routing lives in `lib/net/http/router.1z`.
+\
+\ See `docs/guides/http.md` for an overview.
 
 use "strings" ;
 use "conversions" ;
@@ -12,6 +14,7 @@ use "os/path" ;
 use "mimetype" ;
 use "net/server" ;
 use "data/url" ;
+use "time" ;
 
 EMalformedRequest: ( -- err: symbol ) [ malformed-request: ] ;
 
@@ -96,6 +99,28 @@ max-request-body: parameter{ [ 1048576 ] } ;
 
 \\ Run `quot` with the maximum request body size bound to `size` bytes.
 with-max-request-body: ( size quot -- ) [ max-request-body swap with-parameter ] ;
+
+\\ How long the server waits for the next request on a persistent connection before closing it as idle.
+\\
+\\ The wait covers only the gap between requests. Once a request line arrives, the header and body
+\\ reads that follow run without this timeout.
+\\
+\\ Bind it dynamically with `with-idle-connection-timeout`.
+idle-connection-timeout: parameter{ [ 30 seconds ] } ;
+
+\\ Run `quot` with `idle-connection-timeout` bound to `duration`.
+with-idle-connection-timeout: ( duration quot -- ) [ idle-connection-timeout swap with-parameter ] ;
+
+\\ Read the next request line under the idle-connection timeout.
+\\
+\\ Returns `option:none` on a clean close and, uniformly, on an idle timeout, so the
+\\ loop terminates in both cases. Returns `option:some` the line otherwise. `recover`
+\\ stays terminal so the timeout throw lands on a clean stack.
+(read-request-line-timed?): ( stream -- option ) [
+  [ [ (read-request-line?) ] curry idle-connection-timeout get with-timeout ]
+  [ drop option:none ]
+  recover
+] ;
 
 \ True when the request's declared Content-Length exceeds the max-request-body
 \ cap. A missing content-length reads as 0 and is never too large.
@@ -317,12 +342,13 @@ private{
     with-parameter
   ] ;
 
-  \ Handle one request on a persistent connection. The bottom six items are the
-  \ connection context, shared across every request on the connection, and are
-  \ left intact for the next loop iteration; only the five wire fields on top are
-  \ consumed. Returns whether the connection should keep going: the negotiated
-  \ keep-alive? after a normal dispatch, f after a framing rejection that closes
-  \ the connection.
+  \\ Handle one request on a persistent connection.
+  \\
+  \\ The bottom six items are the connection context, shared across every request on the connection,
+  \\ and are left intact for the next loop iteration. Only the wire fields on top are consumed.
+  \\
+  \\ Returns whether the connection should keep going: the negotiated `keep-alive?` after a normal
+  \\ dispatch, f after a framing rejection that closes the connection.
   (handle-request): ( stream sh sp uh rh rp m p q v h -- stream sh sp uh rh rp keep? ) [
     dup (chunked-request?)
     [           \ chunked body: reject with 411 and close; the eager read cannot frame it
@@ -353,13 +379,17 @@ private{
     if
   ] ;
 
-  \ Persistent-connection read loop. Holds the connection context
-  \ ( stream server-host server-port user-handler remote-host remote-port ) across
-  \ requests and serves each in turn. Terminates and returns the stream when the
-  \ client closes at a request boundary (a non-throwing read of the next request
-  \ line yields f) or when a request is rejected for framing.
+  \\ Persistant-connection read loop.
+  \\
+  \\ Holds the connection context:
+  \\
+  \\    ( stream server-host server-port user-handler remote-host remote-port )
+  \\
+  \\ across requests and serves each in turn. Terminates and returns the stream when the client
+  \\ closes at a request boundary or goes idle past the timeout (both yield a next-request read
+  \\ of option:none), or when a request is rejected for framing.
   (serve-connection): ( stream sh sp uh rh rp -- stream ) [
-    5 pick-n (read-request-line?)  \ non-throwing next-request line
+    5 pick-n (read-request-line-timed?)  \ next-request line, none on close or idle timeout
     dup option:some?
     [ option:some>
       6 pick-n swap (parse-request-line)

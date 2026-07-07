@@ -485,6 +485,14 @@ PASS: second status
 PASS: second blank
 PASS: second body
 Stack: [ ]
+=== read-request-line-timed?: idle read times out to option:none ===
+Stack: [ ]
+PASS: idle read times out as a clean close
+Stack: [ ]
+=== serve-connection: idle connection closes on timeout ===
+Stack: [ ]
+PASS: server closed idle connection
+Stack: [ ]
 === send-response: default disposition outside the server is close ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> ]

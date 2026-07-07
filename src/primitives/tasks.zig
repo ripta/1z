@@ -460,6 +460,11 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     var scope = TaskScope.init(ctx.allocator);
     defer scope.deinit();
 
+    // Race semantics: whichever of the main and timer tasks finishes first cancels
+    // the other. Without this the main task completing normally leaves the timer
+    // sleeping, and the caller blocks for the full timeout duration.
+    scope.race_first_finisher = true;
+
     // NOTE(ripta): Do NOT set the task as the scope task so that sibling cancellation from the timer can reach it.
     const main_task = try allocateTask(ctx, scheduler, &scope, quot);
     try scope.addChild(main_task);

@@ -1014,35 +1014,41 @@ pub const Scheduler = struct {
                     .message = "task failed without error details",
                 }) catch null;
             }
+        }
 
-            // NOTE(ripta): When a task fails, convey the cancellation to siblings in the same scope.
-            //              This is a best-effort attempt to prevent siblings from doing more work after
-            //              a failure, but it doesn't guarantee that they won't do any more work since
-            //              they may have already been resumed and be running concurrently. The cancelled
-            //              flag is checked in the scheduler loop before resuming a task, but if a sibling
-            //              is already running then it may not observe the cancellation until it yields
-            //              back to the scheduler.
+        // NOTE(ripta): When a task fails, convey the cancellation to siblings in the same scope.
+        //              This is a best-effort attempt to prevent siblings from doing more work after
+        //              a failure, but it doesn't guarantee that they won't do any more work since
+        //              they may have already been resumed and be running concurrently. The cancelled
+        //              flag is checked in the scheduler loop before resuming a task, but if a sibling
+        //              is already running then it may not observe the cancellation until it yields
+        //              back to the scheduler.
+        //
+        // A `race_first_finisher` scope extends the trigger to any completion: the first child to
+        // finish, failed or not, cancels the losing sibling. `with-timeout` uses this so the timer is
+        // cancelled once the main task completes and the main task is cancelled once the timer fires.
+        //
+        // The cmpxchg ensures only the wall-clock-first finisher fires
+        // the sibling-cancellation cascade; the language-visible
+        // propagated error is selected in spawn order at scope exit
+        // by `TaskScope.firstFailedChildError`, so the cancellation
+        // trigger and the propagated error may identify different
+        // tasks under M:N.
+        if ((task.getStatus() == .failed or task.scope.race_first_finisher) and
+            task.scope.cancellation_requested.cmpxchgStrong(false, true, .acq_rel, .acquire) == null)
+        {
+            // XXX(ripta): Be sure to skip the scope task since it's the coordinator and needs to observe
+            //             the failure via await, but it may not be in the same scope if it's a nested scope.
             //
-            // The cmpxchg ensures only the wall-clock-first failure fires
-            // the sibling-cancellation cascade; the language-visible
-            // propagated error is selected in spawn order at scope exit
-            // by `TaskScope.firstFailedChildError`, so the cancellation
-            // trigger and the propagated error may identify different
-            // tasks under M:N.
-            if (task.scope.cancellation_requested.cmpxchgStrong(false, true, .acq_rel, .acquire) == null) {
-                // XXX(ripta): Be sure to skip the scope task since it's the coordinator and needs to observe
-                //             the failure via await, but it may not be in the same scope if it's a nested scope.
-                //
-                // `cancelTask` routes siblings on other workers through their
-                // home worker's cancellation queue, so per-state cleanup
-                // happens on the owning thread.
-                task.scope.children_mu.lock();
-                defer task.scope.children_mu.unlock();
-                for (task.scope.children.items) |sibling| {
-                    if (sibling == task) continue;
-                    if (sibling == task.scope.scope_task) continue;
-                    self.cancelTask(sibling);
-                }
+            // `cancelTask` routes siblings on other workers through their
+            // home worker's cancellation queue, so per-state cleanup
+            // happens on the owning thread.
+            task.scope.children_mu.lock();
+            defer task.scope.children_mu.unlock();
+            for (task.scope.children.items) |sibling| {
+                if (sibling == task) continue;
+                if (sibling == task.scope.scope_task) continue;
+                self.cancelTask(sibling);
             }
         }
 

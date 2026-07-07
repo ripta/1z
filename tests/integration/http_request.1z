@@ -603,6 +603,36 @@ port>> 9999 "serve config port" assert=
   close
 ] task-scope
 
+"read-request-line-timed?: idle read times out to option:none" test-section
+[
+  10 milliseconds [
+    <pipe> (read-request-line-timed?) option:none? "idle read times out as a clean close" assert-true
+  ] with-idle-connection-timeout
+] task-scope
+
+"serve-connection: idle connection closes on timeout" test-section
+[
+  100 milliseconds [
+    39502
+    dup "127.0.0.1" swap make-addr:tcp 128 listen
+
+    dup [
+      accept
+      "127.0.0.1" 39502 [
+        path>> "text/plain; charset=utf-8" ok send-response
+      ] (serve-dispatch)
+    ] curry spawn
+
+    "127.0.0.1" 3 pick-n make-addr:tcp connect
+    dup stream-read-line f "server closed idle connection" assert=
+    stream-close
+
+    await drop
+    swap drop
+    close
+  ] with-idle-connection-timeout
+] task-scope
+
 "send-response: default disposition outside the server is close" test-section
 <pipe> dup 200 "OK" "text/plain; charset=utf-8" "hi" <response> send-response stream-close
 dup stream-read-line drop

@@ -238,6 +238,12 @@ pub const TaskScope = struct {
     active_children: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// Atomic flag set when a child fails and sibling cancellation triggers.
     cancellation_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// When true, the first child to finish with any status fires the
+    /// sibling-cancellation cascade, not only a failing child. `with-timeout`
+    /// sets this so its winner cancels the loser: the main task cancels the
+    /// timer when it completes, and the timer cancels the main task when it
+    /// fires.
+    race_first_finisher: bool = false,
     /// Fire-and-forget detached tasks. Not in `children`, so they are never
     /// walked by sibling cancellation or `firstFailedChildError`. Reaped at
     /// their own completion, so this holds only in-flight detached tasks.

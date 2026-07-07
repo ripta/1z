@@ -74,6 +74,16 @@ test-with-timeout-error: ( -- ) [
   ] test-err: "with-timeout propagates task error" assert-error-type
 ] ;
 
+\ -- 9. with-timeout returns as soon as the main task completes --
+\ The timeout is far longer than the harness per-test limit, so a regression that
+\ waits for the timer to elapse would hang and fail rather than pass.
+
+test-with-timeout-early-return: ( -- ) [
+  [
+    [ 42 ] 100 seconds with-timeout 42 "returns without waiting for the timeout" assert=
+  ] task-scope
+] ;
+
 test-spawn-n-basic
 test-spawn-n-zero
 test-concurrent-basic
@@ -82,3 +92,4 @@ test-cancel-task
 test-with-timeout-success
 test-with-timeout-fires
 test-with-timeout-error
+test-with-timeout-early-return
