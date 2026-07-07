@@ -103,13 +103,39 @@ with-max-request-body: ( size quot -- ) [ max-request-body swap with-parameter ]
   "content-length" "0" @get-or parse-integer max-request-body get >
 ] ;
 
+\ Parse a header value as a case-insensitive comma-separated token set. A missing
+\ header yields a single empty token, which no real token matches.
+(header-tokens): ( headers name -- tokens ) [
+  "" @get-or lowercase "," split [ trim ] #map #collect
+] ;
+
 \ True when the request declares Transfer-Encoding: chunked. The header value is
 \ a case-insensitive comma-separated token list. A chunked body is not
 \ Content-Length framed, so the eager body read cannot frame it; such a request
 \ is rejected with 411 rather than desynchronizing the stream.
 (chunked-request?): ( headers -- chunked? ) [
-  "transfer-encoding" "" @get-or lowercase "," split
-  [ trim ] #map #collect "chunked" #in?
+  "transfer-encoding" (header-tokens) "chunked" #in?
+] ;
+
+\ Negotiated default connection disposition for a request, per RFC 7230. A client
+\ Connection: close closes on any version. HTTP/1.1 is persistent by default.
+\ HTTP/1.0 persists only on an explicit Connection: keep-alive. Any other version
+\ closes. The Connection header is a case-insensitive comma-separated token set.
+(negotiate-keep-alive?): ( request -- keep-alive? ) [
+  dup headers>> "connection" (header-tokens)
+  dup "close" #in?
+  [ 2drop f ]
+  [ swap version>>
+    dup "HTTP/1.1" =
+    [ 2drop t ]
+    [ "HTTP/1.0" =
+      [ "keep-alive" #in? ]
+      [ drop f ]
+      if
+    ]
+    if
+  ]
+  if
 ] ;
 
 \ Read exactly Content-Length bytes of the request body from a stream. A
@@ -319,7 +345,8 @@ private{
         f "" ""                            \ TLS sentinels
         make-request                       \ ( stream sh sp uh rh rp request )
         6 pick-n swap 4 pick-n             \ ( ... stream-copy request handler )
-        t (dispatch-under-disposition)     \ ( ... keep-alive? ); 362.4 replaces t with request negotiation
+        1 pick-n (negotiate-keep-alive?)   \ ( ... stream-copy request handler keep? )
+        (dispatch-under-disposition)       \ ( ... keep-alive? )
       ]
       if
     ]

@@ -16,6 +16,25 @@ check-status: ( handler path -- status-line ) [
   stream-read-line
 ] ;
 
+\ Connect to a local server that may still be binding under load. Retries with a
+\ short connect-timeout so a not-yet-listening server does not hard-fail the
+\ client's first attempt on the 5s default deadline.
+connect-when-ready: ( addr -- stream ) [
+  50 milliseconds [ 40 connect-loop ] with-connect-timeout
+] ;
+
+connect-loop: ( addr n -- stream ) [
+  over [ connect ] [ drop f ] recover
+  dup f =
+  [ drop 1 - dup 0 <=
+    [ drop connect ]
+    [ 25 milliseconds sleep connect-loop ]
+    if
+  ]
+  [ [ 2drop ] dip ]
+  if
+] ;
+
 "exact match hit" test-section
 <router>
 "/health" [ drop "ok" "text/plain" ok ] route
@@ -83,7 +102,7 @@ dup "/api/other" check-status "HTTP/1.1 200 OK" "prefix for non-exact" assert=
 
   \ The server keeps each connection alive, so read the Content-Length-framed body
   \ exactly and close the client to let the server's per-connection loop terminate.
-  "127.0.0.1" 39350 make-addr:tcp connect
+  "127.0.0.1" 39350 make-addr:tcp connect-when-ready
   dup "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "tcp exact status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop

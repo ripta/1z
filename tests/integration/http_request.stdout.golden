@@ -1,4 +1,5 @@
 Stack: [ ]
+Stack: [ ]
 === read-request: simple GET ===
 Stack: [ ]
 Stack: [ <stream pipe(rd) read> <stream pipe(wr) write> ]
@@ -275,6 +276,42 @@ Stack: [ ]
 === chunked-request?: non-chunked encoding is not chunked ===
 Stack: [ ]
 PASS: gzip alone not chunked
+Stack: [ ]
+=== negotiate-keep-alive?: HTTP/1.1 defaults to keep-alive ===
+Stack: [ ]
+PASS: 1.1 with no Connection header keeps alive
+Stack: [ ]
+=== negotiate-keep-alive?: HTTP/1.1 Connection: close closes ===
+Stack: [ ]
+PASS: 1.1 close closes
+Stack: [ ]
+=== negotiate-keep-alive?: HTTP/1.0 defaults to close ===
+Stack: [ ]
+PASS: 1.0 with no Connection header closes
+Stack: [ ]
+=== negotiate-keep-alive?: HTTP/1.0 Connection: keep-alive persists ===
+Stack: [ ]
+PASS: 1.0 keep-alive persists
+Stack: [ ]
+=== negotiate-keep-alive?: HTTP/1.0 Connection: close closes ===
+Stack: [ ]
+PASS: close wins on 1.0
+Stack: [ ]
+=== negotiate-keep-alive?: unknown version closes ===
+Stack: [ ]
+PASS: unknown version closes
+Stack: [ ]
+=== negotiate-keep-alive?: case-insensitive close on 1.1 ===
+Stack: [ ]
+PASS: uppercase Close closes
+Stack: [ ]
+=== negotiate-keep-alive?: case-insensitive keep-alive on 1.0 ===
+Stack: [ ]
+PASS: mixed-case Keep-Alive persists
+Stack: [ ]
+=== negotiate-keep-alive?: multi-token keep-alive on 1.0 ===
+Stack: [ ]
+PASS: multi-token keep-alive persists
 Stack: [ ]
 === length-required: builds a 411 response ===
 Stack: [ ]

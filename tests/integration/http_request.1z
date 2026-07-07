@@ -5,6 +5,14 @@ use "net/tcp" ;
 use "net/server" ;
 use "time" ;
 
+\ Build a request carrying only the fields negotiation reads (version, headers);
+\ the remaining fields ride sentinel defaults.
+mk-req: ( version headers -- request ) [
+  [ "GET" "/" "" ] 2dip
+  B{ } "" 0 "" 0 f "" ""
+  make-request
+] ;
+
 make-http-server-once-task: ( host port handler -- task ) [
   [ swap dup -rot> dup read-request <rot- call stream-close ] curry
   <server-config> swap >>handler swap >>port swap >>host
@@ -219,6 +227,33 @@ H{ } (chunked-request?) f "missing transfer-encoding not chunked" assert=
 
 "chunked-request?: non-chunked encoding is not chunked" test-section
 H{ "transfer-encoding" "gzip" } (chunked-request?) f "gzip alone not chunked" assert=
+
+"negotiate-keep-alive?: HTTP/1.1 defaults to keep-alive" test-section
+"HTTP/1.1" H{ } mk-req (negotiate-keep-alive?) t "1.1 with no Connection header keeps alive" assert=
+
+"negotiate-keep-alive?: HTTP/1.1 Connection: close closes" test-section
+"HTTP/1.1" H{ "connection" "close" } mk-req (negotiate-keep-alive?) f "1.1 close closes" assert=
+
+"negotiate-keep-alive?: HTTP/1.0 defaults to close" test-section
+"HTTP/1.0" H{ } mk-req (negotiate-keep-alive?) f "1.0 with no Connection header closes" assert=
+
+"negotiate-keep-alive?: HTTP/1.0 Connection: keep-alive persists" test-section
+"HTTP/1.0" H{ "connection" "keep-alive" } mk-req (negotiate-keep-alive?) t "1.0 keep-alive persists" assert=
+
+"negotiate-keep-alive?: HTTP/1.0 Connection: close closes" test-section
+"HTTP/1.0" H{ "connection" "close" } mk-req (negotiate-keep-alive?) f "close wins on 1.0" assert=
+
+"negotiate-keep-alive?: unknown version closes" test-section
+"HTTP/0.9" H{ } mk-req (negotiate-keep-alive?) f "unknown version closes" assert=
+
+"negotiate-keep-alive?: case-insensitive close on 1.1" test-section
+"HTTP/1.1" H{ "connection" "Close" } mk-req (negotiate-keep-alive?) f "uppercase Close closes" assert=
+
+"negotiate-keep-alive?: case-insensitive keep-alive on 1.0" test-section
+"HTTP/1.0" H{ "connection" "Keep-Alive" } mk-req (negotiate-keep-alive?) t "mixed-case Keep-Alive persists" assert=
+
+"negotiate-keep-alive?: multi-token keep-alive on 1.0" test-section
+"HTTP/1.0" H{ "connection" "keep-alive, foo" } mk-req (negotiate-keep-alive?) t "multi-token keep-alive persists" assert=
 
 "length-required: builds a 411 response" test-section
 length-required dup status>> 411 "411 status" assert=
