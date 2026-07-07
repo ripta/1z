@@ -79,6 +79,21 @@ query-string>> "" "empty query string" assert=
 "read-request: malformed request line throws EMalformedRequest" test-section
 [ <pipe> dup "GET /\r\n\r\n" stream-write drop stream-close read-request ] malformed-request: "too few parts" assert-error-type
 
+"read-request-line?: clean close yields option:none" test-section
+<pipe> stream-close (read-request-line?) option:none? "closed stream is a clean close" assert-true
+
+"read-request-line?: request line yields option:some" test-section
+<pipe> dup "GET / HTTP/1.1\r\n" stream-write drop stream-close (read-request-line?)
+dup option:some? "a present request line is some" assert-true
+option:some> "GET / HTTP/1.1" "some wraps the request line" assert=
+
+"read-request-line?: mid-request truncation is some, not a clean close" test-section
+<pipe> dup "GET /foo\r\n" stream-write drop stream-close (read-request-line?)
+option:some? "a truncated request line is a request to parse, not a clean close" assert-true
+
+"read-request-line?: mid-request truncation keeps the throwing parse" test-section
+[ <pipe> dup "GET /foo\r\n" stream-write drop stream-close (read-request-wire) ] malformed-request: "truncated request line still throws when parsed" assert-error-type
+
 "make-request: socket-derived fields round-trip" test-section
 "GET" "/" "" "HTTP/1.1" H{ } B{ }
 "192.0.2.1" 54321 "example.com" 8443 t "TLSv1.3" "TLS_AES_128_GCM_SHA256"

@@ -78,6 +78,16 @@ private{
   (parse-request-line)
 ] ;
 
+\ Read the next request line, non-throwing. Returns option:none on a clean
+\ close at a request boundary (stream-read-line yields f), else option:some the line.
+(read-request-line?): ( stream -- option ) [
+  stream-read-line
+  dup f =
+  [ drop option:none ]
+  [ >option:some ]
+  if
+] ;
+
 \\ Maximum number of bytes the server reads for a request body. A request whose
 \\ Content-Length exceeds this cap is answered with 413 Content Too Large and the
 \\ connection is closed, rather than reading the oversized body. Bind it
@@ -272,13 +282,14 @@ private{
   \ client closes at a request boundary (a non-throwing read of the next request
   \ line yields f) or when a request is rejected for framing.
   (serve-connection): ( stream sh sp uh rh rp -- stream ) [
-    5 pick-n stream-read-line  \ non-throwing next-request line
-    dup f =
-    [ drop 5 drop-n ]  \ clean close at a request boundary: ( stream )
-    [ 6 pick-n swap (parse-request-line)
+    5 pick-n (read-request-line?)  \ non-throwing next-request line
+    dup option:some?
+    [ option:some>
+      6 pick-n swap (parse-request-line)
       (handle-request)
       [ (serve-connection) ] [ 5 drop-n ] if
     ]
+    [ drop 5 drop-n ]  \ clean close at a request boundary: ( stream )
     if
   ] ;
 }

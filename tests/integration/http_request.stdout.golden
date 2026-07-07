@@ -84,6 +84,26 @@ Stack: [ ]
 Stack: [ ]
 PASS: too few parts
 Stack: [ ]
+=== read-request-line?: clean close yields option:none ===
+Stack: [ ]
+PASS: closed stream is a clean close
+Stack: [ ]
+=== read-request-line?: request line yields option:some ===
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: "GET / HTTP/1.1" }> ]
+PASS: a present request line is some
+Stack: [ <option:some option-payload{ value: "GET / HTTP/1.1" }> ]
+PASS: some wraps the request line
+Stack: [ ]
+=== read-request-line?: mid-request truncation is some, not a clean close ===
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: "GET /foo" }> ]
+PASS: a truncated request line is a request to parse, not a clean close
+Stack: [ ]
+=== read-request-line?: mid-request truncation keeps the throwing parse ===
+Stack: [ ]
+PASS: truncated request line still throws when parsed
+Stack: [ ]
 === make-request: socket-derived fields round-trip ===
 Stack: [ ]
 Stack: [ "GET" "/" "" "HTTP/1.1" H{ } B{ } ]
