@@ -51,21 +51,31 @@ read-headers-loop: ( stream headers -- headers ) [
   if
 ] ;
 
+private{
+  \ Parse an already-read request line plus the header block into the five
+  \ wire fields. Split out from (read-request-wire) so the server loop can read
+  \ the request line non-throwing, decide whether the connection has closed, and
+  \ then parse the line it already holds without re-reading the stream.
+  (parse-request-line): ( stream line -- method path query-string version headers ) [
+    " " split
+    dup #len 3 < [ dup " " #join "malformed request line" EMalformedRequest make-error throw ] when
+    dup 2 #nth
+    over 0 #nth
+    -rot>
+    swap 1 #nth (split-target)
+    <rot-
+    4 pick-n read-headers
+    5 drop-at
+  ] ;
+}
+
 \ Read the wire-derived portion of an HTTP request from a stream. Returns the
 \ five wire fields on the stack with `headers` on top. Used by `read-request`
 \ and the server-path dispatch.
 (read-request-wire): ( stream -- method path query-string version headers ) [
   dup stream-read-line
   dup f = [ f "unexpected EOF reading request line" EUnexpectedEOF make-error throw ] when
-  " " split
-  dup #len 3 < [ dup " " #join "malformed request line" EMalformedRequest make-error throw ] when
-  dup 2 #nth
-  over 0 #nth
-  -rot>
-  swap 1 #nth (split-target)
-  <rot-
-  4 pick-n read-headers
-  5 drop-at
+  (parse-request-line)
 ] ;
 
 \\ Maximum number of bytes the server reads for a request body. A request whose
@@ -221,46 +231,69 @@ error-response: ( status reason message -- response ) [
   "text/plain; charset=utf-8" swap <response>
 ] ;
 
-\ Per-connection dispatch. Invoked by serve-loop with ( stream addr ) and the
-\ curried context ( server-host server-port user-handler ). Reads the wire
-\ request fields and the request body eagerly, populates the socket-derived
-\ fields from the addr and the server config, calls the user handler with
-\ ( stream request ), and closes the stream. The eager body read keeps the
-\ stream positioned at the next request regardless of what the handler does.
-(serve-dispatch): ( stream addr server-host server-port user-handler -- ) [
-  3 <rot-n             \ ( stream sh sp uh addr )
-  addr-host-port       \ ( stream sh sp uh rh rp )
-  5 pick-n             \ ( stream sh sp uh rh rp stream' )
-  (read-request-wire)  \ ( stream sh sp uh rh rp m p q v h )
-  dup (chunked-request?)
-  [            \ chunked body: reject with 411 and close; the eager read cannot frame it
-    10 drop-n  \ ( stream )
-    dup length-required send-response
-  ]
-  [ dup (body-too-large?)
-    [            \ over cap: reject with 413 and close; do not read the body or dispatch
-      10 drop-n  \ ( stream )
-      dup content-too-large send-response
+private{
+  \ Handle one request on a persistent connection. The bottom six items are the
+  \ connection context, shared across every request on the connection, and are
+  \ left intact for the next loop iteration; only the five wire fields on top are
+  \ consumed. Returns whether the connection should keep going: t after a normal
+  \ dispatch, f after a framing rejection that closes the connection.
+  (handle-request): ( stream sh sp uh rh rp m p q v h -- stream sh sp uh rh rp keep? ) [
+    dup (chunked-request?)
+    [           \ chunked body: reject with 411 and close; the eager read cannot frame it
+      5 drop-n  \ drop the wire fields, leaving the connection context
+      5 pick-n length-required send-response
+      f
     ]
-    [                                    \ within cap: read body eagerly, build request, dispatch; ends ( stream )
-      dup 11 pick-n (read-request-body)  \ append body
-      7 pick-n                           \ append rh
-      7 pick-n                           \ append rp
-      12 pick-n                          \ append sh
-      12 pick-n                          \ append sp
-      f "" ""                            \ TLS sentinels
-      make-request                       \ ( stream sh sp uh rh rp request )
-      1 drop-at                          \ drop rp
-      1 drop-at                          \ drop rh
-      2 drop-at                          \ drop sp
-      2 drop-at                          \ drop sh; stack now ( stream uh request )
-      swap                               \ ( stream request uh )
-      2keep                              \ user handler runs with ( stream request ); restored
-      drop                               \ ( stream )
+    [ dup (body-too-large?)
+      [  \ over cap: reject with 413 and close; do not read the body or dispatch
+        5 drop-n
+        5 pick-n content-too-large send-response
+        f
+      ]
+      [                                    \ within cap: read body eagerly, build request, dispatch
+        dup 11 pick-n (read-request-body)  \ append body
+        7 pick-n                           \ append rh
+        7 pick-n                           \ append rp
+        12 pick-n                          \ append sh
+        12 pick-n                          \ append sp
+        f "" ""                            \ TLS sentinels
+        make-request                       \ ( stream sh sp uh rh rp request )
+        6 pick-n swap 4 pick-n call        \ user handler runs with ( stream-copy request )
+        t
+      ]
+      if
     ]
     if
-  ]
-  if
+  ] ;
+
+  \ Persistent-connection read loop. Holds the connection context
+  \ ( stream server-host server-port user-handler remote-host remote-port ) across
+  \ requests and serves each in turn. Terminates and returns the stream when the
+  \ client closes at a request boundary (a non-throwing read of the next request
+  \ line yields f) or when a request is rejected for framing.
+  (serve-connection): ( stream sh sp uh rh rp -- stream ) [
+    5 pick-n stream-read-line  \ non-throwing next-request line
+    dup f =
+    [ drop 5 drop-n ]  \ clean close at a request boundary: ( stream )
+    [ 6 pick-n swap (parse-request-line)
+      (handle-request)
+      [ (serve-connection) ] [ 5 drop-n ] if
+    ]
+    if
+  ] ;
+}
+
+\ Per-connection dispatch. Invoked by serve-loop with ( stream addr ) and the
+\ curried context ( server-host server-port user-handler ). Computes the
+\ socket-derived remote address once, then loops through (serve-connection),
+\ serving each request on the connection and calling the user handler with
+\ ( stream request ). Closes the stream when the client closes at a request
+\ boundary. The eager body read in (handle-request) keeps the stream positioned
+\ at the next request regardless of what the handler does.
+(serve-dispatch): ( stream addr server-host server-port user-handler -- ) [
+  3 <rot-n            \ ( stream sh sp uh addr )
+  addr-host-port      \ ( stream sh sp uh rh rp )
+  (serve-connection)  \ ( stream )
   stream-close
 ] ;
 

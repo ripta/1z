@@ -437,6 +437,11 @@ port>> 9999 "serve config port" assert=
   "127.0.0.1" 3 pick-n make-addr:tcp connect
   dup "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "populated-fields status" assert=
+  \ Drain the full response before closing so the server's persistent-connection
+  \ loop reads a clean EOF at the next request boundary rather than a reset.
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line drop
+  dup 9 stream-read(exact) drop
   stream-close
 
   await drop
@@ -486,7 +491,8 @@ port>> 9999 "serve config port" assert=
   dup stream-read-line "HTTP/1.1 200 OK" "within cap status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
   dup stream-read-line "" "within cap blank" assert=
-  stream-read-line "alice" "within cap body echoes name" assert=
+  dup 5 stream-read(exact) bytes> "alice" "within cap body echoes name" assert=
+  stream-close
 
   await drop
   swap drop
@@ -508,6 +514,38 @@ port>> 9999 "serve config port" assert=
   "127.0.0.1" 3 pick-n make-addr:tcp connect
   dup "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 411 Length Required" "chunked request gets 411" assert=
+  stream-close
+
+  await drop
+  swap drop
+  close
+] task-scope
+
+"serve-connection: two requests on one connection" test-section
+[
+  39499
+  dup "127.0.0.1" swap make-addr:tcp 128 listen
+
+  dup [
+    accept
+    "127.0.0.1" 39499 [
+      path>> "text/plain; charset=utf-8" ok send-response
+    ] (serve-dispatch)
+  ] curry spawn
+
+  "127.0.0.1" 3 pick-n make-addr:tcp connect
+  dup "GET /one HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "first status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "first blank" assert=
+  dup 4 stream-read(exact) bytes> "/one" "first body" assert=
+
+  dup "GET /two HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
+  dup stream-read-line "HTTP/1.1 200 OK" "second status" assert=
+  dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
+  dup stream-read-line "" "second blank" assert=
+  dup 4 stream-read(exact) bytes> "/two" "second body" assert=
+
   stream-close
 
   await drop

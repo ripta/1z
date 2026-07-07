@@ -79,25 +79,30 @@ dup "/api/other" check-status "HTTP/1.1 200 OK" "prefix for non-exact" assert=
     build
     serve
   ] spawn
-  10 milliseconds sleep
+  100 milliseconds sleep
 
+  \ The server keeps each connection alive, so read the Content-Length-framed body
+  \ exactly and close the client to let the server's per-connection loop terminate.
   "127.0.0.1" 39350 make-addr:tcp connect
   dup "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "tcp exact status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
   dup stream-read-line "" "tcp exact blank" assert=
-  stream-read-line "healthy" "tcp exact body" assert=
+  dup 7 stream-read(exact) bytes> "healthy" "tcp exact body" assert=
+  stream-close
 
   "127.0.0.1" 39350 make-addr:tcp connect
   dup "GET /api/users HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
   dup stream-read-line "HTTP/1.1 200 OK" "tcp prefix status" assert=
   dup stream-read-line drop dup stream-read-line drop dup stream-read-line drop
   dup stream-read-line "" "tcp prefix blank" assert=
-  stream-read-line "api-response" "tcp prefix body" assert=
+  dup 12 stream-read(exact) bytes> "api-response" "tcp prefix body" assert=
+  stream-close
 
   "127.0.0.1" 39350 make-addr:tcp connect
   dup "GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n" stream-write drop
-  stream-read-line "HTTP/1.1 404 Not Found" "tcp 404 status" assert=
+  dup stream-read-line "HTTP/1.1 404 Not Found" "tcp 404 status" assert=
+  stream-close
 
   cancel-task
 ] task-scope

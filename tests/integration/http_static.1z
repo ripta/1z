@@ -52,7 +52,7 @@ use "time" ;
   dup read-headers
   dup "content-type" @get "application/octet-stream" "noext content-type" assert=
   "content-length" @get "14" "noext content-length" assert=
-  dup stream-read-line "binary content" "noext body" assert=
+  dup 14 stream-read(exact) bytes> "binary content" "noext body" assert=
   stream-close
 
   "serve-static: serves index.html for trailing-slash directory" test-section

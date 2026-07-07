@@ -419,3 +419,12 @@ Stack: [ ]
 Stack: [ ]
 PASS: chunked request gets 411
 Stack: [ ]
+=== serve-connection: two requests on one connection ===
+Stack: [ ]
+PASS: first status
+PASS: first blank
+PASS: first body
+PASS: second status
+PASS: second blank
+PASS: second body
+Stack: [ ]
