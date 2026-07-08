@@ -1,0 +1,5 @@
+=== concurrent-connections cap ===
+PASS: third handler has not started while both permits are held
+Stack: [ ]
+bounded
+Stack: [ ]

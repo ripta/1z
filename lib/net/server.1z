@@ -2,6 +2,7 @@
 
 use "net" ;
 use "net/tcp" ;
+use "semaphore" ;
 
 server-config: mutable struct{ host port backlog handler on-error } ;
 
@@ -18,22 +19,42 @@ start-server: ( config -- server ) [
   listen
 ] ;
 
+\\ Maximum number of connections the server handles simultaneously.
+\\
+\\ A permit is acquired before accepting each connection and released when that connection's handler
+\\ task finishes (success, error, or cancellation).
+\\
+\\ Bind it dynamically with `with-max-concurrent-connections`.
+max-concurrent-connections: parameter{ [ 256 ] } ;
+
+\\ Run `quot` with `max-concurrent-connections` bound to `count`.
+with-max-concurrent-connections: ( count quot -- ) [ max-concurrent-connections swap with-parameter ] ;
+
 private{
-  \\ Repeatedly accept connections and spawn one handler task per connection.
+  \\ Repeatedly accept connections and spawn one handler task per connection, bounded by the
+  \\ concurrent-connections semaphore.
+  \\
   \\ Must be called inside task-scope.
-  serve-loop: ( handler on-error server -- ) [
-    dup accept                        \ handler on-error server stream addr
-    4 pick-n curry curry              \ handler on-error server [stream addr handler...]
-    2 pick-n [ recover ] curry curry  \ handler on-error server [[stream addr handler...] on-error recover]
-    spawn-detached                    \ handler on-error server
+  serve-loop: ( sem handler on-error server -- ) [
+    3 pick-n acquire                  \ sem handler on-error server        (block for a permit)
+    dup accept                        \ sem handler on-error server stream addr
+    4 pick-n curry curry              \ sem handler on-error server [stream addr handler...]
+    2 pick-n [ recover ] curry curry  \ sem handler on-error server [[stream addr handler...] on-error recover]
+    4 pick-n [ release ] curry        \ sem handler on-error server [...recover] [sem release]
+    [ cleanup ] curry curry           \ sem handler on-error server [[...recover] [sem release] cleanup]
+    spawn-detached                    \ sem handler on-error server
     serve-loop
   ] ;
 }
 
-\ Run a server forever: start, then loop accepting connections.
-\ Each connection spawns a task that runs the handler with the stream
-\ and the peer address. Must be called inside task-scope.
+\\ Run a server forever: start, then loop accepting connections.
+\\
+\\ Each connections spawns a task that runs the handler with the stream and the peer address, bounded
+\\ by `max-concurrent-connections`.
+\\
+\\ Must be called inside task-scope.
 serve-forever: ( config -- ) [
+  max-concurrent-connections get <semaphore> swap
   dup handler>> swap
   dup on-error>> swap
   start-server

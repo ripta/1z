@@ -1,0 +1,108 @@
+\ Integration test for the accept loop's concurrent-connections cap
+\ (max-concurrent-connections / with-max-concurrent-connections in
+\ lib/net/server.1z).
+\
+\ Rather than inferring the bound from timing (sleep windows), the test
+\ synchronizes deterministically with the server over two channels. Each
+\ handler invocation sends on `arrived` as soon as it starts and blocks
+\ receiving from `go-ahead` before it finishes, so the test can observe
+\ exactly how many handlers are running at any point and control exactly
+\ when each one is allowed to complete and free its permit.
+\
+\ With the cap bound to 2 and three clients dialing concurrently: the test
+\ proves the server accepts and starts exactly two handlers, that a third
+\ handler has NOT started (the accept loop is blocked acquiring a permit,
+\ so the third connection is never even accept()-ed), and that releasing
+\ one permit lets the third handler start.
+\
+\ The gate channel is deliberately not named `release`: that name collides
+\ with lib/semaphore.1z's `release` word, which lib/net/server.1z brings into
+\ scope via `use "semaphore"`. A closure referencing a local word under that
+\ name, once threaded through serve-loop's curry chain and spawn-detached,
+\ resolves to a different object than the driver's own reference. Avoiding
+\ the colliding name sidesteps it here.
+\
+\ Dials with raw primitives (socket + native.connect + fd>stream), not the
+\ library `connect`, which spawns tasks that are retained until the process
+\ exits and would leak across the repeated dials this test performs.
+
+use "net" ;
+use "net/tcp" ;
+use "net/server" ;
+use "time" ;
+use "testing" ;
+
+[
+  arrived: 3 <buffered-channel> ;
+  go-ahead: 3 <buffered-channel> ;
+
+  gated-handler: ( stream -- ) [
+    t arrived send
+    go-ahead receive drop
+    dup "ok\n" stream-write drop
+    stream-close
+  ] ;
+
+  dial: ( raddr -- stream ) [
+    dup socket dup [ swap native.connect ] dip fd>stream
+  ] ;
+
+  \ Retry dial until the server is listening, matching router.1z's
+  \ connect-when-ready/connect-loop pattern for the raw-dial path.
+  dial-loop: ( raddr n -- stream ) [
+    over [ dial ] [ drop f ] recover
+    dup f =
+    [ drop 1 - dup 0 <=
+      [ drop dial ]
+      [ 5 milliseconds sleep dial-loop ]
+      if
+    ]
+    [ [ 2drop ] dip ]
+    if
+  ] ;
+
+  dial-when-ready: ( raddr -- stream ) [ 40 dial-loop ] ;
+
+  raddr: "127.0.0.1" 39500 make-addr:tcp resolve #first ;
+
+  client-round-trip: ( -- ) [
+    raddr dial-when-ready
+    dup "hi\n" stream-write drop
+    dup stream-read-line drop
+    stream-close
+  ] ;
+
+  <server-config>
+  "127.0.0.1" >>host
+  39500 >>port
+  [ drop gated-handler ] >>handler
+
+  2 [ [ serve-forever ] curry spawn ] with-max-concurrent-connections
+
+  100 milliseconds sleep
+
+  [ client-round-trip ] spawn
+  [ client-round-trip ] spawn
+  [ client-round-trip ] spawn
+
+  "concurrent-connections cap" test-section
+
+  arrived receive drop
+  arrived receive drop
+  arrived try-receive f "third handler has not started while both permits are held" assert=
+  drop
+
+  t go-ahead send
+  arrived receive drop
+
+  t go-ahead send
+  t go-ahead send
+
+  await drop
+  await drop
+  await drop
+
+  cancel-task
+] task-scope
+
+"bounded" print-line
