@@ -111,6 +111,16 @@ idle-connection-timeout: parameter{ [ 30 seconds ] } ;
 \\ Run `quot` with `idle-connection-timeout` bound to `duration`.
 with-idle-connection-timeout: ( duration quot -- ) [ idle-connection-timeout swap with-parameter ] ;
 
+\\ Maximum number of requests the server serves on one persistent connection.
+\\ When a dispatched request reaches this count, the loop forces close on that
+\\ response through the connection's disposition cell, so the client gets a
+\\ final answer and then must open a fresh connection. Bind it dynamically with
+\\ `with-requests-per-connection`.
+requests-per-connection: parameter{ [ 100 ] } ;
+
+\\ Run `quot` with `requests-per-connection` bound to `count`.
+with-requests-per-connection: ( count quot -- ) [ requests-per-connection swap with-parameter ] ;
+
 \\ Read the next request line under the idle-connection timeout.
 \\
 \\ Returns `option:none` on a clean close and, uniformly, on an idle timeout, so the
@@ -276,6 +286,28 @@ disable-keep-alive: ( -- ) [
   headers>> "connection" "" @get-or lowercase "close" =
 ] ;
 
+\\ Per-connection request-count cell bound by the server loop around the whole
+\\ connection. (bump-request-count-at-cap?) increments it once per dispatched
+\\ request. Unbound outside the server.
+connection-request-count: parameter{ [ f ] } ;
+
+\ Build a fresh per-connection request-count cell starting at zero.
+(make-request-count-cell): ( -- cell ) [ M{ } "count" 0 @set! ] ;
+
+\ Increment the bound request-count cell and report whether the connection has
+\ now reached the requests-per-connection cap. Unbound (outside the server)
+\ never reports at-cap, since there is no cap to enforce.
+(bump-request-count-at-cap?): ( -- at-cap? ) [
+  connection-request-count get
+  dup mutable-map?
+  [ dup "count" @get 1 +
+    [ "count" swap @set! drop ] keep
+    requests-per-connection get >=
+  ]
+  [ drop f ]
+  if
+] ;
+
 \\ Write a complete HTTP response to a stream.
 \\ Builds the full response as a single string and writes it in one call.
 \\ The emitted Connection header reflects the loop's disposition cell: a handler
@@ -362,17 +394,18 @@ private{
         5 pick-n content-too-large send-response
         f
       ]
-      [                                    \ within cap: read body eagerly, build request, dispatch
-        dup 11 pick-n (read-request-body)  \ append body
-        7 pick-n                           \ append rh
-        7 pick-n                           \ append rp
-        12 pick-n                          \ append sh
-        12 pick-n                          \ append sp
-        f "" ""                            \ TLS sentinels
-        make-request                       \ ( stream sh sp uh rh rp request )
-        6 pick-n swap 4 pick-n             \ ( ... stream-copy request handler )
-        1 pick-n (negotiate-keep-alive?)   \ ( ... stream-copy request handler keep? )
-        (dispatch-under-disposition)       \ ( ... keep-alive? )
+      [                                       \ within cap: read body eagerly, build request, dispatch
+        dup 11 pick-n (read-request-body)     \ append body
+        7 pick-n                              \ append rh
+        7 pick-n                              \ append rp
+        12 pick-n                             \ append sh
+        12 pick-n                             \ append sp
+        f "" ""                               \ TLS sentinels
+        make-request                          \ ( stream sh sp uh rh rp request )
+        6 pick-n swap 4 pick-n                \ ( ... stream-copy request handler )
+        1 pick-n (negotiate-keep-alive?)      \ ( ... stream-copy request handler keep? )
+        (bump-request-count-at-cap?) not and  \ fold the requests-per-connection cap into the seed
+        (dispatch-under-disposition)          \ ( ... keep-alive? )
       ]
       if
     ]
@@ -409,9 +442,9 @@ private{
 \ boundary. The eager body read in (handle-request) keeps the stream positioned
 \ at the next request regardless of what the handler does.
 (serve-dispatch): ( stream addr server-host server-port user-handler -- ) [
-  3 <rot-n            \ ( stream sh sp uh addr )
-  addr-host-port      \ ( stream sh sp uh rh rp )
-  (serve-connection)  \ ( stream )
+  3 <rot-n                                                                                  \ ( stream sh sp uh addr )
+  addr-host-port                                                                            \ ( stream sh sp uh rh rp )
+  (make-request-count-cell) connection-request-count [ (serve-connection) ] with-parameter  \ ( stream )
   stream-close
 ] ;
 

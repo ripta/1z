@@ -527,3 +527,24 @@ PASS: forced-close blank
 PASS: forced-close body
 PASS: connection closed after forced close
 Stack: [ ]
+=== bump-request-count-at-cap?: increments and reports the cap ===
+Stack: [ ]
+PASS: first request under cap
+PASS: second request at cap
+Stack: [ ]
+=== bump-request-count-at-cap?: unbound outside the server never reports at-cap ===
+Stack: [ ]
+PASS: unbound never at cap
+Stack: [ ]
+=== serve-connection: requests-per-connection cap forces a final close ===
+Stack: [ ]
+PASS: first status
+PASS: first under cap
+PASS: first blank
+PASS: first body
+PASS: second status
+PASS: second at cap
+PASS: second blank
+PASS: second body
+PASS: connection closed after cap
+Stack: [ ]
