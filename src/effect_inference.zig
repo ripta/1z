@@ -1519,7 +1519,7 @@ test "row-poly keep with insufficient stack falls through" {
         .action = .{ .native = dummy },
     });
 
-    // Body only pushes the quotation -- x comes from outer scope.
+    // Body only pushes the quotation. x comes from outer scope.
     // Stack model has only 1 entry but keep needs 2 concrete inputs.
     const drop_body: []const Instruction = &.{};
     const body: []const Instruction = &.{
@@ -1587,7 +1587,7 @@ test "row-poly keep with non-literal quotation falls through" {
         .action = .{ .native = dummy },
     });
 
-    // Both args come from runtime -- quotation arg is .other in stack model
+    // Both args come from runtime. Quotation arg is .other in stack model.
     const body: []const Instruction = &.{
         makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
         makeInstr(.{ .call_word = "get-quot" }),

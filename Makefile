@@ -31,6 +31,9 @@ integration-test: ## Run integration tests
 fmt-test: ## Run formatter tests
 	( time timeout $(TIMEOUT) zig build fmt-test )
 
+lint: ## Check src/ and lib/ comments for em-dash and prose double-dash usage
+	./scripts/lint-dashes.sh
+
 update-golden: ## Update integration test golden files
 	timeout $(TIMEOUT) zig build update-golden
 
