@@ -1,4 +1,4 @@
-\ Test for empty comments (Bug 2 fix)
+\ Test for empty comments
 \ Normal comment
 1 2 + .
 \

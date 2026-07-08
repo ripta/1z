@@ -32,7 +32,7 @@ split: ( str delim -- array ) [
       2dup #index-of dup not
       [ drop drop 1array ]
       [
-        \ str delim idx -- move delim to bottom
+        \ str delim idx   \ move delim to bottom
         [ swap ] dip  \ delim str idx
 
         \ Compute prefix = str[0..idx], guarding empty slice
