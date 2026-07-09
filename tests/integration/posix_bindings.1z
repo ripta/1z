@@ -1,0 +1,76 @@
+use "testing" ;
+use "posix" ;
+
+\ Exercises the libc bindings in lib/posix.1z: the errno-aware convention on real
+\ syscalls, thread-local errno isolation, and the per-binding sandbox gate.
+
+\ === succy calls ===
+"posix successful calls" test-section
+
+getpid 0 > "getpid returns a positive pid" assert-true
+getppid 0 > "getppid returns a positive pid" assert-true
+
+\ truncate on a real file exercises the success-through-neg1-sentinel path
+\ the sentinel is present but not hit, so no throw
+"tests/integration/_tmp_posix" create-directory
+"tests/integration/_tmp_posix/f.txt" write: stream-open
+dup "hello world" stream-write drop
+stream-close
+
+"tests/integration/_tmp_posix/f.txt" 0 truncate
+0 "truncate to zero succeeds" assert=
+
+\ === errno-returning failures ===
+"posix errno failures" test-section
+
+\ flock on a bad descriptor fails with EBADF
+[ -1 "LOCK_EX" posix-const flock ] [
+  dup error-type: @get posix-error: "flock on bad fd raises posix-error" assert=
+  dup data: @get name: @get ebadf: "flock errno name is ebadf" assert=
+  dup data: @get errno: @get fixnum? "raw errno integer reaches consumer" assert-true
+  message: @get #len 0 > "strerror message is non-empty" assert-true
+] recover
+
+\ truncate on a missing path fails with ENOENT.
+[ "/no/such/path/for/posix/test" 0 truncate ] [
+  dup error-type: @get posix-error: "truncate on missing path raises posix-error" assert=
+  data: @get name: @get enoent: "truncate errno name is enoent" assert=
+] recover
+
+\ === Thread-local errno isolation ===
+\ Each task triggers a distinct errno and reads back its own error name. The
+\ synchronous fetch inside ffi-call keeps one task's errno out of another's.
+"posix errno isolation under concurrent tasks" test-section
+
+[
+  [ [ -1 "LOCK_EX" posix-const flock ] [ data: @get name: @get ] recover ] spawn
+  [ [ "/no/such/path/for/posix/test" 0 truncate ] [ data: @get name: @get ] recover ] spawn
+  [ [ 2147483646 0 kill ] [ data: @get name: @get ] recover ] spawn
+  await esrch: "task 3 sees its own errno (esrch)" assert=
+  await enoent: "task 2 sees its own errno (enoent)" assert=
+  await ebadf: "task 1 sees its own errno (ebadf)" assert=
+] task-scope
+
+\ === Per-binding sandbox gate ===
+\ kill(getpid(), 0) sends no signal (signal 0 is an existence check), so the
+\ system-capability cases have no side effects.
+"posix per-binding sandbox gate" test-section
+
+\ io/fs grant allows the io/fs-capped truncate binding.
+sandbox{ io/fs } [ "tests/integration/_tmp_posix/f.txt" 0 truncate ] with-sandbox
+0 "io/fs grant allows truncate" assert=
+
+\ A system-capped binding is denied without a system grant.
+[ sandbox{ io/fs } [ getpid 0 kill ] with-sandbox ]
+"system-cap kill denied without system grant" assert-error
+
+\ system grant allows the system-capped kill binding.
+sandbox{ system } [ getpid 0 kill ] with-sandbox
+0 "system grant allows kill" assert=
+
+\ An io/fs-capped binding is denied without an io/fs grant.
+[ sandbox{ system } [ "tests/integration/_tmp_posix/f.txt" 0 truncate ] with-sandbox ]
+"io/fs-cap truncate denied without io/fs grant" assert-error
+
+"tests/integration/_tmp_posix/f.txt" delete-file
+"tests/integration/_tmp_posix" delete-directory

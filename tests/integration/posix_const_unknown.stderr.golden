@@ -1,1 +1,1 @@
-posix:5: error 'invalid-argument' unknown posix constant: NOT_A_CONSTANT at word 'native.posix-const'
+posix:7: error 'invalid-argument' unknown posix constant: NOT_A_CONSTANT at word 'native.posix-const'

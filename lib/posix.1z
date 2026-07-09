@@ -1,5 +1,62 @@
 \ lib/posix.1z - POSIX constant lookup and libc bindings
 
+use "ffi" ;
+
 \\ Look up a POSIX constant by name (e.g. "LOCK_EX", "O_CLOEXEC"),
 \\ returning the build target's std.posix value as a fixnum.
 posix-const: ( name -- value ) [ native.posix-const ] ;
+
+\ Bind the flat-signature POSIX functions against the system libc.
+\
+\ `getpid` and `getppid` are infallible.
+\
+\ Other bindings carries the errno-aware convention: on the failure sentinel it raises a
+\ `posix-error:` carrying the thread-local errno, and it is gated by sandbox capabilities.
+"c" lib-open ffi-def{
+  (flock):     "flock" H{ errno: neg1: cap: io/fs: } ffi{ i32 i32 -> i32 }
+  (kill):      "kill" H{ errno: neg1: cap: system: } ffi{ i32 i32 -> i32 }
+  (getpid):    "getpid" H{ cap: none: } ffi{ -> i32 }
+  (getppid):   "getppid" H{ cap: none: } ffi{ -> i32 }
+  (mprotect):  "mprotect" H{ errno: neg1: cap: system: } ffi{ ptr usize i32 -> i32 }
+  (madvise):   "madvise" H{ errno: neg1: cap: system: } ffi{ ptr usize i32 -> i32 }
+  (truncate):  "truncate" H{ errno: neg1: cap: io/fs: } ffi{ cstring i64 -> i32 }
+  (ftruncate): "ftruncate" H{ errno: neg1: cap: io/fs: } ffi{ i32 i64 -> i32 }
+} call "posix-raw" swap >module reexport
+
+\\ Apply or remove an advisory whole-file lock.
+\\
+\\ `op` combines LOCK_SH/LOCK_EX with optional LOCK_NB, or is LOCK_UN.
+\\
+\\ Throws `posix-error:` on failure.
+flock: ( fd op -- result ) [ (flock) ] ;
+
+\\ Send a signal to a process.
+\\
+\\ A `sig` of 0 checks for existence without sending. Throws `posix-error:` on failure.
+kill: ( pid sig -- result ) [ (kill) ] ;
+
+\\ Process id of the calling process.
+getpid: ( -- pid ) [ (getpid) ] ;
+
+\\ Process id of the parent of the calling process.
+getppid: ( -- pid ) [ (getppid) ] ;
+
+\\ Set the protection on a region of memory.
+\\
+\\ `prot` combines PROT_* flags. Throws `posix-error:` on failure.
+mprotect: ( addr len prot -- result ) [ (mprotect) ] ;
+
+\\ Advise the kernel about the expected access pattern of a memory region.
+\\
+\\ `advice` is a MADV_* value. Throws `posix-error:` on failure.
+madvise: ( addr len advice -- result ) [ (madvise) ] ;
+
+\\ Truncate a file, named by path, to a given length.
+\\
+\\ Throws `posix-error:` on failure.
+truncate: ( path len -- result ) [ (truncate) ] ;
+
+\\ Truncate a file, referenced by descriptor, to a given length.
+\\
+\\ Throws posix-error: on failure.
+ftruncate: ( fd len -- result ) [ (ftruncate) ] ;

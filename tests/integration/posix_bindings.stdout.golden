@@ -1,0 +1,45 @@
+=== posix successful calls ===
+Stack: [ ]
+PASS: getpid returns a positive pid
+Stack: [ ]
+PASS: getppid returns a positive pid
+Stack: [ ]
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_posix/f.txt write> ]
+Stack: [ <stream tests/integration/_tmp_posix/f.txt write> ]
+Stack: [ ]
+Stack: [ 0 ]
+PASS: truncate to zero succeeds
+Stack: [ ]
+=== posix errno failures ===
+Stack: [ ]
+PASS: flock on bad fd raises posix-error
+PASS: flock errno name is ebadf
+PASS: raw errno integer reaches consumer
+PASS: strerror message is non-empty
+Stack: [ ]
+PASS: truncate on missing path raises posix-error
+PASS: truncate errno name is enoent
+Stack: [ ]
+=== posix errno isolation under concurrent tasks ===
+Stack: [ ]
+PASS: task 3 sees its own errno (esrch)
+PASS: task 2 sees its own errno (enoent)
+PASS: task 1 sees its own errno (ebadf)
+Stack: [ ]
+=== posix per-binding sandbox gate ===
+Stack: [ ]
+Stack: [ 0 ]
+PASS: io/fs grant allows truncate
+Stack: [ ]
+Stack: [ [ sandbox{ io io/fs } [ getpid 0 kill ] with-sandbox ] ]
+PASS: system-cap kill denied without system grant
+Stack: [ ]
+Stack: [ 0 ]
+PASS: system grant allows kill
+Stack: [ ]
+Stack: [ [ sandbox{ system } [ "tests/integration/_tmp_posix/f.txt" 0 truncate ] with-sandbox ] ]
+PASS: io/fs-cap truncate denied without io/fs grant
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
