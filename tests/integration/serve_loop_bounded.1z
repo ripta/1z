@@ -18,9 +18,9 @@
 \
 \ The client dials with raw primitives (socket + native.connect + fd>stream)
 \ rather than the library `connect`. The library `connect` runs a Happy-Eyeballs
-\ race that spawns its own tasks per call, and those tasks leak until the process
-\ exits (see spec/bugs/20260705-connect-happy-eyeballs-task-leak.md). Using it
-\ here would leak on the client side and mask the server-side fix under test.
+\ race that spawns its own tasks per call, and those tasks currently leak until
+\ the process exits. Using it here would leak on the client side and mask the
+\ server-side fix under test.
 \
 \ NOTE: this is a fixed-port socket test, so it carries some inherent flakiness
 \ (port reuse, listen-before-connect timing). If it proves very flaky, it can be
