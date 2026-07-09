@@ -1,0 +1,5 @@
+\ Test that an unknown posix-const name surfaces as a parse-time error.
+
+use "posix" ;
+
+"NOT_A_CONSTANT" posix-const

@@ -1,0 +1,5 @@
+\ lib/posix.1z - POSIX constant lookup and libc bindings
+
+\\ Look up a POSIX constant by name (e.g. "LOCK_EX", "O_CLOEXEC"),
+\\ returning the build target's std.posix value as a fixnum.
+posix-const: ( name -- value ) [ native.posix-const ] ;

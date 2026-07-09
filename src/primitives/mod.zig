@@ -73,6 +73,7 @@ pub const signals = @import("signals.zig");
 pub const watchers = @import("watchers.zig");
 pub const packed_arrays = @import("packed.zig");
 pub const simd_vector = @import("simd_vector.zig");
+pub const posix = @import("posix.zig");
 
 // Sequence protocol
 pub const sequence = @import("sequence.zig");
@@ -163,6 +164,7 @@ pub const extracted_registry_entries = structs.registry_entries ++
     process.registry_entries ++
     hooks.registry_entries ++
     signals.registry_entries ++
+    posix.registry_entries ++
     misc.registry_entries ++
     packed_arrays.registry_entries ++
     simd_vector.registry_entries ++

@@ -1,0 +1,48 @@
+=== flock modes ===
+Stack: [ ]
+PASS: LOCK_SH is 1
+Stack: [ ]
+PASS: LOCK_EX is 2
+Stack: [ ]
+PASS: LOCK_NB is 4
+Stack: [ ]
+PASS: LOCK_UN is 8
+Stack: [ ]
+=== memory protection flags ===
+Stack: [ ]
+PASS: PROT_NONE is 0
+Stack: [ ]
+PASS: PROT_READ is 1
+Stack: [ ]
+PASS: PROT_WRITE is 2
+Stack: [ ]
+PASS: PROT_EXEC is 4
+Stack: [ ]
+=== memory advice ===
+Stack: [ ]
+PASS: MADV_NORMAL is 0
+Stack: [ ]
+PASS: MADV_WILLNEED is 3
+Stack: [ ]
+=== resource limits ===
+Stack: [ ]
+PASS: RLIMIT_CPU is 0
+Stack: [ ]
+PASS: RLIMIT_NOFILE is a fixnum
+Stack: [ ]
+=== clock ids ===
+Stack: [ ]
+PASS: CLOCK_REALTIME is a fixnum
+Stack: [ ]
+PASS: CLOCK_MONOTONIC is a fixnum
+Stack: [ ]
+=== open flags ===
+Stack: [ ]
+PASS: O_CLOEXEC is a positive bit value
+Stack: [ ]
+PASS: O_NONBLOCK is a positive bit value
+Stack: [ ]
+=== error handling ===
+Stack: [ ]
+PASS: unknown constant name throws
+Stack: [ ]

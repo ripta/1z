@@ -1,0 +1,40 @@
+use "testing" ;
+use "posix" ;
+
+"flock modes" test-section
+
+"LOCK_SH" posix-const 1 "LOCK_SH is 1" assert=
+"LOCK_EX" posix-const 2 "LOCK_EX is 2" assert=
+"LOCK_NB" posix-const 4 "LOCK_NB is 4" assert=
+"LOCK_UN" posix-const 8 "LOCK_UN is 8" assert=
+
+"memory protection flags" test-section
+
+"PROT_NONE" posix-const 0 "PROT_NONE is 0" assert=
+"PROT_READ" posix-const 1 "PROT_READ is 1" assert=
+"PROT_WRITE" posix-const 2 "PROT_WRITE is 2" assert=
+"PROT_EXEC" posix-const 4 "PROT_EXEC is 4" assert=
+
+"memory advice" test-section
+
+"MADV_NORMAL" posix-const 0 "MADV_NORMAL is 0" assert=
+"MADV_WILLNEED" posix-const 3 "MADV_WILLNEED is 3" assert=
+
+"resource limits" test-section
+
+"RLIMIT_CPU" posix-const 0 "RLIMIT_CPU is 0" assert=
+"RLIMIT_NOFILE" posix-const fixnum? "RLIMIT_NOFILE is a fixnum" assert-true
+
+"clock ids" test-section
+
+"CLOCK_REALTIME" posix-const fixnum? "CLOCK_REALTIME is a fixnum" assert-true
+"CLOCK_MONOTONIC" posix-const fixnum? "CLOCK_MONOTONIC is a fixnum" assert-true
+
+"open flags" test-section
+
+"O_CLOEXEC" posix-const 0 > "O_CLOEXEC is a positive bit value" assert-true
+"O_NONBLOCK" posix-const 0 > "O_NONBLOCK is a positive bit value" assert-true
+
+"error handling" test-section
+
+[ "NOT_A_CONSTANT" posix-const ] "unknown constant name throws" assert-error
