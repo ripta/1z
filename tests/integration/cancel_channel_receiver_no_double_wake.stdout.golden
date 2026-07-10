@@ -1,0 +1,6 @@
+=== cancel unwires a channel-blocked receiver ===
+Stack: [ ]
+PASS: buffered send survived the cancel
+Stack: [ ]
+done
+Stack: [ ]

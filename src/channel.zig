@@ -26,6 +26,42 @@ pub const Channel = struct {
         return ch;
     }
 
+    /// Remove `task`'s pending waiter entry (as receiver or sender) under the
+    /// channel mutex. Returns true if an entry was removed, meaning the task
+    /// was still genuinely blocked on this channel.
+    ///
+    /// A blocked sender's owning `value` reference is left in place: the sender
+    /// task releases it when it resumes and unwinds. This only drops the entry.
+    ///
+    /// Callers gate re-enqueue on the result. A false return means a concurrent
+    /// send or receive already woke the task, so re-enqueuing it would resume a
+    /// coroutine that is no longer suspended.
+    pub fn removeWaiter(self: *Channel, task: *Task) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        var removed = false;
+        var i: usize = 0;
+        while (i < self.waiting_receivers.items.len) {
+            if (self.waiting_receivers.items[i].task == task) {
+                _ = self.waiting_receivers.orderedRemove(i);
+                removed = true;
+            } else {
+                i += 1;
+            }
+        }
+        i = 0;
+        while (i < self.waiting_senders.items.len) {
+            if (self.waiting_senders.items[i].task == task) {
+                _ = self.waiting_senders.orderedRemove(i);
+                removed = true;
+            } else {
+                i += 1;
+            }
+        }
+        task.blocked_on_channel = null;
+        return removed;
+    }
+
     pub fn deinit(self: *Channel) void {
         // Release values the channel still owns at teardown: anything left in
         // the buffer (never received) and any sender that was abandoned while

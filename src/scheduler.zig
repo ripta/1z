@@ -906,8 +906,17 @@ pub const Scheduler = struct {
 
         task.setCancellationPhase(.pending);
 
-        if (task.blocked_on_channel != null) {
-            self.run_queue.append(self.allocator, task) catch {};
+        if (task.blocked_on_channel) |ch_ptr| {
+            // Unwire the task from the channel's waiter list before enqueuing,
+            // mirroring the io/process branches below. Leaving a stale entry
+            // lets a later send re-wake the task, enqueuing it a second time
+            // and resuming a coroutine that is no longer suspended. Enqueue
+            // only if the task was still parked; a false return means a
+            // concurrent send/receive already woke it.
+            const ch: *Channel = @ptrCast(@alignCast(ch_ptr));
+            if (ch.removeWaiter(task)) {
+                self.run_queue.append(self.allocator, task) catch {};
+            }
         } else if (task.blocked_on_io_fd) |fd| {
             if (self.io_wait_map.fetchRemove(fd)) |kv| {
                 self.multiplexer.unregister(fd, kv.value.event) catch {};

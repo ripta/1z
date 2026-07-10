@@ -1,0 +1,24 @@
+use "testing" ;
+use "time" ;
+
+\ Regression: cancelling a task blocked on a channel receive must remove it from
+\ the channel's waiter list. A stale waiter entry let a later send re-wake the
+\ task, enqueuing it a second time and resuming a coroutine that was no longer
+\ suspended ("attempt to resume a coroutine that is not suspended"), wedging the
+\ scheduler. This surfaced as an intermittent hang in the concurrent-connections
+\ server test, whose semaphore acquire blocks a receive that cancel-task tears
+\ down while handlers concurrently release permits.
+
+"cancel unwires a channel-blocked receiver" test-section
+
+[
+  ch: 1 <buffered-channel> ;
+  r: [ ch receive drop ] spawn ;
+  10 milliseconds sleep  \ let r park in ch.waiting_receivers
+  r cancel-task          \ must remove r from the channel's waiter list
+  ch t swap send         \ a later send must buffer, not re-wake the gone r
+  r await-terminal       \ r ends cancelled; no double-resume, no hang
+  ch receive t "buffered send survived the cancel" assert=
+] task-scope
+
+"done" print-line
