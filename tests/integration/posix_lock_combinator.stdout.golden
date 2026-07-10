@@ -1,0 +1,40 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== posix.flock combinator setup ===
+Stack: [ ]
+Stack: [ ]
+=== lock held during quotation ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> "tests/integration/_tmp_lockc.txt" ]
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> [ "tests/integration/_tmp_lockc.txt" (probe-lockable?) f "prober blocks while lock is held" assert= ] ]
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> exclusive: [ "tests/integration/_tmp_lockc.txt" (probe-lockable?) f "prober blocks while lock is held" assert= ] ]
+PASS: prober blocks while lock is held
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> ]
+Stack: [ ]
+=== lock released on normal exit ===
+Stack: [ ]
+Stack: [ t ]
+PASS: prober acquires after the combinator returns normally
+Stack: [ ]
+=== lock released on throw ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> <stream tests/integration/_tmp_lockc.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> [ <stream tests/integration/_tmp_lockc.txt read-write> exclusive: [ drop f "boom" EUserThrown make-error throw ] using-file-lock ] ]
+PASS: combinator re-throws the body error
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> ]
+Stack: [ ]
+Stack: [ t ]
+PASS: prober acquires after the combinator throws
+Stack: [ ]
+=== shared mode binds ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_lockc.txt read-write> ]
+Stack: [ ]
+Stack: [ t ]
+PASS: shared-mode combinator runs and releases
+Stack: [ ]
+Stack: [ ]
