@@ -1,0 +1,12 @@
+=== send-signal success ===
+Stack: [ ]
+Stack: [ ]
+PASS: send-signal WINCH: to self succeeds
+Stack: [ ]
+=== send-signal failure ===
+Stack: [ ]
+PASS: send-signal to missing pid raises posix-error
+PASS: send-signal errno name is esrch
+Stack: [ ]
+PASS: unknown signal name throws
+Stack: [ ]

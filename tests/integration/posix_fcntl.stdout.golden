@@ -1,0 +1,12 @@
+=== fcntl success ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_fcntl.txt write> ]
+PASS: F_GETFL returns non-negative status flags
+Stack: [ <stream tests/integration/_tmp_fcntl.txt write> ]
+Stack: [ ]
+Stack: [ ]
+=== fcntl failure ===
+Stack: [ ]
+PASS: fcntl on bad fd raises posix-error
+PASS: fcntl errno name is ebadf
+Stack: [ ]

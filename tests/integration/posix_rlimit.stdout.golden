@@ -1,0 +1,23 @@
+=== getrlimit success ===
+Stack: [ ]
+PASS: getrlimit hard limit is positive
+Stack: [ ]
+PASS: getrlimit soft limit is positive
+Stack: [ ]
+=== resource-limit wrapper ===
+Stack: [ ]
+PASS: resource-limit hard limit is positive
+Stack: [ ]
+PASS: resource-limit soft limit is positive
+Stack: [ ]
+=== setrlimit round-trip ===
+Stack: [ ]
+PASS: setrlimit returns 0 on success
+Stack: [ ]
+PASS: soft limit still positive after set-resource-limit
+Stack: [ ]
+=== getrlimit failure ===
+Stack: [ ]
+PASS: getrlimit on bad resource raises posix-error
+PASS: getrlimit errno name is einval
+Stack: [ ]

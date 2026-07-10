@@ -35,6 +35,25 @@ use "posix" ;
 "O_CLOEXEC" posix-const 0 > "O_CLOEXEC is a positive bit value" assert-true
 "O_NONBLOCK" posix-const 0 > "O_NONBLOCK is a positive bit value" assert-true
 
+"fcntl commands" test-section
+
+"F_DUPFD" posix-const 0 "F_DUPFD is 0" assert=
+"F_GETFD" posix-const 1 "F_GETFD is 1" assert=
+"F_SETFD" posix-const 2 "F_SETFD is 2" assert=
+"F_GETFL" posix-const 3 "F_GETFL is 3" assert=
+"F_SETFL" posix-const 4 "F_SETFL is 4" assert=
+
+"posix_fadvise advice (linux-only)" test-section
+
+\ On Linux this verifies the POSIX_FADV_* values; off Linux the constants are
+\ absent, so the branch trivially passes. Both branches leave the same boolean
+\ to keep the golden platform-independent. The Zig unit test covers the exact
+\ per-platform values.
+target-os choose{
+  linux: [ "POSIX_FADV_NORMAL" posix-const 0 = "POSIX_FADV_SEQUENTIAL" posix-const 2 = and ]
+  _ [ t ]
+} "POSIX_FADV_* resolves on Linux (skipped elsewhere)" assert-true
+
 "error handling" test-section
 
 [ "NOT_A_CONSTANT" posix-const ] "unknown constant name throws" assert-error

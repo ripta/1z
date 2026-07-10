@@ -21,6 +21,10 @@ posix-const: ( name -- value ) [ native.posix-const ] ;
   (madvise):   "madvise" H{ errno: neg1: cap: system: } ffi{ ptr usize i32 -> i32 }
   (truncate):  "truncate" H{ errno: neg1: cap: io/fs: } ffi{ cstring i64 -> i32 }
   (ftruncate): "ftruncate" H{ errno: neg1: cap: io/fs: } ffi{ i32 i64 -> i32 }
+  (getrlimit): "getrlimit" H{ errno: neg1: cap: system: } ffi{ i32 ptr -> i32 }
+  (setrlimit): "setrlimit" H{ errno: neg1: cap: system: } ffi{ i32 ptr -> i32 }
+  (clock_gettime): "clock_gettime" H{ errno: neg1: cap: none: } ffi{ i32 ptr -> i32 }
+  (fcntl): "fcntl" H{ errno: neg1: cap: io/fs: } ffi{ i32 i32 ... -> i32 }
 } call "posix-raw" swap >module reexport
 
 \\ Apply or remove an advisory whole-file lock.
@@ -60,3 +64,140 @@ truncate: ( path len -- result ) [ (truncate) ] ;
 \\
 \\ Throws posix-error: on failure.
 ftruncate: ( fd len -- result ) [ (ftruncate) ] ;
+
+\ Marshal two u64 fields (lo at offset 0, hi at offset 8) into a fresh
+\ 16-byte buffer, mutating it in place, and leave just the buffer.
+(pair>buf): ( lo hi -- buf ) [
+  16 bytes-alloc
+  dup 0 4 pick-n 8 #poke! drop
+  dup 8 3 pick-n 8 #poke! drop
+  [ 2drop ] dip
+] ;
+
+\\ Read a resource limit into its soft and hard values.
+\\
+\\ `resource` is a RLIMIT_* value. Throws `posix-error:` on failure.
+getrlimit: ( resource -- soft hard ) [
+  16 bytes-alloc
+  bytes>ffi-ptr
+  swap
+  [ (getrlimit) drop ] dip
+  dup 0 8 #peek
+  swap 8 8 #peek
+] ;
+
+\\ Set a resource limit from its soft and hard values.
+\\
+\\ `resource` is a RLIMIT_* value. Throws `posix-error:` on failure.
+setrlimit: ( resource soft hard -- result ) [
+  (pair>buf)
+  bytes>ffi-ptr
+  swap
+  [ (setrlimit) ] dip
+  drop
+] ;
+
+\\ Read a clock into its seconds and nanoseconds.
+\\
+\\ `clock-id` is a CLOCK_* value. Throws `posix-error:` on failure.
+clock_gettime: ( clock-id -- sec nsec ) [
+  16 bytes-alloc
+  bytes>ffi-ptr
+  swap
+  [ (clock_gettime) drop ] dip
+  dup 0 8 #peek
+  swap 8 8 #peek
+] ;
+
+\\ Perform a file-descriptor control operation.
+\\
+\\ `cmd` is an F_* value; `arg` is its integer argument. `fcntl` is variadic in
+\\ C, so `arg` is passed through the variadic calling convention. Throws
+\\ `posix-error:` on failure.
+fcntl: ( fd cmd arg -- result ) [ 1array (fcntl) ] ;
+
+\ posix_fadvise is Linux-only. std.posix has no Darwin binding, and the C
+\ symbol is absent from macOS libc, so the binding and wrapper are selected at
+\ parse time and never reach a macOS build.
+target-os choose{
+  linux: [
+    "c" lib-open ffi-def{
+      (posix_fadvise): "posix_fadvise" H{ cap: io/fs: } ffi{ i32 i64 i64 i32 -> i32 }
+    } call "posix-fadvise-raw" swap >module reexport
+
+    \\ Advise the kernel about the expected access pattern of a file region.
+    \\
+    \\ `advice` is a POSIX_FADV_* value. posix_fadvise reports failure by
+    \\ returning the error number directly, so the raw return reaches the caller
+    \\ rather than raising `posix-error:`. Linux-only.
+    posix_fadvise: ( fd offset len advice -- result ) [ (posix_fadvise) ] ;
+  ]
+  _ [ ]
+}
+
+\ Map a lock-file mode symbol to its LOCK_* operation.
+(mode->lock-op): ( mode -- op ) [
+  dup exclusive: = [ drop "LOCK_EX" posix-const ] [
+    dup shared: = [ drop "LOCK_SH" posix-const ] [
+      f "lock-file mode must be exclusive: or shared:" EInvalidArgument make-error throw
+    ] if
+  ] if
+] ;
+
+\\ Acquire an advisory whole-file lock on a stream.
+\\
+\\ `mode` is `exclusive:` or `shared:`. Blocks until the lock is available.
+\\ Throws `posix-error:` on failure, or EInvalidArgument on an unknown mode.
+lock-file: ( stream mode -- ) [
+  (mode->lock-op)
+  swap stream>fd swap
+  flock drop
+] ;
+
+\\ Send a named signal to a process.
+\\
+\\ `signal` is a bare signal-name symbol (`TERM:`, `INT:`, `HUP:`, ...). A
+\\ `pid` of the current process with signal 0 checks existence. Throws
+\\ `posix-error:` on failure.
+send-signal: ( pid signal -- ) [
+  >string native.signal-number
+  kill drop
+] ;
+
+\ Map a resource-limit kind symbol to its RLIMIT_* value.
+(resource->rlimit): ( kind -- resource ) [
+  dup cpu: = [ drop "RLIMIT_CPU" ] [
+    dup fsize: = [ drop "RLIMIT_FSIZE" ] [
+      dup data: = [ drop "RLIMIT_DATA" ] [
+        dup stack: = [ drop "RLIMIT_STACK" ] [
+          dup core: = [ drop "RLIMIT_CORE" ] [
+            dup nofile: = [ drop "RLIMIT_NOFILE" ] [
+              dup as: = [ drop "RLIMIT_AS" ] [
+                dup memlock: = [ drop "RLIMIT_MEMLOCK" ] [
+                  dup nproc: = [ drop "RLIMIT_NPROC" ] [
+                    f "unknown resource limit kind" EInvalidArgument make-error throw
+                  ] if
+                ] if
+              ] if
+            ] if
+          ] if
+        ] if
+      ] if
+    ] if
+  ] if
+  posix-const
+] ;
+
+\\ Read a resource limit by kind symbol.
+\\
+\\ `kind` is a symbol like `cpu:`, `nofile:`, or `as:`. Throws `posix-error:`
+\\ on failure.
+resource-limit: ( kind -- soft hard ) [ (resource->rlimit) getrlimit ] ;
+
+\\ Set a resource limit by kind symbol.
+\\
+\\ `kind` is a symbol like `cpu:`, `nofile:`, or `as:`. Throws `posix-error:`
+\\ on failure.
+set-resource-limit: ( kind soft hard -- ) [
+  [ (resource->rlimit) ] 2dip setrlimit drop
+] ;

@@ -22,6 +22,32 @@ fn nativePosixConst(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "posix-const");
     const name = try helpers.popString(ctx);
 
+    // POSIX_FADV_* exist only on Linux. On macOS std.posix.POSIX_FADV aliases
+    // the Solaris definition, which is comptime-guarded against use on the
+    // wrong OS, so referencing it there is a hard compile error. native_os is
+    // comptime-known, so this branch is pruned from analysis on non-Linux
+    // targets and never references std.posix.POSIX_FADV.
+    if (native_os == .linux) {
+        const fadv: ?i64 = if (std.mem.eql(u8, name, "POSIX_FADV_NORMAL"))
+            std.posix.POSIX_FADV.NORMAL
+        else if (std.mem.eql(u8, name, "POSIX_FADV_RANDOM"))
+            std.posix.POSIX_FADV.RANDOM
+        else if (std.mem.eql(u8, name, "POSIX_FADV_SEQUENTIAL"))
+            std.posix.POSIX_FADV.SEQUENTIAL
+        else if (std.mem.eql(u8, name, "POSIX_FADV_WILLNEED"))
+            std.posix.POSIX_FADV.WILLNEED
+        else if (std.mem.eql(u8, name, "POSIX_FADV_DONTNEED"))
+            std.posix.POSIX_FADV.DONTNEED
+        else if (std.mem.eql(u8, name, "POSIX_FADV_NOREUSE"))
+            std.posix.POSIX_FADV.NOREUSE
+        else
+            null;
+        if (fadv) |v| {
+            try ctx.stack.push(.{ .fixnum = v });
+            return;
+        }
+    }
+
     const val: i64 = if (std.mem.eql(u8, name, "LOCK_SH"))
         std.posix.LOCK.SH
     else if (std.mem.eql(u8, name, "LOCK_EX"))
@@ -76,6 +102,16 @@ fn nativePosixConst(ctx: *Context) anyerror!void {
         @intCast(@as(u32, @bitCast(std.posix.O{ .CLOEXEC = true })))
     else if (std.mem.eql(u8, name, "O_NONBLOCK"))
         @intCast(@as(u32, @bitCast(std.posix.O{ .NONBLOCK = true })))
+    else if (std.mem.eql(u8, name, "F_DUPFD"))
+        std.posix.F.DUPFD
+    else if (std.mem.eql(u8, name, "F_GETFD"))
+        std.posix.F.GETFD
+    else if (std.mem.eql(u8, name, "F_SETFD"))
+        std.posix.F.SETFD
+    else if (std.mem.eql(u8, name, "F_GETFL"))
+        std.posix.F.GETFL
+    else if (std.mem.eql(u8, name, "F_SETFL"))
+        std.posix.F.SETFL
     else {
         helpers.setErrorContext(ctx, "unknown posix constant: {s}", .{name});
         return error.InvalidArgument;
@@ -190,6 +226,40 @@ test "posix-const resolves open flags via bit extraction" {
     try testing.expectEqual(
         @as(i64, @as(u32, @bitCast(std.posix.O{ .NONBLOCK = true }))),
         try constOf("O_NONBLOCK"),
+    );
+}
+
+test "posix-const resolves fcntl commands" {
+    if (is_freestanding) return error.SkipZigTest;
+
+    // F_DUPFD/GETFD/SETFD/GETFL/SETFL are the portable 0..4 fcntl commands
+    // per fcntl.h, identical on Linux and macOS.
+    try testing.expectEqual(@as(i64, 0), try constOf("F_DUPFD"));
+    try testing.expectEqual(@as(i64, 1), try constOf("F_GETFD"));
+    try testing.expectEqual(@as(i64, 2), try constOf("F_SETFD"));
+    try testing.expectEqual(@as(i64, 3), try constOf("F_GETFL"));
+    try testing.expectEqual(@as(i64, 4), try constOf("F_SETFL"));
+}
+
+test "posix-const resolves posix_fadvise advice on Linux" {
+    if (is_freestanding) return error.SkipZigTest;
+    // POSIX_FADV_* is Linux-only; on other targets the names are unknown.
+    if (native_os != .linux) {
+        try testing.expectError(error.InvalidArgument, constOf("POSIX_FADV_NORMAL"));
+        return;
+    }
+
+    try testing.expectEqual(@as(i64, 0), try constOf("POSIX_FADV_NORMAL"));
+    try testing.expectEqual(@as(i64, 1), try constOf("POSIX_FADV_RANDOM"));
+    try testing.expectEqual(@as(i64, 2), try constOf("POSIX_FADV_SEQUENTIAL"));
+    try testing.expectEqual(@as(i64, 3), try constOf("POSIX_FADV_WILLNEED"));
+    try testing.expectEqual(
+        @as(i64, @intCast(std.posix.POSIX_FADV.DONTNEED)),
+        try constOf("POSIX_FADV_DONTNEED"),
+    );
+    try testing.expectEqual(
+        @as(i64, @intCast(std.posix.POSIX_FADV.NOREUSE)),
+        try constOf("POSIX_FADV_NOREUSE"),
     );
 }
 

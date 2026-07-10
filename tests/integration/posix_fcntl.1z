@@ -1,0 +1,20 @@
+use "testing" ;
+use "posix" ;
+
+\ Exercises the variadic fcntl binding. The returned status flags vary by
+\ platform, so they are consumed within their line.
+
+"fcntl success" test-section
+
+"tests/integration/_tmp_fcntl.txt" write: stream-open
+dup stream>fd "F_GETFL" posix-const 0 fcntl 0 >= "F_GETFL returns non-negative status flags" assert-true
+stream-close
+"tests/integration/_tmp_fcntl.txt" delete-file
+
+"fcntl failure" test-section
+
+\ F_GETFL on a bad descriptor fails with EBADF.
+[ -1 "F_GETFL" posix-const 0 fcntl ] [
+  dup error-type: @get posix-error: "fcntl on bad fd raises posix-error" assert=
+  data: @get name: @get ebadf: "fcntl errno name is ebadf" assert=
+] recover

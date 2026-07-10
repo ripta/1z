@@ -1,0 +1,18 @@
+use "testing" ;
+use "posix" ;
+
+\ Exercises the struct-marshalled clock_gettime binding. The live clock values
+\ are consumed within each line so they never reach the shown-stack output.
+
+"clock_gettime success" test-section
+
+"CLOCK_REALTIME" posix-const clock_gettime nip dup 0 >= swap 1000000000 < and "nanoseconds are within a second" assert-true
+"CLOCK_REALTIME" posix-const clock_gettime drop 0 > "seconds are positive" assert-true
+
+"clock_gettime failure" test-section
+
+\ An unknown clock id fails with EINVAL.
+[ 9999 clock_gettime ] [
+  dup error-type: @get posix-error: "clock_gettime on bad clock raises posix-error" assert=
+  data: @get name: @get einval: "clock_gettime errno name is einval" assert=
+] recover

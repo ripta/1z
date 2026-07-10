@@ -1,0 +1,30 @@
+use "testing" ;
+use "posix" ;
+
+\ Exercises the struct-marshalled rlimit bindings and their symbol wrappers.
+\ The raw limit values vary by platform, so each is consumed within its line to
+\ keep the shown-stack output platform-independent.
+
+"getrlimit success" test-section
+
+"RLIMIT_NOFILE" posix-const getrlimit nip 0 > "getrlimit hard limit is positive" assert-true
+"RLIMIT_NOFILE" posix-const getrlimit drop 0 > "getrlimit soft limit is positive" assert-true
+
+"resource-limit wrapper" test-section
+
+nofile: resource-limit nip 0 > "resource-limit hard limit is positive" assert-true
+nofile: resource-limit drop 0 > "resource-limit soft limit is positive" assert-true
+
+"setrlimit round-trip" test-section
+
+\ Read the current limits and write them straight back unchanged.
+"RLIMIT_NOFILE" posix-const dup getrlimit setrlimit 0 = "setrlimit returns 0 on success" assert-true
+nofile: nofile: resource-limit set-resource-limit nofile: resource-limit drop 0 > "soft limit still positive after set-resource-limit" assert-true
+
+"getrlimit failure" test-section
+
+\ An out-of-range resource kind fails with EINVAL.
+[ 9999 getrlimit ] [
+  dup error-type: @get posix-error: "getrlimit on bad resource raises posix-error" assert=
+  data: @get name: @get einval: "getrlimit errno name is einval" assert=
+] recover

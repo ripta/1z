@@ -42,6 +42,22 @@ PASS: O_CLOEXEC is a positive bit value
 Stack: [ ]
 PASS: O_NONBLOCK is a positive bit value
 Stack: [ ]
+=== fcntl commands ===
+Stack: [ ]
+PASS: F_DUPFD is 0
+Stack: [ ]
+PASS: F_GETFD is 1
+Stack: [ ]
+PASS: F_SETFD is 2
+Stack: [ ]
+PASS: F_GETFL is 3
+Stack: [ ]
+PASS: F_SETFL is 4
+Stack: [ ]
+=== posix_fadvise advice (linux-only) ===
+Stack: [ ]
+PASS: POSIX_FADV_* resolves on Linux (skipped elsewhere)
+Stack: [ ]
 === error handling ===
 Stack: [ ]
 PASS: unknown constant name throws

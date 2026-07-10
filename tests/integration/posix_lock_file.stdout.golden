@@ -1,0 +1,15 @@
+=== lock-file success ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_lock.txt write> ]
+Stack: [ <stream tests/integration/_tmp_lock.txt write> ]
+PASS: exclusive lock acquired without error
+Stack: [ <stream tests/integration/_tmp_lock.txt write> ]
+Stack: [ <stream tests/integration/_tmp_lock.txt write> ]
+PASS: same-fd re-lock to shared succeeds
+Stack: [ <stream tests/integration/_tmp_lock.txt write> ]
+Stack: [ ]
+Stack: [ ]
+=== lock-file failure ===
+Stack: [ ]
+PASS: unknown lock mode throws
+Stack: [ ]

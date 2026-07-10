@@ -1,0 +1,25 @@
+use "testing" ;
+use "posix" ;
+
+\ posix_fadvise is Linux-only, selected at parse time. On Linux each branch runs
+\ a real success or failure check; on other platforms the word is absent, so the
+\ check is trivially satisfied. Either way the choose leaves the same boolean, so
+\ the golden output is platform-independent.
+
+"posix_fadvise success" test-section
+target-os choose{
+  linux: [
+    "tests/integration/_tmp_fadv.txt" write: stream-open
+    dup "hello world" stream-write drop
+    dup stream>fd 0 0 "POSIX_FADV_NORMAL" posix-const posix_fadvise 0 =
+    swap stream-close
+    "tests/integration/_tmp_fadv.txt" delete-file
+  ]
+  _ [ t ]
+} "posix_fadvise on a valid fd returns 0 (linux-only; skipped elsewhere)" assert-true
+
+"posix_fadvise failure" test-section
+target-os choose{
+  linux: [ -1 0 0 "POSIX_FADV_NORMAL" posix-const posix_fadvise 0 > ]
+  _ [ t ]
+} "posix_fadvise on a bad fd returns a positive errno (linux-only; skipped elsewhere)" assert-true

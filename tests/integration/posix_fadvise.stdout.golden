@@ -1,0 +1,8 @@
+=== posix_fadvise success ===
+Stack: [ ]
+PASS: posix_fadvise on a valid fd returns 0 (linux-only; skipped elsewhere)
+Stack: [ ]
+=== posix_fadvise failure ===
+Stack: [ ]
+PASS: posix_fadvise on a bad fd returns a positive errno (linux-only; skipped elsewhere)
+Stack: [ ]

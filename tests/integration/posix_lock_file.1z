@@ -1,0 +1,20 @@
+use "testing" ;
+use "posix" ;
+
+\ Exercises the lock-file wrapper over posix.flock.
+
+"lock-file success" test-section
+
+"tests/integration/_tmp_lock.txt" write: stream-open  \ stream
+dup exclusive: lock-file
+t "exclusive lock acquired without error" assert-true
+dup shared: lock-file
+t "same-fd re-lock to shared succeeds" assert-true
+stream-close
+"tests/integration/_tmp_lock.txt" delete-file
+
+"lock-file failure" test-section
+
+\ The mode dispatch throws before touching the stream, so a non-stream
+\ argument is never read.
+[ f bogus: lock-file ] "unknown lock mode throws" assert-error

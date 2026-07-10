@@ -1,0 +1,11 @@
+=== clock_gettime success ===
+Stack: [ ]
+PASS: nanoseconds are within a second
+Stack: [ ]
+PASS: seconds are positive
+Stack: [ ]
+=== clock_gettime failure ===
+Stack: [ ]
+PASS: clock_gettime on bad clock raises posix-error
+PASS: clock_gettime errno name is einval
+Stack: [ ]

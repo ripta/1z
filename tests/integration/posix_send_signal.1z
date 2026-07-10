@@ -1,0 +1,21 @@
+use "testing" ;
+use "posix" ;
+
+\ Exercises the send-signal wrapper over posix.kill.
+
+"send-signal success" test-section
+
+\ SIGWINCH is ignored by default, so sending it to ourselves is harmless.
+getpid WINCH: send-signal
+t "send-signal WINCH: to self succeeds" assert-true
+
+"send-signal failure" test-section
+
+\ Signalling a non-existent process fails with ESRCH.
+[ 2147483646 TERM: send-signal ] [
+  dup error-type: @get posix-error: "send-signal to missing pid raises posix-error" assert=
+  data: @get name: @get esrch: "send-signal errno name is esrch" assert=
+] recover
+
+\ An unknown signal name is rejected before any syscall.
+[ getpid NOTASIGNAL: send-signal ] "unknown signal name throws" assert-error
