@@ -681,6 +681,96 @@ test "sampleCounts: sums live, retained, and detached across workers" {
     try std.testing.expectEqual(counts.detached, again.detached);
 }
 
+test "sampler snapshot: a retaining workload climbs monotonically" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 1);
+    defer pool.deinit();
+
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    mem_limit.setPeakTracking(true);
+    pool.mem_limit = &mem_limit;
+    pool.sample_tasks = true;
+    pool.sample_memory = true;
+    const mem_alloc = mem_limit.allocator();
+
+    // A long-lived scope that keeps spawning tracked children which complete but
+    // are never reaped: each completed child stays in finished_tasks and its
+    // allocation stays live, so retained and live bytes climb every tick.
+    var live_chunks = std.ArrayListUnmanaged([]u8){};
+    defer {
+        for (live_chunks.items) |chunk| mem_alloc.free(chunk);
+        live_chunks.deinit(std.testing.allocator);
+    }
+    const sched = &pool.workers[0].scheduler;
+    // finished_tasks holds dummy pointers counted only by length; clear before
+    // deinit so the reap loop never dereferences them.
+    defer sched.finished_tasks.clearRetainingCapacity();
+
+    var prev = pool.sampleCounts();
+    var prev_bytes: usize = mem_limit.currentBytes();
+    const first_retained = prev.retained;
+    const first_bytes = prev_bytes;
+
+    var i: usize = 0;
+    while (i < 5) : (i += 1) {
+        const dummy: *Task = @ptrFromInt(0x1000 * (i + 1));
+        try sched.finished_tasks.append(std.testing.allocator, dummy);
+        try live_chunks.append(std.testing.allocator, try mem_alloc.alloc(u8, 4096));
+
+        const counts = pool.sampleCounts();
+        const bytes = mem_limit.currentBytes();
+        try std.testing.expect(counts.retained > prev.retained);
+        try std.testing.expect(bytes > prev_bytes);
+        try std.testing.expect(mem_limit.peakBytes() >= bytes);
+        prev = counts;
+        prev_bytes = bytes;
+    }
+
+    // The leak signal: the last sample is strictly larger than the first.
+    try std.testing.expect(prev.retained > first_retained);
+    try std.testing.expect(prev_bytes > first_bytes);
+}
+
+test "sampler snapshot: a bounded workload stays flat" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 1);
+    defer pool.deinit();
+
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    mem_limit.setPeakTracking(true);
+    pool.mem_limit = &mem_limit;
+    pool.sample_tasks = true;
+    pool.sample_memory = true;
+    const mem_alloc = mem_limit.allocator();
+
+    // One retained task and one persistent buffer stand in for a bounded
+    // workload at rest.
+    const sched = &pool.workers[0].scheduler;
+    const persistent: *Task = @ptrFromInt(0x1000);
+    try sched.finished_tasks.append(std.testing.allocator, persistent);
+    defer sched.finished_tasks.clearRetainingCapacity();
+    const persistent_buf = try mem_alloc.alloc(u8, 4096);
+    defer mem_alloc.free(persistent_buf);
+
+    const base = pool.sampleCounts();
+    const base_bytes = mem_limit.currentBytes();
+
+    // Each tick spawns and reaps: transient work that nets to zero, so every
+    // sample reads the same steady state instead of accumulating.
+    var i: usize = 0;
+    while (i < 5) : (i += 1) {
+        const transient: *Task = @ptrFromInt(0x2000);
+        try sched.finished_tasks.append(std.testing.allocator, transient);
+        _ = sched.finished_tasks.swapRemove(sched.finished_tasks.items.len - 1);
+        const chunk = try mem_alloc.alloc(u8, 8192);
+        mem_alloc.free(chunk);
+
+        const counts = pool.sampleCounts();
+        try std.testing.expectEqual(base.retained, counts.retained);
+        try std.testing.expectEqual(base_bytes, mem_limit.currentBytes());
+    }
+}
+
 test "claimSampleTick: elects one winner and re-arms past now" {
     var pool: WorkerPool = undefined;
     try pool.init(std.testing.allocator, 1);
