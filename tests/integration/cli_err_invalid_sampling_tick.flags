@@ -1,0 +1,4 @@
+@raw
+run
+--sampling-tick=abc
+{file}

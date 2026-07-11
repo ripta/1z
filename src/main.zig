@@ -459,6 +459,11 @@ fn parseExecutionFlag(
         state.trace_config.sample_memory = true;
         return .consumed;
     }
+    if (std.mem.eql(u8, arg, "--sampling-tick")) {
+        err_writer.print("Error: --sampling-tick requires a value (e.g. --sampling-tick=1000ms)\n", .{}) catch {};
+        err_writer.flush() catch {};
+        return error.InvalidFlagValue;
+    }
     if (std.mem.startsWith(u8, arg, "--sampling-tick=")) {
         const value = arg["--sampling-tick=".len..];
         state.trace_config.sampling_tick_ns = parseSamplingTick(value) orelse {
@@ -4305,6 +4310,72 @@ test "writeVersion emits '1z <version>\\n'" {
     try writeVersion(fbs.writer());
     const expected = "1z " ++ version ++ "\n";
     try std.testing.expectEqualStrings(expected, fbs.getWritten());
+}
+
+test "parseSamplingTick: bare seconds and ms suffix" {
+    try std.testing.expectEqual(@as(?i128, 2 * std.time.ns_per_s), parseSamplingTick("2"));
+    try std.testing.expectEqual(@as(?i128, 0), parseSamplingTick("0"));
+    try std.testing.expectEqual(@as(?i128, 500 * std.time.ns_per_ms), parseSamplingTick("500ms"));
+    try std.testing.expectEqual(@as(?i128, std.time.ns_per_s), parseSamplingTick("1000ms"));
+}
+
+test "parseSamplingTick: malformed input returns null" {
+    try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("abc"));
+    try std.testing.expectEqual(@as(?i128, null), parseSamplingTick(""));
+    try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("ms"));
+    try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("5x"));
+    try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("1.5"));
+    try std.testing.expectEqual(@as(?i128, null), parseSamplingTick("-1"));
+}
+
+test "parseExecutionFlag: sample axes and sampling-tick" {
+    var buf: [256]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectEqual(FlagParseResult.consumed, try parseExecutionFlag("--sample-tasks", &state, &w));
+        try std.testing.expect(state.trace_config.sample_tasks);
+        try std.testing.expect(!state.trace_config.sample_memory);
+        try std.testing.expectEqual(@as(?i128, null), state.trace_config.sampling_tick_ns);
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectEqual(FlagParseResult.consumed, try parseExecutionFlag("--sample-memory", &state, &w));
+        try std.testing.expect(state.trace_config.sample_memory);
+        try std.testing.expect(!state.trace_config.sample_tasks);
+    }
+
+    {
+        // A tick with neither axis enabled parses fine and stays a no-op: the
+        // interval is recorded but both axes remain off.
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectEqual(FlagParseResult.consumed, try parseExecutionFlag("--sampling-tick=250ms", &state, &w));
+        try std.testing.expectEqual(@as(?i128, 250 * std.time.ns_per_ms), state.trace_config.sampling_tick_ns);
+        try std.testing.expect(!state.trace_config.sample_tasks);
+        try std.testing.expect(!state.trace_config.sample_memory);
+    }
+}
+
+test "parseExecutionFlag: malformed and missing sampling-tick value" {
+    var buf: [256]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--sampling-tick=abc", &state, &w));
+        try std.testing.expectEqualStrings("Error: invalid value for --sampling-tick: 'abc'\n", w.buffered());
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--sampling-tick", &state, &w));
+        try std.testing.expectEqualStrings("Error: --sampling-tick requires a value (e.g. --sampling-tick=1000ms)\n", w.buffered());
+    }
 }
 
 test "parseAotMetadata happy path" {
