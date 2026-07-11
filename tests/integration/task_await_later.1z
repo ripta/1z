@@ -1,0 +1,16 @@
+use "testing" ;
+
+\ A completed task handle stays awaitable later in the same scope, even after
+\ doing unrelated work. Locks in await-later before scope-exit reaping changes
+\ cleanup.
+
+test-await-later: ( -- ) [
+  [
+    [ 7 ] spawn  \ child A, keep handle
+    yield        \ let A complete
+    [ 100 ] spawn await 100 "unrelated work runs" assert=
+    await 7 "completed handle awaitable later in scope" assert=
+  ] task-scope
+] ;
+
+test-await-later

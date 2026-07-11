@@ -1,0 +1,15 @@
+use "testing" ;
+
+\ A scope with multiple failing children re-throws the first failure in spawn
+\ order. Locks in first-error ordering before scope-exit reaping changes cleanup.
+
+test-scope-first-error: ( -- ) [
+  [
+    [
+      [ f "first" first-error: make-error throw ] spawn drop
+      [ f "second" second-error: make-error throw ] spawn drop
+    ] task-scope
+  ] first-error: "scope propagates first spawn-order error" assert-error-type
+] ;
+
+test-scope-first-error

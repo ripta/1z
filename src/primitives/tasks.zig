@@ -43,14 +43,14 @@ pub const registry_entries = [_]RegistryEntry{
 
 pub const primitives = [_]Primitive{
     .{ .name = "task-scope", .stack_effect = "quot --", .doc = "Run quotation in a structured concurrency scope. Waits for every child task to reach a terminal status regardless of which worker each child ran on. When task-scope returns, normally or by re-throwing a child's error, every child has reached terminal status and its registered cleanup handler has run to completion.", .func = nativeTaskScope },
-    .{ .name = "spawn", .stack_effect = "quot -- task", .doc = "Spawn a new task from a quotation. The task is pinned to the worker with the fewest active tasks at spawn time for its entire lifetime.", .func = nativeSpawn },
+    .{ .name = "spawn", .stack_effect = "quot -- task", .doc = "Spawn a new task from a quotation. The task is pinned to the worker with the fewest active tasks at spawn time for its entire lifetime. The returned handle is valid only within the task-scope that spawned it. After that scope exits the handle must not be used, because the runtime may have destroyed the task.", .func = nativeSpawn },
     .{ .name = "spawn-detached", .stack_effect = "quot --", .doc = "Spawn a fire-and-forget task reaped at its own completion, not at scope exit, so a long-running scope stays bounded in memory. The task is isolated from sibling cancellation and pushes no handle. The scope still waits for in-flight detached tasks before returning.", .func = nativeSpawnDetached },
     .{ .name = "spawn-named", .stack_effect = "quot name -- task", .doc = "Spawn a named task from a quotation.", .func = nativeSpawnNamed },
     .{ .name = "task-self", .stack_effect = "-- task", .doc = "Push the current task handle.", .func = nativeTaskSelf },
     .{ .name = "yield", .stack_effect = "--", .doc = "Voluntarily yield the current task.", .func = nativeYield },
-    .{ .name = "await", .stack_effect = "task -- value", .doc = "Wait for a task to complete and push its result.", .func = nativeAwait },
-    .{ .name = "await-terminal", .stack_effect = "task --", .doc = "Wait for a task to reach a terminal status without pushing its result. Swallows cancellation, re-throws failure. Pairs with cancel-task to wait for cross-worker cleanup.", .func = nativeAwaitTerminal },
-    .{ .name = "await-all", .stack_effect = "array -- array", .doc = "Wait for all tasks in array and return array of results.", .func = nativeAwaitAll },
+    .{ .name = "await", .stack_effect = "task -- value", .doc = "Wait for a task to complete and push its result. The handle must belong to an open task-scope; it is no longer valid after its scope exits.", .func = nativeAwait },
+    .{ .name = "await-terminal", .stack_effect = "task --", .doc = "Wait for a task to reach a terminal status without pushing its result. Swallows cancellation, re-throws failure. Pairs with cancel-task to wait for cross-worker cleanup. The handle must belong to an open task-scope; it is no longer valid after its scope exits.", .func = nativeAwaitTerminal },
+    .{ .name = "await-all", .stack_effect = "array -- array", .doc = "Wait for all tasks in array and return array of results. Each handle must belong to an open task-scope; handles are no longer valid after their scope exits.", .func = nativeAwaitAll },
     .{ .name = "sleep", .stack_effect = "duration --", .doc = "Suspend the current task for a duration.", .func = nativeSleep },
     .{ .name = "cancel-task", .stack_effect = "task --", .doc = "Cancel a task.", .func = nativeCancelTask },
     .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration. The main task and the timer task may run on different workers; cancellation crosses workers via the scheduler's cross-thread cancel path.", .func = nativeWithTimeout },
@@ -229,6 +229,10 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
 /// caller's scope, and dispatches it via local or cross-thread enqueue.
 /// The spawned task is pinned to its assigned worker for its entire
 /// lifetime; it does not migrate between workers.
+///
+/// The returned handle is valid only within the task-scope that spawned it.
+/// After that scope exits the handle must not be used, because the runtime
+/// may have destroyed the task.
 fn nativeSpawn(ctx: *Context) anyerror!void {
     const quot = try helpers.popQuotation(ctx);
 
@@ -570,7 +574,8 @@ fn nativeCancelTask(ctx: *Context) anyerror!void {
 ///
 /// Wait for a task to complete and push its result. If the task has no result,
 /// pushes `f`. If the task failed, re-throws its error. If the task is still
-/// running, suspends the caller until the task finishes.
+/// running, suspends the caller until the task finishes. The handle must belong
+/// to an open task-scope; it is no longer valid after its scope exits.
 fn nativeAwait(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "await cannot be called during module loading";
@@ -616,6 +621,9 @@ fn nativeAwait(ctx: *Context) anyerror!void {
 /// task and then waits for the task's registered cleanup handler to finish:
 ///
 ///     dup cancel-task await-terminal
+///
+/// The handle must belong to an open task-scope; it is no longer valid after
+/// its scope exits.
 fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "await-terminal cannot be called during module loading";
@@ -665,7 +673,8 @@ fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
 ///
 /// Wait for all tasks in the array to complete and return an array of results
 /// in the same order. If any task failed or was cancelled, re-throw the first
-/// error, in array order, after all tasks have finished.
+/// error, in array order, after all tasks have finished. Each handle must belong
+/// to an open task-scope; handles are no longer valid after their scope exits.
 fn nativeAwaitAll(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "await-all cannot be called during module loading";

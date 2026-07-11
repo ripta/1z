@@ -1,0 +1,4 @@
+Stack: [ ]
+PASS: unrelated work runs
+PASS: completed handle awaitable later in scope
+Stack: [ ]
