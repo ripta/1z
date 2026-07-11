@@ -14,16 +14,39 @@ pub const MemoryLimitAllocator = struct {
     current_bytes: std.atomic.Value(usize),
     max_bytes: usize,
 
+    // High-water mark of bytes allocated, maintained only when `track_peak` is set.
+    //
+    // `track_peak` is set once at startup before any worker thread runs, so a plain bool read on
+    // the allocation path is a single predictable branch when the feature is off.
+    peak_bytes: std.atomic.Value(usize),
+    track_peak: bool,
+
     pub fn init(backing: std.mem.Allocator, max_bytes: usize) MemoryLimitAllocator {
         return .{
             .backing_allocator = backing,
             .current_bytes = std.atomic.Value(usize).init(0),
             .max_bytes = max_bytes,
+            .peak_bytes = std.atomic.Value(usize).init(0),
+            .track_peak = false,
         };
     }
 
     pub fn currentBytes(self: *const MemoryLimitAllocator) usize {
         return self.current_bytes.load(.monotonic);
+    }
+
+    pub fn setPeakTracking(self: *MemoryLimitAllocator, enabled: bool) void {
+        self.track_peak = enabled;
+    }
+
+    pub fn peakBytes(self: *const MemoryLimitAllocator) usize {
+        return self.peak_bytes.load(.monotonic);
+    }
+
+    fn recordPeak(self: *MemoryLimitAllocator, new_total: usize) void {
+        if (self.track_peak) {
+            _ = self.peak_bytes.fetchMax(new_total, .monotonic);
+        }
     }
 
     pub fn allocator(self: *MemoryLimitAllocator) std.mem.Allocator {
@@ -49,7 +72,8 @@ pub const MemoryLimitAllocator = struct {
 
         const result = self.backing_allocator.rawAlloc(len, alignment, ret_addr);
         if (result != null) {
-            _ = self.current_bytes.fetchAdd(len, .monotonic);
+            const prev = self.current_bytes.fetchAdd(len, .monotonic);
+            self.recordPeak(prev + len);
         }
         return result;
     }
@@ -68,7 +92,8 @@ pub const MemoryLimitAllocator = struct {
         const success = self.backing_allocator.rawResize(memory, alignment, new_len, ret_addr);
         if (success) {
             if (new_len > old_len) {
-                _ = self.current_bytes.fetchAdd(new_len - old_len, .monotonic);
+                const prev = self.current_bytes.fetchAdd(new_len - old_len, .monotonic);
+                self.recordPeak(prev + (new_len - old_len));
             } else {
                 _ = self.current_bytes.fetchSub(old_len - new_len, .monotonic);
             }
@@ -90,7 +115,8 @@ pub const MemoryLimitAllocator = struct {
         const result = self.backing_allocator.rawRemap(memory, alignment, new_len, ret_addr);
         if (result != null) {
             if (new_len > old_len) {
-                _ = self.current_bytes.fetchAdd(new_len - old_len, .monotonic);
+                const prev = self.current_bytes.fetchAdd(new_len - old_len, .monotonic);
+                self.recordPeak(prev + (new_len - old_len));
             } else {
                 _ = self.current_bytes.fetchSub(old_len - new_len, .monotonic);
             }
@@ -239,4 +265,60 @@ test "MemoryLimitAllocator: unlimited allows any allocation" {
     defer alloc.free(mem);
 
     try std.testing.expectEqual(@as(usize, 1024 * 1024), mem_limit.currentBytes());
+}
+
+test "MemoryLimitAllocator: peak reflects the maximum live figure" {
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    mem_limit.setPeakTracking(true);
+    const alloc = mem_limit.allocator();
+
+    const mem1 = try alloc.alloc(u8, 100);
+    try std.testing.expectEqual(@as(usize, 100), mem_limit.peakBytes());
+
+    const mem2 = try alloc.alloc(u8, 200);
+    try std.testing.expectEqual(@as(usize, 300), mem_limit.peakBytes());
+
+    // Freeing lowers the live figure but leaves the high-water mark.
+    alloc.free(mem1);
+    try std.testing.expectEqual(@as(usize, 200), mem_limit.currentBytes());
+    try std.testing.expectEqual(@as(usize, 300), mem_limit.peakBytes());
+
+    // Growing back past the prior peak advances it.
+    const mem3 = try alloc.alloc(u8, 150);
+    try std.testing.expectEqual(@as(usize, 350), mem_limit.currentBytes());
+    try std.testing.expectEqual(@as(usize, 350), mem_limit.peakBytes());
+
+    alloc.free(mem2);
+    alloc.free(mem3);
+    try std.testing.expectEqual(@as(usize, 350), mem_limit.peakBytes());
+}
+
+test "MemoryLimitAllocator: peak stays zero when tracking disabled" {
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    const alloc = mem_limit.allocator();
+
+    const mem = try alloc.alloc(u8, 4096);
+    defer alloc.free(mem);
+
+    try std.testing.expectEqual(@as(usize, 4096), mem_limit.currentBytes());
+    try std.testing.expectEqual(@as(usize, 0), mem_limit.peakBytes());
+}
+
+test "MemoryLimitAllocator: peak tracks a remap grow path" {
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    mem_limit.setPeakTracking(true);
+    const alloc = mem_limit.allocator();
+
+    var list = std.ArrayListUnmanaged(u8){};
+    defer list.deinit(alloc);
+
+    try list.appendNTimes(alloc, 0, 32);
+    const after_first = mem_limit.peakBytes();
+    try std.testing.expect(after_first >= 32);
+
+    // ArrayListUnmanaged grows via the allocator's remap, so this exercises the
+    // remap grow path. The resize grow branch shares the identical accounting.
+    try list.appendNTimes(alloc, 0, 8192);
+    try std.testing.expect(mem_limit.peakBytes() >= 8192);
+    try std.testing.expect(mem_limit.peakBytes() >= mem_limit.currentBytes());
 }
