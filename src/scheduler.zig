@@ -140,6 +140,20 @@ pub const WorkerOps = struct {
     /// `handleTaskDone` so the primary observes the pool draining without
     /// needing a separate event source.
     wakePrimary: *const fn (owner: *anyopaque) void,
+    /// Read the pool's next periodic-sample deadline in nanoseconds, or null
+    /// when the sampler is disabled. Folded into the poll timeout so an idle
+    /// worker wakes each tick.
+    poolSampleDeadlineNs: *const fn (owner: *anyopaque) ?i128,
+    /// CAS-elect this worker as the sole emitter for the current sample tick,
+    /// re-arming the deadline. Returns true when this worker should emit.
+    claimSampleTick: *const fn (owner: *anyopaque, now_ns: i128) bool,
+    /// Emit one aggregated `SAMPLE:` line across the pool. Paired with a
+    /// winning `claimSampleTick`.
+    emitPoolSample: *const fn (owner: *anyopaque) void,
+    /// Drop the pool's in-flight detached-task count. Called from
+    /// `handleDetachedTaskDone` on the owning worker as a detached task is
+    /// reaped, mirroring `onTaskDone` for the tracked-task count.
+    onDetachedTaskDone: *const fn (owner: *anyopaque) void,
 };
 
 /// Cooperative scheduler with a FIFO run queue.
@@ -317,9 +331,12 @@ pub const Scheduler = struct {
 
     /// Remove a completed task from `finished_tasks` before it's reaped early at scope exit.
     ///
-    /// This runs on the owning worker, which is the same thread that appends, so it needs no lock
-    /// to perform it safetly.
+    /// This runs on the owning worker, the same thread that appends. It holds `all_tasks_mu`
+    /// anyway because the periodic sampler reads `finished_tasks.items.len` cross-worker under
+    /// that lock, so a concurrent read must not observe a half-completed `swapRemove`.
     fn removeFinished(self: *Scheduler, task: *Task) void {
+        self.all_tasks_mu.lock();
+        defer self.all_tasks_mu.unlock();
         for (self.finished_tasks.items, 0..) |t, i| {
             if (t == task) {
                 _ = self.finished_tasks.swapRemove(i);
@@ -466,6 +483,31 @@ pub const Scheduler = struct {
         const owner = self.owner orelse return true;
         const ops = self.ops orelse return true;
         return ops.shutdownRequested(owner);
+    }
+
+    /// Read the pool's next periodic-sample deadline, or null when the
+    /// sampler is off or the scheduler is standalone. Folded into the poll
+    /// timeout so an idle worker wakes at each tick.
+    fn sampleDeadlineNs(self: *Scheduler) ?i128 {
+        const owner = self.owner orelse return null;
+        const ops = self.ops orelse return null;
+        return ops.poolSampleDeadlineNs(owner);
+    }
+
+    /// If a periodic sample is due, elect a single emitter across the pool
+    /// and emit the aggregate line. No-op on standalone schedulers.
+    fn maybeSample(self: *Scheduler) void {
+        const owner = self.owner orelse return;
+        const ops = self.ops orelse return;
+        if (ops.claimSampleTick(owner, monotonicNowNs())) ops.emitPoolSample(owner);
+    }
+
+    /// Drop the pool's in-flight detached-task count on the owning worker as
+    /// a detached task is reaped. No-op on standalone schedulers.
+    fn notifyOwnerDetachedDone(self: *Scheduler) void {
+        const owner = self.owner orelse return;
+        const ops = self.ops orelse return;
+        ops.onDetachedTaskDone(owner);
     }
 
     /// Re-enqueue the current task and yield back to the scheduler loop.
@@ -715,6 +757,12 @@ pub const Scheduler = struct {
                 timeout = if (timeout) |t| @min(t, stall_timeout) else stall_timeout;
             }
 
+            if (self.sampleDeadlineNs()) |deadline| {
+                const remaining = deadline - monotonicNowNs();
+                const sample_timeout: i128 = if (remaining > 0) remaining else 0;
+                timeout = if (timeout) |t| @min(t, sample_timeout) else sample_timeout;
+            }
+
             if (self.clock == .fake) {
                 timeout = 0;
             }
@@ -757,6 +805,8 @@ pub const Scheduler = struct {
                     self.reportStall(threshold);
                 }
             }
+
+            self.maybeSample();
         }
     }
 
@@ -1144,7 +1194,15 @@ pub const Scheduler = struct {
         if (task.peak_stack_usage > self.peak_task_stack_usage) {
             self.peak_task_stack_usage = task.peak_stack_usage;
         }
-        self.finished_tasks.append(self.allocator, task) catch {};
+        // The `finished_tasks` length is the periodic sampler's `retained=`
+        // signal, read cross-worker under `all_tasks_mu`, so the append is
+        // brought under that lock too. `children_mu` above is released before
+        // this point, so no nested lock ordering arises.
+        {
+            self.all_tasks_mu.lock();
+            defer self.all_tasks_mu.unlock();
+            self.finished_tasks.append(self.allocator, task) catch {};
+        }
 
         // Drop the owning worker's active-task counter so future
         // `pickLeastLoaded` decisions reflect the freed slot. No-op when
@@ -1182,6 +1240,7 @@ pub const Scheduler = struct {
 
         self.maybeWakeScopeWaiter(scope);
         self.reapTask(task);
+        self.notifyOwnerDetachedDone();
         self.notifyOwnerTaskDone();
     }
 

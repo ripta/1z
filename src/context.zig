@@ -38,6 +38,7 @@ const SandboxSpec = types_mod.SandboxSpec;
 const primitives = @import("primitives.zig");
 const parser = @import("parser.zig");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
+const MemoryLimitAllocator = @import("memory_limit.zig").MemoryLimitAllocator;
 const ProfileStats = @import("profile.zig").ProfileStats;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 
@@ -472,6 +473,9 @@ pub const Context = struct {
     trace: TraceConfig = .{},
     /// Wall-clock stall detection threshold in nanoseconds, parsed from --deadlock-detect[=N].
     deadlock_detect_ns: ?i128 = null,
+    /// The process-wide memory-cap allocator, so the periodic sampler can read current and peak
+    /// live bytes. Null when no cap allocator is active.
+    mem_limit: ?*MemoryLimitAllocator = null,
     /// Monotonic counter for assigning unique dispatch IDs to word definitions.
     /// Atomic for future thread-safety requirements.
     next_dispatch_id: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -941,6 +945,7 @@ pub const Context = struct {
 
             .trace = parent.trace,
             .deadlock_detect_ns = parent.deadlock_detect_ns,
+            .mem_limit = parent.mem_limit,
             .current_source = parent.current_source,
             .current_source_dir = parent.current_source_dir,
             .load_paths = parent.load_paths,

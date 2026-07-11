@@ -9,6 +9,7 @@ const TaskStatus = @import("task.zig").TaskStatus;
 const Multiplexer = @import("multiplexer.zig").Multiplexer;
 const WakeSource = @import("multiplexer.zig").WakeSource;
 const trace = @import("trace.zig");
+const MemoryLimitAllocator = @import("memory_limit.zig").MemoryLimitAllocator;
 
 /// Static `WorkerOps` table used by every `Worker` so the scheduler can
 /// call back into the worker through type-erased pointers without forming
@@ -33,6 +34,10 @@ const worker_ops: WorkerOps = .{
     .dumpAllPoolTasks = dumpAllPoolTasksCb,
     .poolHasAliveTasks = poolHasAliveTasksCb,
     .wakePrimary = wakePrimaryCb,
+    .poolSampleDeadlineNs = poolSampleDeadlineNsCb,
+    .claimSampleTick = claimSampleTickCb,
+    .emitPoolSample = emitPoolSampleCb,
+    .onDetachedTaskDone = onDetachedTaskDoneCb,
 };
 
 fn drainExternalCb(owner: *anyopaque) void {
@@ -130,6 +135,28 @@ fn poolHasAliveTasksCb(owner: *anyopaque) bool {
 fn wakePrimaryCb(owner: *anyopaque) void {
     const w: *Worker = @ptrCast(@alignCast(owner));
     w.pool.?.workers[0].wake.signal();
+}
+
+fn poolSampleDeadlineNsCb(owner: *anyopaque) ?i128 {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    const pool = w.pool.?;
+    if (pool.sampling_tick_ns == null) return null;
+    return pool.next_sample_ns.load(.acquire);
+}
+
+fn claimSampleTickCb(owner: *anyopaque, now_ns: i128) bool {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    return w.pool.?.claimSampleTick(now_ns);
+}
+
+fn emitPoolSampleCb(owner: *anyopaque) void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    w.pool.?.emitSample();
+}
+
+fn onDetachedTaskDoneCb(owner: *anyopaque) void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    _ = w.pool.?.detached_in_flight.fetchSub(1, .acq_rel);
 }
 
 /// A single OS thread with its own scheduler instance.
@@ -319,6 +346,29 @@ pub const Worker = struct {
     }
 };
 
+/// Pool-wide task counts for one sample tick.
+pub const SampleCounts = struct { live: usize, retained: usize, detached: u32 };
+
+/// Current and peak live bytes for one sample tick.
+pub const MemSample = struct { bytes: usize, peak: usize };
+
+/// Build one `SAMPLE:` line into `buf`. `t=` is always present. The task
+/// fields appear only when `sample_tasks`; the memory fields only when `mem`
+/// is set. Returns the written slice.
+pub fn formatSample(buf: []u8, elapsed_ns: i128, sample_tasks: bool, counts: SampleCounts, mem: ?MemSample) []const u8 {
+    const secs = @as(f64, @floatFromInt(@as(i64, @intCast(@min(elapsed_ns, std.math.maxInt(i64)))))) / @as(f64, @floatFromInt(@as(i64, std.time.ns_per_s)));
+    var len: usize = 0;
+    len += (std.fmt.bufPrint(buf[len..], "SAMPLE: t={d:.1}s", .{secs}) catch return buf[0..len]).len;
+    if (sample_tasks) {
+        len += (std.fmt.bufPrint(buf[len..], " live={d} retained={d} detached={d}", .{ counts.live, counts.retained, counts.detached }) catch return buf[0..len]).len;
+    }
+    if (mem) |m| {
+        len += (std.fmt.bufPrint(buf[len..], " bytes={d} peak={d}", .{ m.bytes, m.peak }) catch return buf[0..len]).len;
+    }
+    len += (std.fmt.bufPrint(buf[len..], "\n", .{}) catch return buf[0..len]).len;
+    return buf[0..len];
+}
+
 /// A pool of Workers, one per OS thread. Worker[0] runs on the calling thread.
 pub const WorkerPool = struct {
     workers: []Worker,
@@ -343,6 +393,28 @@ pub const WorkerPool = struct {
     /// `std.process.exit(124)` when multiple workers simultaneously detect
     /// the threshold has been exceeded.
     stall_reported: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    // Periodic task/memory sampler state, set by `task-scope` from
+    // `ctx.trace` when an axis is enabled. All fields are read by every
+    // worker's run loop; the tick interval and axis flags are written once
+    // before background workers start and never mutated after.
+    //
+    // `sampling_tick_ns` null disables the sampler entirely.
+    sample_tasks: bool = false,
+    sample_memory: bool = false,
+    sampling_tick_ns: ?i128 = null,
+    /// The memory-cap allocator, read for the `bytes=`/`peak=` figures.
+    mem_limit: ?*MemoryLimitAllocator = null,
+    /// Count of in-flight detached tasks across the pool, the `detached=`
+    /// field. Per-scope `detached_active` is not summable pool-wide because
+    /// there is no scope registry, so this pool-level atomic mirrors it.
+    detached_in_flight: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Monotonic deadline of the next sample. The worker that advances it past
+    /// `now` via CAS is the sole emitter for that tick, re-arming it to
+    /// `now + interval` for a steady cadence.
+    next_sample_ns: std.atomic.Value(i128) = std.atomic.Value(i128).init(0),
+    /// Monotonic timestamp when sampling started, for the `t=` elapsed field.
+    sampler_started_ns: i128 = 0,
 
     /// Initialize `pool` in place. Takes a self-pointer so worker
     /// back-pointers can be set during construction; this guarantees
@@ -505,6 +577,51 @@ pub const WorkerPool = struct {
             home.dumpOneTask(&tw, task);
         }
     }
+
+    /// Re-arm the sample deadline and report whether this worker won the
+    /// tick. Returns false when the sampler is off, the tick is not yet due,
+    /// or another worker advanced the deadline first. The winner re-arms to
+    /// `now + interval` so the cadence stays steady rather than catching up
+    /// after a long idle poll.
+    pub fn claimSampleTick(self: *WorkerPool, now_ns: i128) bool {
+        const interval = self.sampling_tick_ns orelse return false;
+        const observed = self.next_sample_ns.load(.acquire);
+        if (now_ns < observed) return false;
+        return self.next_sample_ns.cmpxchgStrong(observed, now_ns + interval, .acq_rel, .acquire) == null;
+    }
+
+    /// Snapshot the pool-wide task counts. `live` and `detached` are lock-free
+    /// atomic sums. `retained` is read under the ordered `all_tasks_mu` lock,
+    /// which also guards each scheduler's `finished_tasks` mutations, so the
+    /// summed length is well-defined across workers.
+    pub fn sampleCounts(self: *WorkerPool) SampleCounts {
+        var live: usize = 0;
+        for (self.workers) |*w| live += w.active_tasks.load(.acquire);
+        const detached = self.detached_in_flight.load(.acquire);
+
+        var retained: usize = 0;
+        self.lockAllTasksMu();
+        for (self.workers) |*w| retained += w.scheduler.finished_tasks.items.len;
+        self.unlockAllTasksMu();
+
+        return .{ .live = live, .retained = retained, .detached = detached };
+    }
+
+    /// Emit one `SAMPLE:` line to stderr for the current tick. Called only by
+    /// the worker that won `claimSampleTick`.
+    pub fn emitSample(self: *WorkerPool) void {
+        const counts = self.sampleCounts();
+        const mem: ?MemSample = if (self.sample_memory) blk: {
+            const ml = self.mem_limit orelse break :blk null;
+            break :blk .{ .bytes = ml.currentBytes(), .peak = ml.peakBytes() };
+        } else null;
+        const elapsed = monotonicNowNs() - self.sampler_started_ns;
+
+        var buf: [256]u8 = undefined;
+        const line = formatSample(&buf, elapsed, self.sample_tasks, counts, mem);
+        var tw = trace.TraceWriter.init();
+        tw.print("{s}", .{line});
+    }
 };
 
 fn taskIdLessThan(_: void, a: *Task, b: *Task) bool {
@@ -514,6 +631,106 @@ fn taskIdLessThan(_: void, a: *Task, b: *Task) bool {
 // =============================================================================
 // Tests
 // =============================================================================
+
+test "formatSample: both axes" {
+    var buf: [256]u8 = undefined;
+    const line = formatSample(&buf, 12_500_000_000, true, .{ .live = 3, .retained = 2, .detached = 1 }, .{ .bytes = 23457600, .peak = 24117248 });
+    try std.testing.expectEqualStrings("SAMPLE: t=12.5s live=3 retained=2 detached=1 bytes=23457600 peak=24117248\n", line);
+}
+
+test "formatSample: tasks axis only" {
+    var buf: [256]u8 = undefined;
+    const line = formatSample(&buf, 12_500_000_000, true, .{ .live = 3, .retained = 2, .detached = 1 }, null);
+    try std.testing.expectEqualStrings("SAMPLE: t=12.5s live=3 retained=2 detached=1\n", line);
+}
+
+test "formatSample: memory axis only" {
+    var buf: [256]u8 = undefined;
+    const line = formatSample(&buf, 12_500_000_000, false, .{ .live = 0, .retained = 0, .detached = 0 }, .{ .bytes = 23457600, .peak = 24117248 });
+    try std.testing.expectEqualStrings("SAMPLE: t=12.5s bytes=23457600 peak=24117248\n", line);
+}
+
+test "sampleCounts: sums live, retained, and detached across workers" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 2);
+    defer pool.deinit();
+
+    pool.workers[0].active_tasks.store(2, .release);
+    pool.workers[1].active_tasks.store(1, .release);
+    pool.detached_in_flight.store(1, .release);
+
+    // Two retained tasks on worker 0, none on worker 1. The pointers are only
+    // counted by length, never dereferenced, so dummy aligned addresses are
+    // safe; they are cleared before deinit so the reap loop never touches them.
+    const dummy_a: *Task = @ptrFromInt(0x1000);
+    const dummy_b: *Task = @ptrFromInt(0x2000);
+    try pool.workers[0].scheduler.finished_tasks.append(std.testing.allocator, dummy_a);
+    try pool.workers[0].scheduler.finished_tasks.append(std.testing.allocator, dummy_b);
+    defer pool.workers[0].scheduler.finished_tasks.clearRetainingCapacity();
+
+    const counts = pool.sampleCounts();
+    try std.testing.expectEqual(@as(usize, 3), counts.live);
+    try std.testing.expectEqual(@as(usize, 2), counts.retained);
+    try std.testing.expectEqual(@as(u32, 1), counts.detached);
+
+    // Re-reading the unchanged state returns identical counts: a bounded
+    // workload at rest shows flat counters.
+    const again = pool.sampleCounts();
+    try std.testing.expectEqual(counts.live, again.live);
+    try std.testing.expectEqual(counts.retained, again.retained);
+    try std.testing.expectEqual(counts.detached, again.detached);
+}
+
+test "claimSampleTick: elects one winner and re-arms past now" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 1);
+    defer pool.deinit();
+
+    // Sampler off: never claims.
+    try std.testing.expect(!pool.claimSampleTick(1_000));
+
+    pool.sampling_tick_ns = 100;
+    pool.next_sample_ns.store(1_000, .release);
+
+    // Not yet due.
+    try std.testing.expect(!pool.claimSampleTick(999));
+
+    // Due: the first caller wins and re-arms to now + interval.
+    try std.testing.expect(pool.claimSampleTick(1_000));
+    try std.testing.expectEqual(@as(i128, 1_100), pool.next_sample_ns.load(.acquire));
+
+    // A second claim at the same instant loses: the deadline already moved.
+    try std.testing.expect(!pool.claimSampleTick(1_000));
+}
+
+test "sampler callbacks dispatch through the worker_ops table" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 1);
+    defer pool.deinit();
+
+    // Reach the scheduler's ops table the same way the run loop does, so a
+    // mis-wired callback (pointing at the wrong pool method) is caught.
+    const sched = &pool.primary().scheduler;
+    const ops = sched.ops.?;
+    const owner = sched.owner.?;
+
+    // Sampler off: no deadline is reported and no tick is claimed.
+    try std.testing.expect(ops.poolSampleDeadlineNs(owner) == null);
+    try std.testing.expect(!ops.claimSampleTick(owner, 1_000));
+
+    pool.sample_tasks = true;
+    pool.sampling_tick_ns = 100;
+    pool.next_sample_ns.store(1_000, .release);
+
+    try std.testing.expectEqual(@as(?i128, 1_000), ops.poolSampleDeadlineNs(owner));
+    try std.testing.expect(ops.claimSampleTick(owner, 1_000));
+    try std.testing.expectEqual(@as(i128, 1_100), pool.next_sample_ns.load(.acquire));
+
+    // The detached-done callback drops the pool's in-flight count.
+    pool.detached_in_flight.store(2, .release);
+    ops.onDetachedTaskDone(owner);
+    try std.testing.expectEqual(@as(u32, 1), pool.detached_in_flight.load(.acquire));
+}
 
 test "WorkerPool init and deinit with n=1" {
     var pool: WorkerPool = undefined;

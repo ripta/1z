@@ -80,6 +80,16 @@ pub const TraceConfig = struct {
     trace_container_detect: bool = false,
     dump_scope: ?[]const u8 = null,
 
+    // Periodic task/memory sampler axes and interval. Independent of the
+    // trace flags above; the sampler is driven by the scheduler, not the
+    // word-execution path, so it is excluded from `isEnabled`.
+    //
+    // `sampling_tick_ns` null means no interval was given; the sampler
+    // defaults it to 1000ms when an axis is enabled.
+    sample_tasks: bool = false,
+    sample_memory: bool = false,
+    sampling_tick_ns: ?i128 = null,
+
     pub fn isEnabled(self: TraceConfig) bool {
         return self.trace_words or self.trace_resolve or self.trace_modules.any() or self.trace_jit or self.trace_pic or self.trace_container_detect or self.dump_scope != null;
     }

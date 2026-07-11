@@ -308,6 +308,19 @@ fn parseGlobalFlag(
     return .not_mine;
 }
 
+/// Parse a `--sampling-tick` duration into nanoseconds.
+///
+/// A bare integer is seconds. An `ms` suffix is milliseconds. Returns null on malformed input.
+fn parseSamplingTick(value: []const u8) ?i128 {
+    if (std.mem.endsWith(u8, value, "ms")) {
+        const num = value[0 .. value.len - 2];
+        const millis = std.fmt.parseInt(u64, num, 10) catch return null;
+        return @as(i128, millis) * std.time.ns_per_ms;
+    }
+    const secs = std.fmt.parseInt(u64, value, 10) catch return null;
+    return @as(i128, secs) * std.time.ns_per_s;
+}
+
 /// Attempts to parse `arg` as an execution flag (run/eval/repl flags).
 /// Same contract as `parseGlobalFlag`.
 fn parseExecutionFlag(
@@ -436,6 +449,23 @@ fn parseExecutionFlag(
             return error.InvalidFlagValue;
         };
         state.deadlock_detect_ns = @as(i128, secs) * std.time.ns_per_s;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--sample-tasks")) {
+        state.trace_config.sample_tasks = true;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--sample-memory")) {
+        state.trace_config.sample_memory = true;
+        return .consumed;
+    }
+    if (std.mem.startsWith(u8, arg, "--sampling-tick=")) {
+        const value = arg["--sampling-tick=".len..];
+        state.trace_config.sampling_tick_ns = parseSamplingTick(value) orelse {
+            err_writer.print("Error: invalid value for --sampling-tick: '{s}'\n", .{value}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        };
         return .consumed;
     }
     if (std.mem.eql(u8, arg, "--test-timeout")) {
@@ -918,6 +948,9 @@ const ExecutionContext = struct {
         ec.ctx.trace = exec.trace_config;
         ec.ctx.deadlock_detect_ns = exec.deadlock_detect_ns;
         ec.ctx.worker_count = exec.worker_count;
+        ec.ctx.mem_limit = mem_limit_ptr;
+
+        if (exec.trace_config.sample_memory) mem_limit_ptr.setPeakTracking(true);
 
         for (global.load_paths.items) |lp| {
             const duped = ec.ctx.quotationAllocator().dupe(u8, lp) catch {

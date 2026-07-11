@@ -178,6 +178,20 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     // suppresses a false stall warning on an idle primary.
     pool.deadlock_threshold_ns = ctx.deadlock_detect_ns;
 
+    // Arm the periodic sampler when either axis is enabled. A tick with no
+    // axis is a no-op: `sampler_on` is false and the pool keeps sampling off.
+    const sampler_on = ctx.trace.sample_tasks or ctx.trace.sample_memory;
+    if (sampler_on) {
+        const interval = ctx.trace.sampling_tick_ns orelse (1000 * std.time.ns_per_ms);
+        const now = scheduler_mod.monotonicNowNs();
+        pool.sample_tasks = ctx.trace.sample_tasks;
+        pool.sample_memory = ctx.trace.sample_memory;
+        pool.sampling_tick_ns = interval;
+        pool.mem_limit = ctx.mem_limit;
+        pool.sampler_started_ns = now;
+        pool.next_sample_ns.store(now + interval, .release);
+    }
+
     const primary = pool.primary();
 
     ctx.scheduler = &primary.scheduler;
@@ -344,6 +358,9 @@ fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, 
         const target = pool.pickLeastLoaded();
         _ = target.active_tasks.fetchAdd(1, .release);
         errdefer _ = target.active_tasks.fetchSub(1, .release);
+
+        _ = pool.detached_in_flight.fetchAdd(1, .acq_rel);
+        errdefer _ = pool.detached_in_flight.fetchSub(1, .acq_rel);
 
         const task = try allocateTask(ctx, &target.scheduler, scope, quot);
         task.detached = true;
