@@ -1,0 +1,33 @@
+\ Bounded-memory regression for scope-exit reaping of tracked spawn tasks.
+\
+\ Repeatedly enter a short-lived nested task-scope that spawns tracked
+\ children and exits. Each scope-exit now reaps its completed tracked
+\ children, so their task structs, contexts, and arenas are freed and
+\ steady-state memory stays bounded across the loop. A nested task-scope
+\ blocks until every child is terminal, so no explicit yield is needed for
+\ the children to finish before the scope drains and reaps them.
+\
+\ Before scope-exit reaping, every completed tracked child was retained in
+\ the scheduler's finished_tasks until scheduler teardown. This loop reaps
+\ roughly 24000 tasks (8000 scopes, three tracked tasks each: the scope
+\ coordinator plus two spawned children), so a regression back to that
+\ behavior retains all of them and exhausts the 8 MB cap set in the `.flags`
+\ sidecar partway through, dying with a memory-limit error instead of
+\ printing the marker.
+\
+\ The `.flags` sidecar pins `--threads=1`. Same-worker scope-exit reaping only
+\ reaps children whose home worker is the exiting worker, so every child must
+\ be local to the reaping worker for this to stay bounded. Cross-worker
+\ reaping is a follow-up, so the pin is required even under the threads=auto
+\ test variant.
+
+[
+  8000 [
+    [
+      [ 1 1 + drop ] spawn drop
+      [ 2 2 + drop ] spawn drop
+    ] task-scope
+  ] times
+] task-scope
+
+"bounded" print-line

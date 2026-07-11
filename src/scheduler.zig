@@ -307,6 +307,39 @@ pub const Scheduler = struct {
         self.allocator.destroy(task);
     }
 
+    /// Remove a completed task from `finished_tasks` before it's reaped early at scope exit.
+    ///
+    /// This runs on the owning worker, which is the same thread that appends, so it needs no lock
+    /// to perform it safetly.
+    fn removeFinished(self: *Scheduler, task: *Task) void {
+        for (self.finished_tasks.items, 0..) |t, i| {
+            if (t == task) {
+                _ = self.finished_tasks.swapRemove(i);
+                return;
+            }
+        }
+    }
+
+    /// Reap a scope's completed tracked children at scope exit on the exiting worker.
+    ///
+    /// This runs only once the scope has drained, which means every child is terminal and already
+    /// in the finished tasks list.
+    ///
+    /// A local child, i.e., whose home is this scheduler, is reaped inline.
+    /// Remote children are left for the scheduler's own deinit.
+    pub fn reapScopeAtExit(self: *Scheduler, scope: *TaskScope) void {
+        if (scope.active_children.load(.acquire) != 0) return;
+        scope.children_mu.lock();
+        defer scope.children_mu.unlock();
+        for (scope.children.items) |child| {
+            const home = if (child.ctx.scheduler) |s| s else self;
+            if (home != self) continue;
+            self.removeFinished(child);
+            self.untrackTask(child);
+            self.reapTask(child);
+        }
+    }
+
     fn drainOwnedExternal(self: *Scheduler) void {
         const owner = self.owner orelse return;
         const ops = self.ops orelse return;

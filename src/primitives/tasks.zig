@@ -137,6 +137,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     if (ctx.scheduler) |scheduler| {
         var scope = TaskScope.init(ctx.allocator);
         defer scope.deinit();
+        defer scheduler.reapScopeAtExit(&scope);
 
         const scope_task = try allocateTask(ctx, scheduler, &scope, quot);
         scope.scope_task = scope_task;
