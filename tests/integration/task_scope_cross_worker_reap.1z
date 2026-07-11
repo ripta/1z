@@ -1,0 +1,34 @@
+\ Cross-worker bounded-memory regression for scope-exit reaping.
+\
+\ Repeatedly enter a short-lived nested task-scope that spawns four tracked children. `spawn` picks
+\ the least-loaded worker and increments its load at dispatch, so four rapid spawns spread across
+\ the four workers pinned by the `.flags` sidecar. Most children therefore run on a worker other
+\ than the one exiting the scope.
+\
+\ A remote child can't be freed by the exiting worker without violating the owning-worker invariant.
+\ Instead the exiting worker routes each remote child to its home worker's reap queue, and the home
+\ worker frees it on its own thread.
+\
+\ Same-worker reaping alone leaves every remote child retained in its home worker's finished_tasks
+\ until scheduler teardown. A regression that drops the reap-queue routing exhausts the 8 MB cap
+\ set in the `.flags` sidecar partway through and dies with a memory-limit error instead of
+\ printing the marker.
+\
+\ A nested task-scope blocks until every child is terminal, so no explicit yield is needed for the
+\ children to finish before the scope drains and reaps them.
+\
+\ Bounded completion proves no leak. Clean termination proves no deadlock. Running the real binary
+\ surfaces any use-after-free or stale diagnostic pointer.
+
+[
+  6000 [
+    [
+      [ 1 1 + drop ] spawn drop
+      [ 2 2 + drop ] spawn drop
+      [ 3 3 + drop ] spawn drop
+      [ 4 4 + drop ] spawn drop
+    ] task-scope
+  ] times
+] task-scope
+
+"bounded" print-line

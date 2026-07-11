@@ -22,6 +22,8 @@ const worker_ops: WorkerOps = .{
     .enqueueExternal = enqueueExternalCb,
     .requestCancellation = requestCancellationCb,
     .drainCancellations = drainCancellationsCb,
+    .requestReap = requestReapCb,
+    .drainReaps = drainReapsCb,
     .nextTaskId = nextTaskIdCb,
     .recordPoolProgress = recordPoolProgressCb,
     .poolLastProgressNs = poolLastProgressNsCb,
@@ -71,6 +73,16 @@ fn requestCancellationCb(owner: *anyopaque, task: *Task) !void {
 fn drainCancellationsCb(owner: *anyopaque) void {
     const w: *Worker = @ptrCast(@alignCast(owner));
     w.drainCancellations();
+}
+
+fn requestReapCb(owner: *anyopaque, task: *Task) !void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    try w.requestReap(task);
+}
+
+fn drainReapsCb(owner: *anyopaque) void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    w.drainReaps();
 }
 
 fn nextTaskIdCb(owner: *anyopaque) u64 {
@@ -155,6 +167,15 @@ pub const Worker = struct {
     /// appending to the run queue.
     cancel_queue: std.ArrayListUnmanaged(*Task) = .{},
     cancel_queue_mu: std.Thread.Mutex = .{},
+    /// Cross-thread reap request buffer.
+    ///
+    /// When a scope exits on another worker, that worker appends each of this worker's terminal
+    /// children here under `reap_queue_mu` and signals `wake`. This worker's scheduler drains it
+    /// at the top of every loop iteration and frees each task on its own thread.
+    ///
+    /// Routing reaping through the home worker keeps task destruction on the owning worker.
+    reap_queue: std.ArrayListUnmanaged(*Task) = .{},
+    reap_queue_mu: std.Thread.Mutex = .{},
     /// Wake source registered with `scheduler.multiplexer`; lets other
     /// threads interrupt a blocking `poll()` so newly enqueued external
     /// tasks are observed promptly.
@@ -187,6 +208,7 @@ pub const Worker = struct {
         self.wake.deinit();
         self.external_queue.deinit(self.allocator);
         self.cancel_queue.deinit(self.allocator);
+        self.reap_queue.deinit(self.allocator);
         self.scheduler.deinit();
     }
 
@@ -247,6 +269,41 @@ pub const Worker = struct {
         }
         for (snapshot.items) |t| {
             self.scheduler.cancelTaskLocal(t);
+        }
+    }
+
+    /// Append a terminal task to this worker's cross-thread reap queue and wake the worker.
+    ///
+    /// Safe to call from any thread.
+    ///
+    /// The task is already terminal and enqueued exactly once by the exiting scope, so the home
+    /// worker frees it exactly once when it drains.
+    pub fn requestReap(self: *Worker, task: *Task) !void {
+        {
+            self.reap_queue_mu.lock();
+            defer self.reap_queue_mu.unlock();
+            try self.reap_queue.append(self.allocator, task);
+        }
+        self.wake.signal();
+    }
+
+    /// Drain the reap queue, freeing each terminal task on the owning thread.
+    ///
+    /// Owning thread only.
+    ///
+    /// Snapshots the queue under the lock so the frees happen without holding the reap-queue mutex.
+    pub fn drainReaps(self: *Worker) void {
+        var snapshot: std.ArrayListUnmanaged(*Task) = .{};
+        defer snapshot.deinit(self.allocator);
+        {
+            self.reap_queue_mu.lock();
+            defer self.reap_queue_mu.unlock();
+            if (self.reap_queue.items.len == 0) return;
+            snapshot.appendSlice(self.allocator, self.reap_queue.items) catch {};
+            self.reap_queue.clearRetainingCapacity();
+        }
+        for (snapshot.items) |t| {
+            self.scheduler.reapTrackedTask(t);
         }
     }
 
@@ -552,6 +609,22 @@ test "Worker.requestCancellation appends to cancel queue" {
 
     try std.testing.expectEqual(@as(usize, 1), pool.workers[0].cancel_queue.items.len);
     try std.testing.expectEqual(&dummy_task, pool.workers[0].cancel_queue.items[0]);
+}
+
+test "Worker.requestReap appends to reap queue" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 1);
+    defer pool.deinit();
+
+    // Only the enqueue is exercised here. Draining the reap queue would call
+    // reapTask, which frees the task's coroutine, context, and structs; a
+    // stack-allocated dummy cannot survive that. The drain path is covered
+    // end-to-end by the task_scope_cross_worker_reap integration test.
+    var dummy_task: Task = undefined;
+    try pool.workers[0].requestReap(&dummy_task);
+
+    try std.testing.expectEqual(@as(usize, 1), pool.workers[0].reap_queue.items.len);
+    try std.testing.expectEqual(&dummy_task, pool.workers[0].reap_queue.items[0]);
 }
 
 test "Worker.drainCancellations clears the cancel queue" {

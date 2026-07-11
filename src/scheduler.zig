@@ -89,6 +89,14 @@ pub const WorkerOps = struct {
     /// scheduler's local-cancellation logic for each entry. Owning thread
     /// only.
     drainCancellations: *const fn (owner: *anyopaque) void,
+    /// Ask the owning worker to reap a terminal task on its own thread. The
+    /// worker pushes the task pointer onto its reap queue and signals its
+    /// wake source. The home worker then drains the queue and frees the
+    /// task, keeping destruction on the owning worker.
+    requestReap: *const fn (owner: *anyopaque, task: *Task) anyerror!void,
+    /// Drain the worker's reap request queue, freeing each terminal task on
+    /// the owning thread. Owning thread only.
+    drainReaps: *const fn (owner: *anyopaque) void,
     /// Allocate the next globally-unique task ID from the worker's pool so
     /// that diagnostic output can refer to any task by a single integer
     /// regardless of which worker it lives on. Safe to call from any
@@ -320,24 +328,52 @@ pub const Scheduler = struct {
         }
     }
 
+    /// Reap a terminal tracked task early by pulling it out of the list of tasks, then freeing it.
+    ///
+    /// This runs on the task's owning worker.
+    pub fn reapTrackedTask(self: *Scheduler, task: *Task) void {
+        self.removeFinished(task);
+        self.untrackTask(task);
+        self.reapTask(task);
+    }
+
     /// Reap a scope's completed tracked children at scope exit on the exiting worker.
     ///
     /// This runs only once the scope has drained, which means every child is terminal and already
     /// in the finished tasks list.
     ///
-    /// A local child, i.e., whose home is this scheduler, is reaped inline.
-    /// Remote children are left for the scheduler's own deinit.
+    /// A local child, i.e., whose home is this scheduler, is reaped inline. A remote child is
+    /// routed to its home worker's reap queue so destruction stays on the owning worker.
     pub fn reapScopeAtExit(self: *Scheduler, scope: *TaskScope) void {
         if (scope.active_children.load(.acquire) != 0) return;
         scope.children_mu.lock();
         defer scope.children_mu.unlock();
         for (scope.children.items) |child| {
             const home = if (child.ctx.scheduler) |s| s else self;
-            if (home != self) continue;
-            self.removeFinished(child);
-            self.untrackTask(child);
-            self.reapTask(child);
+            if (home == self) {
+                self.reapTrackedTask(child);
+            } else {
+                self.requestReapRemote(home, child);
+            }
         }
+    }
+
+    /// Hand a terminal child off to its home worker's reap queue so the home worker frees it on
+    /// its own thread.
+    ///
+    /// This is fire-and-forget, in that the exiting worker doesn't wait. The child is already
+    /// terminal and is enqueued exactly once, so that it's freed exactly once.
+    fn requestReapRemote(self: *Scheduler, home: *Scheduler, task: *Task) void {
+        _ = self;
+        if (home.owner) |owner| {
+            if (home.ops) |ops| {
+                ops.requestReap(owner, task) catch {};
+                return;
+            }
+        }
+
+        // standalone scheduler with no concurrent runLoop gets reaped inline
+        home.reapTrackedTask(task);
     }
 
     fn drainOwnedExternal(self: *Scheduler) void {
@@ -350,6 +386,12 @@ pub const Scheduler = struct {
         const owner = self.owner orelse return;
         const ops = self.ops orelse return;
         ops.drainCancellations(owner);
+    }
+
+    fn drainOwnedReaps(self: *Scheduler) void {
+        const owner = self.owner orelse return;
+        const ops = self.ops orelse return;
+        ops.drainReaps(owner);
     }
 
     fn drainOwnedWake(self: *Scheduler) void {
@@ -574,13 +616,16 @@ pub const Scheduler = struct {
         self.recordProgress();
 
         while (true) {
-            // Move any tasks pushed onto the owning worker's external queue
-            // into the local run queue before we make scheduling decisions.
+            // Move any tasks pushed onto the owning worker's external queue into the local runqueue
+            // before making scheduling decisions
             self.drainOwnedExternal();
-            // Process cross-thread cancellation requests next so the local
-            // logic can route blocked tasks (IO/sleep/process/scope/channel)
-            // back into the run queue before the scheduling pass picks one.
+            // Process cross-thread cancellation requests next so the local logic can route blocked
+            // tasks (IO/sleep/process/scope/channel) back into the run queue before the scheduling
+            // pass picks one
             self.drainOwnedCancellations();
+            // Free any terminal tasks other workers routed here for reaping at their scope's exit,
+            // on this worker's own thread
+            self.drainOwnedReaps();
 
             if (self.wakeExpiredSleepers()) {
                 self.recordProgress();
