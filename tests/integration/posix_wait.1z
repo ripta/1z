@@ -1,0 +1,51 @@
+use "testing" ;
+use "posix" ;
+use "process" ;
+use "time" ;
+
+\ Exercises the waitpid binding and the non-blocking reap-any wrapper. The raw
+\ pids and status words vary per run, so each reap stays on a single line and its
+\ values are consumed within that line, keeping the shown-stack output stable.
+
+\ Reap any exited child, sleeping between polls until one is ready. A live but
+\ unexited child makes WNOHANG return pid 0 (not ECHILD), so this terminates once
+\ the child exits. Must run inside a task-scope, since sleep yields to the
+\ scheduler.
+(poll-wait): ( -- pid status ) [
+  wait over 0 = [ 2drop 1 milliseconds sleep (poll-wait) ] [ ] if
+] ;
+
+"posix.waitpid success" test-section
+
+\ Spawn a child that exits 7 and reap it by its specific pid with a blocking
+\ waitpid. The exit code lives in the status high byte on both Linux and macOS
+\ (status = code << 8 for a normal exit), so `256 div` recovers it portably.
+{ "/bin/sh" "-c" "exit 7" } <stdio-opts> spawn-process pid>> dup 0 waitpid 256 div 7 "waitpid status decodes to exit 7" assert= "waitpid reaps the spawned child by pid" assert=
+
+"posix.wait reap-any success" test-section
+
+\ Spawn a second child, then reap whichever child exits via the WNOHANG poll.
+{ "/bin/sh" "-c" "exit 0" } <stdio-opts> spawn-process drop
+[ (poll-wait) drop 0 > "posix.wait reaps a child with a positive pid" assert-true ] task-scope
+
+"posix.wait failure" test-section
+
+\ With no children left, wait fails with ECHILD.
+[ wait ] [ dup error-type: @get posix-error: "wait with no children raises posix-error" assert= data: @get name: @get echild: "wait errno name is echild" assert= ] recover
+
+\ waitpid on a non-existent pid fails with ECHILD (WNOHANG keeps it non-blocking).
+[ 2147483646 "WNOHANG" posix-const waitpid ] [ dup error-type: @get posix-error: "waitpid on a bad pid raises posix-error" assert= data: @get name: @get echild: "waitpid errno name is echild" assert= ] recover
+
+"posix.wait sandbox gate" test-section
+
+\ The wrapper marshals a status buffer (ffi capability), then calls the
+\ system-capped waitpid binding. Granting both reaches the syscall (ECHILD on the
+\ bad pid); granting ffi alone denies the binding before the syscall. The denied
+\ call leaves a partial stack, so both checks run inside a task-scope whose
+\ isolated stack is discarded at scope exit.
+[
+  [ sandbox{ ffi system } [ 2147483646 "WNOHANG" posix-const waitpid ] with-sandbox ]
+  [ error-type: @get posix-error: "ffi+system grant lets waitpid reach the syscall" assert= ] recover
+  [ sandbox{ ffi } [ 2147483646 "WNOHANG" posix-const waitpid ] with-sandbox ]
+  [ error-type: @get permission-denied: "ffi-only grant denies the system-capped waitpid" assert= ] recover
+] task-scope

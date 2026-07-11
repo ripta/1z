@@ -24,7 +24,8 @@ posix-const: ( name -- value ) [ native.posix-const ] ;
   (getrlimit): "getrlimit" H{ errno: neg1: cap: system: } ffi{ i32 ptr -> i32 }
   (setrlimit): "setrlimit" H{ errno: neg1: cap: system: } ffi{ i32 ptr -> i32 }
   (clock_gettime): "clock_gettime" H{ errno: neg1: cap: none: } ffi{ i32 ptr -> i32 }
-  (fcntl): "fcntl" H{ errno: neg1: cap: io/fs: } ffi{ i32 i32 ... -> i32 }
+  (fcntl):         "fcntl" H{ errno: neg1: cap: io/fs: } ffi{ i32 i32 ... -> i32 }
+  (waitpid):       "waitpid" H{ errno: neg1: cap: system: } ffi{ i32 ptr i32 -> i32 }
 } call "posix-raw" swap >module reexport
 
 \\ Apply or remove an advisory whole-file lock.
@@ -44,6 +45,30 @@ getpid: ( -- pid ) [ (getpid) ] ;
 
 \\ Process id of the parent of the calling process.
 getppid: ( -- pid ) [ (getppid) ] ;
+
+\\ Wait for a child, writing its status into a fresh buffer.
+\\
+\\ `options` combines WNOHANG/WUNTRACED (raw waitpid options); `pid` follows the
+\\ waitpid conventions (-1 for any child). Returns the reaped pid (0 under
+\\ WNOHANG when no child is ready) and the raw status word. Decode the status
+\\ with the caller's own bit math (`status 256 div` is the exit code for a
+\\ normal exit). Throws `posix-error:` on failure, e.g. ECHILD when no child
+\\ exists.
+waitpid: ( pid options -- pid status ) [
+  4 bytes-alloc
+  bytes>ffi-ptr
+  -rot>
+  [ (waitpid) ] dip
+  0 4 #peek
+] ;
+
+\\ Non-blocking reap of any exited child.
+\\
+\\ Returns pid=0 when no child is ready, or the reaped pid and its raw status
+\\ word. Never blocks. Do not use alongside scheduler-managed children
+\\ (`spawn-process` with `wait-process`): it reaps any child and would steal one
+\\ the scheduler is waiting on. Throws `posix-error:` when no children exist.
+wait: ( -- pid status ) [ -1 "WNOHANG" posix-const waitpid ] ;
 
 \\ Set the protection on a region of memory.
 \\

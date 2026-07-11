@@ -38,6 +38,7 @@ surface to 1z:
 - memory tuning the stdlib does not expose (`mprotect`, `madvise`)
 - fine-grained clocks (`clock_gettime`)
 - file-descriptor control and truncation (`fcntl`, `truncate`, `ftruncate`)
+- non-blocking child reaping (`waitpid`, `wait`)
 
 The two routes coexist. A new binding picks the route based on what the syscall
 needs. Where Zig stdlib already does the work, going through libc is added cost
@@ -127,6 +128,56 @@ use "posix" ;
 getpid WINCH: send-signal   \ SIGWINCH is ignored by default, so this is harmless
 ```
 
+## Waiting for Children
+
+`waitpid` reaps an exited child. It takes a pid and an options word and returns
+the reaped pid and the raw status word.
+
+```
+use "posix" ;
+
+child-pid 0 waitpid   \ ( -- pid status ) blocking wait for one specific child
+```
+
+The status is the raw C status word, not a decoded exit code. Decode it with your
+own arithmetic. For a normal exit the exit code lives in the high byte on both
+Linux and macOS, so `256 div` recovers it:
+
+```
+use "posix" ;
+
+child-pid 0 waitpid   \ pid status
+256 div               \ pid exit-code
+```
+
+`wait` is the high-level wrapper. It reaps any exited child without blocking, by
+calling `waitpid` with `-1` and `WNOHANG`. It returns pid `0` when no child is
+ready:
+
+```
+use "posix" ;
+
+wait   \ ( -- pid status ) pid is 0 when nothing is ready
+```
+
+`wait` is non-blocking on purpose. A blocking wait through the FFI would block the
+whole scheduler worker thread, not just the calling task. Poll it and yield
+between polls instead:
+
+```
+use "posix" ;
+
+reap-any: ( -- pid status ) [
+  wait over 0 = [ 2drop yield reap-any ] [ ] if
+] ;
+```
+
+Do not mix `wait` with the scheduler-managed child processes in `lib/process.1z`
+(`spawn-process` with `wait-process`). `wait` reaps any child, so it can steal a
+child the scheduler is already waiting on. That leaves the scheduler's waiter
+hanging. Use one model or the other for a given child, not both. When there are no
+children at all, `wait` fails with `echild:`.
+
 ## Errno Failures
 
 A raw binding raises `posix-error:` when the syscall fails. The error carries the
@@ -152,7 +203,7 @@ works. The v1 words split as:
 
 - `io/fs`: `flock`, `lock-file`, `truncate`, `ftruncate`, `fcntl`, `posix_fadvise`
 - `system`: `kill`, `send-signal`, `mprotect`, `madvise`, `getrlimit`, `setrlimit`,
-  `resource-limit`, `set-resource-limit`
+  `resource-limit`, `set-resource-limit`, `waitpid`, `wait`
 - `none`: `getpid`, `getppid`, `clock_gettime`
 
 A sandbox that grants `io/fs` can lock a file but cannot send a signal.

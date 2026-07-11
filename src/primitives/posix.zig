@@ -46,6 +46,14 @@ fn nativePosixConst(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .fixnum = v });
             return;
         }
+
+        // WCONTINUED is Linux-only. macOS's std.posix.W has no CONTINUED field,
+        // so referencing it there is a hard compile error. This branch is pruned
+        // on non-Linux targets since native_os is comptime-known.
+        if (std.mem.eql(u8, name, "WCONTINUED")) {
+            try ctx.stack.push(.{ .fixnum = std.posix.W.CONTINUED });
+            return;
+        }
     }
 
     const val: i64 = if (std.mem.eql(u8, name, "LOCK_SH"))
@@ -112,6 +120,10 @@ fn nativePosixConst(ctx: *Context) anyerror!void {
         std.posix.F.GETFL
     else if (std.mem.eql(u8, name, "F_SETFL"))
         std.posix.F.SETFL
+    else if (std.mem.eql(u8, name, "WNOHANG"))
+        std.posix.W.NOHANG
+    else if (std.mem.eql(u8, name, "WUNTRACED"))
+        std.posix.W.UNTRACED
     else {
         helpers.setErrorContext(ctx, "unknown posix constant: {s}", .{name});
         return error.InvalidArgument;
@@ -239,6 +251,21 @@ test "posix-const resolves fcntl commands" {
     try testing.expectEqual(@as(i64, 2), try constOf("F_SETFD"));
     try testing.expectEqual(@as(i64, 3), try constOf("F_GETFL"));
     try testing.expectEqual(@as(i64, 4), try constOf("F_SETFL"));
+}
+
+test "posix-const resolves wait flags" {
+    if (is_freestanding) return error.SkipZigTest;
+
+    // WNOHANG/WUNTRACED are defined on both Linux and macOS per sys/wait.h.
+    try testing.expectEqual(@as(i64, std.posix.W.NOHANG), try constOf("WNOHANG"));
+    try testing.expectEqual(@as(i64, std.posix.W.UNTRACED), try constOf("WUNTRACED"));
+
+    // WCONTINUED is Linux-only; on other targets the name is unknown.
+    if (native_os == .linux) {
+        try testing.expectEqual(@as(i64, std.posix.W.CONTINUED), try constOf("WCONTINUED"));
+    } else {
+        try testing.expectError(error.InvalidArgument, constOf("WCONTINUED"));
+    }
 }
 
 test "posix-const resolves posix_fadvise advice on Linux" {

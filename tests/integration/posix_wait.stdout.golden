@@ -1,0 +1,24 @@
+Stack: [ ]
+=== posix.waitpid success ===
+Stack: [ ]
+PASS: waitpid status decodes to exit 7
+PASS: waitpid reaps the spawned child by pid
+Stack: [ ]
+=== posix.wait reap-any success ===
+Stack: [ ]
+Stack: [ ]
+PASS: posix.wait reaps a child with a positive pid
+Stack: [ ]
+=== posix.wait failure ===
+Stack: [ ]
+PASS: wait with no children raises posix-error
+PASS: wait errno name is echild
+Stack: [ ]
+PASS: waitpid on a bad pid raises posix-error
+PASS: waitpid errno name is echild
+Stack: [ ]
+=== posix.wait sandbox gate ===
+Stack: [ ]
+PASS: ffi+system grant lets waitpid reach the syscall
+PASS: ffi-only grant denies the system-capped waitpid
+Stack: [ ]

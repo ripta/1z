@@ -54,6 +54,14 @@ PASS: F_GETFL is 3
 Stack: [ ]
 PASS: F_SETFL is 4
 Stack: [ ]
+=== wait flags ===
+Stack: [ ]
+PASS: WNOHANG is a positive bit value
+Stack: [ ]
+PASS: WUNTRACED is a positive bit value
+Stack: [ ]
+PASS: WCONTINUED resolves on Linux (skipped elsewhere)
+Stack: [ ]
 === posix_fadvise advice (linux-only) ===
 Stack: [ ]
 PASS: POSIX_FADV_* resolves on Linux (skipped elsewhere)

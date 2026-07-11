@@ -43,6 +43,19 @@ use "posix" ;
 "F_GETFL" posix-const 3 "F_GETFL is 3" assert=
 "F_SETFL" posix-const 4 "F_SETFL is 4" assert=
 
+"wait flags" test-section
+
+"WNOHANG" posix-const 0 > "WNOHANG is a positive bit value" assert-true
+"WUNTRACED" posix-const 0 > "WUNTRACED is a positive bit value" assert-true
+
+\ WCONTINUED is Linux-only; off Linux the name is absent, so the branch trivially
+\ passes. Both branches leave the same boolean to keep the golden
+\ platform-independent. The Zig unit test covers the exact per-platform value.
+target-os choose{
+  linux: [ "WCONTINUED" posix-const 0 > ]
+  _ [ t ]
+} "WCONTINUED resolves on Linux (skipped elsewhere)" assert-true
+
 "posix_fadvise advice (linux-only)" test-section
 
 \ On Linux this verifies the POSIX_FADV_* values; off Linux the constants are
