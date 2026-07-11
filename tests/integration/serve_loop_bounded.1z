@@ -16,11 +16,9 @@
 \ that behavior exhausts the cap partway through the loop and dies with a
 \ memory-limit error instead of printing the marker.
 \
-\ The client dials with raw primitives (socket + native.connect + fd>stream)
-\ rather than the library `connect`. The library `connect` runs a Happy-Eyeballs
-\ race that spawns its own tasks per call, and those tasks currently leak until
-\ the process exits. Using it here would leak on the client side and mask the
-\ server-side fix under test.
+\ The client uses the library `connect`. Its Happy-Eyeballs race spawns tasks
+\ per call, but scope-exit reaping now releases them when connect's internal
+\ scope exits, so the client side stays bounded across the repeated dials.
 \
 \ NOTE: this is a fixed-port socket test, so it carries some inherent flakiness
 \ (port reuse, listen-before-connect timing). If it proves very flaky, it can be
@@ -38,11 +36,6 @@ use "time" ;
     stream-close
   ] ;
 
-  \ Dial one connection with raw primitives, no library `connect`.
-  dial: ( raddr -- stream ) [
-    dup socket dup [ swap native.connect ] dip fd>stream
-  ] ;
-
   <server-config>
   "127.0.0.1" >>host
   39422 >>port
@@ -52,14 +45,12 @@ use "time" ;
 
   100 milliseconds sleep
 
-  "127.0.0.1" 39422 make-addr:tcp resolve #first
-  2000 [
-    dup dial
+  800 [
+    "127.0.0.1" 39422 make-addr:tcp connect
     dup "ping\n" stream-write drop
     dup stream-read-line drop
     stream-close
   ] times
-  drop
 
   cancel-task
 ] task-scope

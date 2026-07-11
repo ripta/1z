@@ -1,0 +1,50 @@
+\ Bounded-memory regression for the library `connect` client path.
+\
+\ `connect` runs a Happy-Eyeballs race inside an internal task-scope that spawns
+\ one connect-attempt task per resolved address, plus a connect-deadline task.
+\
+\ Every child is terminal before connect returns, yet before scope-exit reaping
+\ each was retained in its home scheduler's finished_tasks until scheduler
+\ teardown. A client calling connect in a loop therefore grew with the total
+\ number of past connections. Scope-exit reaping now releases those children
+\ when connect's internal scope exits, so a loop of connects stays bounded.
+\
+\ The server here is a minimal raw listen plus a spawned accept-loop that only
+\ accepts and closes. The only tasks under test are the ones connect spawns
+\ internally, so a failure isolates the client-side leak. This works cross-worker
+\ as well as same-worker, so the `.flags` sidecar pins no thread count: connect's
+\ children stay bounded wherever they land.
+\
+\ A regression that stops reaping connect's scope children retains every attempt
+\ and deadline task and exhausts the 64 MB cap in the `.flags` sidecar partway
+\ through the loop, dying with a memory-limit error instead of printing the
+\ marker.
+\
+\ NOTE: This is a fixed-port socket test, so it carries some inherent flakiness
+\       from port reuse and listen-before-connect timing. If it proves very flaky,
+\       it can be temporarily disabled.
+
+use "net" ;
+use "net/tcp" ;
+use "time" ;
+
+[
+  accept-loop: ( server -- ) [
+    dup accept drop stream-close accept-loop
+  ] ;
+
+  "127.0.0.1" 39525 make-addr:tcp 128 listen
+  dup [ accept-loop ] curry spawn
+
+  100 milliseconds sleep
+
+  1000 [
+    "127.0.0.1" 39525 make-addr:tcp connect
+    stream-close
+  ] times
+
+  cancel-task
+  close
+] task-scope
+
+"bounded" print-line
