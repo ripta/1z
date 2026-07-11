@@ -107,6 +107,104 @@ Each entry maps a 1z word name to a C symbol name and signature. The
 `call "name" swap >module import` pattern bakes the definitions into an
 importable module.
 
+## Errno-Aware Bindings
+
+A typical libc function reports failure by returning a sentinel value and
+writing the error code into the thread-local `errno`. Binding such a function
+by hand means checking the return, resolving the platform-specific errno
+fetcher, dereferencing it, and formatting the error. FFI does all of that for
+you when a binding opts in.
+
+An `ffi-def{` entry may carry an optional `H{ }` options hash between the
+C-symbol string and the `ffi{ }` signature:
+
+```
+"c" lib-open ffi-def{
+  (flock): "flock" H{ errno: neg1: cap: io/fs: } ffi{ i32 i32 -> i32 }
+} call "libc" swap >module import
+```
+
+The `errno:` key names the failure sentinel. It is one of three symbols:
+
+| Sentinel | Failure when the return value is |
+|----------|----------------------------------|
+| `neg1:` | equal to `-1` (the common `int`-returning case, and `MAP_FAILED`) |
+| `null:` | equal to `0` / NULL (the pointer-returning case, e.g. `fopen`) |
+| `neg:` | less than `0` |
+
+When the return matches the sentinel, the runtime reads `errno` synchronously,
+before any other call can clobber it, and raises a `posix-error:`. The error
+carries a structured `data` hash and a `strerror`-derived message. A binding
+with no `errno:` key behaves exactly as a plain binding: the raw return value
+goes on the stack and `errno` is not touched.
+
+The `data` hash has two fields. `errno:` is the raw platform integer. `name:`
+is a normalized symbol (`ebadf:`, `enoent:`, `eagain:`, ...) sourced from the
+build target. The `name:` symbol is the portable dispatch key: `EAGAIN` is `11`
+on Linux and `35` on macOS, but the symbol is `eagain:` on both. Match on
+`name:`, not the raw integer.
+
+Catch a failure with `recover` and read the fields with `@get`:
+
+```
+use "posix" ;
+
+[ -1 "LOCK_EX" posix-const flock ]
+[ data: @get name: @get ]   \ ebadf:
+recover
+```
+
+The error type is `posix-error:`, reachable through `error-type: @get`, and the
+`strerror` text is `message: @get`.
+
+The errno-on-NULL case works the same way, only the sentinel differs. A
+`fopen`-style binding declares `H{ errno: null: cap: io/fs: }`, so a NULL return
+triggers the errno fetch. (`fopen` is not part of the POSIX v1 surface; this
+entry is illustrative.)
+
+```
+libc ffi-def{
+  (fopen): "fopen" H{ errno: null: cap: io/fs: } ffi{ cstring cstring -> ptr }
+}
+```
+
+The [POSIX guide](posix.md) is the worked consumer of this convention. Its
+bindings are the first real libc functions bound this way.
+
+## Per-Binding Capabilities
+
+The `cap:` key of the same options hash names the sandbox capability the call
+requires. It is checked at `ffi-call` against the active `sandbox{ }`, so the
+sandbox distinguishes a file-locking call from a signal-sending call even though
+both go through FFI. Absent a `cap:` key the binding requires the blanket `ffi`
+capability.
+
+The value is one of the existing sandbox capability names: `io`, `process`,
+`io/fs`, `io/net`, `ffi`, `system`, `eval`, or `none`. A file-descriptor
+operation declares `cap: io/fs:`; a process or memory operation declares
+`cap: system:`; a harmless read like `getpid` declares `cap: none:`.
+
+A granted capability allows its binding; a denied one is rejected before the C
+code runs:
+
+```
+use "posix" ;
+
+"cap-demo.txt" write: stream-open stream-close
+
+\ truncate is bound with cap: io/fs:, so an io/fs grant allows it.
+sandbox{ io/fs } [ "cap-demo.txt" 0 truncate drop ] with-sandbox
+
+\ kill is bound with cap: system:, so the same io/fs grant denies it.
+[ sandbox{ io/fs } [ getpid 0 kill ] with-sandbox ]
+[ drop "denied" print-line ]
+recover
+
+"cap-demo.txt" delete-file
+```
+
+The [POSIX guide](posix.md) lists which capability each POSIX word requires.
+
 ## Resource Lifecycle
 
 C libraries often hand back opaque pointers that must be freed. `bind-close`

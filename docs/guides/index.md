@@ -21,13 +21,15 @@ definitions, and control flow.
 8. [HTTP](http.md) -- request/response, handler shape, routing, static files
 9. [CGI](cgi.md) -- running net/http handlers as classical CGI scripts
 10. [Foreign Function Interface](ffi.md) -- calling C libraries from 1z
-11. [Execution and Compilation Modes](execution-modes.md) -- interpreter,
+11. [POSIX](posix.md) -- libc-bound syscalls through the errno-aware FFI
+    convention, and when to use them over native primitives
+12. [Execution and Compilation Modes](execution-modes.md) -- interpreter,
     JIT, runtime-image AOT, and interpreter-free AOT tradeoffs
-12. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
+13. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
     and `samply` see 1z words in AOT binaries
-13. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
+14. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
     on QEMU riscv64 with no operating system
-14. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
+15. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
     comparison for experienced stack-language programmers
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with
