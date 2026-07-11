@@ -1,4 +1,5 @@
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
 Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter

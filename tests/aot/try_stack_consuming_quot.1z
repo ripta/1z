@@ -1,0 +1,27 @@
+\\ A try whose quotation consumes a stack argument compiles under `--interpreter-fallback=false`
+\\ instead of failing the NC.13 abstract-stack underflow.
+\\
+\\ This is the static-file-handler shape: the quot consumes `path`, and an `if` arm reaches below
+\\ the result via `swap` for a value kept from before the try.
+\\
+\\ `try`'s row-variable effect resolves the real arity from the quotation literal per call site,
+\\ so the word's own body compiles concretely rather than underflowing.
+demo: ( n path -- s ) [
+  [ 100 swap / ] try
+  dup result:ok?
+  [ unwrap-or-throw swap + >string ]
+  [ drop drop "error" ]
+  if
+] ;
+
+5 4 demo print-line
+5 0 demo print-line
+
+\\ A try whose quotation consumes two arguments, confirming arity resolves for
+\\ counts other than one.
+add-safely: ( a b -- s ) [
+  [ + ] try
+  dup result:ok? [ unwrap-or-throw >string ] [ drop "err" ] if
+] ;
+
+10 20 add-safely print-line

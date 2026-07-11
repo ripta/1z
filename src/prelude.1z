@@ -928,7 +928,7 @@ unwrap-or-throw: method{ result } [ dup result:ok? [ unmake-result:ok ] [ unmake
 ?flatten: method{ result } [ dup result:ok? [ unmake-result:ok ] when ] ;
 
 \\ Call a quotation, wrapping success in result:ok and thrown errors in result:err.
-try: ( quot -- result ) [ [ call >result:ok ] [ >result:err ] recover ] ;
+try: ( ..a quot: ( ..a -- x ) -- result ) [ [ call >result:ok ] [ >result:err ] recover ] ;
 
 \\ Look up a key in an associative, returning some(value) or none.
 @get?: ( assoc key -- option ) [ 2dup @has? [ @get >option:some ] [ 2drop option:none ] if ] ;

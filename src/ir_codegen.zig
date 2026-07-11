@@ -2613,16 +2613,30 @@ fn resolveRowVariableEffect(
         const row_out_size: u8 = inferred.output_count - @as(u8, @intCast(declared_concrete_out));
 
         // Bind row variables from the quotation's input side.
+        var input_has_row_var = false;
         for (qe.inputs) |qp| {
             if (!qp.is_row_variable) continue;
+            input_has_row_var = true;
             if (!(try addOrCheckBinding(&bindings, &num_bindings, qp.name, row_in_size))) return null;
         }
 
         // Bind row variables from the quotation's output side.
+        var output_has_row_var = false;
         for (qe.outputs) |qp| {
             if (!qp.is_row_variable) continue;
+            output_has_row_var = true;
             if (!(try addOrCheckBinding(&bindings, &num_bindings, qp.name, row_out_size))) return null;
         }
+
+        // A side that inferred more entries than it declares concretely, but carries no row
+        // variable to absorb the surplus, is not soundly modeled. The extra entries would be
+        // silently dropped.
+        //
+        // Bail so the call falls back to the interpreter rather than miscompiling. This is the
+        // concrete-output + row-input shape, e.g., `try` with a multi-value quotation. The
+        // `keep` / `dip` family always carries a row variable on both sides and never trips it.
+        if (row_in_size > 0 and !input_has_row_var) return null;
+        if (row_out_size > 0 and !output_has_row_var) return null;
     }
 
     // Compute specialized outer effect using row variable bindings.
@@ -16292,6 +16306,72 @@ test "resolveRowVariableEffect: keep with [ dup ]" {
     try testing.expect(result != null);
     try testing.expectEqual(@as(u8, 2), result.?.input_count);
     try testing.expectEqual(@as(u8, 3), result.?.output_count);
+}
+
+test "resolveRowVariableEffect: try with a single-output quotation resolves" {
+    // try: ( ..a quot: ( ..a -- x ) -- result )
+    // Quotation [ 2 * ] has inferred effect (1 -- 1).
+    // quot declared: ( ..a -- x ), concrete_in=0, concrete_out=1(x)
+    // ..a = 1 - 0 = 1, output surplus = 1 - 1 = 0
+    // Specialized: inputs = ..a(1) + quot(1) = 2, outputs = result(1)
+    const quot_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "x" },
+        },
+    };
+    const outer = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "quot", .quotation_effect = &quot_effect },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "result" },
+        },
+    };
+
+    const body = makeInstructions(.{ @as(i64, 2), "*" });
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .quotation_body = &body }; // quot
+
+    const result = resolveRowVariableEffect(&outer, &stack, 1, null) catch unreachable;
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(u8, 2), result.?.input_count);
+    try testing.expectEqual(@as(u8, 1), result.?.output_count);
+}
+
+test "resolveRowVariableEffect: try with a multi-output quotation bails to null" {
+    // try: ( ..a quot: ( ..a -- x ) -- result )
+    // Quotation [ 1 2 ] has inferred effect (0 -- 2), one more output than the
+    // declared single `x`. The output side carries no row variable to absorb
+    // the surplus, so the effect cannot be soundly modeled and resolution bails
+    // to null (interpreter fallback) rather than dropping the extra output.
+    const quot_effect = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "x" },
+        },
+    };
+    const outer = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "quot", .quotation_effect = &quot_effect },
+        },
+        .outputs = &[_]StackEffectParam{
+            .{ .name = "result" },
+        },
+    };
+
+    const body = makeInstructions(.{ @as(i64, 1), @as(i64, 2) });
+    var stack: [max_abstract_stack_depth]StackEntry = undefined;
+    stack[0] = .{ .quotation_body = &body }; // quot
+
+    const result = resolveRowVariableEffect(&outer, &stack, 1, null) catch unreachable;
+    try testing.expect(result == null);
 }
 
 test "resolveRowVariableEffect: raw_at_slot quotation returns null" {

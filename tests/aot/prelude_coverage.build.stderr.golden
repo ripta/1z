@@ -43,6 +43,7 @@ AOT interpreter fallbacks: 315 total
     ... 299 more
   static-check: jitInterpretedCall=2/2 jitNativeWordCall=296/296 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
+Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'q' has row-variable effect; quotation call falls back to interpreter
 Warning: '3keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
