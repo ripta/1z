@@ -1,0 +1,26 @@
+\ A quotation resolves its bare words against the lexical scope where it was
+\ created, not against the live frame stack it happens to execute against.
+\
+\ `apply` runs each closure inside the helper module's body, where that module's
+\ own `val` and `module-only` are live on the frame stack. A closure that closes
+\ over the local `val` must still resolve to the local; a closure that binds no
+\ local must resolve to the module word.
+
+use "testing" ;
+use "./lexical_closure_capture_mod.1z" ;
+
+[
+  val: [ "LOCAL-VAL" ] ;
+
+  "local binding shadowed by same-named module word" test-section
+  [ val ] apply
+  "LOCAL-VAL"
+  "closure resolves to its definition-site local, not the live module word"
+  assert=
+
+  "bare word with no local binding" test-section
+  [ module-only ] apply
+  "MODULE-ONLY"
+  "closure with no local binding resolves to the module word"
+  assert=
+] task-scope

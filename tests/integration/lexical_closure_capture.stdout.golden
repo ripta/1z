@@ -1,0 +1,5 @@
+=== local binding shadowed by same-named module word ===
+PASS: closure resolves to its definition-site local, not the live module word
+=== bare word with no local binding ===
+PASS: closure with no local binding resolves to the module word
+Stack: [ ]

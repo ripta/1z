@@ -5473,7 +5473,7 @@ fn putTopLevelWord(
     instrs: []const Instruction,
 ) !void {
     if (ctx.import_frame_index == null) {
-        try ctx.local_frames.append(ctx.allocator, .{});
+        try ctx.pushLocalFrame();
         ctx.import_frame_index = ctx.local_frames.items.len - 1;
     }
     const frame = &ctx.local_frames.items[ctx.import_frame_index.?];

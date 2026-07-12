@@ -1,0 +1,13 @@
+\ Helper module for lexical_closure_capture.1z.
+\
+\ `val` deliberately collides with a local binding the main test defines, so a
+\ closure that closes over the local must not resolve to this module word.
+\ `apply` runs a passed quotation inside this module's body, which is what makes
+\ this module's own `val` / `module-only` live on the frame stack while the
+\ quotation executes.
+
+val: ( -- s ) [ "MODULE-VAL" ] ;
+
+module-only: ( -- s ) [ "MODULE-ONLY" ] ;
+
+apply: ( q -- x ) [ call ] ;

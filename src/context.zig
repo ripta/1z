@@ -94,6 +94,33 @@ pub const ParameterFrame = std.StringHashMapUnmanaged(Value);
 pub const LocalFrame = std.StringHashMapUnmanaged(WordDefinition);
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 
+/// The purposes a `LocalFrame` serves on the shared `local_frames` stack:
+///
+/// - `lexical` frames hold genuine top-level / quotation-local words. The closure-local bindings
+///    a quotation legitimately closes over.
+/// - `module_deps` frames are the transient frames that `pushModuleDepsFrame` puts up during a
+///    module's tail calls. They hold that module's deps and words and are recoverable from the
+///    module pointer alone.
+///
+/// The tag exists so lexical-closure capture can snapshot only the small lexical frames and
+/// reference the (large) module by pointer, rather than deep-copying a module-deps frame on every
+/// quotation creation.
+pub const FrameKind = enum { lexical, module_deps };
+
+/// The lexical scope captured at a quotation's creation site, keyed off the quotation body's
+/// instruction-slice pointer.
+///
+/// Bare words inside the quotation resolve against this, not the live frame stack the quotation
+/// happens to execute against, so a closure means the same thing wherever it runs.
+///
+/// `lexical_frames` is an owned snapshot of the genuine lexical frames live at creation.
+///
+/// Module-scope resolution still flows through the existing `quotation_defining_module` stamp, so
+/// no module pointer is captured here.
+pub const CapturedScope = struct {
+    lexical_frames: []LocalFrame,
+};
+
 /// Compute the constant-per-word `ExecFlags` from a definition's markers and
 /// action. Called at definition finalization so the flags ride the by-value
 /// execution copy that `executeResolvedWord` reads on the hot path.
@@ -346,6 +373,10 @@ pub const Context = struct {
     parameter_env: std.ArrayListUnmanaged(ParameterFrame),
     /// Local definition frames for lexical scoping within quotations
     local_frames: std.ArrayListUnmanaged(LocalFrame),
+    /// Per-frame kind tag, kept index-parallel with `local_frames`. Every push and pop of a local
+    /// frame maintains both arrays together; the debug-only `assertFrameKindsParity` checks the
+    /// lengths stay equal.
+    local_frame_kinds: std.ArrayListUnmanaged(FrameKind) = .{},
     /// Tokenizer for parse-time word access (set during parsing, null otherwise)
     parse_tokenizer: ?*Tokenizer = null,
     /// Deferred emissions requested by parse-time words via `emit-call` /
@@ -560,6 +591,11 @@ pub const Context = struct {
     /// when the defining module's deps frame is no longer on the frame stack.
     /// Populated at module finalization; consulted only on the unknown-word path.
     quotation_defining_module: std.AutoHashMapUnmanaged(usize, *const value_mod.Module) = .{},
+    /// Maps a quotation body's instruction-slice pointer to the lexical scope captured where the
+    /// quotation was created. Populated only when live lexical frames exist at creation, so a
+    /// program that never closes over a local binding never touches it and resolution stays on
+    /// the fast path.
+    quotation_captured_scope: std.AutoHashMapUnmanaged(usize, *CapturedScope) = .{},
     /// PIC entry for the current instruction, threaded through so native
     /// operators (arithmetic, comparison) can use it without signature changes.
     current_pic_entry: ?*PolymorphicCache = null,
@@ -1039,13 +1075,18 @@ pub const Context = struct {
         // and owns no allocation, so the frame clone copies entries directly
         // without the container-backing retain the parameter snapshot needs.
         const transient_start = if (parent.import_frame_index) |idx| idx + 1 else 0;
-        for (parent.local_frames.items[transient_start..]) |parent_frame| {
+        for (parent.local_frames.items[transient_start..], transient_start..) |parent_frame, src_idx| {
             var cloned_frame = LocalFrame{};
             var iter = parent_frame.iterator();
             while (iter.next()) |entry| {
                 try cloned_frame.put(allocator, entry.key_ptr.*, entry.value_ptr.*);
             }
             try ctx.local_frames.append(allocator, cloned_frame);
+            const kind: FrameKind = if (src_idx < parent.local_frame_kinds.items.len)
+                parent.local_frame_kinds.items[src_idx]
+            else
+                .lexical;
+            try ctx.local_frame_kinds.append(allocator, kind);
         }
 
         return ctx;
@@ -1201,6 +1242,8 @@ pub const Context = struct {
             frame.deinit(self.allocator);
         }
         self.local_frames.deinit(self.allocator);
+        self.local_frame_kinds.deinit(self.allocator);
+        self.deinitCapturedScopes();
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
         self.jit_pending_trace_frames.deinit(self.allocator);
@@ -1418,6 +1461,9 @@ pub const Context = struct {
     /// pool exists, so it is uncontended too.
     pub fn pushLocalFrame(self: *Context) !void {
         try self.local_frames.append(self.allocator, LocalFrame{});
+        errdefer self.local_frames.items.len -= 1;
+        try self.local_frame_kinds.append(self.allocator, .lexical);
+        self.assertFrameKindsParity();
     }
 
     /// Pop the top local frame from the frame stack. Lock-free for the same
@@ -1427,7 +1473,103 @@ pub const Context = struct {
             const last_idx = self.local_frames.items.len - 1;
             self.local_frames.items[last_idx].deinit(self.allocator);
             self.local_frames.items.len -= 1;
+            if (self.local_frame_kinds.items.len > 0) {
+                self.local_frame_kinds.items.len -= 1;
+            }
+            self.assertFrameKindsParity();
         }
+    }
+
+    /// Debug-only invariant: the kind tag array stays index-parallel with the frame array.
+    ///
+    /// A desync means a push or pop touched one without the other.
+    fn assertFrameKindsParity(self: *const Context) void {
+        std.debug.assert(self.local_frame_kinds.items.len == self.local_frames.items.len);
+    }
+
+    /// Capture the lexical scope visible at a quotation's creation, keyed off the quotation body's
+    /// instruction-slice pointer. Capture is done once per body.
+    ///
+    /// Bare words inside the quotation resolve to their definition-site bindings rather than to
+    /// same-named words that merely happen to be live on the frame stack where the quotation later
+    /// executes.
+    ///
+    /// Only the transient lexical frames above the durable import frame are snapshotted; the
+    /// durable scope and the module are reached the normal way. When no transient lexical frame is
+    /// live, there is nothing to close over. This is the common case, so it returns without
+    /// touching the side map and resolution stays on the existing fast path.
+    ///
+    /// A captured scope is read by any in-flight execution of this body, so it must never be freed
+    /// and rebuilt under a live reader. A single stable capture avoids that use-after-free and
+    /// bounds memory to the number of distinct closure literals.
+    ///
+    /// The consequence is that one body reused in two scopes that bind the same name differently
+    /// resolves both to the first scope's binding. Per-call distinct captures need the per-quotation
+    /// scope that `curry` / `compose` will carry.
+    fn captureQuotationScope(self: *Context, instructions: []const Instruction) !void {
+        if (instructions.len == 0) return;
+        const floor = if (self.import_frame_index) |idx| idx + 1 else 0;
+        if (self.local_frames.items.len <= floor) return;
+
+        const key = @intFromPtr(instructions.ptr);
+        if (self.quotation_captured_scope.contains(key)) return;
+
+        var frames: std.ArrayListUnmanaged(LocalFrame) = .{};
+        errdefer {
+            for (frames.items) |*f| f.deinit(self.allocator);
+            frames.deinit(self.allocator);
+        }
+
+        var i = floor;
+        while (i < self.local_frames.items.len) : (i += 1) {
+            if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] != .lexical) continue;
+            const src = &self.local_frames.items[i];
+            if (src.count() == 0) continue;
+            var clone: LocalFrame = .{};
+            errdefer clone.deinit(self.allocator);
+            var it = src.iterator();
+            while (it.next()) |e| try clone.put(self.allocator, e.key_ptr.*, e.value_ptr.*);
+            try frames.append(self.allocator, clone);
+        }
+
+        if (frames.items.len == 0) {
+            frames.deinit(self.allocator);
+            return;
+        }
+
+        const scope = try self.allocator.create(CapturedScope);
+        errdefer self.allocator.destroy(scope);
+        scope.* = .{
+            .lexical_frames = try frames.toOwnedSlice(self.allocator),
+        };
+
+        try self.quotation_captured_scope.put(self.allocator, key, scope);
+    }
+
+    /// Resolve `name` against a captured lexical scope's transient frames, most-recently-pushed
+    /// frame first.
+    ///
+    /// Returns null when the captured scope does not bind the name, so the caller falls back to
+    /// normal resolution.
+    fn lookupInCapturedScope(scope: *const CapturedScope, name: []const u8) ?WordDefinition {
+        var i = scope.lexical_frames.len;
+        while (i > 0) {
+            i -= 1;
+            if (scope.lexical_frames[i].get(name)) |def| return def;
+        }
+        return null;
+    }
+
+    fn freeCapturedScope(self: *Context, scope: *CapturedScope) void {
+        for (scope.lexical_frames) |*f| f.deinit(self.allocator);
+        self.allocator.free(scope.lexical_frames);
+        self.allocator.destroy(scope);
+    }
+
+    fn deinitCapturedScopes(self: *Context) void {
+        var it = self.quotation_captured_scope.valueIterator();
+        while (it.next()) |scope_ptr| self.freeCapturedScope(scope_ptr.*);
+        self.quotation_captured_scope.deinit(self.allocator);
     }
 
     /// Record `module` as the defining module of this body and every quotation
@@ -1486,6 +1628,14 @@ pub const Context = struct {
     /// frame, task-private and never read cross-task.
     pub fn pushModuleDepsFrame(self: *Context, module: *const value_mod.Module) !void {
         try self.local_frames.append(self.allocator, LocalFrame{});
+        errdefer {
+            self.local_frames.items[self.local_frames.items.len - 1].deinit(self.allocator);
+            self.local_frames.items.len -= 1;
+        }
+
+        try self.local_frame_kinds.append(self.allocator, .module_deps);
+        errdefer self.local_frame_kinds.items.len -= 1;
+        self.assertFrameKindsParity();
         const frame_idx = self.local_frames.items.len - 1;
         var frame = &self.local_frames.items[frame_idx];
 
@@ -5049,6 +5199,16 @@ pub const Context = struct {
         // `use`-imported word inside this body; popped on every exit from the body.
         var lazy_deps_module: ?*const value_mod.Module = null;
         defer if (lazy_deps_module) |mod| self.popModuleDepsFrameTraced(mod);
+
+        // The lexical scope captured where this body was created, if any. A bare word that this
+        // scope binds resolves to that binding, ahead of a same-named word merely live on the
+        // frame stack this body runs against. The count guard keeps resolution on the fast path
+        // for programs that never close over a local binding.
+        const captured_scope: ?*const CapturedScope = if (self.quotation_captured_scope.count() > 0)
+            self.quotation_captured_scope.get(@intFromPtr(instructions.ptr))
+        else
+            null;
+
         for (instructions, 0..) |instr, idx| {
             if (self.debugger) |dbg| {
                 if (try dbg.shouldPause(instr, self)) {
@@ -5065,6 +5225,10 @@ pub const Context = struct {
             switch (instr.op) {
                 .push_literal => |val| {
                     try self.stack.push(val);
+                    // Capture the lexical scope at the moment a quotation literal is created
+                    if (val == .quotation) {
+                        try self.captureQuotationScope(val.quotation.instructions);
+                    }
                     if (self.benchmark) |b| {
                         b.recordPushLiteral();
                         b.updatePeakStackDepth(self.stack.depth());
@@ -5081,6 +5245,16 @@ pub const Context = struct {
                         b.beginWordProfile();
                     }
                     if (self.profile) |p| p.recordWordStart(self.allocator);
+
+                    if (captured_scope) |scope| {
+                        if (lookupInCapturedScope(scope, name)) |word| {
+                            switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                                .proceed => {},
+                                .tail_call_set => return,
+                            }
+                            continue;
+                        }
+                    }
 
                     if (self.lookupWordForExecution(name)) |word| {
                         switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
@@ -7009,4 +7183,62 @@ test "wordDefFromModuleWord: synthesized definition carries computed exec_flags"
     try std.testing.expect(!nat_def.exec_flags.is_generic);
     try std.testing.expect(!nat_def.exec_flags.empty_compound_body);
     try std.testing.expect(!nat_def.exec_flags.skip_type_validation);
+}
+
+test "frame-kind tag: pushLocalFrame is lexical, pushModuleDepsFrame is module_deps" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+
+    try ctx.pushLocalFrame();
+    try ctx.pushModuleDepsFrame(&module);
+    try ctx.pushLocalFrame();
+
+    try std.testing.expectEqual(@as(usize, 3), ctx.local_frames.items.len);
+    try std.testing.expectEqual(@as(usize, 3), ctx.local_frame_kinds.items.len);
+    try std.testing.expectEqual(FrameKind.lexical, ctx.local_frame_kinds.items[0]);
+    try std.testing.expectEqual(FrameKind.module_deps, ctx.local_frame_kinds.items[1]);
+    try std.testing.expectEqual(FrameKind.lexical, ctx.local_frame_kinds.items[2]);
+
+    // Popping keeps the two arrays index-parallel.
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(usize, 2), ctx.local_frames.items.len);
+    try std.testing.expectEqual(@as(usize, 2), ctx.local_frame_kinds.items.len);
+}
+
+test "captureQuotationScope: snapshots a lexical local, skips a module-deps frame" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    // Frame 0 is the durable import frame; captures start above it.
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    // A module-deps frame carrying a `shadow` word that must NOT be captured.
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    try module.words.put(std.testing.allocator, "shadow", .{ .action = .{ .native = noop } });
+    defer module.words.deinit(std.testing.allocator);
+    try ctx.pushModuleDepsFrame(&module);
+
+    // A genuine lexical frame binding `shadow` to a distinct local definition.
+    try ctx.pushLocalFrame();
+    try ctx.local_frames.items[ctx.local_frames.items.len - 1].put(ctx.allocator, "shadow", .{
+        .name = "shadow",
+        .source_file = "local-site",
+        .action = .{ .compound = &.{} },
+    });
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "shadow" }, .line = 0 }};
+    try ctx.captureQuotationScope(&body);
+
+    const scope = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedCapture;
+    // Only the lexical frame is snapshotted; the module-deps frame is skipped.
+    try std.testing.expectEqual(@as(usize, 1), scope.lexical_frames.len);
+    const resolved = Context.lookupInCapturedScope(scope, "shadow") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
 }
