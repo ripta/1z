@@ -3,16 +3,19 @@
 # Benchmark examples/http-static.1z across the execution modes: interpreted
 # (--compile=off), JIT hybrid (--compile=hybrid), and JIT eager (--compile=eager).
 # The AOT mode (`1z build --interpreter-fallback=false`) is attempted last: the
-# example builds, but the compiled serve path currently resets connections at
-# runtime, so its row records `reset` rather than a throughput number. See
+# example builds, but the compiled serve path never responds at runtime, so its
+# row records `reset` rather than a throughput number. See
 # examples/http-static-benchmark.md.
 #
 # Each mode serves a sustained load. The old per-connection leak is fixed, so the
 # server stays bounded; steady-state RSS is sampled per mode to show it.
 #
-# Requires ApacheBench (`ab`), which ships with macOS. `wrk` is not used because
-# the server sends `Connection: close` (no keep-alive) and `wrk` is not present
-# on a stock macOS.
+# Each mode is driven under two connection modes. Plain `ab` sends HTTP/1.0 with no
+# keep-alive header, so the server closes after every response: the close-per-request
+# baseline. `ab -k` adds `Connection: keep-alive`, so the server reuses each connection
+# up to its 100-requests-per-connection cap, amortizing the per-connection task spawn.
+#
+# Requires ApacheBench (`ab`), which ships with macOS.
 #
 # Usage:
 #   examples/http-static-benchmark.sh [OUTPUT_FILE]
@@ -69,8 +72,8 @@ trap cleanup EXIT
   echo "Measured:    -n ${MEASURE_N} -c ${MEASURE_C}"
   echo "Max memory:  ${MAX_MEMORY} (interpreter/JIT; AOT is uncapped, see RSS)"
   echo
-  printf '%-10s %14s %18s %14s %10s\n' "mode" "req/s" "ms/req(concurrent)" "p50(ms)" "RSS(MB)"
-  printf '%-10s %14s %18s %14s %10s\n' "----" "-----" "------------------" "-------" "-------"
+  printf '%-10s %-10s %14s %18s %14s %10s\n' "mode" "conn" "req/s" "ms/req(concurrent)" "p50(ms)" "RSS(MB)"
+  printf '%-10s %-10s %14s %18s %14s %10s\n' "----" "----" "-----" "------------------" "-------" "-------"
 } >> "${OUT}"
 
 # Launch an interpreter/JIT server. Sets SERVER_PID.
@@ -89,20 +92,14 @@ launch_aot() {
   SERVER_PID=$!
 }
 
-# Warm up, measure, sample RSS, and record one row. Assumes SERVER_PID is a
-# running server. Kills it afterward.
-measure() {
-  local label="$1" port="$2"
+# Run one measured ab load, sample RSS, and record one row. AB_FLAGS is empty for
+# the close-per-request baseline and "-k" for keep-alive. Assumes SERVER_PID is a
+# running server; does not stop it.
+record_row() {
+  local label="$1" conn="$2" ab_flags="$3" port="$4"
 
-  echo "== mode=${label} port=${port} =="
-  sleep 2   # eager/AOT modes may compile up front; give it a moment.
-
-  # Warmup (discarded): lets the JIT modes reach steady state.
-  ab -n "${WARMUP_N}" -c "${WARMUP_C}" "http://127.0.0.1:${port}/" >/dev/null 2>&1 || true
-
-  # Measured run.
   local report
-  report="$(ab -n "${MEASURE_N}" -c "${MEASURE_C}" "http://127.0.0.1:${port}/" 2>/dev/null)"
+  report="$(ab ${ab_flags} -n "${MEASURE_N}" -c "${MEASURE_C}" "http://127.0.0.1:${port}/" 2>/dev/null)"
 
   # Steady-state RSS of the server after the sustained run (KB on macOS -> MB).
   local rss_kb rss_mb
@@ -114,7 +111,25 @@ measure() {
   mspr="$(echo "${report}" | awk '/across all concurrent/ {print $4}')"
   p50="$(echo "${report}"  | awk '/^  50%/ {print $2}')"
 
-  printf '%-10s %14s %18s %14s %10s\n' "${label}" "${rps}" "${mspr}" "${p50}" "${rss_mb}" >> "${OUT}"
+  printf '%-10s %-10s %14s %18s %14s %10s\n' "${label}" "${conn}" "${rps}" "${mspr}" "${p50}" "${rss_mb}" >> "${OUT}"
+}
+
+# Warm up, then measure both connection modes against the same running server, and
+# record a row for each. Assumes SERVER_PID is a running server. Kills it afterward.
+measure() {
+  local label="$1" port="$2"
+
+  echo "== mode=${label} port=${port} =="
+  sleep 2   # eager/AOT modes may compile up front; give it a moment.
+
+  # Close-per-request baseline: warmup (discarded) lets the JIT modes reach steady
+  # state, then one measured run.
+  ab -n "${WARMUP_N}" -c "${WARMUP_C}" "http://127.0.0.1:${port}/" >/dev/null 2>&1 || true
+  record_row "${label}" close "" "${port}"
+
+  # Keep-alive: a separate warmup on the reused connection, then one measured run.
+  ab -k -n "${WARMUP_N}" -c "${WARMUP_C}" "http://127.0.0.1:${port}/" >/dev/null 2>&1 || true
+  record_row "${label}" keepalive "-k" "${port}"
 
   kill "${SERVER_PID}" 2>/dev/null || true
   wait "${SERVER_PID}" 2>/dev/null || true
@@ -127,8 +142,8 @@ launch_jit hybrid 18212; measure hybrid 18212
 launch_jit eager  18213; measure eager  18213
 
 # AOT: the example builds (--interpreter-fallback=false), but the compiled serve
-# path currently resets connections at runtime, so the server accepts and then
-# drops each request. Guard the build and the run and record the outcome instead
+# path does not respond at runtime: the server accepts each request and then
+# stalls with no reply. Guard the build and the run and record the outcome instead
 # of aborting the whole script. See examples/http-static-benchmark.md.
 echo "Building the AOT binary (--interpreter-fallback=false)..."
 AOT_BIN="$(mktemp)"
@@ -137,23 +152,29 @@ if "${BIN}" build --interpreter-fallback=false examples/http-static.1z -o "${AOT
   echo "== mode=aot port=18214 =="
   launch_aot 18214
   sleep 2
-  if curl -sf -o /dev/null "http://127.0.0.1:18214/"; then
+  # --max-time guards against a compiled server that accepts but never responds:
+  # without it a hung connection would block the probe forever.
+  if curl -sf --max-time 5 -o /dev/null "http://127.0.0.1:18214/"; then
     measure aot 18214
   else
-    # Built and bound, but the compiled handler resets connections.
-    printf '%-10s %14s %18s %14s %10s\n' "aot" "reset" "n/a" "n/a" "n/a" >> "${OUT}"
+    # Built and bound, but the compiled handler never responds. Both connection
+    # modes fail the same way, so record a reset row for each.
+    printf '%-10s %-10s %14s %18s %14s %10s\n' "aot" "close"     "reset" "n/a" "n/a" "n/a" >> "${OUT}"
+    printf '%-10s %-10s %14s %18s %14s %10s\n' "aot" "keepalive" "reset" "n/a" "n/a" "n/a" >> "${OUT}"
     kill "${SERVER_PID}" 2>/dev/null || true
     wait "${SERVER_PID}" 2>/dev/null || true
     SERVER_PID=""
   fi
 else
-  printf '%-10s %14s %18s %14s %10s\n' "aot" "build-fail" "n/a" "n/a" "n/a" >> "${OUT}"
+  printf '%-10s %-10s %14s %18s %14s %10s\n' "aot" "close"     "build-fail" "n/a" "n/a" "n/a" >> "${OUT}"
+  printf '%-10s %-10s %14s %18s %14s %10s\n' "aot" "keepalive" "build-fail" "n/a" "n/a" "n/a" >> "${OUT}"
 fi
 
 echo >> "${OUT}"
-echo "Note: throughput is expected to be nearly identical across modes. The" >> "${OUT}"
-echo "server is spawn-bound (one coroutine + context allocated per connection)," >> "${OUT}"
-echo "not compute-bound, so the compile mode barely affects it." >> "${OUT}"
+echo "Note: within each connection mode, throughput is nearly identical across compile" >> "${OUT}"
+echo "modes, so the compile mode is not the bottleneck. Keep-alive reuses each connection" >> "${OUT}"
+echo "for up to 100 requests. It lowers per-request latency but does not raise throughput," >> "${OUT}"
+echo "so the ceiling is not the per-connection accept and spawn cost." >> "${OUT}"
 
 echo
 echo "Results written to: ${OUT}"
