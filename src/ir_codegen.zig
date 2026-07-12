@@ -4589,6 +4589,8 @@ const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
     .{ "<rot-n", IntrinsicEntry{ .handler = emitIntrinsicRotNUp, .caps = .{ .needs_native_call = true } } },
     .{ "rot-n>", IntrinsicEntry{ .handler = emitIntrinsicRotNDown, .caps = .{ .needs_native_call = true } } },
     .{ "nip-n", IntrinsicEntry{ .handler = emitIntrinsicNipN, .caps = .{ .needs_native_call = true } } },
+    .{ "drop-n", IntrinsicEntry{ .handler = emitIntrinsicDropN, .caps = .{ .needs_native_call = true } } },
+    .{ "array-n", IntrinsicEntry{ .handler = emitIntrinsicArrayN, .caps = .{ .needs_native_call = true } } },
     .{ "times", IntrinsicEntry{ .handler = emitIntrinsicTimes, .caps = .{ .needs_safepoint = true } } },
     .{ "loop", IntrinsicEntry{ .handler = emitIntrinsicLoop, .caps = .{ .needs_safepoint = true } } },
     .{ "while", IntrinsicEntry{ .handler = emitIntrinsicWhile, .caps = .{ .needs_safepoint = true } } },
@@ -6433,6 +6435,84 @@ fn emitIntrinsicRotNDown(ec: EmitCtx) IrCodegenError!ControlFlow {
 
 fn emitIntrinsicNipN(ec: EmitCtx) IrCodegenError!ControlFlow {
     return emitIndexedStackDispatch(ec, .nip_n);
+}
+
+/// Compile `drop-n` / `array-n` when the count is a literal.
+///
+/// Their declared variadic effect (`x1..xn n --`, `...elems n -- array`) models a
+/// fixed arity, so without the literal count the abstract stack cannot tell how
+/// many entries the op consumes. It then collapses to a row. That is fatal when
+/// concrete entries sit below the consumed span, because the row swallows them.
+///
+/// Folding the literal count recovers the real arity. The op consumes `depth`
+/// entries plus the count literal itself, and produces `produced`. The native
+/// runs against the live stack. `settleRowAwareStack` then reconciles the
+/// abstract stack, preserving any row below and collapsing only when the consumed
+/// span reaches into it.
+///
+/// `escapes` marks the produced value as a word-output escape position, so a
+/// packed quotation element with an uncompiled body is force-linked to the
+/// interpreter. `array-n` escapes its packed array; `drop-n` produces nothing.
+///
+/// A count that is not a literal keeps the pre-existing row-collapse behavior.
+fn emitLiteralCountConsumingOp(ec: EmitCtx, produced: usize, escapes: bool) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+    const name = ec.name;
+
+    const res = state.resolver orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+    const resolved = res.resolve(name, res.user_data) orelse {
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
+    };
+
+    const depth = extractPrecedingLiteralDepth(ec.instructions, ec.idx) orelse {
+        if (state.aot_mode) {
+            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line)) return .next;
+            return .stop;
+        }
+        state.not_compilable_reason = .indexed_access_into_row;
+        return IrCodegenError.NotCompilable;
+    };
+
+    // The op consumes `depth` entries beneath the count plus the count itself.
+    const consumed = depth + 1;
+    // The consumed span must stay above any row: the deepest consumed entry sits
+    // at `sp - consumed` and must be a modeled entry strictly above the row.
+    const reaches_row = if (findRowRegionIndex(stack, sp.*)) |row_idx|
+        !(sp.* > consumed and sp.* - consumed > row_idx)
+    else
+        sp.* < consumed;
+    if (reaches_row) {
+        if (state.aot_mode) {
+            if (try emitDynamicRowFallback(state, stack, sp, name, resolved, ec.line)) return .next;
+            return .stop;
+        }
+        state.not_compilable_reason = .indexed_access_into_row;
+        return IrCodegenError.NotCompilable;
+    }
+
+    try materializeQuotations(state, stack, sp.*, escapes);
+    flushToPhysicalStack(state, stack, sp.*);
+    const ctx_val = emitCallbackPreamble(state, sp.*);
+    if (resolved.stack_effect_ptr) |eff_ptr| emitParamValidation(state, eff_ptr);
+    emitNativeWordCall(state, ctx_val, name, resolved, ec.line);
+    if (exitFallsThrough(state.exit_kind)) {
+        settleRowAwareStack(state, stack, sp, consumed, produced);
+    }
+    return .next;
+}
+
+fn emitIntrinsicDropN(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitLiteralCountConsumingOp(ec, 0, false);
+}
+
+fn emitIntrinsicArrayN(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return emitLiteralCountConsumingOp(ec, 1, true);
 }
 
 fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
