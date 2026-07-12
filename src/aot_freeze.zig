@@ -925,6 +925,37 @@ fn classifyCallee(ctx: *const Context, name: []const u8) PendingResolution {
     return .{ .unresolved = .not_in_dictionary };
 }
 
+/// Seed the worklist with every word a reified quotation calls, without recording per-call-site
+/// `pending_call_targets`.
+///
+/// A `parameter{ [ ... ] }` default is a quotation the interpreter runs on an unbound `get`. It is
+/// serialized into the runtime image as bytecode, but the words it calls are not part of any
+/// compiled instruction stream, so the main BFS never reaches them. Such a callee then has its
+/// interpretable body dropped as empty at freeze while no compiled function is emitted for it, so
+/// calling it from the interpreted default is a silent no-op that leaks the caller's inputs.
+///
+/// Seeding the callees compiles them, so `get` runs them through `executeCompiled`. Unlike
+/// `collectCallWords`, no call-site record is appended: the call site lives inside the default, not
+/// in the defining word's compiled body, so a `pending_call_target` keyed on the defining word
+/// would name an instruction that body does not contain. `drainWorklist` walks each seeded word's
+/// own body with the correct caller, so its transitive callees and call sites are discovered normally.
+fn seedInterpretedQuotationCallees(instrs: []const Instruction, worklist: *std.ArrayListUnmanaged([]const u8), seen: *std.StringHashMapUnmanaged(void), allocator: Allocator) Allocator.Error!void {
+    for (instrs) |instr| {
+        switch (instr.op) {
+            .call_word => |name| {
+                const gop = try seen.getOrPut(allocator, name);
+                if (!gop.found_existing) try worklist.append(allocator, name);
+            },
+            .push_literal => |val| switch (val) {
+                .quotation => |q| try seedInterpretedQuotationCallees(q.instructions, worklist, seen, allocator),
+                .parameter => |p| try seedInterpretedQuotationCallees(p.default_quotation.instructions, worklist, seen, allocator),
+                else => {},
+            },
+            else => {},
+        }
+    }
+}
+
 /// Extract call_word names from instructions and add unseen ones to the worklist.
 /// Also collects reachable quotation bodies, dwduped by pointer identity.
 /// Per-call-site records are appended to `pending_call_targets` for later
@@ -1018,6 +1049,10 @@ fn collectCallWords(
                         _ = quotation_path.pop();
                         try recurse_err;
                     },
+                    // A parameter's default quotation runs under the interpreter on an unbound
+                    // `get`. Seed its callees so they compile and are runnable, without recording
+                    // callsite records against this word's compiled body, which never contains them.
+                    .parameter => |p| try seedInterpretedQuotationCallees(p.default_quotation.instructions, worklist, seen, allocator),
                     else => {},
                 }
             },

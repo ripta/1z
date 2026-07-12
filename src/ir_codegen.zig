@@ -3626,10 +3626,16 @@ fn emitSlotTruthiness(ctx: *c.ir_ctx, base_addr: c.ir_ref, s: usize, state: *Com
     const is_bool_tag = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, state.boolean_tag_const);
 
     const payload_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), slot_addr, state.payload_offset_const);
-    const payload_val = c._ir_LOAD(ctx, c.IR_BOOL, payload_addr);
-    const false_const = c.ir_const_bool(ctx, false);
-    const is_false_payload = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), payload_val, false_const);
+
+    // Read the payload's low byte as an integer, never as IR_BOOL. Only a boolean Value holds a
+    // valid 0/1 there. `is_bool_tag` already gates the falsy result, but the IR AND evaluates both
+    // operands unconditionally, so a non-boolean payload byte outside {0,1} would trip IR_BOOL's
+    // load-safety check. An integer compare against zero is equivalent and panic-free.
+    const payload_val = c._ir_LOAD(ctx, c.IR_U8, payload_addr);
+    const zero_u8 = c.ir_const_u8(ctx, 0);
+    const is_false_payload = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), payload_val, zero_u8);
     const is_falsy = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_bool_tag, is_false_payload);
+    const false_const = c.ir_const_bool(ctx, false);
     return c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), is_falsy, false_const);
 }
 

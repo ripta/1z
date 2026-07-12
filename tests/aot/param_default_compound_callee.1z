@@ -1,0 +1,16 @@
+\ A parameter{ } default quotation runs under the interpreter on an unbound
+\ get. The freeze BFS must walk that default and seed the words it calls into
+\ the compilation set. Otherwise a callee reachable only through the default
+\ has its interpretable body dropped as empty with no compiled function, so
+\ calling it is a silent no-op that leaks the caller's inputs.
+\
+\ Here `seconds` is reached only through the default. Without the discovery
+\ fix `idle-timeout get` drops `seconds` and yields the bare fixnum 30 instead
+\ of a duration.
+
+use "time" ;
+
+idle-timeout: parameter{ [ 30 seconds ] } ;
+
+idle-timeout get duration? >string print-line      \ t once seconds runs
+idle-timeout get duration-nsec >string print-line  \ 30000000000

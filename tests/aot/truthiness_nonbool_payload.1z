@@ -1,0 +1,12 @@
+\ 1z truthiness: only `f` is falsy. The compiled `if` truthiness check reads a
+\ Value's payload to test for boolean-false. It must read that payload as an
+\ integer, never as a Zig bool. A non-boolean value whose low payload byte is
+\ >= 2 would otherwise trip a bool load-safety panic, because the IR AND with
+\ the tag check does not short-circuit the payload load.
+\
+\ `#len` yields a runtime fixnum (5) the compiler does not constant-fold, so the
+\ `if` reads the physical slot through the truthiness path rather than folding.
+
+len-of: ( s -- n ) [ #len ] ;
+
+"abcde" len-of [ "truthy" ] [ "falsy" ] if print-line  \ 5 is truthy

@@ -1,7 +1,6 @@
 \ AOT regression test for lib/strings.1z. Exercises trim and repeat so
 \ that runtime regressions in basic string composition surface on the
-\ existing AOT test target. Avoids `split` and `split-once` which trip
-\ AOT codegen / runtime bugs tracked separately.
+\ existing AOT test target.
 
 use "strings" ;
 
