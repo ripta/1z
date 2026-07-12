@@ -644,6 +644,24 @@ pub fn traceAotEffectAttempt(
     trace_writer.writeAll(fbs.getWritten());
 }
 
+/// Format an `instr` per-instruction line. `word` is the enclosing word, `op` the op tag, and
+/// `target` the call target (or `"-"` for a non-call op).
+///
+/// `sp` is the abstract-stack depth going into the instruction, and `has_row` whether a row region
+/// is live below it. A failing op leaves its own line as the last one before the rejection, so
+/// `sp` / `target` locate the failure to the instruction.
+pub fn writeAotInstrLine(w: anytype, word: []const u8, op: []const u8, target: []const u8, sp: usize, has_row: bool, line: usize) !void {
+    try w.print("AOT instr {s} op={s} target={s} sp={d} row={} line={d}\n", .{ word, op, target, sp, has_row, line });
+}
+
+/// Emit an `instr` per-instruction line for `--trace-aot=instr`.
+pub fn traceAotInstr(trace_writer: *TraceWriter, word: []const u8, op: []const u8, target: []const u8, sp: usize, has_row: bool, line: usize) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    writeAotInstrLine(fbs.writer(), word, op, target, sp, has_row, line) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
 /// Returns true if `name` matches the given comma-separated pattern.
 /// A null pattern matches everything.
 pub fn matchesPattern(name: []const u8, pattern: ?[]const u8) bool {
@@ -890,6 +908,27 @@ test "writeAotEffectAttemptLine: bare arity-sweep miss" {
     var w = std.Io.Writer.fixed(&buf);
     try writeAotEffectAttemptLine(&w, "onez_q_12", 0, null, null, "");
     try std.testing.expectEqualStrings("AOT effect quot onez_q_12 (in=0) -> fail\n", w.buffered());
+}
+
+test "writeAotInstrLine: call op locates an underflow to the instruction" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeAotInstrLine(&w, "bad-word", "call_word", "+", 1, false, 7);
+    try std.testing.expectEqualStrings("AOT instr bad-word op=call_word target=+ sp=1 row=false line=7\n", w.buffered());
+}
+
+test "writeAotInstrLine: push_literal has no call target" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeAotInstrLine(&w, "greet", "push_literal", "-", 0, false, 3);
+    try std.testing.expectEqualStrings("AOT instr greet op=push_literal target=- sp=0 row=false line=3\n", w.buffered());
+}
+
+test "writeAotInstrLine: live row region" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeAotInstrLine(&w, "loop-body", "call_word", "swap", 2, true, 12);
+    try std.testing.expectEqualStrings("AOT instr loop-body op=call_word target=swap sp=2 row=true line=12\n", w.buffered());
 }
 
 test "ModuleSourceKind.label" {

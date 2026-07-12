@@ -1,0 +1,8 @@
+\ A non-recursive word that fails AOT codegen with NC.13 (abstract stack
+\ underflow). It declares one input but drops twice, so the second `drop` runs
+\ against an empty abstract stack. The `--trace-aot=instr` per-instruction trace
+\ fires for this non-recursive word and names the underflowing `drop` at sp=0,
+\ the instruction the NC.13 rejection then reports. The old ONEZ_DEBUG_TRACE hook
+\ printed nothing here because it fired only for self-tail-recursive words.
+bad-nonrec: ( x -- ) [ drop drop ] ;
+5 bad-nonrec

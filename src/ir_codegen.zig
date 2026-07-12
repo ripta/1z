@@ -6944,14 +6944,7 @@ fn compileInstructions(
     const ctx = state.ctx;
 
     for (instructions, 0..) |instr, idx| {
-        if (std.posix.getenv("ONEZ_DEBUG_TRACE")) |tgt| {
-            if (state.self_name) |sn| {
-                if (std.mem.eql(u8, sn, tgt)) {
-                    const nm = instr.op.callTargetName() orelse @tagName(instr.op);
-                    std.debug.print("TRACE {s} sp={d} hasrow={} op={s} name={s}\n", .{ sn, sp.*, hasRowRegion(stack, sp.*), @tagName(instr.op), nm });
-                }
-            }
-        }
+        emitAotInstrTrace(state, instr, stack, sp.*);
         if (state.dynamic_call_emitted) {
             state.not_compilable_reason = .post_dynamic_call;
             return IrCodegenError.NotCompilable;
@@ -8980,6 +8973,25 @@ fn emitAotCodegenTrace(interp_ctx: ?*const Context, kind: []const u8, name: []co
     } else {
         trace_mod.traceAotCodegen(&tw, kind, name, null, "");
     }
+}
+
+/// Emit a `--trace-aot=instr` line for one instruction as codegen steps the abstract stack.
+///
+/// Fires for every word, not only self-tail-recursive ones, because the name comes from
+/// `caller_name_for_report`, which is always set on the AOT path. It's a noöp unless `interp_ctx`
+/// carries the instr axis, and `hasRowRegion` runs only after that gate, so the trace-off cost is
+/// one pointer load and one bool check.
+///
+/// The two-pass AOT compile runs `compileInstructions` several times per word, so a word that
+/// compiles emits each line more than once. A word that fails NC.13 traces once, because it aborts
+/// in the first pass before the emit passes run.
+fn emitAotInstrTrace(state: *const CompileState, instr: Instruction, stack: []const StackEntry, sp: usize) void {
+    const ctx = state.interp_ctx orelse return;
+    if (!ctx.trace.trace_aot.instr) return;
+    const word = state.caller_name_for_report orelse state.self_name orelse "<unknown>";
+    const target = instr.op.callTargetName() orelse "-";
+    var tw = trace_mod.TraceWriter.init();
+    trace_mod.traceAotInstr(&tw, word, @tagName(instr.op), target, sp, hasRowRegion(stack, sp), instr.line);
 }
 
 /// Emit a `--trace-aot=effect` line for one compile-to-discover attempt at input
