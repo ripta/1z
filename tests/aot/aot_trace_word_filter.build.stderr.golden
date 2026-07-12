@@ -1,0 +1,6 @@
+Error: 2 words could not be compiled to C
+  word 'skip-me': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+  word 'keep-me': NC.13: word body underflows the abstract stack (row-variable effects)
+      hint: blocked until row-variable stack regions can be modeled
+AOT interpreter fallbacks: 2 total (compound-uncompiled=2)

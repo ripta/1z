@@ -1,0 +1,10 @@
+\ Two non-recursive words that both fail AOT codegen with NC.13 (abstract stack
+\ underflow): each declares one input but drops twice. Unfiltered, the trace
+\ names both words on every enabled axis. `--trace-aot-word=keep-me` scopes the
+\ trace to keep-me, so its freeze / codegen / instr lines appear and skip-me's
+\ are filtered out. The build itself still compiles (and rejects) both words;
+\ only the trace output is scoped.
+keep-me: ( x -- ) [ drop drop ] ;
+skip-me: ( x -- ) [ drop drop ] ;
+5 keep-me
+6 skip-me

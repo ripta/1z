@@ -18,6 +18,7 @@ Build options:
   --emit-runtime-image          Embed a runtime program image in the binary
   --target=TRIPLE               Cross-compilation target (e.g. riscv64-freestanding-none)
   --trace-aot[=CATS]            Trace the AOT compiler (CATS: freeze, codegen, effect, instr; bare=freeze,codegen,effect)
+  --trace-aot-word=PAT          Filter --trace-aot to words matching PAT (comma-separated exact names)
 
 Global options:
   --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)

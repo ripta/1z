@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -135,7 +135,7 @@ aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
 	chmod +x $(_aot_tmp) && \
 	timeout $(AOT_TIMEOUT) $(_aot_tmp)
 
-aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check ## Run AOT build integration tests
+aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check ## Run AOT build integration tests
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directives at word and quotation function entries
@@ -196,6 +196,31 @@ aot-trace-instr-check: build ## Verify --trace-aot=instr fires per-instruction f
 		grep -E 'could not be compiled|NC\.' $(_stderr) || true; exit 1; \
 	fi; \
 	echo "PASS: --trace-aot=instr fires for a non-recursive word and locates its NC.13 underflow to an instruction"
+
+aot-trace-word-filter-check: build ## Verify --trace-aot-word=PAT scopes the trace to matching words on a per-word and the instr axis
+	$(eval _bin := $(shell mktemp /tmp/1z-trace-word-XXXXXX))
+	$(eval _stderr := $(shell mktemp /tmp/1z-trace-word-stderr-XXXXXX))
+	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
+	: 'TraceWriter re-creates a File.Writer per line, so a seekable stderr overwrites at offset 0; pipe stderr through cat to keep it non-seekable and preserve every line.'; \
+	./$(ZIG_PREFIX)/bin/1z build tests/aot/aot_trace_word_filter.1z -o $(_bin) --interpreter-fallback=false --trace-aot=freeze --trace-aot-word=keep-me 2>&1 1>/dev/null | cat > $(_stderr) || true; \
+	if ! grep -qE '^AOT freeze word keep-me ' $(_stderr); then \
+		echo "FAIL: --trace-aot-word=keep-me dropped the freeze line for the matching word"; \
+		grep -E '^AOT freeze word (keep-me|skip-me) ' $(_stderr) || true; exit 1; \
+	fi; \
+	if grep -qE '^AOT freeze word skip-me ' $(_stderr); then \
+		echo "FAIL: --trace-aot-word=keep-me did not filter out the non-matching word skip-me on the freeze axis"; \
+		grep -E '^AOT freeze word skip-me ' $(_stderr) || true; exit 1; \
+	fi; \
+	./$(ZIG_PREFIX)/bin/1z build tests/aot/aot_trace_word_filter.1z -o $(_bin) --interpreter-fallback=false --trace-aot=instr --trace-aot-word=keep-me 2>&1 1>/dev/null | cat > $(_stderr) || true; \
+	if ! grep -qE '^AOT instr keep-me ' $(_stderr); then \
+		echo "FAIL: --trace-aot-word=keep-me dropped the instr lines for the matching word"; \
+		grep -E '^AOT instr (keep-me|skip-me) ' $(_stderr) | head -5 || true; exit 1; \
+	fi; \
+	if grep -qE '^AOT instr skip-me ' $(_stderr); then \
+		echo "FAIL: --trace-aot-word=keep-me did not filter out the non-matching word skip-me on the instr axis"; \
+		grep -E '^AOT instr skip-me ' $(_stderr) | head -5 || true; exit 1; \
+	fi; \
+	echo "PASS: --trace-aot-word=PAT scopes both a per-word axis and the instr firehose to the matching word"
 
 aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides so linker symbols show verbatim 1z names
 	$(eval _bin := $(shell mktemp /tmp/1z-asm-name-XXXXXX))

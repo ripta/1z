@@ -828,7 +828,8 @@ fn printBuildHelp() void {
     w.writeAll("  --dump-aot-image-c            Print the generated runtime-image C source\n") catch {};
     w.writeAll("  --emit-runtime-image          Embed a runtime program image in the binary\n") catch {};
     w.writeAll("  --target=TRIPLE               Cross-compilation target (e.g. riscv64-freestanding-none)\n") catch {};
-    w.writeAll("  --trace-aot[=CATS]            Trace the AOT compiler (CATS: freeze, codegen, effect, instr; bare=freeze,codegen,effect)\n\n") catch {};
+    w.writeAll("  --trace-aot[=CATS]            Trace the AOT compiler (CATS: freeze, codegen, effect, instr; bare=freeze,codegen,effect)\n") catch {};
+    w.writeAll("  --trace-aot-word=PAT          Filter --trace-aot to words matching PAT (comma-separated exact names)\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
@@ -2451,6 +2452,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var output_path: ?[]const u8 = null;
     var allow_interpreter_fallback = false;
     var trace_aot_cats: trace_mod.AotTraceCategories = .{};
+    var trace_aot_word_pattern: ?[]const u8 = null;
     var compilation_stats = false;
     var compile_all_prelude = false;
     var save_temps = false;
@@ -2502,6 +2504,15 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 err_writer.flush() catch {};
                 return 1;
             };
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--trace-aot-word")) {
+            err_writer.print("Error: --trace-aot-word requires a value (e.g. --trace-aot-word=my-word)\n", .{}) catch {};
+            err_writer.flush() catch {};
+            return 1;
+        }
+        if (std.mem.startsWith(u8, arg, "--trace-aot-word=")) {
+            trace_aot_word_pattern = arg["--trace-aot-word=".len..];
             continue;
         }
         if (std.mem.eql(u8, arg, "--compilation-stats")) {
@@ -2630,9 +2641,10 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     defer ctx_obj.deinit();
     const ctx = &ctx_obj;
 
-    // Trace axes for `--trace-aot`. Read by the freeze BFS and, via `interp_ctx`,
-    // by the codegen passes in `emitProgramC`.
+    // Trace axes for `--trace-aot`. Read by the freeze BFS and, via `interp_ctx`, by the codegen
+    // passes in `emitProgramC`. The `--trace-aot-word` filter scopes whichever axes are enabled.
     ctx.trace.trace_aot = trace_aot_cats;
+    ctx.trace.trace_aot_word_pattern = trace_aot_word_pattern;
 
     // Resolve the build target for the parse-time `target-os` / `target-arch`
     // accessors before the module graph is frozen. A `--target` cross build

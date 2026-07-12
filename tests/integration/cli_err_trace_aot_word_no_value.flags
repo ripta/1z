@@ -1,0 +1,4 @@
+@raw
+build
+--trace-aot-word
+{file}

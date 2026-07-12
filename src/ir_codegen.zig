@@ -8967,6 +8967,7 @@ pub const AotMetadata = struct {
 fn emitAotCodegenTrace(interp_ctx: ?*const Context, kind: []const u8, name: []const u8, reason: ?NotCompilableReason) void {
     const ctx = interp_ctx orelse return;
     if (!ctx.trace.trace_aot.codegen) return;
+    if (!trace_mod.matchesPattern(name, ctx.trace.trace_aot_word_pattern)) return;
     var tw = trace_mod.TraceWriter.init();
     if (reason) |r| {
         trace_mod.traceAotCodegen(&tw, kind, name, r.code(), r.message());
@@ -8989,6 +8990,7 @@ fn emitAotInstrTrace(state: *const CompileState, instr: Instruction, stack: []co
     const ctx = state.interp_ctx orelse return;
     if (!ctx.trace.trace_aot.instr) return;
     const word = state.caller_name_for_report orelse state.self_name orelse "<unknown>";
+    if (!trace_mod.matchesPattern(word, ctx.trace.trace_aot_word_pattern)) return;
     const target = instr.op.callTargetName() orelse "-";
     var tw = trace_mod.TraceWriter.init();
     trace_mod.traceAotInstr(&tw, word, @tagName(instr.op), target, sp, hasRowRegion(stack, sp), instr.line);
@@ -9001,6 +9003,7 @@ fn emitAotInstrTrace(state: *const CompileState, instr: Instruction, stack: []co
 fn emitAotEffectTrace(interp_ctx: ?*const Context, name: []const u8, in_arity: u8, out_arity: ?u8, reason: ?NotCompilableReason) void {
     const ctx = interp_ctx orelse return;
     if (!ctx.trace.trace_aot.effect) return;
+    if (!trace_mod.matchesPattern(name, ctx.trace.trace_aot_word_pattern)) return;
     var tw = trace_mod.TraceWriter.init();
     if (out_arity) |out| {
         trace_mod.traceAotEffectAttempt(&tw, name, in_arity, out, null, "");

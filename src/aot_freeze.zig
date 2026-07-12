@@ -828,6 +828,7 @@ fn discoverReachableWords(
 /// manifest. `kind` is `"compound"` or `"native"`. No-op unless the axis is on.
 fn emitFreezeWordTrace(ctx: *const Context, name: []const u8, kind: []const u8) void {
     if (!ctx.trace.trace_aot.freeze) return;
+    if (!trace_mod.matchesPattern(name, ctx.trace.trace_aot_word_pattern)) return;
     var tw = trace_mod.TraceWriter.init();
     trace_mod.traceAotFreezeWord(&tw, name, kind);
 }
@@ -837,6 +838,7 @@ fn emitFreezeWordTrace(ctx: *const Context, name: []const u8, kind: []const u8) 
 /// found in. No-op unless the axis is on.
 fn emitFreezeQuotationTrace(ctx: *const Context, caller: []const u8, ptr_key: usize) void {
     if (!ctx.trace.trace_aot.freeze) return;
+    if (!trace_mod.matchesPattern(caller, ctx.trace.trace_aot_word_pattern)) return;
     var tw = trace_mod.TraceWriter.init();
     trace_mod.traceAotFreezeQuotation(&tw, caller, ptr_key);
 }

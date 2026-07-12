@@ -134,6 +134,10 @@ pub const TraceConfig = struct {
     // sampler axes below are.
     trace_aot: AotTraceCategories = .{},
 
+    // `--trace-aot-word=PAT` word-name filter, applied to whichever `trace_aot` axes are enabled.
+    // A null pattern matches every word, so the filter is a noöp when the flag is absent.
+    trace_aot_word_pattern: ?[]const u8 = null,
+
     trace_jit: bool = false,
     trace_pic: bool = false,
     trace_container_detect: bool = false,
