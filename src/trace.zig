@@ -34,8 +34,34 @@ pub const ModuleTraceCategories = packed struct {
     }
 };
 
+/// Categories of `--trace-aot` events, one per AOT-compiler trace axis. Each
+/// AOT trace call site checks the field for the axis it is about to emit.
+pub const AotTraceCategories = packed struct {
+    freeze: bool = false,
+    codegen: bool = false,
+    effect: bool = false,
+    instr: bool = false,
+
+    /// True when at least one axis is enabled.
+    pub fn any(self: AotTraceCategories) bool {
+        return self.freeze or self.codegen or self.effect or self.instr;
+    }
+
+    /// The three per-word axes enabled by bare `--trace-aot`. The per-instruction
+    /// `instr` firehose stays opt-in and is left off here.
+    pub fn perWordAxes() AotTraceCategories {
+        return .{ .freeze = true, .codegen = true, .effect = true };
+    }
+};
+
 /// Error returned by `parseModuleTraceCategories` when the value is malformed.
 pub const ParseModuleTraceError = error{
+    EmptyValue,
+    UnknownCategory,
+};
+
+/// Error returned by `parseAotTraceCategories` when the value is malformed.
+pub const ParseAotTraceError = error{
     EmptyValue,
     UnknownCategory,
 };
@@ -68,6 +94,33 @@ pub fn parseModuleTraceCategories(value: []const u8) ParseModuleTraceError!Modul
     return cats;
 }
 
+/// Parse a comma-separated category list (e.g., `"freeze,codegen"`) into an
+/// `AotTraceCategories`. Whitespace around each token is trimmed. Empty strings
+/// and unknown tokens fail. `instr` parses as a valid token; it has no emit
+/// sites yet, so enabling it produces no output.
+pub fn parseAotTraceCategories(value: []const u8) ParseAotTraceError!AotTraceCategories {
+    if (value.len == 0) return error.EmptyValue;
+
+    var cats: AotTraceCategories = .{};
+    var iter = std.mem.splitScalar(u8, value, ',');
+    while (iter.next()) |segment| {
+        const trimmed = std.mem.trim(u8, segment, " \t");
+        if (trimmed.len == 0) return error.EmptyValue;
+        if (std.mem.eql(u8, trimmed, "freeze")) {
+            cats.freeze = true;
+        } else if (std.mem.eql(u8, trimmed, "codegen")) {
+            cats.codegen = true;
+        } else if (std.mem.eql(u8, trimmed, "effect")) {
+            cats.effect = true;
+        } else if (std.mem.eql(u8, trimmed, "instr")) {
+            cats.instr = true;
+        } else {
+            return error.UnknownCategory;
+        }
+    }
+    return cats;
+}
+
 /// Configuration for execution tracing.
 pub const TraceConfig = struct {
     trace_words: bool = false,
@@ -75,6 +128,12 @@ pub const TraceConfig = struct {
     trace_resolve: bool = false,
     trace_resolve_pattern: ?[]const u8 = null,
     trace_modules: ModuleTraceCategories = .{},
+
+    // AOT-compiler trace axes. Driven by the AOT build path, not the
+    // word-execution path, so it is excluded from `isEnabled` the same way the
+    // sampler axes below are.
+    trace_aot: AotTraceCategories = .{},
+
     trace_jit: bool = false,
     trace_pic: bool = false,
     trace_container_detect: bool = false,
@@ -482,6 +541,109 @@ pub fn tracePicHit(trace_writer: *TraceWriter, name: []const u8) void {
     trace_writer.writeAll(fbs.getWritten());
 }
 
+// =============================================================================
+// AOT compiler tracing (`--trace-aot`)
+//
+// Each helper is split into a pure `writeAot*Line` formatter and a thin
+// `traceAot*` wrapper that buffers and writes. The formatters take the AOT
+// rejection reason as pre-formatted `code` / `message` strings (the caller
+// passes `NotCompilableReason.code()` / `.message()`), so this module stays
+// decoupled from `ir_codegen.zig`.
+// =============================================================================
+
+/// Format a `freeze` per-word discovery line. `kind` is `"compound"` or `"native"`.
+pub fn writeAotFreezeWordLine(w: anytype, name: []const u8, kind: []const u8) !void {
+    try w.print("AOT freeze word {s} ({s})\n", .{ name, kind });
+}
+
+/// Format a `freeze` quotation-discovery line. A quotation has no name, so it is
+/// identified by its instruction-body pointer and the caller it was found in.
+pub fn writeAotFreezeQuotationLine(w: anytype, caller: []const u8, ptr_key: usize) !void {
+    try w.print("AOT freeze quot @0x{x} (in {s})\n", .{ ptr_key, caller });
+}
+
+/// Format a `codegen` trial-compile line. `kind` is `"word"` or `"quot"`. A null
+/// `code` is a success; otherwise `code` / `message` name the rejection reason.
+pub fn writeAotCodegenLine(
+    w: anytype,
+    kind: []const u8,
+    name: []const u8,
+    code: ?[]const u8,
+    message: []const u8,
+) !void {
+    if (code) |c| {
+        try w.print("AOT codegen {s} {s} -> REJECT {s}: {s}\n", .{ kind, name, c, message });
+    } else {
+        try w.print("AOT codegen {s} {s} -> ok\n", .{ kind, name });
+    }
+}
+
+/// Format an `effect` compile-to-discover attempt line. A non-null `out_arity`
+/// is a success at input arity `in_arity`. A non-null `code` names a categorized
+/// rejection. A bare failure carries neither: the arity-sweep just did not fit at
+/// this input count and the next arity will be tried, so it reads `-> fail`.
+pub fn writeAotEffectAttemptLine(
+    w: anytype,
+    name: []const u8,
+    in_arity: u8,
+    out_arity: ?u8,
+    code: ?[]const u8,
+    message: []const u8,
+) !void {
+    if (out_arity) |out| {
+        try w.print("AOT effect quot {s} (in={d}) -> ok (out={d})\n", .{ name, in_arity, out });
+    } else if (code) |c| {
+        try w.print("AOT effect quot {s} (in={d}) -> REJECT {s}: {s}\n", .{ name, in_arity, c, message });
+    } else {
+        try w.print("AOT effect quot {s} (in={d}) -> fail\n", .{ name, in_arity });
+    }
+}
+
+/// Emit a `freeze` per-word discovery line for `--trace-aot=freeze`.
+pub fn traceAotFreezeWord(trace_writer: *TraceWriter, name: []const u8, kind: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    writeAotFreezeWordLine(fbs.writer(), name, kind) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a `freeze` quotation-discovery line for `--trace-aot=freeze`.
+pub fn traceAotFreezeQuotation(trace_writer: *TraceWriter, caller: []const u8, ptr_key: usize) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    writeAotFreezeQuotationLine(fbs.writer(), caller, ptr_key) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a `codegen` trial-compile line for `--trace-aot=codegen`.
+pub fn traceAotCodegen(
+    trace_writer: *TraceWriter,
+    kind: []const u8,
+    name: []const u8,
+    code: ?[]const u8,
+    message: []const u8,
+) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    writeAotCodegenLine(fbs.writer(), kind, name, code, message) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit an `effect` compile-to-discover attempt line for `--trace-aot=effect`.
+pub fn traceAotEffectAttempt(
+    trace_writer: *TraceWriter,
+    name: []const u8,
+    in_arity: u8,
+    out_arity: ?u8,
+    code: ?[]const u8,
+    message: []const u8,
+) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    writeAotEffectAttemptLine(fbs.writer(), name, in_arity, out_arity, code, message) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
 /// Returns true if `name` matches the given comma-separated pattern.
 /// A null pattern matches everything.
 pub fn matchesPattern(name: []const u8, pattern: ?[]const u8) bool {
@@ -616,6 +778,118 @@ test "parseModuleTraceCategories: empty segment" {
 test "parseModuleTraceCategories: unknown category" {
     try std.testing.expectError(error.UnknownCategory, parseModuleTraceCategories("bogus"));
     try std.testing.expectError(error.UnknownCategory, parseModuleTraceCategories("source,bogus"));
+}
+
+test "AotTraceCategories.any" {
+    try std.testing.expect(!(AotTraceCategories{}).any());
+    try std.testing.expect((AotTraceCategories{ .freeze = true }).any());
+    try std.testing.expect((AotTraceCategories{ .instr = true }).any());
+}
+
+test "AotTraceCategories.perWordAxes enables the three per-word axes, not instr" {
+    const cats = AotTraceCategories.perWordAxes();
+    try std.testing.expect(cats.freeze);
+    try std.testing.expect(cats.codegen);
+    try std.testing.expect(cats.effect);
+    try std.testing.expect(!cats.instr);
+}
+
+test "parseAotTraceCategories: single category" {
+    const cats = try parseAotTraceCategories("codegen");
+    try std.testing.expect(cats.codegen);
+    try std.testing.expect(!cats.freeze);
+    try std.testing.expect(!cats.effect);
+    try std.testing.expect(!cats.instr);
+}
+
+test "parseAotTraceCategories: multiple categories" {
+    const cats = try parseAotTraceCategories("freeze,effect");
+    try std.testing.expect(cats.freeze);
+    try std.testing.expect(cats.effect);
+    try std.testing.expect(!cats.codegen);
+    try std.testing.expect(!cats.instr);
+}
+
+test "parseAotTraceCategories: all four" {
+    const cats = try parseAotTraceCategories("freeze,codegen,effect,instr");
+    try std.testing.expect(cats.freeze);
+    try std.testing.expect(cats.codegen);
+    try std.testing.expect(cats.effect);
+    try std.testing.expect(cats.instr);
+}
+
+test "parseAotTraceCategories: whitespace trimming" {
+    const cats = try parseAotTraceCategories(" freeze , codegen ");
+    try std.testing.expect(cats.freeze);
+    try std.testing.expect(cats.codegen);
+}
+
+test "parseAotTraceCategories: empty value" {
+    try std.testing.expectError(error.EmptyValue, parseAotTraceCategories(""));
+}
+
+test "parseAotTraceCategories: empty segment" {
+    try std.testing.expectError(error.EmptyValue, parseAotTraceCategories("freeze,,effect"));
+}
+
+test "parseAotTraceCategories: unknown category" {
+    try std.testing.expectError(error.UnknownCategory, parseAotTraceCategories("bogus"));
+    try std.testing.expectError(error.UnknownCategory, parseAotTraceCategories("freeze,bogus"));
+}
+
+test "writeAotFreezeWordLine" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeAotFreezeWordLine(&w, "static-file-handler", "compound");
+    try std.testing.expectEqualStrings("AOT freeze word static-file-handler (compound)\n", w.buffered());
+}
+
+test "writeAotFreezeQuotationLine" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeAotFreezeQuotationLine(&w, "serve-loop", 0x10a3f0);
+    try std.testing.expectEqualStrings("AOT freeze quot @0x10a3f0 (in serve-loop)\n", w.buffered());
+}
+
+test "writeAotCodegenLine: success" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeAotCodegenLine(&w, "word", "static-file-handler", null, "");
+    try std.testing.expectEqualStrings("AOT codegen word static-file-handler -> ok\n", w.buffered());
+}
+
+test "writeAotCodegenLine: rejection names the word and its reason" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeAotCodegenLine(&w, "word", "static-file-handler", "NC.13", "word body underflows the abstract stack (row-variable effects)");
+    try std.testing.expectEqualStrings(
+        "AOT codegen word static-file-handler -> REJECT NC.13: word body underflows the abstract stack (row-variable effects)\n",
+        w.buffered(),
+    );
+}
+
+test "writeAotEffectAttemptLine: success" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeAotEffectAttemptLine(&w, "pick-quot/quot", 1, 1, null, "");
+    try std.testing.expectEqualStrings("AOT effect quot pick-quot/quot (in=1) -> ok (out=1)\n", w.buffered());
+}
+
+test "writeAotEffectAttemptLine: rejection" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeAotEffectAttemptLine(&w, "pick-quot/quot", 2, null, "NC.13", "word body underflows the abstract stack (row-variable effects)");
+    try std.testing.expectEqualStrings(
+        "AOT effect quot pick-quot/quot (in=2) -> REJECT NC.13: word body underflows the abstract stack (row-variable effects)\n",
+        w.buffered(),
+    );
+}
+
+test "writeAotEffectAttemptLine: bare arity-sweep miss" {
+    var buf: [256]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writeAotEffectAttemptLine(&w, "onez_q_12", 0, null, null, "");
+    try std.testing.expectEqualStrings("AOT effect quot onez_q_12 (in=0) -> fail\n", w.buffered());
 }
 
 test "ModuleSourceKind.label" {

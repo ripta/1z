@@ -1,0 +1,1 @@
+Error: invalid value for --trace-aot: 'bogus' (expected comma list of: freeze, codegen, effect, instr; bare=freeze,codegen,effect)

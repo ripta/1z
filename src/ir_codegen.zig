@@ -8967,6 +8967,38 @@ pub const AotMetadata = struct {
     freestanding: bool = false,
 };
 
+/// Emit a `--trace-aot=codegen` line for a word or quotation trial-compile.
+/// `kind` is `"word"` or `"quot"`. A null `reason` is a success; otherwise the
+/// reason's code and message name the rejection. No-op unless `interp_ctx`
+/// carries the codegen axis.
+fn emitAotCodegenTrace(interp_ctx: ?*const Context, kind: []const u8, name: []const u8, reason: ?NotCompilableReason) void {
+    const ctx = interp_ctx orelse return;
+    if (!ctx.trace.trace_aot.codegen) return;
+    var tw = trace_mod.TraceWriter.init();
+    if (reason) |r| {
+        trace_mod.traceAotCodegen(&tw, kind, name, r.code(), r.message());
+    } else {
+        trace_mod.traceAotCodegen(&tw, kind, name, null, "");
+    }
+}
+
+/// Emit a `--trace-aot=effect` line for one compile-to-discover attempt at input
+/// arity `in_arity`. A non-null `out_arity` is a success; otherwise `reason`
+/// names the rejection for that attempt. No-op unless `interp_ctx` carries the
+/// effect axis.
+fn emitAotEffectTrace(interp_ctx: ?*const Context, name: []const u8, in_arity: u8, out_arity: ?u8, reason: ?NotCompilableReason) void {
+    const ctx = interp_ctx orelse return;
+    if (!ctx.trace.trace_aot.effect) return;
+    var tw = trace_mod.TraceWriter.init();
+    if (out_arity) |out| {
+        trace_mod.traceAotEffectAttempt(&tw, name, in_arity, out, null, "");
+    } else if (reason) |r| {
+        trace_mod.traceAotEffectAttempt(&tw, name, in_arity, null, r.code(), r.message());
+    } else {
+        trace_mod.traceAotEffectAttempt(&tw, name, in_arity, null, null, "");
+    }
+}
+
 pub fn emitProgramC(
     words: []const AotWordDesc,
     quotations: []AotQuotationDesc,
@@ -9265,6 +9297,7 @@ pub fn emitProgramC(
         // interpreted, where nested-scope shadowing is honored.
         if (findUndiscoverableNestedDef(w.instructions) != null) {
             try failure_reasons.put(allocator, w.name, .nested_definition);
+            emitAotCodegenTrace(interp_ctx, "word", w.name, .nested_definition);
             continue;
         }
         var reason: ?NotCompilableReason = null;
@@ -9293,14 +9326,18 @@ pub fn emitProgramC(
             w.source_file,
             strict_interpreter_free,
         ) catch |err| {
-            if (reason) |r| {
-                try failure_reasons.put(allocator, w.name, r);
-            } else if (err == IrCodegenError.StackUnderflow or err == IrCodegenError.StackShapeMismatch) {
-                try failure_reasons.put(allocator, w.name, .abstract_stack_underflow);
-            }
+            const rejected: ?NotCompilableReason = if (reason) |r|
+                r
+            else if (err == IrCodegenError.StackUnderflow or err == IrCodegenError.StackShapeMismatch)
+                .abstract_stack_underflow
+            else
+                null;
+            if (rejected) |r| try failure_reasons.put(allocator, w.name, r);
+            emitAotCodegenTrace(interp_ctx, "word", w.name, rejected orelse .unknown_reason);
             continue;
         };
         allocator.free(trial);
+        emitAotCodegenTrace(interp_ctx, "word", w.name, null);
         try compilable_names.put(allocator, w.name, w.word_id);
     }
 
@@ -9327,8 +9364,12 @@ pub fn emitProgramC(
             var ic: u8 = 0;
             while (ic <= max_discovered_quotation_arity) : (ic += 1) {
                 var dreason: ?NotCompilableReason = null;
-                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, null, null, null, allocator, null, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, false) catch continue;
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, null, null, null, allocator, null, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, false) catch {
+                    emitAotEffectTrace(interp_ctx, q.c_name, ic, null, dreason);
+                    continue;
+                };
                 if (dres.body) |b| allocator.free(b);
+                emitAotEffectTrace(interp_ctx, q.c_name, ic, dres.discovered_output, null);
                 found = .{ .input_count = ic, .output_count = dres.discovered_output };
                 break;
             }
@@ -9336,6 +9377,7 @@ pub fn emitProgramC(
             q.inferred_effect = e;
             break :blk e;
         };
+        var qreason: ?NotCompilableReason = null;
         const trial = emitWordCAotWithCName(
             q.instructions,
             effect.input_count,
@@ -9350,7 +9392,7 @@ pub fn emitProgramC(
             null,
             allocator,
             null,
-            null,
+            &qreason,
             null,
             null,
             interp_ctx,
@@ -9361,8 +9403,12 @@ pub fn emitProgramC(
             emit_slot_table_literals,
             q.source_file,
             strict_interpreter_free,
-        ) catch continue;
+        ) catch {
+            emitAotCodegenTrace(interp_ctx, "quot", q.c_name, qreason orelse .unknown_reason);
+            continue;
+        };
         allocator.free(trial);
+        emitAotCodegenTrace(interp_ctx, "quot", q.c_name, null);
         try compilable_quotation_ids.put(allocator, q.quotation_id, {});
     }
 

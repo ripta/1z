@@ -2,22 +2,32 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const Context = @import("context.zig").Context;
+
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
+
 const StatementProcessor = @import("statement.zig").StatementProcessor;
+
 const ir_codegen = @import("ir_codegen.zig");
 const AotWordDesc = ir_codegen.AotWordDesc;
+
 const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
+
 const dictionary_mod = @import("dictionary.zig");
 const WordDefinition = dictionary_mod.WordDefinition;
+
 const markers_mod = @import("primitives/markers.zig");
 const ArtifactClass = markers_mod.ArtifactClass;
+
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const pic_mod = @import("pic.zig");
+
 const dispatch_mod = @import("dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
+
+const trace_mod = @import("trace.zig");
 
 pub const AotQuotationDesc = struct {
     quotation_id: u32,
@@ -814,6 +824,23 @@ fn discoverReachableWords(
     return result;
 }
 
+/// Emit a `--trace-aot=freeze` line naming a word committed to the compilation
+/// manifest. `kind` is `"compound"` or `"native"`. No-op unless the axis is on.
+fn emitFreezeWordTrace(ctx: *const Context, name: []const u8, kind: []const u8) void {
+    if (!ctx.trace.trace_aot.freeze) return;
+    var tw = trace_mod.TraceWriter.init();
+    trace_mod.traceAotFreezeWord(&tw, name, kind);
+}
+
+/// Emit a `--trace-aot=freeze` line for a newly discovered quotation. A quotation
+/// has no name, so it is identified by its body pointer and the caller it was
+/// found in. No-op unless the axis is on.
+fn emitFreezeQuotationTrace(ctx: *const Context, caller: []const u8, ptr_key: usize) void {
+    if (!ctx.trace.trace_aot.freeze) return;
+    var tw = trace_mod.TraceWriter.init();
+    trace_mod.traceAotFreezeQuotation(&tw, caller, ptr_key);
+}
+
 /// Drain `worklist` via BFS: for each popped name, look up the word, record it (or its native
 /// entry) into `result`, discover its callees via `collectCallWords` (which appends more names to
 /// `worklist`), and walk its dispatch method bodies. Extracted from a single inline loop so the
@@ -849,11 +876,13 @@ fn drainWorklist(
                         // special-cases or bails out per native.
                         try result.native_names.append(allocator, name);
                         try result.native_defs.append(allocator, wordDefFromModuleWord(name, mod_word));
+                        emitFreezeWordTrace(ctx, name, "native");
                     },
                     .compound => |compound_instrs| {
                         try result.names.append(allocator, name);
                         const qualified_def = wordDefFromModuleWord(name, mod_word);
                         try result.defs.append(allocator, qualified_def);
+                        emitFreezeWordTrace(ctx, name, "compound");
                         try collectCallWords(ctx, compound_instrs, name, worklist, seen, &result.quotation_bodies, quotation_seen, &result.pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, result_allocator);
                         try walkDispatchMethodBodies(ctx, qualified_def, name, worklist, seen, &result.quotation_bodies, quotation_seen, &result.method_body_ptrs, &result.pending_call_targets, diagnostics, artifact_class, allocator, result_allocator);
                     },
@@ -872,12 +901,14 @@ fn drainWorklist(
             .native, .host_callback => {
                 try result.native_names.append(allocator, name);
                 try result.native_defs.append(allocator, word);
+                emitFreezeWordTrace(ctx, name, "native");
                 continue;
             },
         };
 
         try result.names.append(allocator, name);
         try result.defs.append(allocator, word);
+        emitFreezeWordTrace(ctx, name, "compound");
 
         // Discover callees
         try collectCallWords(ctx, instrs, name, worklist, seen, &result.quotation_bodies, quotation_seen, &result.pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, result_allocator);
@@ -1043,6 +1074,7 @@ fn collectCallWords(
                         const qgop = try quotation_seen.getOrPut(allocator, ptr_key);
                         if (!qgop.found_existing) {
                             try quotation_bodies.append(allocator, q.instructions);
+                            emitFreezeQuotationTrace(ctx, caller_name, ptr_key);
                         }
                         try quotation_path.append(allocator, @intCast(idx));
                         const recurse_err = collectCallWords(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
