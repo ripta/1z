@@ -8625,6 +8625,13 @@ fn emitWordCAotPass(
             if (row_aware_self_loop) {
                 state.row_aware_loop = true;
                 setupRowAwareLoopEntry(&state, stack_buf, &sp);
+            } else if (state.refresh_stack_fn != c.IR_UNUSED) {
+                // Re-derive the base address at the loop header. A nested call in the loop body
+                // can reallocate ctx.stack.items, which freeze the old buffer. Without this refresh,
+                // the back-edge keeps using the entry-time base pointer and reads the freed buffer
+                // on the next iteration. The while/loop combinators refresh the same way at their
+                // loop headers.
+                refreshCachedStackPointer(&state);
             }
         }
     }

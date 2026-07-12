@@ -1,0 +1,35 @@
+\\ A self-tail-recursive word wraps its body in a LOOP_BEGIN back-edge. The base
+\\ address for slot access was derived once from the entry-time stack pointer. A
+\\ nested call in the loop body can reallocate ctx.stack.items, freeing the old
+\\ buffer. Before the fix the back-edge kept using the entry-time base pointer, so
+\\ the next iteration read the freed (poisoned) buffer -- an uninitialized-slot
+\\ retain that crashed with "switch on corrupt value".
+\\
+\\ Reproducing it needs three things at once: a self-tail-call loop, a nested call
+\\ in the body that grows the stack enough to realloc (split-once allocates), and a
+\\ deep base so a stale pointer lands in freed memory. This mirrors the shape of
+\\ read-headers-loop reached through the HTTP serve path.
+
+use "strings" ;
+use "sequences" ;
+
+\ Pushes thirty values and drops them: its peak stack usage forces
+\ jitEnsureStackCapacity to grow (and relocate) the value buffer when called at
+\ depth, which is what leaves the loop's entry-time base pointer dangling.
+grow: ( -- ) [ 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 30 drop-n ] ;
+
+\ Self-tail-recursive: split a string each iteration and push its first part into
+\ the vector, preserving the vector below across the back-edge. `grow` forces a
+\ buffer relocation inside the loop body.
+split-loop: ( vec n -- vec ) [
+  dup 0 >
+  [ over "left:right" ":" split-once #first #push! drop grow 1 - split-loop ]
+  [ drop ]
+  if
+] ;
+
+\ Call the loop at a deep base: twelve values sit below it, so a stale base
+\ pointer after a realloc lands in freed memory.
+run-deep: ( a b c d e f g h i j k l -- ) [ V{ } 20 split-loop #len >string print-line 12 drop-n ] ;
+
+1 2 3 4 5 6 7 8 9 10 11 12 run-deep  \ 20 pushes -> length 20
