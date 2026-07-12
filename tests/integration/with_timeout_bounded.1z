@@ -1,0 +1,26 @@
+\ Bounded-memory regression for `with-timeout`.
+\
+\ with-timeout builds a nested scope with two tasks per call: the main task
+\ running the quotation and a timer task. It now reaps both when the scope
+\ exits, so a program that calls with-timeout in a loop stays bounded no matter
+\ how many times it runs. Each call's main task returns instantly and wins the
+\ race, so the timer is cancelled. Before the reap fix, every completed main and
+\ timer task lingered in the scheduler's finished list until teardown, leaking
+\ about half a megabyte per call, and this loop exhausted the cap in the .flags
+\ sidecar partway through and died with a memory-limit error instead of printing
+\ the marker.
+\
+\ The same missing accounting also never counted these two tasks in their
+\ worker's active-task counter, which the completion path decrements, so the
+\ counter underflowed. The reap and the matching spawn-side increment are one
+\ fix; this test guards the memory half.
+
+use "time" ;
+
+[
+  500 [
+    [ 42 ] 5 seconds with-timeout drop
+  ] times
+] task-scope
+
+"bounded" print-line

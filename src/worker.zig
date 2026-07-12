@@ -16,6 +16,7 @@ const MemoryLimitAllocator = @import("memory_limit.zig").MemoryLimitAllocator;
 /// an import cycle.
 const worker_ops: WorkerOps = .{
     .drainExternal = drainExternalCb,
+    .onTaskSpawned = onTaskSpawnedCb,
     .onTaskDone = onTaskDoneCb,
     .shutdownRequested = shutdownRequestedCb,
     .drainWake = drainWakeCb,
@@ -43,6 +44,11 @@ const worker_ops: WorkerOps = .{
 fn drainExternalCb(owner: *anyopaque) void {
     const w: *Worker = @ptrCast(@alignCast(owner));
     w.drainExternal();
+}
+
+fn onTaskSpawnedCb(owner: *anyopaque) void {
+    const w: *Worker = @ptrCast(@alignCast(owner));
+    _ = w.active_tasks.fetchAdd(1, .acq_rel);
 }
 
 fn onTaskDoneCb(owner: *anyopaque) void {

@@ -75,6 +75,11 @@ pub const ClockMode = union(enum) {
 /// importing `worker.zig` (which would form an import cycle).
 pub const WorkerOps = struct {
     drainExternal: *const fn (owner: *anyopaque) void,
+    /// Increment the owning worker's active-task counter as a task homed on
+    /// this worker is enqueued. The symmetric partner of `onTaskDone`, for the
+    /// enqueue sites that home a task on the current scheduler rather than a
+    /// pool-selected worker (nested `task-scope` and `with-timeout`).
+    onTaskSpawned: *const fn (owner: *anyopaque) void,
     onTaskDone: *const fn (owner: *anyopaque) void,
     shutdownRequested: *const fn (owner: *anyopaque) bool,
     drainWake: *const fn (owner: *anyopaque) void,
@@ -415,6 +420,15 @@ pub const Scheduler = struct {
         const owner = self.owner orelse return;
         const ops = self.ops orelse return;
         ops.drainWake(owner);
+    }
+
+    /// Count a task homed on this worker as it is enqueued, balancing the
+    /// `notifyOwnerTaskDone` decrement that runs when it completes. No-op on a
+    /// standalone scheduler, matching the decrement side.
+    pub fn notifyOwnerTaskSpawned(self: *Scheduler) void {
+        const owner = self.owner orelse return;
+        const ops = self.ops orelse return;
+        ops.onTaskSpawned(owner);
     }
 
     fn notifyOwnerTaskDone(self: *Scheduler) void {

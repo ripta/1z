@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 #
-# Benchmark examples/http-static.1z across the three execution modes:
-# interpreted (--compile=off), JIT hybrid (--compile=hybrid), and JIT eager
-# (--compile=eager). AOT is intentionally not covered here; see
+# Benchmark examples/http-static.1z across the execution modes: interpreted
+# (--compile=off), JIT hybrid (--compile=hybrid), and JIT eager (--compile=eager).
+# The AOT mode (`1z build --interpreter-fallback=false`) is attempted last: the
+# example builds, but the compiled serve path currently resets connections at
+# runtime, so its row records `reset` rather than a throughput number. See
 # examples/http-static-benchmark.md.
+#
+# Each mode serves a sustained load. The old per-connection leak is fixed, so the
+# server stays bounded; steady-state RSS is sampled per mode to show it.
 #
 # Requires ApacheBench (`ab`), which ships with macOS. `wrk` is not used because
 # the server sends `Connection: close` (no keep-alive) and `wrk` is not present
@@ -28,10 +33,12 @@ BIN="${REPO_ROOT}/zig-out/bin/1z"
 # Benchmark knobs.
 WARMUP_N=200
 WARMUP_C=10
-MEASURE_N=1000
+MEASURE_N=5000         # Sustained: well past the ~900-connection point where the
+                       # old leak used to die, so a clean run proves bounded memory.
 MEASURE_C=20
-MAX_MEMORY=2G          # Raised so the per-connection leak (see the .md) does not
-                       # kill the server mid-run at the default 256M.
+MAX_MEMORY=256M        # Bounded. The per-connection leak is fixed, so the default
+                       # cap holds for interpreter/JIT. AOT binaries ignore this
+                       # flag (it is a driver flag); their memory is shown via RSS.
 
 command -v ab >/dev/null 2>&1 || { echo "error: ApacheBench (ab) not found" >&2; exit 1; }
 
@@ -43,8 +50,10 @@ DOCROOT="$(mktemp -d)"
 printf '<h1>hello from 1z</h1>\n' > "${DOCROOT}/index.html"
 
 SERVER_PID=""
+AOT_BIN=""
 cleanup() {
   [ -n "${SERVER_PID}" ] && kill "${SERVER_PID}" 2>/dev/null || true
+  [ -n "${AOT_BIN}" ] && rm -f "${AOT_BIN}" || true
 }
 trap cleanup EXIT
 
@@ -58,20 +67,35 @@ trap cleanup EXIT
   echo "Doc size:    $(wc -c < "${DOCROOT}/index.html") bytes"
   echo "Warmup:      -n ${WARMUP_N} -c ${WARMUP_C} (discarded)"
   echo "Measured:    -n ${MEASURE_N} -c ${MEASURE_C}"
-  echo "Max memory:  ${MAX_MEMORY}"
+  echo "Max memory:  ${MAX_MEMORY} (interpreter/JIT; AOT is uncapped, see RSS)"
   echo
-  printf '%-10s %14s %18s %14s\n' "mode" "req/s" "ms/req(concurrent)" "p50(ms)"
-  printf '%-10s %14s %18s %14s\n' "----" "-----" "------------------" "-------"
+  printf '%-10s %14s %18s %14s %10s\n' "mode" "req/s" "ms/req(concurrent)" "p50(ms)" "RSS(MB)"
+  printf '%-10s %14s %18s %14s %10s\n' "----" "-----" "------------------" "-------" "-------"
 } >> "${OUT}"
 
-run_mode() {
+# Launch an interpreter/JIT server. Sets SERVER_PID.
+launch_jit() {
   local mode="$1" port="$2"
-
-  echo "== mode=${mode} port=${port} =="
   "${BIN}" run "--compile=${mode}" "--max-memory=${MAX_MEMORY}" \
     examples/http-static.1z --port "${port}" --dir "${DOCROOT}" &
   SERVER_PID=$!
-  sleep 2   # eager mode compiles up front; give it a moment.
+}
+
+# Launch the prebuilt AOT binary. Sets SERVER_PID. AOT binaries take no
+# --max-memory (that is a driver flag); their memory is reported via RSS.
+launch_aot() {
+  local port="$1"
+  "${AOT_BIN}" --port "${port}" --dir "${DOCROOT}" &
+  SERVER_PID=$!
+}
+
+# Warm up, measure, sample RSS, and record one row. Assumes SERVER_PID is a
+# running server. Kills it afterward.
+measure() {
+  local label="$1" port="$2"
+
+  echo "== mode=${label} port=${port} =="
+  sleep 2   # eager/AOT modes may compile up front; give it a moment.
 
   # Warmup (discarded): lets the JIT modes reach steady state.
   ab -n "${WARMUP_N}" -c "${WARMUP_C}" "http://127.0.0.1:${port}/" >/dev/null 2>&1 || true
@@ -80,12 +104,17 @@ run_mode() {
   local report
   report="$(ab -n "${MEASURE_N}" -c "${MEASURE_C}" "http://127.0.0.1:${port}/" 2>/dev/null)"
 
+  # Steady-state RSS of the server after the sustained run (KB on macOS -> MB).
+  local rss_kb rss_mb
+  rss_kb="$(ps -o rss= -p "${SERVER_PID}" 2>/dev/null | tr -d ' ' || true)"
+  rss_mb=$(( ${rss_kb:-0} / 1024 ))
+
   local rps mspr p50
   rps="$(echo "${report}"  | awk '/Requests per second/ {print $4}')"
   mspr="$(echo "${report}" | awk '/across all concurrent/ {print $4}')"
   p50="$(echo "${report}"  | awk '/^  50%/ {print $2}')"
 
-  printf '%-10s %14s %18s %14s\n' "${mode}" "${rps}" "${mspr}" "${p50}" >> "${OUT}"
+  printf '%-10s %14s %18s %14s %10s\n' "${label}" "${rps}" "${mspr}" "${p50}" "${rss_mb}" >> "${OUT}"
 
   kill "${SERVER_PID}" 2>/dev/null || true
   wait "${SERVER_PID}" 2>/dev/null || true
@@ -93,9 +122,33 @@ run_mode() {
   sleep 1
 }
 
-run_mode off    18211
-run_mode hybrid 18212
-run_mode eager  18213
+launch_jit off    18211; measure off    18211
+launch_jit hybrid 18212; measure hybrid 18212
+launch_jit eager  18213; measure eager  18213
+
+# AOT: the example builds (--interpreter-fallback=false), but the compiled serve
+# path currently resets connections at runtime, so the server accepts and then
+# drops each request. Guard the build and the run and record the outcome instead
+# of aborting the whole script. See examples/http-static-benchmark.md.
+echo "Building the AOT binary (--interpreter-fallback=false)..."
+AOT_BIN="$(mktemp)"
+if "${BIN}" build --interpreter-fallback=false examples/http-static.1z -o "${AOT_BIN}"; then
+  chmod +x "${AOT_BIN}"
+  echo "== mode=aot port=18214 =="
+  launch_aot 18214
+  sleep 2
+  if curl -sf -o /dev/null "http://127.0.0.1:18214/"; then
+    measure aot 18214
+  else
+    # Built and bound, but the compiled handler resets connections.
+    printf '%-10s %14s %18s %14s %10s\n' "aot" "reset" "n/a" "n/a" "n/a" >> "${OUT}"
+    kill "${SERVER_PID}" 2>/dev/null || true
+    wait "${SERVER_PID}" 2>/dev/null || true
+    SERVER_PID=""
+  fi
+else
+  printf '%-10s %14s %18s %14s %10s\n' "aot" "build-fail" "n/a" "n/a" "n/a" >> "${OUT}"
+fi
 
 echo >> "${OUT}"
 echo "Note: throughput is expected to be nearly identical across modes. The" >> "${OUT}"

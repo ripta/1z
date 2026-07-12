@@ -53,7 +53,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "await-all", .stack_effect = "array -- array", .doc = "Wait for all tasks in array and return array of results. Each handle must belong to an open task-scope; handles are no longer valid after their scope exits.", .func = nativeAwaitAll },
     .{ .name = "sleep", .stack_effect = "duration --", .doc = "Suspend the current task for a duration.", .func = nativeSleep },
     .{ .name = "cancel-task", .stack_effect = "task --", .doc = "Cancel a task.", .func = nativeCancelTask },
-    .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration. The main task and the timer task may run on different workers; cancellation crosses workers via the scheduler's cross-thread cancel path.", .func = nativeWithTimeout },
+    .{ .name = "with-timeout", .stack_effect = "quot duration -- value", .doc = "Run a quotation with a timeout duration. Returns the quotation's value if it finishes first, or throws a timeout error if the duration elapses first.", .func = nativeWithTimeout },
     .{ .name = "multiplexer-stats", .stack_effect = "-- hash", .doc = "Return a hash of I/O multiplexer statistics. Requires an active task-scope.", .func = nativeMultiplexerStats },
     .{ .name = "container-limits", .stack_effect = "-- hash", .doc = "Return a hash of detected container CPU and memory limits: cpu-count, cpu-source, cpu-raw, memory-cap, memory-source, memory-raw.", .func = nativeContainerLimits },
     .{ .name = "cancelled?", .stack_effect = "-- bool", .doc = "Push t if the current task has a pending cancellation, f otherwise.", .func = nativeCancelledQuery },
@@ -144,6 +144,9 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
 
         try scope.addChild(scope_task);
         try scheduler.enqueue(scope_task);
+        // Count the scope task on its home worker so the decrement in
+        // `handleTaskDone` when it completes does not underflow `active_tasks`.
+        scheduler.notifyOwnerTaskSpawned();
 
         const current = scheduler.current_task.?;
         scope.waiting_task = current;
@@ -449,15 +452,12 @@ fn nativeSleep(ctx: *Context) anyerror!void {
 ///
 /// Run a quotation with a timeout. Creates an isolated nested scope with two
 /// tasks: the main task running the user's quotation and a timer task that
-/// sleeps for the given duration then triggers a timeout failure. Each
-/// task is assigned to a worker by the usual least-loaded rule, so the
-/// main task and the timer task may run on different workers.
+/// sleeps for the given duration then triggers a timeout failure. Both tasks
+/// are homed on the current worker, so the scope's completed children are reaped
+/// inline on that worker when this returns.
 ///
 /// If the main task completes first, its result is pushed and the timer is cancelled.
 /// If the timer fires first, the main task is cancelled and a `timeout` error is thrown.
-/// Cross-worker cancellation routes through the scheduler's cross-thread
-/// cancel queue with home-worker cleanup, so neither outcome depends on
-/// the two tasks sharing a worker.
 fn nativeWithTimeout(ctx: *Context) anyerror!void {
     const dur = try helpers.popDuration(ctx);
     const quot = try helpers.popQuotation(ctx);
@@ -481,6 +481,14 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     //              the caller's other tasks. Spawn the main task with the user's quotation.
     var scope = TaskScope.init(ctx.allocator);
     defer scope.deinit();
+    // Reap both children when the scope exits. Without this they linger in the
+    // scheduler's finished list until teardown. The HTTP idle-read timeout calls
+    // with-timeout once per request, so that leaks a main and a timer task stack
+    // on every request.
+    //
+    // Deferred after `scope.deinit` so LIFO runs the reap first, while the
+    // children list is still intact.
+    defer scheduler.reapScopeAtExit(&scope);
 
     // Race semantics: whichever of the main and timer tasks finishes first cancels
     // the other. Without this the main task completing normally leaves the timer
@@ -491,6 +499,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     const main_task = try allocateTask(ctx, scheduler, &scope, quot);
     try scope.addChild(main_task);
     try scheduler.enqueue(main_task);
+    scheduler.notifyOwnerTaskSpawned();
 
     const alloc = ctx.arena.allocator();
     const timer_instrs = try alloc.alloc(Instruction, 2);
@@ -502,6 +511,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     const timer_task = try allocateTaskWithEntry(ctx, scheduler, &scope, timer_quot, &timerTaskEntryPoint);
     try scope.addChild(timer_task);
     try scheduler.enqueue(timer_task);
+    scheduler.notifyOwnerTaskSpawned();
 
     // suspend the current task until the scope drains
     scope.waiting_task = current;

@@ -22,9 +22,13 @@ Each mode is measured against the same 23-byte `index.html`:
 
 - Warmup: `ab -n 200 -c 10`, discarded. This lets the JIT modes reach steady
   state.
-- Measured: `ab -n 1000 -c 20`.
-- `--max-memory=2G`, raised so the per-connection memory leak (see below) does
-  not kill the server mid-run.
+- Measured: `ab -n 5000 -c 20`. The run is long on purpose. It runs well past the
+  point where the old leak used to exhaust memory, so a clean run is itself
+  evidence of bounded memory.
+- `--max-memory=256M` on the interpreter and JIT modes. The per-connection leak
+  is fixed, so the default cap holds.
+- Steady-state RSS is sampled after each measured run. A leak would show as a
+  large resident set rather than the few tens of megabytes below.
 
 Every mode restarts the server fresh. Numbers are one machine, one session, so
 treat small differences as noise.
@@ -33,29 +37,41 @@ treat small differences as noise.
 
 Apple Silicon (arm64), macOS 25.5.0:
 
-| Mode              | req/s | ms/req (concurrent) | p50 (ms) |
-|-------------------|-------|---------------------|----------|
-| `--compile=off`    | 79.5  | 12.6                | 240      |
-| `--compile=hybrid` | 81.4  | 12.3                | 236      |
-| `--compile=eager`  | 80.8  | 12.4                | 240      |
+| Mode               | req/s | ms/req (concurrent) | p50 (ms) | RSS (MB) |
+|--------------------|-------|---------------------|----------|----------|
+| `--compile=off`    | 50.1  | 19.9                | 390      | 49       |
+| `--compile=hybrid` | 50.0  | 20.0                | 391      | 49       |
+| `--compile=eager`  | 49.8  | 20.1                | 391      | 61       |
+| `aot`              | reset | n/a                 | n/a      | n/a      |
 
-AOT (`1z build`) is not covered here. It is deferred to a follow-up, because the
-serving path relies on the module and task-scope machinery that first needs the
-defects below resolved.
+The interpreter and JIT modes each serve the full 5000-request run bounded.
+Resident memory stays flat at about 50-60 MB, well under the 256 MB cap.
+
+### AOT does not serve yet
+
+The AOT binary builds.
+`1z build --interpreter-fallback=false examples/http-static.1z` compiles with no
+rejected word. It links the interpreter as a fallback for the row-variable
+combinators the serve path uses (`keep`, `2dip`, `try`), binds the port, and
+prints its serving banner.
+
+But it does not serve. It accepts each connection, reads the request, and resets
+the connection with no response. The compiled serve path fails at request
+handling. So the AOT row records `reset`, not a throughput number. A working AOT
+number needs the compiled serve path to run, which is separate work from this
+benchmark.
 
 ## Conclusion: the server is spawn-bound, not compute-bound
 
-The three modes are within run-to-run noise of each other. Compile mode does not
-matter here.
+The three working modes are within run-to-run noise of each other. Compile mode
+does not matter here.
 
 The reason is that throughput is limited by the per-connection task spawn, not by
-the 1z-level request handling. The accept loop is serial: it accepts one
+the 1z-level request handling. The accept loop is serial. It accepts one
 connection, spawns a handler task, and loops. Each spawn allocates a fresh
-coroutine (a 768 KB stack) plus a context and arena. That native cost is
+coroutine with a 768 KB stack, plus a context and arena. That native cost is
 identical in every compile mode, so the JIT has nothing to speed up on the hot
-path. Throughput is also flat with concurrency (about 82 req/s at both `-c 10`
-and `-c 20`), which is the signature of a serial bottleneck rather than a
-CPU-bound one.
+path.
 
 The JIT and AOT will only start to matter for this workload once the spawn cost
 stops dominating. That means serving larger responses, doing more per-request
@@ -63,18 +79,24 @@ stops dominating. That means serving larger responses, doing more per-request
 
 ## Defects found
 
-Two pre-existing defects surfaced. Both are filed and are being addressed
-separately from the server work.
+- The idle-read timeout leaked memory per request. Each request reads its request
+  line under a timeout. The timeout built a nested scope with a main task and a
+  timer task, and neither was reaped when the scope exited. Both lingered in the
+  scheduler's finished list until the process ended. A long run leaked about a
+  megabyte per request and hit the memory limit after roughly 250 connections. The
+  timeout now reaps both tasks at scope exit. The same fix restores the worker's
+  active-task counter, which the completion path had been driving negative. The
+  bounded runs above and the `with_timeout_bounded` integration test both cover
+  it.
 
-- The entire high-level serve path (`serve`, `serve-static`, `serve-forever`)
-  never ran. A tail call from public `serve-forever` into the private
-  `serve-loop` dropped the module-deps frame, so `accept` was unresolvable. The
-  library was restructured to make `serve-loop` public as a mitigation; the
-  underlying runtime defect remains open.
+- The high-level serve path once did not run at all. A tail call from public
+  `serve-forever` into the private `serve-loop` dropped the module-deps frame, so
+  `accept` was unresolvable. The library was restructured to make `serve-loop`
+  public as a mitigation. The underlying runtime defect remains open. The AOT
+  serve path resetting connections may be a related bare-word resolution failure
+  in compiled code.
 
-- A `task-scope` never reaps completed children while it is open. The server's
-  accept loop runs inside one perpetual `task-scope`, so every completed
-  connection task's memory is retained. The server leaks about 285 KB per request
-  and dies at the memory limit after roughly 900 connections. The raised
-  `--max-memory` in the benchmark only defers this; it does not bound
-  steady-state memory.
+- The AOT-compiled server resets every connection instead of responding. It
+  builds and binds the port, then accepts, reads the request, and closes the
+  socket with no response and no diagnostic. The interpreter and both JIT modes
+  serve the same program correctly.
