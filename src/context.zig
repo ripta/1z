@@ -377,6 +377,14 @@ pub const Context = struct {
     /// frame maintains both arrays together; the debug-only `assertFrameKindsParity` checks the
     /// lengths stay equal.
     local_frame_kinds: std.ArrayListUnmanaged(FrameKind) = .{},
+    /// Count of live transient lexical frames (above `import_frame_index`, kind `.lexical`) that
+    /// currently hold at least one definition. A fast-path gate for `captureQuotationScope`: when
+    /// zero, no quotation push has anything to close over, so the capture scan is skipped.
+    ///
+    /// Maintained task-privately at the define, remove, pop, and spawn-clone sites, so no atomic is
+    /// needed. A wrong-high count only falls through to the existing scan, so the sole correctness
+    /// duty is to never undercount.
+    nonempty_transient_lexical_frames: usize = 0,
     /// Tokenizer for parse-time word access (set during parsing, null otherwise)
     parse_tokenizer: ?*Tokenizer = null,
     /// Deferred emissions requested by parse-time words via `emit-call` /
@@ -1100,6 +1108,11 @@ pub const Context = struct {
             else
                 .lexical;
             try ctx.local_frame_kinds.append(allocator, kind);
+
+            const new_idx = ctx.local_frames.items.len - 1;
+            if (ctx.isTransientLexicalFrame(new_idx) and ctx.local_frames.items[new_idx].count() > 0) {
+                ctx.nonempty_transient_lexical_frames += 1;
+            }
         }
 
         return ctx;
@@ -1484,6 +1497,13 @@ pub const Context = struct {
     pub fn popLocalFrame(self: *Context) void {
         if (self.local_frames.items.len > 0) {
             const last_idx = self.local_frames.items.len - 1;
+            if (self.local_frames.items[last_idx].count() > 0 and self.isTransientLexicalFrame(last_idx) and
+                self.nonempty_transient_lexical_frames > 0)
+            {
+                // Production stays balanced by construction. The guard tolerates test code that
+                // hand-builds a non-empty frame without going through `defineWordLocked`.
+                self.nonempty_transient_lexical_frames -= 1;
+            }
             self.local_frames.items[last_idx].deinit(self.allocator);
             self.local_frames.items.len -= 1;
             if (self.local_frame_kinds.items.len > 0) {
@@ -1498,6 +1518,14 @@ pub const Context = struct {
     /// A desync means a push or pop touched one without the other.
     fn assertFrameKindsParity(self: *const Context) void {
         std.debug.assert(self.local_frame_kinds.items.len == self.local_frames.items.len);
+    }
+
+    /// True when frame `idx` is a transient lexical frame: strictly above the durable import frame
+    /// and of `.lexical` kind. The floor matches the one the capture scan uses.
+    fn isTransientLexicalFrame(self: *const Context, idx: usize) bool {
+        const floor = if (self.import_frame_index) |i| i + 1 else 0;
+        if (idx < floor) return false;
+        return idx < self.local_frame_kinds.items.len and self.local_frame_kinds.items[idx] == .lexical;
     }
 
     /// Capture the lexical scope visible at a quotation's creation, keyed off the quotation body's
@@ -1521,6 +1549,7 @@ pub const Context = struct {
     /// scope that `curry` / `compose` carry.
     fn captureQuotationScope(self: *Context, instructions: []const Instruction) !void {
         if (instructions.len == 0) return;
+        if (self.nonempty_transient_lexical_frames == 0) return;
         const floor = if (self.import_frame_index) |idx| idx + 1 else 0;
         if (self.local_frames.items.len <= floor) return;
 
@@ -1894,7 +1923,15 @@ pub const Context = struct {
         defer self.releaseSharedWrite();
         if (self.local_frames.items.len > 0) {
             const top_index = self.local_frames.items.len - 1;
-            return self.local_frames.items[top_index].remove(name);
+            const removed = self.local_frames.items[top_index].remove(name);
+            if (removed and self.local_frames.items[top_index].count() == 0 and
+                self.isTransientLexicalFrame(top_index) and self.nonempty_transient_lexical_frames > 0)
+            {
+                // Saturating: hand-built test frames may empty a frame the increment path never
+                // counted. Production stays balanced by construction.
+                self.nonempty_transient_lexical_frames -= 1;
+            }
+            return removed;
         }
         return self.dictionary.remove(name);
     }
@@ -1973,7 +2010,11 @@ pub const Context = struct {
 
         if (self.local_frames.items.len > 0) {
             const top_index = self.local_frames.items.len - 1;
+            const was_empty = self.local_frames.items[top_index].count() == 0;
             try self.local_frames.items[top_index].put(self.allocator, name, def);
+            if (was_empty and self.isTransientLexicalFrame(top_index)) {
+                self.nonempty_transient_lexical_frames += 1;
+            }
         } else {
             try self.dictionary.put(name, def);
         }
@@ -7128,6 +7169,36 @@ test "initForTask: captures only frames above the parent's import frame" {
     try std.testing.expect(task_ctx.local_frames.items[0].get("stable-w") == null);
 }
 
+test "initForTask: seeds the gate counter from cloned non-empty transient frames" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // The stable import frame at index 0 is not cloned; only the non-empty transient frame is. The
+    // child must start with a counter reflecting that clone, or a quotation the child later pushes
+    // that closes over the cloned binding would be wrongly gated off.
+    try parent.pushLocalFrame();
+    try parent.local_frames.items[0].put(std.testing.allocator, "stable-w", .{
+        .name = "stable-w",
+        .action = .{ .compound = &.{} },
+    });
+    parent.import_frame_index = 0;
+    try parent.pushLocalFrame();
+    try parent.local_frames.items[1].put(std.testing.allocator, "transient-w", .{
+        .name = "transient-w",
+        .action = .{ .compound = &.{} },
+    });
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(@as(usize, 1), task_ctx.nonempty_transient_lexical_frames);
+}
+
 test "computeExecFlags: generic word with empty compound body" {
     const def = WordDefinition{
         .name = "gen-empty",
@@ -7351,6 +7422,8 @@ test "captureQuotationScope: snapshots a lexical local, skips a module-deps fram
         .source_file = "local-site",
         .action = .{ .compound = &.{} },
     });
+    // The direct put bypasses `defineWordLocked`, so the gate counter is set by hand here.
+    ctx.nonempty_transient_lexical_frames = 1;
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "shadow" }, .line = 0 }};
     try ctx.captureQuotationScope(&body);
@@ -7359,6 +7432,76 @@ test "captureQuotationScope: snapshots a lexical local, skips a module-deps fram
     // Only the lexical frame is snapshotted; the module-deps frame is skipped.
     try std.testing.expectEqual(@as(usize, 1), scope.lexical_frames.len);
     const resolved = Context.lookupInCapturedScope(scope, "shadow") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
+}
+
+test "nonempty_transient_lexical_frames: define, remove, and pop stay balanced" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // Frame 0 is the durable import frame; only frames above it are counted.
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    try ctx.pushLocalFrame();
+    try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
+
+    // First definition makes the frame non-empty.
+    try ctx.defineWord("a", .{ .name = "a", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+
+    // A second definition in the same frame does not change the count.
+    try ctx.defineWord("b", .{ .name = "b", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+
+    // Removing one word leaves the frame non-empty.
+    try std.testing.expect(ctx.removeWord("a"));
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+
+    // Removing the last word empties the frame.
+    try std.testing.expect(ctx.removeWord("b"));
+    try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
+
+    // A definition followed by a pop of the whole frame nets back to zero.
+    try ctx.defineWord("c", .{ .name = "c", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
+}
+
+test "captureQuotationScope: empty combinator frames leave the counter zero and skip capture" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    // Two empty lexical frames stand in for combinator frames that define no locals.
+    try ctx.pushLocalFrame();
+    try ctx.pushLocalFrame();
+    try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "x" }, .line = 0 }};
+    try ctx.captureQuotationScope(&body);
+    try std.testing.expect(ctx.quotation_captured_scope.get(@intFromPtr(&body)) == null);
+}
+
+test "captureQuotationScope: a live local still captures through the gate" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("local", .{ .name = "local", .source_file = "local-site", .action = .{ .compound = &.{} } });
+    try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    try ctx.captureQuotationScope(&body);
+
+    const scope = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedCapture;
+    const resolved = Context.lookupInCapturedScope(scope, "local") orelse return error.TestExpectedResolution;
     try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
 }
 
