@@ -29,8 +29,14 @@ Output:
 
 If you have used languages with lambdas or anonymous functions, quotations
 fill the same role -- but they are simpler. A quotation is just a sequence
-of words. It captures no variables and creates no scope. It operates on
-whatever is on the stack when it runs.
+of words. It captures no stack values. It operates on whatever is on the
+stack when it runs.
+
+The one thing a quotation does carry is name resolution. Its bare words
+resolve against the scope where the quotation is written. That means its
+own module and any enclosing local definitions, not wherever it is later
+called. This holds through `curry`, `compose`, and `spawn`: a bare name
+resolves where the quotation was written, not where it later runs.
 
 ## `call` and Execution
 

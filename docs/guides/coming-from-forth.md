@@ -163,6 +163,13 @@ Instead, definitions inside quotations are scoped to that quotation:
 These are lexically scoped -- `a` and `b` shadow outer definitions and are
 restored on exit.
 
+A quotation that closes over such a local carries that binding wherever it
+runs. A bare name inside a quotation resolves to the definition visible where
+the quotation was written, not to a same-named word visible where it is later
+called. So a closure threaded through another module's `curry` and `spawn`
+still resolves its own locals correctly, even if that module defines a word by
+the same name.
+
 ---
 
 ## Data Types
