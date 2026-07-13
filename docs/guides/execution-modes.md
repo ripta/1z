@@ -9,6 +9,10 @@ The AOT path has several artifact classes depending on how much runtime
 machinery is linked into the executable. This guide uses small programs and
 repeatable commands to show the behavioral and operational differences.
 
+For an end-to-end explanation of source loading, freezing, reachability,
+codegen, runtime images, name mangling, and linking, see
+[Ahead-of-Time Compilation](aot.md).
+
 ## Mode Summary
 
 | Mode | Command shape | What runs | Main tradeoff |

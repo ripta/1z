@@ -25,11 +25,13 @@ definitions, and control flow.
     convention, and when to use them over native primitives
 12. [Execution and Compilation Modes](execution-modes.md) -- interpreter,
     JIT, runtime-image AOT, and interpreter-free AOT tradeoffs
-13. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
+13. [Ahead-of-Time Compilation](aot.md) -- the complete AOT pipeline from
+    source loading and freezing through C emission, linking, and startup
+14. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
     and `samply` see 1z words in AOT binaries
-14. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
+15. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
     on QEMU riscv64 with no operating system
-15. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
+16. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
     comparison for experienced stack-language programmers
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with

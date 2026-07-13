@@ -7,6 +7,9 @@ backend would otherwise emit. `nm`, `perf`, and `samply` all read those
 symbols, so a profile of a 1z program lands on names like `parse-json?` and
 `person/id>>` instead of `onez_w_parse_json_Q` and `onez_w_id_G_G`.
 
+For the complete build pipeline that produces these functions and symbols, see
+[Ahead-of-Time Compilation](aot.md).
+
 The verification harness shipped with this repo confirms the policy across the
 toolchains that consume the symbol table, on both macOS and Linux. This guide
 documents what it covers and the per-tool surprises it surfaced.
