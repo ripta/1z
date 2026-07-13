@@ -1,0 +1,10 @@
+\ Two modules each define a `slot>>` getter for a different struct, and neither
+\ imports the other, so the getters do not unify. Both are reachable and called.
+\ Name-keyed AOT discovery would collapse them to one baked getter and misresolve
+\ one call; per-caller-module-scoped discovery keeps each caller bound to its own
+\ module's getter. Correct output proves both resolved to the right getter.
+use "./support/coll_widget.1z" ;
+use "./support/coll_gadget.1z" ;
+
+widget-slot .
+gadget-slot .

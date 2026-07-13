@@ -171,10 +171,11 @@ else
 fi
 
 echo >> "${OUT}"
-echo "Note: within each connection mode, throughput is nearly identical across compile" >> "${OUT}"
-echo "modes, so the compile mode is not the bottleneck. Keep-alive reuses each connection" >> "${OUT}"
-echo "for up to 100 requests. It lowers per-request latency but does not raise throughput," >> "${OUT}"
-echo "so the ceiling is not the per-connection accept and spawn cost." >> "${OUT}"
+echo "Note: the interpreter and both JIT modes land within noise of each other, so the JIT" >> "${OUT}"
+echo "does not help this workload. AOT is faster (about 60% above the interpreter on close):" >> "${OUT}"
+echo "compiling the serve path removes per-request interpreter overhead the JIT never amortizes" >> "${OUT}"
+echo "on this short-lived per-connection path. Keep-alive lowers per-request latency but not the" >> "${OUT}"
+echo "interpreter/JIT rate, so the per-connection accept and spawn is not their bottleneck." >> "${OUT}"
 
 echo
 echo "Results written to: ${OUT}"

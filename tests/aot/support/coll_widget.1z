@@ -1,0 +1,4 @@
+\ Fixture: `slot` at field index 0, with its own `slot>>` generic.
+widget: struct{ slot } ;
+
+widget-slot: ( -- fixnum ) [ 7 make-widget slot>> ] ;

@@ -2300,10 +2300,8 @@ pub const Context = struct {
 
     /// Find a cached module by its exact name.
     ///
-    /// Modules are read lock-free on the execution path, matching `pushModuleDepsFrame`'s callers.
-    /// The cache is populated at load time and immutable afterward. Used by the AOT direct-call
-    /// scope helpers to recover a callee's defining module at runtime, since an embedded Module
-    /// pointer would be process-local.
+    /// Used during AOT freeze to re-establish a callee's defining-module scope while discovering
+    /// its body.
     pub fn moduleByNameInCache(self: *const Context, name: []const u8) ?*const value_mod.Module {
         var iter = self.module_cache_value.map.iterator();
         while (iter.next()) |entry| {
@@ -5546,7 +5544,6 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .bounded_constraint = if (bounded) |b| b.constraint else null,
         .bounded_arity = if (bounded) |b| b.arity else .unary,
         .bounded_trace_name = if (bounded) |b| ctx.boundedConstraintTraceName(b.constraint) else null,
-        .source_module_name = if (callee.source_module) |m| m.name else null,
     };
     if (stack_effect_mod.hasAnyRowVariable(effect)) {
         result.callee_effect = ctx.lookupWordStackEffectPtr(name);

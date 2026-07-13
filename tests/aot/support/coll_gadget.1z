@@ -1,0 +1,5 @@
+\ Fixture: `slot` at field index 1, a separate `slot>>` generic. This module
+\ does not import coll_widget, so the two `slot>>` getters do not unify.
+gadget: struct{ extra slot } ;
+
+gadget-slot: ( -- fixnum ) [ 3 9 make-gadget slot>> ] ;
