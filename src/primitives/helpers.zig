@@ -483,7 +483,17 @@ pub const CallableWithScope = struct {
 pub fn popCallableWithScope(ctx: *Context) !CallableWithScope {
     const val = try ctx.stack.pop();
     switch (val) {
-        .quotation => |q| return .{ .quot = q, .scope = null },
+        .quotation => |q| {
+            // A plain quotation carries no scope on the value, so source its own from this
+            // context's side map: `push_literal` captured it here, where the literal was created.
+            // The child task stamps it. Self-map only (lock-free), gated so the common no-closure
+            // program pays a single count check.
+            const scope: ?*const CapturedScope = if (ctx.quotation_captured_scope.count() > 0)
+                ctx.quotation_captured_scope.get(@intFromPtr(q.instructions.ptr))
+            else
+                null;
+            return .{ .quot = q, .scope = scope };
+        },
         .closure => |c| return .{ .quot = c.asQuotation(), .scope = c.captured_scope },
         else => {
             setTypeMismatchError(ctx, "quotation", val);

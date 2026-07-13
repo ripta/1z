@@ -1,0 +1,5 @@
+=== plain-quotation local resolution across spawn ===
+PASS: spawned plain quotation resolves its own local val, not the module's val
+Stack: [ ]
+resolved
+Stack: [ ]

@@ -1,0 +1,29 @@
+\ A plain (non-curried) quotation spawned across a task boundary resolves its
+\ bare words to its definition-site locals, even when the spawn-time frame clone
+\ carries a same-named module word into the child.
+\
+\ `apply-spawn` runs in the helper module, so that module's `val` is live on the
+\ frame stack and is cloned into the child task above the caller's local frame.
+\ Resolving `val` by frame-stack order alone would find the module word. The
+\ spawned quotation carries its own captured scope across the boundary, and that
+\ scope resolves ahead of the cloned frames, so the local `val` wins.
+\
+\ Without the plain-quotation scope carry this assertion fails: the child receives
+\ "MODULE-VAL".
+
+use "testing" ;
+use "./lexical_closure_capture_mod.1z" ;
+
+[
+  val: [ "LOCAL-VAL" ] ;
+  out: 1 <buffered-channel> ;
+
+  [ val out send ] apply-spawn
+
+  "plain-quotation local resolution across spawn" test-section
+  out receive "LOCAL-VAL"
+  "spawned plain quotation resolves its own local val, not the module's val"
+  assert=
+] task-scope
+
+"resolved" print-line

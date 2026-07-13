@@ -962,15 +962,10 @@ pub const Context = struct {
         return ctx;
     }
 
-    /// Create a lightweight Context for a spawned task. Primitives and the
-    /// prelude are not registered here; they are resolved at lookup time
-    /// by walking up the parent_context chain. Per-task state like the stack,
-    /// dictionary, and arena are freshly allocated.
-    pub fn initForTask(
-        allocator: Allocator,
-        parent: *Context,
-        scheduler: *Scheduler,
-    ) !Context {
+    /// Create a lightweight Context for a spawned task. Primitives and the prelude are not
+    /// registered here. They are resolved at lookup time by walking up the parent_context chain.
+    /// Per-task state like the stack, dictionary, and arena are freshly allocated.
+    pub fn initForTask(allocator: Allocator, parent: *Context, scheduler: *Scheduler) !Context {
         var ctx = Context{
             .stack = Stack.init(allocator),
             .dictionary = Dictionary.init(allocator),
@@ -1065,22 +1060,33 @@ pub const Context = struct {
             try ctx.parameter_env.append(allocator, cloned_frame);
         }
 
-        // Capture the parent's in-scope transient local frames at spawn, the
-        // same snapshot-at-spawn discipline the parameter environment above
-        // uses. The transient frames are those above the parent's resolution
-        // root: the parent's import frame and below are the durable scope a
-        // descendant reaches by walking `parent_context`, while the frames
-        // above it (module-deps and combinator frames, and any quotation-local
-        // definitions they hold) are per-task execution state a descendant has
-        // no live window into once cross-context resolution is task-private.
-        // A task parent has no import frame, so all of its frames are
-        // transient; the primary context contributes only frames above its
-        // `import_frame_index`. In the common case this set is empty, since
-        // top-level and word-body definitions land in the stable import frame.
+        // Clone the parent's in-scope transient local frames at spawn, the same snapshot-at-spawn
+        // discipline the parameter environment above uses.
         //
-        // `WordDefinition` borrows its name, effect, markers, and body slice
-        // and owns no allocation, so the frame clone copies entries directly
-        // without the container-backing retain the parameter snapshot needs.
+        // The transient frames are those above the parent's resolution root: the parent's import
+        // frame and below are the durable scope a descendant reaches by walking `parent_context`,
+        // while the frames above it (module-deps and combinator frames, and any quotation-local
+        // definitions they hold) are per-task execution state a descendant has no live window
+        // into once cross-context resolution is task-private.
+        //
+        // A task parent has no import frame, so all of its frames are transient; the primary context
+        // contributes only frames above its `import_frame_index`. In the common case this set is
+        // empty, since top-level and word-body definitions land in the stable import frame.
+        //
+        // Per-quotation lexical capture sits in front of this clone: a spawned closure or plain
+        // quotation carries its own captured scope, which `executeInstructions` resolves ahead of
+        // the frame stack, so a local binding is no longer silently shadowed by an unrelated
+        // same-named module word. The clone is therefore not redundant.
+        //
+        // Captured scope attaches only to a quotation *literal*, so a top-level local *word* whose
+        // body references a sibling local (e.g., `net/server`'s handler calling a local word that
+        // reads a local channel) still resolves that sibling through the live frame stack. This
+        // clone is what keeps that sibling frame live in the spawned task, which captured scope
+        // can't cover.
+        //
+        // `WordDefinition` borrows its name, effect, markers, and body slice and owns no allocation,
+        // so the frame clone copies entries directly without the container-backing retain the
+        // parameter snapshot needs.
         const transient_start = if (parent.import_frame_index) |idx| idx + 1 else 0;
         for (parent.local_frames.items[transient_start..], transient_start..) |parent_frame, src_idx| {
             var cloned_frame = LocalFrame{};
@@ -1512,7 +1518,7 @@ pub const Context = struct {
     ///
     /// The consequence is that one body reused in two scopes that bind the same name differently
     /// resolves both to the first scope's binding. Per-call distinct captures need the per-quotation
-    /// scope that `curry` / `compose` will carry.
+    /// scope that `curry` / `compose` carry.
     fn captureQuotationScope(self: *Context, instructions: []const Instruction) !void {
         if (instructions.len == 0) return;
         const floor = if (self.import_frame_index) |idx| idx + 1 else 0;
@@ -5322,7 +5328,7 @@ pub const Context = struct {
             switch (instr.op) {
                 .push_literal => |val| {
                     try self.stack.push(val);
-                    // Capture the lexical scope at the moment a quotation literal is created
+                    // Capture the lexical scope at the moment a quotation literal is created.
                     if (val == .quotation) {
                         try self.captureQuotationScope(val.quotation.instructions);
                     }
@@ -7051,8 +7057,10 @@ test "initForTask: captures parent transient local frames at spawn" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
 
-    // Task-parent semantics: no import frame, so every parent frame is
-    // transient and captured into the child as a private, frozen prefix.
+    // Task-parent semantics: no import frame, so every parent frame is transient and captured into
+    // the child as a private, frozen prefix. The clone carries lexical frames because a top-level
+    // local word's body resolves sibling locals through the live frame stack, which per-quotation
+    // captured scope does not cover.
     try parent.pushLocalFrame();
     try parent.local_frames.items[0].put(std.testing.allocator, "quo-local", .{
         .name = "quo-local",
@@ -7067,8 +7075,8 @@ test "initForTask: captures parent transient local frames at spawn" {
     var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
     defer task_ctx.deinit();
 
-    // The transient frame is cloned into the child, resolvable in the child's
-    // own frames without walking the parent.
+    // The transient frame is cloned into the child, resolvable in the child's own frames without
+    // walking the parent.
     try std.testing.expectEqual(@as(usize, 1), task_ctx.local_frames.items.len);
     const found = task_ctx.local_frames.items[0].get("quo-local") orelse return error.TestExpectedLookup;
     try std.testing.expectEqualStrings("quo-local", found.name);
@@ -7078,9 +7086,9 @@ test "initForTask: captures only frames above the parent's import frame" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
 
-    // Primary-context semantics: frame 0 is the stable import frame the child
-    // reaches live by walking the parent chain, frame 1 is transient and must
-    // be captured. Only the transient frame is cloned.
+    // Primary-context semantics: frame 0 is the stable import frame the child reaches live by
+    // walking the parent chain, frame 1 is transient and must be captured. Only the transient frame
+    // is cloned.
     try parent.pushLocalFrame();
     try parent.local_frames.items[0].put(std.testing.allocator, "stable-w", .{
         .name = "stable-w",

@@ -11,3 +11,8 @@ val: ( -- s ) [ "MODULE-VAL" ] ;
 module-only: ( -- s ) [ "MODULE-ONLY" ] ;
 
 apply: ( q -- x ) [ call ] ;
+
+\ Spawn a passed quotation from inside this module's body. This module's `val`
+\ is live on the frame stack at the spawn, so the spawn-time frame clone carries
+\ that module word into the child task above the caller's local frame.
+apply-spawn: ( q -- ) [ spawn drop ] ;
