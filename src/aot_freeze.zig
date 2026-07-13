@@ -2035,6 +2035,7 @@ fn buildAotDescs(
                     .source_line = def.source_line,
                     .is_generated = def.provenance != null or devirt.provenance != null,
                     .parent = parent,
+                    .source_module_name = if (def.source_module) |m| m.name else null,
                 });
                 continue;
             }
@@ -2099,6 +2100,7 @@ fn buildAotDescs(
             .bounded_dispatch_id = if (bounded != null) def.dispatch_id else 0,
             .bounded_constraint = if (bounded) |b| b.constraint else null,
             .bounded_arity = if (bounded) |b| b.arity else .unary,
+            .source_module_name = if (def.source_module) |m| m.name else null,
         });
     }
 
@@ -2221,6 +2223,7 @@ fn buildAotDescs(
                 .never_returns = entry.never_returns,
                 .is_native = entry.is_native,
                 .native_fn_ptr = entry.native_fn_ptr,
+                .source_module_name = entry.source_module_name,
             };
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {

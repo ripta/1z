@@ -570,6 +570,11 @@ pub const AotWordDesc = struct {
     bounded_constraint: ?dispatch_helpers.BoundedConstraint = null,
     /// Arity for the bounded dispatch. Meaningful only when `bounded_constraint` is non-null.
     bounded_arity: dispatch_helpers.ProtocolArity = .unary,
+    /// Name of this word's defining module, or null for words with no source
+    /// module. AOT direct-call sites push this module's deps frame around the
+    /// call so the callee body's bare/generic words resolve against the callee's
+    /// module scope, mirroring the interpreter's `executeResolvedWord`.
+    source_module_name: ?[]const u8 = null,
 };
 
 const supported_indexed_stack_ops = [_][]const u8{ "pick-n", "<rot-n", "rot-n>", "nip-n" };
@@ -815,6 +820,12 @@ pub const ResolvedWord = struct {
     /// declared concrete effect, or a later branch merge sees diverging
     /// depths. Populated from the row-returning set discovered before Pass 1a.
     returns_row: bool = false,
+    /// Name of the callee's defining module, when it has one. AOT direct calls
+    /// (`emitAotWordCall`) push this module's deps frame around the call so a
+    /// bare or generic word in the callee body resolves against the callee's
+    /// module scope, mirroring the interpreter's `executeResolvedWord`. Null for
+    /// words with no source module (top-level user words).
+    source_module_name: ?[]const u8 = null,
 };
 
 /// Callback interface for resolving word names to dispatch table IDs.
@@ -1825,6 +1836,11 @@ const CompileState = struct {
     /// `word_id` using the cached `native_fn_ptr` on the JIT dispatch
     /// entry. AOT-mode replaces `interpreted_call_fn` for native targets.
     native_word_call_fn: c.ir_ref = c.IR_UNUSED,
+    /// References to `onez_push_word_module_scope` / `onez_pop_word_module_scope`: push and pop a
+    /// callee's defining-module deps frame around an AOT direct call. Only set in AOT mode; the
+    /// interpreter and JIT dispatch wrappers establish this scope themselves.
+    push_word_scope_fn: c.ir_ref = c.IR_UNUSED,
+    pop_word_scope_fn: c.ir_ref = c.IR_UNUSED,
     /// Reference to jitRefreshStack: re-LOADs ctx.stack.items.items.ptr and
     /// capacity into the JitContext after a callback may have reallocated
     /// the stack. Emitted from emitCallbackPostCheck on the hot-path continue
@@ -8175,7 +8191,11 @@ pub fn emitWordC(
         "extern int32_t jitNullCodePtrError(uintptr_t ctx);\n" ++
         "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t line);\n" ++
         "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t line);\n" ++
-        "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n\n";
+        "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n" ++
+        "extern int32_t jitPushWordModuleScope(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n" ++
+        "extern int32_t jitPopWordModuleScope(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n" ++
+        "static int32_t onez_push_word_module_scope(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushWordModuleScope(ctx, (uintptr_t)name, len); }\n" ++
+        "static int32_t onez_pop_word_module_scope(uintptr_t ctx, const char *name, uintptr_t len) { return jitPopWordModuleScope(ctx, (uintptr_t)name, len); }\n\n";
     const result = try allocator.alloc(u8, preamble.len + body.len);
     @memcpy(result[0..preamble.len], preamble);
     @memcpy(result[preamble.len..], body);
@@ -8399,6 +8419,12 @@ fn emitWordCAotPass(
     // phantom LOAD that collides with vreg 0.
     const native_word_call_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitNativeWordCall"), proto_3arg);
 
+    // Always declared, like aot_generic_dispatch_fn: a cross-module direct call
+    // may be emitted at a site the pre-scan didn't predict, and an unset
+    // reference would let ir_emit_c emit a phantom LOAD. Cheap when unreferenced.
+    const push_word_scope_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_push_word_module_scope"), proto_3arg);
+    const pop_word_scope_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "onez_pop_word_module_scope"), proto_3arg);
+
     const proto_4arg = c.ir_proto_4(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
     const proto_5arg = c.ir_proto_5(&ctx, 0, c.IR_I32, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR, c.IR_ADDR);
 
@@ -8556,6 +8582,8 @@ fn emitWordCAotPass(
         .native_call_fn = native_call_fn,
         .interpreted_call_fn = interpreted_call_fn,
         .native_word_call_fn = native_word_call_fn,
+        .push_word_scope_fn = push_word_scope_fn,
+        .pop_word_scope_fn = pop_word_scope_fn,
         .pic_dispatch_fn = pic_dispatch_fn,
         .pic_match_fn = pic_match_fn,
         .refresh_stack_fn = refresh_stack_fn,
@@ -9129,6 +9157,13 @@ pub fn emitProgramC(
                 .bounded_arity = entry.bounded_arity,
                 .is_generic = entry.is_generic,
                 .returns_row = self.returns_row_names.contains(name_ptr),
+                // Generated words (struct getters/setters, conversions) have
+                // mechanical bodies with no bare module-word references, so they
+                // need no defining-module scope. Skip them: a generic getter like
+                // `path>>` exists in several modules, and pushing its resolved
+                // module would shadow the enclosing word's scope right where the
+                // enclosing body resolves the getter by name.
+                .source_module_name = if (entry.is_generated) null else entry.source_module_name,
             };
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
@@ -9880,6 +9915,10 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitAppendNamedTraceFrame(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len, uintptr_t line);\n");
     try out.appendSlice(allocator, "extern int32_t jitAppendBuiltinTraceFrame(uintptr_t ctx, uintptr_t frame_kind, uintptr_t line);\n");
     try out.appendSlice(allocator, "static int32_t onez_append_named_trace_frame(uintptr_t ctx, const char *name, uintptr_t len, uintptr_t line) { return jitAppendNamedTraceFrame(ctx, (uintptr_t)name, len, line); }\n");
+    try out.appendSlice(allocator, "extern int32_t jitPushWordModuleScope(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPopWordModuleScope(uintptr_t ctx, uintptr_t name_ptr, uintptr_t name_len);\n");
+    try out.appendSlice(allocator, "static int32_t onez_push_word_module_scope(uintptr_t ctx, const char *name, uintptr_t len) { return jitPushWordModuleScope(ctx, (uintptr_t)name, len); }\n");
+    try out.appendSlice(allocator, "static int32_t onez_pop_word_module_scope(uintptr_t ctx, const char *name, uintptr_t len) { return jitPopWordModuleScope(ctx, (uintptr_t)name, len); }\n");
     try out.appendSlice(allocator, "extern int32_t jitPushString(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushSymbol(uintptr_t ctx, uintptr_t str_ptr, uintptr_t str_len);\n");
     try out.appendSlice(allocator, "extern int32_t jitPushQuotation(uintptr_t ctx, uintptr_t data, uintptr_t len, uintptr_t dest, uintptr_t quotation_id);\n");
@@ -10855,6 +10894,23 @@ fn emitWordTraceFrame(state: *CompileState, word_name: []const u8, line: usize) 
     _ = c._ir_CALL_4(state.ctx, c.IR_I32, state.append_word_trace_frame_fn, ctx_val, name_ptr, name_len_const, line_const);
 }
 
+/// Emit a pointer to `str` as AOT-binary data and return the IR ref of its
+/// address. Registers the bytes as an `onez_lit_N` string literal so the value
+/// lives in the compiled binary rather than as a process-local compile-time
+/// pointer. AOT-mode only.
+fn emitAotStringLiteralPtr(state: *CompileState, str: []const u8) c.ir_ref {
+    const lit_id = if (state.aot_string_literals) |lits| lits.items.len else 0;
+    if (state.aot_string_literals) |lits| {
+        lits.append(std.heap.page_allocator, .{
+            .data = str,
+            .is_symbol = false,
+        }) catch return c.IR_UNUSED;
+    }
+    var sym_buf: [32]u8 = undefined;
+    const sym_name = std.fmt.bufPrint(&sym_buf, "onez_lit_{d}", .{lit_id}) catch unreachable;
+    return c.ir_const_func(state.ctx, c.ir_strl(state.ctx, &sym_buf, sym_name.len), 0);
+}
+
 fn emitActiveInlineTraceFrames(state: *CompileState) void {
     var i = state.inline_trace_frame_count;
     while (i > 0) {
@@ -11265,7 +11321,32 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
             const mangled = mangleWordName(name, std.heap.page_allocator) catch unreachable;
             defer std.heap.page_allocator.free(mangled);
             const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, mangled.ptr), state.aot_proto_1arg);
+
+            // A direct C call bypasses the dispatch wrappers that push a compound word's defining-
+            // module deps frame, so a bare or generic word in the callee body would resolve against
+            // the caller's live frame stack. Push that frame around the call, so the callee's module
+            // scope is active while its body runs.
+            const scope_name = resolved.source_module_name;
+            const wrap_scope = scope_name != null and
+                state.push_word_scope_fn != c.IR_UNUSED and
+                state.pop_word_scope_fn != c.IR_UNUSED;
+            var scope_name_ptr: c.ir_ref = c.IR_UNUSED;
+            var scope_name_len: c.ir_ref = c.IR_UNUSED;
+            if (wrap_scope) {
+                scope_name_ptr = emitAotStringLiteralPtr(state, scope_name.?);
+                scope_name_len = c.ir_const_addr(ictx, scope_name.?.len);
+                const push_result = c._ir_CALL_3(ictx, c.IR_I32, state.push_word_scope_fn, ctx_val, scope_name_ptr, scope_name_len);
+                emitCallbackPostCheck(state, push_result, state.error_propagate_status, null, .none);
+            }
+
             const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, state.jit_ctx_ptr);
+
+            // Pop unconditionally before the call's error check so the frame is
+            // released on both the success and error-propagation paths.
+            if (wrap_scope) {
+                _ = c._ir_CALL_3(ictx, c.IR_I32, state.pop_word_scope_fn, ctx_val, scope_name_ptr, scope_name_len);
+            }
+
             emitCallbackPostCheck(state, call_result, call_result, if (resolved.never_returns) state.error_propagate_status else null, .{ .named = .{ .name = name, .line = line } });
             return;
         }
@@ -12206,6 +12287,39 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
         }
     }
     dest.* = .{ .quotation = .{ .instructions = instructions, .code_ptr = code_ptr } };
+    return 0;
+}
+
+/// Push a compiled compound word's defining-module deps frame before its body
+/// runs. AOT direct calls (`emitAotWordCall`) call the callee's C symbol
+/// directly, bypassing the dispatch wrappers (`executeResolvedWord`,
+/// `jitInterpretedCall`, `invokeModuleWord`) that push this frame everywhere
+/// else. Without it a bare or generic word in the callee body resolves against
+/// the caller's live frame stack, not the callee's module scope -- so across a
+/// spawn boundary a getter like `path>>` binds to the wrong same-named module
+/// word. The module is recovered by name at runtime: an embedded Module pointer
+/// would be process-local and invalid in the AOT binary.
+export fn jitPushWordModuleScope(ctx_raw: usize, name_ptr: usize, name_len: usize) callconv(.c) i32 {
+    if (ctx_raw == 0 or name_ptr == 0 or name_len == 0) return 0;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const name = @as([*]const u8, @ptrFromInt(name_ptr))[0..name_len];
+    const mod = ctx.moduleByNameInCache(name) orelse return 0;
+    ctx.pushModuleDepsFrame(mod) catch {
+        ctx.jit_pending_error = error.OutOfMemory;
+        return 2;
+    };
+    return 0;
+}
+
+/// Pop the deps frame pushed by `jitPushWordModuleScope`. Resolves the same
+/// module by the same name so the push/pop pair is symmetric: if the module was
+/// not found (nothing pushed), nothing is popped.
+export fn jitPopWordModuleScope(ctx_raw: usize, name_ptr: usize, name_len: usize) callconv(.c) i32 {
+    if (ctx_raw == 0 or name_ptr == 0 or name_len == 0) return 0;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const name = @as([*]const u8, @ptrFromInt(name_ptr))[0..name_len];
+    const mod = ctx.moduleByNameInCache(name) orelse return 0;
+    ctx.popModuleDepsFrameTraced(mod);
     return 0;
 }
 
