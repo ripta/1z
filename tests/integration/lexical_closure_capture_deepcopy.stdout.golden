@@ -1,0 +1,5 @@
+PASS: curried closure over a local survives await's deep copy
+PASS: curried closure over a local survives a channel send
+Stack: [ ]
+deep-copy-scope
+Stack: [ ]

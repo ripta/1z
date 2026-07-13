@@ -1,0 +1,30 @@
+\ Regression test for per-quotation lexical scope surviving a value deep copy.
+\
+\ A spawned task defines a local word `secret`, curries a closure that closes over
+\ it, and leaves that closure as its result. `await` deep-copies the result into
+\ this task, which has no `secret` binding of its own. The closure must still
+\ resolve `secret` to its creation-site value through the scope carried on the
+\ closure value; a deep copy that dropped the scope would resolve `secret` against
+\ this task's frames and fail with an unknown word.
+\
+\ This exercises the deep-copy boundary (`await` / channel send), distinct from the
+\ spawn-input boundary the sibling closure-capture tests cover.
+
+use "testing" ;
+
+[
+  \ await path: the closure is the task's deep-copied result.
+  [ secret: 7 ; 10 [ secret + ] curry ] spawn
+  await call 17 "curried closure over a local survives await's deep copy" assert=
+
+  \ channel path: the closure is deep-copied on send and called in another task.
+  reply: 1 <buffered-channel> ;
+  handoff: 1 <buffered-channel> ;
+
+  [ handoff receive call reply send ] spawn
+
+  [ boost: 100 ; 5 [ boost + ] curry handoff send ] call
+  reply receive 105 "curried closure over a local survives a channel send" assert=
+] task-scope
+
+"deep-copy-scope" print-line

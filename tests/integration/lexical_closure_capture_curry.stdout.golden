@@ -1,0 +1,5 @@
+=== cross-module closure name resolution ===
+PASS: handler's local release resolves to the channel, not semaphore.release
+Stack: [ ]
+resolved
+Stack: [ ]

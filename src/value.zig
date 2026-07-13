@@ -1000,6 +1000,18 @@ pub const Closure = struct {
     effect: ?*const StackEffect = null,
     segments: []const Segment,
 
+    /// The lexical scope captured where this closure was created, carried by
+    /// `curry`/`compose` off the base quotation. It rides the value across every
+    /// spawn boundary, so a curried closure resolves its bare words at its
+    /// creation site no matter which task later runs it. Null when the base
+    /// closed over no lexical binding.
+    ///
+    /// Borrowed, not owned: it points at the scope the base already holds (a
+    /// side-map entry or another closure's scope), which outlives this closure,
+    /// so `curry` shares the pointer rather than copying per call. See
+    /// `context.CapturedScope`.
+    captured_scope: ?*const context_mod.CapturedScope = null,
+
     /// View the closure body as a plain quotation for interpreter execution and
     /// the reuse of quotation formatting/equality/hashing. `code_ptr` is null so
     /// the interpreter runs `instructions` rather than dispatching a base.

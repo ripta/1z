@@ -1,5 +1,8 @@
 const std = @import("std");
-const Context = @import("../context.zig").Context;
+const context_mod = @import("../context.zig");
+const Context = context_mod.Context;
+const CapturedScope = context_mod.CapturedScope;
+const LocalFrame = context_mod.LocalFrame;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
@@ -54,9 +57,54 @@ fn segmentsOf(alloc: std.mem.Allocator, val: Value) !?[]const Segment {
             segs[0] = .{ .captures = &.{}, .base_code_ptr = cp };
             break :blk segs;
         } else null,
-        .closure => |c| c.segments,
+        // A scope-carrying closure over an uncompiled base has empty segments -- it is compiled in
+        // no sense, so treat it like an uncompiled quotation and take the interpreter branch.
+        .closure => |c| if (c.segments.len == 0) null else c.segments,
         else => null,
     };
+}
+
+/// The lexical scope a base callable closes over, if any. A closure carries it on the value; a
+/// plain quotation's scope lives in the capture side map, looked up here in this context and, for a
+/// quotation created in an ancestor task, up the parent chain. `curry`/`compose` borrow this onto
+/// the closure they build so it rides the value across spawn boundaries.
+fn baseCapturedScope(ctx: *Context, val: Value) ?*const CapturedScope {
+    return switch (val) {
+        .closure => |c| c.captured_scope,
+        .quotation => |q| ctx.findCapturedScopeForBody(@intFromPtr(q.instructions.ptr)),
+        else => null,
+    };
+}
+
+/// Deep-copy the concatenation of two source scopes onto `alloc`, `a`'s frames before `b`'s.
+/// `compose` runs `instrs1` then `instrs2`, so a name bound in both resolves to `b`'s binding,
+/// matching `lookupInCapturedScope`'s most-recent-first walk. Only reached when both bases carry a
+/// scope; the single-source case shares the base's scope with no copy.
+fn mergeCapturedScopes(alloc: std.mem.Allocator, a: *const CapturedScope, b: *const CapturedScope) !*CapturedScope {
+    const a_frames = a.lexical_frames;
+    const b_frames = b.lexical_frames;
+
+    const frames = try alloc.alloc(LocalFrame, a_frames.len + b_frames.len);
+    var built: usize = 0;
+    errdefer {
+        for (frames[0..built]) |*f| f.deinit(alloc);
+        alloc.free(frames);
+    }
+
+    for ([_][]const LocalFrame{ a_frames, b_frames }) |group| {
+        for (group) |*sf| {
+            var clone: LocalFrame = .{};
+            errdefer clone.deinit(alloc);
+            var it = sf.iterator();
+            while (it.next()) |e| try clone.put(alloc, e.key_ptr.*, e.value_ptr.*);
+            frames[built] = clone;
+            built += 1;
+        }
+    }
+
+    const scope = try alloc.create(CapturedScope);
+    scope.* = .{ .lexical_frames = frames };
+    return scope;
 }
 
 /// curry ( x quot -- quot' ) - Partially apply a value to a quotation
@@ -92,11 +140,22 @@ pub fn nativeCurry(ctx: *Context) anyerror!void {
 
     try ctx.registerQuotationContainerLiterals(new_instrs);
 
+    // Carry the base's captured lexical scope onto the new body so a curried closure resolves its
+    // bare words at its creation site wherever it later runs. Borrowed from the base, which outlives
+    // the closure, so no per-call copy.
+    const carried: ?*const CapturedScope = baseCapturedScope(ctx, quot_val);
+
     // Curried quotation has no effect - effect validation happens at parameter attachment time
     if (try segmentsOf(alloc, quot_val)) |base_segments| {
         const new_segments = try prependCapture(alloc, base_segments, x);
         const cl = try alloc.create(Closure);
-        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = new_segments };
+        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = new_segments, .captured_scope = carried };
+        try ctx.stack.push(.{ .closure = cl });
+    } else if (carried != null) {
+        // No compiled segments, but a scope to carry: box a closure over the interpreter body so
+        // the scope rides the value. `segments` is empty; the interpreter runs `instructions`.
+        const cl = try alloc.create(Closure);
+        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = &.{}, .captured_scope = carried };
         try ctx.stack.push(.{ .closure = cl });
     } else {
         try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });
@@ -149,6 +208,15 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
 
     try ctx.registerQuotationContainerLiterals(new_instrs);
 
+    // Carry the bases' captured lexical scopes onto the composed body. A single source is borrowed
+    // as-is; two are merged into one scope on the quotation arena, `quot1`'s frames before `quot2`'s.
+    const sa = baseCapturedScope(ctx, quot1_val);
+    const sb = baseCapturedScope(ctx, quot2_val);
+    const carried: ?*const CapturedScope = if (sa != null and sb != null)
+        try mergeCapturedScopes(alloc, sa.?, sb.?)
+    else
+        (sa orelse sb);
+
     // Composed quotation has no effect - effect validation happens at parameter attachment time
     const s1 = try segmentsOf(alloc, quot1_val);
     const s2 = try segmentsOf(alloc, quot2_val);
@@ -157,7 +225,11 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
         @memcpy(new_segments[0..s1.?.len], s1.?);
         @memcpy(new_segments[s1.?.len..], s2.?);
         const cl = try alloc.create(Closure);
-        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = new_segments };
+        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = new_segments, .captured_scope = carried };
+        try ctx.stack.push(.{ .closure = cl });
+    } else if (carried != null) {
+        const cl = try alloc.create(Closure);
+        cl.* = .{ .instructions = new_instrs, .effect = null, .segments = &.{}, .captured_scope = carried };
         try ctx.stack.push(.{ .closure = cl });
     } else {
         try ctx.stack.push(.{ .quotation = .{ .instructions = new_instrs, .effect = null } });

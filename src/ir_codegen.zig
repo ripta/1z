@@ -11877,6 +11877,14 @@ export fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i3
         },
         .closure => |cl| {
             const ctx: *Context = @ptrCast(@alignCast(jit_ctx.ctx));
+            // A scope-carrying closure over an uncompiled base has no segments; its body is meant
+            // for the interpreter. `curry` over an uncompiled quotation used to yield a plain
+            // uncompiled quotation, which traps here the same way, so trap honestly rather than
+            // silently running zero segments.
+            if (cl.segments.len == 0) {
+                ctx.jit_pending_error = error.NullCodePtr;
+                return 2;
+            }
             for (cl.segments) |seg| {
                 for (seg.captures) |cap| {
                     container_backing.retainValue(cap);

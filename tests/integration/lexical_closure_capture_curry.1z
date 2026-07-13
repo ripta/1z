@@ -1,0 +1,65 @@
+\ Regression test for per-quotation lexical scope capture through curry + spawn.
+\
+\ A handler closure closes over a local `release` channel. That name collides
+\ with lib/semaphore.1z's `release`, which lib/net/server.1z brings into scope
+\ via `use "semaphore"`. serve-loop curries the handler and spawn-detaches it
+\ onto a per-connection task. Before curry carried the closure's captured scope,
+\ the handler's bare `release` resolved to semaphore.release there -- a wrong-word
+\ call that threw inside `ch>>` and was silently swallowed by serve-loop's own
+\ recover, so the local channel never received anything.
+\
+\ With the scope riding the closure value, `release` resolves to the local
+\ channel wherever the closure runs, so the handler's send is observed by the
+\ driver's own `release` reference. serve-loop's own `[ sem release ]` cleanup
+\ still resolves to semaphore.release, proving both coexist.
+\
+\ The sibling server_max_concurrent_connections.1z deliberately renamed its gate
+\ channel away from `release` to sidestep this bug; this test exercises the name
+\ head-on.
+
+use "net" ;
+use "net/tcp" ;
+use "net/server" ;
+use "time" ;
+use "testing" ;
+
+[
+  release: 3 <buffered-channel> ;
+
+  \ Retry connect until the server is listening, matching router.1z's
+  \ connect-when-ready/connect-loop pattern.
+  connect-loop: ( addr n -- stream ) [
+    over [ connect ] [ drop f ] recover
+    dup f =
+    [ drop 1 - dup 0 <=
+      [ drop connect ]
+      [ 5 milliseconds sleep connect-loop ]
+      if
+    ]
+    [ [ 2drop ] dip ]
+    if
+  ] ;
+
+  connect-when-ready: ( addr -- stream ) [ 40 connect-loop ] ;
+
+  raddr: "127.0.0.1" 39540 make-addr:tcp ;
+
+  \ Direct closure handler closing over the local `release` channel. It drops the
+  \ peer address, sends a marker on the local channel, and closes the stream.
+  <server-config>
+  "127.0.0.1" >>host
+  39540 >>port
+  [ drop "from-handler" release send stream-close ] >>handler
+
+  [ serve-forever ] curry spawn
+
+  100 milliseconds sleep
+  raddr connect-when-ready stream-close
+
+  "cross-module closure name resolution" test-section
+  release receive "from-handler" "handler's local release resolves to the channel, not semaphore.release" assert=
+
+  cancel-task
+] task-scope
+
+"resolved" print-line

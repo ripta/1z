@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const Context = @import("../context.zig").Context;
+const CapturedScope = @import("../context.zig").CapturedScope;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Quotation = value_mod.Quotation;
@@ -453,7 +454,37 @@ pub fn popQuotation(ctx: *Context) !Quotation {
     const val = try ctx.stack.pop();
     switch (val) {
         .quotation => |q| return q,
-        .closure => |c| return c.asQuotation(),
+        .closure => |c| {
+            // Stamp the closure's carried scope into this context so its body resolves its bare
+            // words at its creation site. This runs the closure in the current task, so the stamp
+            // belongs here; `spawn` hands the closure to a child task instead and stamps there.
+            if (c.captured_scope) |scope| try ctx.stampCapturedScopeForExecution(c.instructions, scope);
+            return c.asQuotation();
+        },
+        else => {
+            setTypeMismatchError(ctx, "quotation", val);
+            container_backing.releaseValue(val);
+            return error.TypeMismatch;
+        },
+    }
+}
+
+/// A callable body paired with the lexical scope it carries. See `popCallableWithScope`.
+pub const CallableWithScope = struct {
+    quot: Quotation,
+    scope: ?*const CapturedScope,
+};
+
+/// Pop a callable without stamping the current context, returning its body and its carried scope.
+///
+/// `spawn` uses this because it runs the closure in a child task, not here: stamping this context
+/// would leak one scope copy per spawn and never reach the child. The caller stamps the child task
+/// context instead, before the child can start.
+pub fn popCallableWithScope(ctx: *Context) !CallableWithScope {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .quotation => |q| return .{ .quot = q, .scope = null },
+        .closure => |c| return .{ .quot = c.asQuotation(), .scope = c.captured_scope },
         else => {
             setTypeMismatchError(ctx, "quotation", val);
             container_backing.releaseValue(val);
