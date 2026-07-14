@@ -1,0 +1,4 @@
+@raw
+check
+--profile-out=out.pb.gz
+{file}

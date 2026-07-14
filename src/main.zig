@@ -374,6 +374,17 @@ fn parseExecutionFlag(
         state.cli_set_profile_top = true;
         return .consumed;
     }
+    if (std.mem.startsWith(u8, arg, "--profile-out=")) {
+        const value = arg["--profile-out=".len..];
+        if (value.len == 0) {
+            err_writer.writeAll("Error: invalid value for --profile-out: path is empty\n") catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        }
+        state.profile_config.out_path = value;
+        state.profile_config.enabled = true;
+        return .consumed;
+    }
     if (std.mem.eql(u8, arg, "--debug")) {
         state.debug_mode = true;
         return .consumed;
@@ -621,6 +632,7 @@ const execution_flags_help =
     \\  --benchmark=json          Benchmark with JSON output
     \\  --profile                 Collect per-word wall-time samples
     \\  --profile-top=N           Limit the profile table to N rows (default 20)
+    \\  --profile-out=FILE        Write a gzipped pprof profile to FILE (implies --profile)
 ;
 
 const global_flags_help =
@@ -674,7 +686,7 @@ fn printCheckHelp() void {
     w.writeAll("Usage: 1z check [options] <file>\n\n") catch {};
     w.writeAll("Run static analysis on a 1z source file without executing it.\n\n") catch {};
     w.writeAll("The following execution flags are NOT accepted by `check`:\n") catch {};
-    w.writeAll("  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile, --profile-top=N\n\n") catch {};
+    w.writeAll("  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile, --profile-top=N, --profile-out=FILE\n\n") catch {};
     w.writeAll("Execution options:\n") catch {};
     w.writeAll("  --threads=N|auto          Worker threads, or 'auto' to detect (default: auto)\n\n") catch {};
     w.writeAll("Global options:\n") catch {};
@@ -864,6 +876,7 @@ const ExecutionContext = struct {
     bench_enabled: bool,
     profile_enabled: bool,
     profile_top: usize,
+    profile_out_path: ?[]const u8,
 
     fn init(
         gpa: std.mem.Allocator,
@@ -950,6 +963,7 @@ const ExecutionContext = struct {
             .bench_enabled = bench_enabled,
             .profile_enabled = exec.profile_config.enabled,
             .profile_top = exec.profile_config.top_n,
+            .profile_out_path = exec.profile_config.out_path,
         };
         errdefer ec.ctx.deinit();
 
@@ -1107,6 +1121,34 @@ const ExecutionContext = struct {
         while (written < data.len) {
             written += std.posix.write(std.posix.STDOUT_FILENO, data[written..]) catch break;
         }
+
+        if (self.profile_out_path) |path| self.writePprof(path);
+    }
+
+    /// Encode the samples as a gzipped pprof profile and write it to `path`.
+    /// The human table already went to stdout; this file is additive.
+    fn writePprof(self: *ExecutionContext, path: []const u8) void {
+        var err_buf: [256]u8 = undefined;
+        var err_stream = std.io.fixedBufferStream(&err_buf);
+
+        const bytes = self.profile_stats.exportPprof(self.gpa) catch {
+            const msg = "Error: failed to encode pprof profile\n";
+            _ = std.posix.write(std.posix.STDERR_FILENO, msg) catch {};
+            return;
+        };
+        defer self.gpa.free(bytes);
+
+        const file = std.fs.cwd().createFile(path, .{}) catch |err| {
+            err_stream.writer().print("Error: cannot write pprof profile to '{s}': {s}\n", .{ path, @errorName(err) }) catch {};
+            _ = std.posix.write(std.posix.STDERR_FILENO, err_stream.getWritten()) catch {};
+            return;
+        };
+        defer file.close();
+
+        file.writeAll(bytes) catch |err| {
+            err_stream.writer().print("Error: cannot write pprof profile to '{s}': {s}\n", .{ path, @errorName(err) }) catch {};
+            _ = std.posix.write(std.posix.STDERR_FILENO, err_stream.getWritten()) catch {};
+        };
     }
 
     fn deinit(self: *ExecutionContext) void {

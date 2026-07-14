@@ -239,7 +239,7 @@ fn readVarint(bytes: []const u8, pos: *usize) !u64 {
 
 /// Inflate the stored-block gzip `gzipStored` emits and verify its footer. Only the exact container
 /// this module produces is handled.
-fn inflateStored(alloc: std.mem.Allocator, gz: []const u8) ![]u8 {
+pub fn inflateStored(alloc: std.mem.Allocator, gz: []const u8) ![]u8 {
     try testing.expect(gz.len >= 18);
     try testing.expectEqual(@as(u8, 0x1f), gz[0]);
     try testing.expectEqual(@as(u8, 0x8b), gz[1]);
@@ -276,7 +276,7 @@ fn inflateStored(alloc: std.mem.Allocator, gz: []const u8) ![]u8 {
 
 /// A field parsed from a protobuf message: its number plus either a scalar varint or a
 /// length-delimited slice.
-const Field = struct {
+pub const Field = struct {
     number: u32,
     varint: u64 = 0,
     bytes: []const u8 = &.{},
@@ -284,7 +284,7 @@ const Field = struct {
 
 /// Walk every top-level field of a protobuf message. Only varint and length-delimited wire types
 /// appear in `profile.proto`.
-fn parseFields(alloc: std.mem.Allocator, msg: []const u8) ![]Field {
+pub fn parseFields(alloc: std.mem.Allocator, msg: []const u8) ![]Field {
     var fields: std.ArrayListUnmanaged(Field) = .empty;
     errdefer fields.deinit(alloc);
 
@@ -312,7 +312,7 @@ fn parseFields(alloc: std.mem.Allocator, msg: []const u8) ![]Field {
 }
 
 /// Collect the packed varints in a length-delimited field body.
-fn parsePacked(alloc: std.mem.Allocator, body: []const u8) ![]u64 {
+pub fn parsePacked(alloc: std.mem.Allocator, body: []const u8) ![]u64 {
     var out: std.ArrayListUnmanaged(u64) = .empty;
     errdefer out.deinit(alloc);
     var pos: usize = 0;

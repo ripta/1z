@@ -3,7 +3,7 @@ Usage: 1z check [options] <file>
 Run static analysis on a 1z source file without executing it.
 
 The following execution flags are NOT accepted by `check`:
-  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile, --profile-top=N
+  --compile=MODE, --benchmark, --benchmark=verbose, --benchmark=json, --profile, --profile-top=N, --profile-out=FILE
 
 Execution options:
   --threads=N|auto          Worker threads, or 'auto' to detect (default: auto)

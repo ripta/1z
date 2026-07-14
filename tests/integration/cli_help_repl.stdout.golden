@@ -34,3 +34,4 @@ Execution options:
   --benchmark=json          Benchmark with JSON output
   --profile                 Collect per-word wall-time samples
   --profile-top=N           Limit the profile table to N rows (default 20)
+  --profile-out=FILE        Write a gzipped pprof profile to FILE (implies --profile)

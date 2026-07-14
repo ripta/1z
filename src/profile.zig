@@ -1,10 +1,14 @@
 const std = @import("std");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
+const pprof = @import("pprof.zig");
 
 /// Configuration for word-attributed profile mode.
 pub const ProfileConfig = struct {
     enabled: bool = false,
     top_n: usize = 20,
+    /// When set, `--profile-out=FILE` writes a gzipped pprof profile here in
+    /// addition to the human table. Implies `enabled`.
+    out_path: ?[]const u8 = null,
 };
 
 /// One recorded word dispatch: the word's name, the start timestamp at
@@ -171,6 +175,127 @@ pub const ProfileStats = struct {
             try formatTimeFixed(writer, per_call_ns, 10);
             try writer.writeAll("\n");
         }
+    }
+
+    /// Per-sample ancestry recovered from interval containment: the caller's
+    /// index (null for a root) and the sample's exclusive self-time.
+    const Ancestry = struct {
+        parents: []?usize,
+        self_ns: []i128,
+    };
+
+    /// Recover each sample's caller and exclusive self-time from interval containment.
+    ///
+    /// The `pending_starts` buffer is a push/pop stack, so every child interval nests strictly
+    /// inside its caller. That containment makes both the parent link and the self-time exact.
+    fn recoverAncestry(self: *const ProfileStats, alloc: std.mem.Allocator) !Ancestry {
+        const n = self.samples.items.len;
+        const parents = try alloc.alloc(?usize, n);
+        const self_ns = try alloc.alloc(i128, n);
+
+        var stack: std.ArrayListUnmanaged(usize) = .{};
+        defer stack.deinit(alloc);
+
+        for (self.samples.items, 0..) |s, i| {
+            const total_ns = s.end_ns - s.start_ns;
+            var child_sum_ns: i128 = 0;
+
+            while (stack.items.len > 0) {
+                const top_idx = stack.items[stack.items.len - 1];
+                const top = self.samples.items[top_idx];
+                const contained = top.start_ns >= s.start_ns and top.end_ns <= s.end_ns;
+                if (!contained) break;
+                child_sum_ns += top.end_ns - top.start_ns;
+                parents[top_idx] = i;
+                _ = stack.pop();
+            }
+
+            self_ns[i] = total_ns - child_sum_ns;
+            parents[i] = null;
+            try stack.append(alloc, i);
+        }
+
+        return .{ .parents = parents, .self_ns = self_ns };
+    }
+
+    /// Build a pprof wire model from the recorded samples.
+    ///
+    /// Every allocation lands on `alloc`, which the caller reaps in one shot from an arena. Each
+    /// interval becomes one sample: a leaf-first ancestor chain of locations, an exclusive
+    /// self-time in nanoseconds, and a call count of one. pprof derives the cumulative views from
+    /// the stacks.
+    fn buildProfile(self: *const ProfileStats, alloc: std.mem.Allocator) !pprof.Profile {
+        const ancestry = try self.recoverAncestry(alloc);
+
+        var strings: std.ArrayListUnmanaged([]const u8) = .{};
+        try strings.append(alloc, "");
+
+        const wall_type: u64 = strings.items.len;
+        try strings.append(alloc, "wall");
+        const ns_unit: u64 = strings.items.len;
+        try strings.append(alloc, "nanoseconds");
+        const calls_type: u64 = strings.items.len;
+        try strings.append(alloc, "calls");
+        const count_unit: u64 = strings.items.len;
+        try strings.append(alloc, "count");
+
+        // Intern word names to a 1-based function id. A location mirrors each
+        // function one-to-one, so the location id can reuse the function id.
+        var name_ids: std.StringHashMapUnmanaged(u64) = .{};
+        var functions: std.ArrayListUnmanaged(pprof.Function) = .{};
+        var locations: std.ArrayListUnmanaged(pprof.Location) = .{};
+
+        for (self.samples.items) |s| {
+            const gop = try name_ids.getOrPut(alloc, s.name);
+            if (gop.found_existing) continue;
+            const fid: u64 = functions.items.len + 1;
+            gop.value_ptr.* = fid;
+            const name_idx: u64 = strings.items.len;
+            try strings.append(alloc, s.name);
+            try functions.append(alloc, .{ .id = fid, .name_idx = name_idx });
+            try locations.append(alloc, .{ .id = fid, .function_id = fid });
+        }
+
+        var samples: std.ArrayListUnmanaged(pprof.Sample) = .{};
+        for (self.samples.items, 0..) |_, i| {
+            var chain: std.ArrayListUnmanaged(u64) = .{};
+            var cur: ?usize = i;
+            while (cur) |c| {
+                try chain.append(alloc, name_ids.get(self.samples.items[c].name).?);
+                cur = ancestry.parents[c];
+            }
+
+            const values = try alloc.alloc(i64, 2);
+            values[0] = @intCast(ancestry.self_ns[i]);
+            values[1] = 1;
+
+            try samples.append(alloc, .{ .location_ids = chain.items, .values = values });
+        }
+
+        const sample_types = try alloc.alloc(pprof.ValueType, 2);
+        sample_types[0] = .{ .type_idx = wall_type, .unit_idx = ns_unit };
+        sample_types[1] = .{ .type_idx = calls_type, .unit_idx = count_unit };
+
+        return .{
+            .sample_types = sample_types,
+            .samples = samples.items,
+            .locations = locations.items,
+            .functions = functions.items,
+            .string_table = strings.items,
+            .default_sample_type = wall_type,
+        };
+    }
+
+    /// Encode the recorded samples as a gzipped pprof profile, returning bytes owned by `alloc`.
+    ///
+    /// The wire model is built in a scratch arena that is freed before returning. Only the
+    /// encoded bytes survive.
+    pub fn exportPprof(self: *const ProfileStats, alloc: std.mem.Allocator) ![]u8 {
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+
+        const profile = try self.buildProfile(arena.allocator());
+        return pprof.encode(alloc, profile);
     }
 };
 
@@ -393,4 +518,124 @@ test "formatHuman top_n caps the number of rows" {
     // "c" is the smallest by total_ns, so it should not appear when top_n=2.
     try std.testing.expect(std.mem.indexOf(u8, out, " c ") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "(top 2 by total time)") != null);
+}
+
+/// Resolve a function's id by looking its name up in the built string table.
+fn functionIdByName(profile: pprof.Profile, name: []const u8) u64 {
+    for (profile.functions) |f| {
+        if (std.mem.eql(u8, profile.string_table[f.name_idx], name)) return f.id;
+    }
+    unreachable;
+}
+
+fn containsString(table: []const []const u8, needle: []const u8) bool {
+    for (table) |s| {
+        if (std.mem.eql(u8, s, needle)) return true;
+    }
+    return false;
+}
+
+test "buildProfile emits functions, leaf-first chains, and self-time values" {
+    const alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var stats: ProfileStats = .{};
+    defer stats.deinit(alloc);
+    // outer [0..100], inner [20..70]; close order is inner then outer.
+    try pushSample(&stats, alloc, "inner", 20, 70);
+    try pushSample(&stats, alloc, "outer", 0, 100);
+
+    const profile = try stats.buildProfile(a);
+
+    try std.testing.expectEqual(@as(usize, 2), profile.functions.len);
+    try std.testing.expectEqual(@as(usize, 2), profile.locations.len);
+    try std.testing.expectEqual(@as(usize, 2), profile.sample_types.len);
+    // pprof opens on the wall axis, the first sample type.
+    try std.testing.expectEqual(profile.sample_types[0].type_idx, profile.default_sample_type);
+
+    const inner_fid = functionIdByName(profile, "inner");
+    const outer_fid = functionIdByName(profile, "outer");
+
+    // samples[0] is the inner leaf; its chain is [inner, outer] leaf-first.
+    try std.testing.expectEqualSlices(u64, &.{ inner_fid, outer_fid }, profile.samples[0].location_ids);
+    // samples[1] is the outer root; its chain is just [outer].
+    try std.testing.expectEqualSlices(u64, &.{outer_fid}, profile.samples[1].location_ids);
+
+    // Self-times: inner = 50, outer = 100 - 50 = 50. Each carries one call.
+    try std.testing.expectEqual(@as(i64, 50), profile.samples[0].values[0]);
+    try std.testing.expectEqual(@as(i64, 1), profile.samples[0].values[1]);
+    try std.testing.expectEqual(@as(i64, 50), profile.samples[1].values[0]);
+    try std.testing.expectEqual(@as(i64, 1), profile.samples[1].values[1]);
+}
+
+test "exportPprof round-trips a nested profile through the wire format" {
+    const alloc = std.testing.allocator;
+
+    var stats: ProfileStats = .{};
+    defer stats.deinit(alloc);
+    try pushSample(&stats, alloc, "inner", 20, 70);
+    try pushSample(&stats, alloc, "outer", 0, 100);
+
+    const gz = try stats.exportPprof(alloc);
+    defer alloc.free(gz);
+
+    const proto = try pprof.inflateStored(alloc, gz);
+    defer alloc.free(proto);
+
+    const fields = try pprof.parseFields(alloc, proto);
+    defer alloc.free(fields);
+
+    var strings: std.ArrayListUnmanaged([]const u8) = .{};
+    defer strings.deinit(alloc);
+    var functions: usize = 0;
+    var found_leaf_chain = false;
+
+    for (fields) |f| {
+        switch (f.number) {
+            5 => functions += 1,
+            6 => try strings.append(alloc, f.bytes),
+            2 => {
+                const inner = try pprof.parseFields(alloc, f.bytes);
+                defer alloc.free(inner);
+                const loc_ids = try pprof.parsePacked(alloc, inner[0].bytes);
+                defer alloc.free(loc_ids);
+                // The two-frame sample is the inner leaf. Function ids are
+                // interned in sample order, so inner is 1 and outer is 2, and
+                // the chain must be leaf-first.
+                if (loc_ids.len == 2) {
+                    found_leaf_chain = true;
+                    try std.testing.expectEqualSlices(u64, &.{ 1, 2 }, loc_ids);
+                }
+            },
+            else => {},
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), functions);
+    try std.testing.expect(found_leaf_chain);
+    try std.testing.expect(containsString(strings.items, "inner"));
+    try std.testing.expect(containsString(strings.items, "outer"));
+}
+
+test "exportPprof on an empty buffer produces a decodable profile with no samples" {
+    const alloc = std.testing.allocator;
+    var stats: ProfileStats = .{};
+    defer stats.deinit(alloc);
+
+    const gz = try stats.exportPprof(alloc);
+    defer alloc.free(gz);
+
+    const proto = try pprof.inflateStored(alloc, gz);
+    defer alloc.free(proto);
+
+    const fields = try pprof.parseFields(alloc, proto);
+    defer alloc.free(fields);
+
+    var samples: usize = 0;
+    for (fields) |f| {
+        if (f.number == 2) samples += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 0), samples);
 }
