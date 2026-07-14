@@ -4408,6 +4408,7 @@ test {
     _ = @import("formatter.zig");
     _ = @import("benchmark.zig");
     _ = @import("profile.zig");
+    _ = @import("pprof.zig");
     _ = @import("memory_limit.zig");
     _ = @import("container_limits.zig");
     _ = @import("container_backing.zig");
