@@ -1,0 +1,114 @@
+\ Advisory whole-file locking over posix.flock. The public surface is two combinators
+\ that bracket a quotation with a flock acquire and release.
+
+use "posix" ;
+use "time" ;
+
+\\ Error type raised when acquiring an advisory file lock fails for a genuine reason such
+\\ as a bad descriptor. A contended lock is not a failure.
+EFileLockError: ( -- sym ) [ file-lock-error: ] ;
+
+\ Smallest and largest cooperative retry interval, in milliseconds.
+(lock-backoff-start-ms): ( -- n ) [ 1 ] ;
+(lock-backoff-cap-ms): ( -- n ) [ 100 ] ;
+
+\ Map the mode symbol to its base LOCK_* operation, without LOCK_NB.
+(mode->flock-op): ( mode -- op ) [
+  dup exclusive: = [ drop "LOCK_EX" posix-const ] [
+    dup shared: = [ drop "LOCK_SH" posix-const ] [
+      f "file lock mode must be exclusive: or shared:" EInvalidArgument make-error throw
+    ] if
+  ] if
+] ;
+
+(would-block?): ( name-sym -- bool ) [ dup eagain: = swap ewouldblock: = or ] ;
+
+\ Re-raise a flock posix-error as file-lock-error:, preserving errno:/name:.
+(raise-file-lock-error): ( error -- * ) [
+  dup data: @get swap message: @get EFileLockError make-error throw
+] ;
+
+\ Classify a caught flock error: contended -> contended:, anything else re-raises.
+(classify-lock-error): ( error -- outcome ) [
+  dup data: @get name: @get (would-block?)
+  [ drop contended: ] [ (raise-file-lock-error) ] if
+] ;
+
+\ One non-blocking flock attempt. acquired: on success, contended: on would-block, throws
+\ file-lock-error: on any other errno.
+(try-acquire-once): ( fd op-nb -- outcome ) [
+  [ flock drop acquired: ] [ (classify-lock-error) ] recover
+] ;
+
+\ Cooperative retry loop: attempt, and on contention sleep with exponential backoff (capped)
+\ then retry. Keeps fd/op-nb/ms on the stack across retries; the wrapper drops them if a
+\ throw interrupts an in-flight acquire.
+(acquire-retry-loop): ( fd op-nb ms -- ) [
+  2 pick-n 2 pick-n (try-acquire-once)
+  acquired: = [
+    3drop
+  ] [
+    dup milliseconds sleep
+    2 * (lock-backoff-cap-ms) min
+    (acquire-retry-loop)
+  ] if
+] ;
+
+\ Drive the retry loop, dropping the fd/op-nb/ms working set when a genuine errno or a
+\ cancellation interrupts the loop, so only the caller's stream is left on the stack.
+(acquire-retry): ( fd op-nb ms -- ) [
+  [ (acquire-retry-loop) ] [ 3 nip-n throw ] recover
+] ;
+
+\ Bare blocking acquire used when no scheduler is present.
+(blocking-acquire): ( fd op -- ) [
+  [ flock drop ] [ (raise-file-lock-error) ] recover
+] ;
+
+\ t if a scheduler is present. Detected by whether yield throws; a pending cancellation is
+\ re-raised rather than misread as absence.
+(scheduler-present?): ( -- bool ) [
+  [ yield t ]
+  [ dup error-type: @get task-cancelled: = [ throw ] [ drop f ] if ]
+  recover
+] ;
+
+\ Acquire the lock on stream, leaving the stream on the stack.
+(cooperative-acquire): ( stream mode -- stream ) [
+  over stream>fd swap (mode->flock-op)
+  (scheduler-present?)
+  [ "LOCK_NB" posix-const bitor (lock-backoff-start-ms) (acquire-retry) ]
+  [ (blocking-acquire) ]
+  if
+] ;
+
+\\ Acquire an advisory whole-file lock on `stream`, run the quotation with the stream still
+\\ on the stack, and release on every exit path.
+\\
+\\ Blocks cooperatively under contention. `mode` is exclusive: or shared:. Release runs on
+\\ normal return, throw, and cancellation. A genuine acquire errno raises file-lock-error:
+\\ before the body runs, leaving the stream on the stack for the caller to close.
+using-file-lock: ( ..a stream mode quot: ( ..a stream -- ..b ) -- ..b ) [
+  [ (cooperative-acquire) ] dip
+  over [ stream>fd "LOCK_UN" posix-const flock drop ] curry
+  cleanup
+] ;
+
+\\ Attempt the lock on `stream` once, without waiting. If granted, run `acquired:` with the
+\\ stream and release on every exit path. If held by another owner, run `missed:` without
+\\ the stream.
+\\
+\\ `mode` is exclusive: or shared:. A genuine acquire errno raises file-lock-error: before
+\\ either quotation runs, leaving the stream on the stack for the caller to close.
+try-file-lock: ( ..a stream mode acquired: ( ..a stream -- ..b ) missed: ( ..a -- ..b ) -- ..b ) [
+  3 pick-n stream>fd
+  3 pick-n (mode->flock-op) "LOCK_NB" posix-const bitor
+  [ (try-acquire-once) ] [ 3 nip-n throw ] recover
+  acquired: = [
+    drop nip
+    over [ stream>fd "LOCK_UN" posix-const flock drop ] curry
+    cleanup
+  ] [
+    nip nip nip call
+  ] if
+] ;

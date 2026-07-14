@@ -1,0 +1,114 @@
+Stack: [ ]
+=== file lock setup ===
+Stack: [ ]
+Stack: [ ]
+=== using-file-lock holds and releases ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> "tests/integration/_tmp_oslock.txt" ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> [ "tests/integration/_tmp_oslock.txt" (probe-lockable?) f "prober blocks while lock is held" assert= ] ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> exclusive: [ "tests/integration/_tmp_oslock.txt" (probe-lockable?) f "prober blocks while lock is held" assert= ] ]
+PASS: prober blocks while lock is held
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ ]
+Stack: [ t ]
+PASS: prober acquires after the combinator returns normally
+Stack: [ ]
+=== using-file-lock releases on throw ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> [ <stream tests/integration/_tmp_oslock.txt read-write> exclusive: [ drop f "boom" EUserThrown make-error throw ] using-file-lock ] ]
+PASS: combinator re-throws the body error
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ ]
+Stack: [ t ]
+PASS: prober acquires after the combinator throws
+Stack: [ ]
+=== using-file-lock shared mode ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ ]
+Stack: [ t ]
+PASS: shared-mode combinator runs and releases
+Stack: [ ]
+=== try-file-lock acquired branch ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> t ]
+PASS: try-file-lock takes acquired branch when free
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ ]
+=== try-file-lock missed branch ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> "tests/integration/_tmp_oslock.txt" ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> [ "tests/integration/_tmp_oslock.txt" read-write: stream-open dup exclusive: [ drop t ] [ f ] try-file-lock f "try-file-lock misses while another descriptor holds the lock" assert= stream-close ] ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> exclusive: [ "tests/integration/_tmp_oslock.txt" read-write: stream-open dup exclusive: [ drop t ] [ f ] try-file-lock f "try-file-lock misses while another descriptor holds the lock" assert= stream-close ] ]
+PASS: try-file-lock misses while another descriptor holds the lock
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ ]
+=== using-file-lock waits out contention ===
+Stack: [ ]
+Stack: [ V{ } ]
+Stack: [ V{ } V{ } ]
+Stack: [ V{ } [ V{ } "tests/integration/_tmp_oslock.txt" read-write: stream-open [ exclusive: [ 50 milliseconds sleep ] using-file-lock stream-close ] curry spawn drop 10 milliseconds sleep "tests/integration/_tmp_oslock.txt" read-write: stream-open exclusive: [ ] using-file-lock stream-close 0 #push! drop ] ]
+Stack: [ V{ 0 } ]
+PASS: contended cooperative acquire eventually succeeds
+Stack: [ ]
+=== using-file-lock releases on cancellation ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> [ <stream tests/integration/_tmp_oslock.txt read-write> [ exclusive: [ 100000 milliseconds sleep ] using-file-lock ] curry spawn 10 milliseconds sleep cancel-task yield ] ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ ]
+Stack: [ t ]
+PASS: lock released after task cancellation
+Stack: [ ]
+=== file-lock-error on bad descriptor ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ 4 ]
+Stack: [ [ 4 fd>stream exclusive: [ ] using-file-lock ] ]
+PASS: bad descriptor raises file-lock-error
+PASS: file-lock-error carries the ebadf name
+PASS: file-lock-error carries the raw errno integer
+Stack: [ <stream fd read-write> ]
+Stack: [ ]
+=== try-file-lock file-lock-error on bad descriptor ===
+Stack: [ ]
+Stack: [ <stream tests/integration/_tmp_oslock.txt read-write> ]
+Stack: [ 4 ]
+Stack: [ <stream fd read-write> ]
+Stack: [ <stream fd read-write> exclusive: [ drop t ] [ f ] ]
+Stack: [ <stream fd read-write> exclusive: [ drop t ] [ f ] [ try-file-lock ] ]
+Stack: [ <stream fd read-write> exclusive: [ drop t ] [ f ] [ try-file-lock ] [ error-type: @get file-lock-error: "try-file-lock bad descriptor raises file-lock-error" assert= ] ]
+PASS: try-file-lock bad descriptor raises file-lock-error
+Stack: [ <stream fd read-write> ]
+PASS: try-file-lock leaves only the caller's stream after a failed acquire
+Stack: [ <stream fd read-write> ]
+Stack: [ ]
+=== using-file-lock file-lock-error under a scheduler ===
+Stack: [ ]
+Stack: [ V{ } ]
+Stack: [ V{ } V{ } ]
+Stack: [ V{ } [ V{ } "tests/integration/_tmp_oslock.txt" read-write: stream-open dup stream>fd swap stream-close fd>stream [ exclusive: [ ] using-file-lock drop no-error: ] [ nip error-type: @get ] recover #push! drop ] ]
+Stack: [ V{ file-lock-error: } ]
+PASS: cooperative acquire recorded one outcome
+Stack: [ V{ file-lock-error: } ]
+PASS: cooperative-path bad descriptor raises file-lock-error
+Stack: [ ]
+=== using-file-lock cancellation while waiting ===
+Stack: [ ]
+Stack: [ V{ } ]
+Stack: [ V{ } V{ } ]
+Stack: [ V{ } [ V{ } "tests/integration/_tmp_oslock.txt" read-write: stream-open [ exclusive: [ 1000 milliseconds sleep ] using-file-lock stream-close ] curry spawn 10 milliseconds sleep over "tests/integration/_tmp_oslock.txt" [ read-write: stream-open [ exclusive: [ ] using-file-lock stream-close acquired: ] [ 2drop cancelled: ] recover #push! drop ] curry curry spawn 10 milliseconds sleep cancel-task cancel-task drop ] ]
+Stack: [ V{ cancelled: } ]
+PASS: waiter recorded one outcome
+Stack: [ V{ cancelled: } ]
+PASS: waiter was cancelled while waiting, not acquired
+Stack: [ ]
+Stack: [ ]

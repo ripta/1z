@@ -1,0 +1,192 @@
+use "testing" ;
+use "os/lock" ;
+use "posix" ;
+use "time" ;
+
+\ Open a fresh independent descriptor on `path`, try a non-blocking exclusive
+\ flock, then release and close. Returns t if the lock was acquired, f if it
+\ would have blocked. A second open is a distinct open file description, so its
+\ flock contends with any lock held through another descriptor.
+(probe-lockable?): ( path -- bool ) [
+  read: stream-open
+  dup [ stream>fd "LOCK_EX" posix-const "LOCK_NB" posix-const bitor flock drop t ] [ drop f ] recover
+  over stream>fd "LOCK_UN" posix-const flock drop
+  swap stream-close
+] ;
+
+"file lock setup" test-section
+
+"tests/integration/_tmp_oslock.txt" write: stream-open stream-close
+
+\ === lock held during the quotation, released on normal exit ===
+"using-file-lock holds and releases" test-section
+
+"tests/integration/_tmp_oslock.txt" read-write: stream-open
+"tests/integration/_tmp_oslock.txt"
+[ (probe-lockable?) f "prober blocks while lock is held" assert= ] curry
+exclusive: swap
+using-file-lock
+stream-close
+
+"tests/integration/_tmp_oslock.txt" (probe-lockable?)
+t "prober acquires after the combinator returns normally" assert=
+
+\ === lock released on a throwing body ===
+"using-file-lock releases on throw" test-section
+
+"tests/integration/_tmp_oslock.txt" read-write: stream-open
+dup
+[ exclusive: [ drop f "boom" EUserThrown make-error throw ] using-file-lock ] curry
+"combinator re-throws the body error" assert-error
+stream-close
+
+"tests/integration/_tmp_oslock.txt" (probe-lockable?)
+t "prober acquires after the combinator throws" assert=
+
+\ === shared mode binds and releases ===
+"using-file-lock shared mode" test-section
+
+"tests/integration/_tmp_oslock.txt" read-write: stream-open
+shared: [ ] using-file-lock
+stream-close
+
+"tests/integration/_tmp_oslock.txt" (probe-lockable?)
+t "shared-mode combinator runs and releases" assert=
+
+\ === try-file-lock acquires when the file is free ===
+"try-file-lock acquired branch" test-section
+
+"tests/integration/_tmp_oslock.txt" read-write: stream-open
+dup
+exclusive: [ drop t ] [ f ] try-file-lock
+t "try-file-lock takes acquired branch when free" assert=
+stream-close
+
+\ === try-file-lock misses while another descriptor holds the lock ===
+"try-file-lock missed branch" test-section
+
+"tests/integration/_tmp_oslock.txt" read-write: stream-open
+"tests/integration/_tmp_oslock.txt"
+[
+  read-write: stream-open
+  dup exclusive: [ drop t ] [ f ] try-file-lock
+  f "try-file-lock misses while another descriptor holds the lock" assert=
+  stream-close
+] curry
+exclusive: swap
+using-file-lock
+stream-close
+
+\ === cooperative acquire waits out contention, then acquires ===
+"using-file-lock waits out contention" test-section
+
+V{ }
+dup
+[
+  "tests/integration/_tmp_oslock.txt" read-write: stream-open
+  [ exclusive: [ 50 milliseconds sleep ] using-file-lock stream-close ] curry
+  spawn
+  drop
+  10 milliseconds sleep
+  "tests/integration/_tmp_oslock.txt" read-write: stream-open
+  exclusive: [ ] using-file-lock
+  stream-close
+  0 #push! drop
+] curry
+task-scope
+#len 1 "contended cooperative acquire eventually succeeds" assert=
+
+\ === release runs on cancellation ===
+"using-file-lock releases on cancellation" test-section
+
+"tests/integration/_tmp_oslock.txt" read-write: stream-open
+dup
+[
+  [ exclusive: [ 100000 milliseconds sleep ] using-file-lock ] curry
+  spawn
+  10 milliseconds sleep
+  cancel-task
+  yield
+] curry
+task-scope
+stream-close
+
+"tests/integration/_tmp_oslock.txt" (probe-lockable?)
+t "lock released after task cancellation" assert=
+
+\ === genuine acquire errno raises file-lock-error: ===
+"file-lock-error on bad descriptor" test-section
+
+"tests/integration/_tmp_oslock.txt" read-write: stream-open
+dup stream>fd swap stream-close
+[ fd>stream exclusive: [ ] using-file-lock ] curry
+[
+  dup error-type: @get file-lock-error: "bad descriptor raises file-lock-error" assert=
+  dup data: @get name: @get ebadf: "file-lock-error carries the ebadf name" assert=
+  data: @get errno: @get fixnum? "file-lock-error carries the raw errno integer" assert-true
+] recover
+
+\ using-file-lock leaves the caller's stream on the stack when the acquire
+\ throws, since the caller retains ownership. Drop that residual here.
+drop
+
+\ === try-file-lock genuine errno raises file-lock-error: and leaves only the stream ===
+"try-file-lock file-lock-error on bad descriptor" test-section
+
+"tests/integration/_tmp_oslock.txt" read-write: stream-open
+dup stream>fd swap stream-close
+fd>stream
+exclusive: [ drop t ] [ f ]
+[ try-file-lock ]
+[ error-type: @get file-lock-error: "try-file-lock bad descriptor raises file-lock-error" assert= ]
+recover
+dup stream? "try-file-lock leaves only the caller's stream after a failed acquire" assert-true
+drop
+
+\ === cooperative-path acquire errno raises file-lock-error: with a clean stack ===
+"using-file-lock file-lock-error under a scheduler" test-section
+
+V{ }
+dup
+[
+  "tests/integration/_tmp_oslock.txt" read-write: stream-open
+  dup stream>fd swap stream-close
+  fd>stream
+  [ exclusive: [ ] using-file-lock drop no-error: ]
+  [ nip error-type: @get ]
+  recover
+  #push! drop
+] curry
+task-scope
+dup #len 1 "cooperative acquire recorded one outcome" assert=
+0 #nth file-lock-error: "cooperative-path bad descriptor raises file-lock-error" assert=
+
+\ === cancellation while waiting propagates cleanly and never acquires ===
+"using-file-lock cancellation while waiting" test-section
+
+V{ }
+dup
+[
+  "tests/integration/_tmp_oslock.txt" read-write: stream-open
+  [ exclusive: [ 1000 milliseconds sleep ] using-file-lock stream-close ] curry
+  spawn
+  10 milliseconds sleep
+  over "tests/integration/_tmp_oslock.txt"
+  [
+    read-write: stream-open
+    [ exclusive: [ ] using-file-lock stream-close acquired: ]
+    [ 2drop cancelled: ]
+    recover
+    #push! drop
+  ] curry curry
+  spawn
+  10 milliseconds sleep
+  cancel-task
+  cancel-task
+  drop
+] curry
+task-scope
+dup #len 1 "waiter recorded one outcome" assert=
+0 #nth cancelled: "waiter was cancelled while waiting, not acquired" assert=
+
+"tests/integration/_tmp_oslock.txt" delete-file
