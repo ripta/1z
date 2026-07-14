@@ -1,0 +1,10 @@
+\ Fixtures for the module-deps frame template. A word here runs through a
+\ cloned deps-and-words frame, so its own name and a runtime-defined helper must
+\ both resolve against that frame.
+
+\ Recursive: resolves its own name through the module-deps frame on every call.
+fact: stack-recursive ( n -- n! ) [ dup 1 <= [ drop 1 ] [ dup 1 - fact * ] if ] ;
+
+\ Defines a helper at runtime, then calls it. The helper lands in the per-call
+\ frame clone, not the shared template.
+with-helper: ( n -- 2n ) [ (dbl): [ 2 * ] ; (dbl) ] ;

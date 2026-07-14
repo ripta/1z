@@ -1980,6 +1980,12 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
                 word_entry.value_ptr.dispatch_id = did;
             }
         }
+
+        // Warm the deps-and-words frame template now that this module's word
+        // bodies (decoded in `loadIntoContext`) and dispatch_ids are final. The
+        // loader arena outlives the process. A binary with no dispatch entries
+        // returns early above and leaves modules to the per-entry rebuild.
+        Context.buildModuleDepsTemplate(cached.*.module, ctx.quotationAllocator()) catch return LoaderError.OutOfMemory;
     }
 }
 

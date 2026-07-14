@@ -118,6 +118,8 @@ fn nativeToModule(ctx: *Context) anyerror!void {
         });
     }
 
+    try Context.buildModuleDepsTemplate(module, alloc);
+
     try ctx.stack.push(.{ .module = module });
 }
 
@@ -473,6 +475,11 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceModuleLoadEnd(&tw, filename, module.words.count());
     }
+
+    // Pre-build the deps-and-words frame template now that the module is fully
+    // populated. `alloc` is the module's own arena, so the template lives and
+    // dies with it.
+    try Context.buildModuleDepsTemplate(module, alloc);
 
     // Only insert if the resolved path is not already in the cache; an
     // overwrite would silently drop the fresh key dupe.

@@ -1,0 +1,16 @@
+use "testing" ;
+
+"recursive module word" test-section
+
+use "module_deps_template_lib.1z" ;
+5 fact 120 "recursive module word resolves its own name through the frame" assert=
+
+"runtime helper inside a module word" test-section
+
+21 with-helper 42 "runtime-defined helper resolves in the cloned frame" assert=
+21 with-helper 42 "second call re-defines the helper in a fresh clone" assert=
+
+"word from a reloaded module" test-section
+
+use "module_deps_template_lib.1z" reload shadow-ok ;
+6 fact 720 "reloaded module word resolves against its fresh template" assert=

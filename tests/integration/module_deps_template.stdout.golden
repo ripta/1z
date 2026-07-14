@@ -1,0 +1,14 @@
+=== recursive module word ===
+Stack: [ ]
+PASS: recursive module word resolves its own name through the frame
+Stack: [ ]
+=== runtime helper inside a module word ===
+Stack: [ ]
+PASS: runtime-defined helper resolves in the cloned frame
+Stack: [ ]
+PASS: second call re-defines the helper in a fresh clone
+Stack: [ ]
+=== word from a reloaded module ===
+Stack: [ ]
+PASS: reloaded module word resolves against its fresh template
+Stack: [ ]

@@ -849,6 +849,11 @@ pub const Module = struct {
     /// Whether this module can be imported with `import`. Virtual modules
     /// like `native` set this to false.
     importable: bool = true,
+    /// Pre-built deps-and-words frame for module-word calls; see
+    /// `context.DepsFrameTemplate`. Null for a module that never had one built
+    /// (an ad-hoc module), in which case `pushModuleDepsFrame` rebuilds the frame
+    /// per entry.
+    deps_template: ?context_mod.DepsFrameTemplate = null,
 };
 
 /// StackFrame represents a single frame in a stack trace.

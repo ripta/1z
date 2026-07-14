@@ -94,6 +94,16 @@ pub const ParameterFrame = std.StringHashMapUnmanaged(Value);
 pub const LocalFrame = std.StringHashMapUnmanaged(WordDefinition);
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 
+/// A module's pre-built deps-and-words map, hung off the `Module` and cloned
+/// into a fresh per-task frame by `pushModuleDepsFrame` on each module-word call.
+///
+/// Cloning the backing directly avoids re-hashing every entry, the cost the
+/// per-call rebuild used to pay. The contents are a pure function of the module,
+/// so the template is immutable after build and shared read-only across tasks.
+pub const DepsFrameTemplate = struct {
+    frame: LocalFrame,
+};
+
 /// The purposes a `LocalFrame` serves on the shared `local_frames` stack:
 ///
 /// - `lexical` frames hold genuine top-level / quotation-local words. The closure-local bindings
@@ -1751,6 +1761,84 @@ pub const Context = struct {
         return def;
     }
 
+    /// Fill `frame` with `module`'s deps then words (words override same-named
+    /// deps), synthesizing a `WordDefinition` per entry with `allocator`. Shared
+    /// by the template builder and the un-templated fallback in
+    /// `pushModuleDepsFrame`.
+    fn populateModuleDepsFrame(frame: *LocalFrame, module: *const value_mod.Module, allocator: Allocator) !void {
+        var dep_iter = module.deps.iterator();
+        while (dep_iter.next()) |entry| {
+            try frame.put(allocator, entry.key_ptr.*, moduleWordFrameDef(entry.key_ptr.*, entry.value_ptr.*, module));
+        }
+
+        var word_iter = module.words.iterator();
+        while (word_iter.next()) |entry| {
+            try frame.put(allocator, entry.key_ptr.*, moduleWordFrameDef(entry.key_ptr.*, entry.value_ptr.*, module));
+        }
+    }
+
+    /// Build `module`'s immutable deps-and-words template with `allocator`, which
+    /// must outlive the module. Callers pass the module's own arena, so the
+    /// template is freed wholesale with it and needs no explicit deinit.
+    ///
+    /// This overwrites any prior template without freeing it, so `allocator` must
+    /// be arena-scoped. The AOT loader relies on the overwrite: it rebuilds after
+    /// patching dispatch_ids that an earlier build missed.
+    pub fn buildModuleDepsTemplate(module: *value_mod.Module, allocator: Allocator) !void {
+        var frame: LocalFrame = .{};
+        errdefer frame.deinit(allocator);
+        try populateModuleDepsFrame(&frame, module, allocator);
+        module.deps_template = .{ .frame = frame };
+    }
+
+    /// Copy a word frame's single backing allocation directly, without
+    /// re-hashing any key. `StringHashMapUnmanaged` stores one allocation laid
+    /// out as `[Header][metadata][keys][values]`; this duplicates that buffer at
+    /// the source capacity and rebases the header's absolute `keys`/`values`
+    /// pointers to the new base. The result is an ordinary mutable map: a later
+    /// `put`, iteration, and `deinit(allocator)` all behave normally. This
+    /// reaches into std layout internals and is guarded by a unit test.
+    fn cloneWordFrameCapacityMatched(src: LocalFrame, allocator: Allocator) !LocalFrame {
+        if (src.metadata == null or src.size == 0) return .{};
+
+        // Mirror the private layout of `std.HashMapUnmanaged`: a single
+        // allocation of `[Header][metadata][keys][values]`, one metadata byte
+        // per slot. `Header` must match std's field order so the copied header's
+        // `keys`/`values` fields sit at the same offsets we overwrite below.
+        const Metadata = u8;
+        const K = []const u8;
+        const V = WordDefinition;
+        const Header = struct { values: [*]V, keys: [*]K, capacity: u32 };
+
+        const header_align = @alignOf(Header);
+        const key_align = @alignOf(K);
+        const val_align = @alignOf(V);
+        const max_align: std.mem.Alignment = comptime .fromByteUnits(@max(header_align, key_align, val_align));
+
+        const cap: usize = src.capacity();
+        const meta_size = @sizeOf(Header) + cap * @sizeOf(Metadata);
+        const keys_start = std.mem.alignForward(usize, meta_size, key_align);
+        const keys_end = keys_start + cap * @sizeOf(K);
+        const vals_start = std.mem.alignForward(usize, keys_end, val_align);
+        const vals_end = vals_start + cap * @sizeOf(V);
+        const total_size = max_align.forward(vals_end);
+
+        const src_base: [*]const u8 = @as([*]const u8, @ptrCast(src.metadata.?)) - @sizeOf(Header);
+        const dst_slice = try allocator.alignedAlloc(u8, max_align, total_size);
+        @memcpy(dst_slice, src_base[0..total_size]);
+
+        const dst_base: [*]u8 = dst_slice.ptr;
+        const hdr: *Header = @ptrCast(@alignCast(dst_base));
+        hdr.keys = @ptrCast(@alignCast(dst_base + keys_start));
+        hdr.values = @ptrCast(@alignCast(dst_base + vals_start));
+
+        var dst: LocalFrame = .{};
+        dst.metadata = @ptrCast(@alignCast(dst_base + @sizeOf(Header)));
+        dst.size = src.size;
+        dst.available = src.available;
+        return dst;
+    }
+
     /// Push a local frame populated with a module's deps and words.
     /// This makes the module's dependencies available for late-binding
     /// resolution when executing the module's own words.
@@ -1758,6 +1846,11 @@ pub const Context = struct {
     /// The module's own words take precedence over its dependencies.
     /// No lock: a module-deps frame is a transient frame like a combinator
     /// frame, task-private and never read cross-task.
+    ///
+    /// A module with a pre-built template gets a direct clone of it, avoiding a
+    /// per-entry rehash. A module without one is rebuilt entry by entry. The
+    /// empty frame is appended first so that a clone or populate failure unwinds
+    /// through the same errdefer, with no owned allocation stranded.
     pub fn pushModuleDepsFrame(self: *Context, module: *const value_mod.Module) !void {
         try self.local_frames.append(self.allocator, LocalFrame{});
         errdefer {
@@ -1768,17 +1861,12 @@ pub const Context = struct {
         try self.local_frame_kinds.append(self.allocator, .module_deps);
         errdefer self.local_frame_kinds.items.len -= 1;
         self.assertFrameKindsParity();
+
         const frame_idx = self.local_frames.items.len - 1;
-        var frame = &self.local_frames.items[frame_idx];
-
-        var dep_iter = module.deps.iterator();
-        while (dep_iter.next()) |entry| {
-            try frame.put(self.allocator, entry.key_ptr.*, moduleWordFrameDef(entry.key_ptr.*, entry.value_ptr.*, module));
-        }
-
-        var word_iter = module.words.iterator();
-        while (word_iter.next()) |entry| {
-            try frame.put(self.allocator, entry.key_ptr.*, moduleWordFrameDef(entry.key_ptr.*, entry.value_ptr.*, module));
+        if (module.deps_template) |tmpl| {
+            self.local_frames.items[frame_idx] = try cloneWordFrameCapacityMatched(tmpl.frame, self.allocator);
+        } else {
+            try populateModuleDepsFrame(&self.local_frames.items[frame_idx], module, self.allocator);
         }
 
         if (self.trace.trace_modules.deps) {
@@ -7395,6 +7483,85 @@ test "frame-kind tag: pushLocalFrame is lexical, pushModuleDepsFrame is module_d
     ctx.popLocalFrame();
     try std.testing.expectEqual(@as(usize, 2), ctx.local_frames.items.len);
     try std.testing.expectEqual(@as(usize, 2), ctx.local_frame_kinds.items.len);
+}
+
+test "cloneWordFrameCapacityMatched: copies every entry and stays a mutable map" {
+    const alloc = std.testing.allocator;
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    var src: LocalFrame = .{};
+    defer src.deinit(alloc);
+
+    const names = [_][]const u8{ "alpha", "beta", "gamma", "delta", "epsilon" };
+    for (names, 0..) |n, i| {
+        try src.put(alloc, n, .{ .name = n, .dispatch_id = @intCast(i + 1), .action = .{ .native = noop } });
+    }
+
+    var dst = try Context.cloneWordFrameCapacityMatched(src, alloc);
+    defer dst.deinit(alloc);
+
+    try std.testing.expectEqual(src.count(), dst.count());
+    for (names, 0..) |n, i| {
+        const d = dst.get(n) orelse return error.MissingKey;
+        try std.testing.expectEqual(@as(u32, @intCast(i + 1)), d.dispatch_id);
+        try std.testing.expectEqualStrings(n, d.name);
+    }
+
+    // A put into the clone and a subsequent deinit must not leak or double-free
+    // (testing.allocator asserts), proving the copied backing is a valid map.
+    try dst.put(alloc, "zeta", .{ .name = "zeta", .action = .{ .native = noop } });
+    try std.testing.expectEqual(src.count() + 1, dst.count());
+    try std.testing.expect(dst.get("alpha") != null);
+}
+
+test "cloneWordFrameCapacityMatched: empty frame clones to empty" {
+    const alloc = std.testing.allocator;
+    var src: LocalFrame = .{};
+    defer src.deinit(alloc);
+
+    var dst = try Context.cloneWordFrameCapacityMatched(src, alloc);
+    defer dst.deinit(alloc);
+
+    try std.testing.expectEqual(@as(usize, 0), dst.count());
+}
+
+test "pushModuleDepsFrame: clones the template, word overrides same-named dep" {
+    const alloc = std.testing.allocator;
+    var ctx = Context.init(alloc);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    defer {
+        module.words.deinit(alloc);
+        module.deps.deinit(alloc);
+        if (module.deps_template) |*t| t.frame.deinit(alloc);
+    }
+
+    try module.deps.put(alloc, "shared", .{ .dispatch_id = 10, .action = .{ .native = noop } });
+    try module.deps.put(alloc, "dep-only", .{ .dispatch_id = 11, .action = .{ .native = noop } });
+    try module.words.put(alloc, "shared", .{ .dispatch_id = 20, .action = .{ .native = noop } });
+    try module.words.put(alloc, "word-only", .{ .dispatch_id = 21, .action = .{ .native = noop } });
+
+    try Context.buildModuleDepsTemplate(&module, alloc);
+    try std.testing.expect(module.deps_template != null);
+
+    try ctx.pushModuleDepsFrame(&module);
+    defer ctx.popLocalFrame();
+
+    const idx = ctx.local_frames.items.len - 1;
+    try std.testing.expectEqual(FrameKind.module_deps, ctx.local_frame_kinds.items[idx]);
+
+    const frame = ctx.local_frames.items[idx];
+    try std.testing.expectEqual(@as(u32, 20), (frame.get("shared") orelse return error.Missing).dispatch_id);
+    try std.testing.expectEqual(@as(u32, 11), (frame.get("dep-only") orelse return error.Missing).dispatch_id);
+    try std.testing.expectEqual(@as(u32, 21), (frame.get("word-only") orelse return error.Missing).dispatch_id);
 }
 
 test "captureQuotationScope: snapshots a lexical local, skips a module-deps frame" {
