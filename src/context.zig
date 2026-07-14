@@ -404,6 +404,9 @@ pub const Context = struct {
     benchmark: ?*BenchmarkStats = null,
     /// Optional word-attributed profile stats (null when --profile is unset)
     profile: ?*ProfileStats = null,
+    /// True when this Context owns `profile` and must free it in `deinit`. Task Contexts own a
+    /// fresh buffer; the main context borrows one owned by main.zig.
+    profile_owned: bool = false,
     /// Counters for unique VirtualType/StructType allocations, used by
     /// --benchmark to report prelude output inventory.
     virtual_type_count: usize = 0,
@@ -1125,6 +1128,16 @@ pub const Context = struct {
             }
         }
 
+        // Propagate the profile-enabled state without sharing the parent's buffer. Each task
+        // records into its own ProfileStats, so concurrent workers never mutate one buffer and
+        // each buffer's interval nesting stays consistent.
+        if (parent.profile != null) {
+            const p = try allocator.create(ProfileStats);
+            p.* = .{};
+            ctx.profile = p;
+            ctx.profile_owned = true;
+        }
+
         return ctx;
     }
 
@@ -1269,6 +1282,12 @@ pub const Context = struct {
 
     /// Free all resources used by the context.
     pub fn deinit(self: *Context) void {
+        if (self.profile_owned) {
+            if (self.profile) |p| {
+                p.deinit(self.allocator);
+                self.allocator.destroy(p);
+            }
+        }
         self.aot_generic_dispatch_ids.deinit(self.allocator);
         for (self.parameter_env.items) |*frame| {
             self.deinitParameterFrame(frame);
@@ -7201,6 +7220,51 @@ test "initForTask: inherits AOT runtime-image state from parent" {
     try std.testing.expectEqual(true, task_ctx.runtime_image_loaded);
     try std.testing.expectEqual(@as(u32, 7), task_ctx.image_typevalue_slot_count);
     try std.testing.expectEqual(@as(u32, 3), task_ctx.image_parameter_slot_count);
+}
+
+test "initForTask: gives each task its own profile buffer when profiling is enabled" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    // The parent stands in for the main context: it borrows a profile buffer the test owns.
+    var parent_stats: ProfileStats = .{};
+    defer parent_stats.deinit(std.testing.allocator);
+    parent.profile = &parent_stats;
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    const task_profile = task_ctx.profile orelse return error.TestExpectedProfile;
+    try std.testing.expect(task_ctx.profile_owned);
+    // A fresh buffer, not the parent's.
+    try std.testing.expect(task_profile != &parent_stats);
+
+    // Task-body dispatches land in the task's own buffer, where today they drop.
+    task_profile.recordWordStart(std.testing.allocator);
+    task_profile.recordWordEnd(std.testing.allocator, "+");
+    try std.testing.expectEqual(@as(usize, 1), task_profile.samples.items.len);
+    try std.testing.expectEqual(@as(usize, 0), parent_stats.samples.items.len);
+}
+
+test "initForTask: leaves the task profile null when profiling is disabled" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+
+    try std.testing.expectEqual(@as(?*ProfileStats, null), task_ctx.profile);
+    try std.testing.expect(!task_ctx.profile_owned);
 }
 
 test "initForTask: captures parent transient local frames at spawn" {
