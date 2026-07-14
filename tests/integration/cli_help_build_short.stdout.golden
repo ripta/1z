@@ -20,6 +20,7 @@ Build options:
   --trace-aot[=CATS]            Trace the AOT compiler (CATS: freeze, codegen, effect, instr; bare=freeze,codegen,effect)
   --trace-aot-word=PAT          Filter --trace-aot to words matching PAT (comma-separated exact names)
 
+  --opt-level=N                 Optimize generated C: 0 1 2 3 s z (default: 2; freestanding: 0)
 Global options:
   --max-memory=SIZE         Set memory limit (e.g. 128M, 1G; default 256M)
   --load-path=PATH          Add a module search path (repeatable)

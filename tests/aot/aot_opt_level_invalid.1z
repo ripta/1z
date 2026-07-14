@@ -1,0 +1,4 @@
+\ A bad --opt-level value is rejected before any compilation. The value must be
+\ one of 0 1 2 3 s z; '9' is not, so the build fails with a clear 1z error and
+\ never reaches cc. The program body is irrelevant; the build stops at flag parse.
+42 .

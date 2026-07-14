@@ -830,6 +830,7 @@ fn printBuildHelp() void {
     w.writeAll("  --target=TRIPLE               Cross-compilation target (e.g. riscv64-freestanding-none)\n") catch {};
     w.writeAll("  --trace-aot[=CATS]            Trace the AOT compiler (CATS: freeze, codegen, effect, instr; bare=freeze,codegen,effect)\n") catch {};
     w.writeAll("  --trace-aot-word=PAT          Filter --trace-aot to words matching PAT (comma-separated exact names)\n\n") catch {};
+    w.writeAll("  --opt-level=N                 Optimize generated C: 0 1 2 3 s z (default: 2; freestanding: 0)\n") catch {};
     w.writeAll("Global options:\n") catch {};
     w.writeAll(global_flags_help) catch {};
     w.writeAll("\n") catch {};
@@ -2461,6 +2462,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     var emit_runtime_image_flag = false;
     var interpreter_fallback: ir_codegen.InterpreterFallbackMode = .auto;
     var lock_interpreter_setting = false;
+    var opt_token: []const u8 = "-O2";
+    var opt_token_explicit = false;
     var target_triple_override: ?[]const u8 = null;
     var target_os_override: ?std.Target.Os.Tag = null;
     var target_arch_override: ?std.Target.Cpu.Arch = null;
@@ -2576,6 +2579,28 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         }
         if (std.mem.eql(u8, arg, "--lock-interpreter-setting")) {
             lock_interpreter_setting = true;
+            continue;
+        }
+        if (std.mem.startsWith(u8, arg, "--opt-level=")) {
+            const value = arg["--opt-level=".len..];
+            if (std.mem.eql(u8, value, "0")) {
+                opt_token = "-O0";
+            } else if (std.mem.eql(u8, value, "1")) {
+                opt_token = "-O1";
+            } else if (std.mem.eql(u8, value, "2")) {
+                opt_token = "-O2";
+            } else if (std.mem.eql(u8, value, "3")) {
+                opt_token = "-O3";
+            } else if (std.mem.eql(u8, value, "s")) {
+                opt_token = "-Os";
+            } else if (std.mem.eql(u8, value, "z")) {
+                opt_token = "-Oz";
+            } else {
+                err_writer.print("Error: --opt-level must be one of '0', '1', '2', '3', 's', or 'z', got '{s}'\n", .{value}) catch {};
+                err_writer.flush() catch {};
+                return 1;
+            }
+            opt_token_explicit = true;
             continue;
         }
         if (std.mem.startsWith(u8, arg, "--target=")) {
@@ -3087,25 +3112,51 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const cc_env = std.posix.getenv("CC");
     const cc_cmd = cc_env orelse "zig";
 
-    var cc_argv: std.ArrayListUnmanaged([]const u8) = .{};
-    defer cc_argv.deinit(allocator);
-    // Flags formatted at runtime must outlive the child process; free them once
-    // the command has finished.
+    // Runtime-formatted flags must outlive the child process; free them once
+    // the commands have finished.
     var owned_flags: std.ArrayListUnmanaged([]const u8) = .{};
     defer {
         for (owned_flags.items) |f| allocator.free(f);
         owned_flags.deinit(allocator);
     }
-    cc_argv.append(allocator, cc_cmd) catch return 1;
-    if (cc_env == null) cc_argv.append(allocator, "cc") catch return 1;
-    cc_argv.append(allocator, "-o") catch return 1;
-    cc_argv.append(allocator, output) catch return 1;
-    cc_argv.append(allocator, tmp_path) catch return 1;
+
+    // Set by the hosted two-stage path to the intermediate object; freed and removed alongside
+    // the generated C.
+    var obj_path: ?[]const u8 = null;
+    defer if (obj_path) |p| allocator.free(p);
+
+    // Reclaim the generated C and the intermediate object on every exit, including the compile and
+    // link failure paths, unless --save-temps keeps them. Report the C before the object so a
+    // `Saved:` consumer that reads the first line gets the source.
+    defer {
+        if (save_temps) {
+            err_writer.print("Saved: {s}\n", .{tmp_path}) catch {};
+            if (obj_path) |p| err_writer.print("Saved: {s}\n", .{p}) catch {};
+            err_writer.flush() catch {};
+        } else {
+            std.fs.cwd().deleteFile(tmp_path) catch {};
+            if (obj_path) |p| std.fs.cwd().deleteFile(p) catch {};
+        }
+    }
 
     if (target_is_freestanding) {
-        // Cross-link a bare-metal ELF: target the requested triple, drop the
-        // hosted C runtime, and link only what the caller passes in plus the
-        // linker script that places the kernel.
+        // Cross-link a bare-metal ELF in one step: target the requested triple, drop the hosted C
+        // runtime, and link only what the caller passes in plus the linker script that places the
+        // kernel.
+        //
+        // There is no host archive to link and UBSan is disabled, so -O needs no compile/link split
+        // here.
+        var cc_argv: std.ArrayListUnmanaged([]const u8) = .{};
+        defer cc_argv.deinit(allocator);
+        cc_argv.append(allocator, cc_cmd) catch return 1;
+        if (cc_env == null) cc_argv.append(allocator, "cc") catch return 1;
+        cc_argv.append(allocator, "-o") catch return 1;
+        cc_argv.append(allocator, output) catch return 1;
+        cc_argv.append(allocator, tmp_path) catch return 1;
+        // Default bare metal to -O0 so the audited freestanding codegen stays identical to the prior
+        // no-flag build. An explicit --opt-level still applies, so a size-tuned image can pick -Os
+        // or -Oz.
+        cc_argv.append(allocator, if (opt_token_explicit) opt_token else "-O0") catch return 1;
         cc_argv.append(allocator, "-target") catch return 1;
         cc_argv.append(allocator, target_triple_override.?) catch return 1;
         cc_argv.append(allocator, "-ffreestanding") catch return 1;
@@ -3130,34 +3181,86 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             owned_flags.append(allocator, flag) catch return 1;
             cc_argv.append(allocator, flag) catch return 1;
         }
+
+        if (runCcCommand(allocator, cc_argv.items, cc_cmd, err_writer) != 0) return 1;
     } else {
-        cc_argv.append(allocator, lib1z_path.?) catch return 1;
+        // Hosted build in two stages: compile the generated C to an object at the requested -O
+        // level, then link that object with the runtime archive.
+        //
+        // Keeping -O on the compile stage only means the link never re-derives a release link mode
+        // from it. A debug lib1z.a references the UBSan minimal runtime, which an -O>=1 link would
+        // drop, breaking the link. The split makes every -O level link against both a debug and a
+        // release archive.
+        obj_path = std.fmt.allocPrint(allocator, "{s}/1z_aot_{d}.o", .{ tmpdir, pid }) catch {
+            err_writer.writeAll("Error: out of memory\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+
+        var compile_argv: std.ArrayListUnmanaged([]const u8) = .{};
+        defer compile_argv.deinit(allocator);
+        compile_argv.append(allocator, cc_cmd) catch return 1;
+        if (cc_env == null) compile_argv.append(allocator, "cc") catch return 1;
+        compile_argv.append(allocator, opt_token) catch return 1;
+        // Section flags belong on the compile stage so the link stage's --gc-sections can drop the
+        // unreferenced generated functions.
+        if (builtin.os.tag == .linux) {
+            compile_argv.append(allocator, "-ffunction-sections") catch return 1;
+            compile_argv.append(allocator, "-fdata-sections") catch return 1;
+        }
+        compile_argv.append(allocator, "-c") catch return 1;
+        compile_argv.append(allocator, tmp_path) catch return 1;
+        compile_argv.append(allocator, "-o") catch return 1;
+        compile_argv.append(allocator, obj_path.?) catch return 1;
+
+        if (runCcCommand(allocator, compile_argv.items, cc_cmd, err_writer) != 0) return 1;
+
+        var link_argv: std.ArrayListUnmanaged([]const u8) = .{};
+        defer link_argv.deinit(allocator);
+        link_argv.append(allocator, cc_cmd) catch return 1;
+        if (cc_env == null) link_argv.append(allocator, "cc") catch return 1;
+        link_argv.append(allocator, "-o") catch return 1;
+        link_argv.append(allocator, output) catch return 1;
+        link_argv.append(allocator, obj_path.?) catch return 1;
+        link_argv.append(allocator, lib1z_path.?) catch return 1;
         // XXX(ripta): linker GC when the binary is interpreter-free (no jitInterpretedCall / jitCallQuotation),
         //             the linker drops the unreferenced interpreter code. Harmless when the interpreter is in
         //             use because the symbols are still referenced.
         switch (builtin.os.tag) {
             .macos => {
-                cc_argv.append(allocator, "-Wl,-dead_strip") catch return 1;
+                link_argv.append(allocator, "-Wl,-dead_strip") catch return 1;
             },
             .linux => {
-                cc_argv.append(allocator, "-ffunction-sections") catch return 1;
-                cc_argv.append(allocator, "-fdata-sections") catch return 1;
-                cc_argv.append(allocator, "-Wl,--gc-sections") catch return 1;
+                link_argv.append(allocator, "-Wl,--gc-sections") catch return 1;
             },
             else => {},
         }
-        cc_argv.append(allocator, "-lffi") catch return 1;
+        link_argv.append(allocator, "-lffi") catch return 1;
         for (static_libs.items) |lib_name| {
             const flag = std.fmt.allocPrint(allocator, "-l{s}", .{lib_name}) catch return 1;
             owned_flags.append(allocator, flag) catch return 1;
-            cc_argv.append(allocator, flag) catch return 1;
+            link_argv.append(allocator, flag) catch return 1;
         }
         for (link_objects.items) |obj| {
-            cc_argv.append(allocator, obj) catch return 1;
+            link_argv.append(allocator, obj) catch return 1;
         }
+
+        if (runCcCommand(allocator, link_argv.items, cc_cmd, err_writer) != 0) return 1;
     }
 
-    var child = std.process.Child.init(cc_argv.items, allocator);
+    return 0;
+}
+
+/// Spawn `argv` as a C-compiler invocation, drain its stderr, and wait. Returns 0 on a clean exit.
+/// On a spawn failure, a non-zero exit, or a wait error it prints a diagnostic to `err_writer` and
+/// returns 1.
+fn runCcCommand(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    cc_cmd: []const u8,
+    err_writer: anytype,
+) u8 {
+    var child = std.process.Child.init(argv, allocator);
     child.stderr_behavior = .Pipe;
     child.spawn() catch |err| {
         err_writer.print("Error spawning C compiler '{s}': {s}\n", .{ cc_cmd, @errorName(err) }) catch {};
@@ -3195,14 +3298,6 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         err_writer.print("Error: C compiler exited with status {d}\n", .{result.Exited}) catch {};
         err_writer.flush() catch {};
         return 1;
-    }
-
-    // Clean up temp file on success.
-    if (save_temps) {
-        err_writer.print("Saved: {s}\n", .{tmp_path}) catch {};
-        err_writer.flush() catch {};
-    } else {
-        std.fs.cwd().deleteFile(tmp_path) catch {};
     }
 
     return 0;

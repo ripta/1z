@@ -1,0 +1,4 @@
+\ A build at a non-default --opt-level maps to a -O<x> token, flows through cc,
+\ and the resulting binary runs. The default -O2 is exercised by every other AOT
+\ test; this pins a non-default level end-to-end.
+2 3 + .
