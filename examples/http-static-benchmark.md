@@ -99,6 +99,42 @@ concurrency 20, peaked near 390 MB of process RSS, with the 1z heap capped at
 256 MB on the interpreter and JIT modes. Nothing climbed cell over cell, which is
 the signature the old per-request leak used to show.
 
+### Optimization level (`-O0` vs `-O2`)
+
+The `aot` rows in the main table were built at `-O0`, the C compiler default
+before `1z build` gained the `--opt-level` flag. That flag now defaults to
+`-O2`. This section compares the two levels in one session, so the delta is a
+clean signal rather than a cross-session comparison. Only the AOT C codegen
+changes. The interpreter and JIT modes are unaffected, so they are not
+re-measured. The `-O0` rows here reproduce the main-table baseline (close c=1
+1125 vs 1127, close c=20 2685 vs 2697), which anchors the control.
+
+| AOT build | Conn       |  c | req/s |
+|-----------|------------|----|-------|
+| `-O0`     | close      |  1 |  1125 |
+| `-O0`     | close      | 20 |  2685 |
+| `-O0`     | keep-alive |  1 |  1070 |
+| `-O0`     | keep-alive | 20 |  2089 |
+| `-O2`     | close      |  1 |  1188 |
+| `-O2`     | close      | 20 |  2695 |
+| `-O2`     | keep-alive |  1 |  1123 |
+| `-O2`     | keep-alive | 20 |  2152 |
+
+Build time is the `cc` compile-and-link stage, with the release runtime already
+built: `-O0` 1.40 s, `-O2` 1.52 s. Binary size: `-O0` 5.76 MiB, `-O2` 4.07 MiB.
+
+`-O2` buys a small serial throughput gain, about 5 percent at concurrency 1
+(1188 vs 1125 close, 1123 vs 1070 keep-alive). At concurrency 20 the gain washes
+into noise on close (2695 vs 2685, under half a percent) and is about 3 percent
+on keep-alive. The server is CPU-bound on per-request coordination at concurrency
+20, not on the per-word dispatch that `-O2` inlines. So the optimization helps
+most where dispatch is the bottleneck. That is the serial path.
+
+`-O2` also shrinks the binary by about 29 percent, roughly 1.7 MiB. Dead-code
+elimination and inlining leave fewer live functions, so the linker's dead-strip
+drops more. The build costs about 0.1 s more. `-O2` is the better default on both
+throughput and size at negligible build-time cost.
+
 ## Conclusion: AOT wins a steady margin; the JIT does not; keep-alive trades throughput for a tail
 
 On release the server serves about 930 to 1130 req/s serially and, at concurrency
