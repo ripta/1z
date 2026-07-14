@@ -1,0 +1,29 @@
+use "testing" ;
+
+\ The module-deps template caches a module's deps-and-words frame. It never needs invalidation:
+\ a module is immutable after its template is built. Reload creates a fresh module, and a runtime
+\ redefinition writes to the dictionary or a local frame, never to module.words. These tests lock
+\ that invariant in place.
+
+\ Reload returns a fresh module and does not overwrite the cache entry the original binding points
+\ at. The fixture content is fixed, so a content-divergence check is not expressible here: `use` is
+\ parse-time and cannot take a runtime path, and there is no runtime way to call a word on a loaded
+\ module value. This section asserts the original module's template is untouched by a reload.
+"reload leaves the original module's template intact" test-section
+
+orig: "./module_deps_invalidation_lib.1z" load ;
+5 orig.compute 15 "original module word resolves through its template" assert=
+"./module_deps_invalidation_lib.1z" reload drop
+5 orig.compute 15 "original template survives a reload of the same file" assert=
+
+"reloaded module resolves through a fresh template" test-section
+
+use "./module_deps_invalidation_lib.1z" reload shadow-ok ;
+5 compute 15 "reloaded module word resolves through its fresh template" assert=
+
+"top-level redefinition does not leak into a module's template" test-section
+
+report "module-helper" "module word uses its own helper" assert=
+helper: ( -- s ) [ "top-helper" ] ;
+helper "top-helper" "redefinition is in effect at top level" assert=
+report "module-helper" "module word still uses its own helper after redefine" assert=

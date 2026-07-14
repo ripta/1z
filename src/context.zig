@@ -1784,6 +1784,13 @@ pub const Context = struct {
     /// This overwrites any prior template without freeing it, so `allocator` must
     /// be arena-scoped. The AOT loader relies on the overwrite: it rebuilds after
     /// patching dispatch_ids that an earlier build missed.
+    ///
+    /// Called where a module's `words`/`deps` are finalized, such as load and reload
+    /// (`nativeLoadImpl`), ad-hoc `>module`, and runtime-image load. A module that reaches
+    /// `pushModuleDepsFrame` without a template, such as one built by `current-scope` or
+    /// `local-scope`, falls back to the per-entry rebuild. The template needs no invalidation
+    /// once built; see the immutability invariant on `Module.deps_template`. A future feature
+    /// that mutates a templated module in place must call this again to rebuild.
     pub fn buildModuleDepsTemplate(module: *value_mod.Module, allocator: Allocator) !void {
         var frame: LocalFrame = .{};
         errdefer frame.deinit(allocator);

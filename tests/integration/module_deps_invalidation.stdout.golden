@@ -1,0 +1,21 @@
+=== reload leaves the original module's template intact ===
+Stack: [ ]
+Stack: [ ]
+PASS: original module word resolves through its template
+Stack: [ ]
+Stack: [ ]
+PASS: original template survives a reload of the same file
+Stack: [ ]
+=== reloaded module resolves through a fresh template ===
+Stack: [ ]
+PASS: reloaded module word resolves through its fresh template
+Stack: [ ]
+=== top-level redefinition does not leak into a module's template ===
+Stack: [ ]
+PASS: module word uses its own helper
+Stack: [ ]
+Stack: [ ]
+PASS: redefinition is in effect at top level
+Stack: [ ]
+PASS: module word still uses its own helper after redefine
+Stack: [ ]

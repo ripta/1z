@@ -849,10 +849,15 @@ pub const Module = struct {
     /// Whether this module can be imported with `import`. Virtual modules
     /// like `native` set this to false.
     importable: bool = true,
-    /// Pre-built deps-and-words frame for module-word calls; see
-    /// `context.DepsFrameTemplate`. Null for a module that never had one built
-    /// (an ad-hoc module), in which case `pushModuleDepsFrame` rebuilds the frame
-    /// per entry.
+    /// Pre-built deps-and-words frame for module-word calls; see `context.DepsFrameTemplate`.
+    /// Null for a module that never had one built (an ad-hoc module), in which case
+    /// `pushModuleDepsFrame` rebuilds the frame per entry.
+    ///
+    /// The template needs no invalidation because a module is immutable after it is built.
+    /// `reload` produces a brand-new `Module`, and a runtime redefinition writes to a local frame
+    /// or the global dictionary, never to `words`/`deps`. So the template always matches the module
+    /// it hangs off. A future code path that mutates a templated module's `words` or `deps` in
+    /// place must rebuild the template with `buildModuleDepsTemplate`, or the frame clones go stale.
     deps_template: ?context_mod.DepsFrameTemplate = null,
 };
 

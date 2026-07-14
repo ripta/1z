@@ -1,0 +1,10 @@
+\ Fixtures for module-deps template invalidation. Each word here runs through a cloned
+\ deps-and-words frame, so a sibling call resolves against that frame.
+
+\ report calls helper via late binding through the module-deps frame.
+helper: ( -- s ) [ "module-helper" ] ;
+report: ( -- s ) [ helper ] ;
+
+\ compute calls a sibling dependency, exercising the cloned frame plus arithmetic.
+add-ten: ( n -- n ) [ 10 + ] ;
+compute: ( n -- n ) [ add-ten ] ;
