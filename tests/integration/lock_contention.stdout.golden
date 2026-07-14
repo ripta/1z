@@ -1,0 +1,4 @@
+=== cross-process file lock contention ===
+PASS: second contender exits cleanly
+PASS: first contender exits cleanly
+PASS: two contenders serialized on the lock

@@ -1051,7 +1051,7 @@ fn addIntegrationTests(
             }
             previous_serial_test_run = &test_run.step;
         }
-        configureIntegrationRun(b, test_run, te, timeout_secs, jit_mode, test_threads);
+        configureIntegrationRun(b, test_run, te, timeout_secs, jit_mode, test_threads, artifact);
 
         if (te.has_stderr_golden) {
             test_run.addFileInput(b.path(te.stderr_golden_path));
@@ -1108,7 +1108,7 @@ fn addIntegrationTests(
             update_run.addArg("--");
             update_run.addFileInput(artifact.getEmittedBin());
             update_run.addArtifactArg(artifact);
-            configureIntegrationRun(b, update_run, te, timeout_secs, false, test_threads);
+            configureIntegrationRun(b, update_run, te, timeout_secs, false, test_threads, artifact);
             uf_ptr.*.addCopyFileToSource(update_run.captureStdOut(), te.stdout_golden_path);
 
             const update_exit_code = te.expected_exit_code orelse 0;
@@ -1692,6 +1692,10 @@ fn addAotTests(
 // file path. Otherwise, a line matching a subcommand word
 // (run|eval|check|repl|version|fmt|build) sets the subcommand used by the
 // harness; if no such line is present, the harness defaults to `run`.
+//
+// A line equal to `@self-exe` appends the interpreter artifact's own binary path as the final
+// argv element, letting a test that spawns child interpreters read its own path from
+// `command-line-args`.
 fn configureIntegrationRun(
     b: *std.Build,
     run: *std.Build.Step.Run,
@@ -1699,6 +1703,7 @@ fn configureIntegrationRun(
     timeout_secs: u32,
     jit_mode: bool,
     test_threads: []const u8,
+    artifact: *std.Build.Step.Compile,
 ) void {
     var raw_mode = false;
     var detected_subcommand: ?[]const u8 = null;
@@ -1733,6 +1738,7 @@ fn configureIntegrationRun(
                 const trimmed = std.mem.trim(u8, flag, " \t\r");
                 if (trimmed.len == 0) continue;
                 if (std.mem.eql(u8, trimmed, "@raw")) continue;
+                if (std.mem.eql(u8, trimmed, "@self-exe")) continue;
                 // A valid `--test-timeout=N` only drives the wrapper timeout
                 // (computed separately via testTimeoutSeconds); it is not a
                 // flag the raw subcommand accepts, so keep it out of the
@@ -1749,6 +1755,7 @@ fn configureIntegrationRun(
                 }
             }
         }
+        if (flagsContainSubcommand(te.flags_lines, "@self-exe")) run.addArtifactArg(artifact);
         addCommonFileDeps(b, run);
         if (te.has_flags) run.addFileInput(b.path(te.flags_path));
         if (te.has_stdin) run.addFileInput(b.path(te.stdin_path));
@@ -1779,6 +1786,7 @@ fn configureIntegrationRun(
             if (std.mem.eql(u8, trimmed_flag, "--no-show-stack")) continue;
             if (std.mem.eql(u8, trimmed_flag, "--no-jit")) continue;
             if (std.mem.eql(u8, trimmed_flag, "@raw")) continue;
+            if (std.mem.eql(u8, trimmed_flag, "@self-exe")) continue;
             if (isSubcommandWord(trimmed_flag)) continue;
             run.addArg(trimmed_flag);
         }
@@ -1803,6 +1811,7 @@ fn configureIntegrationRun(
             }
         }
     }
+    if (flagsContainSubcommand(te.flags_lines, "@self-exe")) run.addArtifactArg(artifact);
     addCommonFileDeps(b, run);
     if (te.has_args) run.addFileInput(b.path(te.args_path));
     if (te.has_stdin) run.addFileInput(b.path(te.stdin_path));

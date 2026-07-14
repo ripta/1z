@@ -1,0 +1,52 @@
+\ Child process for the cross-process advisory file-lock test, driven by the parent
+\ tests/integration/lock_contention.1z. Each contender waits on a shared go signal, then runs one
+\ locked read-barrier-write on a shared counter. When the lock serializes the two contenders the
+\ counter ends at 2. A lost update from a broken lock leaves it at 1.
+
+use "os/lock" ;
+use "os/fs" ;
+use "conversions" ;
+use "strings" ;
+use "time" ;
+
+\ Read the decimal counter, treating a blank file as 0.
+(read-count): ( path -- n ) [
+  read: stream-open
+  dup stream-read-all swap stream-close
+  bytes> trim
+  dup #empty? [ drop 0 ] [ parse-integer ] if
+] ;
+
+\ Overwrite the counter file with a decimal value.
+(write-count): ( path n -- ) [
+  >string swap write: stream-open
+  tuck swap stream-write drop
+  stream-close
+] ;
+
+\ Bounded poll for the go signal, so a broken setup fails fast rather than
+\ hanging to the test wrapper timeout.
+(await-iters): ( -- n ) [ 1000 ] ;
+
+(await-go): ( go iters -- ) [
+  dup 0 <=
+  [ 2drop f "lock_contender: go signal never arrived" EUserThrown make-error throw ]
+  [ over file-exists? [ 2drop ] [ 5 milliseconds sleep 1 - (await-go) ] if ]
+  if
+] ;
+
+\ task-scope gives the root task a context where the go-signal poll and the
+\ in-lock barrier can sleep, and where the combinator's cooperative acquire runs.
+\ args: go ready lockfile counterfile barrier-ms
+[
+  command-line-args
+  dup 1 #nth dup write: stream-open stream-close drop
+  dup 0 #nth (await-iters) (await-go)
+
+  dup 3 #nth swap
+  dup 4 #nth parse-integer swap
+  2 #nth read-write: stream-open
+  exclusive: [ [ over (read-count) swap milliseconds sleep 1 + (write-count) ] dip ]
+  using-file-lock
+  stream-close
+] task-scope

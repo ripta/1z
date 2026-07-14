@@ -1,0 +1,86 @@
+\ Cross-process advisory file-lock contention test for lib/os/lock.1z. It spawns two child
+\ interpreters running fixtures/lock_contender.1z, each taking the lock and doing one
+\ read-barrier-write on a shared counter. A two-phase ready/go handshake guarantees both children are
+\ in flight before the race. The counter reaching 2 then proves the two locked sections serialized. A
+\ broken lock would instead let both read 0 during the barrier and write 1, losing an update. The
+\ interpreter path arrives as the sole command-line argument via the harness @self-exe directive.
+
+use "testing" ;
+use "process" ;
+use "os/fs" ;
+use "conversions" ;
+use "strings" ;
+use "time" ;
+
+go-file:     ( -- path ) [ "tests/integration/_tmp_lockc_go" ] ;
+ready1-file: ( -- path ) [ "tests/integration/_tmp_lockc_ready1" ] ;
+ready2-file: ( -- path ) [ "tests/integration/_tmp_lockc_ready2" ] ;
+lock-file:   ( -- path ) [ "tests/integration/_tmp_lockc_lock" ] ;
+count-file:  ( -- path ) [ "tests/integration/_tmp_lockc_count" ] ;
+barrier-ms:  ( -- ms )   [ "200" ] ;
+child-path:  ( -- path ) [ "tests/integration/fixtures/lock_contender.1z" ] ;
+
+(rm-if): ( path -- ) [ dup file-exists? [ delete-file ] [ drop ] if ] ;
+
+(spit): ( path text -- ) [
+  swap write: stream-open
+  tuck swap stream-write drop
+  stream-close
+] ;
+
+(slurp): ( path -- text ) [
+  read: stream-open
+  dup stream-read-all swap stream-close
+  bytes>
+] ;
+
+(await-iters): ( -- n ) [ 1000 ] ;
+
+(await-file): ( path iters -- ) [
+  dup 0 <=
+  [ 2drop f "lock_contention: child never became ready" EUserThrown make-error throw ]
+  [ over file-exists? [ 2drop ] [ 5 milliseconds sleep 1 - (await-file) ] if ]
+  if
+] ;
+
+\ Build a child argv, slotting the per-child ready-file into position. The interpreter path is this
+\ test's own, forwarded by the harness @self-exe hook. Each child gets its own --test-timeout
+\ watchdog so a hung lock-retry self-aborts instead of orphaning past the parent's timeout.
+(child-argv): ( ready -- argv ) [
+  [ command-line-args 0 #nth "run" "--stdlib-path=lib" "--test-timeout=8" child-path go-file ] dip
+  lock-file count-file barrier-ms
+  10 array-n
+] ;
+
+"cross-process file lock contention" test-section
+
+\ task-scope gives the root task a context where the handshake polls can sleep
+\ cooperatively and wait-process can suspend without blocking a worker.
+[
+  go-file (rm-if)
+  ready1-file (rm-if)
+  ready2-file (rm-if)
+  lock-file (rm-if)
+  count-file (rm-if)
+
+  lock-file "" (spit)
+  count-file "0" (spit)
+
+  ready1-file (child-argv) <stdio-opts> spawn-process
+  ready2-file (child-argv) <stdio-opts> spawn-process
+
+  ready1-file (await-iters) (await-file)
+  ready2-file (await-iters) (await-file)
+  go-file "" (spit)
+
+  wait-process 0 "second contender exits cleanly" assert=
+  wait-process 0 "first contender exits cleanly" assert=
+
+  count-file (slurp) trim "2" "two contenders serialized on the lock" assert=
+
+  go-file (rm-if)
+  ready1-file (rm-if)
+  ready2-file (rm-if)
+  lock-file (rm-if)
+  count-file (rm-if)
+] task-scope
