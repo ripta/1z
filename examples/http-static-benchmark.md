@@ -135,6 +135,59 @@ elimination and inlining leave fewer live functions, so the linker's dead-strip
 drops more. The build costs about 0.1 s more. `-O2` is the better default on both
 throughput and size at negligible build-time cost.
 
+### Module-deps frame caching
+
+Every call to a word from a library module used to rebuild that module's
+deps-and-words dictionary into a fresh local frame, re-hashing every entry. The
+serve path lives in `lib/net/http.1z`, so this ran on essentially every word
+call. The rebuild now clones an immutable per-module template: one allocation and
+one `memcpy` of the map backing, no re-hashing. The push path stays lock-free,
+and the clone does fewer allocations than the per-entry rebuild it replaced.
+
+The table below compares the current build against the release baseline. The
+`--compile=off` rows compare against the main throughput table. The `aot` rows
+compare against the `-O2` rows, since `1z build` now defaults to `-O2`. Hybrid and
+eager track the interpreter, so only `--compile=off` is shown. Each current number
+is a two-run median of medians, rounded. The two runs agreed within about 3
+percent. The exception is AOT keep-alive at concurrency 20, which spanned 1934 to
+2094.
+
+| Mode            | Conn       |  c | baseline | current |
+|-----------------|------------|----|----------|---------|
+| `--compile=off` | close      |  1 |      968 |    1580 |
+| `--compile=off` | close      | 20 |     2369 |    1820 |
+| `--compile=off` | keep-alive |  1 |     1057 |    1930 |
+| `--compile=off` | keep-alive | 20 |     1636 |    1310 |
+| `aot` (`-O2`)   | close      |  1 |     1188 |    1200 |
+| `aot` (`-O2`)   | close      | 20 |     2695 |    2630 |
+| `aot` (`-O2`)   | keep-alive |  1 |     1123 |    1130 |
+| `aot` (`-O2`)   | keep-alive | 20 |     2152 |    2010 |
+
+Read this as the change in the whole build since the baseline, not as the cache in
+isolation. The interpreter baseline predates two serve-path changes: a quotation
+scope-capture guard and this cache. The interpreter serial throughput is much
+higher than the baseline (close 1580 versus 968). AOT serial is flat across the
+two sessions (1200 versus 1188), so that serial gain is the serve-path code
+changes, not a faster machine. Splitting it between the capture guard and this
+cache needs an in-session build-versus-build run, which this did not do.
+
+The interpreter concurrency-20 throughput is lower than the baseline (close 1820
+versus 2369). That gap is not the cache. This session the interpreter scales only
+about 1.2x from one connection to twenty, while AOT scales about 2.2x. The
+interpreter and JIT modes run under `--max-memory`, whose limit allocator does an
+atomic add and subtract on one shared byte counter on every allocation. That is a
+contention point the allocation-heavy interpreter path has and the unlimited AOT
+server does not. It does not by itself explain the drop, though. The baseline
+session ran under the same `--max-memory` and still scaled the interpreter about
+2.4x. The concurrency-20 rate also varies with machine load, and this was a busier
+session than the baseline. What changed the interpreter's scaling between the two
+sessions is not established here.
+
+The cache itself is lock-free and does fewer allocations per push than the
+per-entry rebuild it replaced, so it cannot add contention or regress the serial
+path. Confirming a concurrency win, or ruling one out, needs an in-session
+build-versus-build comparison.
+
 ## Conclusion: AOT wins a steady margin; the JIT does not; keep-alive trades throughput for a tail
 
 On release the server serves about 930 to 1130 req/s serially and, at concurrency
