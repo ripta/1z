@@ -29,9 +29,11 @@ definitions, and control flow.
     source loading and freezing through C emission, linking, and startup
 14. [AOT Symbol Names for Profilers](aot-symbols.md) -- how `nm`, `perf`,
     and `samply` see 1z words in AOT binaries
-15. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
+15. [Profiling](profiling.md) -- the interpreter's pprof export and the external
+    `perf` / `samply` -> pprof path for AOT binaries
+16. [Bare-Metal AOT Builds](bare-metal.md) -- freestanding executables that run
     on QEMU riscv64 with no operating system
-16. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
+17. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
     comparison for experienced stack-language programmers
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with
