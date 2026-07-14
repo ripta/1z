@@ -32,11 +32,22 @@ pub const Location = struct {
     function_id: u64,
 };
 
-/// One profile sample: a leaf-first location chain and one value per sample axis. `values` must
-/// have the same length as `Profile.sample_types`.
+/// One `(key, value)` annotation on a sample, per `profile.proto` Label. A label is either
+/// string-valued (`key` and `str`, both string-table indices) or numeric (`key` and `num`).
+pub const Label = struct {
+    key_idx: u64,
+    value: union(enum) {
+        str: u64, // string-table index
+        num: i64, // numeric value
+    },
+};
+
+/// One profile sample: a leaf-first location chain, one value per sample axis, and optional
+/// labels. `values` must have the same length as `Profile.sample_types`.
 pub const Sample = struct {
     location_ids: []const u64,
     values: []const i64,
+    labels: []const Label = &.{},
 };
 
 /// A minimal pprof profile: enough of `profile.proto` to carry word-attributed samples with
@@ -129,6 +140,21 @@ fn encodeProfile(alloc: std.mem.Allocator, profile: Profile) ![]u8 {
         sub.clearRetainingCapacity();
         try appendPackedVarints(&sub, alloc, 1, s.location_ids);
         try appendPackedVarints(&sub, alloc, 2, s.values);
+
+        // Each label is a nested Label message: key (field 1), then either a string-table index
+        // (field 2) or a numeric value (field 3).
+        for (s.labels) |lbl| {
+            var label_bytes: Bytes = .empty;
+            defer label_bytes.deinit(alloc);
+            try appendVarintField(&label_bytes, alloc, 1, lbl.key_idx);
+            switch (lbl.value) {
+                .str => |idx| try appendVarintField(&label_bytes, alloc, 2, idx),
+                // int64 encodes as its two's-complement reinterpreted as a varint.
+                .num => |n| try appendVarintField(&label_bytes, alloc, 3, @bitCast(n)),
+            }
+            try appendLenField(&sub, alloc, 3, label_bytes.items);
+        }
+
         try appendLenField(&out, alloc, 2, sub.items);
     }
 
@@ -489,4 +515,69 @@ test "encode: a known two-frame nested sample round-trips" {
     try testing.expectEqual(@as(usize, 2), locations);
     try testing.expectEqual(@as(usize, 7), strings);
     try testing.expect(checked_sample);
+}
+
+test "encode: a sample carrying string and numeric labels round-trips" {
+    const alloc = testing.allocator;
+
+    // string_table: "", "handler", "wall", "nanoseconds", "task", "task_name".
+    const profile: Profile = .{
+        .sample_types = &.{.{ .type_idx = 2, .unit_idx = 3 }},
+        .functions = &.{.{ .id = 1, .name_idx = 1 }},
+        .locations = &.{.{ .id = 1, .function_id = 1 }},
+        .samples = &.{.{
+            .location_ids = &.{1},
+            .values = &.{42},
+            .labels = &.{
+                .{ .key_idx = 4, .value = .{ .num = 7 } }, // task = 7
+                .{ .key_idx = 5, .value = .{ .str = 1 } }, // task_name = "handler"
+            },
+        }},
+        .string_table = &.{ "", "handler", "wall", "nanoseconds", "task", "task_name" },
+        .default_sample_type = 2,
+    };
+
+    const gz = try encode(alloc, profile);
+    defer alloc.free(gz);
+
+    const proto = try inflateStored(alloc, gz);
+    defer alloc.free(proto);
+
+    const fields = try parseFields(alloc, proto);
+    defer alloc.free(fields);
+
+    var saw_num_label = false;
+    var saw_str_label = false;
+
+    for (fields) |f| {
+        if (f.number != 2) continue;
+        const inner = try parseFields(alloc, f.bytes);
+        defer alloc.free(inner);
+
+        for (inner) |sub| {
+            if (sub.number != 3) continue; // Sample.label
+            const label = try parseFields(alloc, sub.bytes);
+            defer alloc.free(label);
+
+            const key = label[0].varint;
+            switch (key) {
+                4 => {
+                    // task: numeric label, field 3 carries the value.
+                    try testing.expectEqual(@as(u32, 3), label[1].number);
+                    try testing.expectEqual(@as(u64, 7), label[1].varint);
+                    saw_num_label = true;
+                },
+                5 => {
+                    // task_name: string label, field 2 carries the string index.
+                    try testing.expectEqual(@as(u32, 2), label[1].number);
+                    try testing.expectEqual(@as(u64, 1), label[1].varint);
+                    saw_str_label = true;
+                },
+                else => {},
+            }
+        }
+    }
+
+    try testing.expect(saw_num_label);
+    try testing.expect(saw_str_label);
 }

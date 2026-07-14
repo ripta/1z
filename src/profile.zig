@@ -246,21 +246,22 @@ pub const ProfileStats = struct {
     ///
     /// The `pending_starts` buffer is a push/pop stack, so every child interval nests strictly
     /// inside its caller. That containment makes both the parent link and the self-time exact.
-    fn recoverAncestry(self: *const ProfileStats, alloc: std.mem.Allocator) !Ancestry {
-        const n = self.samples.items.len;
+    /// Containment only holds within one buffer's timeline, so each buffer is recovered on its own.
+    fn recoverAncestry(alloc: std.mem.Allocator, samples: []const ProfileSample) !Ancestry {
+        const n = samples.len;
         const parents = try alloc.alloc(?usize, n);
         const self_ns = try alloc.alloc(i128, n);
 
         var stack: std.ArrayListUnmanaged(usize) = .{};
         defer stack.deinit(alloc);
 
-        for (self.samples.items, 0..) |s, i| {
+        for (samples, 0..) |s, i| {
             const total_ns = s.end_ns - s.start_ns;
             var child_sum_ns: i128 = 0;
 
             while (stack.items.len > 0) {
                 const top_idx = stack.items[stack.items.len - 1];
-                const top = self.samples.items[top_idx];
+                const top = samples[top_idx];
                 const contained = top.start_ns >= s.start_ns and top.end_ns <= s.end_ns;
                 if (!contained) break;
                 child_sum_ns += top.end_ns - top.start_ns;
@@ -276,15 +277,72 @@ pub const ProfileStats = struct {
         return .{ .parents = parents, .self_ns = self_ns };
     }
 
+    /// Intern each new word name in `samples` into `strings` and give it a 1-based function id,
+    /// with a location mirroring the function one-to-one. Interning across every buffer keeps a
+    /// word shared between the main context and a task mapped to a single function.
+    fn internNames(
+        alloc: std.mem.Allocator,
+        name_ids: *std.StringHashMapUnmanaged(u64),
+        functions: *std.ArrayListUnmanaged(pprof.Function),
+        locations: *std.ArrayListUnmanaged(pprof.Location),
+        strings: *std.ArrayListUnmanaged([]const u8),
+        samples: []const ProfileSample,
+    ) !void {
+        for (samples) |s| {
+            const gop = try name_ids.getOrPut(alloc, s.name);
+            if (gop.found_existing) continue;
+            const fid: u64 = functions.items.len + 1;
+            gop.value_ptr.* = fid;
+            const name_idx: u64 = strings.items.len;
+            try strings.append(alloc, s.name);
+            try functions.append(alloc, .{ .id = fid, .name_idx = name_idx });
+            try locations.append(alloc, .{ .id = fid, .function_id = fid });
+        }
+    }
+
+    /// Emit one pprof sample per recorded interval in `samples`, each carrying `labels`.
+    ///
+    /// Ancestry is recovered over this buffer alone, so the leaf-first location chain and the
+    /// exclusive self-time stay valid for one task's timeline. All samples in a buffer share the
+    /// same task labels, so `labels` is pointed at rather than copied.
+    fn appendBufferSamples(
+        alloc: std.mem.Allocator,
+        out: *std.ArrayListUnmanaged(pprof.Sample),
+        name_ids: *std.StringHashMapUnmanaged(u64),
+        samples: []const ProfileSample,
+        labels: []const pprof.Label,
+    ) !void {
+        const ancestry = try recoverAncestry(alloc, samples);
+
+        for (samples, 0..) |_, i| {
+            var chain: std.ArrayListUnmanaged(u64) = .{};
+            var cur: ?usize = i;
+            while (cur) |c| {
+                try chain.append(alloc, name_ids.get(samples[c].name).?);
+                cur = ancestry.parents[c];
+            }
+
+            const values = try alloc.alloc(i64, 2);
+            values[0] = @intCast(ancestry.self_ns[i]);
+            values[1] = 1;
+
+            try out.append(alloc, .{ .location_ids = chain.items, .values = values, .labels = labels });
+        }
+    }
+
     /// Build a pprof wire model from the recorded samples.
     ///
-    /// Every allocation lands on `alloc`, which the caller reaps in one shot from an arena. Each
+    /// Every allocation lands on `alloc`, which the caller reaps in one shot from an arena. The
+    /// main context and every drained task buffer contribute their samples to one profile. Each
     /// interval becomes one sample: a leaf-first ancestor chain of locations, an exclusive
     /// self-time in nanoseconds, and a call count of one. pprof derives the cumulative views from
     /// the stacks.
+    ///
+    /// Every sample carries `task`, `task_name`, and `worker` labels so pprof can filter and group
+    /// by task. The main context is labeled task 0 named "main"; task ids start at 1, so 0 is an
+    /// unambiguous main bucket. A task buffer carries its own id and worker, plus its `spawn-named`
+    /// name when it has one.
     fn buildProfile(self: *const ProfileStats, alloc: std.mem.Allocator) !pprof.Profile {
-        const ancestry = try self.recoverAncestry(alloc);
-
         var strings: std.ArrayListUnmanaged([]const u8) = .{};
         try strings.append(alloc, "");
 
@@ -297,37 +355,44 @@ pub const ProfileStats = struct {
         const count_unit: u64 = strings.items.len;
         try strings.append(alloc, "count");
 
+        const task_key: u64 = strings.items.len;
+        try strings.append(alloc, "task");
+        const task_name_key: u64 = strings.items.len;
+        try strings.append(alloc, "task_name");
+        const worker_key: u64 = strings.items.len;
+        try strings.append(alloc, "worker");
+        const main_name: u64 = strings.items.len;
+        try strings.append(alloc, "main");
+
         // Intern word names to a 1-based function id. A location mirrors each
         // function one-to-one, so the location id can reuse the function id.
         var name_ids: std.StringHashMapUnmanaged(u64) = .{};
         var functions: std.ArrayListUnmanaged(pprof.Function) = .{};
         var locations: std.ArrayListUnmanaged(pprof.Location) = .{};
 
-        for (self.samples.items) |s| {
-            const gop = try name_ids.getOrPut(alloc, s.name);
-            if (gop.found_existing) continue;
-            const fid: u64 = functions.items.len + 1;
-            gop.value_ptr.* = fid;
-            const name_idx: u64 = strings.items.len;
-            try strings.append(alloc, s.name);
-            try functions.append(alloc, .{ .id = fid, .name_idx = name_idx });
-            try locations.append(alloc, .{ .id = fid, .function_id = fid });
+        try internNames(alloc, &name_ids, &functions, &locations, &strings, self.samples.items);
+        for (self.task_profiles.items) |tp| {
+            try internNames(alloc, &name_ids, &functions, &locations, &strings, tp.samples.items);
         }
 
         var samples: std.ArrayListUnmanaged(pprof.Sample) = .{};
-        for (self.samples.items, 0..) |_, i| {
-            var chain: std.ArrayListUnmanaged(u64) = .{};
-            var cur: ?usize = i;
-            while (cur) |c| {
-                try chain.append(alloc, name_ids.get(self.samples.items[c].name).?);
-                cur = ancestry.parents[c];
+
+        const main_labels = try alloc.alloc(pprof.Label, 3);
+        main_labels[0] = .{ .key_idx = task_key, .value = .{ .num = 0 } };
+        main_labels[1] = .{ .key_idx = task_name_key, .value = .{ .str = main_name } };
+        main_labels[2] = .{ .key_idx = worker_key, .value = .{ .num = 0 } };
+        try appendBufferSamples(alloc, &samples, &name_ids, self.samples.items, main_labels);
+
+        for (self.task_profiles.items) |tp| {
+            var labels: std.ArrayListUnmanaged(pprof.Label) = .{};
+            try labels.append(alloc, .{ .key_idx = task_key, .value = .{ .num = @intCast(tp.task_id) } });
+            if (tp.task_name) |name| {
+                const name_idx: u64 = strings.items.len;
+                try strings.append(alloc, name);
+                try labels.append(alloc, .{ .key_idx = task_name_key, .value = .{ .str = name_idx } });
             }
-
-            const values = try alloc.alloc(i64, 2);
-            values[0] = @intCast(ancestry.self_ns[i]);
-            values[1] = 1;
-
-            try samples.append(alloc, .{ .location_ids = chain.items, .values = values });
+            try labels.append(alloc, .{ .key_idx = worker_key, .value = .{ .num = @intCast(tp.worker_id) } });
+            try appendBufferSamples(alloc, &samples, &name_ids, tp.samples.items, labels.items);
         }
 
         const sample_types = try alloc.alloc(pprof.ValueType, 2);
@@ -656,6 +721,33 @@ fn containsString(table: []const []const u8, needle: []const u8) bool {
     return false;
 }
 
+/// Find the string-table index of `needle`, or null when it is absent.
+fn stringIndexOf(table: []const []const u8, needle: []const u8) ?u64 {
+    for (table, 0..) |s, i| {
+        if (std.mem.eql(u8, s, needle)) return @intCast(i);
+    }
+    return null;
+}
+
+/// The sample whose leaf frame is `leaf_name`. Locations mirror functions one-to-one, so the
+/// leaf location id equals the leaf function id.
+fn sampleForLeaf(profile: pprof.Profile, leaf_name: []const u8) pprof.Sample {
+    const fid = functionIdByName(profile, leaf_name);
+    for (profile.samples) |s| {
+        if (s.location_ids.len > 0 and s.location_ids[0] == fid) return s;
+    }
+    unreachable;
+}
+
+/// The label on `sample` whose key resolves to `key`, or null when absent.
+fn labelByKey(profile: pprof.Profile, sample: pprof.Sample, key: []const u8) ?pprof.Label {
+    const key_idx = stringIndexOf(profile.string_table, key) orelse return null;
+    for (sample.labels) |lbl| {
+        if (lbl.key_idx == key_idx) return lbl;
+    }
+    return null;
+}
+
 test "buildProfile emits functions, leaf-first chains, and self-time values" {
     const alloc = std.testing.allocator;
     var arena = std.heap.ArenaAllocator.init(alloc);
@@ -759,4 +851,100 @@ test "exportPprof on an empty buffer produces a decodable profile with no sample
         if (f.number == 2) samples += 1;
     }
     try std.testing.expectEqual(@as(usize, 0), samples);
+}
+
+test "buildProfile labels main as task 0 and tasks by id, name, and worker" {
+    const alloc = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    var stats: ProfileStats = .{};
+    defer stats.deinit(alloc);
+
+    // The main context ran `accept`.
+    try pushSample(&stats, alloc, "accept", 0, 100);
+
+    // A named task ran `handler`.
+    var named: TaskProfile = .{ .task_id = 5, .worker_id = 2 };
+    named.task_name = try alloc.dupe(u8, "handler");
+    try addTaskSample(&named, alloc, "handler", 0, 200);
+    try stats.task_profiles.append(alloc, named);
+
+    // An unnamed task ran `work`.
+    var unnamed: TaskProfile = .{ .task_id = 6, .worker_id = 3 };
+    try addTaskSample(&unnamed, alloc, "work", 0, 50);
+    try stats.task_profiles.append(alloc, unnamed);
+
+    const profile = try stats.buildProfile(a);
+
+    const main = sampleForLeaf(profile, "accept");
+    try std.testing.expectEqual(@as(i64, 0), (labelByKey(profile, main, "task").?).value.num);
+    const main_name = labelByKey(profile, main, "task_name").?;
+    try std.testing.expectEqualStrings("main", profile.string_table[main_name.value.str]);
+    try std.testing.expectEqual(@as(i64, 0), (labelByKey(profile, main, "worker").?).value.num);
+
+    const handler = sampleForLeaf(profile, "handler");
+    try std.testing.expectEqual(@as(i64, 5), (labelByKey(profile, handler, "task").?).value.num);
+    const handler_name = labelByKey(profile, handler, "task_name").?;
+    try std.testing.expectEqualStrings("handler", profile.string_table[handler_name.value.str]);
+    try std.testing.expectEqual(@as(i64, 2), (labelByKey(profile, handler, "worker").?).value.num);
+
+    const work = sampleForLeaf(profile, "work");
+    try std.testing.expectEqual(@as(i64, 6), (labelByKey(profile, work, "task").?).value.num);
+    try std.testing.expectEqual(@as(i64, 3), (labelByKey(profile, work, "worker").?).value.num);
+    // An unnamed task carries no task_name label.
+    try std.testing.expect(labelByKey(profile, work, "task_name") == null);
+}
+
+test "exportPprof round-trips a handler task's name label through the wire format" {
+    const alloc = std.testing.allocator;
+
+    var stats: ProfileStats = .{};
+    defer stats.deinit(alloc);
+
+    // Server-shaped: the main context runs the accept loop, a task runs the handler.
+    try pushSample(&stats, alloc, "accept", 0, 100);
+    var tp: TaskProfile = .{ .task_id = 9, .worker_id = 1 };
+    tp.task_name = try alloc.dupe(u8, "handler");
+    try addTaskSample(&tp, alloc, "handler", 0, 500);
+    try stats.task_profiles.append(alloc, tp);
+
+    const gz = try stats.exportPprof(alloc);
+    defer alloc.free(gz);
+
+    const proto = try pprof.inflateStored(alloc, gz);
+    defer alloc.free(proto);
+
+    const fields = try pprof.parseFields(alloc, proto);
+    defer alloc.free(fields);
+
+    // The string table is encoded in table order, so index i names strings.items[i].
+    var strings: std.ArrayListUnmanaged([]const u8) = .{};
+    defer strings.deinit(alloc);
+    for (fields) |f| {
+        if (f.number == 6) try strings.append(alloc, f.bytes);
+    }
+
+    try std.testing.expect(containsString(strings.items, "handler"));
+
+    // Some sample carries a string label whose value resolves to "handler".
+    var found_handler_label = false;
+    for (fields) |f| {
+        if (f.number != 2) continue;
+        const inner = try pprof.parseFields(alloc, f.bytes);
+        defer alloc.free(inner);
+        for (inner) |sub| {
+            if (sub.number != 3) continue; // Sample.label
+            const label = try pprof.parseFields(alloc, sub.bytes);
+            defer alloc.free(label);
+            if (label.len >= 2 and label[1].number == 2) {
+                const str_idx = label[1].varint;
+                if (str_idx < strings.items.len and std.mem.eql(u8, strings.items[str_idx], "handler")) {
+                    found_handler_label = true;
+                }
+            }
+        }
+    }
+    try std.testing.expect(found_handler_label);
 }

@@ -71,20 +71,35 @@ wall time is self time. Cumulative wall time is total time. The count axis gives
 direct versus on-stack call counts. This covers all three columns of the
 flat table, plus the call-graph structure the table cannot show.
 
-## Limitation: Main-Context-Only
+## Concurrent and Task Profiling
 
-The interpreter's sample collector is attached to the main context only.
-Spawned and detached task bodies run with no collector attached, so **their word
-dispatches are not recorded at all**. Any work a program pushes into a task is
-invisible to both the flat table and the pprof profile.
+The collector attaches to every context, not just the main one. Each spawned or
+detached task records into its own sample buffer. When a task is reaped, its
+buffer is drained onto the owning worker, and at pool teardown every worker's
+buffers are merged into the export. So a `--profile` run of a concurrent program
+sees the task bodies, not just the accept loop or the main context.
 
-This hits the workloads that most want profiling. A server runs each connection
-handler in a spawned or detached task, so a `--profile` run of a server captures
-the accept loop and nothing of the handlers. Treat an interpreter profile as
-covering only the code that runs on the main context.
+The flat table sums all task work into one whole-program view. The pprof profile
+keeps each task separable through per-sample labels:
 
-Closing this gap -- per-task sample buffers merged into one labeled profile --
-is a planned concurrency-aware profiling follow-on.
+- **task** -- the numeric task id. Spawned task ids start at 1; the main context
+  is task 0.
+- **task_name** -- the `spawn-named` name, when the task has one. The main
+  context is named `main`.
+- **worker** -- the owning worker id.
+
+Filter by a label to isolate one task. For a server that runs each connection
+handler in a task named `handler`:
+
+```
+go tool pprof -tagfocus=task_name=handler program.pb.gz
+```
+
+`go tool pprof -tags program.pb.gz` lists every label value and its share of
+samples, so you can spot which task or worker dominates before drilling in.
+Filter the main context by `task_name=main`: pprof's tag views treat a
+zero-valued numeric label as unset, so the main context's `task=0` and
+`worker=0` do not appear under the `task` and `worker` tags.
 
 ## Profiling AOT Binaries
 
