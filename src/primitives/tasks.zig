@@ -193,6 +193,16 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     // suppresses a false stall warning on an idle primary.
     pool.deadlock_threshold_ns = ctx.deadlock_detect_ns;
 
+    // Point every worker's drain at the main context's buffer and give it a
+    // worker id for the drained labels. Each worker folds its collection into
+    // this sink at teardown, so task-body samples reach the exported profile.
+    if (ctx.profile) |sink| {
+        for (pool.workers) |*w| {
+            w.scheduler.profile_sink = sink;
+            w.scheduler.worker_id = w.id;
+        }
+    }
+
     // Arm the periodic sampler when either axis is enabled. A tick with no
     // axis is a no-op: `sampler_on` is false and the pool keeps sampling off.
     const sampler_on = ctx.trace.sample_tasks or ctx.trace.sample_memory;

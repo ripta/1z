@@ -1111,7 +1111,7 @@ const ExecutionContext = struct {
 
     fn finalizeProfile(self: *ExecutionContext) void {
         if (!self.profile_enabled) return;
-        if (self.profile_stats.samples.items.len == 0) return;
+        if (!self.profile_stats.hasSamples()) return;
 
         var buf: [8192]u8 = undefined;
         var stream = std.io.fixedBufferStream(&buf);

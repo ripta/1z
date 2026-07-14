@@ -19,6 +19,24 @@ pub const ProfileSample = struct {
     end_ns: i128,
 };
 
+/// One task's drained profile: the task's samples with their word names copied
+/// onto a longer-lived allocator, plus the labels captured at drain time.
+///
+/// The reaping worker frees the task Context and the dictionary/arena bytes that
+/// back a `ProfileSample.name`, so the drain owns duplicated copies here.
+pub const TaskProfile = struct {
+    samples: std.ArrayListUnmanaged(ProfileSample) = .{},
+    task_id: u64 = 0,
+    task_name: ?[]const u8 = null,
+    worker_id: usize = 0,
+
+    pub fn deinit(self: *TaskProfile, alloc: std.mem.Allocator) void {
+        for (self.samples.items) |s| alloc.free(s.name);
+        if (self.task_name) |n| alloc.free(n);
+        self.samples.deinit(alloc);
+    }
+};
+
 /// Aggregate counters for a single word across all dispatches.
 pub const WordAggregate = struct {
     calls: u64 = 0,
@@ -37,6 +55,10 @@ pub const WordAggregate = struct {
 pub const ProfileStats = struct {
     samples: std.ArrayListUnmanaged(ProfileSample) = .{},
     pending_starts: std.ArrayListUnmanaged(i128) = .{},
+    /// Buffers drained from reaped task Contexts, one per task, kept separable so
+    /// each is aggregated within its own timeline. Only the main context's buffer
+    /// accumulates these; task buffers leave it empty.
+    task_profiles: std.ArrayListUnmanaged(TaskProfile) = .{},
 
     /// Push a start timestamp onto the pending stack. Called from the
     /// `call_word` instrumentation point in `executeInstructions`.
@@ -62,36 +84,46 @@ pub const ProfileStats = struct {
     pub fn deinit(self: *ProfileStats, alloc: std.mem.Allocator) void {
         self.samples.deinit(alloc);
         self.pending_starts.deinit(alloc);
+        for (self.task_profiles.items) |*tp| tp.deinit(alloc);
+        self.task_profiles.deinit(alloc);
     }
 
-    /// Walk the close-order sample buffer and aggregate per-word counters.
-    /// Caller owns the returned map and must call `deinit` on it.
+    /// True when any word dispatch was recorded, across the main-context buffer
+    /// and every drained task buffer.
+    pub fn hasSamples(self: *const ProfileStats) bool {
+        if (self.samples.items.len > 0) return true;
+        for (self.task_profiles.items) |tp| {
+            if (tp.samples.items.len > 0) return true;
+        }
+        return false;
+    }
+
+    /// Run one containment pass over `samples` and fold the per-word counters
+    /// into `map`.
     ///
     /// Self-time is the per-call duration minus the sum of direct child
-    /// durations, computed by a single forward pass with an "available
-    /// siblings" stack. Samples are appended at dispatch end, so a parent
-    /// always appears after all its descendants in the buffer; the parent's
-    /// direct children are the contiguous suffix of the stack whose
-    /// `[start_ns, end_ns]` falls inside the parent's window.
-    pub fn aggregate(
-        self: *const ProfileStats,
+    /// durations. Samples are appended at dispatch end, so a parent always
+    /// appears after all its descendants; the parent's direct children are the
+    /// contiguous suffix of the stack whose `[start_ns, end_ns]` falls inside the
+    /// parent's window. The stack is local to this pass, so each buffer must be
+    /// aggregated on its own: containment only holds within one task's timeline.
+    fn aggregateInto(
+        map: *std.StringHashMapUnmanaged(WordAggregate),
         alloc: std.mem.Allocator,
-    ) !std.StringHashMapUnmanaged(WordAggregate) {
-        var map: std.StringHashMapUnmanaged(WordAggregate) = .{};
-        errdefer map.deinit(alloc);
-
+        samples: []const ProfileSample,
+    ) !void {
         // Stack of indices into `samples` that have not yet been claimed
         // as a child of a later parent sample.
         var stack: std.ArrayListUnmanaged(usize) = .{};
         defer stack.deinit(alloc);
 
-        for (self.samples.items, 0..) |s, i| {
+        for (samples, 0..) |s, i| {
             const total_ns = s.end_ns - s.start_ns;
             var child_sum_ns: i128 = 0;
 
             while (stack.items.len > 0) {
                 const top_idx = stack.items[stack.items.len - 1];
-                const top = self.samples.items[top_idx];
+                const top = samples[top_idx];
                 const contained = top.start_ns >= s.start_ns and top.end_ns <= s.end_ns;
                 if (!contained) break;
                 child_sum_ns += top.end_ns - top.start_ns;
@@ -108,7 +140,33 @@ pub const ProfileStats = struct {
 
             try stack.append(alloc, i);
         }
+    }
 
+    /// Aggregate per-word counters over the main-context buffer.
+    /// Caller owns the returned map and must call `deinit` on it.
+    pub fn aggregate(
+        self: *const ProfileStats,
+        alloc: std.mem.Allocator,
+    ) !std.StringHashMapUnmanaged(WordAggregate) {
+        var map: std.StringHashMapUnmanaged(WordAggregate) = .{};
+        errdefer map.deinit(alloc);
+        try aggregateInto(&map, alloc, self.samples.items);
+        return map;
+    }
+
+    /// Aggregate the main-context buffer together with every drained task buffer.
+    /// Each buffer contributes its own containment pass; the per-word counters
+    /// sum across all of them, keyed by word name. Caller owns the returned map.
+    pub fn aggregateWholeProgram(
+        self: *const ProfileStats,
+        alloc: std.mem.Allocator,
+    ) !std.StringHashMapUnmanaged(WordAggregate) {
+        var map: std.StringHashMapUnmanaged(WordAggregate) = .{};
+        errdefer map.deinit(alloc);
+        try aggregateInto(&map, alloc, self.samples.items);
+        for (self.task_profiles.items) |tp| {
+            try aggregateInto(&map, alloc, tp.samples.items);
+        }
         return map;
     }
 
@@ -132,9 +190,9 @@ pub const ProfileStats = struct {
         writer: anytype,
         top_n: usize,
     ) !void {
-        if (self.samples.items.len == 0) return;
+        if (!self.hasSamples()) return;
 
-        var map = try self.aggregate(alloc);
+        var map = try self.aggregateWholeProgram(alloc);
         defer map.deinit(alloc);
 
         var rows: std.ArrayListUnmanaged(Row) = .{};
@@ -369,6 +427,13 @@ fn pushSample(stats: *ProfileStats, alloc: std.mem.Allocator, name: []const u8, 
     try stats.samples.append(alloc, .{ .name = name, .start_ns = start_ns, .end_ns = end_ns });
 }
 
+// Helper for task-buffer tests: append a sample whose name is owned by `alloc`,
+// mirroring how the drain dupes borrowed names onto a longer-lived allocator.
+fn addTaskSample(tp: *TaskProfile, alloc: std.mem.Allocator, name: []const u8, start_ns: i128, end_ns: i128) !void {
+    const owned = try alloc.dupe(u8, name);
+    try tp.samples.append(alloc, .{ .name = owned, .start_ns = start_ns, .end_ns = end_ns });
+}
+
 test "aggregate over empty buffer returns empty map" {
     const alloc = std.testing.allocator;
     var stats: ProfileStats = .{};
@@ -518,6 +583,62 @@ test "formatHuman top_n caps the number of rows" {
     // "c" is the smallest by total_ns, so it should not appear when top_n=2.
     try std.testing.expect(std.mem.indexOf(u8, out, " c ") == null);
     try std.testing.expect(std.mem.indexOf(u8, out, "(top 2 by total time)") != null);
+}
+
+test "aggregateWholeProgram sums main and task buffers by word" {
+    const alloc = std.testing.allocator;
+    var stats: ProfileStats = .{};
+    defer stats.deinit(alloc);
+
+    // The main context ran `+` once.
+    try pushSample(&stats, alloc, "+", 0, 100);
+
+    // A drained task ran `+` again and `dup` once.
+    var tp: TaskProfile = .{ .task_id = 7, .worker_id = 1 };
+    tp.task_name = try alloc.dupe(u8, "worker");
+    try addTaskSample(&tp, alloc, "+", 200, 260);
+    try addTaskSample(&tp, alloc, "dup", 300, 320);
+    try stats.task_profiles.append(alloc, tp);
+
+    var map = try stats.aggregateWholeProgram(alloc);
+    defer map.deinit(alloc);
+
+    const plus = map.get("+") orelse unreachable;
+    try std.testing.expectEqual(@as(u64, 2), plus.calls);
+    try std.testing.expectEqual(@as(i128, 160), plus.total_ns);
+
+    const d = map.get("dup") orelse unreachable;
+    try std.testing.expectEqual(@as(u64, 1), d.calls);
+    try std.testing.expectEqual(@as(i128, 20), d.total_ns);
+}
+
+test "formatHuman renders a word that only ran in a task buffer" {
+    const alloc = std.testing.allocator;
+    var stats: ProfileStats = .{};
+    defer stats.deinit(alloc);
+
+    // The main context recorded nothing; only a task did.
+    var tp: TaskProfile = .{ .task_id = 3 };
+    try addTaskSample(&tp, alloc, "handler", 0, 1_000_000);
+    try stats.task_profiles.append(alloc, tp);
+
+    var buf: [1024]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&buf);
+    try stats.formatHuman(alloc, stream.writer(), 20);
+    const out = stream.getWritten();
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "=== Word Profile") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "handler") != null);
+}
+
+test "TaskProfile.deinit frees duped names and task name" {
+    const alloc = std.testing.allocator;
+    var tp: TaskProfile = .{ .task_id = 1, .worker_id = 2 };
+    tp.task_name = try alloc.dupe(u8, "t1");
+    try addTaskSample(&tp, alloc, "+", 0, 10);
+    try addTaskSample(&tp, alloc, "dup", 20, 30);
+    tp.deinit(alloc);
+    // The testing allocator asserts no leak when the test ends.
 }
 
 /// Resolve a function's id by looking its name up in the built string table.

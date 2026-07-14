@@ -12,6 +12,8 @@ const ProcessWaitHandle = @import("multiplexer.zig").ProcessWaitHandle;
 const processWaitHandleKey = @import("multiplexer.zig").processWaitHandleKey;
 const trace = @import("trace.zig");
 const value_mod = @import("value.zig");
+const profile = @import("profile.zig");
+const ProfileStats = profile.ProfileStats;
 
 const is_freestanding = builtin.os.tag == .freestanding;
 
@@ -196,6 +198,17 @@ pub const Scheduler = struct {
     /// Clock mode.
     clock: ClockMode = .real,
     peak_task_stack_usage: usize = 0,
+    /// Profile buffers drained from this worker's reaped task Contexts, one per
+    /// task. Only the owning worker appends here (in `reapTask`), so no lock is
+    /// needed. Folded into `profile_sink` at teardown in `deinit`.
+    drained_task_profiles: std.ArrayListUnmanaged(profile.TaskProfile) = .{},
+    /// Fold target for `drained_task_profiles` at teardown, the main context's
+    /// buffer. Null on standalone schedulers and when `--profile` is off; those
+    /// drained buffers are freed instead of merged.
+    profile_sink: ?*ProfileStats = null,
+    /// Owning worker's id, captured into each drained buffer's label. Zero on
+    /// the primary worker and on standalone schedulers.
+    worker_id: usize = 0,
     /// Type-erased back-pointer to the owning `Worker`. Null on standalone
     /// schedulers used in tests. Erased to break a circular import between
     /// `worker.zig` and this file. Paired with `ops` for invoking worker
@@ -237,6 +250,23 @@ pub const Scheduler = struct {
             self.reapTask(t);
         }
         self.finished_tasks.deinit(self.allocator);
+
+        // The reap loop above has drained every remaining tracked task into
+        // `drained_task_profiles`. This is the single-threaded teardown fold:
+        // move each buffer into the main context's sink, or free it when there
+        // is no sink. A standalone scheduler and a run with profiling off both
+        // have no sink.
+        for (self.drained_task_profiles.items) |*tp| {
+            if (self.profile_sink) |sink| {
+                sink.task_profiles.append(self.allocator, tp.*) catch {
+                    tp.deinit(self.allocator);
+                };
+            } else {
+                tp.deinit(self.allocator);
+            }
+        }
+        self.drained_task_profiles.deinit(self.allocator);
+
         for (self.channels.items) |ch| {
             ch.deinit();
             self.allocator.destroy(ch);
@@ -327,11 +357,57 @@ pub const Scheduler = struct {
     /// on the owning worker for a detached task at its own completion, and
     /// for tracked tasks at `deinit`.
     fn reapTask(self: *Scheduler, task: *Task) void {
+        self.drainTaskProfile(task);
         task_mod.coroDestroy(task);
         task_mod.releaseTaskResult(task);
         task.ctx.deinit();
         self.allocator.destroy(task.ctx);
         self.allocator.destroy(task);
+    }
+
+    /// Copy a reaped task's profile samples into this worker's collection before
+    /// the Context is freed.
+    ///
+    /// A `ProfileSample.name` and `task.name` are borrowed slices into
+    /// dictionary/arena bytes that `task.ctx.deinit` frees, so both are duped
+    /// onto `self.allocator`, which outlives the reduction. Labels are captured
+    /// here because the drain is the only point where the task's id, name, and
+    /// owning worker are all still reachable. A no-op when the task carries no
+    /// owned profile buffer, which is the case with profiling off, or recorded
+    /// nothing.
+    fn drainTaskProfile(self: *Scheduler, task: *Task) void {
+        if (!task.ctx.profile_owned) return;
+        const src = task.ctx.profile orelse return;
+        if (src.samples.items.len == 0) return;
+
+        var drained: profile.TaskProfile = .{
+            .task_id = task.id,
+            .worker_id = self.worker_id,
+        };
+
+        if (task.name) |name| {
+            drained.task_name = self.allocator.dupe(u8, name) catch null;
+        }
+
+        drained.samples.ensureTotalCapacity(self.allocator, src.samples.items.len) catch {
+            drained.deinit(self.allocator);
+            return;
+        };
+        for (src.samples.items) |s| {
+            const owned = self.allocator.dupe(u8, s.name) catch {
+                drained.deinit(self.allocator);
+                return;
+            };
+            drained.samples.appendAssumeCapacity(.{
+                .name = owned,
+                .start_ns = s.start_ns,
+                .end_ns = s.end_ns,
+            });
+        }
+
+        self.drained_task_profiles.append(self.allocator, drained) catch {
+            drained.deinit(self.allocator);
+        };
     }
 
     /// Remove a completed task from `finished_tasks` before it's reaped early at scope exit.
@@ -1370,4 +1446,113 @@ test "nextId is unique under concurrent access" {
         try std.testing.expect(!gop.found_existing);
     }
     try std.testing.expectEqual(@as(usize, thread_count * per_thread), seen.count());
+}
+
+test "drainTaskProfile copies samples into the worker collection with labels" {
+    const alloc = std.testing.allocator;
+    const Context = @import("context.zig").Context;
+
+    var sink: ProfileStats = .{};
+    defer sink.deinit(alloc);
+
+    var sched = try Scheduler.init(alloc);
+    sched.profile_sink = &sink;
+    sched.worker_id = 2;
+
+    // A task Context that owns a profile buffer with one recorded dispatch.
+    var ctx = Context.init(alloc);
+    const pstats = try alloc.create(ProfileStats);
+    pstats.* = .{};
+    ctx.profile = pstats;
+    ctx.profile_owned = true;
+    pstats.recordWordStart(alloc);
+    pstats.recordWordEnd(alloc, "spawned-word");
+
+    var task: Task = .{
+        .id = 42,
+        .name = "job",
+        .status = std.atomic.Value(TaskStatus).init(.completed),
+        .ctx = &ctx,
+        .scope = undefined,
+        .quotation = undefined,
+    };
+
+    sched.drainTaskProfile(&task);
+
+    try std.testing.expectEqual(@as(usize, 1), sched.drained_task_profiles.items.len);
+    const dp = sched.drained_task_profiles.items[0];
+    try std.testing.expectEqual(@as(u64, 42), dp.task_id);
+    try std.testing.expectEqual(@as(usize, 2), dp.worker_id);
+    try std.testing.expectEqualStrings("job", dp.task_name.?);
+    try std.testing.expectEqual(@as(usize, 1), dp.samples.items.len);
+    try std.testing.expectEqualStrings("spawned-word", dp.samples.items[0].name);
+    // The drained name is a distinct allocation, not the source slice.
+    try std.testing.expect(dp.samples.items[0].name.ptr != pstats.samples.items[0].name.ptr);
+
+    // Free the source Context and its owned buffer; the drained copy stays valid.
+    ctx.deinit();
+
+    // Teardown folds the collection into the sink.
+    sched.deinit();
+    try std.testing.expectEqual(@as(usize, 1), sink.task_profiles.items.len);
+    try std.testing.expectEqualStrings(
+        "spawned-word",
+        sink.task_profiles.items[0].samples.items[0].name,
+    );
+}
+
+test "Scheduler.deinit frees drained task profiles when no sink is set" {
+    const alloc = std.testing.allocator;
+    const Context = @import("context.zig").Context;
+
+    var sched = try Scheduler.init(alloc);
+
+    var ctx = Context.init(alloc);
+    const pstats = try alloc.create(ProfileStats);
+    pstats.* = .{};
+    ctx.profile = pstats;
+    ctx.profile_owned = true;
+    pstats.recordWordStart(alloc);
+    pstats.recordWordEnd(alloc, "detached-word");
+
+    var task: Task = .{
+        .id = 7,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.completed),
+        .ctx = &ctx,
+        .scope = undefined,
+        .quotation = undefined,
+    };
+
+    sched.drainTaskProfile(&task);
+    try std.testing.expectEqual(@as(usize, 1), sched.drained_task_profiles.items.len);
+
+    ctx.deinit();
+
+    // No sink: teardown frees the drained buffers. The testing allocator asserts
+    // no leak or double-free at test end.
+    sched.deinit();
+}
+
+test "drainTaskProfile is a no-op when the task carries no owned profile" {
+    const alloc = std.testing.allocator;
+    const Context = @import("context.zig").Context;
+
+    var sched = try Scheduler.init(alloc);
+    defer sched.deinit();
+
+    var ctx = Context.init(alloc);
+    defer ctx.deinit();
+
+    var task: Task = .{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(TaskStatus).init(.completed),
+        .ctx = &ctx,
+        .scope = undefined,
+        .quotation = undefined,
+    };
+
+    sched.drainTaskProfile(&task);
+    try std.testing.expectEqual(@as(usize, 0), sched.drained_task_profiles.items.len);
 }
