@@ -21,6 +21,10 @@
 # connection mode is measured at concurrency 1 and 20, so a reader can see
 # throughput scale with concurrency.
 #
+# Each cell runs five times and the median run by throughput is reported, with its
+# latency percentile line. The interpreter mode varies enough run to run that a
+# single pass cannot rank the modes.
+#
 # Requires ApacheBench (`ab`), which ships with macOS.
 #
 # Usage:
@@ -40,13 +44,23 @@ OUT="${1:-${REPO_ROOT}/http-static-bench-results.txt}"
 BIN="${REPO_ROOT}/zig-out/bin/1z"
 
 # Benchmark knobs.
-WARMUP_N=200           # Discarded per measured run; warms up at that run's concurrency.
-MEASURE_N=5000         # Sustained: well past the ~900-connection point where the
-                       # old leak used to die, so a clean run proves bounded memory.
+WARMUP_N=400           # Discarded per measured run; warms up at that run's concurrency.
+REPS=5                 # Runs per cell; the median run by throughput is reported. The
+                       # interpreter mode varies run to run, so a single pass cannot
+                       # rank the modes.
+MEASURE_N_C1=4000      # Serial runs are slower, so fewer requests still run long.
+MEASURE_N_C20=8000     # Concurrent runs are long on purpose, well past the point
+                       # where the old per-connection leak used to exhaust memory.
 MEASURE_CONCS="1 20"   # Each connection mode is measured at each of these.
-MAX_MEMORY=256M        # Bounded. The per-connection leak is fixed, so the default
-                       # cap holds for interpreter/JIT. AOT binaries ignore this
-                       # flag (it is a driver flag); their memory is shown via RSS.
+MAX_MEMORY=256M        # Bounded. The per-connection leak is fixed, so the cap holds
+                       # for interpreter/JIT. AOT binaries ignore this driver flag;
+                       # their memory is shown via RSS.
+
+# Request count for a concurrency level. Serial runs get fewer requests because
+# they are slower per request.
+measure_n_for() {
+  [ "$1" = "1" ] && echo "${MEASURE_N_C1}" || echo "${MEASURE_N_C20}"
+}
 
 command -v ab >/dev/null 2>&1 || { echo "error: ApacheBench (ab) not found" >&2; exit 1; }
 
@@ -74,11 +88,12 @@ trap cleanup EXIT
   echo "ab:          $(ab -V 2>&1 | head -1)"
   echo "Doc size:    $(wc -c < "${DOCROOT}/index.html") bytes"
   echo "Warmup:      -n ${WARMUP_N} (discarded)"
-  echo "Measured:    -n ${MEASURE_N} -c ${MEASURE_CONCS// /,}"
+  echo "Measured:    ${REPS} runs/cell, median by req/s; -n ${MEASURE_N_C1} at c=1, -n ${MEASURE_N_C20} at c=20"
   echo "Max memory:  ${MAX_MEMORY} (interpreter/JIT; AOT is uncapped, see RSS)"
+  echo "Latency:     p50/p90/p95/p99/max in ms, from the median run"
   echo
-  printf '%-10s %-10s %4s %14s %18s %14s %10s\n' "mode" "conn" "c" "req/s" "ms/req(concurrent)" "p50(ms)" "RSS(MB)"
-  printf '%-10s %-10s %4s %14s %18s %14s %10s\n' "----" "----" "-" "-----" "------------------" "-------" "-------"
+  printf '%-10s %-10s %4s %8s %5s %5s %5s %5s %6s %8s\n' "mode" "conn" "c" "req/s" "p50" "p90" "p95" "p99" "max" "RSS(MB)"
+  printf '%-10s %-10s %4s %8s %5s %5s %5s %5s %6s %8s\n' "----" "----" "-" "-----" "---" "---" "---" "---" "---" "-------"
 } >> "${OUT}"
 
 # Launch an interpreter/JIT server. Sets SERVER_PID.
@@ -97,26 +112,42 @@ launch_aot() {
   SERVER_PID=$!
 }
 
-# Run one measured ab load, sample RSS, and record one row. AB_FLAGS is empty for
+# Run REPS measured ab passes for one cell, then record the median run by req/s
+# with its full percentile line and the steady-state RSS. AB_FLAGS is empty for
 # the close-per-request baseline and "-k" for keep-alive. CONC is the concurrency
 # passed to `ab -c`. Assumes SERVER_PID is a running server; does not stop it.
 record_row() {
   local label="$1" conn="$2" ab_flags="$3" port="$4" conc="$5"
+  local n; n="$(measure_n_for "${conc}")"
 
-  local report
-  report="$(ab ${ab_flags} -n "${MEASURE_N}" -c "${conc}" "http://127.0.0.1:${port}/" 2>/dev/null)"
+  # One line per rep: "req/s p50 p90 p95 p99 max".
+  local runs; runs="$(mktemp)"
+  local i
+  for i in $(seq 1 "${REPS}"); do
+    ab ${ab_flags} -n "${n}" -c "${conc}" "http://127.0.0.1:${port}/" 2>/dev/null | awk '
+      /Requests per second/ {rps=$4}
+      $1=="50%"  {p50=$2}
+      $1=="90%"  {p90=$2}
+      $1=="95%"  {p95=$2}
+      $1=="99%"  {p99=$2}
+      $1=="100%" {p100=$2}
+      END {printf "%.0f %s %s %s %s %s\n", rps, p50, p90, p95, p99, p100}
+    ' >> "${runs}"
+  done
 
-  # Steady-state RSS of the server after the sustained run (KB on macOS -> MB).
+  # Median run by req/s: sort numerically on the first field, take the middle line.
+  local median; median="$(sort -n "${runs}" | sed -n "$(( (REPS + 1) / 2 ))p")"
+  rm -f "${runs}"
+
+  # Steady-state RSS of the server after the cell (KB on macOS -> MB).
   local rss_kb rss_mb
   rss_kb="$(ps -o rss= -p "${SERVER_PID}" 2>/dev/null | tr -d ' ' || true)"
   rss_mb=$(( ${rss_kb:-0} / 1024 ))
 
-  local rps mspr p50
-  rps="$(echo "${report}"  | awk '/Requests per second/ {print $4}')"
-  mspr="$(echo "${report}" | awk '/across all concurrent/ {print $4}')"
-  p50="$(echo "${report}"  | awk '/^  50%/ {print $2}')"
-
-  printf '%-10s %-10s %4s %14s %18s %14s %10s\n' "${label}" "${conn}" "${conc}" "${rps}" "${mspr}" "${p50}" "${rss_mb}" >> "${OUT}"
+  local rps p50 p90 p95 p99 pmax
+  read -r rps p50 p90 p95 p99 pmax <<< "${median}"
+  printf '%-10s %-10s %4s %8s %5s %5s %5s %5s %6s %8s\n' \
+    "${label}" "${conn}" "${conc}" "${rps}" "${p50}" "${p90}" "${p95}" "${p99}" "${pmax}" "${rss_mb}" >> "${OUT}"
 }
 
 # Warm up, then measure the 2x2 matrix against the same running server: both
@@ -156,7 +187,7 @@ record_status_rows() {
   local label="$1" status="$2" conn conc
   for conn in close keepalive; do
     for conc in ${MEASURE_CONCS}; do
-      printf '%-10s %-10s %4s %14s %18s %14s %10s\n' "${label}" "${conn}" "${conc}" "${status}" "n/a" "n/a" "n/a" >> "${OUT}"
+      printf '%-10s %-10s %4s %8s %5s %5s %5s %5s %6s %8s\n' "${label}" "${conn}" "${conc}" "${status}" "n/a" "n/a" "n/a" "n/a" "n/a" "n/a" >> "${OUT}"
     done
   done
 }

@@ -34,87 +34,119 @@ so the table shows how throughput scales with concurrency.
 
 Each mode is measured against the same 23-byte `index.html`:
 
-- Warmup: `ab -n 200`, discarded, at the same concurrency as the run it precedes.
+- Warmup: `ab -n 400`, discarded, at the same concurrency as the run it precedes.
   This lets the JIT modes reach steady state. The keep-alive run gets its own
   `ab -k` warmup.
-- Measured: `ab -n 5000` at `-c 1` and again at `-c 20`, each also with `-k`. The
-  run is long on purpose. It runs well past the point where the old leak used to
-  exhaust memory, so a clean run is itself evidence of bounded memory.
-- `--max-memory=256M` on the interpreter and JIT modes. The per-connection leak
-  is fixed, so the default cap holds. AOT binaries ignore this driver flag; their
-  memory is shown via RSS.
-- Steady-state RSS is sampled after each measured run. A leak would show as a
-  large resident set rather than the few tens of megabytes below.
+- Measured: five runs per cell, of which the median run by throughput is reported.
+  The interpreter mode varies enough run to run that a single pass cannot rank the
+  modes. Each run is `ab -n 8000` at `-c 20` and `ab -n 4000` at `-c 1`, each also
+  with `-k`. The runs are long on purpose, well past the point where the old leak
+  used to exhaust memory.
+- The tail-latency table reports the percentile line of that same median run.
+- `--max-memory=256M` on the interpreter and JIT modes. The per-connection leak is
+  fixed, so the cap holds. AOT binaries ignore this driver flag.
+- Resident memory is sampled after each cell. A leak would show as a set that
+  climbs cell over cell rather than settling.
 
 Every mode restarts the server fresh. Numbers are one machine, one session, so
 treat small differences as noise.
 
 ## Results
 
-Apple Silicon (arm64), macOS 25.5.0, 14 logical cores:
+Apple Silicon (arm64), macOS 25.5.0, 14 logical cores. Each number is the median
+of five runs.
 
-| Mode               | Conn       |  c | req/s | ms/req (concurrent) | p50 (ms) | RSS (MB) |
-|--------------------|------------|----|-------|---------------------|----------|----------|
-| `--compile=off`    | close      |  1 |   421 | 2.38                |        3 |       45 |
-| `--compile=off`    | close      | 20 |  2800 | 0.36                |        7 |      137 |
-| `--compile=off`    | keep-alive |  1 |   650 | 1.54                |        1 |       52 |
-| `--compile=off`    | keep-alive | 20 |  2742 | 0.37                |        5 |      208 |
-| `--compile=hybrid` | close      |  1 |   888 | 1.13                |        1 |       42 |
-| `--compile=hybrid` | close      | 20 |  2503 | 0.40                |        7 |      127 |
-| `--compile=hybrid` | keep-alive |  1 |  1034 | 0.97                |        1 |       48 |
-| `--compile=hybrid` | keep-alive | 20 |  2476 | 0.40                |        6 |      184 |
-| `--compile=eager`  | close      |  1 |   917 | 1.09                |        1 |       51 |
-| `--compile=eager`  | close      | 20 |  2393 | 0.42                |        8 |      136 |
-| `--compile=eager`  | keep-alive |  1 |  1052 | 0.95                |        1 |       55 |
-| `--compile=eager`  | keep-alive | 20 |  1683 | 0.59                |        8 |      189 |
-| `aot`              | close      |  1 |  1106 | 0.90                |        1 |       28 |
-| `aot`              | close      | 20 |  2789 | 0.36                |        7 |      102 |
-| `aot`              | keep-alive |  1 |  1078 | 0.93                |        1 |       39 |
-| `aot`              | keep-alive | 20 |  2172 | 0.46                |        7 |      193 |
+### Throughput
 
-Every mode serves the full 5000-request run bounded, under both connection modes
-and both concurrency levels. Close-per-request resident memory ranges from a few
-tens of megabytes at concurrency 1 to about 100 to 140 MB at concurrency 20, well
-under the 256 MB cap. Keep-alive at concurrency 20 holds 20 long-lived
-connections open and carries a higher resident set (184 to 208 MB on the
-interpreter and JIT modes) but stays bounded. The AOT binary carries the smallest
-close-mode footprint (28 to 102 MB).
+| Mode               | Conn       |  c | req/s |
+|--------------------|------------|----|-------|
+| `--compile=off`    | close      |  1 |   968 |
+| `--compile=off`    | close      | 20 |  2369 |
+| `--compile=off`    | keep-alive |  1 |  1057 |
+| `--compile=off`    | keep-alive | 20 |  1636 |
+| `--compile=hybrid` | close      |  1 |   930 |
+| `--compile=hybrid` | close      | 20 |  2374 |
+| `--compile=hybrid` | keep-alive |  1 |  1054 |
+| `--compile=hybrid` | keep-alive | 20 |  1722 |
+| `--compile=eager`  | close      |  1 |   927 |
+| `--compile=eager`  | close      | 20 |  2312 |
+| `--compile=eager`  | keep-alive |  1 |  1054 |
+| `--compile=eager`  | keep-alive | 20 |  1673 |
+| `aot`              | close      |  1 |  1127 |
+| `aot`              | close      | 20 |  2697 |
+| `aot`              | keep-alive |  1 |  1050 |
+| `aot`              | keep-alive | 20 |  2139 |
 
-## Conclusion: compilation helps the serial path; concurrency closes the gap
+### Tail latency at concurrency 20
 
-On release the server serves hundreds to about 2800 requests per second, not the
-50 an earlier version of this document reported. That 50 was the debug safety
-allocator taking a global lock per allocation, which serialized every worker. It
-was never interpreter dispatch. Building release removes that lock, and every
-mode speeds up by more than an order of magnitude.
+Percentiles are milliseconds, from the median run of each cell. At concurrency 1
+every percentile rounds to 1 ms, so only the concurrency-20 cells appear here.
 
-The clear, reproducible signal is at concurrency 1, where requests run serially.
-There compilation pays. The interpreter serves 421 req/s close, JIT hybrid and
-eager about 890 to 920, and AOT 1106. AOT is about 2.6 times the interpreter
-serially. This is the per-request interpreter dispatch that compiling to native
-removes.
+| Mode               | Conn       | p50 | p90 | p95 | p99 |  max |
+|--------------------|------------|-----|-----|-----|-----|------|
+| `--compile=off`    | close      |   8 |  11 |  12 |  14 |   27 |
+| `--compile=off`    | keep-alive |   9 |  19 |  28 |  80 |  304 |
+| `--compile=hybrid` | close      |   8 |  11 |  12 |  14 |   24 |
+| `--compile=hybrid` | keep-alive |   8 |  15 |  23 | 135 |  294 |
+| `--compile=eager`  | close      |   8 |  11 |  12 |  15 |   25 |
+| `--compile=eager`  | keep-alive |   9 |  18 |  26 | 118 |  290 |
+| `aot`              | close      |   7 |  10 |  11 |  14 |   25 |
+| `aot`              | keep-alive |   7 |  15 |  18 |  64 |  256 |
 
-At concurrency 20 the modes converge. Close-per-request lands between 2393 and
-2800 req/s across all four modes, with the interpreter (2800) and AOT (2789) tied
-at the top and the JIT modes a little behind, all within run-to-run noise. The
-serial dispatch advantage disappears. At 20 concurrent connections the serve path
-is bound by the shared accept, spawn, and syscall work, not by per-request
-interpreter overhead, so removing that overhead buys nothing.
+Resident memory stayed bounded across the whole matrix. Close-mode cells settled
+in the tens to low hundreds of megabytes. The heaviest cell, AOT keep-alive at
+concurrency 20, peaked near 390 MB of process RSS, with the 1z heap capped at
+256 MB on the interpreter and JIT modes. Nothing climbed cell over cell, which is
+the signature the old per-request leak used to show.
+
+## Conclusion: AOT wins a steady margin; the JIT does not; keep-alive trades throughput for a tail
+
+On release the server serves about 930 to 1130 req/s serially and, at concurrency
+20, about 2300 to 2700 close, not the 50 an earlier version of this document
+reported. That 50 was the debug safety allocator taking a global lock per
+allocation, which serialized every worker. Building release removes the lock.
+Every mode speeds up by more than an order of magnitude.
+
+AOT is the one mode that helps, by a steady margin at both concurrencies. On the
+median-of-five numbers it beats the interpreter about 16 percent serially (1127
+vs 968) and about 14 percent at concurrency 20 (2697 vs 2369). That margin is the
+per-request native dispatch AOT removes ahead of time. It does not wash out under
+load.
+
+The JIT does not help. Hybrid and eager track the interpreter, and at concurrency
+1 they sit just below it (930 and 927 versus 968). The serve path lives on a
+short-lived per-connection task. The JIT has little chance to run a word often
+enough to amortize compiling it. Only ahead-of-time compilation pays here.
+
+Throughput scales about 2.4x from one connection to twenty for every mode. That
+scaling is what the debug allocator lock used to hide. The lock pinned every mode
+near 50 req/s regardless of concurrency, which is why the old conclusion mistook a
+lock-contention floor for interpreter cost.
+
+The concurrency ceiling is the server, not the benchmark client. Driving one
+server with two `ab -c 20` clients at once does not raise its total rate above a
+single client's (interpreter 2168 versus 2414, AOT 2477 versus 2670), so one `ab`
+already saturates it. The server burns about 11 of 14 cores at concurrency 20 yet
+delivers only about 2.4x its single-connection rate. It is CPU-bound on the
+per-request serve path and scales sub-linearly, so most of the added cores go to
+coordination overhead rather than throughput. Naming the exact contention needs a
+lock-aware profiler.
 
 So the old table was wrong on both axes. It understated throughput by more than
-an order of magnitude, and its claim that AOT beats the interpreter by about 60
-percent was a debug artifact. The honest picture is narrower. Compiling helps a
-serial client and does nothing for a saturated one.
+an order of magnitude, and its 60 percent AOT figure was a debug artifact. The
+honest AOT margin is about 15 percent.
 
-Keep-alive helps only the serial client. At concurrency 1 reusing the connection
-raises throughput for every interpreted and JIT mode (interpreter 650 vs 421,
-hybrid 1034 vs 888, eager 1052 vs 917), because it skips the per-request
-handshake and task spawn. AOT alone is flat there. At concurrency 20 the benefit
-is gone. The interpreter and hybrid land within a couple percent of their close
-numbers, but the eager and AOT modes drop 20 to 30 percent (eager 1683 vs 2393,
-AOT 2172 vs 2789). Once the machine is saturated, holding 20 long-lived
-connections open buys nothing over the accept path it replaces, and on this run
-it cost the two most-compiled modes the most.
+Keep-alive splits by concurrency. At concurrency 1 reusing the connection helps
+the interpreter and JIT modes a little (interpreter 1057 vs 968, eager 1054 vs
+927), because it skips the per-request handshake and task spawn. AOT is flat
+there. At concurrency 20 keep-alive costs every mode 20 to 31 percent of its close
+throughput. The cost is not a slower typical request. The keep-alive median
+matches close, around 7 to 9 ms. It is a fat tail. p99 jumps from close's 14 to
+15 ms to 64 to 135 ms, and the worst request stretches to 256 to 304 ms. A small
+fraction of requests on reused connections stall, and those stalls, not the
+median, lower the rate. The stall sits in the wait for the next request on a live
+connection. That is where the idle-read timeout the Defects section describes
+arms, once per reused request, so it is the likely culprit.
 
 ## Defects found
 
