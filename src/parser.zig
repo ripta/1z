@@ -254,7 +254,10 @@ fn executeParseTimeWord(
                 saved_doc_count += 1;
             },
             else => {
-                c.stack.push(instr.op.push_literal) catch return ParseError.OutOfMemory;
+                // The trailing instruction is truncated in step 3, so its
+                // owning reference moves into the stack slot rather than
+                // retaining a second one that nothing would ever release.
+                c.stack.pushMoved(instr.op.push_literal) catch return ParseError.OutOfMemory;
                 pushed_count += 1;
             },
         }

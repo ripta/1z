@@ -285,7 +285,7 @@ fn hashToStructHelper(ctx: *Context) anyerror!void {
 
     const field_values = try alloc.alloc(Value, st.fields.len);
     for (st.fields, 0..) |field, i| {
-        if (hash.get(field)) |val| {
+        if (hash.map.get(field)) |val| {
             if (st.field_types.len != 0) {
                 const expected = st.field_types[i] orelse unreachable;
                 if (!try protocols.valueMatchesElement(ctx, val, expected)) {
@@ -409,11 +409,10 @@ fn structInstanceDestructureHelper(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( instance struct-type -- hash )
 fn structInstanceToHashHelper(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
     const st = try helpers.popStructType(ctx);
     const inst = try helpers.popStructInstance(ctx);
-    // The instance was popped (moved) here; release it once the hash has been
-    // pushed (push retains every value it stores).
+    // The instance was popped (moved) here; release it once the hash holds
+    // its own references to the field values.
     defer container_backing.releaseValue(.{ .struct_instance = inst });
 
     if (inst.struct_type != st) {
@@ -421,13 +420,20 @@ fn structInstanceToHashHelper(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     }
 
-    const hash = try alloc.create(value_mod.HashTable);
-    hash.* = .{};
+    const hash = try value_mod.HashTable.create(ctx.allocator);
+    errdefer hash.header.release();
+    const hash_alloc = hash.header.allocator;
     for (st.fields, 0..) |field, i| {
-        try hash.put(alloc, field, inst.fields[i]);
+        const key_copy = try hash_alloc.dupe(u8, field);
+        container_backing.retainValue(inst.fields[i]);
+        hash.map.put(hash_alloc, key_copy, inst.fields[i]) catch {
+            hash_alloc.free(key_copy);
+            container_backing.releaseValue(inst.fields[i]);
+            return error.OutOfMemory;
+        };
     }
 
-    try ctx.stack.push(.{ .hash = hash });
+    try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
 /// make-NAME: ( field1 field2 ... -- instance ) - positional constructor

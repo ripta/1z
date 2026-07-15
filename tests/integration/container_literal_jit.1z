@@ -8,32 +8,44 @@ use "testing" ;
 \ output plus zero leaks / no refcount underflow at shutdown.
 
 \ Bodies that push a refcounted container literal and consume it in-body.
-vec-len: ( -- n ) [ V{ 1 2 3 } #len ] ;
-map-get: ( -- v ) [ M{ a: 1 b: 2 } "a" @get ] ;
+vec-len:  ( -- n ) [ V{ 1 2 3 } #len ] ;
+map-get:  ( -- v ) [ M{ a: 1 b: 2 } "a" @get ] ;
+hash-get: ( -- v ) [ H{ a: 1 b: 2 } "a" @get ] ;
 
 \ dup of a container literal: exercises the clone retain and the drop
 \ release on the compiled path.
 vec-twice-len: ( -- n ) [ V{ 1 2 } dup #len swap #len + ] ;
 
 \ Container literal pushed then discarded in-body: exercises drop release.
-vec-drop: ( -- n ) [ V{ 9 8 7 } drop 42 ] ;
+vec-drop:  ( -- n ) [ V{ 9 8 7 } drop 42 ] ;
+hash-drop: ( -- n ) [ H{ x: 9 } drop 42 ] ;
+set-drop:  ( -- n ) [ S{ 9 8 } drop 42 ] ;
 
 vec-len 3 "vector literal body returns length 3" assert=
 map-get 1 "map literal body returns a:1" assert=
+hash-get 1 "hash literal body returns a:1" assert=
 vec-twice-len 4 "dup of vector literal sums both lengths" assert=
 vec-drop 42 "vector literal dropped in body, fixnum returned" assert=
+hash-drop 42 "hash literal dropped in body, fixnum returned" assert=
+set-drop 42 "set literal dropped in body, fixnum returned" assert=
 
 t vec-len: >word-info compiled?>> "vec-len is compiled" assert=
 t map-get: >word-info compiled?>> "map-get is compiled" assert=
+t hash-get: >word-info compiled?>> "hash-get is compiled" assert=
 t vec-twice-len: >word-info compiled?>> "vec-twice-len is compiled" assert=
 t vec-drop: >word-info compiled?>> "vec-drop is compiled" assert=
+t hash-drop: >word-info compiled?>> "hash-drop is compiled" assert=
+t set-drop: >word-info compiled?>> "set-drop is compiled" assert=
 
 \ Stress the compiled push/pop path: each call pushes a fresh refcounted
 \ literal and consumes it; the refcount must return to the dictionary
 \ baseline every iteration.
 2000 [ vec-len drop ] times
 2000 [ map-get drop ] times
+2000 [ hash-get drop ] times
 2000 [ vec-twice-len drop ] times
 2000 [ vec-drop drop ] times
+2000 [ hash-drop drop ] times
+2000 [ set-drop drop ] times
 
 "stress complete" print-line

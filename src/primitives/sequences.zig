@@ -286,13 +286,13 @@ fn nativeLenByteArray(ctx: *Context) anyerror!void {
 fn nativeLenSet(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    try ctx.stack.push(.{ .fixnum = @intCast(val.set.count()) });
+    try ctx.stack.push(.{ .fixnum = @intCast(val.set.map.count()) });
 }
 
 fn nativeLenHash(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    try ctx.stack.push(.{ .fixnum = @intCast(val.hash.count()) });
+    try ctx.stack.push(.{ .fixnum = @intCast(val.hash.map.count()) });
 }
 
 fn nativeLenMutableMap(ctx: *Context) anyerror!void {
@@ -748,6 +748,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
 pub fn nativeFirst(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "#first")) return;
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (val == .set) {
         setErrorContext(ctx, "sets do not support positional access", .{});
     } else {
@@ -760,6 +761,7 @@ pub fn nativeFirst(ctx: *Context) anyerror!void {
 pub fn nativeLast(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "#last")) return;
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (val == .set) {
         setErrorContext(ctx, "sets do not support positional access", .{});
     } else {
@@ -887,6 +889,10 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
 pub fn nativeReduce(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     var acc = try ctx.stack.pop(); // initial accumulator
+    // On any error unwind the local still owns the current accumulator's
+    // reference; without this the in-flight accumulator leaks when the
+    // quotation throws mid-fold.
+    errdefer container_backing.releaseValue(acc);
     const raw_seq = try ctx.stack.pop();
     defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
@@ -894,6 +900,7 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
 
     if (seq == .iterator) {
         while (try seq.iterator.next(ctx)) |elem| {
+            errdefer container_backing.releaseValue(elem);
             try ctx.stack.push(acc);
             try ctx.stack.push(elem);
             try ctx.executeQuotationWithFrame(quot);
@@ -931,6 +938,9 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
 pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     var acc = try ctx.stack.pop();
+    // Mirror of the `nativeReduce` errdefer: the local owns the in-flight
+    // accumulator's reference across the quotation call.
+    errdefer container_backing.releaseValue(acc);
     const raw_seq = try ctx.stack.pop();
     defer container_backing.releaseValue(raw_seq);
     const alloc = ctx.quotationAllocator();
@@ -939,6 +949,7 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
 
     if (seq == .iterator) {
         while (try seq.iterator.next(ctx)) |elem| {
+            errdefer container_backing.releaseValue(elem);
             try ctx.stack.push(acc);
             try ctx.stack.push(elem);
             try ctx.stack.push(.{ .fixnum = idx });
@@ -2176,7 +2187,7 @@ fn nativeIn(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .boolean = found });
         },
         .set => |set| {
-            const found = set.contains(elem);
+            const found = set.map.contains(elem);
             try ctx.stack.push(.{ .boolean = found });
         },
         else => {
@@ -2810,8 +2821,12 @@ fn nativeToArrayByteArray(ctx: *Context) anyerror!void {
 /// >array ( set -- array ) - Convert set to array in insertion order
 fn nativeToArraySet(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const alloc = ctx.quotationAllocator();
     const items = try sequenceToValues(val, alloc);
+    // Pushing the array retains each element through `retainValue`; that retain
+    // happens before the deferred source release below, so the snapshot keeps
+    // its own reference without an extra retain here.
     try ctx.stack.push(.{ .array = items });
 }
 
@@ -2824,6 +2839,7 @@ fn nativeToArrayArray(_: *Context) anyerror!void {
 fn nativeToArray(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">array")) return;
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     setErrorContext(ctx, ">array expected vector, byte-array, set, or array, got {s}", .{valueTypeName(val)});
     return error.TypeMismatch;
 }
@@ -2923,19 +2939,23 @@ fn nativeToHashMutableMap(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     const m = val.mutable_map;
-    const alloc = ctx.quotationAllocator();
-    const new_hash = alloc.create(HashTable) catch return error.OutOfMemory;
-    new_hash.* = HashTable{};
+    const new_hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer new_hash.header.release();
+    const hash_alloc = new_hash.header.allocator;
     var iter = m.map.iterator();
     while (iter.next()) |entry| {
-        const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
+        const key_copy = hash_alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
         // The hash becomes a fresh owner of each value; retain before the
         // mutable-map is released below so destroying it does not drop the last
         // reference to a refcounted value the hash still points at.
         container_backing.retainValue(entry.value_ptr.*);
-        new_hash.put(alloc, key_copy, entry.value_ptr.*) catch return error.OutOfMemory;
+        new_hash.map.put(hash_alloc, key_copy, entry.value_ptr.*) catch {
+            hash_alloc.free(key_copy);
+            container_backing.releaseValue(entry.value_ptr.*);
+            return error.OutOfMemory;
+        };
     }
-    try ctx.stack.push(.{ .hash = new_hash });
+    try ctx.stack.pushMoved(.{ .hash = new_hash });
 }
 
 /// >hash ( hash -- hash ) - Identity, no allocation

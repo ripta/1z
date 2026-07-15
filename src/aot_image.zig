@@ -546,7 +546,7 @@ test "classifyValue: quotation with type_val literal is structural" {
 }
 
 test "classifyValue: quotation with blob literal is blob" {
-    var ht = value_mod.HashTable{};
+    var ht = value_mod.HashTable{ .header = undefined };
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .hash = &ht } }, .line = 0, .column = 0 },
     };
@@ -555,7 +555,7 @@ test "classifyValue: quotation with blob literal is blob" {
 }
 
 test "classifyValue: hash is blob; mutable_map and empty vector are structural" {
-    var ht = value_mod.HashTable{};
+    var ht = value_mod.HashTable{ .header = undefined };
     try testing.expectEqual(ImagePath.blob, classifyValue(.{ .hash = &ht }).path);
     try testing.expectEqual(BlobReason.mutable_map, classifyValue(.{ .hash = &ht }).reason);
 
@@ -594,7 +594,7 @@ test "classifyValue: struct_instance with structural fields is structural" {
 
 test "classifyValue: struct_instance with a blob field is blob" {
     var st = value_mod.StructType{ .name = "rec", .fields = &.{"a"} };
-    var ht = value_mod.HashTable{};
+    var ht = value_mod.HashTable{ .header = undefined };
     var fields = [_]Value{.{ .hash = &ht }};
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
     const c = classifyValue(.{ .struct_instance = &si });
@@ -613,7 +613,7 @@ test "classifyValue: populated vector with structural elements is structural" {
 }
 
 test "classifyValue: vector with a blob element is blob" {
-    var ht = value_mod.HashTable{};
+    var ht = value_mod.HashTable{ .header = undefined };
     var elems = [_]Value{.{ .hash = &ht }};
     var vec = value_mod.Vector{ .header = undefined, .list = .{ .items = &elems, .capacity = elems.len } };
     const c = classifyValue(.{ .vector = &vec });
@@ -674,7 +674,7 @@ test "buildImageManifest: synthetic modules produce sorted, classified entries" 
     // A bare hash literal forces the blob path: dynamic-container
     // contents carry heap state that no static initializer can express.
     const blob_ht_ptr = try arena.create(value_mod.HashTable);
-    blob_ht_ptr.* = .{};
+    blob_ht_ptr.* = .{ .header = undefined };
     const blob_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .hash = blob_ht_ptr } }, .line = 0, .column = 0 },
     });
@@ -752,7 +752,7 @@ test "writeManifestDump: deterministic output" {
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
     const blob_ht_ptr = try arena.create(value_mod.HashTable);
-    blob_ht_ptr.* = .{};
+    blob_ht_ptr.* = .{ .header = undefined };
     const blob_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .hash = blob_ht_ptr } }, .line = 0, .column = 0 },
     });

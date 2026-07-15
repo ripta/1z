@@ -1,0 +1,51 @@
+use "testing" ;
+
+\ Cross-worker hash lifecycle under the refcounted header model.
+\
+\ A hash captured by a spawned child is shared by pointer, so the child's
+\ reads must stay valid and the parent's original must survive the child's
+\ exit. Channel send still deep-copies, so a received hash is independent
+\ of the sender's, including any nested mutable container.
+
+test-hash-read-in-child: ( -- ) [
+  H{ count: 41 }
+  dup
+  [
+    [ count: @get ] curry
+    spawn await
+    41 "child reads the shared hash" assert=
+  ] curry
+  task-scope
+  count: @get 41 "parent hash intact after child exit" assert=
+] ;
+
+test-hash-through-channel-isolated: ( -- ) [
+  [
+    <channel>  \ data channel: parent -> child
+    <channel>  \ ack channel:  child  -> parent
+    \ stack: data ack
+    2dup  \ data ack data ack
+    [
+      \ child body, stack on entry: data ack
+      swap receive                    \ ack hash'  (independent copy)
+      dup inner: @get 99 #push! drop  \ ack hash'  (mutated its nested vector)
+      swap send                       \ --         (send the copy back on ack)
+    ] curry curry spawn drop
+    \ stack: data ack
+    swap                         \ ack data
+    H{ } inner: V{ 1 2 3 } @set  \ ack data hash  (parent's original)
+    tuck                         \ ack hash data hash
+    swap                         \ ack hash hash data
+    send                         \ ack hash        (sent a copy on data)
+    swap                         \ hash ack
+    receive                      \ hash result     (child's mutated copy)
+    dup inner: @get #len 4 "child copy nested vector grew to length 4" assert=
+    inner: @get 3 #nth 99 "child copy nested vector has 99 appended" assert=
+    \ stack: hash
+    dup inner: @get #len 3 "parent nested vector length unchanged" assert=
+    inner: @get 0 #nth 1 "parent nested vector first element unchanged" assert=
+  ] task-scope
+] ;
+
+test-hash-read-in-child
+test-hash-through-channel-isolated

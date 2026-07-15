@@ -635,7 +635,7 @@ const VariantHistogramWalker = struct {
                 const ptr_key = @intFromPtr(h);
                 if (!try enterPointer(&self.hashes, alloc, ptr_key)) return;
                 defer _ = self.hashes.remove(ptr_key);
-                var iter = h.iterator();
+                var iter = h.map.iterator();
                 while (iter.next()) |entry| {
                     try self.walkValue(alloc, stats, entry.value_ptr.*);
                 }
@@ -650,7 +650,7 @@ const VariantHistogramWalker = struct {
                 const ptr_key = @intFromPtr(s);
                 if (!try enterPointer(&self.sets, alloc, ptr_key)) return;
                 defer _ = self.sets.remove(ptr_key);
-                for (s.keys()) |key| try self.walkValue(alloc, stats, key);
+                for (s.map.keys()) |key| try self.walkValue(alloc, stats, key);
             },
             .mutable_map => |m| {
                 const ptr_key = @intFromPtr(m);
@@ -1160,13 +1160,14 @@ test "collectVariantHistogram counts nested arrays hashes and quotation literals
         quot,
     };
 
-    var hash = @import("value.zig").HashTable{};
-    defer hash.deinit(std.testing.allocator);
-    try hash.put(std.testing.allocator, "k", .{ .array = arr[0..] });
+    const hash = try @import("value.zig").HashTable.create(std.testing.allocator);
+    defer hash.header.release();
+    const hash_alloc = hash.header.allocator;
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "k"), .{ .array = arr[0..] });
 
     const roots = [_]Value{
         .{ .array = arr[0..] },
-        .{ .hash = &hash },
+        .{ .hash = hash },
     };
 
     try stats.collectVariantHistogram(std.testing.allocator, &roots);

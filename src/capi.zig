@@ -1286,7 +1286,7 @@ export fn onez_hash_get(ptr: ?*anyopaque, val_ptr: ?*anyopaque, key: [*]const u8
     const value: *const Value = @ptrCast(@alignCast(vp));
     switch (value.*) {
         .hash => |h| {
-            const found = h.get(key[0..key_len]) orelse {
+            const found = h.map.get(key[0..key_len]) orelse {
                 setLastError(handle, "key not found", .{});
                 return ONEZ_ERR_KEY_NOT_FOUND;
             };
@@ -1315,13 +1315,13 @@ export fn onez_hash_keys(ptr: ?*anyopaque, val_ptr: ?*anyopaque, out: *?*anyopaq
     switch (value.*) {
         .hash => |h| {
             const alloc = handle.ctx.quotationAllocator();
-            const count = h.count();
+            const count = h.map.count();
             const keys = alloc.alloc(Value, count) catch {
                 setLastError(handle, "allocation failure creating keys array", .{});
                 return ONEZ_ERR_ALLOC;
             };
             var i: usize = 0;
-            var it = h.iterator();
+            var it = h.map.iterator();
             while (it.next()) |entry| {
                 keys[i] = .{ .symbol = entry.key_ptr.* };
                 i += 1;

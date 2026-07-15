@@ -28,7 +28,7 @@ const popSymbol = helpers.popSymbol;
 /// Used by `;` to recognize type-defining syntaxes like `struct{ ... }` or `virtual{ ... }`.
 fn isDefinitionDescriptor(val: Value) bool {
     const define_val_opt: ?Value = switch (val) {
-        .hash => |h| h.get("define"),
+        .hash => |h| h.map.get("define"),
         .mutable_map => |m| m.map.get("define"),
         else => null,
     };
@@ -44,11 +44,11 @@ fn isDefinitionDescriptor(val: Value) bool {
 }
 
 /// Get the underlying map from a definition descriptor. Both `hash` and
-/// `mutable_map` ultimately store a `std.StringHashMapUnmanaged(Value)`; the
-/// MutableMap wrapper exposes it as `m.map`.
-fn getDescriptorMap(val: Value) ?*value_mod.HashTable {
+/// `mutable_map` ultimately store a `std.StringHashMapUnmanaged(Value)`;
+/// each wrapper exposes it as `.map`.
+fn getDescriptorMap(val: Value) ?*std.StringHashMapUnmanaged(Value) {
     return switch (val) {
-        .hash => |h| h,
+        .hash => |h| &h.map,
         .mutable_map => |m| &m.map,
         else => null,
     };
@@ -400,6 +400,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     if (!desc_map.contains("doc")) {
                         const map_alloc = switch (top_val) {
                             .mutable_map => |m| m.header.allocator,
+                            .hash => |h| h.header.allocator,
                             else => alloc,
                         };
                         const key_copy = try map_alloc.dupe(u8, "doc");

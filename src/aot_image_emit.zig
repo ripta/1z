@@ -901,7 +901,7 @@ fn internValueTypeLiterals(
             }
         },
         .hash => |h| {
-            var iter = h.iterator();
+            var iter = h.map.iterator();
             while (iter.next()) |entry| {
                 try internValueTypeLiterals(struct_plans, struct_index, effect_table, entry.value_ptr.*);
             }
@@ -4322,7 +4322,7 @@ fn buildSyntheticImageContext(ctx: *Context) !void {
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
     });
     const blob_ht_ptr = try arena.create(value_mod.HashTable);
-    blob_ht_ptr.* = .{};
+    blob_ht_ptr.* = .{ .header = undefined };
     const blob_instrs = try arena.dupe(Instruction, &.{
         .{ .op = .{ .push_literal = .{ .hash = blob_ht_ptr } }, .line = 0, .column = 0 },
     });

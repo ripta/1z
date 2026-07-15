@@ -47,10 +47,9 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const instrs = quot.instructions;
 
-    // Create a new hash table
-    const hash = ctx.quotationAllocator().create(HashTable) catch return error.OutOfMemory;
-    hash.* = HashTable{};
+    const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .hash = hash });
+    const hash_alloc = hash.header.allocator;
 
     // Parse instructions as key: value pairs
     var i: usize = 0;
@@ -101,11 +100,12 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
             };
         };
 
-        const key_copy = ctx.quotationAllocator().dupe(u8, key) catch {
+        const key_copy = hash_alloc.dupe(u8, key) catch {
             container_backing.releaseValue(val);
             return error.OutOfMemory;
         };
-        hash.put(ctx.quotationAllocator(), key_copy, val) catch {
+        hash.map.put(hash_alloc, key_copy, val) catch {
+            hash_alloc.free(key_copy);
             container_backing.releaseValue(val);
             return error.OutOfMemory;
         };
@@ -195,12 +195,10 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
 pub fn nativeMakeSet(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const instrs = quot.instructions;
-    const alloc = ctx.quotationAllocator();
 
-    // Create a new set
-    const set = alloc.create(Set) catch return error.OutOfMemory;
-    set.* = Set{};
+    const set = Set.create(ctx.allocator) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .set = set });
+    const set_alloc = set.header.allocator;
 
     // Execute each instruction and collect unique values. push_literal values
     // are borrowed from the instruction stream, so a set slot becomes a new
@@ -221,7 +219,7 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
 
         // A duplicate key already present in the set keeps its existing owning
         // reference; release the redundant one this iteration produced.
-        const gop = set.getOrPut(alloc, val) catch {
+        const gop = set.map.getOrPut(set_alloc, val) catch {
             container_backing.releaseValue(val);
             return error.OutOfMemory;
         };

@@ -55,7 +55,7 @@ fn nativeToModule(ctx: *Context) anyerror!void {
     const name = try popString(ctx);
 
     const entries: *std.StringHashMapUnmanaged(Value) = switch (ht_val) {
-        .hash => |h| h,
+        .hash => |h| &h.map,
         .mutable_map => |m| &m.map,
         else => {
             helpers.setTypeMismatchError(ctx, "hashtable", ht_val);

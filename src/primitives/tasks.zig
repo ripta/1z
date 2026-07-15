@@ -16,6 +16,7 @@ const WorkerPool = worker_mod.WorkerPool;
 const Primitive = @import("types.zig").Primitive;
 const helpers = @import("helpers.zig");
 const value_mod = @import("../value.zig");
+const container_backing = @import("../container_backing.zig");
 const Value = value_mod.Value;
 const Instruction = value_mod.Instruction;
 const ErrorObject = value_mod.ErrorObject;
@@ -916,14 +917,13 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         },
 
         .hash => |h| blk: {
-            const new_h = try alloc.create(value_mod.HashTable);
-            new_h.* = .{};
-            try new_h.ensureTotalCapacity(alloc, @intCast(h.count()));
-            var iter = h.iterator();
+            const new_h = try value_mod.HashTable.create(alloc);
+            try new_h.map.ensureTotalCapacity(alloc, @intCast(h.map.count()));
+            var iter = h.map.iterator();
             while (iter.next()) |entry| {
                 const key = try alloc.dupe(u8, entry.key_ptr.*);
                 const v = try deepCopyValue(entry.value_ptr.*, alloc);
-                new_h.putAssumeCapacityNoClobber(key, v);
+                new_h.map.putAssumeCapacityNoClobber(key, v);
             }
             break :blk .{ .hash = new_h };
         },
@@ -946,11 +946,10 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         },
 
         .set => |s| blk: {
-            const new_s = try alloc.create(value_mod.Set);
-            new_s.* = .{};
-            try new_s.ensureTotalCapacity(alloc, @intCast(s.count()));
-            for (s.keys()) |key| {
-                new_s.putAssumeCapacity(try deepCopyValue(key, alloc), {});
+            const new_s = try value_mod.Set.create(alloc);
+            try new_s.map.ensureTotalCapacity(alloc, @intCast(s.map.count()));
+            for (s.map.keys()) |key| {
+                new_s.map.putAssumeCapacity(try deepCopyValue(key, alloc), {});
             }
             break :blk .{ .set = new_s };
         },
@@ -1156,21 +1155,21 @@ fn nativeMultiplexerStats(ctx: *Context) anyerror!void {
         return error.InvalidState;
     };
 
-    const alloc = ctx.quotationAllocator();
-    const hash = alloc.create(value_mod.HashTable) catch return error.OutOfMemory;
-    hash.* = value_mod.HashTable{};
+    const hash = value_mod.HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer hash.header.release();
+    const hash_alloc = hash.header.allocator;
 
-    hash.put(alloc, try alloc.dupe(u8, "io-waiting"), .{
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "io-waiting"), .{
         .fixnum = @intCast(scheduler.io_wait_map.count()),
     }) catch return error.OutOfMemory;
-    hash.put(alloc, try alloc.dupe(u8, "sleeping"), .{
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "sleeping"), .{
         .fixnum = @intCast(scheduler.sleep_queue.count()),
     }) catch return error.OutOfMemory;
-    hash.put(alloc, try alloc.dupe(u8, "run-queue"), .{
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "run-queue"), .{
         .fixnum = @intCast(scheduler.run_queue.items.len),
     }) catch return error.OutOfMemory;
 
-    try ctx.stack.push(.{ .hash = hash });
+    try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
 fn cpuSourceSymbol(s: container_limits.CpuSource) []const u8 {
@@ -1196,27 +1195,32 @@ fn nativeContainerLimits(ctx: *Context) anyerror!void {
     const cpu = container_limits.detectCpus(trace_enabled);
     const mem = container_limits.detectMemory(trace_enabled);
 
-    const alloc = ctx.quotationAllocator();
-    const hash = alloc.create(value_mod.HashTable) catch return error.OutOfMemory;
-    hash.* = value_mod.HashTable{};
+    const hash = value_mod.HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer hash.header.release();
+    const hash_alloc = hash.header.allocator;
 
-    hash.put(alloc, try alloc.dupe(u8, "cpu-count"), .{ .fixnum = @intCast(cpu.count) }) catch return error.OutOfMemory;
-    hash.put(alloc, try alloc.dupe(u8, "cpu-source"), .{ .symbol = cpuSourceSymbol(cpu.source) }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "cpu-count"), .{ .fixnum = @intCast(cpu.count) }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "cpu-source"), .{ .symbol = cpuSourceSymbol(cpu.source) }) catch return error.OutOfMemory;
     const cpu_raw: Value = if (cpu.raw_quota != null and cpu.raw_period != null) blk: {
-        const inner = alloc.create(value_mod.HashTable) catch return error.OutOfMemory;
-        inner.* = value_mod.HashTable{};
-        inner.put(alloc, try alloc.dupe(u8, "quota"), .{ .fixnum = cpu.raw_quota.? }) catch return error.OutOfMemory;
-        inner.put(alloc, try alloc.dupe(u8, "period"), .{ .fixnum = cpu.raw_period.? }) catch return error.OutOfMemory;
+        const inner = value_mod.HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+        errdefer inner.header.release();
+        const inner_alloc = inner.header.allocator;
+        inner.map.put(inner_alloc, try inner_alloc.dupe(u8, "quota"), .{ .fixnum = cpu.raw_quota.? }) catch return error.OutOfMemory;
+        inner.map.put(inner_alloc, try inner_alloc.dupe(u8, "period"), .{ .fixnum = cpu.raw_period.? }) catch return error.OutOfMemory;
         break :blk .{ .hash = inner };
     } else .{ .unit = {} };
-    hash.put(alloc, try alloc.dupe(u8, "cpu-raw"), cpu_raw) catch return error.OutOfMemory;
+    // The outer slot takes over the inner hash's construction reference.
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "cpu-raw"), cpu_raw) catch {
+        container_backing.releaseValue(cpu_raw);
+        return error.OutOfMemory;
+    };
 
-    hash.put(alloc, try alloc.dupe(u8, "memory-cap"), .{ .fixnum = @intCast(mem.cap) }) catch return error.OutOfMemory;
-    hash.put(alloc, try alloc.dupe(u8, "memory-source"), .{ .symbol = memSourceSymbol(mem.source) }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "memory-cap"), .{ .fixnum = @intCast(mem.cap) }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "memory-source"), .{ .symbol = memSourceSymbol(mem.source) }) catch return error.OutOfMemory;
     const mem_raw: Value = if (mem.raw) |r| .{ .fixnum = @intCast(r) } else .{ .unit = {} };
-    hash.put(alloc, try alloc.dupe(u8, "memory-raw"), mem_raw) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "memory-raw"), mem_raw) catch return error.OutOfMemory;
 
-    try ctx.stack.push(.{ .hash = hash });
+    try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
 test "handleAwaitResult rethrows borrowed buffer escape" {

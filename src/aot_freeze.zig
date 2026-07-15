@@ -1191,7 +1191,7 @@ fn collectQuotationsInValue(val: Value, quotation_bodies: *std.ArrayListUnmanage
             for (items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, allocator);
         },
         .hash => |h| {
-            var it = h.iterator();
+            var it = h.map.iterator();
             while (it.next()) |entry| try collectQuotationsInValue(entry.value_ptr.*, quotation_bodies, quotation_seen, allocator);
         },
         .vector => |v| {
@@ -1281,7 +1281,7 @@ fn collectQuotationsInValuePromoting(
             for (items) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         .hash => |h| {
-            var it = h.iterator();
+            var it = h.map.iterator();
             while (it.next()) |entry| try collectQuotationsInValuePromoting(ctx, entry.value_ptr.*, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         .vector => |v| {
@@ -1414,7 +1414,7 @@ fn walkDispatchContainerValue(
             }
         },
         .hash => |h| {
-            var it = h.iterator();
+            var it = h.map.iterator();
             while (it.next()) |entry| {
                 if (std.mem.eql(u8, entry.key_ptr.*, dispatch_hash_key_match)) {
                     if (entry.value_ptr.* == .quotation) {
@@ -3556,11 +3556,11 @@ test "collectCompositeQuotations collects a quotation nested in a hash literal" 
     const inner_instrs = &[_]Instruction{
         .{ .op = .{ .call_word = "inner-noop" }, .line = 1 },
     };
-    var hash = value_mod.HashTable{};
-    defer hash.deinit(allocator);
-    try hash.put(allocator, "match", .{ .quotation = .{ .instructions = inner_instrs } });
+    const hash = try value_mod.HashTable.create(allocator);
+    defer hash.header.release();
+    try hash.map.put(allocator, try allocator.dupe(u8, "match"), .{ .quotation = .{ .instructions = inner_instrs } });
     const outer_instrs = &[_]Instruction{
-        .{ .op = .{ .push_literal = .{ .hash = &hash } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .hash = hash } }, .line = 1 },
     };
 
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
@@ -3585,11 +3585,11 @@ test "collectCompositeQuotations collects a quotation nested in a nested composi
     const arr_elems = [_]Value{
         .{ .quotation = .{ .instructions = inner_instrs } },
     };
-    var hash = value_mod.HashTable{};
-    defer hash.deinit(allocator);
-    try hash.put(allocator, "match", .{ .array = &arr_elems });
+    const hash = try value_mod.HashTable.create(allocator);
+    defer hash.header.release();
+    try hash.map.put(allocator, try allocator.dupe(u8, "match"), .{ .array = &arr_elems });
     const outer_instrs = &[_]Instruction{
-        .{ .op = .{ .push_literal = .{ .hash = &hash } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .hash = hash } }, .line = 1 },
     };
 
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
@@ -3766,12 +3766,12 @@ test "collectDispatchContainerQuotationsPromoting promotes the match key quotati
     const match_instrs = &[_]Instruction{
         .{ .op = .{ .call_word = "promoted-rule-callee" }, .line = 1 },
     };
-    var hash = value_mod.HashTable{};
-    defer hash.deinit(allocator);
-    try hash.put(allocator, "kind", .{ .symbol = "word" });
-    try hash.put(allocator, "match", .{ .quotation = .{ .instructions = match_instrs } });
+    const hash = try value_mod.HashTable.create(allocator);
+    defer hash.header.release();
+    try hash.map.put(allocator, try allocator.dupe(u8, "kind"), .{ .symbol = "word" });
+    try hash.map.put(allocator, try allocator.dupe(u8, "match"), .{ .quotation = .{ .instructions = match_instrs } });
     const outer_instrs = &[_]Instruction{
-        .{ .op = .{ .push_literal = .{ .hash = &hash } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .hash = hash } }, .line = 1 },
     };
 
     var seen = std.StringHashMapUnmanaged(void){};
@@ -3848,11 +3848,11 @@ test "collectDispatchContainerQuotationsPromoting does not promote a hash entry 
     const other_instrs = &[_]Instruction{
         .{ .op = .{ .call_word = "should-not-promote-2" }, .line = 1 },
     };
-    var hash = value_mod.HashTable{};
-    defer hash.deinit(allocator);
-    try hash.put(allocator, "fallback", .{ .quotation = .{ .instructions = other_instrs } });
+    const hash = try value_mod.HashTable.create(allocator);
+    defer hash.header.release();
+    try hash.map.put(allocator, try allocator.dupe(u8, "fallback"), .{ .quotation = .{ .instructions = other_instrs } });
     const outer_instrs = &[_]Instruction{
-        .{ .op = .{ .push_literal = .{ .hash = &hash } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .hash = hash } }, .line = 1 },
     };
 
     var seen = std.StringHashMapUnmanaged(void){};

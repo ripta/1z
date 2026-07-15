@@ -940,18 +940,18 @@ fn nativeScopeFrames(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     var results: std.ArrayListUnmanaged(Value) = .{};
 
-    try collectScopeFrames(alloc, ctx, "", &results, false);
+    try collectScopeFrames(alloc, ctx.allocator, ctx, "", &results, false);
 
     var ancestor = ctx.parent_context;
     while (ancestor) |anc| {
         // A descendant task resolves only an ancestor's stable scope, so the
         // dump stops at each ancestor's import frame rather than walking its
         // task-private transient frames across the spawn boundary.
-        try collectScopeFrames(alloc, anc, "parent-", &results, true);
+        try collectScopeFrames(alloc, ctx.allocator, anc, "parent-", &results, true);
         ancestor = anc.parent_context;
     }
 
-    try ctx.stack.push(.{ .array = results.items });
+    try ctx.stack.pushMoved(.{ .array = results.items });
 }
 
 /// stack-snapshot ( -- string ) - Return a debug snapshot of the current data stack.
@@ -965,17 +965,19 @@ fn nativeStackSnapshot(ctx: *Context) anyerror!void {
 
 fn buildFrameHash(
     alloc: Allocator,
+    gpa: Allocator,
     type_name: []const u8,
     index: i64,
     frame_words: anytype,
     is_import_frame: bool,
 ) !Value {
-    const hash = try alloc.create(HashTable);
-    hash.* = HashTable{};
+    const hash = try HashTable.create(gpa);
+    errdefer hash.header.release();
+    const hash_alloc = hash.header.allocator;
 
-    try hash.put(alloc, "type", .{ .string = type_name });
-    try hash.put(alloc, "index", .{ .fixnum = index });
-    try hash.put(alloc, "import-frame?", .{ .boolean = is_import_frame });
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "type"), .{ .string = type_name });
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "index"), .{ .fixnum = index });
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "import-frame?"), .{ .boolean = is_import_frame });
 
     var word_names: std.ArrayListUnmanaged(Value) = .{};
     var count: i64 = 0;
@@ -986,14 +988,15 @@ fn buildFrameHash(
         count += 1;
     }
 
-    try hash.put(alloc, "words", .{ .array = word_names.items });
-    try hash.put(alloc, "count", .{ .fixnum = count });
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "words"), .{ .array = word_names.items });
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "count"), .{ .fixnum = count });
 
     return .{ .hash = hash };
 }
 
 fn collectScopeFrames(
     alloc: Allocator,
+    gpa: Allocator,
     source_ctx: *const Context,
     prefix: []const u8,
     results: *std.ArrayListUnmanaged(Value),
@@ -1013,6 +1016,7 @@ fn collectScopeFrames(
         const is_import = source_ctx.import_frame_index != null and i == source_ctx.import_frame_index.?;
         try results.append(alloc, try buildFrameHash(
             alloc,
+            gpa,
             local_type,
             @intCast(i),
             &source_ctx.local_frames.items[i],
@@ -1022,6 +1026,7 @@ fn collectScopeFrames(
 
     try results.append(alloc, try buildFrameHash(
         alloc,
+        gpa,
         dict_type,
         -1,
         &source_ctx.dictionary.entries,

@@ -385,9 +385,9 @@ pub fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocato
         },
         .hash => |h| {
             try buf.append(allocator, value_tag_hash);
-            const entry_count: u32 = @intCast(h.count());
+            const entry_count: u32 = @intCast(h.map.count());
             try buf.appendSlice(allocator, std.mem.asBytes(&entry_count));
-            var iter = h.iterator();
+            var iter = h.map.iterator();
             while (iter.next()) |entry| {
                 const key = entry.key_ptr.*;
                 const key_len: u32 = @intCast(key.len);
@@ -487,9 +487,9 @@ pub fn serializeValueIntoForImage(
         },
         .hash => |h| {
             try buf.append(allocator, value_tag_hash);
-            const entry_count: u32 = @intCast(h.count());
+            const entry_count: u32 = @intCast(h.map.count());
             try buf.appendSlice(allocator, std.mem.asBytes(&entry_count));
-            var iter = h.iterator();
+            var iter = h.map.iterator();
             while (iter.next()) |entry| {
                 const key = entry.key_ptr.*;
                 const key_len: u32 = @intCast(key.len);
@@ -688,8 +688,8 @@ pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator
             if (offset.* + 4 > data.len) return error.OutOfMemory;
             const entry_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
             offset.* += 4;
-            var h = HashTable{};
-            try h.ensureTotalCapacity(allocator, entry_count);
+            const h = HashTable.create(allocator) catch return error.OutOfMemory;
+            try h.map.ensureTotalCapacity(allocator, entry_count);
             for (0..entry_count) |_| {
                 if (offset.* + 4 > data.len) return error.OutOfMemory;
                 const klen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
@@ -698,11 +698,9 @@ pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator
                 const key = try allocator.dupe(u8, data[offset.*..][0..klen]);
                 offset.* += klen;
                 const value = try deserializeValueAt(data, offset, allocator, qfns);
-                h.putAssumeCapacity(key, value);
+                h.map.putAssumeCapacity(key, value);
             }
-            const h_ptr = try allocator.create(HashTable);
-            h_ptr.* = h;
-            break :blk .{ .hash = h_ptr };
+            break :blk .{ .hash = h };
         },
         value_tag_mutable_map => blk: {
             if (offset.* + 4 > data.len) return error.OutOfMemory;
@@ -838,8 +836,8 @@ pub fn deserializeValueAtForImage(
             if (offset.* + 4 > data.len) return error.OutOfMemory;
             const entry_count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
             offset.* += 4;
-            var h = HashTable{};
-            try h.ensureTotalCapacity(allocator, entry_count);
+            const h = HashTable.create(allocator) catch return error.OutOfMemory;
+            try h.map.ensureTotalCapacity(allocator, entry_count);
             for (0..entry_count) |_| {
                 if (offset.* + 4 > data.len) return error.OutOfMemory;
                 const klen = std.mem.readInt(u32, data[offset.*..][0..4], .little);
@@ -848,11 +846,9 @@ pub fn deserializeValueAtForImage(
                 const key = try allocator.dupe(u8, data[offset.*..][0..klen]);
                 offset.* += klen;
                 const value = try deserializeValueAtForImage(data, offset, allocator, slot_tables);
-                h.putAssumeCapacity(key, value);
+                h.map.putAssumeCapacity(key, value);
             }
-            const h_ptr = try allocator.create(HashTable);
-            h_ptr.* = h;
-            break :blk .{ .hash = h_ptr };
+            break :blk .{ .hash = h };
         },
         value_tag_quotation => blk: {
             // Read the quotation_id and attach the compiled code_ptr from the
@@ -933,13 +929,15 @@ fn freeDecodedValue(v: Value) void {
             testing.allocator.free(q.instructions);
         },
         .hash => |h| {
-            var iter = h.iterator();
+            // Raw string/array allocations inside the decoded values are not
+            // refcounted, so free them here and blank the slots; the header
+            // release then frees the dup'd keys and the struct itself.
+            var iter = h.map.iterator();
             while (iter.next()) |entry| {
-                testing.allocator.free(entry.key_ptr.*);
                 freeDecodedValue(entry.value_ptr.*);
+                entry.value_ptr.* = .unit;
             }
-            h.deinit(testing.allocator);
-            testing.allocator.destroy(h);
+            h.header.release();
         },
         .stack_effect => |effect| {
             for (effect.inputs) |p| testing.allocator.free(p.name);
@@ -1090,9 +1088,8 @@ test "roundtrip: nested array" {
 }
 
 test "roundtrip: empty hash" {
-    const h_ptr = try testing.allocator.create(HashTable);
-    h_ptr.* = HashTable{};
-    defer testing.allocator.destroy(h_ptr);
+    const h_ptr = try HashTable.create(testing.allocator);
+    defer h_ptr.header.release();
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .hash = h_ptr } }, .line = 1 },
     };
@@ -1102,17 +1099,14 @@ test "roundtrip: empty hash" {
     defer freeDecodedInstructions(decoded);
 
     try testing.expect(decoded[0].op.push_literal == .hash);
-    try testing.expectEqual(@as(u32, 0), decoded[0].op.push_literal.hash.count());
+    try testing.expectEqual(@as(u32, 0), decoded[0].op.push_literal.hash.map.count());
 }
 
 test "roundtrip: hash with entries" {
-    var h = HashTable{};
-    try h.put(testing.allocator, "x", .{ .fixnum = 10 });
-    try h.put(testing.allocator, "y", .{ .boolean = false });
-    defer h.deinit(testing.allocator);
-    const h_ptr = try testing.allocator.create(HashTable);
-    h_ptr.* = h;
-    defer testing.allocator.destroy(h_ptr);
+    const h_ptr = try HashTable.create(testing.allocator);
+    defer h_ptr.header.release();
+    try h_ptr.map.put(testing.allocator, try testing.allocator.dupe(u8, "x"), .{ .fixnum = 10 });
+    try h_ptr.map.put(testing.allocator, try testing.allocator.dupe(u8, "y"), .{ .boolean = false });
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .hash = h_ptr } }, .line = 1 },
     };
@@ -1122,9 +1116,9 @@ test "roundtrip: hash with entries" {
     defer freeDecodedInstructions(decoded);
 
     const dh = decoded[0].op.push_literal.hash;
-    try testing.expectEqual(@as(u32, 2), dh.count());
-    try testing.expectEqual(@as(i64, 10), dh.get("x").?.fixnum);
-    try testing.expectEqual(false, dh.get("y").?.boolean);
+    try testing.expectEqual(@as(u32, 2), dh.map.count());
+    try testing.expectEqual(@as(i64, 10), dh.map.get("x").?.fixnum);
+    try testing.expectEqual(false, dh.map.get("y").?.boolean);
 }
 
 test "roundtrip: nested quotation" {
@@ -1655,10 +1649,10 @@ test "nested quotation in hash literal carries compiled code_ptr" {
         .{ .op = .{ .call_word = "noop" }, .line = 1 },
     };
     const inner_slice: []const Instruction = &inner;
-    var h = HashTable{};
-    defer h.deinit(testing.allocator);
-    try h.put(testing.allocator, "match", .{ .quotation = .{ .instructions = inner_slice } });
-    const hash_val: Value = .{ .hash = &h };
+    const h = try HashTable.create(testing.allocator);
+    defer h.header.release();
+    try h.map.put(testing.allocator, try testing.allocator.dupe(u8, "match"), .{ .quotation = .{ .instructions = inner_slice } });
+    const hash_val: Value = .{ .hash = h };
 
     var qid_map = QuotationIdMap{};
     defer qid_map.deinit(testing.allocator);
@@ -1676,7 +1670,7 @@ test "nested quotation in hash literal carries compiled code_ptr" {
     defer freeDecodedValue(decoded);
 
     try testing.expect(decoded == .hash);
-    const got = decoded.hash.get("match").?;
+    const got = decoded.hash.map.get("match").?;
     try testing.expect(got == .quotation);
     try testing.expectEqual(dummy_fn, got.quotation.code_ptr.?);
 }

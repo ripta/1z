@@ -21,67 +21,72 @@ fn nativeEnviron(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "environ");
     const alloc = ctx.quotationAllocator();
 
-    const hash = alloc.create(HashTable) catch return error.OutOfMemory;
-    hash.* = HashTable{};
+    const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer hash.header.release();
+    const hash_alloc = hash.header.allocator;
 
     const env_map = std.process.getEnvMap(alloc) catch return error.OutOfMemory;
     var iter = env_map.iterator();
     while (iter.next()) |entry| {
-        const key = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
+        const key = hash_alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
         const val_str = alloc.dupe(u8, entry.value_ptr.*) catch return error.OutOfMemory;
-        hash.put(alloc, key, .{ .string = val_str }) catch return error.OutOfMemory;
+        hash.map.put(hash_alloc, key, .{ .string = val_str }) catch {
+            hash_alloc.free(key);
+            return error.OutOfMemory;
+        };
     }
 
-    try ctx.stack.push(.{ .hash = hash });
+    try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
 /// sys-info ( -- hash ) - Return a hash of system/platform information
 fn nativeSysInfo(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
-    const hash = alloc.create(HashTable) catch return error.OutOfMemory;
-    hash.* = HashTable{};
+    const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer hash.header.release();
+    const hash_alloc = hash.header.allocator;
 
     const target = builtin.target;
 
     // "os" - e.g. "macos", "linux", "windows"
     const os_name = @tagName(target.os.tag);
-    const os_key = alloc.dupe(u8, "os") catch return error.OutOfMemory;
+    const os_key = hash_alloc.dupe(u8, "os") catch return error.OutOfMemory;
     const os_val = alloc.dupe(u8, os_name) catch return error.OutOfMemory;
-    hash.put(alloc, os_key, .{ .string = os_val }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, os_key, .{ .string = os_val }) catch return error.OutOfMemory;
 
     // "arch" - e.g. "aarch64", "x86_64"
     const arch_name = @tagName(target.cpu.arch);
-    const arch_key = alloc.dupe(u8, "arch") catch return error.OutOfMemory;
+    const arch_key = hash_alloc.dupe(u8, "arch") catch return error.OutOfMemory;
     const arch_val = alloc.dupe(u8, arch_name) catch return error.OutOfMemory;
-    hash.put(alloc, arch_key, .{ .string = arch_val }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, arch_key, .{ .string = arch_val }) catch return error.OutOfMemory;
 
     // "abi" - e.g. "none", "gnu", "musl"
     const abi_name = @tagName(target.abi);
-    const abi_key = alloc.dupe(u8, "abi") catch return error.OutOfMemory;
+    const abi_key = hash_alloc.dupe(u8, "abi") catch return error.OutOfMemory;
     const abi_val = alloc.dupe(u8, abi_name) catch return error.OutOfMemory;
-    hash.put(alloc, abi_key, .{ .string = abi_val }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, abi_key, .{ .string = abi_val }) catch return error.OutOfMemory;
 
     // "endian" - "little" or "big"
     const endian_name = switch (target.cpu.arch.endian()) {
         .little => "little",
         .big => "big",
     };
-    const endian_key = alloc.dupe(u8, "endian") catch return error.OutOfMemory;
+    const endian_key = hash_alloc.dupe(u8, "endian") catch return error.OutOfMemory;
     const endian_val = alloc.dupe(u8, endian_name) catch return error.OutOfMemory;
-    hash.put(alloc, endian_key, .{ .string = endian_val }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, endian_key, .{ .string = endian_val }) catch return error.OutOfMemory;
 
     // "ptr-width" - 32 or 64
-    const pw_key = alloc.dupe(u8, "ptr-width") catch return error.OutOfMemory;
-    hash.put(alloc, pw_key, .{ .fixnum = target.ptrBitWidth() }) catch return error.OutOfMemory;
+    const pw_key = hash_alloc.dupe(u8, "ptr-width") catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, pw_key, .{ .fixnum = target.ptrBitWidth() }) catch return error.OutOfMemory;
 
     // "os-family" - "unix", "windows", or "other"
     const os_family = if (target.os.tag == .windows) "windows" else if (target.os.tag.isDarwin() or target.os.tag == .linux or target.os.tag == .freebsd or target.os.tag == .openbsd or target.os.tag == .netbsd or target.os.tag == .dragonfly or target.os.tag == .solaris) "unix" else "other";
-    const fam_key = alloc.dupe(u8, "os-family") catch return error.OutOfMemory;
+    const fam_key = hash_alloc.dupe(u8, "os-family") catch return error.OutOfMemory;
     const fam_val = alloc.dupe(u8, os_family) catch return error.OutOfMemory;
-    hash.put(alloc, fam_key, .{ .string = fam_val }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, fam_key, .{ .string = fam_val }) catch return error.OutOfMemory;
 
-    try ctx.stack.push(.{ .hash = hash });
+    try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
 /// Raise a parse-time error naming the unenumerated build target. Mirrors the

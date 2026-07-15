@@ -285,35 +285,35 @@ fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
     try exec_result;
 
     // Build result hash
-    const alloc = ctx.quotationAllocator();
-    const hash = alloc.create(HashTable) catch return error.OutOfMemory;
-    hash.* = HashTable{};
+    const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer hash.header.release();
+    const hash_alloc = hash.header.allocator;
 
-    const key1 = alloc.dupe(u8, "elapsed_ns") catch return error.OutOfMemory;
-    hash.put(alloc, key1, .{ .fixnum = @intCast(elapsed_ns) }) catch return error.OutOfMemory;
+    const key1 = hash_alloc.dupe(u8, "elapsed_ns") catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, key1, .{ .fixnum = @intCast(elapsed_ns) }) catch return error.OutOfMemory;
 
-    const key2 = alloc.dupe(u8, "push_literal") catch return error.OutOfMemory;
-    hash.put(alloc, key2, .{ .fixnum = @intCast(local_stats.push_literal_count) }) catch return error.OutOfMemory;
+    const key2 = hash_alloc.dupe(u8, "push_literal") catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, key2, .{ .fixnum = @intCast(local_stats.push_literal_count) }) catch return error.OutOfMemory;
 
-    const key3 = alloc.dupe(u8, "call_word") catch return error.OutOfMemory;
-    hash.put(alloc, key3, .{ .fixnum = @intCast(local_stats.call_word_count) }) catch return error.OutOfMemory;
+    const key3 = hash_alloc.dupe(u8, "call_word") catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, key3, .{ .fixnum = @intCast(local_stats.call_word_count) }) catch return error.OutOfMemory;
 
-    const key4 = alloc.dupe(u8, "total_instructions") catch return error.OutOfMemory;
-    hash.put(alloc, key4, .{ .fixnum = @intCast(local_stats.totalInstructions()) }) catch return error.OutOfMemory;
+    const key4 = hash_alloc.dupe(u8, "total_instructions") catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, key4, .{ .fixnum = @intCast(local_stats.totalInstructions()) }) catch return error.OutOfMemory;
 
-    const key5 = alloc.dupe(u8, "peak_stack_depth") catch return error.OutOfMemory;
-    hash.put(alloc, key5, .{ .fixnum = @intCast(local_stats.peak_stack_depth) }) catch return error.OutOfMemory;
+    const key5 = hash_alloc.dupe(u8, "peak_stack_depth") catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, key5, .{ .fixnum = @intCast(local_stats.peak_stack_depth) }) catch return error.OutOfMemory;
 
-    const key_iter = alloc.dupe(u8, "iterations") catch return error.OutOfMemory;
-    hash.put(alloc, key_iter, .{ .fixnum = @intCast(n) }) catch return error.OutOfMemory;
+    const key_iter = hash_alloc.dupe(u8, "iterations") catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, key_iter, .{ .fixnum = @intCast(n) }) catch return error.OutOfMemory;
 
     // Add allocation stats only when --benchmark is active
     if (alloc_delta) |delta| {
-        const key6 = alloc.dupe(u8, "total_allocations") catch return error.OutOfMemory;
-        hash.put(alloc, key6, .{ .fixnum = @intCast(delta.allocs) }) catch return error.OutOfMemory;
+        const key6 = hash_alloc.dupe(u8, "total_allocations") catch return error.OutOfMemory;
+        hash.map.put(hash_alloc, key6, .{ .fixnum = @intCast(delta.allocs) }) catch return error.OutOfMemory;
 
-        const key7 = alloc.dupe(u8, "total_bytes") catch return error.OutOfMemory;
-        hash.put(alloc, key7, .{ .fixnum = @intCast(delta.bytes) }) catch return error.OutOfMemory;
+        const key7 = hash_alloc.dupe(u8, "total_bytes") catch return error.OutOfMemory;
+        hash.map.put(hash_alloc, key7, .{ .fixnum = @intCast(delta.bytes) }) catch return error.OutOfMemory;
     }
 
     return hash;
@@ -323,7 +323,7 @@ fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
 pub fn nativeBenchmark(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const hash = try executeBenchmark(ctx, quot);
-    try ctx.stack.push(.{ .hash = hash });
+    try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
 /// make-benchmark-report ( -- report ) - Create a benchmark report collector
@@ -349,8 +349,25 @@ fn nativeBenchmarkRun(ctx: *Context) anyerror!void {
     };
 
     const hash = try executeBenchmark(ctx, quot);
-    try report.addEntry(label, hash);
+    defer hash.header.release();
+    try report.addEntry(label, try snapshotResults(ctx, hash));
     try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
+}
+
+/// Copy a benchmark result hash's entries into a raw arena-lifetime map for
+/// a report entry. The report outlives the refcounted hash, and every stored
+/// value is a fixnum, so a shallow arena copy is the whole ownership story.
+fn snapshotResults(ctx: *Context, hash: *HashTable) !*std.StringHashMapUnmanaged(Value) {
+    const alloc = ctx.quotationAllocator();
+    const copy = alloc.create(std.StringHashMapUnmanaged(Value)) catch return error.OutOfMemory;
+    copy.* = .{};
+    try copy.ensureTotalCapacity(alloc, hash.map.count());
+    var iter = hash.map.iterator();
+    while (iter.next()) |entry| {
+        const key = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
+        copy.putAssumeCapacityNoClobber(key, entry.value_ptr.*);
+    }
+    return copy;
 }
 
 /// benchmark-n ( report label n quot -- report ) - Benchmark a quotation N times and add to report
@@ -372,7 +389,8 @@ fn nativeBenchmarkN(ctx: *Context) anyerror!void {
     };
 
     const hash = try executeBenchmarkN(ctx, quot, n);
-    try report.addEntry(label, hash);
+    defer hash.header.release();
+    try report.addEntry(label, try snapshotResults(ctx, hash));
     try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
 }
 
@@ -397,12 +415,15 @@ fn nativeBenchmarkAuto(ctx: *Context) anyerror!void {
 
     while (true) {
         const hash = try executeBenchmarkN(ctx, quot, n);
-        const elapsed_ns: u64 = @intCast(getHashInt(hash, "elapsed_ns") orelse 0);
+        const elapsed_ns: u64 = @intCast(getHashInt(&hash.map, "elapsed_ns") orelse 0);
 
         if (elapsed_ns >= target_ns or n >= max_iters) {
             final_hash = hash;
             break;
         }
+
+        // Calibration round: this result is discarded, so drop its reference.
+        hash.header.release();
 
         const scaled = if (elapsed_ns > 0)
             @min(max_iters, @max(n * 2, n * target_ns / elapsed_ns))
@@ -413,7 +434,8 @@ fn nativeBenchmarkAuto(ctx: *Context) anyerror!void {
         if (n > max_iters) n = max_iters;
     }
 
-    try report.addEntry(label, final_hash.?);
+    defer final_hash.?.header.release();
+    try report.addEntry(label, try snapshotResults(ctx, final_hash.?));
     try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
 }
 
@@ -423,6 +445,7 @@ fn nativeBenchmarkAuto(ctx: *Context) anyerror!void {
 fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
 
     switch (val) {
         .benchmark_report => |report| {
@@ -440,7 +463,7 @@ fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
             };
             // Create a temporary single-entry report
             var tmp_report = BenchmarkReport.init(alloc);
-            try tmp_report.addEntry(label, hash);
+            try tmp_report.addEntry(label, try snapshotResults(ctx, hash));
             try printReportTable(ctx, &tmp_report);
         },
         else => {
@@ -454,8 +477,8 @@ fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
 // Table formatter
 // =============================================================================
 
-fn getHashInt(hash: *HashTable, key: []const u8) ?i64 {
-    const val = hash.get(key) orelse return null;
+fn getHashInt(map: *const std.StringHashMapUnmanaged(Value), key: []const u8) ?i64 {
+    const val = map.get(key) orelse return null;
     return switch (val) {
         .fixnum => |i| i,
         else => null,

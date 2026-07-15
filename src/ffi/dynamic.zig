@@ -246,11 +246,24 @@ fn raisePosixError(ctx: *Context, e: c_int) anyerror!void {
 
     const name = try errnoName(alloc, e);
 
-    const hash = try alloc.create(HashTable);
-    hash.* = HashTable{};
-    errdefer container_backing.releaseValue(.{ .hash = hash });
-    try hash.put(alloc, try alloc.dupe(u8, "errno"), .{ .fixnum = @as(i64, e) });
-    try hash.put(alloc, try alloc.dupe(u8, "name"), .{ .symbol = name });
+    // The deliberate `error.UserThrown` return below is an error path, so an
+    // errdefer would release the hash the stash just took ownership of. Build
+    // the error inside a helper whose error returns all mean "the hash did not
+    // reach the stash", and release only when that helper fails.
+    const hash = try HashTable.create(ctx.allocator);
+    stashPosixError(ctx, alloc, hash, e, name) catch |err| {
+        container_backing.releaseValue(.{ .hash = hash });
+        return err;
+    };
+    return error.UserThrown;
+}
+
+/// Populate the errno hash and stash the boxed `posix-error` on the context.
+/// On success the stash owns the hash's construction reference.
+fn stashPosixError(ctx: *Context, alloc: std.mem.Allocator, hash: *HashTable, e: c_int, name: []const u8) anyerror!void {
+    const hash_alloc = hash.header.allocator;
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "errno"), .{ .fixnum = @as(i64, e) });
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "name"), .{ .symbol = name });
 
     const data_ptr = try alloc.create(Value);
     data_ptr.* = .{ .hash = hash };
@@ -265,7 +278,6 @@ fn raisePosixError(ctx: *Context, e: c_int) anyerror!void {
         .message = message,
         .data = data_ptr,
     });
-    return error.UserThrown;
 }
 
 /// lib-open ( path-or-name -- dylib ) - Opens a dynamic library and returns a resource handle to it.

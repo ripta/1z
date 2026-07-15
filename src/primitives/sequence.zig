@@ -5,6 +5,7 @@ const Value = value_mod.Value;
 const Vector = value_mod.Vector;
 const ByteArray = value_mod.ByteArray;
 const Set = value_mod.Set;
+const container_backing = @import("../container_backing.zig");
 
 // =============================================================================
 // UTF-8 Helpers
@@ -108,7 +109,7 @@ pub fn sequenceLength(val: Value) ?usize {
         .array => |a| a.len,
         .vector => |v| v.list.items.len,
         .byte_array => |b| b.slice().len,
-        .set => |s| s.count(),
+        .set => |s| s.map.count(),
         else => null,
     };
 }
@@ -178,7 +179,7 @@ pub const SequenceIterator = struct {
             .set => |s| SequenceIterator{
                 .kind = .set,
                 .allocator = allocator,
-                .state = .{ .set = .{ .keys = s.keys(), .index = 0 } },
+                .state = .{ .set = .{ .keys = s.map.keys(), .index = 0 } },
             },
             else => null,
         };
@@ -300,8 +301,7 @@ pub const SequenceBuilder = struct {
                 };
             },
             .set => blk: {
-                const s = allocator.create(Set) catch return error.OutOfMemory;
-                s.* = Set{};
+                const s = Set.create(allocator) catch return error.OutOfMemory;
                 break :blk SequenceBuilder{
                     .kind = kind,
                     .allocator = allocator,
@@ -346,7 +346,12 @@ pub const SequenceBuilder = struct {
                 self.state.byte_array.append(self.allocator, byte) catch return error.OutOfMemory;
             },
             .set => {
-                self.state.set.put(self.allocator, val, {}) catch return error.OutOfMemory;
+                // A duplicate member keeps its existing owning reference;
+                // release the redundant one this append carried in.
+                const gop = self.state.set.map.getOrPut(self.allocator, val) catch return error.OutOfMemory;
+                if (gop.found_existing) {
+                    container_backing.releaseValue(val);
+                }
             },
         }
     }

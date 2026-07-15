@@ -18,6 +18,7 @@ const Capability = types_mod.Capability;
 
 const helpers = @import("helpers.zig");
 const streams = @import("streams.zig");
+const container_backing = @import("../container_backing.zig");
 
 pub const registry_entries = [_]RegistryEntry{
     .{
@@ -46,8 +47,11 @@ fn nativeSpawnProcess(ctx: *Context) anyerror!void {
     const stdout_sym = try helpers.popSymbol(ctx);
     const stdin_sym = try helpers.popSymbol(ctx);
     const env_val = ctx.stack.pop() catch return error.StackUnderflow;
+    defer container_backing.releaseValue(env_val);
     const cwd_val = ctx.stack.pop() catch return error.StackUnderflow;
+    defer container_backing.releaseValue(cwd_val);
     const argv_val = ctx.stack.pop() catch return error.StackUnderflow;
+    defer container_backing.releaseValue(argv_val);
     const argv = try parseArgv(ctx, argv_val);
     const cwd = try parseOptionalCwd(ctx, cwd_val);
     var env_map = try parseOptionalEnvMap(ctx, env_val);
@@ -186,7 +190,7 @@ fn hashToEnvMap(ctx: *Context, env_hash: *HashTable) !std.process.EnvMap {
     var env_map = std.process.EnvMap.init(ctx.quotationAllocator());
     errdefer env_map.deinit();
 
-    var iter = env_hash.iterator();
+    var iter = env_hash.map.iterator();
     while (iter.next()) |entry| {
         const value = entry.value_ptr.*;
         const value_str = switch (value) {

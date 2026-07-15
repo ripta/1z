@@ -347,7 +347,7 @@ fn findDanglingIsolatedType(val: Value, isolation_frame: *const TypeRegistryFram
             return null;
         },
         .hash => |h| {
-            var it = h.iterator();
+            var it = h.map.iterator();
             while (it.next()) |entry| {
                 if (findDanglingIsolatedType(entry.value_ptr.*, isolation_frame, depth + 1)) |name| return name;
             }
@@ -360,7 +360,7 @@ fn findDanglingIsolatedType(val: Value, isolation_frame: *const TypeRegistryFram
             return null;
         },
         .set => |s| {
-            for (s.keys()) |key| {
+            for (s.map.keys()) |key| {
                 if (findDanglingIsolatedType(key, isolation_frame, depth + 1)) |name| return name;
             }
             return null;

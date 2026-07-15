@@ -186,12 +186,13 @@ pub const ContainerHeader = struct {
 
 /// Per-variant retain dispatch.
 ///
-/// The header-backed variants (i.e., `vector`, `mutable_map`) carry a refcounted backing and route through
-/// `header.retain()`. Their contents are accounted only at `destroy`, so we don't recurse into them here.
+/// The header-backed variants (i.e., `vector`, `mutable_map`, `hash`, `set`) carry a refcounted
+/// backing and route through `header.retain()`. Their contents are accounted only at `destroy`, so we
+/// don't recurse into them here.
 ///
-/// The headerless composites (i.e., `array`, `hash`, `set`, `tagged`, `struct_instance`, `error_value`,
-/// `iterator`) own a reference to each refcounted value they embed, so a stack slot holding one must
-/// retain those embedded values recursively. An `error_value` owns the value carried in its `data` field.
+/// The headerless composites (i.e., `array`, `tagged`, `struct_instance`, `error_value`, `iterator`)
+/// own a reference to each refcounted value they embed, so a stack slot holding one must retain those
+/// embedded values recursively. An `error_value` owns the value carried in its `data` field.
 ///
 /// `byte_array` carries a refcounted backing like `vector` and `mutable_map`; its bytes are not Values,
 /// so there is nothing to recurse into.
@@ -205,12 +206,9 @@ pub fn retainValue(v: Value) void {
         .vector => |vec| vec.header.retain(),
         .mutable_map => |mm| mm.header.retain(),
         .byte_array => |ba| ba.header.retain(),
+        .hash => |h| h.header.retain(),
+        .set => |s| s.header.retain(),
         .array => |items| retainValues(items),
-        .hash => |h| {
-            var iter = h.iterator();
-            while (iter.next()) |entry| retainValue(entry.value_ptr.*);
-        },
-        .set => |s| retainValues(s.keys()),
         .tagged => |t| retainValue(t.inner.*),
         .struct_instance => |si| retainValues(si.fields),
         .error_value => |err| if (err.data) |data| retainValue(data.*),
@@ -232,12 +230,9 @@ pub fn releaseValue(v: Value) void {
         .vector => |vec| vec.header.release(),
         .mutable_map => |mm| mm.header.release(),
         .byte_array => |ba| ba.header.release(),
+        .hash => |h| h.header.release(),
+        .set => |s| s.header.release(),
         .array => |items| releaseValues(items),
-        .hash => |h| {
-            var iter = h.iterator();
-            while (iter.next()) |entry| releaseValue(entry.value_ptr.*);
-        },
-        .set => |s| releaseValues(s.keys()),
         .tagged => |t| releaseValue(t.inner.*),
         .struct_instance => |si| releaseValues(si.fields),
         .error_value => |err| if (err.data) |data| releaseValue(data.*),
@@ -293,16 +288,8 @@ pub fn releaseIteratorBacking(it: *Iterator) void {
 /// `.iterator` is treated conservatively as carrying a backing.
 pub fn valueCarriesBacking(v: Value) bool {
     return switch (v) {
-        .vector, .mutable_map, .byte_array => true,
+        .vector, .mutable_map, .byte_array, .hash, .set => true,
         .array => |items| valuesCarryBacking(items),
-        .hash => |h| blk: {
-            var iter = h.iterator();
-            while (iter.next()) |entry| {
-                if (valueCarriesBacking(entry.value_ptr.*)) break :blk true;
-            }
-            break :blk false;
-        },
-        .set => |s| valuesCarryBacking(s.keys()),
         .tagged => |t| valueCarriesBacking(t.inner.*),
         .struct_instance => |si| valuesCarryBacking(si.fields),
         .error_value => |err| if (err.data) |data| valueCarriesBacking(data.*) else false,
@@ -342,13 +329,13 @@ pub fn valueDeeplyImmutable(v: Value) bool {
         .array => |items| valuesDeeplyImmutable(items),
         // Hash keys are immutable byte slices; only the values need scanning.
         .hash => |h| blk: {
-            var iter = h.iterator();
+            var iter = h.map.iterator();
             while (iter.next()) |entry| {
                 if (!valueDeeplyImmutable(entry.value_ptr.*)) break :blk false;
             }
             break :blk true;
         },
-        .set => |s| valuesDeeplyImmutable(s.keys()),
+        .set => |s| valuesDeeplyImmutable(s.map.keys()),
         .tagged => |t| valueDeeplyImmutable(t.inner.*),
         else => false,
     };
@@ -428,23 +415,10 @@ pub fn retainInstructionsContainerLiterals(instructions: []const Instruction) vo
 /// be released at teardown.
 pub fn valueHoldsRefcountedBacking(val: Value) bool {
     return switch (val) {
-        .vector, .mutable_map, .byte_array => true,
+        .vector, .mutable_map, .byte_array, .hash, .set => true,
         .array => |items| {
             for (items) |item| {
                 if (valueHoldsRefcountedBacking(item)) return true;
-            }
-            return false;
-        },
-        .hash => |h| {
-            var iter = h.iterator();
-            while (iter.next()) |entry| {
-                if (valueHoldsRefcountedBacking(entry.value_ptr.*)) return true;
-            }
-            return false;
-        },
-        .set => |s| {
-            for (s.keys()) |key| {
-                if (valueHoldsRefcountedBacking(key)) return true;
             }
             return false;
         },
@@ -813,31 +787,64 @@ test "retainValue/releaseValue: struct_instance propagates to field vector" {
     vec.header.release();
 }
 
-test "retainValue/releaseValue: hash propagates to stored vector value" {
-    const vec = try value_mod.Vector.create(testing.allocator);
-    var h = value_mod.HashTable{};
-    defer h.deinit(testing.allocator);
-    try h.put(testing.allocator, "k", .{ .vector = vec });
+test "retainValue/releaseValue: hash dispatch exercises the header" {
+    const h = try value_mod.HashTable.create(testing.allocator);
+    try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
 
-    retainValue(.{ .hash = &h });
+    retainValue(.{ .hash = h });
+    try testing.expectEqual(@as(u32, 2), h.header.refcountValue());
+
+    releaseValue(.{ .hash = h });
+    try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
+
+    releaseValue(.{ .hash = h });
+    // Final release destroys the backing; no further refcount inspection.
+}
+
+test "HashTable: destroy releases stored values and frees keys" {
+    // The vector's construction reference transfers into the hash slot;
+    // retain an observation reference so the refcount stays inspectable
+    // across the hash's destroy.
+    const vec = try value_mod.Vector.create(testing.allocator);
+    vec.header.retain();
+
+    const h = try value_mod.HashTable.create(testing.allocator);
+    const key = try h.header.allocator.dupe(u8, "k");
+    try h.map.put(h.header.allocator, key, .{ .vector = vec });
     try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
 
-    releaseValue(.{ .hash = &h });
+    releaseValue(.{ .hash = h });
     try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 
     vec.header.release();
 }
 
-test "retainValue/releaseValue: set propagates to member vector" {
-    const vec = try value_mod.Vector.create(testing.allocator);
-    var s = value_mod.Set{};
-    defer s.deinit(testing.allocator);
-    try s.put(testing.allocator, .{ .vector = vec }, {});
+test "retainValue/releaseValue: set dispatch exercises the header" {
+    const s = try value_mod.Set.create(testing.allocator);
+    try testing.expectEqual(@as(u32, 1), s.header.refcountValue());
 
-    retainValue(.{ .set = &s });
+    retainValue(.{ .set = s });
+    try testing.expectEqual(@as(u32, 2), s.header.refcountValue());
+
+    releaseValue(.{ .set = s });
+    try testing.expectEqual(@as(u32, 1), s.header.refcountValue());
+
+    releaseValue(.{ .set = s });
+    // Final release destroys the backing; no further refcount inspection.
+}
+
+test "Set: destroy releases member values" {
+    // The vector's construction reference transfers into the set slot;
+    // retain an observation reference so the refcount stays inspectable
+    // across the set's destroy.
+    const vec = try value_mod.Vector.create(testing.allocator);
+    vec.header.retain();
+
+    const s = try value_mod.Set.create(testing.allocator);
+    try s.map.put(s.header.allocator, .{ .vector = vec }, {});
     try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
 
-    releaseValue(.{ .set = &s });
+    releaseValue(.{ .set = s });
     try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 
     vec.header.release();
@@ -976,19 +983,24 @@ test "valueDeeplyImmutable: recurses through array, hash, set, and tagged" {
     var bad_outer = [_]Value{.{ .array = &bad_inner }};
     try testing.expect(!valueDeeplyImmutable(.{ .array = &bad_outer }));
 
-    var h = value_mod.HashTable{};
-    defer h.deinit(testing.allocator);
-    try h.put(testing.allocator, "k", .{ .string = "v" });
-    try testing.expect(valueDeeplyImmutable(.{ .hash = &h }));
-    try h.put(testing.allocator, "m", .{ .vector = vec });
-    try testing.expect(!valueDeeplyImmutable(.{ .hash = &h }));
+    const h = try value_mod.HashTable.create(testing.allocator);
+    defer releaseValue(.{ .hash = h });
+    const h_alloc = h.header.allocator;
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .string = "v" });
+    try testing.expect(valueDeeplyImmutable(.{ .hash = h }));
+    // The hash slot owns its own reference; destroy releases it.
+    retainValue(.{ .vector = vec });
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "m"), .{ .vector = vec });
+    try testing.expect(!valueDeeplyImmutable(.{ .hash = h }));
 
-    var s = value_mod.Set{};
-    defer s.deinit(testing.allocator);
-    try s.put(testing.allocator, .{ .fixnum = 3 }, {});
-    try testing.expect(valueDeeplyImmutable(.{ .set = &s }));
-    try s.put(testing.allocator, .{ .vector = vec }, {});
-    try testing.expect(!valueDeeplyImmutable(.{ .set = &s }));
+    const s = try value_mod.Set.create(testing.allocator);
+    defer releaseValue(.{ .set = s });
+    try s.map.put(s.header.allocator, .{ .fixnum = 3 }, {});
+    try testing.expect(valueDeeplyImmutable(.{ .set = s }));
+    // The set slot owns its own reference; destroy releases it.
+    retainValue(.{ .vector = vec });
+    try s.map.put(s.header.allocator, .{ .vector = vec }, {});
+    try testing.expect(!valueDeeplyImmutable(.{ .set = s }));
 
     var dummy_vt: value_mod.VirtualType = undefined;
     var imm_inner: Value = .{ .fixnum = 4 };

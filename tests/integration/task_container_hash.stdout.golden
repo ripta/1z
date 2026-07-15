@@ -1,0 +1,10 @@
+Stack: [ ]
+Stack: [ ]
+PASS: child reads the shared hash
+PASS: parent hash intact after child exit
+Stack: [ ]
+PASS: child copy nested vector grew to length 4
+PASS: child copy nested vector has 99 appended
+PASS: parent nested vector length unchanged
+PASS: parent nested vector first element unchanged
+Stack: [ ]

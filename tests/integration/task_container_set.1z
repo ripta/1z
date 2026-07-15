@@ -1,0 +1,60 @@
+use "testing" ;
+
+\ Cross-worker set lifecycle under the refcounted header model, plus an
+\ ownership-churn chain across the copying set operations. Any missed
+\ retain or release surfaces through the leak gate at exit.
+
+test-set-read-in-child: ( -- ) [
+  S{ 41 }
+  dup
+  [
+    [ 41 @in? ] curry
+    spawn await
+    t "child sees the shared member" assert=
+  ] curry
+  task-scope
+  41 @in? t "parent set intact after child exit" assert=
+] ;
+
+test-set-through-channel-isolated: ( -- ) [
+  [
+    <channel>  \ data channel: parent -> child
+    <channel>  \ ack channel:  child  -> parent
+    \ stack: data ack
+    2dup  \ data ack data ack
+    [
+      \ child body, stack on entry: data ack
+      swap receive  \ ack set'   (independent copy)
+      7 @in?        \ ack bool
+      swap send     \ --         (send the membership answer back on ack)
+    ] curry curry spawn drop
+    \ stack: data ack
+    swap                   \ ack data
+    S{ 7 } V{ 1 } @adjoin  \ ack data set  (parent's original, one vector member)
+    tuck                   \ ack set data set
+    swap                   \ ack set set data
+    send                   \ ack set        (sent a copy on data)
+    swap                   \ set ack
+    receive                \ set bool
+    t "child copy still contains member 7" assert=
+    \ stack: set
+    7 @in? t "parent set still contains member 7" assert=
+  ] task-scope
+] ;
+
+\ Every operation copies members into a fresh set, so each retained member
+\ must be balanced when the intermediate sets drop.
+test-set-ops-ownership: ( -- ) [
+  S{ 1 2 } 3 @adjoin
+  4 @adjoin
+  3 @remove
+  S{ 2 5 } @union
+  S{ 2 4 5 } @intersection
+  S{ 5 } @difference
+  dup #len 2 "chained set ops end with two members" assert=
+  2 @in? t "2 survived the chain" assert=
+] ;
+
+test-set-read-in-child
+test-set-through-channel-isolated
+test-set-ops-ownership

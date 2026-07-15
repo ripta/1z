@@ -2,21 +2,39 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: vector literal body returns length 3
 Stack: [ ]
 PASS: map literal body returns a:1
+Stack: [ ]
+PASS: hash literal body returns a:1
 Stack: [ ]
 PASS: dup of vector literal sums both lengths
 Stack: [ ]
 PASS: vector literal dropped in body, fixnum returned
 Stack: [ ]
+PASS: hash literal dropped in body, fixnum returned
+Stack: [ ]
+PASS: set literal dropped in body, fixnum returned
+Stack: [ ]
 PASS: vec-len is compiled
 Stack: [ ]
 PASS: map-get is compiled
 Stack: [ ]
+PASS: hash-get is compiled
+Stack: [ ]
 PASS: vec-twice-len is compiled
 Stack: [ ]
 PASS: vec-drop is compiled
+Stack: [ ]
+PASS: hash-drop is compiled
+Stack: [ ]
+PASS: set-drop is compiled
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]

@@ -27,7 +27,10 @@ pub const primitives = [_]Primitive{
     .{ .name = "@values", .stack_effect = "assoc -- array", .doc = "Get all values from an associative type.", .func = nativeAtValues },
 };
 
-/// Helper to get error object field value
+/// Helper to get error object field value. Returns an owning reference:
+/// the `data` field is retained on the way out and the stack-trace frames
+/// are freshly constructed, so callers hand the result to a slot with
+/// `pushMoved` instead of `push`.
 fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8) !Value {
     if (std.mem.eql(u8, field_name, "error-type")) {
         return Value{ .symbol = err.error_type };
@@ -35,6 +38,7 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
         return .{ .string = err.message };
     } else if (std.mem.eql(u8, field_name, "data")) {
         if (err.data) |data| {
+            container_backing.retainValue(data.*);
             return data.*;
         } else {
             return .{ .boolean = false }; // f for null
@@ -43,14 +47,23 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
         if (err.stack_trace) |trace| {
             const alloc = ctx.quotationAllocator();
             const frames = alloc.alloc(Value, trace.len) catch return error.OutOfMemory;
+            var built: usize = 0;
+            errdefer container_backing.releaseValues(frames[0..built]);
             for (trace, 0..) |frame, i| {
-                const frame_hash = alloc.create(HashTable) catch return error.OutOfMemory;
-                frame_hash.* = HashTable{};
-                const word_key = alloc.dupe(u8, "word") catch return error.OutOfMemory;
-                frame_hash.put(alloc, word_key, .{ .string = frame.word_name }) catch return error.OutOfMemory;
-                const line_key = alloc.dupe(u8, "line") catch return error.OutOfMemory;
-                frame_hash.put(alloc, line_key, .{ .fixnum = @intCast(frame.line) }) catch return error.OutOfMemory;
+                const frame_hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
                 frames[i] = .{ .hash = frame_hash };
+                built = i + 1;
+                const hash_alloc = frame_hash.header.allocator;
+                const word_key = hash_alloc.dupe(u8, "word") catch return error.OutOfMemory;
+                frame_hash.map.put(hash_alloc, word_key, .{ .string = frame.word_name }) catch {
+                    hash_alloc.free(word_key);
+                    return error.OutOfMemory;
+                };
+                const line_key = hash_alloc.dupe(u8, "line") catch return error.OutOfMemory;
+                frame_hash.map.put(hash_alloc, line_key, .{ .fixnum = @intCast(frame.line) }) catch {
+                    hash_alloc.free(line_key);
+                    return error.OutOfMemory;
+                };
             }
             return .{ .array = frames };
         } else {
@@ -75,7 +88,7 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
 
     switch (obj) {
         .hash => |h| {
-            if (h.get(key_str)) |val| {
+            if (h.map.get(key_str)) |val| {
                 try ctx.stack.push(val);
             } else {
                 setErrorContext(ctx, "key '{s}' not found in hash", .{key_str});
@@ -92,7 +105,7 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
         },
         .error_value => |err| {
             const val = try getErrorField(ctx, err, key_str);
-            try ctx.stack.push(val);
+            try ctx.stack.pushMoved(val);
         },
         .module => |mod| {
             if (mod.words.get(key_str)) |word| {
@@ -138,7 +151,7 @@ fn nativeAtGetOr(ctx: *Context) anyerror!void {
 
     switch (obj) {
         .hash => |h| {
-            if (h.get(key_str)) |val| {
+            if (h.map.get(key_str)) |val| {
                 try ctx.stack.push(val);
             } else {
                 try ctx.stack.push(default);
@@ -159,7 +172,7 @@ fn nativeAtGetOr(ctx: *Context) anyerror!void {
                 }
                 return e;
             };
-            try ctx.stack.push(val);
+            try ctx.stack.pushMoved(val);
         },
         .module => |mod| {
             if (mod.words.get(key_str)) |word| {
@@ -202,7 +215,7 @@ pub fn nativeAtHas(ctx: *Context) anyerror!void {
 
     switch (obj) {
         .hash => |h| {
-            const exists = h.get(key_str) != null;
+            const exists = h.map.get(key_str) != null;
             try ctx.stack.push(.{ .boolean = exists });
         },
         .mutable_map => |m| {
@@ -231,43 +244,74 @@ pub fn nativeAtHas(ctx: *Context) anyerror!void {
 /// @set ( assoc key value -- assoc' ) - Set value, returns new hash
 /// Non-polymorphic, only works on hash tables
 pub fn nativeAtSet(ctx: *Context) anyerror!void {
-    // Hash isn't refcount-aware: `new_value` is stored in the new hash
-    // slot without a retain (see the comment in `nativeMakeHash`). Releasing
-    // the popped local here would dangle the hash's borrowed pointer, so we
-    // intentionally let the popped ownership flow into the slot. `obj` and
-    // `key` are pure consumes -- they don't end up referenced by the result.
+    // `new_value` was popped into a C local with ownership transferred from
+    // its stack slot; its reference flows into the new hash's slot below, so
+    // there is no defer release for it. `obj` and `key` are pure consumes.
     const new_value = try ctx.stack.pop();
     const key = try ctx.stack.pop();
     defer container_backing.releaseValue(key);
     const obj = try ctx.stack.pop();
     defer container_backing.releaseValue(obj);
 
-    const key_str = try extractKeyString(ctx, key);
+    const key_str = extractKeyString(ctx, key) catch |e| {
+        container_backing.releaseValue(new_value);
+        return e;
+    };
 
     switch (obj) {
         .hash => |h| {
-            const alloc = ctx.quotationAllocator();
-            const new_hash = alloc.create(HashTable) catch return error.OutOfMemory;
-            new_hash.* = HashTable{};
+            const new_hash = HashTable.create(ctx.allocator) catch {
+                container_backing.releaseValue(new_value);
+                return error.OutOfMemory;
+            };
+            errdefer container_backing.releaseValue(.{ .hash = new_hash });
+            const alloc = new_hash.header.allocator;
 
-            // Clone the existing entries
-            var iter = h.iterator();
+            // Clone the existing entries; each copied slot takes its own
+            // owning reference to the value.
+            var iter = h.map.iterator();
             while (iter.next()) |entry| {
-                const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
-                new_hash.put(alloc, key_copy, entry.value_ptr.*) catch return error.OutOfMemory;
+                const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch {
+                    container_backing.releaseValue(new_value);
+                    return error.OutOfMemory;
+                };
+                container_backing.retainValue(entry.value_ptr.*);
+                new_hash.map.put(alloc, key_copy, entry.value_ptr.*) catch {
+                    alloc.free(key_copy);
+                    container_backing.releaseValue(entry.value_ptr.*);
+                    container_backing.releaseValue(new_value);
+                    return error.OutOfMemory;
+                };
             }
 
-            // Add/update the new key-value pair
-            const new_key = alloc.dupe(u8, key_str) catch return error.OutOfMemory;
-            new_hash.put(alloc, new_key, new_value) catch return error.OutOfMemory;
+            // Add/update the new key-value pair. On an existing key the
+            // cloned value is displaced: release its reference and keep the
+            // already-dup'd key bytes.
+            if (new_hash.map.getEntry(key_str)) |entry| {
+                const displaced = entry.value_ptr.*;
+                entry.value_ptr.* = new_value;
+                container_backing.releaseValue(displaced);
+            } else {
+                const new_key = alloc.dupe(u8, key_str) catch {
+                    container_backing.releaseValue(new_value);
+                    return error.OutOfMemory;
+                };
+                new_hash.map.put(alloc, new_key, new_value) catch {
+                    alloc.free(new_key);
+                    container_backing.releaseValue(new_value);
+                    return error.OutOfMemory;
+                };
+            }
 
-            try ctx.stack.push(.{ .hash = new_hash });
+            try ctx.stack.pushMoved(.{ .hash = new_hash });
         },
         .error_value => {
+            container_backing.releaseValue(new_value);
             setErrorContext(ctx, "cannot @set on error object", .{});
             return error.TypeMismatch;
         },
         else => {
+            container_backing.releaseValue(new_value);
             setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});
             return error.TypeMismatch;
         },
@@ -284,11 +328,14 @@ pub fn nativeAtKeys(ctx: *Context) anyerror!void {
     switch (obj) {
         .hash => |h| {
             const alloc = ctx.quotationAllocator();
-            const keys = alloc.alloc(Value, h.count()) catch return error.OutOfMemory;
-            var iter = h.iterator();
+            const keys = alloc.alloc(Value, h.map.count()) catch return error.OutOfMemory;
+            var iter = h.map.iterator();
             var i: usize = 0;
             while (iter.next()) |entry| {
-                keys[i] = .{ .symbol = entry.key_ptr.* };
+                // The hash owns its key bytes and frees them at destroy, so
+                // the escaping symbols need arena-lifetime copies.
+                const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
+                keys[i] = .{ .symbol = key_copy };
                 i += 1;
             }
             try ctx.stack.push(.{ .array = keys });
@@ -341,8 +388,8 @@ pub fn nativeAtValues(ctx: *Context) anyerror!void {
     switch (obj) {
         .hash => |h| {
             const alloc = ctx.quotationAllocator();
-            const values = alloc.alloc(Value, h.count()) catch return error.OutOfMemory;
-            var iter = h.iterator();
+            const values = alloc.alloc(Value, h.map.count()) catch return error.OutOfMemory;
+            var iter = h.map.iterator();
             var i: usize = 0;
             while (iter.next()) |entry| {
                 values[i] = entry.value_ptr.*;
@@ -362,14 +409,19 @@ pub fn nativeAtValues(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .array = values });
         },
         .error_value => |err| {
-            // Get all four error field values
+            // Get all four error field values. Both fetched fields come back
+            // as owning references, so the array transfers to its slot with
+            // `pushMoved`.
             const alloc = ctx.quotationAllocator();
             const values = alloc.alloc(Value, 4) catch return error.OutOfMemory;
             values[0] = Value{ .symbol = err.error_type };
             values[1] = .{ .string = err.message };
-            values[2] = if (err.data) |data| data.* else Value{ .boolean = false };
-            values[3] = try getErrorField(ctx, err, "stack-trace");
-            try ctx.stack.push(.{ .array = values });
+            values[2] = try getErrorField(ctx, err, "data");
+            values[3] = getErrorField(ctx, err, "stack-trace") catch |e| {
+                container_backing.releaseValue(values[2]);
+                return e;
+            };
+            try ctx.stack.pushMoved(.{ .array = values });
         },
         else => {
             setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});

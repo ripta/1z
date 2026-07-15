@@ -1,0 +1,12 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: child sees the shared member
+PASS: parent set intact after child exit
+Stack: [ ]
+PASS: child copy still contains member 7
+PASS: parent set still contains member 7
+Stack: [ ]
+PASS: chained set ops end with two members
+PASS: 2 survived the chain
+Stack: [ ]

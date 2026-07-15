@@ -98,7 +98,7 @@ fn lookupNamed(ctx: ?*Context, source: Value, name: []const u8) !Value {
             return error.KeyNotFound;
         },
         .hash => |h| {
-            return h.get(name) orelse return error.KeyNotFound;
+            return h.map.get(name) orelse return error.KeyNotFound;
         },
         .mutable_map => |m| {
             return m.map.get(name) orelse return error.KeyNotFound;
@@ -430,18 +430,18 @@ test "valueToString converts boolean" {
 }
 
 test "lookupNamed on hash" {
-    var h = HashTable{};
-    defer h.deinit(test_alloc);
-    try h.put(test_alloc, "x", .{ .fixnum = 10 });
-    const val = try lookupNamed(null, .{ .hash = &h }, "x");
+    const h = try HashTable.create(test_alloc);
+    defer h.header.release();
+    try h.map.put(test_alloc, try test_alloc.dupe(u8, "x"), .{ .fixnum = 10 });
+    const val = try lookupNamed(null, .{ .hash = h }, "x");
     try testing.expectEqual(Value{ .fixnum = 10 }, val);
 }
 
 test "lookupNamed on hash missing key" {
-    var h = HashTable{};
-    defer h.deinit(test_alloc);
-    try h.put(test_alloc, "x", .{ .fixnum = 10 });
-    const result = lookupNamed(null, .{ .hash = &h }, "y");
+    const h = try HashTable.create(test_alloc);
+    defer h.header.release();
+    try h.map.put(test_alloc, try test_alloc.dupe(u8, "x"), .{ .fixnum = 10 });
+    const result = lookupNamed(null, .{ .hash = h }, "y");
     try testing.expectError(error.KeyNotFound, result);
 }
 
@@ -464,9 +464,9 @@ test "lookupIndexed out of bounds" {
 }
 
 test "lookupIndexed on hash is TypeError" {
-    var h = HashTable{};
-    defer h.deinit(test_alloc);
-    const result = lookupIndexed(null, .{ .hash = &h }, 0);
+    const h = try HashTable.create(test_alloc);
+    defer h.header.release();
+    const result = lookupIndexed(null, .{ .hash = h }, 0);
     try testing.expectError(error.TypeMismatch, result);
 }
 

@@ -7174,9 +7174,9 @@ fn compileInstructions(
                 } else {
                     const dest_addr = liveSlotAddr(state, sp.*);
                     emitPushValue(ctx, &val, dest_addr);
-                    // A literal that carries a refcounted backing (a `.vector`
-                    // or `.mutable_map`, or an `.array`/`.hash`/`.set` holding
-                    // them) is raw-copied here, so the new slot must retain to
+                    // A literal that carries a refcounted backing (a `.vector`,
+                    // `.mutable_map`, or `.hash`, or an `.array`/`.set` holding
+                    // one) is raw-copied here, so the new slot must retain to
                     // match the consumer's release; the dictionary release list
                     // owns the literal's own reference and frees it at teardown.
                     if (container_backing.valueCarriesBacking(val)) {
@@ -12225,7 +12225,11 @@ export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callcon
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
-    ctx.stack.push(val) catch {
+    // The deserialized composite is freshly constructed, so its slots already
+    // hold owning references; transfer them to the stack slot instead of
+    // retaining a second time and stranding the construction reference.
+    ctx.stack.pushMoved(val) catch {
+        container_backing.releaseValue(val);
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };

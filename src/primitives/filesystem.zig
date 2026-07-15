@@ -142,46 +142,46 @@ fn nativePathExists(ctx: *Context) anyerror!void {
 fn nativeFileInfo(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "file-info");
     const path = try helpers.popString(ctx);
-    const alloc = ctx.quotationAllocator();
 
     const stat = std.fs.cwd().statFile(path) catch |err| {
         helpers.setErrorContext(ctx, "file-info: {s}", .{@errorName(err)});
         return mapFileOpenError(err);
     };
 
-    const hash = alloc.create(HashTable) catch return error.OutOfMemory;
-    hash.* = HashTable{};
+    const hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
+    errdefer hash.header.release();
+    const hash_alloc = hash.header.allocator;
 
     // size
-    const size_key = alloc.dupe(u8, "size") catch return error.OutOfMemory;
-    hash.put(alloc, size_key, .{ .fixnum = @intCast(stat.size) }) catch return error.OutOfMemory;
+    const size_key = hash_alloc.dupe(u8, "size") catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, size_key, .{ .fixnum = @intCast(stat.size) }) catch return error.OutOfMemory;
 
     // type
-    const type_key = alloc.dupe(u8, "type") catch return error.OutOfMemory;
+    const type_key = hash_alloc.dupe(u8, "type") catch return error.OutOfMemory;
     const type_sym: []const u8 = switch (stat.kind) {
         .file => "file",
         .directory => "directory",
         .sym_link => "symlink",
         else => "unknown",
     };
-    hash.put(alloc, type_key, .{ .symbol = type_sym }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, type_key, .{ .symbol = type_sym }) catch return error.OutOfMemory;
 
     // modified (epoch seconds from nanoseconds)
-    const mod_key = alloc.dupe(u8, "modified") catch return error.OutOfMemory;
+    const mod_key = hash_alloc.dupe(u8, "modified") catch return error.OutOfMemory;
     const mtime_secs: i64 = @intCast(@divFloor(stat.mtime, std.time.ns_per_s));
-    hash.put(alloc, mod_key, .{ .fixnum = mtime_secs }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, mod_key, .{ .fixnum = mtime_secs }) catch return error.OutOfMemory;
 
     // accessed (epoch seconds from nanoseconds)
-    const acc_key = alloc.dupe(u8, "accessed") catch return error.OutOfMemory;
+    const acc_key = hash_alloc.dupe(u8, "accessed") catch return error.OutOfMemory;
     const atime_secs: i64 = @intCast(@divFloor(stat.atime, std.time.ns_per_s));
-    hash.put(alloc, acc_key, .{ .fixnum = atime_secs }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, acc_key, .{ .fixnum = atime_secs }) catch return error.OutOfMemory;
 
     // permissions
-    const perm_key = alloc.dupe(u8, "permissions") catch return error.OutOfMemory;
+    const perm_key = hash_alloc.dupe(u8, "permissions") catch return error.OutOfMemory;
     const mode: i64 = @intCast(stat.mode & 0o7777);
-    hash.put(alloc, perm_key, .{ .fixnum = mode }) catch return error.OutOfMemory;
+    hash.map.put(hash_alloc, perm_key, .{ .fixnum = mode }) catch return error.OutOfMemory;
 
-    try ctx.stack.push(.{ .hash = hash });
+    try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
 /// create-symlink ( target link-path -- )

@@ -574,19 +574,20 @@ fn nativeWatcherRead(ctx: *Context) anyerror!void {
         }
 
         const alloc = ctx.quotationAllocator();
-        const hash = try alloc.create(HashTable);
-        hash.* = HashTable{};
+        const hash = try HashTable.create(ctx.allocator);
+        errdefer hash.header.release();
+        const hash_alloc = hash.header.allocator;
 
-        try hash.put(alloc, try alloc.dupe(u8, "watch-id"), .{ .fixnum = event.watch_id });
-        try hash.put(alloc, try alloc.dupe(u8, "kind"), .{ .symbol = event.kind });
-        try hash.put(alloc, try alloc.dupe(u8, "path"), .{ .string = try alloc.dupe(u8, event.path) });
+        try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "watch-id"), .{ .fixnum = event.watch_id });
+        try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "kind"), .{ .symbol = event.kind });
+        try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "path"), .{ .string = try alloc.dupe(u8, event.path) });
         if (event.new_path) |new_path| {
-            try hash.put(alloc, try alloc.dupe(u8, "new-path"), .{ .string = try alloc.dupe(u8, new_path) });
+            try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "new-path"), .{ .string = try alloc.dupe(u8, new_path) });
         } else {
-            try hash.put(alloc, try alloc.dupe(u8, "new-path"), .{ .boolean = false });
+            try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "new-path"), .{ .boolean = false });
         }
 
-        try ctx.stack.push(.{ .hash = hash });
+        try ctx.stack.pushMoved(.{ .hash = hash });
         return;
     }
 }
@@ -892,10 +893,11 @@ test "watcher-add and watcher-read observe file modification" {
     try ctx.stack.push(.{ .resource = resource });
     try nativeWatcherRead(&ctx);
     const hash = (try ctx.stack.pop()).hash;
+    defer hash.header.release();
 
-    try std.testing.expectEqual(watch_id, hash.get("watch-id").?.fixnum);
-    try std.testing.expectEqualStrings("modified", hash.get("kind").?.symbol);
-    try std.testing.expectEqualStrings(path, hash.get("path").?.string);
+    try std.testing.expectEqual(watch_id, hash.map.get("watch-id").?.fixnum);
+    try std.testing.expectEqualStrings("modified", hash.map.get("kind").?.symbol);
+    try std.testing.expectEqualStrings(path, hash.map.get("path").?.string);
 
     try ctx.stack.push(.{ .resource = resource });
     try ctx.stack.push(.{ .fixnum = watch_id });

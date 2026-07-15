@@ -60,8 +60,38 @@ pub const Instruction = struct {
     };
 };
 
-/// Hash table type for H{ } literals.
-pub const HashTable = std.StringHashMapUnmanaged(Value);
+/// Hash table type for H{ } literals - immutable key-value store.
+///
+/// Storage layout mirrors `MutableMap`: a refcounted, mutex-guarded `ContainerHeader` at the top of
+/// the struct, followed by the `StringHashMapUnmanaged` that holds the entries. Create via
+/// `HashTable.create` so the header is initialised before the value can be observed by any other
+/// thread.
+pub const HashTable = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    map: std.StringHashMapUnmanaged(Value) = .{},
+
+    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*HashTable {
+        const self = try allocator.create(HashTable);
+        self.* = .{
+            .header = undefined,
+            .map = .{},
+        };
+        self.header.init(allocator, destroyHashTable);
+        return self;
+    }
+
+    fn destroyHashTable(header: *@import("container_backing.zig").ContainerHeader) void {
+        const cb = @import("container_backing.zig");
+        const self: *HashTable = @fieldParentPtr("header", header);
+        var iter = self.map.iterator();
+        while (iter.next()) |entry| {
+            header.allocator.free(entry.key_ptr.*);
+            cb.releaseValue(entry.value_ptr.*);
+        }
+        self.map.deinit(header.allocator);
+        header.allocator.destroy(self);
+    }
+};
 
 /// Vector type for V{ } literals - mutable, dynamically-sized sequences.
 ///
@@ -237,7 +267,7 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
         },
         .closure => |c| valueContainsBorrowedBuffer(.{ .quotation = c.asQuotation() }),
         .hash => |h| blk: {
-            var iter = h.iterator();
+            var iter = h.map.iterator();
             while (iter.next()) |entry| {
                 if (valueContainsBorrowedBuffer(entry.value_ptr.*)) break :blk true;
             }
@@ -245,7 +275,7 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
         },
         .vector => |v| containsBorrowedInSlice(v.list.items),
         .set => |s| blk: {
-            for (s.keys()) |key| {
+            for (s.map.keys()) |key| {
                 if (valueContainsBorrowedBuffer(key)) break :blk true;
             }
             break :blk false;
@@ -313,7 +343,35 @@ pub const ValueContext = struct {
 
 /// Set type for S{ } literals - immutable collections of unique values.
 /// Uses hash-based storage for O(1) average-case membership testing.
-pub const Set = std.ArrayHashMapUnmanaged(Value, void, ValueContext, true);
+///
+/// Storage layout mirrors `HashTable`: a refcounted, mutex-guarded `ContainerHeader` at the top of
+/// the struct, followed by the `ArrayHashMapUnmanaged` that holds the members. Members are Values,
+/// so destroy releases each one; there are no separate key bytes to free. Create via `Set.create`
+/// so the header is initialised before the value can be observed by any other thread.
+pub const Set = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    map: std.ArrayHashMapUnmanaged(Value, void, ValueContext, true) = .{},
+
+    pub fn create(allocator: std.mem.Allocator) error{OutOfMemory}!*Set {
+        const self = try allocator.create(Set);
+        self.* = .{
+            .header = undefined,
+            .map = .{},
+        };
+        self.header.init(allocator, destroySet);
+        return self;
+    }
+
+    fn destroySet(header: *@import("container_backing.zig").ContainerHeader) void {
+        const cb = @import("container_backing.zig");
+        const self: *Set = @fieldParentPtr("header", header);
+        for (self.map.keys()) |key| {
+            cb.releaseValue(key);
+        }
+        self.map.deinit(header.allocator);
+        header.allocator.destroy(self);
+    }
+};
 
 /// MutableMap type for M{ } literals - mutable key-value store.
 ///
@@ -1173,7 +1231,7 @@ pub const Value = union(enum) {
             // implementation in the prelude.
             .hash => |h| {
                 try writer.writeAll("H{ ");
-                var iter = h.iterator();
+                var iter = h.map.iterator();
                 while (iter.next()) |entry| {
                     try writer.print("{s}: ", .{entry.key_ptr.*});
                     try entry.value_ptr.write(writer);
@@ -1198,7 +1256,7 @@ pub const Value = union(enum) {
             },
             .set => |s| {
                 try writer.writeAll("S{ ");
-                for (s.keys()) |key| {
+                for (s.map.keys()) |key| {
                     try key.write(writer);
                     try writer.writeAll(" ");
                 }
@@ -1338,10 +1396,10 @@ pub const Value = union(enum) {
             // implementation in the prelude.
             .hash => |a| {
                 const b = other.hash;
-                if (a.count() != b.count()) return false;
-                var iter = a.iterator();
+                if (a.map.count() != b.map.count()) return false;
+                var iter = a.map.iterator();
                 while (iter.next()) |entry| {
-                    if (b.get(entry.key_ptr.*)) |bval| {
+                    if (b.map.get(entry.key_ptr.*)) |bval| {
                         if (!entry.value_ptr.eql(bval)) return false;
                     } else {
                         return false;
@@ -1365,10 +1423,10 @@ pub const Value = union(enum) {
             // contain the same elements regardless of iteration order.
             .set => |a| {
                 const b = other.set;
-                if (a.count() != b.count()) return false;
+                if (a.map.count() != b.map.count()) return false;
                 // Check that every element in a exists in b (O(n) with O(1) lookups)
-                for (a.keys()) |key| {
-                    if (!b.contains(key)) return false;
+                for (a.map.keys()) |key| {
+                    if (!b.map.contains(key)) return false;
                 }
                 return true;
             },
@@ -1513,7 +1571,7 @@ pub const Value = union(enum) {
             .hash => |h| {
                 // Order-independent hash using XOR
                 var combined: u64 = 0;
-                var iter = h.iterator();
+                var iter = h.map.iterator();
                 while (iter.next()) |entry| {
                     var pair_hasher = Hasher.init(0);
                     pair_hasher.update(entry.key_ptr.*);
@@ -1533,7 +1591,7 @@ pub const Value = union(enum) {
             .set => |s| {
                 // Order-independent hash using XOR
                 var combined: u64 = 0;
-                for (s.keys()) |key| {
+                for (s.map.keys()) |key| {
                     combined ^= key.hashValue();
                 }
                 hasher.update(std.mem.asBytes(&combined));

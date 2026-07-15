@@ -526,8 +526,6 @@ fn virtualStructUnwrapHelper(ctx: *Context) anyerror!void {
 ///
 /// Validates the tag, unwraps to struct instance, converts fields to a hash.
 fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
 
@@ -537,8 +535,8 @@ fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
     };
 
     const val = try ctx.stack.pop();
-    // The popped tagged value is consumed; release it on every path. Pushing
-    // the resulting hash retains every field value it stores.
+    // The popped tagged value is consumed; release it on every path. The
+    // resulting hash's slots each take their own reference to a field value.
     defer container_backing.releaseValue(val);
     switch (val) {
         .tagged => |t| {
@@ -548,12 +546,19 @@ fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
             }
             switch (t.inner.*) {
                 .struct_instance => |si| {
-                    const hash = try alloc.create(value_mod.HashTable);
-                    hash.* = .{};
+                    const hash = try value_mod.HashTable.create(ctx.allocator);
+                    errdefer hash.header.release();
+                    const hash_alloc = hash.header.allocator;
                     for (st.fields, 0..) |field, i| {
-                        try hash.put(alloc, field, si.fields[i]);
+                        const key_copy = try hash_alloc.dupe(u8, field);
+                        container_backing.retainValue(si.fields[i]);
+                        hash.map.put(hash_alloc, key_copy, si.fields[i]) catch {
+                            hash_alloc.free(key_copy);
+                            container_backing.releaseValue(si.fields[i]);
+                            return error.OutOfMemory;
+                        };
                     }
-                    try ctx.stack.push(.{ .hash = hash });
+                    try ctx.stack.pushMoved(.{ .hash = hash });
                 },
                 else => {
                     helpers.setErrorContext(ctx, "expected struct-backed {s}", .{vt.name});
@@ -596,14 +601,14 @@ fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
         },
     };
 
-    if (hash.count() != st.fields.len) {
-        helpers.setErrorContext(ctx, ">{s} expects {d} fields, got {d}", .{ vt.name, st.fields.len, hash.count() });
+    if (hash.map.count() != st.fields.len) {
+        helpers.setErrorContext(ctx, ">{s} expects {d} fields, got {d}", .{ vt.name, st.fields.len, hash.map.count() });
         return error.TypeMismatch;
     }
 
     const field_values = try alloc.alloc(Value, st.fields.len);
     for (st.fields, 0..) |field, i| {
-        field_values[i] = hash.get(field) orelse {
+        field_values[i] = hash.map.get(field) orelse {
             helpers.setErrorContext(ctx, ">{s} missing field '{s}'", .{ vt.name, field });
             return error.MissingField;
         };
@@ -1249,7 +1254,7 @@ fn bindTypeParams(
     const base = ctx.resolveBaseParams(base_tv);
 
     // Every hash key must name a declared parameter that is still unbound.
-    var it = tp_hash.iterator();
+    var it = tp_hash.map.iterator();
     while (it.next()) |entry| {
         const key = entry.key_ptr.*;
         const idx = for (base.declared, 0..) |p, i| {
@@ -1268,7 +1273,7 @@ fn bindTypeParams(
     const params = try alloc.alloc(*const value_mod.TypeValue, base.current.len);
     for (base.current, 0..) |cur, i| {
         if (value_mod.isTypeParameter(cur)) {
-            if (tp_hash.get(cur.name)) |bound_val| {
+            if (tp_hash.map.get(cur.name)) |bound_val| {
                 params[i] = switch (bound_val) {
                     .type_val => |tv| tv,
                     else => {
