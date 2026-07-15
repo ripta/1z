@@ -1,0 +1,56 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== wrap rejects mismatched contents ===
+Stack: [ ]
+PASS: hash wrap rejects string value
+Stack: [ ]
+PASS: set wrap rejects string member
+Stack: [ ]
+PASS: vector wrap rejects string element
+Stack: [ ]
+PASS: mutable-map wrap rejects string value
+Stack: [ ]
+=== wrap accepts matching contents ===
+Stack: [ ]
+PASS: hash wrap accepts fixnum values
+Stack: [ ]
+PASS: set wrap accepts fixnum members
+Stack: [ ]
+PASS: vector wrap accepts fixnum elements
+Stack: [ ]
+PASS: mutable-map wrap accepts fixnum values
+Stack: [ ]
+=== empty containers wrap ===
+Stack: [ ]
+PASS: empty hash wraps
+Stack: [ ]
+PASS: empty set wraps
+Stack: [ ]
+PASS: empty vector wraps
+Stack: [ ]
+PASS: empty mutable-map wraps
+Stack: [ ]
+=== wrap promotes numeric elements ===
+Stack: [ ]
+PASS: hash wrap promotes fixnum value to float
+Stack: [ ]
+PASS: set wrap promotes fixnum member to float
+Stack: [ ]
+PASS: promoted set member dedupes against existing
+Stack: [ ]
+PASS: vector wrap promotes fixnum element to float
+Stack: [ ]
+PASS: mutable-map wrap promotes fixnum value to float
+Stack: [ ]
+=== promotion does not mutate immutable sources ===
+Stack: [ ]
+PASS: aliased source hash keeps its fixnum
+Stack: [ ]
+PASS: aliased source set keeps its fixnum
+Stack: [ ]

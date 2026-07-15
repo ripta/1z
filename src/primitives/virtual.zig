@@ -1034,8 +1034,8 @@ fn typedFreezeDispatch(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( value tv -- tagged )
 ///
-/// Like virtualWrapHelper but additionally validates that array elements
-/// match the parameterized type's type_params[0].
+/// Like virtualWrapHelper but additionally validates the wrapped value's contents against the
+/// parameterized type's type_params[0], promoting numeric elements where the tower allows.
 fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -1055,6 +1055,9 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
             }
         }
     }
+
+    // Popped with ownership; it flows into the tagged inner on success, so release only on throw.
+    errdefer container_backing.releaseValue(val);
 
     const actual_type: []const u8 = switch (val) {
         .struct_instance => |si| si.struct_type.name,
@@ -1120,6 +1123,127 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
                         if (!helpers.valueMatchesType(ctx, field_val, bound)) {
                             helpers.setErrorContext(ctx, ">{s} field '{s}' expects {s}, got {s}", .{ vt.name, si.struct_type.fields[i], bound.name, helpers.valueTypeName(field_val) });
                             return error.TypeMismatch;
+                        }
+                    }
+                },
+                .hash => |h| {
+                    // Immutable and possibly aliased: validate first, then swap in a fresh
+                    // HashTable when anything promotes.
+                    var needs_promotion = false;
+                    var scan = h.map.iterator();
+                    while (scan.next()) |entry| {
+                        const elem = entry.value_ptr.*;
+                        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+                        if (elem_tv == expected_tv) continue;
+                        if (tryPromoteElement(alloc, elem, expected_tv.name) == null) {
+                            helpers.setErrorContext(ctx, ">{s} value for key '{s}' has type {s}, expected {s}", .{ vt.name, entry.key_ptr.*, elem_tv.name, expected_tv.name });
+                            return error.TypeMismatch;
+                        }
+                        needs_promotion = true;
+                    }
+
+                    if (needs_promotion) {
+                        const new_hash = try value_mod.HashTable.create(ctx.allocator);
+                        errdefer container_backing.releaseValue(.{ .hash = new_hash });
+                        const hash_alloc = new_hash.header.allocator;
+
+                        var rebuild = h.map.iterator();
+                        while (rebuild.next()) |entry| {
+                            const key_copy = try hash_alloc.dupe(u8, entry.key_ptr.*);
+
+                            const elem = entry.value_ptr.*;
+                            const carried = dispatch_mod.dispatchTypeValue(elem, ctx) == expected_tv;
+                            const stored = if (carried) elem else tryPromoteElement(alloc, elem, expected_tv.name).?;
+                            if (carried) container_backing.retainValue(stored);
+
+                            new_hash.map.put(hash_alloc, key_copy, stored) catch {
+                                hash_alloc.free(key_copy);
+                                if (carried) container_backing.releaseValue(stored);
+                                return error.OutOfMemory;
+                            };
+                        }
+
+                        container_backing.releaseValue(val);
+                        val = .{ .hash = new_hash };
+                    }
+                },
+                .set => |s| {
+                    var needs_promotion = false;
+                    for (s.map.keys()) |member| {
+                        const member_tv = dispatch_mod.dispatchTypeValue(member, ctx);
+                        if (member_tv == expected_tv) continue;
+                        if (tryPromoteElement(alloc, member, expected_tv.name) == null) {
+                            helpers.setErrorContext(ctx, ">{s} member has type {s}, expected {s}", .{ vt.name, member_tv.name, expected_tv.name });
+                            return error.TypeMismatch;
+                        }
+                        needs_promotion = true;
+                    }
+
+                    if (needs_promotion) {
+                        const new_set = try value_mod.Set.create(ctx.allocator);
+                        errdefer container_backing.releaseValue(.{ .set = new_set });
+                        const set_alloc = new_set.header.allocator;
+
+                        for (s.map.keys()) |member| {
+                            const carried = dispatch_mod.dispatchTypeValue(member, ctx) == expected_tv;
+                            const stored = if (carried) member else tryPromoteElement(alloc, member, expected_tv.name).?;
+                            if (carried) container_backing.retainValue(stored);
+
+                            // A promoted member may collide with an existing one; drop the duplicate.
+                            const gop = new_set.map.getOrPut(set_alloc, stored) catch {
+                                container_backing.releaseValue(stored);
+                                return error.OutOfMemory;
+                            };
+                            if (gop.found_existing) container_backing.releaseValue(stored);
+                        }
+
+                        container_backing.releaseValue(val);
+                        val = .{ .set = new_set };
+                    }
+                },
+                .vector => |v| {
+                    // The wrap keeps the same mutable backing, so promote in place; validate
+                    // first so a failed wrap leaves it untouched.
+                    v.header.lock();
+                    defer v.header.unlock();
+
+                    for (v.list.items, 0..) |elem, i| {
+                        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+                        if (elem_tv == expected_tv) continue;
+                        if (tryPromoteElement(alloc, elem, expected_tv.name) == null) {
+                            helpers.setErrorContext(ctx, ">{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, elem_tv.name, expected_tv.name });
+                            return error.TypeMismatch;
+                        }
+                    }
+
+                    for (v.list.items, 0..) |elem, i| {
+                        if (dispatch_mod.dispatchTypeValue(elem, ctx) != expected_tv) {
+                            // Displaces only a fixnum or bignum, neither refcounted.
+                            v.list.items[i] = tryPromoteElement(alloc, elem, expected_tv.name).?;
+                        }
+                    }
+                },
+                .mutable_map => |m| {
+                    m.header.lock();
+                    defer m.header.unlock();
+
+                    var scan = m.map.iterator();
+                    while (scan.next()) |entry| {
+                        const elem = entry.value_ptr.*;
+                        const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
+                        if (elem_tv == expected_tv) continue;
+                        if (tryPromoteElement(alloc, elem, expected_tv.name) == null) {
+                            helpers.setErrorContext(ctx, ">{s} value for key '{s}' has type {s}, expected {s}", .{ vt.name, entry.key_ptr.*, elem_tv.name, expected_tv.name });
+                            return error.TypeMismatch;
+                        }
+                    }
+
+                    var rewrite = m.map.iterator();
+                    while (rewrite.next()) |entry| {
+                        const elem = entry.value_ptr.*;
+                        if (dispatch_mod.dispatchTypeValue(elem, ctx) != expected_tv) {
+                            // Displaces only a fixnum or bignum, neither refcounted.
+                            entry.value_ptr.* = tryPromoteElement(alloc, elem, expected_tv.name).?;
                         }
                     }
                 },

@@ -1,0 +1,46 @@
+\ Wrap-time element validation for parameterized container types
+
+use "testing" ;
+
+hash(fixnum):        M{ inner-type: hash element-type: fixnum define: [ define-parameterized-type ] } ;
+hash(float):         M{ inner-type: hash element-type: float define: [ define-parameterized-type ] } ;
+set(fixnum):         M{ inner-type: set element-type: fixnum define: [ define-parameterized-type ] } ;
+set(float):          M{ inner-type: set element-type: float define: [ define-parameterized-type ] } ;
+vector(fixnum):      M{ inner-type: vector element-type: fixnum define: [ define-parameterized-type ] } ;
+vector(float):       M{ inner-type: vector element-type: float define: [ define-parameterized-type ] } ;
+mutable-map(fixnum): M{ inner-type: mutable-map element-type: fixnum define: [ define-parameterized-type ] } ;
+mutable-map(float):  M{ inner-type: mutable-map element-type: float define: [ define-parameterized-type ] } ;
+
+"wrap rejects mismatched contents" test-section
+
+[ H{ a: "nope" } >hash(fixnum) ] type-mismatch: "hash wrap rejects string value" assert-error-type
+[ S{ "nope" } >set(fixnum) ] type-mismatch: "set wrap rejects string member" assert-error-type
+[ V{ 1 "nope" } >vector(fixnum) ] type-mismatch: "vector wrap rejects string element" assert-error-type
+[ M{ x: "nope" } >mutable-map(fixnum) ] type-mismatch: "mutable-map wrap rejects string value" assert-error-type
+
+"wrap accepts matching contents" test-section
+
+H{ a: 1 b: 2 } >hash(fixnum) type-name "hash(fixnum)" "hash wrap accepts fixnum values" assert=
+S{ 1 2 } >set(fixnum) type-name "set(fixnum)" "set wrap accepts fixnum members" assert=
+V{ 1 2 } >vector(fixnum) type-name "vector(fixnum)" "vector wrap accepts fixnum elements" assert=
+M{ x: 1 } >mutable-map(fixnum) type-name "mutable-map(fixnum)" "mutable-map wrap accepts fixnum values" assert=
+
+"empty containers wrap" test-section
+
+H{ } >hash(fixnum) type-name "hash(fixnum)" "empty hash wraps" assert=
+S{ } >set(fixnum) type-name "set(fixnum)" "empty set wraps" assert=
+V{ } >vector(fixnum) type-name "vector(fixnum)" "empty vector wraps" assert=
+M{ } >mutable-map(fixnum) type-name "mutable-map(fixnum)" "empty mutable-map wraps" assert=
+
+"wrap promotes numeric elements" test-section
+
+H{ a: 1 } >hash(float) unmake-hash(float) a: @get 1.0 "hash wrap promotes fixnum value to float" assert=
+S{ 1 } >set(float) unmake-set(float) 1.0 @in? t "set wrap promotes fixnum member to float" assert=
+S{ 1 1.0 } >set(float) unmake-set(float) #len 1 "promoted set member dedupes against existing" assert=
+V{ 1 2.5 } >vector(float) unmake-vector(float) 0 #nth 1.0 "vector wrap promotes fixnum element to float" assert=
+M{ x: 1 } >mutable-map(float) unmake-mutable-map(float) x: @get 1.0 "mutable-map wrap promotes fixnum value to float" assert=
+
+"promotion does not mutate immutable sources" test-section
+
+H{ a: 1 } dup >hash(float) drop a: @get 1 "aliased source hash keeps its fixnum" assert=
+S{ 1 } dup >set(float) drop 1 @in? t "aliased source set keeps its fixnum" assert=
