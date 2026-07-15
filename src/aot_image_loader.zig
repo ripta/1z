@@ -537,6 +537,18 @@ pub fn loadIntoContext(
     ctx.image_constraintcombinator_slots = slots.constraint_combinators;
     ctx.image_constraintcombinator_slot_count = header.constraintcombinator_slot_count;
 
+    // Decoded-edge counts for the struct-instance slots, incremented by the decoder's arm across
+    // every content pass, including the method-dispatch replay that runs after this function
+    // returns. The context's teardown compensation reads them to balance the field-set releases
+    // that recursion through stored struct-instance references performs. Allocated before any
+    // content decodes so no edge is missed.
+    if (header.struct_instance_slot_count > 0) {
+        const degrees = ctx.quotationAllocator().alloc(u32, header.struct_instance_slot_count) catch
+            return LoaderError.OutOfMemory;
+        @memset(degrees, 0);
+        ctx.image_struct_instance_in_degree = degrees.ptr;
+    }
+
     // Stash the method-dispatch replay table; the actual replay runs in
     // `replayMethodDispatch` after the quotation-function table is
     // registered, which happens after this loader pass.
@@ -601,7 +613,7 @@ pub fn loadIntoContext(
 /// the Context's patched slot-table pointers. Both the generated-word-body
 /// pass and method-dispatch replay decode `.struct_type` (and other
 /// type-carrier) literals against these.
-fn imageSlotTables(ctx: *const Context) instruction_bytecode.SlotResolutionTables {
+fn imageSlotTables(ctx: *Context) instruction_bytecode.SlotResolutionTables {
     return .{
         .typevalue_slots = ctx.image_typevalue_slots,
         .typevalue_slot_count = ctx.image_typevalue_slot_count,
@@ -623,6 +635,13 @@ fn imageSlotTables(ctx: *const Context) instruction_bytecode.SlotResolutionTable
         // here), so a quotation nested in a container slot value -- the lint
         // registry's `check` quotations -- decodes with its compiled code_ptr.
         .quotation_fns = if (ctx.aot_quotation_fns) |f| f.table[0..f.size] else null,
+        // Ownership side channels: decoded struct-instance edges are counted
+        // for the teardown compensation, and nested quotation streams whose
+        // operands carry container literals register on the context release
+        // list so their operand references drop at teardown.
+        .struct_instance_in_degree = ctx.image_struct_instance_in_degree,
+        .decoded_streams = &ctx.container_release_list,
+        .decoded_streams_allocator = ctx.allocator,
     };
 }
 
@@ -658,6 +677,7 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
         const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
         const instrs = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables) catch
             return LoaderError.OutOfMemory;
+        ctx.registerQuotationContainerLiterals(instrs) catch return LoaderError.OutOfMemory;
         word_entry.action = .{ .compound = instrs };
     }
 }
@@ -715,6 +735,7 @@ fn populateModulesAndWords(
                 &.{}
             else
                 decodeWordBodyInline(arena, w);
+            ctx.registerQuotationContainerLiterals(body) catch return LoaderError.OutOfMemory;
             const diag = decodeDiagnosticMetadata(w);
 
             // Treat `aot_image_emit.word_id_sentinel` (0xFFFFFFFFu) as
@@ -1348,8 +1369,8 @@ fn populateParameterSlots(
 /// either direction -- the flag descriptor chain
 /// `flag-registry -> registry-entry -> descriptor` is a forward reference
 /// from a lower slot to a higher one. Each map's initial refcount of 1 is
-/// donated to the slot, which holds a strong reference for the process
-/// lifetime.
+/// donated to the slot and released by the context's image-slot teardown
+/// walk.
 ///
 /// Runs before `populateTaggedSlots` so a tagged-inner value carrying a
 /// `.mutable_map` resolves correctly; an entry that references a tagged
@@ -1364,15 +1385,13 @@ fn populateMutableMapSlots(
     const descs = header.mutable_map_descriptions orelse return;
     const slot_table = slots orelse return;
 
-    // The slot maps and their interior allocations all sit on the
-    // context arena. The arena is freed wholesale at `Context.deinit`,
-    // so the slot table never needs explicit release; storing the
-    // header allocator as the arena keeps any runtime mutation of the
-    // map (key dupes, hashmap grows) flowing through the same arena
-    // for the same wholesale teardown. The slot's refcount of 1 is
-    // ignored at teardown because nothing decrements it; the destroy
-    // callback would no-op anyway since the arena does not free
-    // individual allocations.
+    // The slot maps sit on the context arena, and storing the header
+    // allocator as the arena keeps runtime mutation of the map (key dupes,
+    // hashmap grows) flowing through the same arena. The map's ELEMENT
+    // references are not arena-scoped: runtime `@set!` transfers ownership
+    // of refcounted values into the map, so the context's image-slot
+    // teardown walk releases each slot's donated reference and the destroy
+    // drops those element references before the arena is freed.
     const arena = ctx.quotationAllocator();
 
     const slot_tables = imageSlotTables(ctx);
@@ -1518,8 +1537,9 @@ fn populateStructInstanceFields(
 /// Allocate one empty `*Vector` per vector slot and patch the slot table
 /// before any element is decoded, so a forward reference from a lower slot to
 /// a higher one resolves regardless of slot ordering. Each vector's initial
-/// refcount of 1 is donated to the slot; the arena frees everything wholesale
-/// at `Context.deinit`, so no explicit release is needed.
+/// refcount of 1 is donated to the slot and released by the context's
+/// image-slot teardown walk, so runtime-appended element references drop
+/// before the arena that owns the vector struct is freed.
 fn allocateVectorSlots(
     ctx: *Context,
     header: *const Header,
@@ -1919,6 +1939,8 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
             // tables are patched before replay runs, so they resolve here.
             const body_tables = imageSlotTables(ctx);
             body_instructions = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &body_tables) catch
+                return LoaderError.OutOfMemory;
+            ctx.registerQuotationContainerLiterals(body_instructions) catch
                 return LoaderError.OutOfMemory;
             break :blk null;
         };

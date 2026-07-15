@@ -1,0 +1,23 @@
+\ Module-private container state for the runtime-mutation teardown
+\ regression. The V{ } and M{ } literals serialize into the AOT image as
+\ container slots. The struct instance stored at module load rides the
+\ image as a struct-instance slot. `populate-state` runs at binary
+\ runtime, so its entries are refcounted allocations that context
+\ teardown must release.
+
+rec: struct{ tag payload } ;
+
+(cache): ( -- vec ) V{ } ;
+(registry): ( -- mmap ) M{ } ;
+
+(pin-frozen): ( -- ) [ (registry) pinned: 7 { 1 2 } make-rec @set! drop ] ;
+(pin-frozen)
+
+populate-state: ( -- ) [
+  H{ } "k" 42 @set (cache) over #push! 2drop
+  (registry) runtime: { 4 5 6 } @set! drop
+] ;
+
+cache-value:         ( -- n )   [ (cache) 0 #nth "k" @get ] ;
+registry-runtime:    ( -- arr ) [ (registry) runtime: @get ] ;
+registry-pinned-tag: ( -- n )   [ (registry) pinned: @get tag>> ] ;

@@ -12105,9 +12105,9 @@ export fn jitPushTaggedSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 /// Push a `.mutable_map` literal by reading slot `slot` from
 /// `onez_image_mutable_map_slots[]`. The loader allocated and populated
 /// the `*MutableMap` during runtime-image rehydration; the slot holds a
-/// single strong reference for the process lifetime. The helper retains
-/// before pushing so each push site donates its own reference and the
-/// slot's anchor reference remains intact.
+/// strong reference released by the context's image-slot teardown walk.
+/// `stack.push` retains, so the pushed slot owns its own reference and
+/// the slot table's anchor stays intact.
 export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -12121,9 +12121,7 @@ export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
         ctx.jit_pending_error = error.WordNotFound;
         return 2;
     };
-    mmap.header.retain();
     ctx.stack.push(.{ .mutable_map = mmap }) catch {
-        mmap.header.release();
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
@@ -12131,9 +12129,9 @@ export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 }
 
 /// Push the image's struct instance for `slot` onto the stack. A struct
-/// instance has no refcount header of its own; the image owns the canonical
-/// `*StructInstance`, so retain its field vector to balance the release that
-/// occurs when the pushed copy is dropped.
+/// instance has no refcount header of its own; `stack.push` retains its
+/// field backings, balancing the release that occurs when the pushed copy
+/// is dropped.
 export fn jitPushStructInstanceSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -12147,10 +12145,7 @@ export fn jitPushStructInstanceSlot(ctx_raw: usize, slot: usize) callconv(.c) i3
         ctx.jit_pending_error = error.WordNotFound;
         return 2;
     };
-    const val: Value = .{ .struct_instance = si };
-    container_backing.retainValue(val);
-    ctx.stack.push(val) catch {
-        container_backing.releaseValue(val);
+    ctx.stack.push(.{ .struct_instance = si }) catch {
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };
@@ -12159,9 +12154,10 @@ export fn jitPushStructInstanceSlot(ctx_raw: usize, slot: usize) callconv(.c) i3
 
 /// Push a `.vector` literal by reading slot `slot` from
 /// `onez_image_vector_slots[]`. The loader allocated the `*Vector` during
-/// runtime-image rehydration; the slot holds a single strong reference for
-/// the process lifetime. The helper retains before pushing so each push site
-/// donates its own reference and the slot's anchor reference remains intact.
+/// runtime-image rehydration; the slot holds a strong reference released by
+/// the context's image-slot teardown walk. `stack.push` retains, so the
+/// pushed slot owns its own reference and the slot table's anchor stays
+/// intact.
 export fn jitPushVectorSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -12175,9 +12171,7 @@ export fn jitPushVectorSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
         ctx.jit_pending_error = error.WordNotFound;
         return 2;
     };
-    vec.header.retain();
     ctx.stack.push(.{ .vector = vec }) catch {
-        vec.header.release();
         ctx.jit_pending_error = error.OutOfMemory;
         return 2;
     };

@@ -1,0 +1,12 @@
+\ Regression: values created at binary runtime and stored into
+\ image-materialized module-private container state must be released at
+\ context teardown. The debug allocator in the linked runtime reports any
+\ missed release on stderr, which this fixture catches through its stderr
+\ golden. The program exits by falling off the end; `sys-exit` would skip
+\ teardown and mask the check.
+use "./support/private_state.1z" ;
+
+populate-state
+cache-value inspect print-line
+registry-runtime inspect print-line
+registry-pinned-tag inspect print-line

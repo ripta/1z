@@ -570,6 +570,11 @@ pub const Context = struct {
     image_vector_slot_count: u32 = 0,
     image_protocoldescriptor_slot_count: u32 = 0,
     image_constraintcombinator_slot_count: u32 = 0,
+    /// Decoded-edge count per struct-instance slot, recorded by the image
+    /// decoder's struct_instance_slot arm and consumed by the teardown
+    /// compensation in `deinit`. Arena-owned; never copied to task contexts,
+    /// since only the root context walks the image slots at teardown.
+    image_struct_instance_in_degree: ?[*]u32 = null,
     /// AOT method-dispatch replay table, stashed by `loadIntoContext` and
     /// consumed by `aot_image_loader.replayMethodDispatch` after the
     /// quotation-function table is registered. Stored opaquely to avoid an
@@ -1353,10 +1358,17 @@ pub const Context = struct {
         // (dictionary) and arena-owned quotations. All releases must
         // happen before the arena that owns the quotation instructions
         // is torn down.
+        //
+        // The image-slot compensation must precede the release-list walks:
+        // registered image streams hold struct-instance operand edges whose
+        // releases the compensation balances. Task contexts share the slot
+        // tables with their root, so only the root walks them.
         self.stack.clear();
+        if (self.parent_context == null) self.compensateImageStructInstanceOwnership();
         self.dictionary.walkContainerReleaseList();
         self.walkContainerReleaseList();
         self.container_release_list.deinit(self.allocator);
+        if (self.parent_context == null) self.releaseImageSlotReferences();
 
         self.arena.deinit();
         self.dictionary.deinit();
@@ -1397,6 +1409,64 @@ pub const Context = struct {
             container_backing.releaseInstructionsContainerLiterals(instrs);
         }
         self.container_release_list.clearRetainingCapacity();
+    }
+
+    /// Balance the decoded struct-instance edges the image loader counted.
+    ///
+    /// Release recurses through headerless composites, so every stored
+    /// reference to a struct-instance slot releases the instance's field set
+    /// once at teardown. The fields carry one owned reference set from their
+    /// decode, and `releaseImageSlotReferences` drops one more, so each slot
+    /// needs exactly `in_degree` additional retains. Must run before any
+    /// release that can reach a decoded struct-instance edge.
+    fn compensateImageStructInstanceOwnership(self: *Context) void {
+        const degrees = self.image_struct_instance_in_degree orelse return;
+        const table = self.image_struct_instance_slots orelse return;
+        var i: u32 = 0;
+        while (i < self.image_struct_instance_slot_count) : (i += 1) {
+            const si = table[i] orelse continue;
+            var k = degrees[i];
+            while (k > 0) : (k -= 1) {
+                container_backing.retainValues(si.fields);
+            }
+        }
+    }
+
+    /// Release the owning references the image loader donated to the slot
+    /// tables, before the arena that owns the container structs is torn
+    /// down. Struct-instance field sets and tagged inner values release once
+    /// each; mutable-map and vector slots drop their donated header
+    /// reference, so the destroy that runs on last drop releases the
+    /// elements runtime code stored into them.
+    fn releaseImageSlotReferences(self: *Context) void {
+        if (self.image_struct_instance_slots) |table| {
+            var i: u32 = 0;
+            while (i < self.image_struct_instance_slot_count) : (i += 1) {
+                const si = table[i] orelse continue;
+                container_backing.releaseValues(si.fields);
+            }
+        }
+        if (self.image_tagged_slots) |table| {
+            var i: u32 = 0;
+            while (i < self.image_tagged_slot_count) : (i += 1) {
+                const tv = table[i] orelse continue;
+                container_backing.releaseValue(tv.*);
+            }
+        }
+        if (self.image_mutable_map_slots) |table| {
+            var i: u32 = 0;
+            while (i < self.image_mutable_map_slot_count) : (i += 1) {
+                const m = table[i] orelse continue;
+                m.header.release();
+            }
+        }
+        if (self.image_vector_slots) |table| {
+            var i: u32 = 0;
+            while (i < self.image_vector_slot_count) : (i += 1) {
+                const v = table[i] orelse continue;
+                v.header.release();
+            }
+        }
     }
 
     /// Remove every entry from this context's release list whose slice
@@ -7819,4 +7889,35 @@ test "findCapturedScopeForBody: finds in self, then parent-walks to an ancestor"
     // A body in no map returns null.
     const other = [_]Instruction{.{ .op = .{ .call_word = "x" }, .line = 0 }};
     try std.testing.expect(child.findCapturedScopeForBody(@intFromPtr(&other)) == null);
+}
+
+test "deinit releases runtime-created values stored into image container slots" {
+    const alloc = std.testing.allocator;
+    var ctx = Context.init(alloc);
+
+    // Mimic the image loader: slot containers on the context arena, one
+    // donated reference each. The vector receives a runtime-created hash
+    // (as a compiled `#push!` would store it); the map receives a
+    // runtime-created value under a runtime `@set!`.
+    const vec = try value_mod.Vector.create(ctx.quotationAllocator());
+    var vec_slots = [_]?*value_mod.Vector{vec};
+    ctx.image_vector_slots = &vec_slots;
+    ctx.image_vector_slot_count = 1;
+
+    const mmap = try value_mod.MutableMap.create(ctx.quotationAllocator());
+    var map_slots = [_]?*value_mod.MutableMap{mmap};
+    ctx.image_mutable_map_slots = &map_slots;
+    ctx.image_mutable_map_slot_count = 1;
+
+    const h = try value_mod.HashTable.create(alloc);
+    try h.map.put(alloc, try alloc.dupe(u8, "k"), .{ .fixnum = 42 });
+    try vec.list.append(ctx.quotationAllocator(), .{ .hash = h });
+
+    const h2 = try value_mod.HashTable.create(alloc);
+    const key = try ctx.quotationAllocator().dupe(u8, "r");
+    try mmap.map.put(ctx.quotationAllocator(), key, .{ .hash = h2 });
+
+    // deinit's image-slot walk drops the donated references; the destroys
+    // release the stored hashes. testing.allocator reports them if not.
+    ctx.deinit();
 }

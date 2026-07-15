@@ -98,6 +98,8 @@ const stack_effect_mod = @import("stack_effect.zig");
 const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 
+const container_backing = @import("container_backing.zig");
+
 /// Errors that can arise from the encoder.
 pub const SerializeError = Allocator.Error || error{NotEncodable};
 
@@ -160,6 +162,24 @@ pub const SlotResolutionTables = struct {
     /// dispatch of an image-decoded quotation runs compiled. Null leaves
     /// `code_ptr` null, matching the pre-attachment behavior.
     quotation_fns: ?[]const ?*const anyopaque = null,
+
+    /// Per-slot count of decoded references to each struct-instance slot.
+    /// A struct instance is a headerless composite: `releaseValue` recurses
+    /// into its fields, so every decoded reference is one future release of
+    /// the field set at teardown. The fields cannot be retained at decode
+    /// time because the mutable-map entry pass runs before the field pass
+    /// fills them, so the arm only counts here and the loader's teardown
+    /// compensation retains the filled fields once per counted reference.
+    struct_instance_in_degree: ?[*]u32 = null,
+
+    /// When supplied, every instruction slice materialized for a nested
+    /// `.quotation` value whose operands carry a container literal is
+    /// appended here. The loader registers these on the context's container
+    /// release list, mirroring the parser-side registration of quotation
+    /// literals, so the owning references the slot arms take are released
+    /// at teardown.
+    decoded_streams: ?*std.ArrayListUnmanaged([]const Instruction) = null,
+    decoded_streams_allocator: ?Allocator = null,
 };
 
 /// Op tags. Stored in the bytecode stream.
@@ -741,6 +761,13 @@ pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator
 /// deserialize error channel, kept narrow to avoid a separate decoder
 /// error set).
 ///
+/// Every decoded value lands in a stored position (a map entry, vector
+/// element, struct field, tagged inner, or push_literal operand), and a
+/// stored reference is an owning reference. The header-backed slot arms
+/// therefore retain what they hand out; the struct-instance arm counts the
+/// edge instead, because its fields may still be placeholders mid-load.
+/// The context's image-slot teardown walk releases these references.
+///
 /// When `slot_tables` is null, behave identically to `deserializeValueAt`.
 pub fn deserializeValueAtForImage(
     data: []const u8,
@@ -796,6 +823,10 @@ pub fn deserializeValueAtForImage(
             if (slot >= tables.tagged_slot_count) return error.OutOfMemory;
             const table = tables.tagged_slots orelse return error.OutOfMemory;
             const tv = table[slot] orelse return error.OutOfMemory;
+            // The copy is a second reference to the boxed inner value; retain
+            // its transitive backings so the stored copy owns its edge like
+            // every other storage boundary.
+            container_backing.retainValue(tv.*);
             break :blk tv.*;
         },
         value_tag_mutable_map_slot => blk: {
@@ -805,6 +836,11 @@ pub fn deserializeValueAtForImage(
             if (slot >= tables.mutable_map_slot_count) return error.OutOfMemory;
             const table = tables.mutable_map_slots orelse return error.OutOfMemory;
             const m = table[slot] orelse return error.OutOfMemory;
+            // The decoded value is stored (map entry, vector element, struct
+            // field, or push_literal operand), and a stored reference is an
+            // owning reference. The slot table keeps its own donated
+            // refcount, released by the context's image-slot teardown walk.
+            m.header.retain();
             break :blk .{ .mutable_map = m };
         },
         value_tag_struct_instance_slot => blk: {
@@ -814,6 +850,10 @@ pub fn deserializeValueAtForImage(
             if (slot >= tables.struct_instance_slot_count) return error.OutOfMemory;
             const table = tables.struct_instance_slots orelse return error.OutOfMemory;
             const si = table[slot] orelse return error.OutOfMemory;
+            // Headerless composite: cannot retain here because the fields may
+            // still be placeholders mid-load. Count the edge; the loader's
+            // teardown compensation balances it against the filled fields.
+            if (tables.struct_instance_in_degree) |degrees| degrees[slot] += 1;
             break :blk .{ .struct_instance = si };
         },
         value_tag_vector_slot => blk: {
@@ -823,6 +863,7 @@ pub fn deserializeValueAtForImage(
             if (slot >= tables.vector_slot_count) return error.OutOfMemory;
             const table = tables.vector_slots orelse return error.OutOfMemory;
             const v = table[slot] orelse return error.OutOfMemory;
+            v.header.retain();
             break :blk .{ .vector = v };
         },
         value_tag_array => blk: {
@@ -865,6 +906,11 @@ pub fn deserializeValueAtForImage(
             const q_id = std.mem.readInt(u32, data[offset.*..][0..4], .little);
             offset.* += 4;
             const nested = try deserializeInstructionsAtForImage(data, offset, allocator, tables);
+            if (tables.decoded_streams) |streams| {
+                if (container_backing.instructionsHaveContainerLiteral(nested)) {
+                    try streams.append(tables.decoded_streams_allocator.?, nested);
+                }
+            }
             const code_ptr: ?*const anyopaque = if (tables.quotation_fns) |t|
                 (if (q_id != quotation_id_sentinel and q_id < t.len) t[q_id] else null)
             else
