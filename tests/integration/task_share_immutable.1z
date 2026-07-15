@@ -52,8 +52,30 @@ test-await-copies-literal-array: ( -- ) [
   ] task-scope
 ] ;
 
+\ A literal array's backing lives on instruction memory, but freeze rebuilds
+\ it onto the process-lifetime allocator, so the frozen literal qualifies for
+\ sharing and stays valid after the sending task is reaped.
+test-await-shares-frozen-literal: ( -- ) [
+  [
+    [ { 1 2 3 } freeze ] spawn await
+    { 1 2 3 } "awaited frozen literal array" assert=
+  ] task-scope
+] ;
+
+\ A frozen value holding strings stays on the deep-copy path; the received
+\ values read identically either way.
+test-await-copies-frozen-strings: ( -- ) [
+  [
+    [ V{ } "a" #push! freeze ] spawn await
+    dup #len 1 "awaited frozen string array length" assert=
+    0 #nth "a" "awaited frozen string element" assert=
+  ] task-scope
+] ;
+
 test-await-shares-hash
 test-await-shares-set
 test-await-all-shares-hashes
 test-await-shares-array
 test-await-copies-literal-array
+test-await-shares-frozen-literal
+test-await-copies-frozen-strings

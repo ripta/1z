@@ -1,0 +1,90 @@
+=== deep freeze conversions ===
+Stack: [ ]
+PASS: vector freezes to array
+Stack: [ ]
+PASS: frozen array elements
+Stack: [ ]
+PASS: nested vector freezes to array
+Stack: [ { { 1 } { 2 } } ]
+PASS: nested frozen element
+Stack: [ ]
+PASS: mutable-map freezes to hash
+Stack: [ ]
+PASS: mutable-map value freezes
+Stack: [ ]
+PASS: hash value freezes
+Stack: [ ]
+PASS: byte-array freezes to string
+Stack: [ ]
+PASS: set stays a set
+Stack: [ ]
+PASS: frozen set keeps its member
+Stack: [ ]
+=== identity leaves ===
+Stack: [ ]
+PASS: fixnum freeze identity
+Stack: [ ]
+PASS: string freeze identity
+Stack: [ ]
+PASS: boolean freeze identity
+Stack: [ ]
+PASS: array freeze keeps elements
+Stack: [ ]
+=== copy semantics ===
+Stack: [ ]
+PASS: original vector unchanged after freeze
+Stack: [ ]
+PASS: original map unchanged after freeze
+Stack: [ ]
+PASS: original byte-array unchanged after freeze
+Stack: [ ]
+=== freeze! consume semantics ===
+Stack: [ ]
+PASS: freeze! produces array
+Stack: [ ]
+PASS: freeze! elements
+Stack: [ ]
+PASS: freeze! recurses
+Stack: [ ]
+PASS: aliased freeze! leaves alias usable
+Stack: [ ]
+PASS: freeze! mutable-map
+Stack: [ ]
+PASS: freeze! scalar identity
+Stack: [ ]
+=== struct instances ===
+Stack: [ ]
+Stack: [ ]
+PASS: struct field freezes
+Stack: [ ]
+PASS: frozen struct isolated from original mutation
+Stack: [ ]
+PASS: frozen struct shell stays setter-mutable
+Stack: [ ]
+PASS: struct inside vector freezes
+Stack: [ ]
+=== error values ===
+Stack: [ ]
+PASS: error data freezes
+Stack: [ ]
+PASS: error without data passes through
+Stack: [ ]
+=== typed containers ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: typed vector freezes to typed array
+Stack: [ ]
+PASS: freeze! typed vector
+Stack: [ ]
+PASS: nested typed vector freezes
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: typed mutable-map freezes to typed hash
+Stack: [ ]
+Stack: [ ]
+PASS: freeze without typed counterpart errors
+Stack: [ ]
+PASS: freeze! without typed counterpart errors
+Stack: [ ]

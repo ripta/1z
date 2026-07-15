@@ -17,6 +17,7 @@ const markers_mod = @import("markers.zig");
 const struct_field_spec = @import("struct_field_spec.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const container_backing = @import("../container_backing.zig");
+const freeze_mod = @import("freeze.zig");
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
@@ -1015,49 +1016,20 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .tagged = .{ .tag = vt, .inner = inner } });
 }
 
-/// Native dispatch helper for freeze on typed vectors.
-/// Unwraps the typed vector, dupes items to create a raw array, then wraps
-/// as the corresponding typed array.
+/// Native dispatch helper for freeze on typed vectors. Delegates to the deep-freeze walker, which
+/// converts the elements and rewraps through the corresponding typed array's wrap word.
 fn typedFreezeDispatch(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-
     const tv = try helpers.popTypeVal(ctx);
-    const vt = tv.virtual_type.?;
+    _ = tv;
 
     const typed_vec = try ctx.stack.pop();
-    // freeze consumes the typed vector and produces a fresh typed array;
-    // release the consumed wrapper's owning reference on return.
     defer container_backing.releaseValue(typed_vec);
 
-    // Unwrap tagged vec to raw vec
-    const raw_vec = typed_vec.tagged.inner.*;
-    const vec = switch (raw_vec) {
-        .vector => |v| v,
-        else => {
-            helpers.setErrorContext(ctx, "freeze expected vector inside {s}, got {s}", .{ vt.name, helpers.valueTypeName(raw_vec) });
-            return error.TypeMismatch;
-        },
+    const frozen = try freeze_mod.deepFreezeCopy(ctx, typed_vec);
+    ctx.stack.pushMoved(frozen) catch |e| {
+        container_backing.releaseValue(frozen);
+        return e;
     };
-
-    // Construct target type name: "array(" ++ elem_type ++ ")"
-    const params = vt.type_params orelse {
-        helpers.setErrorContext(ctx, "freeze: {s} has no type parameters", .{vt.name});
-        return error.TypeMismatch;
-    };
-    const elem_type_name = params[0].name;
-    const target_wrap_name = try std.fmt.allocPrint(alloc, ">array({s})", .{elem_type_name});
-
-    const wrap_word = ctx.lookupWord(target_wrap_name) orelse {
-        helpers.setErrorContext(ctx, "freeze: no typed array defined for element type {s} (need to define array({s}))", .{ elem_type_name, elem_type_name });
-        return error.WordNotFound;
-    };
-
-    // Snapshot the vector's items into a raw array and execute the wrap word
-    try helpers.pushCopiedArray(ctx, ctx.allocator, vec.list.items);
-    switch (wrap_word.action) {
-        .native, .host_callback => try wrap_word.invoke(ctx),
-        .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
-    }
 }
 
 /// Trampoline helper ( value tv -- tagged )

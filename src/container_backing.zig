@@ -172,6 +172,14 @@ pub const ContainerHeader = struct {
         return self.refcount.load(.monotonic);
     }
 
+    /// Whether the caller holds the only live reference. The acquire load pairs with the
+    /// releasing decrement of every former holder, so a true result also publishes their prior
+    /// writes to the caller, the same guarantee `release` relies on before destroying. Gates
+    /// sole-owner fast paths that read or mutate the backing without taking the mutex.
+    pub fn isSoleOwner(self: *const ContainerHeader) bool {
+        return self.refcount.load(.acquire) == 1;
+    }
+
     /// Current state of the share-safety memo.
     pub fn shareableState(self: *const ContainerHeader) Shareable {
         return self.shareable.load(.monotonic);

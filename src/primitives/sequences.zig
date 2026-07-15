@@ -613,8 +613,6 @@ pub const primitives = [_]Primitive{
     .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .doc = "Find index of element, or f if not found.", .func = nativeIndexOf },
     .{ .name = "#index-of-from", .stack_effect = "str needle start -- n/f", .doc = "Find index of substring starting from codepoint position.", .func = nativeIndexOfFrom },
     .{ .name = "#byte-index-of-from", .stack_effect = "str needle start-byte -- byte-n/f", .doc = "Find byte offset of substring starting from a byte offset; no codepoint accounting.", .func = nativeByteIndexOfFrom },
-    // Freeze
-    .{ .name = "freeze", .stack_effect = "vector -- array", .doc = "Convert a vector to an array (copy semantics).", .func = nativeFreeze, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     // Container conversion
     .{ .name = ">array", .stack_effect = "container -- array", .doc = "Convert vector, byte-array, set, or array to an immutable array. Copy semantics; original unchanged.", .func = nativeToArray, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = ">byte-array", .stack_effect = "value -- value", .doc = "Convert a byte-array or packed value to owned byte-array storage. Owned inputs are returned unchanged; borrowed inputs are copied.", .func = nativeToByteArray, .markers = &.{@constCast(&markers_mod.generic_marker)} },
@@ -2783,23 +2781,6 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
             container_backing.releaseValue(fill);
             container_backing.releaseValue(seq);
             setErrorContext(ctx, "#grow! expected byte-array or vector, got {s}", .{valueTypeName(seq)});
-            return error.TypeMismatch;
-        },
-    }
-}
-
-/// freeze ( vector -- array ) - Convert a vector to an array (copy semantics)
-fn nativeFreeze(ctx: *Context) anyerror!void {
-    if (try dispatch_helpers.tryDispatchUnary(ctx, "freeze")) return;
-
-    const val = try ctx.stack.pop();
-    defer container_backing.releaseValue(val);
-    switch (val) {
-        .vector => |vec| {
-            try helpers.pushCopiedArray(ctx, ctx.allocator, vec.list.items);
-        },
-        else => {
-            setErrorContext(ctx, "freeze expected vector, got {s}", .{valueTypeName(val)});
             return error.TypeMismatch;
         },
     }

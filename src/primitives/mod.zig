@@ -34,6 +34,7 @@ pub const errors = @import("errors.zig");
 pub const data_structures = @import("data_structures.zig");
 pub const functional = @import("functional.zig");
 pub const sequences = @import("sequences.zig");
+pub const freeze = @import("freeze.zig");
 pub const sets = @import("sets.zig");
 pub const associative = @import("associative.zig");
 pub const streams = @import("streams.zig");
@@ -110,6 +111,7 @@ pub const extracted_primitives = stack.primitives ++
     data_structures.primitives ++
     functional.primitives ++
     sequences.primitives ++
+    freeze.primitives ++
     sets.primitives ++
     associative.primitives ++
     streams.primitives ++

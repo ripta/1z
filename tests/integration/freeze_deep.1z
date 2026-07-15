@@ -1,0 +1,75 @@
+\ Deep freeze / freeze! protocol.
+\
+\ freeze produces a deeply-immutable copy: vectors become arrays, mutable-maps
+\ become hashes, byte-arrays become strings, recursively. freeze! does the same
+\ and consumes the original; an aliased original is copied instead of adopted.
+
+use "testing" ;
+
+"deep freeze conversions" test-section
+
+V{ 1 2 3 } freeze type-name "array" "vector freezes to array" assert=
+V{ 1 2 3 } freeze { 1 2 3 } "frozen array elements" assert=
+V{ } V{ 1 } #push! V{ 2 } #push! freeze dup 0 #nth type-name "array" "nested vector freezes to array" assert=
+1 #nth 0 #nth 2 "nested frozen element" assert=
+M{ x: 1 } freeze type-name "hash" "mutable-map freezes to hash" assert=
+M{ } x: V{ 5 } @set! freeze x: @get type-name "array" "mutable-map value freezes" assert=
+H{ } k: V{ 1 } @set freeze k: @get type-name "array" "hash value freezes" assert=
+B{ 97 98 } freeze "ab" "byte-array freezes to string" assert=
+S{ } 1 @adjoin freeze type-name "set" "set stays a set" assert=
+S{ } 1 @adjoin freeze 1 @in? "frozen set keeps its member" assert-true
+
+"identity leaves" test-section
+
+5 freeze 5 "fixnum freeze identity" assert=
+"hi" freeze "hi" "string freeze identity" assert=
+t freeze t "boolean freeze identity" assert=
+{ 1 2 } freeze { 1 2 } "array freeze keeps elements" assert=
+
+"copy semantics" test-section
+
+V{ 1 2 } dup freeze drop #len 2 "original vector unchanged after freeze" assert=
+M{ x: 1 } dup freeze drop x: @get 1 "original map unchanged after freeze" assert=
+B{ 97 } dup freeze drop #len 1 "original byte-array unchanged after freeze" assert=
+
+"freeze! consume semantics" test-section
+
+V{ 1 2 3 } freeze! type-name "array" "freeze! produces array" assert=
+V{ 1 2 3 } freeze! { 1 2 3 } "freeze! elements" assert=
+V{ } V{ 4 } #push! freeze! 0 #nth type-name "array" "freeze! recurses" assert=
+V{ 1 2 } dup freeze! drop #len 2 "aliased freeze! leaves alias usable" assert=
+M{ x: 2 } freeze! type-name "hash" "freeze! mutable-map" assert=
+5 freeze! 5 "freeze! scalar identity" assert=
+
+"struct instances" test-section
+
+fbox: mutable struct{ fval } ;
+
+V{ 7 } make-fbox freeze fval>> type-name "array" "struct field freezes" assert=
+10 make-fbox dup freeze swap 99 >>fval drop fval>> 10 "frozen struct isolated from original mutation" assert=
+10 make-fbox freeze 42 >>fval fval>> 42 "frozen struct shell stays setter-mutable" assert=
+V{ } 10 make-fbox #push! freeze 0 #nth fval>> 10 "struct inside vector freezes" assert=
+
+"error values" test-section
+
+V{ 1 } "boom" freeze-err: make-error freeze "data" @get type-name "array" "error data freezes" assert=
+f "boom" freeze-err: make-error freeze "message" @get "boom" "error without data passes through" assert=
+
+"typed containers" test-section
+
+vector(fixnum): M{ inner-type: vector element-type: fixnum define: [ define-parameterized-type ] } ;
+array(fixnum): M{ inner-type: array element-type: fixnum define: [ define-parameterized-type ] } ;
+
+V{ 1 2 } >vector(fixnum) freeze type-name "array(fixnum)" "typed vector freezes to typed array" assert=
+V{ 1 2 } >vector(fixnum) freeze! type-name "array(fixnum)" "freeze! typed vector" assert=
+V{ } V{ 3 4 } >vector(fixnum) #push! freeze 0 #nth type-name "array(fixnum)" "nested typed vector freezes" assert=
+
+mutable-map(fixnum): M{ inner-type: mutable-map element-type: fixnum define: [ define-parameterized-type ] } ;
+hash(fixnum): M{ inner-type: hash element-type: fixnum define: [ define-parameterized-type ] } ;
+
+M{ x: 1 } >mutable-map(fixnum) freeze type-name "hash(fixnum)" "typed mutable-map freezes to typed hash" assert=
+
+vector(string): M{ inner-type: vector element-type: string define: [ define-parameterized-type ] } ;
+
+[ V{ "a" } >vector(string) freeze ] "freeze without typed counterpart errors" assert-error
+[ V{ "a" } >vector(string) freeze! ] "freeze! without typed counterpart errors" assert-error
