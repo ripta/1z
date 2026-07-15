@@ -69,7 +69,9 @@ use "testing" ;
 
 Results are deep-copied from the child task's memory arena to the caller's.
 This means you always get an independent value -- mutations on one side do
-not affect the other.
+not affect the other. As an optimization, a provably immutable container is
+shared by reference count instead of copied; that sharing is unobservable,
+because such a value cannot be mutated by either side.
 
 If a task pushes nothing, `await` returns `f`:
 

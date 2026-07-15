@@ -1,0 +1,11 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: awaited hash first value
+PASS: awaited hash second value
+Stack: [ ]
+PASS: awaited set contains its member
+Stack: [ ]
+PASS: await-all first shared hash
+PASS: await-all second shared hash
+Stack: [ ]

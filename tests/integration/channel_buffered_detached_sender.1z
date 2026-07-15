@@ -1,0 +1,18 @@
+use "testing" ;
+
+\ A buffered channel entry must own its value. A detached sender is reaped at
+\ its own completion, which can happen long before the value is received. A
+\ computed string's bytes live on the sender's arena, so a buffer that merely
+\ borrowed the sender's value would read freed memory here.
+
+test-buffered-value-outlives-detached-sender: ( -- ) [
+  [
+    1 <buffered-channel>
+    dup [
+      [ 41 1 + >string swap send ] curry spawn-detached
+    ] curry task-scope
+    receive "42" "computed string survives detached sender reap" assert=
+  ] task-scope
+] ;
+
+test-buffered-value-outlives-detached-sender

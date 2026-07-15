@@ -1,0 +1,45 @@
+use "testing" ;
+
+\ Cross-worker channel sharing of self-contained immutable containers, and
+\ the lifetime that sharing must uphold: a shared backing stays valid after
+\ the task that built it has been reaped.
+\
+\ The buffered test receives only after the inner scope has exited, so the
+\ sender is already reaped; the refcount held by the buffer entry and then by
+\ the receiver's slot must keep the hash alive. The two-hop test re-sends a
+\ received value, exercising the copy-then-share provenance boundary.
+
+test-buffered-share-survives-sender-reap: ( -- ) [
+  [
+    1 <buffered-channel>
+    dup [
+      [ H{ } x: 41 @set y: 42 @set swap send ] curry spawn drop
+    ] curry task-scope
+    receive
+    dup x: @get 41 "hash value one survives sender reap" assert=
+    y: @get 42 "hash value two survives sender reap" assert=
+  ] task-scope
+] ;
+
+test-two-hop-share: ( -- ) [
+  [
+    <channel>  \ ab: A -> B
+    <channel>  \ bc: B -> C (the parent)
+    2dup [
+      \ B body, stack on entry: ab bc
+      swap receive  \ bc hash
+      swap send     \ --
+    ] curry curry spawn drop
+    over [
+      \ A body, stack on entry: ab
+      H{ } n: 5 @set swap send
+    ] curry spawn drop
+    \ stack: ab bc
+    receive  \ ab hash
+    n: @get 5 "hash intact after two hops" assert=
+    drop
+  ] task-scope
+] ;
+
+test-buffered-share-survives-sender-reap
+test-two-hop-share

@@ -4,8 +4,9 @@ use "testing" ;
 \
 \ A hash captured by a spawned child is shared by pointer, so the child's
 \ reads must stay valid and the parent's original must survive the child's
-\ exit. Channel send still deep-copies, so a received hash is independent
-\ of the sender's, including any nested mutable container.
+\ exit. Channel send deep-copies any hash that is not provably shareable;
+\ the hash here nests a mutable vector, so a received copy is independent
+\ of the sender's.
 
 test-hash-read-in-child: ( -- ) [
   H{ count: 41 }

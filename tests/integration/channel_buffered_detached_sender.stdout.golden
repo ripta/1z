@@ -1,0 +1,3 @@
+Stack: [ ]
+PASS: computed string survives detached sender reap
+Stack: [ ]

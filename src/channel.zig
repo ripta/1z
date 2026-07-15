@@ -63,14 +63,14 @@ pub const Channel = struct {
     }
 
     pub fn deinit(self: *Channel) void {
-        // Release values the channel still owns at teardown: anything left in
+        // Destroy entries the channel still owns at teardown: anything left in
         // the buffer (never received) and any sender that was abandoned while
         // blocked (e.g., a task suspended on send at shutdown). Normal
         // completion drains both, so this only fires on shutdown residue.
         var i: usize = 0;
         while (i < self.buffer.count) : (i += 1) {
             const idx = (self.buffer.head + i) % self.buffer.items.len;
-            container_backing.releaseValue(self.buffer.items[idx]);
+            self.buffer.items[idx].destroy(self.allocator);
         }
         for (self.waiting_senders.items) |entry| {
             container_backing.releaseValue(entry.value);
@@ -81,8 +81,27 @@ pub const Channel = struct {
     }
 };
 
+/// A value the channel buffer owns. The buffer never stores a sender's value directly, because
+/// the sender's arena can be freed before the value is received: a shareable value is stored with
+/// its own retained reference, and anything else is deep-copied into `arena`, a per-entry arena
+/// on the channel's allocator that dies with the entry.
+pub const BufferedValue = struct {
+    value: Value,
+    arena: ?*std.heap.ArenaAllocator = null,
+
+    /// Release the entry's owning reference, then free its copy arena. The release runs first
+    /// because a copied container's destroy touches arena memory.
+    pub fn destroy(self: BufferedValue, allocator: std.mem.Allocator) void {
+        container_backing.releaseValue(self.value);
+        if (self.arena) |a| {
+            a.deinit();
+            allocator.destroy(a);
+        }
+    }
+};
+
 pub const RingBuffer = struct {
-    items: []Value,
+    items: []BufferedValue,
     head: usize = 0,
     count: usize = 0,
 
@@ -90,7 +109,7 @@ pub const RingBuffer = struct {
         if (capacity == 0) {
             return .{ .items = &.{} };
         }
-        const items = try allocator.alloc(Value, capacity);
+        const items = try allocator.alloc(BufferedValue, capacity);
         return .{ .items = items };
     }
 
@@ -108,17 +127,17 @@ pub const RingBuffer = struct {
         return self.count == 0;
     }
 
-    pub fn push(self: *RingBuffer, value: Value) void {
+    pub fn push(self: *RingBuffer, entry: BufferedValue) void {
         const idx = (self.head + self.count) % self.items.len;
-        self.items[idx] = value;
+        self.items[idx] = entry;
         self.count += 1;
     }
 
-    pub fn pop(self: *RingBuffer) Value {
-        const value = self.items[self.head];
+    pub fn pop(self: *RingBuffer) BufferedValue {
+        const entry = self.items[self.head];
         self.head = (self.head + 1) % self.items.len;
         self.count -= 1;
-        return value;
+        return entry;
     }
 };
 

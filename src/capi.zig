@@ -38,6 +38,7 @@ const value_mod = @import("value.zig");
 const MutableMap = value_mod.MutableMap;
 const Value = value_mod.Value;
 const TypeValue = value_mod.TypeValue;
+const container_backing = @import("container_backing.zig");
 
 const debugger_mod = @import("debugger/mod.zig");
 
@@ -95,6 +96,12 @@ const OnezHandle = struct {
     ctx: *Context,
     last_error: ?[:0]const u8 = null,
     host_words: std.ArrayListUnmanaged(HostWordRegistration) = .{},
+
+    /// Value boxes handed out by `onez_pop_value`. Each box carries the owning reference its stack
+    /// slot transferred at pop. Deïnit must release them or a popped container's refcounted
+    /// backing leaks.
+    popped_values: std.ArrayListUnmanaged(*Value) = .{},
+
     saved_obligation_frames: std.ArrayListUnmanaged(
         std.ArrayListUnmanaged(context_mod.ProtocolObligation),
     ) = .{},
@@ -264,6 +271,13 @@ export fn onez_deinit(ptr: ?*anyopaque) void {
         allocator.free(entry.name);
     }
     handle.host_words.deinit(allocator);
+
+    // Release the owning references carried by popped-value boxes before the context teardown
+    // that would report their backings as leaked.
+    for (handle.popped_values.items) |slot| {
+        container_backing.releaseValue(slot.*);
+    }
+    handle.popped_values.deinit(allocator);
 
     // XXX(ripta): forcefully close any unclosed isolation frames to avoid leaks. This
     //             is a bit hacky but it avoids the need for a more complex ownership
@@ -1211,11 +1225,16 @@ export fn onez_pop_value(ptr: ?*anyopaque, out: *?*anyopaque) c_int {
         return ONEZ_ERR_STACK_UNDERFLOW;
     };
     const slot = handle.ctx.quotationAllocator().create(Value) catch {
-        handle.ctx.stack.push(val) catch {};
+        handle.ctx.stack.pushMoved(val) catch {};
         setLastError(handle, "allocation failure creating value handle", .{});
         return ONEZ_ERR_ALLOC;
     };
     slot.* = val;
+    handle.popped_values.append(handle.allocator, slot) catch {
+        handle.ctx.stack.pushMoved(val) catch {};
+        setLastError(handle, "allocation failure tracking value handle", .{});
+        return ONEZ_ERR_ALLOC;
+    };
     out.* = slot;
     return ONEZ_OK;
 }
@@ -1456,7 +1475,9 @@ export fn onez_pop_int(ptr: ?*anyopaque, out: *i64) c_int {
             return ONEZ_OK;
         },
         else => {
-            handle.ctx.stack.push(val) catch {};
+            // The pop transferred the slot's owning reference; a retaining push here would
+            // double-count it.
+            handle.ctx.stack.pushMoved(val) catch {};
             setLastError(handle, "type mismatch: expected fixnum, got {s}", .{@tagName(val)});
             return ONEZ_ERR_TYPE_MISMATCH;
         },
@@ -1475,7 +1496,7 @@ export fn onez_pop_double(ptr: ?*anyopaque, out: *f64) c_int {
             return ONEZ_OK;
         },
         else => {
-            handle.ctx.stack.push(val) catch {};
+            handle.ctx.stack.pushMoved(val) catch {};
             setLastError(handle, "type mismatch: expected float, got {s}", .{@tagName(val)});
             return ONEZ_ERR_TYPE_MISMATCH;
         },
@@ -1494,7 +1515,7 @@ export fn onez_pop_bool(ptr: ?*anyopaque, out: *bool) c_int {
             return ONEZ_OK;
         },
         else => {
-            handle.ctx.stack.push(val) catch {};
+            handle.ctx.stack.pushMoved(val) catch {};
             setLastError(handle, "type mismatch: expected boolean, got {s}", .{@tagName(val)});
             return ONEZ_ERR_TYPE_MISMATCH;
         },
@@ -1514,7 +1535,7 @@ export fn onez_pop_string(ptr: ?*anyopaque, out_ptr: *[*]const u8, out_len: *usi
             return ONEZ_OK;
         },
         else => {
-            handle.ctx.stack.push(val) catch {};
+            handle.ctx.stack.pushMoved(val) catch {};
             setLastError(handle, "type mismatch: expected string, got {s}", .{@tagName(val)});
             return ONEZ_ERR_TYPE_MISMATCH;
         },

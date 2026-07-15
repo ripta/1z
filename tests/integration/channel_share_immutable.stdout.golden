@@ -1,0 +1,7 @@
+Stack: [ ]
+Stack: [ ]
+PASS: hash value one survives sender reap
+PASS: hash value two survives sender reap
+Stack: [ ]
+PASS: hash intact after two hops
+Stack: [ ]

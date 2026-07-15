@@ -1,0 +1,37 @@
+use "testing" ;
+
+\ Cross-worker sharing of self-contained immutable containers.
+\
+\ A hash or set built at runtime holds only fixnums, so cross-task transfer
+\ shares the backing by refcount bump instead of deep-copying. Sharing must be
+\ unobservable: the receiver reads the same values, and the shared backing
+\ stays valid for as long as any holder references it.
+
+test-await-shares-hash: ( -- ) [
+  [
+    [ H{ } a: 1 @set b: 2 @set ] spawn await
+    dup a: @get 1 "awaited hash first value" assert=
+    b: @get 2 "awaited hash second value" assert=
+  ] task-scope
+] ;
+
+test-await-shares-set: ( -- ) [
+  [
+    [ S{ } 7 @adjoin ] spawn await
+    7 @in? "awaited set contains its member" assert-true
+  ] task-scope
+] ;
+
+test-await-all-shares-hashes: ( -- ) [
+  [
+    [ H{ } n: 1 @set ] spawn
+    [ H{ } n: 2 @set ] spawn
+    2 array-n await-all
+    dup 0 #nth n: @get 1 "await-all first shared hash" assert=
+    1 #nth n: @get 2 "await-all second shared hash" assert=
+  ] task-scope
+] ;
+
+test-await-shares-hash
+test-await-shares-set
+test-await-all-shares-hashes

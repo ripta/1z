@@ -170,7 +170,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         try helpers.checkCancellation(ctx);
 
         if (scope.firstFailedChildError()) |err_obj| {
-            ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
+            ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
             return error.UserThrown;
         }
 
@@ -258,7 +258,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     }
 
     if (scope.firstFailedChildError()) |err_obj| {
-        ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
+        ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
         return error.UserThrown;
     }
 }
@@ -552,15 +552,17 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
     switch (main_task.getStatus()) {
         .completed => {
             if (main_task.result) |result| {
-                const copied = try deepCopyValue(result, ctx.arena.allocator());
-                try ctx.stack.push(copied);
+                // The copy (or share) carries its own +1 owning reference, which transfers to the
+                // stack slot; a retaining push would double-count it.
+                const copied = try deepCopyValue(result, ctx.arena.allocator(), ctx.allocator);
+                try ctx.stack.pushMoved(copied);
             } else {
                 try ctx.stack.push(.{ .boolean = false });
             }
         },
         .failed => {
             if (main_task.error_obj) |err_obj| {
-                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
+                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
             } else {
                 ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "task-error",
@@ -711,7 +713,7 @@ fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
         .completed, .cancelled => {},
         .failed => {
             if (task.error_obj) |err_obj| {
-                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
+                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
             } else {
                 ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "task-error",
@@ -791,7 +793,7 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
         switch (task.getStatus()) {
             .failed => {
                 if (task.error_obj) |err_obj| {
-                    ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
+                    ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
                 } else {
                     ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                         .error_type = "task-error",
@@ -820,30 +822,35 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
             // XXX(ripta): Potentially expensive deep copy of each result. We have to do this
             //             before checking for errors/cancellations in order to preserve the
             //             correct error precedence. Unsure if there's a better way.
-            results[i] = try deepCopyValue(result, alloc);
+            results[i] = try deepCopyValue(result, alloc, ctx.allocator);
         } else {
             results[i] = .{ .boolean = false };
         }
     }
 
-    try ctx.stack.push(.{ .array = results });
+    // Each element carries its own +1 owning reference from the copy or share above; a moved push
+    // transfers them to the slot, whose release recurses into the array's elements.
+    try ctx.stack.pushMoved(.{ .array = results });
 }
 
-/// Extract the result from a finished task: deep-copy completed results into the
-/// caller's allocator, re-throw failures, and report cancellations.
+/// Extract the result from a finished task: deep-copy completed results into the caller's
+/// allocator, or share them by refcount bump when provably immutable; re-throw failures, and
+/// report cancellations.
 fn handleAwaitResult(ctx: *Context, task: *Task) anyerror!void {
     switch (task.getStatus()) {
         .completed => {
             if (task.result) |result| {
-                const copied = try deepCopyValue(result, ctx.arena.allocator());
-                try ctx.stack.push(copied);
+                // The copy (or share) carries its own +1 owning reference, which transfers to the
+                // stack slot; a retaining push would double-count it.
+                const copied = try deepCopyValue(result, ctx.arena.allocator(), ctx.allocator);
+                try ctx.stack.pushMoved(copied);
             } else {
                 try ctx.stack.push(.{ .boolean = false });
             }
         },
         .failed => {
             if (task.error_obj) |err_obj| {
-                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator());
+                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
             } else {
                 ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "task-error",
@@ -866,9 +873,14 @@ fn handleAwaitResult(ctx: *Context, task: *Task) anyerror!void {
 /// Deep-copy a Value into a destination allocator. Recursive for compound types.
 /// Reference types (stream, parameter, module, marker, struct_type, benchmark_report,
 /// task) are returned as-is since they are not owned by the task arena.
+///
+/// `longlived` is the process-lifetime allocator (`ctx.allocator`); a headered container whose
+/// backing lives on it and whose contents are self-contained is shared by refcount bump instead
+/// of copied. The returned value carries a +1 owning reference either way: a fresh copy's
+/// creation reference, or the share's retain.
 const DeepCopyError = Allocator.Error;
 
-pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
+pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCopyError!Value {
     return switch (val) {
         .fixnum, .float, .boolean, .unit => val,
         .bignum => |b| blk: {
@@ -882,21 +894,21 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         .array => |items| blk: {
             const new_items = try alloc.alloc(Value, items.len);
             for (items, 0..) |item, i| {
-                new_items[i] = try deepCopyValue(item, alloc);
+                new_items[i] = try deepCopyValue(item, alloc, longlived);
             }
             break :blk .{ .array = new_items };
         },
 
-        .quotation => |quot| .{ .quotation = try deepCopyQuotation(quot, alloc) },
+        .quotation => |quot| .{ .quotation = try deepCopyQuotation(quot, alloc, longlived) },
 
         .closure => |c| blk: {
             const new_closure = try alloc.create(value_mod.Closure);
-            const copied = try deepCopyQuotation(c.asQuotation(), alloc);
+            const copied = try deepCopyQuotation(c.asQuotation(), alloc, longlived);
             const new_segments = try alloc.alloc(value_mod.Segment, c.segments.len);
             for (c.segments, 0..) |seg, i| {
                 const new_caps = try alloc.alloc(Value, seg.captures.len);
                 for (seg.captures, 0..) |cap, j| {
-                    new_caps[j] = try deepCopyValue(cap, alloc);
+                    new_caps[j] = try deepCopyValue(cap, alloc, longlived);
                 }
                 new_segments[i] = .{ .captures = new_caps, .base_code_ptr = seg.base_code_ptr };
             }
@@ -917,12 +929,17 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         },
 
         .hash => |h| blk: {
+            if (container_backing.memoShareable(&h.header, val, longlived)) {
+                h.header.retain();
+                break :blk val;
+            }
+
             const new_h = try value_mod.HashTable.create(alloc);
             try new_h.map.ensureTotalCapacity(alloc, @intCast(h.map.count()));
             var iter = h.map.iterator();
             while (iter.next()) |entry| {
                 const key = try alloc.dupe(u8, entry.key_ptr.*);
-                const v = try deepCopyValue(entry.value_ptr.*, alloc);
+                const v = try deepCopyValue(entry.value_ptr.*, alloc, longlived);
                 new_h.map.putAssumeCapacityNoClobber(key, v);
             }
             break :blk .{ .hash = new_h };
@@ -932,7 +949,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
             const new_v = try value_mod.Vector.create(alloc);
             try new_v.list.ensureTotalCapacity(alloc, v.list.items.len);
             for (v.list.items) |item| {
-                new_v.list.appendAssumeCapacity(try deepCopyValue(item, alloc));
+                new_v.list.appendAssumeCapacity(try deepCopyValue(item, alloc, longlived));
             }
             break :blk .{ .vector = new_v };
         },
@@ -946,10 +963,15 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         },
 
         .set => |s| blk: {
+            if (container_backing.memoShareable(&s.header, val, longlived)) {
+                s.header.retain();
+                break :blk val;
+            }
+
             const new_s = try value_mod.Set.create(alloc);
             try new_s.map.ensureTotalCapacity(alloc, @intCast(s.map.count()));
             for (s.map.keys()) |key| {
-                new_s.map.putAssumeCapacity(try deepCopyValue(key, alloc), {});
+                new_s.map.putAssumeCapacity(try deepCopyValue(key, alloc, longlived), {});
             }
             break :blk .{ .set = new_s };
         },
@@ -960,7 +982,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
             var iter = m.map.iterator();
             while (iter.next()) |entry| {
                 const key = try alloc.dupe(u8, entry.key_ptr.*);
-                const v = try deepCopyValue(entry.value_ptr.*, alloc);
+                const v = try deepCopyValue(entry.value_ptr.*, alloc, longlived);
                 new_m.map.putAssumeCapacityNoClobber(key, v);
             }
             break :blk .{ .mutable_map = new_m };
@@ -970,7 +992,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
             const new_si = try alloc.create(value_mod.StructInstance);
             const new_fields = try alloc.alloc(Value, si.fields.len);
             for (si.fields, 0..) |field, i| {
-                new_fields[i] = try deepCopyValue(field, alloc);
+                new_fields[i] = try deepCopyValue(field, alloc, longlived);
             }
             new_si.* = .{
                 .struct_type = si.struct_type,
@@ -979,9 +1001,13 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
             break :blk .{ .struct_instance = new_si };
         },
 
+        // The tagged shell is always copied; a wrapped hash/set backing shares through the
+        // recursion's scan-verified memo. Type parameters are not trusted as a share proof: the
+        // parameterized wrap validates array and struct elements but not hash or set contents, so
+        // a tag like hash(fixnum) can sit on a container holding arena-backed strings.
         .tagged => |t| blk: {
             const new_inner = try alloc.create(Value);
-            new_inner.* = try deepCopyValue(t.inner.*, alloc);
+            new_inner.* = try deepCopyValue(t.inner.*, alloc, longlived);
             break :blk .{ .tagged = .{ .tag = t.tag, .inner = new_inner } };
         },
 
@@ -994,7 +1020,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
         },
 
         .stack_effect => |effect| .{ .stack_effect = try deepCopyStackEffect(effect, alloc) },
-        .error_value => |err| .{ .error_value = try deepCopyErrorObject(err, alloc, alloc) },
+        .error_value => |err| .{ .error_value = try deepCopyErrorObject(err, alloc, alloc, longlived) },
 
         .doc_string => |s| .{ .doc_string = try alloc.dupe(u8, s) },
 
@@ -1003,12 +1029,12 @@ pub fn deepCopyValue(val: Value, alloc: Allocator) DeepCopyError!Value {
     };
 }
 
-fn deepCopyQuotation(quot: value_mod.Quotation, alloc: Allocator) DeepCopyError!value_mod.Quotation {
+fn deepCopyQuotation(quot: value_mod.Quotation, alloc: Allocator, longlived: Allocator) DeepCopyError!value_mod.Quotation {
     const new_instrs = try alloc.alloc(Instruction, quot.instructions.len);
     for (quot.instructions, 0..) |instr, i| {
         new_instrs[i] = .{
             .op = switch (instr.op) {
-                .push_literal => |v| .{ .push_literal = try deepCopyValue(v, alloc) },
+                .push_literal => |v| .{ .push_literal = try deepCopyValue(v, alloc, longlived) },
                 .call_word => |name| .{ .call_word = try alloc.dupe(u8, name) },
                 .call_word_direct => |slot| .{ .call_word_direct = slot },
             },
@@ -1053,10 +1079,10 @@ fn deepCopyTemplateSegment(seg: value_mod.TemplateSegment, alloc: Allocator) Dee
     };
 }
 
-fn deepCopyErrorObjectValue(err: ErrorObject, alloc: Allocator) DeepCopyError!ErrorObject {
+fn deepCopyErrorObjectValue(err: ErrorObject, alloc: Allocator, longlived: Allocator) DeepCopyError!ErrorObject {
     const new_data: ?*const Value = if (err.data) |data| blk: {
         const new_d = try alloc.create(Value);
-        new_d.* = try deepCopyValue(data.*, alloc);
+        new_d.* = try deepCopyValue(data.*, alloc, longlived);
         break :blk new_d;
     } else null;
 
@@ -1083,8 +1109,8 @@ fn deepCopyErrorObjectValue(err: ErrorObject, alloc: Allocator) DeepCopyError!Er
 /// Deep-copy an `ErrorObject` and box it. The box is allocated on
 /// `box_alloc` (typically GPA); the inner strings, data, and stack-trace
 /// frames are allocated on `inner_alloc` (typically the per-context arena).
-fn deepCopyErrorObject(err: *const ErrorObject, box_alloc: Allocator, inner_alloc: Allocator) DeepCopyError!*ErrorObject {
-    const inner = try deepCopyErrorObjectValue(err.*, inner_alloc);
+fn deepCopyErrorObject(err: *const ErrorObject, box_alloc: Allocator, inner_alloc: Allocator, longlived: Allocator) DeepCopyError!*ErrorObject {
+    const inner = try deepCopyErrorObjectValue(err.*, inner_alloc, longlived);
     const ptr = try box_alloc.create(ErrorObject);
     ptr.* = inner;
     return ptr;
@@ -1304,4 +1330,124 @@ test "await-all propagates borrowed buffer escape from failed child" {
     try std.testing.expectError(error.UserThrown, nativeAwaitAll(&ctx));
     try std.testing.expect(ctx.thrown_error != null);
     try std.testing.expectEqualStrings("borrowed-buffer-escape", ctx.thrown_error.?.error_type);
+}
+
+test "deepCopyValue: shares a self-contained hash by refcount bump" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const h = try value_mod.HashTable.create(testing.allocator);
+    defer container_backing.releaseValue(.{ .hash = h });
+    const h_alloc = h.header.allocator;
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .fixnum = 1 });
+
+    const copied = try deepCopyValue(.{ .hash = h }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.hash == h);
+    try testing.expectEqual(@as(u32, 2), h.header.refcountValue());
+
+    container_backing.releaseValue(copied);
+    try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
+}
+
+test "deepCopyValue: shares a self-contained set by refcount bump" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const s = try value_mod.Set.create(testing.allocator);
+    defer container_backing.releaseValue(.{ .set = s });
+    try s.map.put(s.header.allocator, .{ .fixnum = 3 }, {});
+
+    const copied = try deepCopyValue(.{ .set = s }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.set == s);
+    try testing.expectEqual(@as(u32, 2), s.header.refcountValue());
+
+    container_backing.releaseValue(copied);
+    try testing.expectEqual(@as(u32, 1), s.header.refcountValue());
+}
+
+test "deepCopyValue: string-bearing hash is copied, not shared" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const h = try value_mod.HashTable.create(testing.allocator);
+    defer container_backing.releaseValue(.{ .hash = h });
+    const h_alloc = h.header.allocator;
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .string = "v" });
+
+    const copied = try deepCopyValue(.{ .hash = h }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.hash != h);
+    try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
+    container_backing.releaseValue(copied);
+}
+
+test "deepCopyValue: a backing off the long-lived allocator is copied on the next hop" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // Simulates a value that was itself produced by a cross-task copy onto a
+    // receiver arena: contents qualify, but the backing's provenance fails the
+    // identity check, so a re-send copies again instead of sharing.
+    const h = try value_mod.HashTable.create(arena.allocator());
+    const h_alloc = h.header.allocator;
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .fixnum = 1 });
+
+    const copied = try deepCopyValue(.{ .hash = h }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.hash != h);
+    container_backing.releaseValue(copied);
+    container_backing.releaseValue(.{ .hash = h });
+}
+
+test "deepCopyValue: tagged hash shares the backing through the scan and copies the shell" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const h = try value_mod.HashTable.create(testing.allocator);
+    defer container_backing.releaseValue(.{ .hash = h });
+    const h_alloc = h.header.allocator;
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .fixnum = 1 });
+
+    var vt: value_mod.VirtualType = .{ .name = "counts", .inner_type = "hash" };
+    const inner: Value = .{ .hash = h };
+
+    const copied = try deepCopyValue(.{ .tagged = .{ .tag = &vt, .inner = &inner } }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.tagged.inner != &inner);
+    try testing.expect(copied.tagged.inner.hash == h);
+    try testing.expectEqual(@as(u32, 2), h.header.refcountValue());
+    try testing.expectEqual(container_backing.Shareable.shareable, h.header.shareableState());
+
+    container_backing.releaseValue(copied);
+    try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
+}
+
+test "deepCopyValue: a scalar-parameterized tag does not exempt string contents from the scan" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    // The parameterized wrap does not validate hash contents, so a tag
+    // claiming scalar elements can sit on a string-bearing hash. The scan,
+    // not the tag, decides: this must copy.
+    const h = try value_mod.HashTable.create(testing.allocator);
+    defer container_backing.releaseValue(.{ .hash = h });
+    const h_alloc = h.header.allocator;
+    try h.map.put(h_alloc, try h_alloc.dupe(u8, "k"), .{ .string = "v" });
+
+    const fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
+    var params = [_]*const value_mod.TypeValue{&fixnum_tv};
+    const vt = value_mod.VirtualType{
+        .name = "counts",
+        .inner_type = "hash",
+        .type_params = params[0..],
+    };
+    const inner: Value = .{ .hash = h };
+
+    const copied = try deepCopyValue(.{ .tagged = .{ .tag = &vt, .inner = &inner } }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.tagged.inner.hash != h);
+    try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
+    container_backing.releaseValue(copied);
 }
