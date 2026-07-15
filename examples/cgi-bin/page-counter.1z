@@ -8,9 +8,15 @@
 \ reached via lib/os/fs.1z's stream primitives. This is one defensible
 \ default for a low-traffic counter, not a prescription. A managed
 \ database, a key-value store, or a remote counter service would all be
-\ equally valid in production. The open-read-modify-write pattern shown
-\ here is appropriate when contention is rare; heavier load wants a
-\ backend with atomic increment semantics.
+\ equally valid in production.
+\
+\ Concurrency. Each CGI request is a separate process. Two requests that
+\ overlap would otherwise both read the same count and both write back
+\ the same incremented value, dropping a visit. The read-modify-write
+\ cycle is wrapped in an advisory whole-file lock from lib/os/lock.1z.
+\ Each request holds an exclusive lock across the read, increment, and
+\ write. Concurrent invocations serialize on the file, so no visit is
+\ lost.
 \
 \ Deployment. The counter path comes from the PAGE_COUNTER_FILE
 \ environment variable, falling back to "page-counter.dat" in the
@@ -21,6 +27,7 @@ use "conversions" ;
 use "net/cgi" ;
 use "net/http" ;
 use "os/fs" ;
+use "os/lock" ;
 use "strings" ;
 
 \\ Path to the counter file. Overridable via the PAGE_COUNTER_FILE
@@ -57,7 +64,9 @@ private{
 \\ its new value as plain text.
 page-counter-handler: ( stream request -- ) [
   drop
-  (read-count) 1 + dup (write-count)
+  counter-file get read-write: stream-open
+  exclusive: [ [ (read-count) 1 + dup (write-count) ] dip ] using-file-lock
+  stream-close
   >string "Visits: " swap #append "\n" #append
   [ 200 dup reason-for "text/plain; charset=utf-8" ] dip
   <response>

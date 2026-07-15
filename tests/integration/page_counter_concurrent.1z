@@ -1,0 +1,56 @@
+\ Concurrent-invocation test for the page-counter advisory lock. Many in-process tasks race on one
+\ counter file, each replicating the example's locked read-modify-write.
+\
+\ Each task opens its own stream, so their flock calls contend and the cooperative acquire serializes
+\ them. The counter reaching the task count proves no update was lost. A broken lock would let tasks
+\ overlap and land it below the task count. The cross-process variant lives in lock_contention.1z;
+\ this one exercises the M:N scheduler's tasks.
+
+use "testing" ;
+use "os/lock" ;
+use "os/fs" ;
+use "conversions" ;
+use "strings" ;
+use "task" ;
+
+COUNTER: const [ "tests/integration/_tmp_page_counter_concurrent.dat" ] ;
+
+TASK-COUNT: const [ 20 ] ;
+
+\ Read the decimal counter, treating a blank file as 0.
+(read-count): ( path -- n ) [
+  read: stream-open
+  dup stream-read-all swap stream-close
+  bytes> trim
+  dup #empty? [ drop 0 ] [ parse-integer ] if
+] ;
+
+\ Overwrite the counter file with a decimal value.
+(write-count): ( path n -- ) [
+  >string swap write: stream-open
+  tuck swap stream-write drop
+  stream-close
+] ;
+
+\ One locked increment: hold an exclusive lock on a per-task stream across the
+\ read-modify-write on the shared counter file.
+(bump): ( path -- ) [
+  dup read-write: stream-open
+  exclusive: [ [ dup (read-count) 1 + (write-count) ] dip ] using-file-lock
+  stream-close
+] ;
+
+"page-counter concurrent locking" test-section
+
+\ task-scope gives the root task a context where spawned tasks run and the
+\ combinator's cooperative acquire can sleep between retries.
+[
+  COUNTER file-exists? [ COUNTER delete-file ] when
+  COUNTER "0" (write-count)
+
+  [ COUNTER (bump) ] TASK-COUNT spawn-n await-all drop
+
+  COUNTER (read-count) TASK-COUNT "every task's increment landed" assert=
+
+  COUNTER delete-file
+] task-scope

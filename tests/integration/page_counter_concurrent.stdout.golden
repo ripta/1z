@@ -1,0 +1,2 @@
+=== page-counter concurrent locking ===
+PASS: every task's increment landed
