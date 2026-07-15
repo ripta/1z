@@ -50,8 +50,9 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const markers_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(markers_val);
     _ = switch (markers_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", markers_val);
             return error.TypeMismatch;
@@ -70,7 +71,7 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
 
     const methods_val = desc_map.map.get("methods") orelse return error.MissingField;
     const methods_array = switch (methods_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setErrorContext(ctx, "protocol descriptor 'methods' field must be an array", .{});
             return error.TypeMismatch;

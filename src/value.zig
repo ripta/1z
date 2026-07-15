@@ -124,6 +124,87 @@ pub const Vector = struct {
     }
 };
 
+/// Array type for { } literals - immutable sequences.
+///
+/// Carries a `ContainerHeader` so the backing participates in the cross-worker
+/// refcount lifecycle, uniform with `Vector`, `HashTable`, and `Set`. Elements
+/// are immutable after construction.
+///
+/// The header is uniform across storage variants; only the destroy callback
+/// differs. `.owned` releases each element, frees the items slice, and frees
+/// the struct. `.static` releases each element but frees no memory: the
+/// struct and backing belong to the instruction memory of the quotation that
+/// captured the literal and are reclaimed with it, so refcount traffic can
+/// never free a literal's backing. The element release still runs because a
+/// parse-time word inside a literal (e.g. `{ V{ } }`) transfers an owned
+/// container reference into the items.
+///
+/// Create via `Array.fromOwnedSlice` (owned) or `Array.createStatic` (static)
+/// so the header is initialized before the value can be observed by another
+/// thread.
+pub const Array = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    items: []const Value = &.{},
+    storage: enum { owned, static } = .owned,
+
+    /// Adopt a filled slice allocated on `allocator`. Ownership of the slice
+    /// and of the element references transfers to the array: destroy releases
+    /// each element and frees the slice. Callers that copy elements out of a
+    /// container they do not own must retain them first.
+    pub fn fromOwnedSlice(allocator: std.mem.Allocator, items: []const Value) error{OutOfMemory}!*Array {
+        const self = try allocator.create(Array);
+        self.* = .{
+            .header = undefined,
+            .items = items,
+            .storage = .owned,
+        };
+        self.header.init(allocator, destroyArray);
+        return self;
+    }
+
+    /// Copy `src` into a fresh owned array, retaining each copied element:
+    /// the copies become owning references held by the array's backing and
+    /// released by its destroy.
+    pub fn createCopyFrom(allocator: std.mem.Allocator, src: []const Value) error{OutOfMemory}!*Array {
+        const items = try allocator.alloc(Value, src.len);
+        errdefer allocator.free(items);
+        @memcpy(items, src);
+        const self = try fromOwnedSlice(allocator, items);
+        @import("container_backing.zig").retainValues(items);
+        return self;
+    }
+
+    /// Wrap a parse-time or decode-time literal slice living on instruction
+    /// memory. The shareable flag stays `.unknown`: instruction memory is not
+    /// the process-lifetime allocator, so the send-path scan classifies static
+    /// arrays not-shareable and they cross task boundaries by deep copy.
+    pub fn createStatic(allocator: std.mem.Allocator, items: []const Value) error{OutOfMemory}!*Array {
+        const self = try allocator.create(Array);
+        self.* = .{
+            .header = undefined,
+            .items = items,
+            .storage = .static,
+        };
+        self.header.init(allocator, destroyArray);
+        return self;
+    }
+
+    fn destroyArray(header: *@import("container_backing.zig").ContainerHeader) void {
+        const cb = @import("container_backing.zig");
+        const self: *Array = @fieldParentPtr("header", header);
+        for (self.items) |item| {
+            cb.releaseValue(item);
+        }
+        switch (self.storage) {
+            .owned => {
+                header.allocator.free(self.items);
+                header.allocator.destroy(self);
+            },
+            .static => {},
+        }
+    }
+};
+
 /// ByteArray type for B{ } literals - mutable, dynamically-sized byte sequences.
 ///
 /// Carries a `ContainerHeader` so the backing participates in the cross-worker
@@ -253,7 +334,7 @@ pub fn makeBorrowedByteArray(allocator: std.mem.Allocator, bytes: []u8) !*ByteAr
 pub fn valueContainsBorrowedBuffer(val: Value) bool {
     return switch (val) {
         .byte_array => |ba| ba.isBorrowed(),
-        .array => |items| containsBorrowedInSlice(items),
+        .array => |arr| containsBorrowedInSlice(arr.items),
         .quotation => |quot| blk: {
             for (quot.instructions) |instr| {
                 switch (instr.op) {
@@ -1147,7 +1228,7 @@ pub const Value = union(enum) {
     boolean: bool,
     string: []const u8,
     symbol: []const u8,
-    array: []const Value,
+    array: *Array,
     quotation: Quotation,
     closure: *Closure,
     hash: *HashTable,
@@ -1203,9 +1284,9 @@ pub const Value = union(enum) {
             .boolean => |b| try writer.writeAll(if (b) "t" else "f"),
             .string => |s| try writer.print("\"{s}\"", .{s}),
             .symbol => |s| try writer.print("{s}:", .{s}),
-            .array => |items| {
+            .array => |arr| {
                 try writer.writeAll("{ ");
-                for (items) |item| {
+                for (arr.items) |item| {
                     try item.write(writer);
                     try writer.writeAll(" ");
                 }
@@ -1383,8 +1464,9 @@ pub const Value = union(enum) {
             .symbol => |a| simd.eqlBytes(a, other.symbol),
             .array => |a| {
                 const b = other.array;
-                if (a.len != b.len) return false;
-                for (a, b) |ai, bi| {
+                if (a == b) return true;
+                if (a.items.len != b.items.len) return false;
+                for (a.items, b.items) |ai, bi| {
                     if (!ai.eql(bi)) return false;
                 }
                 return true;
@@ -1535,7 +1617,7 @@ pub const Value = union(enum) {
             .boolean => |b| hasher.update(std.mem.asBytes(&b)),
             .string, .symbol => |s| hasher.update(s),
             .array => |arr| {
-                for (arr) |elem| {
+                for (arr.items) |elem| {
                     const elem_hash = elem.hashValue();
                     hasher.update(std.mem.asBytes(&elem_hash));
                 }
@@ -2038,10 +2120,11 @@ test "valueContainsBorrowedBuffer detects direct packed and nested borrowed buff
     const borrowed_inner = Value{ .byte_array = &borrowed_ba };
     const packed_borrowed = Value{ .tagged = .{ .tag = &packed_type, .inner = &borrowed_inner } };
 
-    var nested_array = [_]Value{
+    var nested_array_items = [_]Value{
         .{ .fixnum = 1 },
         .{ .byte_array = &borrowed_ba },
     };
+    var nested_array = Array{ .header = undefined, .items = nested_array_items[0..], .storage = .static };
     var nested_struct_fields = [_]Value{
         .{ .fixnum = 99 },
         packed_borrowed,
@@ -2065,23 +2148,24 @@ test "valueContainsBorrowedBuffer detects direct packed and nested borrowed buff
     try std.testing.expect(!valueContainsBorrowedBuffer(.{ .byte_array = &owned_ba }));
     try std.testing.expect(valueContainsBorrowedBuffer(.{ .byte_array = &borrowed_ba }));
     try std.testing.expect(valueContainsBorrowedBuffer(packed_borrowed));
-    try std.testing.expect(valueContainsBorrowedBuffer(.{ .array = nested_array[0..] }));
+    try std.testing.expect(valueContainsBorrowedBuffer(.{ .array = &nested_array }));
     try std.testing.expect(valueContainsBorrowedBuffer(.{ .struct_instance = &struct_instance }));
     try std.testing.expect(valueContainsBorrowedBuffer(.{ .error_value = &err_obj }));
     try std.testing.expect(!valueContainsBorrowedBuffer(.{ .fixnum = 42 }));
 }
 
 test "array equality" {
-    const arr1 = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
-    const arr2 = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
-    const arr3 = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 3 } };
-    const arr4 = &[_]Value{.{ .fixnum = 1 }};
+    var arr1 = Array{ .header = undefined, .items = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } }, .storage = .static };
+    var arr2 = Array{ .header = undefined, .items = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } }, .storage = .static };
+    var arr3 = Array{ .header = undefined, .items = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 3 } }, .storage = .static };
+    var arr4 = Array{ .header = undefined, .items = &[_]Value{.{ .fixnum = 1 }}, .storage = .static };
 
-    const a = Value{ .array = arr1 };
-    const b = Value{ .array = arr2 };
-    const c = Value{ .array = arr3 };
-    const d = Value{ .array = arr4 };
+    const a = Value{ .array = &arr1 };
+    const b = Value{ .array = &arr2 };
+    const c = Value{ .array = &arr3 };
+    const d = Value{ .array = &arr4 };
 
+    try std.testing.expect(a.eql(a));
     try std.testing.expect(a.eql(b));
     try std.testing.expect(!a.eql(c));
     try std.testing.expect(!a.eql(d));
@@ -2113,7 +2197,8 @@ test "cross-type inequality" {
     const bool_val = Value{ .boolean = true };
     const str_val = Value{ .string = "42" };
     const sym_val = Value{ .symbol = "42" };
-    const arr_val = Value{ .array = &[_]Value{} };
+    var empty_arr = Array{ .header = undefined, .items = &[_]Value{}, .storage = .static };
+    const arr_val = Value{ .array = &empty_arr };
 
     // Different types are never equal
     try std.testing.expect(!int_val.eql(bool_val));

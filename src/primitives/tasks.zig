@@ -739,8 +739,11 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
     }
 
     const val = try ctx.stack.pop();
+    // The popped array must stay alive across the suspensions below, since
+    // `tasks` borrows its backing; the deferred release runs at return.
+    defer container_backing.releaseValue(val);
     const tasks = switch (val) {
-        .array => |items| items,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", val);
             return error.TypeMismatch;
@@ -758,7 +761,7 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
     }
 
     if (tasks.len == 0) {
-        try ctx.stack.push(.{ .array = &.{} });
+        try helpers.pushAdoptedArray(ctx, ctx.allocator, try ctx.allocator.alloc(Value, 0));
         return;
     }
 
@@ -828,9 +831,10 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
         }
     }
 
-    // Each element carries its own +1 owning reference from the copy or share above; a moved push
-    // transfers them to the slot, whose release recurses into the array's elements.
-    try ctx.stack.pushMoved(.{ .array = results });
+    // Each element carries its own +1 owning reference from the copy or share
+    // above; the fresh array adopts them and a moved push transfers the array
+    // to the slot.
+    try helpers.pushAdoptedArray(ctx, alloc, results);
 }
 
 /// Extract the result from a finished task: deep-copy completed results into the caller's
@@ -891,12 +895,17 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
         .string => |s| .{ .string = try alloc.dupe(u8, s) },
         .symbol => |s| .{ .symbol = try alloc.dupe(u8, s) },
 
-        .array => |items| blk: {
-            const new_items = try alloc.alloc(Value, items.len);
-            for (items, 0..) |item, i| {
+        .array => |arr| blk: {
+            if (container_backing.memoShareable(&arr.header, val, longlived)) {
+                arr.header.retain();
+                break :blk val;
+            }
+
+            const new_items = try alloc.alloc(Value, arr.items.len);
+            for (arr.items, 0..) |item, i| {
                 new_items[i] = try deepCopyValue(item, alloc, longlived);
             }
-            break :blk .{ .array = new_items };
+            break :blk .{ .array = try value_mod.Array.fromOwnedSlice(alloc, new_items) };
         },
 
         .quotation => |quot| .{ .quotation = try deepCopyQuotation(quot, alloc, longlived) },
@@ -1325,7 +1334,10 @@ test "await-all propagates borrowed buffer escape from failed child" {
         .{ .task = &failed_child },
         .{ .task = &completed_child },
     };
-    try ctx.stack.push(.{ .array = task_values[0..] });
+    // The push retains the header, so the wrapper needs an initialized one;
+    // static storage keeps the stack-local items untouched by the release.
+    const task_arr = try value_mod.Array.createStatic(ctx.quotationAllocator(), task_values[0..]);
+    try ctx.stack.push(.{ .array = task_arr });
 
     try std.testing.expectError(error.UserThrown, nativeAwaitAll(&ctx));
     try std.testing.expect(ctx.thrown_error != null);
@@ -1365,6 +1377,56 @@ test "deepCopyValue: shares a self-contained set by refcount bump" {
 
     container_backing.releaseValue(copied);
     try testing.expectEqual(@as(u32, 1), s.header.refcountValue());
+}
+
+test "deepCopyValue: shares a self-contained array by refcount bump" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const items = try testing.allocator.alloc(Value, 2);
+    items[0] = .{ .fixnum = 1 };
+    items[1] = .{ .float = 2.5 };
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    defer container_backing.releaseValue(.{ .array = arr });
+
+    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.array == arr);
+    try testing.expectEqual(@as(u32, 2), arr.header.refcountValue());
+
+    container_backing.releaseValue(copied);
+    try testing.expectEqual(@as(u32, 1), arr.header.refcountValue());
+}
+
+test "deepCopyValue: string-bearing array is copied, not shared" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const items = try testing.allocator.alloc(Value, 1);
+    items[0] = .{ .string = "s" };
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    defer container_backing.releaseValue(.{ .array = arr });
+
+    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.array != arr);
+    try testing.expectEqual(@as(u32, 1), arr.header.refcountValue());
+    container_backing.releaseValue(copied);
+}
+
+test "deepCopyValue: a static array is copied, not shared" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const items = try arena.allocator().alloc(Value, 1);
+    items[0] = .{ .fixnum = 9 };
+    const arr = try value_mod.Array.createStatic(arena.allocator(), items);
+
+    const copied = try deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator);
+    try testing.expect(copied.array != arr);
+    try testing.expectEqual(container_backing.Shareable.not_shareable, arr.header.shareableState());
+    container_backing.releaseValue(copied);
 }
 
 test "deepCopyValue: string-bearing hash is copied, not shared" {

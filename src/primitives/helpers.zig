@@ -24,6 +24,33 @@ const StackEffect = stack_effect_mod.StackEffect;
 const StackEffectParam = stack_effect_mod.StackEffectParam;
 const TypeValue = value_mod.TypeValue;
 
+/// Adopt a filled slice into a fresh owned array and push it, transferring
+/// the slice and its element references to the stack slot. The caller's
+/// ownership of `items` ends here on every path: on failure the elements are
+/// released and the slice freed. `items` must have been allocated on `alloc`.
+pub fn pushAdoptedArray(ctx: *Context, alloc: Allocator, items: []const Value) anyerror!void {
+    const arr = value_mod.Array.fromOwnedSlice(alloc, items) catch |e| {
+        container_backing.releaseValues(items);
+        alloc.free(items);
+        return e;
+    };
+    ctx.stack.pushMoved(.{ .array = arr }) catch |e| {
+        container_backing.releaseValue(.{ .array = arr });
+        return e;
+    };
+}
+
+/// Copy a borrowed slice of Values into a fresh owned array on `alloc` and
+/// push it. Each copied element is retained; the caller keeps its own
+/// references to `src`.
+pub fn pushCopiedArray(ctx: *Context, alloc: Allocator, src: []const Value) anyerror!void {
+    const arr = try value_mod.Array.createCopyFrom(alloc, src);
+    ctx.stack.pushMoved(.{ .array = arr }) catch |e| {
+        container_backing.releaseValue(.{ .array = arr });
+        return e;
+    };
+}
+
 /// Create a stack effect from a raw string at runtime.
 /// Supports quotation annotations like "seq quot: ( elem -- elem' ) -- seq'"
 pub fn makeSimpleEffect(allocator: Allocator, raw: []const u8) !StackEffect {
@@ -316,7 +343,7 @@ pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]con
                 break :blk std.fmt.allocPrint(allocator, "{s}...:", .{s[0..max_len]});
             }
         },
-        .array => |items| std.fmt.allocPrint(allocator, "array[{d}]", .{items.len}),
+        .array => |arr| std.fmt.allocPrint(allocator, "array[{d}]", .{arr.items.len}),
         .quotation => |q| std.fmt.allocPrint(allocator, "quotation[{d}]", .{q.instructions.len}),
         .closure => |c| std.fmt.allocPrint(allocator, "quotation[{d}]", .{c.instructions.len}),
         .hash => |h| std.fmt.allocPrint(allocator, "hash[{d}]", .{h.map.count()}),

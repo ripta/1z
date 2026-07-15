@@ -234,8 +234,16 @@ pub const Dictionary = struct {
 
     /// If `instructions` contains any container-variant `push_literal`,
     /// record the slice on the dictionary's release list.
+    ///
+    /// A word defined inside a parse-time body is re-defined with the same
+    /// instruction slice on every invocation, but the captured literals carry
+    /// one creation reference, so each distinct slice is recorded and
+    /// released exactly once.
     pub fn registerCompoundBody(self: *Dictionary, instructions: []const Instruction) !void {
         if (!container_backing.instructionsHaveContainerLiteral(instructions)) return;
+        for (self.container_release_list.items) |existing| {
+            if (existing.ptr == instructions.ptr) return;
+        }
         try self.container_release_list.append(self.allocator, instructions);
     }
 

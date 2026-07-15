@@ -52,8 +52,9 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const markers_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(markers_val);
     const markers_array = switch (markers_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", markers_val);
             return error.TypeMismatch;
@@ -246,7 +247,7 @@ fn nativeTypeMembers(ctx: *Context) anyerror!void {
                 for (members, 0..) |member, i| {
                     arr[i] = .{ .type_val = @constCast(member) };
                 }
-                try ctx.stack.push(.{ .array = arr });
+                try helpers.pushAdoptedArray(ctx, ctx.quotationAllocator(), arr);
             } else {
                 try ctx.stack.push(.{ .boolean = false });
             }
@@ -325,7 +326,7 @@ fn nativeDescriptorFieldsRaw(ctx: *Context) anyerror!void {
     };
     const arr = try alloc.alloc(value_mod.Value, fields.len);
     for (fields, 0..) |name, i| arr[i] = .{ .string = name };
-    try ctx.stack.push(.{ .array = arr });
+    try helpers.pushAdoptedArray(ctx, alloc, arr);
 }
 
 /// descriptor-field-types-raw ( descriptor -- array )
@@ -379,7 +380,7 @@ fn nativeDescriptorFieldTypesRaw(ctx: *Context) anyerror!void {
         break :blk out;
     };
 
-    try ctx.stack.push(.{ .array = arr });
+    try helpers.pushAdoptedArray(ctx, alloc, arr);
 }
 
 /// descriptor-inner-type-raw ( descriptor -- type )
@@ -446,7 +447,7 @@ fn nativeDescriptorTypeParamsRaw(ctx: *Context) anyerror!void {
 
     const out = try alloc.alloc(value_mod.Value, params.len);
     for (params, 0..) |p, i| out[i] = .{ .type_val = @constCast(p) };
-    try ctx.stack.push(.{ .array = out });
+    try helpers.pushAdoptedArray(ctx, alloc, out);
 }
 
 /// descriptor-variants-raw ( descriptor -- array )
@@ -468,9 +469,9 @@ fn nativeDescriptorVariantsRaw(ctx: *Context) anyerror!void {
         const pair = try alloc.alloc(value_mod.Value, 2);
         pair[0] = .{ .symbol = v.name };
         pair[1] = .{ .type_val = if (v.type_val) |tv| @constCast(tv) else unit_tv };
-        arr[i] = .{ .array = pair };
+        arr[i] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, pair) };
     }
-    try ctx.stack.push(.{ .array = arr });
+    try helpers.pushAdoptedArray(ctx, alloc, arr);
 }
 
 /// descriptor-resource-kind-raw ( descriptor -- string )
@@ -524,9 +525,9 @@ test "native type-members returns members for union types" {
 
     const result = try ctx.stack.pop();
     try testing.expect(result == .array);
-    try testing.expectEqual(@as(usize, 2), result.array.len);
-    try testing.expect(result.array[0] == .type_val);
-    try testing.expect(result.array[1] == .type_val);
+    try testing.expectEqual(@as(usize, 2), result.array.items.len);
+    try testing.expect(result.array.items[0] == .type_val);
+    try testing.expect(result.array.items[1] == .type_val);
 }
 
 fn fixnumDescriptor(ctx: *Context) *const value_mod.TypeDescriptor {
@@ -581,9 +582,9 @@ test "descriptor-fields-raw returns struct field names" {
 
     const result = try ctx.stack.pop();
     try testing.expect(result == .array);
-    try testing.expectEqual(@as(usize, 2), result.array.len);
-    try testing.expectEqualStrings("x", result.array[0].string);
-    try testing.expectEqualStrings("y", result.array[1].string);
+    try testing.expectEqual(@as(usize, 2), result.array.items.len);
+    try testing.expectEqualStrings("x", result.array.items[0].string);
+    try testing.expectEqualStrings("y", result.array.items[1].string);
 }
 
 test "descriptor-fields-raw throws on builtin descriptor" {
@@ -624,11 +625,11 @@ test "descriptor-field-types-raw returns typed struct field types" {
 
     const result = try ctx.stack.pop();
     try testing.expect(result == .array);
-    try testing.expectEqual(@as(usize, 2), result.array.len);
-    try testing.expect(result.array[0] == .type_val);
-    try testing.expect(result.array[1] == .type_val);
-    try testing.expectEqualStrings("fixnum", result.array[0].type_val.name);
-    try testing.expectEqualStrings("string", result.array[1].type_val.name);
+    try testing.expectEqual(@as(usize, 2), result.array.items.len);
+    try testing.expect(result.array.items[0] == .type_val);
+    try testing.expect(result.array.items[1] == .type_val);
+    try testing.expectEqualStrings("fixnum", result.array.items[0].type_val.name);
+    try testing.expectEqualStrings("string", result.array.items[1].type_val.name);
 }
 
 test "descriptor-inner-type-raw throws on builtin and on struct" {
@@ -704,13 +705,13 @@ test "descriptor-variants-raw returns name/type pair arrays for enums" {
 
     const result = try ctx.stack.pop();
     try testing.expect(result == .array);
-    try testing.expectEqual(@as(usize, 2), result.array.len);
-    const first = result.array[0];
+    try testing.expectEqual(@as(usize, 2), result.array.items.len);
+    const first = result.array.items[0];
     try testing.expect(first == .array);
-    try testing.expectEqual(@as(usize, 2), first.array.len);
-    try testing.expectEqualStrings("red", first.array[0].symbol);
-    try testing.expectEqualStrings("fixnum", first.array[1].type_val.name);
-    const second = result.array[1];
-    try testing.expectEqualStrings("blue", second.array[0].symbol);
-    try testing.expect(second.array[1].type_val == unit_tv);
+    try testing.expectEqual(@as(usize, 2), first.array.items.len);
+    try testing.expectEqualStrings("red", first.array.items[0].symbol);
+    try testing.expectEqualStrings("fixnum", first.array.items[1].type_val.name);
+    const second = result.array.items[1];
+    try testing.expectEqualStrings("blue", second.array.items[0].symbol);
+    try testing.expect(second.array.items[1].type_val == unit_tv);
 }

@@ -186,12 +186,12 @@ pub const ContainerHeader = struct {
 
 /// Per-variant retain dispatch.
 ///
-/// The header-backed variants (i.e., `vector`, `mutable_map`, `hash`, `set`) carry a refcounted
-/// backing and route through `header.retain()`. Their contents are accounted only at `destroy`, so we
-/// don't recurse into them here.
+/// The header-backed variants (i.e., `array`, `vector`, `mutable_map`, `hash`, `set`) carry a
+/// refcounted backing and route through `header.retain()`. Their contents are accounted only at
+/// `destroy`, so we don't recurse into them here.
 ///
-/// The headerless composites (i.e., `array`, `tagged`, `struct_instance`, `error_value`, `iterator`)
-/// own a reference to each refcounted value they embed, so a stack slot holding one must retain those
+/// The headerless composites (i.e., `tagged`, `struct_instance`, `error_value`, `iterator`) own a
+/// reference to each refcounted value they embed, so a stack slot holding one must retain those
 /// embedded values recursively. An `error_value` owns the value carried in its `data` field.
 ///
 /// `byte_array` carries a refcounted backing like `vector` and `mutable_map`; its bytes are not Values,
@@ -208,7 +208,7 @@ pub fn retainValue(v: Value) void {
         .byte_array => |ba| ba.header.retain(),
         .hash => |h| h.header.retain(),
         .set => |s| s.header.retain(),
-        .array => |items| retainValues(items),
+        .array => |arr| arr.header.retain(),
         .tagged => |t| retainValue(t.inner.*),
         .struct_instance => |si| retainValues(si.fields),
         .error_value => |err| if (err.data) |data| retainValue(data.*),
@@ -232,7 +232,7 @@ pub fn releaseValue(v: Value) void {
         .byte_array => |ba| ba.header.release(),
         .hash => |h| h.header.release(),
         .set => |s| s.header.release(),
-        .array => |items| releaseValues(items),
+        .array => |arr| arr.header.release(),
         .tagged => |t| releaseValue(t.inner.*),
         .struct_instance => |si| releaseValues(si.fields),
         .error_value => |err| if (err.data) |data| releaseValue(data.*),
@@ -243,7 +243,8 @@ pub fn releaseValue(v: Value) void {
 
 /// Retain the refcounted backing an iterator captures.
 ///
-/// `array` iterators hold a slice of element Values.
+/// `array` iterators either walk a headered array (retain its header) or a
+/// slice materialized from another sequence type (retain each element).
 ///
 /// The chained iterators (`map`, `filter`, `take`, `drop`) forward to their inner iterator.
 ///
@@ -260,7 +261,7 @@ pub fn releaseValue(v: Value) void {
 /// per-yield retain is balanced separately by the consumer.
 pub fn retainIteratorBacking(it: *Iterator) void {
     switch (it.kind) {
-        .array => |ai| retainValues(ai.items),
+        .array => |ai| if (ai.source) |arr| arr.header.retain() else retainValues(ai.items),
         .map => |m| retainIteratorBacking(m.inner),
         .filter => |fi| retainIteratorBacking(fi.inner),
         .take => |t| retainIteratorBacking(t.inner),
@@ -272,7 +273,7 @@ pub fn retainIteratorBacking(it: *Iterator) void {
 /// Release the refcounted backing an iterator captures.
 pub fn releaseIteratorBacking(it: *Iterator) void {
     switch (it.kind) {
-        .array => |ai| releaseValues(ai.items),
+        .array => |ai| if (ai.source) |arr| arr.header.release() else releaseValues(ai.items),
         .map => |m| releaseIteratorBacking(m.inner),
         .filter => |fi| releaseIteratorBacking(fi.inner),
         .take => |t| releaseIteratorBacking(t.inner),
@@ -288,8 +289,7 @@ pub fn releaseIteratorBacking(it: *Iterator) void {
 /// `.iterator` is treated conservatively as carrying a backing.
 pub fn valueCarriesBacking(v: Value) bool {
     return switch (v) {
-        .vector, .mutable_map, .byte_array, .hash, .set => true,
-        .array => |items| valuesCarryBacking(items),
+        .vector, .mutable_map, .byte_array, .hash, .set, .array => true,
         .tagged => |t| valueCarriesBacking(t.inner.*),
         .struct_instance => |si| valuesCarryBacking(si.fields),
         .error_value => |err| if (err.data) |data| valueCarriesBacking(data.*) else false,
@@ -316,12 +316,13 @@ pub fn allocatorEql(a: std.mem.Allocator, b: std.mem.Allocator) bool {
 ///
 /// Deep immutability alone is not enough: sharing also requires that no reachable byte dies with
 /// the creating task's arena. Strings, symbols, bignums, templates, and stack effects are
-/// immutable but carry arena-backed payloads, so they block sharing. Bare arrays are unheadered
-/// slices, so they block sharing until they migrate onto `ContainerHeader`. What remains is
-/// payload-in-`Value` scalars plus headered `hash`/`set` whose backing was created on `longlived`
-/// (the process-lifetime allocator) and whose contents recursively qualify. Hash keys are byte
-/// slices duped onto the backing's own allocator at every insert path, so the backing identity
-/// check covers them.
+/// immutable but carry arena-backed payloads, so they block sharing. What remains is
+/// payload-in-`Value` scalars plus headered `array`/`hash`/`set` whose backing was created on
+/// `longlived` (the process-lifetime allocator) and whose contents recursively qualify. Hash keys
+/// are byte slices duped onto the backing's own allocator at every insert path, so the backing
+/// identity check covers them. Static-storage arrays live on instruction memory and fail the
+/// backing identity check, so literals cross task boundaries by deep copy until `freeze` can
+/// produce a self-contained value.
 ///
 /// Coverage can widen later without changing callers.
 pub fn valueShareable(v: Value, longlived: std.mem.Allocator) bool {
@@ -331,6 +332,7 @@ pub fn valueShareable(v: Value, longlived: std.mem.Allocator) bool {
         .boolean,
         .unit,
         => true,
+        .array => |arr| memoShareable(&arr.header, v, longlived),
         .hash => |h| memoShareable(&h.header, v, longlived),
         .set => |s| memoShareable(&s.header, v, longlived),
         else => false,
@@ -342,6 +344,14 @@ pub fn valueShareable(v: Value, longlived: std.mem.Allocator) bool {
 /// memos are populated as a side effect of scanning an outer container.
 fn scanShareable(v: Value, longlived: std.mem.Allocator) bool {
     return switch (v) {
+        .array => |arr| blk: {
+            if (arr.storage != .owned) break :blk false;
+            if (!allocatorEql(arr.header.allocator, longlived)) break :blk false;
+            for (arr.items) |item| {
+                if (!valueShareable(item, longlived)) break :blk false;
+            }
+            break :blk true;
+        },
         .hash => |h| blk: {
             if (!allocatorEql(h.header.allocator, longlived)) break :blk false;
             var iter = h.map.iterator();
@@ -430,13 +440,7 @@ pub fn retainInstructionsContainerLiterals(instructions: []const Instruction) vo
 /// be released at teardown.
 pub fn valueHoldsRefcountedBacking(val: Value) bool {
     return switch (val) {
-        .vector, .mutable_map, .byte_array, .hash, .set => true,
-        .array => |items| {
-            for (items) |item| {
-                if (valueHoldsRefcountedBacking(item)) return true;
-            }
-            return false;
-        },
+        .vector, .mutable_map, .byte_array, .hash, .set, .array => true,
         .tagged => |t| valueHoldsRefcountedBacking(t.inner.*),
         .struct_instance => |si| {
             for (si.fields) |field| {
@@ -758,18 +762,28 @@ test "retainValue/releaseValue: byte_array dispatch exercises the header" {
     // Final release destroys the backing; no further refcount inspection.
 }
 
-test "retainValue/releaseValue: array propagates to embedded vector" {
+test "retainValue/releaseValue: array dispatch exercises the header" {
+    // The vector's construction reference transfers into the array slot;
+    // retain an observation reference so the refcount stays inspectable
+    // across the array's destroy.
     const vec = try value_mod.Vector.create(testing.allocator);
-    var items = [_]Value{.{ .vector = vec }};
-    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+    vec.header.retain();
 
-    retainValue(.{ .array = &items });
+    const items = try testing.allocator.alloc(Value, 1);
+    items[0] = .{ .vector = vec };
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    try testing.expectEqual(@as(u32, 1), arr.header.refcountValue());
+
+    retainValue(.{ .array = arr });
+    try testing.expectEqual(@as(u32, 2), arr.header.refcountValue());
+    // Elements are accounted at destroy, not per stack slot.
     try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
 
-    releaseValue(.{ .array = &items });
+    releaseValue(.{ .array = arr });
+    releaseValue(.{ .array = arr });
+    // The array's destroy released its element reference.
     try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 
-    // Drop the baseline reference; destroys the backing.
     vec.header.release();
 }
 
@@ -865,18 +879,22 @@ test "Set: destroy releases member values" {
     vec.header.release();
 }
 
-test "retainValue/releaseValue: nested array recurses to depth" {
-    const vec = try value_mod.Vector.create(testing.allocator);
-    var inner = [_]Value{.{ .vector = vec }};
-    var outer = [_]Value{.{ .array = &inner }};
+test "retainValue/releaseValue: static array release never frees the backing" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
 
-    retainValue(.{ .array = &outer });
-    try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+    const items = try alloc.alloc(Value, 2);
+    items[0] = .{ .fixnum = 1 };
+    items[1] = .{ .fixnum = 2 };
+    const arr = try value_mod.Array.createStatic(alloc, items);
 
-    releaseValue(.{ .array = &outer });
-    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
-
-    vec.header.release();
+    retainValue(.{ .array = arr });
+    releaseValue(.{ .array = arr });
+    // Dropping the construction reference runs the no-op destroy; the
+    // backing stays readable until the owning arena is torn down.
+    releaseValue(.{ .array = arr });
+    try testing.expectEqual(@as(i64, 1), arr.items[0].fixnum);
 }
 
 test "retainValue/releaseValue: array iterator propagates to captured vector" {
@@ -967,9 +985,6 @@ test "valueShareable: mutable containers, composites, and code values do not qua
     try testing.expect(!valueShareable(.{ .mutable_map = mm }, testing.allocator));
     try testing.expect(!valueShareable(.{ .byte_array = ba }, testing.allocator));
 
-    var flat = [_]Value{.{ .fixnum = 1 }};
-    try testing.expect(!valueShareable(.{ .array = &flat }, testing.allocator));
-
     var dummy_vt: value_mod.VirtualType = undefined;
     var imm_inner: Value = .{ .fixnum = 4 };
     try testing.expect(!valueShareable(.{ .tagged = .{ .tag = &dummy_vt, .inner = &imm_inner } }, testing.allocator));
@@ -989,6 +1004,53 @@ test "valueShareable: mutable containers, composites, and code values do not qua
     var items = [_]Value{.{ .fixnum = 1 }};
     var it = Iterator{ .kind = .{ .array = .{ .items = &items, .index = 0 } } };
     try testing.expect(!valueShareable(.{ .iterator = &it }, testing.allocator));
+}
+
+test "valueShareable: owned array of scalars qualifies and memoizes" {
+    const inner_items = try testing.allocator.alloc(Value, 1);
+    inner_items[0] = .{ .fixnum = 7 };
+    const inner = try value_mod.Array.fromOwnedSlice(testing.allocator, inner_items);
+
+    const items = try testing.allocator.alloc(Value, 2);
+    items[0] = .{ .float = 2.0 };
+    // The outer slot takes the inner's creation reference.
+    items[1] = .{ .array = inner };
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    defer releaseValue(.{ .array = arr });
+
+    try testing.expectEqual(Shareable.unknown, inner.header.shareableState());
+    try testing.expect(valueShareable(.{ .array = arr }, testing.allocator));
+    try testing.expectEqual(Shareable.shareable, arr.header.shareableState());
+    try testing.expectEqual(Shareable.shareable, inner.header.shareableState());
+}
+
+test "valueShareable: string elements and off-allocator backing block array sharing" {
+    const items = try testing.allocator.alloc(Value, 1);
+    items[0] = .{ .string = "s" };
+    const arr = try value_mod.Array.fromOwnedSlice(testing.allocator, items);
+    defer releaseValue(.{ .array = arr });
+    try testing.expect(!valueShareable(.{ .array = arr }, testing.allocator));
+    try testing.expectEqual(Shareable.not_shareable, arr.header.shareableState());
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const arena_items = try arena.allocator().alloc(Value, 1);
+    arena_items[0] = .{ .fixnum = 1 };
+    const arena_arr = try value_mod.Array.fromOwnedSlice(arena.allocator(), arena_items);
+    try testing.expect(!valueShareable(.{ .array = arena_arr }, testing.allocator));
+    releaseValue(.{ .array = arena_arr });
+}
+
+test "valueShareable: static arrays classify not-shareable even on the long-lived allocator" {
+    const items = try testing.allocator.alloc(Value, 1);
+    items[0] = .{ .fixnum = 1 };
+    const arr = try value_mod.Array.createStatic(testing.allocator, items);
+    // Static destroy is a no-op, so the test owns the memory.
+    defer testing.allocator.destroy(arr);
+    defer testing.allocator.free(items);
+
+    try testing.expect(!valueShareable(.{ .array = arr }, testing.allocator));
+    try testing.expectEqual(Shareable.not_shareable, arr.header.shareableState());
 }
 
 test "valueShareable: hash and set of scalars qualify" {

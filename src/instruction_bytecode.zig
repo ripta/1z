@@ -375,11 +375,11 @@ pub fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocato
             try buf.appendSlice(allocator, std.mem.asBytes(&quotation_id_sentinel));
             try serializeInstructionsInto(buf, cl.instructions, allocator, qid_map);
         },
-        .array => |elems| {
+        .array => |arr| {
             try buf.append(allocator, value_tag_array);
-            const elem_count: u32 = @intCast(elems.len);
+            const elem_count: u32 = @intCast(arr.items.len);
             try buf.appendSlice(allocator, std.mem.asBytes(&elem_count));
-            for (elems) |elem| {
+            for (arr.items) |elem| {
                 try serializeValueInto(buf, elem, allocator, qid_map);
             }
         },
@@ -477,11 +477,11 @@ pub fn serializeValueIntoForImage(
             try buf.append(allocator, value_tag_vector_slot);
             try buf.appendSlice(allocator, std.mem.asBytes(&slot));
         },
-        .array => |elems| {
+        .array => |arr| {
             try buf.append(allocator, value_tag_array);
-            const elem_count: u32 = @intCast(elems.len);
+            const elem_count: u32 = @intCast(arr.items.len);
             try buf.appendSlice(allocator, std.mem.asBytes(&elem_count));
-            for (elems) |elem| {
+            for (arr.items) |elem| {
                 try serializeValueIntoForImage(buf, elem, allocator, slot_maps);
             }
         },
@@ -682,7 +682,10 @@ pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator
             for (elems) |*elem| {
                 elem.* = try deserializeValueAt(data, offset, allocator, qfns);
             }
-            break :blk .{ .array = elems };
+            // Decoded literals mirror parse-time literals: static storage,
+            // struct and backing owned by the decode allocator.
+            const arr = value_mod.Array.createStatic(allocator, elems) catch return error.OutOfMemory;
+            break :blk .{ .array = arr };
         },
         value_tag_hash => blk: {
             if (offset.* + 4 > data.len) return error.OutOfMemory;
@@ -830,7 +833,10 @@ pub fn deserializeValueAtForImage(
             for (elems) |*elem| {
                 elem.* = try deserializeValueAtForImage(data, offset, allocator, slot_tables);
             }
-            break :blk .{ .array = elems };
+            // Decoded literals mirror parse-time literals: static storage,
+            // struct and backing owned by the decode allocator.
+            const arr = value_mod.Array.createStatic(allocator, elems) catch return error.OutOfMemory;
+            break :blk .{ .array = arr };
         },
         value_tag_hash => blk: {
             if (offset.* + 4 > data.len) return error.OutOfMemory;
@@ -920,9 +926,12 @@ fn freeDecodedValue(v: Value) void {
     switch (v) {
         .string => |s| testing.allocator.free(s),
         .symbol => |s| testing.allocator.free(s),
-        .array => |elems| {
-            for (elems) |elem| freeDecodedValue(elem);
-            testing.allocator.free(elems);
+        .array => |arr| {
+            // Decoded arrays are static-storage, so the header release is a
+            // no-op; free the raw allocations directly.
+            for (arr.items) |elem| freeDecodedValue(elem);
+            testing.allocator.free(arr.items);
+            testing.allocator.destroy(arr);
         },
         .quotation => |q| {
             for (q.instructions) |instr| freeDecodedOp(instr.op);
@@ -1030,8 +1039,9 @@ test "roundtrip: symbol literal" {
 }
 
 test "roundtrip: empty array" {
+    var empty = value_mod.Array{ .header = undefined, .items = &.{}, .storage = .static };
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .array = &.{} } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .array = &empty } }, .line = 1 },
     };
     const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
     defer testing.allocator.free(data);
@@ -1039,7 +1049,8 @@ test "roundtrip: empty array" {
     defer freeDecodedInstructions(decoded);
 
     try testing.expect(decoded[0].op.push_literal == .array);
-    try testing.expectEqual(@as(usize, 0), decoded[0].op.push_literal.array.len);
+    try testing.expectEqual(@as(usize, 0), decoded[0].op.push_literal.array.items.len);
+    try testing.expectEqual(.static, decoded[0].op.push_literal.array.storage);
 }
 
 test "roundtrip: array with elements" {
@@ -1048,15 +1059,16 @@ test "roundtrip: array with elements" {
         .{ .string = "hello" },
         .{ .boolean = true },
     };
+    var arr_lit = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .array = &elems } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .array = &arr_lit } }, .line = 1 },
     };
     const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
 
-    const arr = decoded[0].op.push_literal.array;
+    const arr = decoded[0].op.push_literal.array.items;
     try testing.expectEqual(@as(usize, 3), arr.len);
     try testing.expectEqual(@as(i64, 42), arr[0].fixnum);
     try testing.expectEqualStrings("hello", arr[1].string);
@@ -1066,25 +1078,28 @@ test "roundtrip: array with elements" {
 test "roundtrip: nested array" {
     const inner1 = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
     const inner2 = [_]Value{.{ .fixnum = 3 }};
+    var inner1_arr = value_mod.Array{ .header = undefined, .items = &inner1, .storage = .static };
+    var inner2_arr = value_mod.Array{ .header = undefined, .items = &inner2, .storage = .static };
     const outer = [_]Value{
-        .{ .array = &inner1 },
-        .{ .array = &inner2 },
+        .{ .array = &inner1_arr },
+        .{ .array = &inner2_arr },
     };
+    var outer_arr = value_mod.Array{ .header = undefined, .items = &outer, .storage = .static };
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .array = &outer } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .array = &outer_arr } }, .line = 1 },
     };
     const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
 
-    const arr = decoded[0].op.push_literal.array;
+    const arr = decoded[0].op.push_literal.array.items;
     try testing.expectEqual(@as(usize, 2), arr.len);
-    try testing.expectEqual(@as(usize, 2), arr[0].array.len);
-    try testing.expectEqual(@as(i64, 1), arr[0].array[0].fixnum);
-    try testing.expectEqual(@as(i64, 2), arr[0].array[1].fixnum);
-    try testing.expectEqual(@as(usize, 1), arr[1].array.len);
-    try testing.expectEqual(@as(i64, 3), arr[1].array[0].fixnum);
+    try testing.expectEqual(@as(usize, 2), arr[0].array.items.len);
+    try testing.expectEqual(@as(i64, 1), arr[0].array.items[0].fixnum);
+    try testing.expectEqual(@as(i64, 2), arr[0].array.items[1].fixnum);
+    try testing.expectEqual(@as(usize, 1), arr[1].array.items.len);
+    try testing.expectEqual(@as(i64, 3), arr[1].array.items[0].fixnum);
 }
 
 test "roundtrip: empty hash" {
@@ -1147,15 +1162,16 @@ test "roundtrip: nested quotation" {
 
 test "roundtrip: array containing symbol" {
     const elems = [_]Value{.{ .symbol = "cond" }};
+    var arr_lit = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
     const instrs = [_]Instruction{
-        .{ .op = .{ .push_literal = .{ .array = &elems } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .array = &arr_lit } }, .line = 1 },
     };
     const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
 
-    const arr = decoded[0].op.push_literal.array;
+    const arr = decoded[0].op.push_literal.array.items;
     try testing.expectEqual(@as(usize, 1), arr.len);
     try testing.expectEqualStrings("cond", arr[0].symbol);
 }
@@ -1618,7 +1634,8 @@ test "nested quotation in array literal carries compiled code_ptr" {
     const elems = [_]Value{
         .{ .quotation = .{ .instructions = inner_slice } },
     };
-    const arr: Value = .{ .array = &elems };
+    var arr_lit = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
+    const arr: Value = .{ .array = &arr_lit };
 
     var qid_map = QuotationIdMap{};
     defer qid_map.deinit(testing.allocator);
@@ -1637,9 +1654,9 @@ test "nested quotation in array literal carries compiled code_ptr" {
     defer freeDecodedValue(decoded);
 
     try testing.expect(decoded == .array);
-    try testing.expectEqual(@as(usize, 1), decoded.array.len);
-    try testing.expect(decoded.array[0] == .quotation);
-    try testing.expectEqual(dummy_fn, decoded.array[0].quotation.code_ptr.?);
+    try testing.expectEqual(@as(usize, 1), decoded.array.items.len);
+    try testing.expect(decoded.array.items[0] == .quotation);
+    try testing.expectEqual(dummy_fn, decoded.array.items[0].quotation.code_ptr.?);
 }
 
 test "nested quotation in hash literal carries compiled code_ptr" {
@@ -1685,7 +1702,8 @@ test "nested quotation decodes to null code_ptr without a map or table" {
     const elems = [_]Value{
         .{ .quotation = .{ .instructions = &inner } },
     };
-    const arr: Value = .{ .array = &elems };
+    var arr_lit = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
+    const arr: Value = .{ .array = &arr_lit };
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(testing.allocator);
@@ -1696,6 +1714,6 @@ test "nested quotation decodes to null code_ptr without a map or table" {
     defer freeDecodedValue(decoded);
 
     try testing.expect(decoded == .array);
-    try testing.expect(decoded.array[0] == .quotation);
-    try testing.expect(decoded.array[0].quotation.code_ptr == null);
+    try testing.expect(decoded.array.items[0] == .quotation);
+    try testing.expect(decoded.array.items[0].quotation.code_ptr == null);
 }

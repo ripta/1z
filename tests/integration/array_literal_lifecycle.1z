@@ -1,0 +1,21 @@
+use "testing" ;
+
+\ A static array literal's backing lives on instruction memory. Every push of
+\ the literal retains and releases its header; none of that traffic may free
+\ the backing, and the literal must stay intact across repeated calls.
+
+lit: ( -- array ) [ { 1 2 3 } ] ;
+
+1000 [ lit drop ] times
+lit 0 #nth 1 "literal intact after repeated pushes" assert=
+lit { 1 2 3 } "literal equality after churn" assert=
+
+\ Nested literals: the outer static array owns the inner one.
+nested: ( -- array ) [ { { 4 5 } 6 } ] ;
+
+100 [ nested drop ] times
+nested 0 #nth 1 #nth 5 "nested literal intact after churn" assert=
+
+\ curry captures the array into a fresh quotation's instructions; the capture
+\ retains the backing and the release list balances it at teardown.
+{ 7 8 } [ 0 #nth ] curry call 7 "curried array capture" assert=

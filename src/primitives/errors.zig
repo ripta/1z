@@ -340,8 +340,8 @@ fn findDanglingIsolatedType(val: Value, isolation_frame: *const TypeRegistryFram
             if (isolation_frame.type_descriptors.get(t.tag.name) != null) return t.tag.name;
             return findDanglingIsolatedType(t.inner.*, isolation_frame, depth + 1);
         },
-        .array => |items| {
-            for (items) |item| {
+        .array => |arr| {
+            for (arr.items) |item| {
                 if (findDanglingIsolatedType(item, isolation_frame, depth + 1)) |name| return name;
             }
             return null;

@@ -114,8 +114,8 @@ fn lookupNamed(ctx: ?*Context, source: Value, name: []const u8) !Value {
 fn lookupIndexed(ctx: ?*Context, source: Value, index: usize) !Value {
     switch (source) {
         .array => |arr| {
-            if (index >= arr.len) return error.IndexOutOfBounds;
-            return arr[index];
+            if (index >= arr.items.len) return error.IndexOutOfBounds;
+            return arr.items[index];
         },
         else => {
             if (ctx) |c| helpers.setTypeMismatchError(c, "array", source);
@@ -446,20 +446,20 @@ test "lookupNamed on hash missing key" {
 }
 
 test "lookupNamed on array is TypeError" {
-    const arr = &[_]Value{.{ .fixnum = 1 }};
-    const result = lookupNamed(null, .{ .array = arr }, "x");
+    var arr = value_mod.Array{ .header = undefined, .items = &[_]Value{.{ .fixnum = 1 }}, .storage = .static };
+    const result = lookupNamed(null, .{ .array = &arr }, "x");
     try testing.expectError(error.TypeMismatch, result);
 }
 
 test "lookupIndexed on array" {
-    const arr = &[_]Value{ .{ .fixnum = 10 }, .{ .fixnum = 20 } };
-    const val = try lookupIndexed(null, .{ .array = arr }, 1);
+    var arr = value_mod.Array{ .header = undefined, .items = &[_]Value{ .{ .fixnum = 10 }, .{ .fixnum = 20 } }, .storage = .static };
+    const val = try lookupIndexed(null, .{ .array = &arr }, 1);
     try testing.expectEqual(Value{ .fixnum = 20 }, val);
 }
 
 test "lookupIndexed out of bounds" {
-    const arr = &[_]Value{.{ .fixnum = 10 }};
-    const result = lookupIndexed(null, .{ .array = arr }, 5);
+    var arr = value_mod.Array{ .header = undefined, .items = &[_]Value{.{ .fixnum = 10 }}, .storage = .static };
+    const result = lookupIndexed(null, .{ .array = &arr }, 5);
     try testing.expectError(error.IndexOutOfBounds, result);
 }
 

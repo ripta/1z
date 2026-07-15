@@ -66,7 +66,7 @@ fn buildStackEffectParamValue(alloc: Allocator, param: StackEffectParam) Allocat
         // combinator's elements is a separate introspection surface.
         .combination => |cc| Value{ .constraint_combinator = cc },
     } else .{ .boolean = false };
-    return .{ .array = fields };
+    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, fields) };
 }
 
 /// The backing of a constraint node: a base protocol or a combinator. Type
@@ -101,7 +101,7 @@ fn buildConstraintRecord(alloc: Allocator, backing: ConstraintBacking, name_over
             @memcpy(methods_arr, descriptor.methods);
             fields[0] = .{ .string = name_override orelse descriptor.name };
             fields[1] = .{ .symbol = "protocol" };
-            fields[2] = .{ .array = methods_arr };
+            fields[2] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, methods_arr) };
             fields[3] = .{ .boolean = false };
             fields[4] = .{ .fixnum = @intCast(descriptor.protocol_id) };
         },
@@ -117,11 +117,11 @@ fn buildConstraintRecord(alloc: Allocator, backing: ConstraintBacking, name_over
             fields[0] = if (name_override) |n| Value{ .string = n } else Value{ .boolean = false };
             fields[1] = .{ .symbol = constraintKindSymbol(cc.kind) };
             fields[2] = .{ .boolean = false };
-            fields[3] = .{ .array = elements_arr };
+            fields[3] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, elements_arr) };
             fields[4] = .{ .fixnum = @intCast(cc.combinator_id) };
         },
     }
-    return .{ .array = fields };
+    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, fields) };
 }
 
 /// Recognize a constraint word and return the raw constraint-info record, or `f`
@@ -156,9 +156,9 @@ fn buildStackEffectValue(alloc: Allocator, effect: *const StackEffect) Allocator
         outputs_arr[i] = try buildStackEffectParamValue(alloc, param);
     }
     const se_fields = try alloc.alloc(Value, 2);
-    se_fields[0] = .{ .array = inputs_arr };
-    se_fields[1] = .{ .array = outputs_arr };
-    return .{ .array = se_fields };
+    se_fields[0] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, inputs_arr) };
+    se_fields[1] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, outputs_arr) };
+    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, se_fields) };
 }
 
 pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, word: WordDefinition) !Value {
@@ -209,13 +209,13 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
             dp_fields[1] = .{ .string = dp.parent };
             dp_fields[2] = .{ .string = dp.role };
             dp_fields[3] = .{ .string = dp.field };
-            break :blk .{ .array = dp_fields };
+            break :blk .{ .array = try value_mod.Array.fromOwnedSlice(alloc, dp_fields) };
         } else .{ .boolean = false };
 
         const method_fields = try alloc.alloc(Value, 2);
-        method_fields[0] = .{ .array = types };
+        method_fields[0] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, types) };
         method_fields[1] = prov_val;
-        methods_arr[i] = .{ .array = method_fields };
+        methods_arr[i] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, method_fields) };
     }
 
     const source_loc_val: Value = if (word.source_file) |file| blk: {
@@ -223,7 +223,7 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
         sl_fields[0] = .{ .string = file };
         sl_fields[1] = .{ .fixnum = @intCast(word.source_line) };
         sl_fields[2] = .{ .fixnum = @intCast(word.source_column) };
-        break :blk .{ .array = sl_fields };
+        break :blk .{ .array = try value_mod.Array.fromOwnedSlice(alloc, sl_fields) };
     } else .{ .boolean = false };
 
     const module_val: Value = if (word.source_module) |mod|
@@ -236,7 +236,7 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
         prov_fields[0] = .{ .string = p.generator };
         prov_fields[1] = .{ .string = p.parent };
         prov_fields[2] = .{ .string = p.role };
-        break :blk .{ .array = prov_fields };
+        break :blk .{ .array = try value_mod.Array.fromOwnedSlice(alloc, prov_fields) };
     } else .{ .boolean = false };
 
     const is_compiled: bool = blk: {
@@ -253,17 +253,17 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
     wi_fields[0] = .{ .string = name };
     wi_fields[1] = effect_val;
     wi_fields[2] = doc_val;
-    wi_fields[3] = .{ .array = markers_arr };
+    wi_fields[3] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, markers_arr) };
     wi_fields[4] = .{ .boolean = is_native };
     wi_fields[5] = body_val;
-    wi_fields[6] = .{ .array = methods_arr };
+    wi_fields[6] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, methods_arr) };
     wi_fields[7] = source_loc_val;
     wi_fields[8] = module_val;
     wi_fields[9] = provenance_val;
     wi_fields[10] = .{ .boolean = is_compiled };
     wi_fields[11] = protocol_val;
 
-    return .{ .array = wi_fields };
+    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, wi_fields) };
 }
 
 fn moduleWordToWordDef(name: []const u8, mw: ModuleWord) WordDefinition {
@@ -315,7 +315,7 @@ const DeadDefinitionInfo = struct {
 fn popStringArray(ctx: *Context, val: Value) anyerror![]const []const u8 {
     const alloc = ctx.quotationAllocator();
     const arr = switch (val) {
-        .array => |items| items,
+        .array => |a| a.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", val);
             return error.TypeMismatch;
@@ -365,7 +365,7 @@ fn buildDeadDefinitionValue(alloc: Allocator, info: DeadDefinitionInfo) !Value {
     fields[1] = .{ .string = info.source_file };
     fields[2] = .{ .fixnum = @intCast(info.source_line) };
     fields[3] = .{ .fixnum = @intCast(info.source_column) };
-    return .{ .array = fields };
+    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, fields) };
 }
 
 /// dead-definitions ( cache files -- array )
@@ -515,7 +515,7 @@ fn nativeDeadDefinitions(ctx: *Context) anyerror!void {
     for (dead_infos.items, 0..) |info, i| {
         result[i] = try buildDeadDefinitionValue(alloc, info);
     }
-    try ctx.stack.push(.{ .array = result });
+    try helpers.pushAdoptedArray(ctx, alloc, result);
 }
 
 /// current-scope ( -- module ) - Snapshot all user-visible words into a Module value.
@@ -718,7 +718,9 @@ fn nativeTypeGeneratedWords(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    try ctx.stack.push(.{ .array = tv.generated_words orelse &.{} });
+    // The generated-words slice belongs to the type value; the result array
+    // copies it.
+    try helpers.pushCopiedArray(ctx, ctx.quotationAllocator(), tv.generated_words orelse &.{});
 }
 
 fn resolveTypeValue(ctx: *Context, val: Value) !*value_mod.TypeValue {
@@ -932,7 +934,8 @@ fn nativeAllWords(ctx: *Context) anyerror!void {
         ancestor = anc.parent_context;
     }
 
-    try ctx.stack.push(.{ .array = results.items });
+    const items = results.toOwnedSlice(alloc) catch return error.OutOfMemory;
+    try helpers.pushAdoptedArray(ctx, alloc, items);
 }
 
 /// scope-frames ( -- array ) - Return an array of frame descriptor hashes for the full scope chain.
@@ -951,7 +954,8 @@ fn nativeScopeFrames(ctx: *Context) anyerror!void {
         ancestor = anc.parent_context;
     }
 
-    try ctx.stack.pushMoved(.{ .array = results.items });
+    const items = results.toOwnedSlice(alloc) catch return error.OutOfMemory;
+    try helpers.pushAdoptedArray(ctx, alloc, items);
 }
 
 /// stack-snapshot ( -- string ) - Return a debug snapshot of the current data stack.
@@ -988,7 +992,9 @@ fn buildFrameHash(
         count += 1;
     }
 
-    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "words"), .{ .array = word_names.items });
+    const names = word_names.toOwnedSlice(alloc) catch return error.OutOfMemory;
+    const names_arr = try value_mod.Array.fromOwnedSlice(alloc, names);
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "words"), .{ .array = names_arr });
     try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "count"), .{ .fixnum = count });
 
     return .{ .hash = hash };
@@ -1117,6 +1123,9 @@ fn nativeQuotationToOpcodes(ctx: *Context) anyerror!void {
         switch (instr.op) {
             .push_literal => |lit| {
                 pair[0] = .{ .symbol = "push-literal" };
+                // The literal is borrowed from the instruction stream; the
+                // pair array must own its own reference.
+                container_backing.retainValue(lit);
                 pair[1] = lit;
             },
             .call_word => |name| {
@@ -1128,8 +1137,8 @@ fn nativeQuotationToOpcodes(ctx: *Context) anyerror!void {
                 pair[1] = .{ .string = slot.name };
             },
         }
-        result[i] = .{ .array = pair };
+        result[i] = .{ .array = try value_mod.Array.fromOwnedSlice(alloc, pair) };
     }
 
-    try ctx.stack.push(.{ .array = result });
+    try helpers.pushAdoptedArray(ctx, alloc, result);
 }

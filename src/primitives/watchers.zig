@@ -699,9 +699,9 @@ fn parseMask(ctx: *Context, val: value_mod.Value) !WatchEventMask {
             return error.TypeMismatch;
         },
         .symbol => |sym| try parseMaskSymbol(ctx, sym),
-        .array => |items| blk: {
+        .array => |arr| blk: {
             var mask = WatchEventMask{};
-            for (items) |item| {
+            for (arr.items) |item| {
                 const sym = switch (item) {
                     .symbol => |s| s,
                     else => {
@@ -884,7 +884,7 @@ test "watcher-add and watcher-read observe file modification" {
     flag_items[0] = .{ .symbol = "modified" };
     try ctx.stack.push(.{ .resource = resource });
     try ctx.stack.push(.{ .string = try ctx.quotationAllocator().dupe(u8, path) });
-    try ctx.stack.push(.{ .array = flag_items });
+    try helpers.pushAdoptedArray(&ctx, ctx.quotationAllocator(), flag_items);
     try nativeWatcherAdd(&ctx);
     const watch_id = try helpers.popFixnum(&ctx);
 

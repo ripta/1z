@@ -82,7 +82,7 @@ pub fn parse(
             // single parameterized type for the field slot.
             var advance: usize = 2;
             if (i + 2 < values.len and markers_mod.isBindPlaceholder(values[i + 2])) {
-                element = try combineBindPlaceholder(allocator, ctx, element, values[i + 2].array, &type_params, &next_param_pos, owner);
+                element = try combineBindPlaceholder(allocator, ctx, element, values[i + 2].array.items, &type_params, &next_param_pos, owner);
                 advance = 3;
             }
             if (saw_untyped) {
@@ -323,8 +323,9 @@ test "a bind{ placeholder combines with a base into a parameterized field type" 
         .{ .marker = @constCast(&markers_mod.bind_placeholder_marker) },
         .{ .symbol = "T" },
     };
+    var placeholder_arr = value_mod.Array{ .header = undefined, .items = &placeholder, .storage = .static };
     const values = [_]Value{
-        .{ .symbol = "v" }, .{ .type_val = box_tv }, .{ .array = &placeholder },
+        .{ .symbol = "v" }, .{ .type_val = box_tv }, .{ .array = &placeholder_arr },
     };
     const parsed = try parse(alloc, &ctx, &values, "struct{");
 
@@ -355,10 +356,11 @@ test "a bare parameter and a bind{ parameter share within one definition" {
         .{ .marker = @constCast(&markers_mod.bind_placeholder_marker) },
         .{ .symbol = "T" },
     };
+    var placeholder_arr = value_mod.Array{ .header = undefined, .items = &placeholder, .storage = .static };
     const values = [_]Value{
-        .{ .symbol = "a" },         .{ .symbol = "T" },
-        .{ .symbol = "b" },         .{ .type_val = box_tv },
-        .{ .array = &placeholder },
+        .{ .symbol = "a" },             .{ .symbol = "T" },
+        .{ .symbol = "b" },             .{ .type_val = box_tv },
+        .{ .array = &placeholder_arr },
     };
     const parsed = try parse(alloc, &ctx, &values, "struct{");
 
@@ -387,8 +389,9 @@ test "a bind{ parameter count must match the base's unbound count" {
         .{ .symbol = "T" },
         .{ .symbol = "U" },
     };
+    var placeholder_arr = value_mod.Array{ .header = undefined, .items = &placeholder, .storage = .static };
     const values = [_]Value{
-        .{ .symbol = "v" }, .{ .type_val = box_tv }, .{ .array = &placeholder },
+        .{ .symbol = "v" }, .{ .type_val = box_tv }, .{ .array = &placeholder_arr },
     };
     try testing.expectError(error.ParseError, parse(alloc, &ctx, &values, "struct{"));
 }
@@ -409,8 +412,9 @@ test "a bind{ placeholder with a concrete type param fully binds the base" {
         .{ .marker = @constCast(&markers_mod.bind_placeholder_marker) },
         .{ .type_val = fixnum_tv },
     };
+    var placeholder_arr = value_mod.Array{ .header = undefined, .items = &placeholder, .storage = .static };
     const values = [_]Value{
-        .{ .symbol = "v" }, .{ .type_val = box_tv }, .{ .array = &placeholder },
+        .{ .symbol = "v" }, .{ .type_val = box_tv }, .{ .array = &placeholder_arr },
     };
     const parsed = try parse(alloc, &ctx, &values, "struct{");
 

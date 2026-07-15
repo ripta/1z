@@ -32,6 +32,28 @@ test-await-all-shares-hashes: ( -- ) [
   ] task-scope
 ] ;
 
+\ A runtime-built array of scalars lives on the process-lifetime allocator,
+\ so the await shares its backing by refcount bump.
+test-await-shares-array: ( -- ) [
+  [
+    [ { 1 2 } 3 #push ] spawn await
+    dup #len 3 "awaited array length" assert=
+    dup 0 #nth 1 "awaited array first element" assert=
+    2 #nth 3 "awaited array pushed element" assert=
+  ] task-scope
+] ;
+
+\ A literal array's backing lives on instruction memory, so it crosses the
+\ boundary by deep copy; the received values are identical either way.
+test-await-copies-literal-array: ( -- ) [
+  [
+    [ { 4 5 6 } ] spawn await
+    { 4 5 6 } "awaited literal array" assert=
+  ] task-scope
+] ;
+
 test-await-shares-hash
 test-await-shares-set
 test-await-all-shares-hashes
+test-await-shares-array
+test-await-copies-literal-array

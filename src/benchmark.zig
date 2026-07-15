@@ -622,12 +622,12 @@ const VariantHistogramWalker = struct {
         record(stats, val);
 
         switch (val) {
-            .array => |items| {
-                if (items.len == 0) return;
-                const ptr_key = @intFromPtr(items.ptr);
+            .array => |arr| {
+                if (arr.items.len == 0) return;
+                const ptr_key = @intFromPtr(arr.items.ptr);
                 if (!try enterPointer(&self.array_slices, alloc, ptr_key)) return;
                 defer _ = self.array_slices.remove(ptr_key);
-                for (items) |item| try self.walkValue(alloc, stats, item);
+                for (arr.items) |item| try self.walkValue(alloc, stats, item);
             },
             .quotation => |quot| try self.walkInstructionSlice(alloc, stats, quot.instructions),
             .closure => |c| try self.walkInstructionSlice(alloc, stats, c.instructions),
@@ -1159,14 +1159,19 @@ test "collectVariantHistogram counts nested arrays hashes and quotation literals
         .{ .fixnum = 7 },
         quot,
     };
+    // The hash releases its values at destroy, so the array wrapper needs an
+    // initialized header; the static no-op destroy leaves the struct to the
+    // deferred free.
+    const arr_val = try @import("value.zig").Array.createStatic(std.testing.allocator, arr[0..]);
+    defer std.testing.allocator.destroy(arr_val);
 
     const hash = try @import("value.zig").HashTable.create(std.testing.allocator);
     defer hash.header.release();
     const hash_alloc = hash.header.allocator;
-    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "k"), .{ .array = arr[0..] });
+    try hash.map.put(hash_alloc, try hash_alloc.dupe(u8, "k"), .{ .array = arr_val });
 
     const roots = [_]Value{
-        .{ .array = arr[0..] },
+        .{ .array = arr_val },
         .{ .hash = hash },
     };
 

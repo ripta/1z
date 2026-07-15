@@ -895,8 +895,8 @@ fn internValueTypeLiterals(
                 try internValueTypeLiterals(struct_plans, struct_index, effect_table, elem);
             }
         },
-        .array => |elems| {
-            for (elems) |elem| {
+        .array => |arr| {
+            for (arr.items) |elem| {
                 try internValueTypeLiterals(struct_plans, struct_index, effect_table, elem);
             }
         },

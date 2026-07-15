@@ -99,6 +99,13 @@ pub const ArrayIter = struct {
     items: []const Value,
     index: usize,
 
+    /// Set when the iterator walks a headered array's backing: the backing
+    /// retain/release then goes through the array's header, which keeps both
+    /// the elements and the slice memory alive. Null for slices materialized
+    /// from other sequence types, which fall back to element-wise retention
+    /// and whose slice memory is arena-owned.
+    source: ?*value_mod.Array = null,
+
     pub fn next(self: *ArrayIter) ?Value {
         if (self.index >= self.items.len) return null;
         const val = self.items[self.index];

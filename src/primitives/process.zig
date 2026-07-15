@@ -118,7 +118,7 @@ fn nativeKillPid(ctx: *Context) anyerror!void {
 
 fn parseArgv(ctx: *Context, argv_val: Value) ![]const []const u8 {
     const items = switch (argv_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", argv_val);
             return error.TypeMismatch;

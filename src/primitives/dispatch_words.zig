@@ -27,8 +27,9 @@ pub const primitives = [_]Primitive{
 /// - body: quotation to execute when dispatched
 fn nativeDefineMethod(ctx: *Context) anyerror!void {
     const markers_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(markers_val);
     const markers_array = switch (markers_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", markers_val);
             return error.TypeMismatch;
@@ -59,7 +60,7 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
 
     const types_val = desc_map.map.get("types") orelse return error.MissingField;
     const types_array = switch (types_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", types_val);
             return error.TypeMismatch;
@@ -315,8 +316,11 @@ fn registerUnaryMethod(
     try ctx.defineWord(word_name, .{ .name = word_name, .action = .{ .native = noopNative } });
 
     const desc_map = try value_mod.MutableMap.create(testing.allocator);
-    var types_arr = [_]Value{.{ .type_val = tv }};
-    try desc_map.map.put(testing.allocator, try testing.allocator.dupe(u8, "types"), .{ .array = &types_arr });
+    // The map slot releases its values at destroy, so the types array needs an
+    // initialized header; the context arena reclaims the static allocations.
+    const types_items = try ctx.quotationAllocator().dupe(Value, &.{.{ .type_val = tv }});
+    const types_arr_val = try value_mod.Array.createStatic(ctx.quotationAllocator(), types_items);
+    try desc_map.map.put(testing.allocator, try testing.allocator.dupe(u8, "types"), .{ .array = types_arr_val });
     const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 0 } }, .line = 0 }};
     try desc_map.map.put(testing.allocator, try testing.allocator.dupe(u8, "body"), .{ .quotation = .{ .instructions = body } });
 
@@ -325,7 +329,10 @@ fn registerUnaryMethod(
     // release inside nativeDefineMethod destroys it exactly once.
     try ctx.stack.push(.{ .symbol = word_name });
     try ctx.stack.pushMoved(.{ .mutable_map = desc_map });
-    try ctx.stack.push(.{ .array = &[_]Value{} });
+    // The push retains the header, so the empty markers array needs an
+    // initialized one; the context arena reclaims the static struct.
+    const empty_markers = try value_mod.Array.createStatic(ctx.quotationAllocator(), &.{});
+    try ctx.stack.push(.{ .array = empty_markers });
 
     const saved = ctx.loading_module;
     ctx.loading_module = loading;

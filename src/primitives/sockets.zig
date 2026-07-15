@@ -174,7 +174,7 @@ fn nativeResolve(ctx: *Context) anyerror!void {
                 const addr_val = try makeInetAddr(ctx, alloc, addr_info.tag, host_copy, addr_info.port);
                 const arr = try alloc.alloc(Value, 1);
                 arr[0] = addr_val;
-                try ctx.stack.push(.{ .array = arr });
+                try helpers.pushAdoptedArray(ctx, alloc, arr);
                 return;
             } else |_| {}
 
@@ -201,7 +201,7 @@ fn nativeResolve(ctx: *Context) anyerror!void {
             }
 
             const arr = try alloc.dupe(Value, results.items);
-            try ctx.stack.push(.{ .array = arr });
+            try helpers.pushAdoptedArray(ctx, alloc, arr);
         },
         .unix => {
             const struct_type = addr_info.tag.anon_struct orelse {
@@ -221,7 +221,7 @@ fn nativeResolve(ctx: *Context) anyerror!void {
             const addr_val = Value{ .tagged = .{ .tag = addr_info.tag, .inner = inner } };
             const arr = try alloc.alloc(Value, 1);
             arr[0] = addr_val;
-            try ctx.stack.push(.{ .array = arr });
+            try helpers.pushAdoptedArray(ctx, alloc, arr);
         },
     }
 }

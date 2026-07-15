@@ -57,8 +57,9 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const markers_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(markers_val);
     const markers_array = switch (markers_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", markers_val);
             return error.TypeMismatch;
@@ -88,7 +89,7 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     };
     const fields_val = raw_desc_map.map.get("fields") orelse return error.MissingField;
     const fields_array = switch (fields_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", fields_val);
             return error.TypeMismatch;
@@ -113,8 +114,8 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
     // end, so dupe the file into the long-lived quotation arena.
     var src_loc: GenSrcLoc = .{};
     if (raw_desc_map.map.get("src-loc")) |sl_val| {
-        if (sl_val == .array and sl_val.array.len == 3) {
-            const parts = sl_val.array;
+        if (sl_val == .array and sl_val.array.items.len == 3) {
+            const parts = sl_val.array.items;
             if (parts[0] == .string) src_loc.file = try alloc.dupe(u8, parts[0].string);
             if (parts[1] == .fixnum) src_loc.line = @intCast(parts[1].fixnum);
             if (parts[2] == .fixnum) src_loc.column = @intCast(parts[2].fixnum);

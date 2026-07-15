@@ -121,9 +121,9 @@ pub fn classifyValue(val: Value) Classification {
         // link-resolvable pointer when tagged is structural.
         .struct_type => Classification.structural_unit,
 
-        .array => |elems| blk: {
+        .array => |arr| blk: {
             var acc = Classification.structural_unit;
-            for (elems) |elem| {
+            for (arr.items) |elem| {
                 acc = acc.combine(classifyValue(elem));
             }
             break :blk acc;
@@ -486,7 +486,8 @@ test "classifyValue: array of structurals is structural" {
         .{ .symbol = "two" },
         .{ .boolean = false },
     };
-    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .array = &elems }).path);
+    var arr = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .array = &arr }).path);
 }
 
 test "classifyValue: array of structural values is structural" {
@@ -496,7 +497,8 @@ test "classifyValue: array of structural values is structural" {
         .{ .fixnum = 1 },
         .{ .type_val = &tv },
     };
-    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .array = &elems }).path);
+    var arr = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
+    try testing.expectEqual(ImagePath.structural, classifyValue(.{ .array = &arr }).path);
 }
 
 test "classifyValue: type_val is structural via the static C data path" {

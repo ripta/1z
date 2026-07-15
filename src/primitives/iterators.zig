@@ -47,16 +47,19 @@ pub fn nativeToIterator(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(raw_val);
     const alloc = ctx.quotationAllocator();
     const val = unwrapBaseType(raw_val);
-    const items: []const Value = switch (val) {
-        .array => |arr| arr,
-        .string, .vector, .byte_array, .set => sequence.sequenceToValues(val, alloc) catch return error.OutOfMemory,
+    const kind: Iterator.Kind = switch (val) {
+        .array => |arr| .{ .array = .{ .items = arr.items, .index = 0, .source = arr } },
+        .string, .vector, .byte_array, .set => .{ .array = .{
+            .items = sequence.sequenceToValues(val, alloc) catch return error.OutOfMemory,
+            .index = 0,
+        } },
         else => {
             helpers.setTypeMismatchError(ctx, "sequence", raw_val);
             return error.TypeMismatch;
         },
     };
     const iter = try alloc.create(Iterator);
-    iter.* = .{ .kind = .{ .array = .{ .items = items, .index = 0 } } };
+    iter.* = .{ .kind = kind };
     try ctx.stack.push(.{ .iterator = iter });
 }
 
@@ -92,16 +95,22 @@ pub fn nativeCollect(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(val);
     switch (val) {
         .iterator => |iter| {
-            const alloc = ctx.quotationAllocator();
+            const alloc = ctx.allocator;
             var list = std.ArrayListUnmanaged(Value){};
-            while (try iter.next(ctx)) |elem| {
-                list.append(alloc, elem) catch return error.OutOfMemory;
+            errdefer {
+                container_backing.releaseValues(list.items);
+                list.deinit(alloc);
             }
+            while (try iter.next(ctx)) |elem| {
+                list.append(alloc, elem) catch {
+                    container_backing.releaseValue(elem);
+                    return error.OutOfMemory;
+                };
+            }
+            // The iterator's yields are owning references; the result array
+            // adopts them wholesale.
             const items = list.toOwnedSlice(alloc) catch return error.OutOfMemory;
-            try ctx.stack.push(.{ .array = items });
-            // push retained the result array's elements; drop the owning
-            // references the iterator yields handed us.
-            container_backing.releaseValues(items);
+            try helpers.pushAdoptedArray(ctx, alloc, items);
         },
         else => {
             helpers.setTypeMismatchError(ctx, "iterator", val);

@@ -502,8 +502,11 @@ fn nativeSelect(ctx: *Context) anyerror!void {
     }
 
     const val = try ctx.stack.pop();
+    // The popped array must stay alive across the suspension below, since
+    // `items` borrows its backing; the deferred release runs at return.
+    defer container_backing.releaseValue(val);
     const items = switch (val) {
-        .array => |a| a,
+        .array => |a| a.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", val);
             return error.TypeMismatch;

@@ -1263,7 +1263,7 @@ export fn onez_array_length(val_ptr: ?*anyopaque) usize {
     const vp = val_ptr orelse return 0;
     const value: *const Value = @ptrCast(@alignCast(vp));
     return switch (value.*) {
-        .array => |a| a.len,
+        .array => |a| a.items.len,
         else => 0,
     };
 }
@@ -1277,15 +1277,15 @@ export fn onez_array_get(ptr: ?*anyopaque, val_ptr: ?*anyopaque, index: usize, o
     const value: *const Value = @ptrCast(@alignCast(vp));
     switch (value.*) {
         .array => |a| {
-            if (index >= a.len) {
-                setLastError(handle, "index {d} out of range for array of length {d}", .{ index, a.len });
+            if (index >= a.items.len) {
+                setLastError(handle, "index {d} out of range for array of length {d}", .{ index, a.items.len });
                 return ONEZ_ERR_INDEX_OUT_OF_RANGE;
             }
             const slot = handle.ctx.quotationAllocator().create(Value) catch {
                 setLastError(handle, "allocation failure creating value handle", .{});
                 return ONEZ_ERR_ALLOC;
             };
-            slot.* = a[index];
+            slot.* = a.items[index];
             out.* = slot;
             return ONEZ_OK;
         },
@@ -1345,11 +1345,15 @@ export fn onez_hash_keys(ptr: ?*anyopaque, val_ptr: ?*anyopaque, out: *?*anyopaq
                 keys[i] = .{ .symbol = entry.key_ptr.* };
                 i += 1;
             }
+            const keys_arr = value_mod.Array.fromOwnedSlice(alloc, keys) catch {
+                setLastError(handle, "allocation failure creating array", .{});
+                return ONEZ_ERR_ALLOC;
+            };
             const slot = alloc.create(Value) catch {
                 setLastError(handle, "allocation failure creating value handle", .{});
                 return ONEZ_ERR_ALLOC;
             };
-            slot.* = .{ .array = keys };
+            slot.* = .{ .array = keys_arr };
             out.* = slot;
             return ONEZ_OK;
         },
@@ -1419,8 +1423,17 @@ export fn onez_push_array(ptr: ?*anyopaque, handles: [*]const ?*anyopaque, count
         const elem: *const Value = @ptrCast(@alignCast(elem_ptr));
         values[i] = elem.*;
     }
-    handle.ctx.stack.push(.{ .array = values }) catch {
+    // The copied elements are borrowed from the caller's boxes; the fresh
+    // array must own its own references.
+    container_backing.retainValues(values);
+    const arr = value_mod.Array.fromOwnedSlice(alloc, values) catch {
+        setLastError(handle, "allocation failure creating array", .{});
+        container_backing.releaseValues(values);
+        return ONEZ_ERR_ALLOC;
+    };
+    handle.ctx.stack.pushMoved(.{ .array = arr }) catch {
         setLastError(handle, "allocation failure pushing array", .{});
+        container_backing.releaseValue(.{ .array = arr });
         return ONEZ_ERR_ALLOC;
     };
     return ONEZ_OK;

@@ -106,7 +106,7 @@ pub fn classifySequence(val: Value) ?SequenceKind {
 pub fn sequenceLength(val: Value) ?usize {
     return switch (val) {
         .string => |s| utf8CodepointCount(s),
-        .array => |a| a.len,
+        .array => |a| a.items.len,
         .vector => |v| v.list.items.len,
         .byte_array => |b| b.slice().len,
         .set => |s| s.map.count(),
@@ -164,7 +164,7 @@ pub const SequenceIterator = struct {
             .array => |a| SequenceIterator{
                 .kind = .array,
                 .allocator = allocator,
-                .state = .{ .array = .{ .items = a, .index = 0 } },
+                .state = .{ .array = .{ .items = a.items, .index = 0 } },
             },
             .vector => |v| SequenceIterator{
                 .kind = .vector,
@@ -360,7 +360,14 @@ pub const SequenceBuilder = struct {
     pub fn toValue(self: *SequenceBuilder) !Value {
         return switch (self.kind) {
             .string => Value{ .string = self.state.string.toOwnedSlice(self.allocator) catch return error.OutOfMemory },
-            .array => Value{ .array = self.state.array.toOwnedSlice(self.allocator) catch return error.OutOfMemory },
+            .array => blk: {
+                const items = self.state.array.toOwnedSlice(self.allocator) catch return error.OutOfMemory;
+                const arr = value_mod.Array.fromOwnedSlice(self.allocator, items) catch |e| {
+                    self.allocator.free(items);
+                    return e;
+                };
+                break :blk Value{ .array = arr };
+            },
             .vector => Value{ .vector = self.state.vector },
             .byte_array => Value{ .byte_array = self.state.byte_array },
             .set => Value{ .set = self.state.set },
@@ -418,13 +425,21 @@ test "sequenceLength" {
     try std.testing.expectEqual(@as(?usize, 5), sequenceLength(.{ .string = "hello" }));
     try std.testing.expectEqual(@as(?usize, 4), sequenceLength(.{ .string = "café" }));
 
-    const arr = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
+    var arr = value_mod.Array{
+        .header = undefined,
+        .items = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } },
+        .storage = .static,
+    };
     try std.testing.expectEqual(@as(?usize, 2), sequenceLength(.{ .array = &arr }));
 }
 
 test "SequenceIterator over array" {
     const allocator = std.testing.allocator;
-    const arr = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 }, .{ .fixnum = 3 } };
+    var arr = value_mod.Array{
+        .header = undefined,
+        .items = &[_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 }, .{ .fixnum = 3 } },
+        .storage = .static,
+    };
     var iter = SequenceIterator.init(.{ .array = &arr }, allocator).?;
 
     try std.testing.expectEqual(@as(i64, 1), (try iter.next()).?.fixnum);
@@ -456,9 +471,9 @@ test "SequenceBuilder for array" {
     try builder.append(.{ .fixnum = 2 });
 
     const result = try builder.toValue();
-    defer allocator.free(result.array);
+    defer container_backing.releaseValue(result);
 
-    try std.testing.expectEqual(@as(usize, 2), result.array.len);
-    try std.testing.expectEqual(@as(i64, 1), result.array[0].fixnum);
-    try std.testing.expectEqual(@as(i64, 2), result.array[1].fixnum);
+    try std.testing.expectEqual(@as(usize, 2), result.array.items.len);
+    try std.testing.expectEqual(@as(i64, 1), result.array.items[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 2), result.array.items[1].fixnum);
 }

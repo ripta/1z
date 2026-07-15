@@ -6,6 +6,7 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 
 const helpers = @import("helpers.zig");
+const container_backing = @import("../container_backing.zig");
 const Primitive = @import("types.zig").Primitive;
 const RegistryEntry = @import("types.zig").RegistryEntry;
 const parse_time_mod = @import("parse_time.zig");
@@ -122,8 +123,9 @@ fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .string = "}" });
     try parse_time_mod.nativeParseValuesUntil(ctx);
     const arr_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(arr_val);
     const items = switch (arr_val) {
-        .array => |a| a,
+        .array => |a| a.items,
         else => return error.TypeMismatch,
     };
 

@@ -40,13 +40,13 @@ const unwrapBaseType = dispatch_mod.unwrapBaseType;
 /// (string, vector, byte-array, set), materializes to a values array first.
 fn seqToArrayIter(seq: Value, alloc: Allocator) !?*Iterator {
     const s = unwrapBaseType(seq);
-    const items: []const Value = switch (s) {
-        .array => |arr| arr,
-        .string, .vector, .byte_array, .set => try sequenceToValues(s, alloc),
+    const kind: Iterator.Kind = switch (s) {
+        .array => |arr| .{ .array = .{ .items = arr.items, .index = 0, .source = arr } },
+        .string, .vector, .byte_array, .set => .{ .array = .{ .items = try sequenceToValues(s, alloc), .index = 0 } },
         else => return null,
     };
     const iter = try alloc.create(Iterator);
-    iter.* = .{ .kind = .{ .array = .{ .items = items, .index = 0 } } };
+    iter.* = .{ .kind = kind };
     return iter;
 }
 
@@ -58,13 +58,13 @@ const container_backing = @import("../container_backing.zig");
 /// The returned slice owns one reference per element: array and sequence
 /// sources retain their copied elements, and the iterator source forwards the
 /// owned references its `next` already yields. The caller owns the slice and
-/// must release each element once (typically after pushing the result array).
+/// its element references, and typically adopts both into the result array.
 fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Value {
     const seq = unwrapBaseType(in_seq);
     switch (seq) {
         .array => |arr| {
-            const result = alloc.alloc(Value, arr.len) catch return error.OutOfMemory;
-            @memcpy(result, arr);
+            const result = alloc.alloc(Value, arr.items.len) catch return error.OutOfMemory;
+            @memcpy(result, arr.items);
             container_backing.retainValues(result);
             return result;
         },
@@ -73,10 +73,15 @@ fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Valu
             while (try iter.next(ctx)) |elem| {
                 list.append(alloc, elem) catch return error.OutOfMemory;
             }
-            return list.items;
+            return list.toOwnedSlice(alloc) catch return error.OutOfMemory;
         },
         .string, .vector, .byte_array, .set => {
-            const result = try sequenceToValues(seq, alloc);
+            // Materialize on the arena: a string source dupes per-codepoint
+            // strings, and those bytes must die with the context rather than
+            // land on the process-lifetime allocator. Only the slice itself
+            // moves onto `alloc` for the result array to adopt.
+            const materialized = try sequenceToValues(seq, ctx.quotationAllocator());
+            const result = alloc.dupe(Value, materialized) catch return error.OutOfMemory;
             container_backing.retainValues(result);
             return result;
         },
@@ -118,29 +123,26 @@ fn nativeSort(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
 
-    // collectToMutableArray hands back owned elements; pushing the result array
-    // retains them again, so release our owning references afterwards.
+    // collectToMutableArray hands back owned elements; the result array
+    // adopts the slice and those references wholesale.
     const items = try collectToMutableArray(seq, ctx, alloc);
-    if (items.len <= 1) {
-        try ctx.stack.push(.{ .array = items });
-        container_backing.releaseValues(items);
-        return;
-    }
 
-    var sort_ctx = SortContext{
-        .ctx = ctx,
-        .quotation = quot,
-        .err = null,
-    };
-    std.mem.sort(Value, items, &sort_ctx, sortCompareFn);
-    if (sort_ctx.err) |e| {
-        container_backing.releaseValues(items);
-        return e;
+    if (items.len > 1) {
+        var sort_ctx = SortContext{
+            .ctx = ctx,
+            .quotation = quot,
+            .err = null,
+        };
+        std.mem.sort(Value, items, &sort_ctx, sortCompareFn);
+        if (sort_ctx.err) |e| {
+            container_backing.releaseValues(items);
+            alloc.free(items);
+            return e;
+        }
     }
-    try ctx.stack.push(.{ .array = items });
-    container_backing.releaseValues(items);
+    try helpers.pushAdoptedArray(ctx, alloc, items);
 }
 
 const SortByContext = struct {
@@ -197,25 +199,34 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
+    // The keys and index permutation are transient scratch; the arena
+    // reclaims them.
+    const scratch = ctx.quotationAllocator();
 
-    // collectToMutableArray hands back owned elements; the result array retains
-    // them again on push, so release our owning references afterwards.
+    // collectToMutableArray hands back owned elements; the result array
+    // adopts those references wholesale.
     const items = try collectToMutableArray(seq, ctx, alloc);
-    if (items.len == 0) {
-        try ctx.stack.push(.{ .array = items });
+    var items_owned = true;
+    errdefer if (items_owned) {
         container_backing.releaseValues(items);
+        alloc.free(items);
+    };
+
+    if (items.len == 0) {
+        items_owned = false;
+        try helpers.pushAdoptedArray(ctx, alloc, items);
         return;
     }
 
-    const keys = alloc.alloc(Value, items.len) catch return error.OutOfMemory;
+    const keys = scratch.alloc(Value, items.len) catch return error.OutOfMemory;
     for (items, 0..) |item, i| {
         try ctx.stack.push(item);
         try ctx.executeQuotationWithFrame(quot);
         keys[i] = try ctx.stack.pop();
     }
 
-    const indices = alloc.alloc(usize, items.len) catch return error.OutOfMemory;
+    const indices = scratch.alloc(usize, items.len) catch return error.OutOfMemory;
     for (indices, 0..) |*idx, i| {
         idx.* = i;
     }
@@ -231,7 +242,6 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
             setErrorContext(ctx, "keys are not comparable", .{});
         }
         container_backing.releaseValues(keys);
-        container_backing.releaseValues(items);
         return e;
     }
 
@@ -239,11 +249,12 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
     for (indices, 0..) |src_idx, dst_idx| {
         result[dst_idx] = items[src_idx];
     }
-    try ctx.stack.push(.{ .array = result });
-    // The keys are owned quotation outputs; drop them, and drop our ownership of
-    // items now that the pushed result array holds the elements.
+    // The element references move from items into the permuted result slice.
+    items_owned = false;
+    alloc.free(items);
+    // The keys are owned quotation outputs; drop them.
     container_backing.releaseValues(keys);
-    container_backing.releaseValues(items);
+    try helpers.pushAdoptedArray(ctx, alloc, result);
 }
 
 const SequenceIterator = sequence.SequenceIterator;
@@ -268,7 +279,7 @@ fn nativeLenString(ctx: *Context) anyerror!void {
 fn nativeLenArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    try ctx.stack.push(.{ .fixnum = @intCast(val.array.len) });
+    try ctx.stack.push(.{ .fixnum = @intCast(val.array.items.len) });
 }
 
 fn nativeLenVector(ctx: *Context) anyerror!void {
@@ -341,7 +352,7 @@ fn nativeNthArray(ctx: *Context) anyerror!void {
         return error.IndexOutOfBounds;
     }
     const idx: usize = @intCast(index);
-    const arr = a.array;
+    const arr = a.array.items;
     if (idx >= arr.len) {
         setErrorContext(ctx, "index {d} out of bounds for array of length {d}", .{ idx, arr.len });
         return error.IndexOutOfBounds;
@@ -402,7 +413,7 @@ fn nativeFirstString(ctx: *Context) anyerror!void {
 fn nativeFirstArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const a = val.array;
+    const a = val.array.items;
     if (a.len == 0) {
         setErrorContext(ctx, "empty array", .{});
         return error.EmptySequence;
@@ -450,7 +461,7 @@ fn nativeLastString(ctx: *Context) anyerror!void {
 fn nativeLastArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const a = val.array;
+    const a = val.array.items;
     if (a.len == 0) {
         setErrorContext(ctx, "empty array", .{});
         return error.EmptySequence;
@@ -1010,14 +1021,11 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .array => |arr| {
-            if (end > arr.len) {
-                setErrorContext(ctx, "slice [{}:{}] out of bounds for array of length {}", .{ start, end, arr.len });
+            if (end > arr.items.len) {
+                setErrorContext(ctx, "slice [{}:{}] out of bounds for array of length {}", .{ start, end, arr.items.len });
                 return error.IndexOutOfBounds;
             }
-            const slice_len = end - start;
-            const result = alloc.alloc(Value, slice_len) catch return error.OutOfMemory;
-            @memcpy(result, arr[start..end]);
-            try ctx.stack.push(.{ .array = result });
+            try helpers.pushCopiedArray(ctx, ctx.allocator, arr.items[start..end]);
         },
         .string => |s| {
             const bounds = utf8SliceByCodepoints(s, start, end) orelse {
@@ -1188,10 +1196,12 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
     switch (seq1) {
         .array => |arr1| {
             const items2 = try sequenceToValues(seq2, alloc);
-            const result = alloc.alloc(Value, arr1.len + items2.len) catch return error.OutOfMemory;
-            @memcpy(result[0..arr1.len], arr1);
-            @memcpy(result[arr1.len..], items2);
-            try ctx.stack.push(.{ .array = result });
+            const result = ctx.allocator.alloc(Value, arr1.items.len + items2.len) catch return error.OutOfMemory;
+            @memcpy(result[0..arr1.items.len], arr1.items);
+            @memcpy(result[arr1.items.len..], items2);
+            // Each element copied into the result is a new owning reference.
+            container_backing.retainValues(result);
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
         },
         .vector => |vec1| {
             const items2 = try sequenceToValues(seq2, alloc);
@@ -1372,10 +1382,12 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
     switch (seq1) {
         .array => |arr1| {
             const items2 = try sequenceToValues(seq2, alloc);
-            const result = alloc.alloc(Value, items2.len + arr1.len) catch return error.OutOfMemory;
+            const result = ctx.allocator.alloc(Value, items2.len + arr1.items.len) catch return error.OutOfMemory;
             @memcpy(result[0..items2.len], items2);
-            @memcpy(result[items2.len..], arr1);
-            try ctx.stack.push(.{ .array = result });
+            @memcpy(result[items2.len..], arr1.items);
+            // Each element copied into the result is a new owning reference.
+            container_backing.retainValues(result);
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
         },
         .vector => |vec1| {
             const items2 = try sequenceToValues(seq2, alloc);
@@ -1493,10 +1505,13 @@ fn nativePush(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .array => |arr| {
-            const result = alloc.alloc(Value, arr.len + 1) catch return error.OutOfMemory;
-            @memcpy(result[0..arr.len], arr);
-            result[arr.len] = elem;
-            try ctx.stack.push(.{ .array = result });
+            const result = ctx.allocator.alloc(Value, arr.items.len + 1) catch return error.OutOfMemory;
+            @memcpy(result[0..arr.items.len], arr.items);
+            // Copied elements become new owning references; elem's popped
+            // reference transfers into the result.
+            container_backing.retainValues(result[0..arr.items.len]);
+            result[arr.items.len] = elem;
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
         },
         .vector => |vec| {
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
@@ -1566,14 +1581,12 @@ fn nativePop(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .array => |arr| {
-            if (arr.len == 0) {
+            if (arr.items.len == 0) {
                 setErrorContext(ctx, "cannot #pop from empty array", .{});
                 return error.EmptySequence;
             }
-            const result = alloc.alloc(Value, arr.len - 1) catch return error.OutOfMemory;
-            @memcpy(result, arr[0 .. arr.len - 1]);
-            try ctx.stack.push(.{ .array = result });
-            try ctx.stack.push(arr[arr.len - 1]);
+            try helpers.pushCopiedArray(ctx, ctx.allocator, arr.items[0 .. arr.items.len - 1]);
+            try ctx.stack.push(arr.items[arr.items.len - 1]);
         },
         .vector => |vec| {
             if (vec.list.items.len == 0) {
@@ -1637,10 +1650,13 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .array => |arr| {
-            const result = alloc.alloc(Value, arr.len + 1) catch return error.OutOfMemory;
+            const result = ctx.allocator.alloc(Value, arr.items.len + 1) catch return error.OutOfMemory;
+            // elem's popped reference transfers into the result; the copied
+            // elements become new owning references.
             result[0] = elem;
-            @memcpy(result[1..], arr);
-            try ctx.stack.push(.{ .array = result });
+            @memcpy(result[1..], arr.items);
+            container_backing.retainValues(result[1..]);
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
         },
         .vector => |vec| {
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
@@ -1708,14 +1724,12 @@ fn nativeShift(ctx: *Context) anyerror!void {
 
     switch (seq) {
         .array => |arr| {
-            if (arr.len == 0) {
+            if (arr.items.len == 0) {
                 setErrorContext(ctx, "cannot #shift from empty array", .{});
                 return error.EmptySequence;
             }
-            const result = alloc.alloc(Value, arr.len - 1) catch return error.OutOfMemory;
-            @memcpy(result, arr[1..]);
-            try ctx.stack.push(.{ .array = result });
-            try ctx.stack.push(arr[0]);
+            try helpers.pushCopiedArray(ctx, ctx.allocator, arr.items[1..]);
+            try ctx.stack.push(arr.items[0]);
         },
         .vector => |vec| {
             if (vec.list.items.len == 0) {
@@ -2002,12 +2016,12 @@ fn nativeStartsWith(ctx: *Context) anyerror!void {
         },
         .array => |arr| {
             const prefix_items = try sequenceToValues(prefix, alloc);
-            if (prefix_items.len > arr.len) {
+            if (prefix_items.len > arr.items.len) {
                 try ctx.stack.push(.{ .boolean = false });
                 return;
             }
             for (prefix_items, 0..) |p, i| {
-                if (!arr[i].eql(p)) {
+                if (!arr.items[i].eql(p)) {
                     try ctx.stack.push(.{ .boolean = false });
                     return;
                 }
@@ -2075,13 +2089,13 @@ fn nativeEndsWith(ctx: *Context) anyerror!void {
         },
         .array => |arr| {
             const suffix_items = try sequenceToValues(suffix, alloc);
-            if (suffix_items.len > arr.len) {
+            if (suffix_items.len > arr.items.len) {
                 try ctx.stack.push(.{ .boolean = false });
                 return;
             }
-            const start = arr.len - suffix_items.len;
+            const start = arr.items.len - suffix_items.len;
             for (suffix_items, 0..) |s, i| {
-                if (!arr[start + i].eql(s)) {
+                if (!arr.items[start + i].eql(s)) {
                     try ctx.stack.push(.{ .boolean = false });
                     return;
                 }
@@ -2152,7 +2166,7 @@ fn nativeIn(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .boolean = found });
         },
         .array => |arr| {
-            for (arr) |item| {
+            for (arr.items) |item| {
                 if (item.eql(elem)) {
                     try ctx.stack.push(.{ .boolean = true });
                     return;
@@ -2232,7 +2246,7 @@ fn nativeIndexOf(ctx: *Context) anyerror!void {
             }
         },
         .array => |arr| {
-            for (arr, 0..) |item, idx| {
+            for (arr.items, 0..) |item, idx| {
                 if (item.eql(elem)) {
                     try ctx.stack.push(.{ .fixnum = @intCast(idx) });
                     return;
@@ -2423,6 +2437,9 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
         const iter = alloc.create(Iterator) catch return error.OutOfMemory;
         iter.* = .{ .kind = .{ .take = .{ .inner = seq.iterator, .remaining = n } } };
         try ctx.stack.push(.{ .iterator = iter });
+        // Pushing the wrapper retained the backing; drop the popped
+        // source's reference.
+        container_backing.releaseValue(seq);
         return;
     }
     defer container_backing.releaseValue(seq);
@@ -2442,10 +2459,8 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .string = s[0..bounds.end_byte] });
         },
         .array => |arr| {
-            const take_count = @min(n, arr.len);
-            const result = alloc.alloc(Value, take_count) catch return error.OutOfMemory;
-            @memcpy(result, arr[0..take_count]);
-            try ctx.stack.push(.{ .array = result });
+            const take_count = @min(n, arr.items.len);
+            try helpers.pushCopiedArray(ctx, ctx.allocator, arr.items[0..take_count]);
         },
         .vector => |vec| {
             const take_count = @min(n, vec.list.items.len);
@@ -2492,6 +2507,9 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
         const iter = alloc.create(Iterator) catch return error.OutOfMemory;
         iter.* = .{ .kind = .{ .drop = .{ .inner = seq.iterator, .to_skip = n } } };
         try ctx.stack.push(.{ .iterator = iter });
+        // Pushing the wrapper retained the backing; drop the popped
+        // source's reference.
+        container_backing.releaseValue(seq);
         return;
     }
     defer container_backing.releaseValue(seq);
@@ -2510,13 +2528,8 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .string = s[bounds.start_byte..bounds.end_byte] });
         },
         .array => |arr| {
-            if (n >= arr.len) {
-                try ctx.stack.push(.{ .array = &[_]Value{} });
-                return;
-            }
-            const result = alloc.alloc(Value, arr.len - n) catch return error.OutOfMemory;
-            @memcpy(result, arr[n..]);
-            try ctx.stack.push(.{ .array = result });
+            const drop_count = @min(n, arr.items.len);
+            try helpers.pushCopiedArray(ctx, ctx.allocator, arr.items[drop_count..]);
         },
         .vector => |vec| {
             if (n >= vec.list.items.len) {
@@ -2783,12 +2796,7 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(val);
     switch (val) {
         .vector => |vec| {
-            const alloc = ctx.quotationAllocator();
-            const items = try alloc.dupe(Value, vec.list.items);
-            // Pushing the array retains each element through `retainValue`;
-            // that retain happens before the deferred source release below, so
-            // the snapshot keeps its own reference without an extra retain here.
-            try ctx.stack.push(.{ .array = items });
+            try helpers.pushCopiedArray(ctx, ctx.allocator, vec.list.items);
         },
         else => {
             setErrorContext(ctx, "freeze expected vector, got {s}", .{valueTypeName(val)});
@@ -2801,33 +2809,26 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
 fn nativeToArrayVector(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const alloc = ctx.quotationAllocator();
-    const items = try alloc.dupe(Value, val.vector.list.items);
-    // Pushing the array retains each element through `retainValue`; that retain
-    // happens before the deferred source release below, so the snapshot keeps
-    // its own reference without an extra retain here.
-    try ctx.stack.push(.{ .array = items });
+    try helpers.pushCopiedArray(ctx, ctx.allocator, val.vector.list.items);
 }
 
 /// >array ( byte-array -- array ) - Convert each byte to a fixnum element
 fn nativeToArrayByteArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const alloc = ctx.quotationAllocator();
-    const items = try sequenceToValues(val, alloc);
-    try ctx.stack.push(.{ .array = items });
+    const items = try sequenceToValues(val, ctx.allocator);
+    try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
 }
 
 /// >array ( set -- array ) - Convert set to array in insertion order
 fn nativeToArraySet(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
-    const alloc = ctx.quotationAllocator();
-    const items = try sequenceToValues(val, alloc);
-    // Pushing the array retains each element through `retainValue`; that retain
-    // happens before the deferred source release below, so the snapshot keeps
-    // its own reference without an extra retain here.
-    try ctx.stack.push(.{ .array = items });
+    const items = try sequenceToValues(val, ctx.allocator);
+    // The materialized values are borrowed from the set; the result array
+    // must own its own references.
+    container_backing.retainValues(items);
+    try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
 }
 
 /// >array ( array -- array ) - Identity, no allocation

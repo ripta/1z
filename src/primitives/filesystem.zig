@@ -1,8 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Context = @import("../context.zig").Context;
-const Value = @import("../value.zig").Value;
-const HashTable = @import("../value.zig").HashTable;
+const value_mod = @import("../value.zig");
+const Value = value_mod.Value;
+const HashTable = value_mod.HashTable;
 const helpers = @import("helpers.zig");
 const mapFileOpenError = @import("error_mapping.zig").mapFileOpenError;
 const mapFileCreateError = @import("error_mapping.zig").mapFileCreateError;
@@ -80,10 +81,12 @@ fn nativeListDirectory(ctx: *Context) anyerror!void {
         pair[0] = .{ .string = name };
         pair[1] = .{ .symbol = type_sym };
 
-        entries.append(alloc, .{ .array = pair }) catch return error.OutOfMemory;
+        const pair_arr = value_mod.Array.fromOwnedSlice(alloc, pair) catch return error.OutOfMemory;
+        entries.append(alloc, .{ .array = pair_arr }) catch return error.OutOfMemory;
     }
 
-    try ctx.stack.push(.{ .array = entries.toOwnedSlice(alloc) catch return error.OutOfMemory });
+    const items = entries.toOwnedSlice(alloc) catch return error.OutOfMemory;
+    try helpers.pushAdoptedArray(ctx, alloc, items);
 }
 
 /// delete-file ( path -- )

@@ -483,7 +483,8 @@ test "dispatchTypeName returns correct name for native types" {
     try std.testing.expectEqualStrings("boolean", dispatchTypeName(.{ .boolean = true }));
     try std.testing.expectEqualStrings("string", dispatchTypeName(.{ .string = "hello" }));
     try std.testing.expectEqualStrings("symbol", dispatchTypeName(.{ .symbol = "foo" }));
-    try std.testing.expectEqualStrings("array", dispatchTypeName(.{ .array = &.{} }));
+    var empty_arr = value_mod.Array{ .header = undefined, .items = &.{}, .storage = .static };
+    try std.testing.expectEqualStrings("array", dispatchTypeName(.{ .array = &empty_arr }));
 }
 
 test "dispatchTypeName returns virtual type name for tagged values" {
@@ -753,6 +754,7 @@ test "register increments generation counter" {
 
 test "builtinTypeName matches dispatchTypeName for static variants" {
     // Verify all non-dynamic variants produce the same name via both functions.
+    var empty_arr = value_mod.Array{ .header = undefined, .items = &.{}, .storage = .static };
     const num_variants = comptime @typeInfo(Value).@"union".fields.len;
     inline for (0..num_variants) |i| {
         const tag: std.meta.Tag(Value) = @enumFromInt(i);
@@ -768,7 +770,7 @@ test "builtinTypeName matches dispatchTypeName for static variants" {
             .boolean => .{ .boolean = false },
             .string => .{ .string = "" },
             .symbol => .{ .symbol = "" },
-            .array => .{ .array = &.{} },
+            .array => .{ .array = &empty_arr },
             .doc_string => .{ .doc_string = "" },
             .unit => .{ .unit = {} },
             // For pointer-based variants, skip runtime check (would need valid allocations).
@@ -859,6 +861,7 @@ test "dispatchDescriptor matches builtin type descriptors" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();
 
+    var empty_arr = value_mod.Array{ .header = undefined, .items = &.{}, .storage = .static };
     const num_variants = comptime @typeInfo(Value).@"union".fields.len;
     inline for (0..num_variants) |i| {
         const tag: std.meta.Tag(Value) = @enumFromInt(i);
@@ -871,7 +874,7 @@ test "dispatchDescriptor matches builtin type descriptors" {
             .boolean => .{ .boolean = false },
             .string => .{ .string = "" },
             .symbol => .{ .symbol = "" },
-            .array => .{ .array = &.{} },
+            .array => .{ .array = &empty_arr },
             .doc_string => .{ .doc_string = "" },
             .unit => .{ .unit = {} },
             else => continue,

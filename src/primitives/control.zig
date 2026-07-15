@@ -421,7 +421,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 for (collected_markers.items, 0..) |mk, i| {
                     markers_array[i] = .{ .marker = mk };
                 }
-                try ctx.stack.push(.{ .array = markers_array });
+                try helpers.pushAdoptedArray(ctx, alloc, markers_array);
 
                 const define_val = desc_map.get("define") orelse return error.MissingField;
                 const define_quot = switch (define_val) {

@@ -1,0 +1,12 @@
+Stack: [ ]
+Stack: [ ]
+PASS: literal intact after repeated pushes
+Stack: [ ]
+PASS: literal equality after churn
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: nested literal intact after churn
+Stack: [ ]
+PASS: curried array capture
+Stack: [ ]

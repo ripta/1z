@@ -1187,8 +1187,8 @@ fn collectQuotationsInValue(val: Value, quotation_bodies: *std.ArrayListUnmanage
                 try collectNestedQuotations(q.instructions, quotation_bodies, quotation_seen, allocator);
             }
         },
-        .array => |items| {
-            for (items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, allocator);
+        .array => |arr| {
+            for (arr.items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, allocator);
         },
         .hash => |h| {
             var it = h.map.iterator();
@@ -1277,8 +1277,8 @@ fn collectQuotationsInValuePromoting(
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
     switch (val) {
         .quotation => |q| try promoteQuotationCallees(ctx, q, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
-        .array => |items| {
-            for (items) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+        .array => |arr| {
+            for (arr.items) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         .hash => |h| {
             var it = h.map.iterator();
@@ -1392,8 +1392,8 @@ fn walkDispatchContainerValue(
     path_allocator: Allocator,
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
     switch (val) {
-        .array => |items| {
-            for (items) |elem| try walkDispatchContainerValue(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+        .array => |arr| {
+            for (arr.items) |elem| try walkDispatchContainerValue(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         .vector => |v| {
             for (v.list.items) |elem| try walkDispatchContainerValue(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
@@ -3531,8 +3531,9 @@ test "collectCompositeQuotations collects a quotation nested in an array literal
     const elems = [_]Value{
         .{ .quotation = .{ .instructions = inner_instrs } },
     };
+    var elems_arr = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
     const outer_instrs = &[_]Instruction{
-        .{ .op = .{ .push_literal = .{ .array = &elems } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .array = &elems_arr } }, .line = 1 },
     };
 
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
@@ -3585,9 +3586,14 @@ test "collectCompositeQuotations collects a quotation nested in a nested composi
     const arr_elems = [_]Value{
         .{ .quotation = .{ .instructions = inner_instrs } },
     };
+    // The hash releases its values at destroy, so the array wrapper needs an
+    // initialized header; the static no-op destroy leaves the struct to the
+    // deferred free.
+    const arr_elems_arr = try value_mod.Array.createStatic(allocator, &arr_elems);
+    defer allocator.destroy(arr_elems_arr);
     const hash = try value_mod.HashTable.create(allocator);
     defer hash.header.release();
-    try hash.map.put(allocator, try allocator.dupe(u8, "match"), .{ .array = &arr_elems });
+    try hash.map.put(allocator, try allocator.dupe(u8, "match"), .{ .array = arr_elems_arr });
     const outer_instrs = &[_]Instruction{
         .{ .op = .{ .push_literal = .{ .hash = hash } }, .line = 1 },
     };
@@ -3638,8 +3644,9 @@ test "collectCompositeQuotations dedupes a quotation reached twice" {
         .{ .quotation = .{ .instructions = inner_instrs } },
         .{ .quotation = .{ .instructions = inner_instrs } },
     };
+    var elems_arr = value_mod.Array{ .header = undefined, .items = &elems, .storage = .static };
     const outer_instrs = &[_]Instruction{
-        .{ .op = .{ .push_literal = .{ .array = &elems } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .array = &elems_arr } }, .line = 1 },
     };
 
     var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
@@ -3726,9 +3733,10 @@ test "collectDispatchContainerQuotationsPromoting promotes the check field quota
     };
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
     var rule_elems = [_]Value{.{ .struct_instance = &si }};
+    var rule_elems_arr = value_mod.Array{ .header = undefined, .items = &rule_elems, .storage = .static };
     var map = value_mod.MutableMap{ .header = undefined, .map = .{} };
     defer map.map.deinit(allocator);
-    try map.map.put(allocator, "rules", .{ .array = &rule_elems });
+    try map.map.put(allocator, "rules", .{ .array = &rule_elems_arr });
     const outer_instrs = &[_]Instruction{
         .{ .op = .{ .push_literal = .{ .mutable_map = &map } }, .line = 1 },
     };
@@ -3895,9 +3903,10 @@ test "discoverReachableWords re-drains the BFS to reach a promoted callee's own 
     };
     var si = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
     var rule_elems = [_]Value{.{ .struct_instance = &si }};
+    var rule_elems_arr = value_mod.Array{ .header = undefined, .items = &rule_elems, .storage = .static };
     var map = value_mod.MutableMap{ .header = undefined, .map = .{} };
     defer map.map.deinit(allocator);
-    try map.map.put(allocator, "rules", .{ .array = &rule_elems });
+    try map.map.put(allocator, "rules", .{ .array = &rule_elems_arr });
 
     const registry_holder_body = &[_]Instruction{
         .{ .op = .{ .push_literal = .{ .mutable_map = &map } }, .line = 1 },

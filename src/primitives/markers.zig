@@ -230,7 +230,7 @@ pub const bind_placeholder_marker: Marker = .{ .name = "bind-placeholder" };
 /// sentinel). An empty body still yields `{ &bind_placeholder_marker }`.
 pub fn isBindPlaceholder(value: value_mod.Value) bool {
     return switch (value) {
-        .array => |arr| arr.len >= 1 and switch (arr[0]) {
+        .array => |arr| arr.items.len >= 1 and switch (arr.items[0]) {
             .marker => |mk| mk == &bind_placeholder_marker,
             else => false,
         },
@@ -584,7 +584,7 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
         result[i] = .{ .marker = @constCast(mk) };
     }
 
-    try ctx.stack.push(.{ .array = result });
+    try helpers.pushAdoptedArray(ctx, alloc, result);
 }
 
 /// native? ( module name -- ? ) - Check if a word in a module is a native primitive

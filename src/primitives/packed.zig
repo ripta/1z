@@ -119,7 +119,7 @@ fn nativePackedFromArray(ctx: *Context) anyerror!void {
     };
 
     const items = switch (arr_val) {
-        .array => |a| a,
+        .array => |a| a.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", arr_val);
             return error.TypeMismatch;
@@ -307,7 +307,7 @@ fn nativePackedToArray(ctx: *Context) anyerror!void {
         .u64 => readElements(u64, bytes, result),
     }
 
-    try ctx.stack.push(.{ .array = result });
+    try helpers.pushAdoptedArray(ctx, alloc, result);
 }
 
 fn readElements(comptime T: type, bytes: []const u8, out: []Value) void {

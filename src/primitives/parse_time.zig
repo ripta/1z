@@ -101,7 +101,7 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
     }
 
     const result = try tokens.toOwnedSlice(alloc);
-    return .{ .array = result };
+    return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, result) };
 }
 
 /// Resolve a token string as a scalar literal value. Returns null if the token
@@ -207,7 +207,8 @@ fn nativeBindUntil(ctx: *Context) anyerror!void {
     while (i < n) : (i += 1) {
         placeholder[n - i] = try ctx.stack.pop();
     }
-    try ctx.stack.push(.{ .array = placeholder });
+    // The popped references transfer into the placeholder array wholesale.
+    try helpers.pushAdoptedArray(ctx, alloc, placeholder);
 }
 
 /// parse-tokens-until ( delimiter -- array ) - Read tokens until delimiter, return as string array

@@ -45,10 +45,13 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
         }
     } else if (std.mem.eql(u8, field_name, "stack-trace")) {
         if (err.stack_trace) |trace| {
-            const alloc = ctx.quotationAllocator();
+            const alloc = ctx.allocator;
             const frames = alloc.alloc(Value, trace.len) catch return error.OutOfMemory;
             var built: usize = 0;
-            errdefer container_backing.releaseValues(frames[0..built]);
+            errdefer {
+                container_backing.releaseValues(frames[0..built]);
+                alloc.free(frames);
+            }
             for (trace, 0..) |frame, i| {
                 const frame_hash = HashTable.create(ctx.allocator) catch return error.OutOfMemory;
                 frames[i] = .{ .hash = frame_hash };
@@ -65,7 +68,8 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
                     return error.OutOfMemory;
                 };
             }
-            return .{ .array = frames };
+            const arr = try value_mod.Array.fromOwnedSlice(alloc, frames);
+            return .{ .array = arr };
         } else {
             return .{ .boolean = false }; // f for null
         }
@@ -327,50 +331,49 @@ pub fn nativeAtKeys(ctx: *Context) anyerror!void {
 
     switch (obj) {
         .hash => |h| {
-            const alloc = ctx.quotationAllocator();
-            const keys = alloc.alloc(Value, h.map.count()) catch return error.OutOfMemory;
+            const keys = ctx.allocator.alloc(Value, h.map.count()) catch return error.OutOfMemory;
             var iter = h.map.iterator();
             var i: usize = 0;
             while (iter.next()) |entry| {
                 // The hash owns its key bytes and frees them at destroy, so
                 // the escaping symbols need arena-lifetime copies.
-                const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
+                const key_copy = ctx.quotationAllocator().dupe(u8, entry.key_ptr.*) catch {
+                    ctx.allocator.free(keys);
+                    return error.OutOfMemory;
+                };
                 keys[i] = .{ .symbol = key_copy };
                 i += 1;
             }
-            try ctx.stack.push(.{ .array = keys });
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);
         },
         .mutable_map => |m| {
-            const alloc = ctx.quotationAllocator();
-            const keys = alloc.alloc(Value, m.map.count()) catch return error.OutOfMemory;
+            const keys = ctx.allocator.alloc(Value, m.map.count()) catch return error.OutOfMemory;
             var iter = m.map.iterator();
             var i: usize = 0;
             while (iter.next()) |entry| {
                 keys[i] = .{ .symbol = entry.key_ptr.* };
                 i += 1;
             }
-            try ctx.stack.push(.{ .array = keys });
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);
         },
         .error_value => {
             // Error objects have fixed fields
-            const alloc = ctx.quotationAllocator();
-            const keys = alloc.alloc(Value, 4) catch return error.OutOfMemory;
+            const keys = ctx.allocator.alloc(Value, 4) catch return error.OutOfMemory;
             keys[0] = .{ .symbol = "error-type" };
             keys[1] = .{ .symbol = "message" };
             keys[2] = .{ .symbol = "data" };
             keys[3] = .{ .symbol = "stack-trace" };
-            try ctx.stack.push(.{ .array = keys });
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);
         },
         .module => |mod| {
-            const alloc = ctx.quotationAllocator();
-            const keys = alloc.alloc(Value, mod.words.count()) catch return error.OutOfMemory;
+            const keys = ctx.allocator.alloc(Value, mod.words.count()) catch return error.OutOfMemory;
             var iter = mod.words.iterator();
             var i: usize = 0;
             while (iter.next()) |entry| {
                 keys[i] = .{ .symbol = entry.key_ptr.* };
                 i += 1;
             }
-            try ctx.stack.push(.{ .array = keys });
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);
         },
         else => {
             setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});
@@ -387,41 +390,45 @@ pub fn nativeAtValues(ctx: *Context) anyerror!void {
     const obj = dispatch_mod.unwrapBaseType(obj_orig);
     switch (obj) {
         .hash => |h| {
-            const alloc = ctx.quotationAllocator();
-            const values = alloc.alloc(Value, h.map.count()) catch return error.OutOfMemory;
+            const values = ctx.allocator.alloc(Value, h.map.count()) catch return error.OutOfMemory;
             var iter = h.map.iterator();
             var i: usize = 0;
             while (iter.next()) |entry| {
                 values[i] = entry.value_ptr.*;
                 i += 1;
             }
-            try ctx.stack.push(.{ .array = values });
+            // The copied values are borrowed from the hash; the result array
+            // must own its own references.
+            container_backing.retainValues(values);
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, values);
         },
         .mutable_map => |m| {
-            const alloc = ctx.quotationAllocator();
-            const values = alloc.alloc(Value, m.map.count()) catch return error.OutOfMemory;
+            const values = ctx.allocator.alloc(Value, m.map.count()) catch return error.OutOfMemory;
             var iter = m.map.iterator();
             var i: usize = 0;
             while (iter.next()) |entry| {
                 values[i] = entry.value_ptr.*;
                 i += 1;
             }
-            try ctx.stack.push(.{ .array = values });
+            container_backing.retainValues(values);
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, values);
         },
         .error_value => |err| {
             // Get all four error field values. Both fetched fields come back
-            // as owning references, so the array transfers to its slot with
-            // `pushMoved`.
-            const alloc = ctx.quotationAllocator();
-            const values = alloc.alloc(Value, 4) catch return error.OutOfMemory;
+            // as owning references, so the array adopts them wholesale.
+            const values = ctx.allocator.alloc(Value, 4) catch return error.OutOfMemory;
             values[0] = Value{ .symbol = err.error_type };
             values[1] = .{ .string = err.message };
-            values[2] = try getErrorField(ctx, err, "data");
-            values[3] = getErrorField(ctx, err, "stack-trace") catch |e| {
-                container_backing.releaseValue(values[2]);
+            values[2] = getErrorField(ctx, err, "data") catch |e| {
+                ctx.allocator.free(values);
                 return e;
             };
-            try ctx.stack.pushMoved(.{ .array = values });
+            values[3] = getErrorField(ctx, err, "stack-trace") catch |e| {
+                container_backing.releaseValue(values[2]);
+                ctx.allocator.free(values);
+                return e;
+            };
+            try helpers.pushAdoptedArray(ctx, ctx.allocator, values);
         },
         else => {
             setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});

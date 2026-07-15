@@ -803,7 +803,7 @@ pub const InferenceEngine = struct {
                     // combinator path taken below.
                     if (idx > 0 and self.default_arm_mode != .off and isPartialDispatch(&wd) and self.isInCheckedSource(caller.source_file)) {
                         switch (instructions[idx - 1].op) {
-                            .push_literal => |val| if (val == .array and !branchesHaveDefault(val.array)) {
+                            .push_literal => |val| if (val == .array and !branchesHaveDefault(val.array.items)) {
                                 const severity: Severity = if (self.default_arm_mode == .warning) .warning else .err;
                                 try self.emitDiagnostic(.{
                                     .word_name = caller.word_name,
@@ -2020,11 +2020,13 @@ test "case without default arm warns" {
     const arm_body: []const Instruction = &.{makeInstr(.{ .push_literal = .{ .fixnum = 0 } })};
     // { { 1 [ 0 ] } } -- a single keyed arm, no bare-quotation default.
     const pair: []const Value = &.{ .{ .fixnum = 1 }, .{ .quotation = .{ .instructions = arm_body } } };
-    const branches: []const Value = &.{.{ .array = pair }};
+    var pair_arr = value_mod.Array{ .header = undefined, .items = pair, .storage = .static };
+    const branches: []const Value = &.{.{ .array = &pair_arr }};
+    var branches_arr = value_mod.Array{ .header = undefined, .items = branches, .storage = .static };
 
     const body: []const Instruction = &.{
         makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
-        makeInstr(.{ .push_literal = .{ .array = branches } }),
+        makeInstr(.{ .push_literal = .{ .array = &branches_arr } }),
         makeInstr(.{ .call_word = "case" }),
     };
 
@@ -2054,15 +2056,17 @@ test "case with default arm does not warn" {
     const arm_body: []const Instruction = &.{makeInstr(.{ .push_literal = .{ .fixnum = 0 } })};
     const default_body: []const Instruction = &.{makeInstr(.{ .push_literal = .{ .fixnum = 9 } })};
     const pair: []const Value = &.{ .{ .fixnum = 1 }, .{ .quotation = .{ .instructions = arm_body } } };
+    var pair_arr = value_mod.Array{ .header = undefined, .items = pair, .storage = .static };
     // { { 1 [ 0 ] } [ 9 ] } -- a keyed arm plus a bare-quotation default.
     const branches: []const Value = &.{
-        .{ .array = pair },
+        .{ .array = &pair_arr },
         .{ .quotation = .{ .instructions = default_body } },
     };
+    var branches_arr = value_mod.Array{ .header = undefined, .items = branches, .storage = .static };
 
     const body: []const Instruction = &.{
         makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
-        makeInstr(.{ .push_literal = .{ .array = branches } }),
+        makeInstr(.{ .push_literal = .{ .array = &branches_arr } }),
         makeInstr(.{ .call_word = "case" }),
     };
 
@@ -2094,10 +2098,12 @@ test "cond without default arm warns" {
         .{ .quotation = .{ .instructions = pred_body } },
         .{ .quotation = .{ .instructions = arm_body } },
     };
-    const branches: []const Value = &.{.{ .array = pair }};
+    var pair_arr = value_mod.Array{ .header = undefined, .items = pair, .storage = .static };
+    const branches: []const Value = &.{.{ .array = &pair_arr }};
+    var branches_arr = value_mod.Array{ .header = undefined, .items = branches, .storage = .static };
 
     const body: []const Instruction = &.{
-        makeInstr(.{ .push_literal = .{ .array = branches } }),
+        makeInstr(.{ .push_literal = .{ .array = &branches_arr } }),
         makeInstr(.{ .call_word = "cond" }),
     };
 
@@ -2126,11 +2132,13 @@ test "case without default arm errors when default_arm_mode is err" {
 
     const arm_body: []const Instruction = &.{makeInstr(.{ .push_literal = .{ .fixnum = 0 } })};
     const pair: []const Value = &.{ .{ .fixnum = 1 }, .{ .quotation = .{ .instructions = arm_body } } };
-    const branches: []const Value = &.{.{ .array = pair }};
+    var pair_arr = value_mod.Array{ .header = undefined, .items = pair, .storage = .static };
+    const branches: []const Value = &.{.{ .array = &pair_arr }};
+    var branches_arr = value_mod.Array{ .header = undefined, .items = branches, .storage = .static };
 
     const body: []const Instruction = &.{
         makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
-        makeInstr(.{ .push_literal = .{ .array = branches } }),
+        makeInstr(.{ .push_literal = .{ .array = &branches_arr } }),
         makeInstr(.{ .call_word = "case" }),
     };
 
@@ -2159,11 +2167,13 @@ test "case without default arm is silent when default_arm_mode is off" {
 
     const arm_body: []const Instruction = &.{makeInstr(.{ .push_literal = .{ .fixnum = 0 } })};
     const pair: []const Value = &.{ .{ .fixnum = 1 }, .{ .quotation = .{ .instructions = arm_body } } };
-    const branches: []const Value = &.{.{ .array = pair }};
+    var pair_arr = value_mod.Array{ .header = undefined, .items = pair, .storage = .static };
+    const branches: []const Value = &.{.{ .array = &pair_arr }};
+    var branches_arr = value_mod.Array{ .header = undefined, .items = branches, .storage = .static };
 
     const body: []const Instruction = &.{
         makeInstr(.{ .push_literal = .{ .fixnum = 1 } }),
-        makeInstr(.{ .push_literal = .{ .array = branches } }),
+        makeInstr(.{ .push_literal = .{ .array = &branches_arr } }),
         makeInstr(.{ .call_word = "case" }),
     };
 
@@ -3539,7 +3549,8 @@ test "declared base input accepts parameterized tagged value" {
         .type_val = &array_fixnum_tv,
     };
     var elems = [_]Value{ .{ .fixnum = 1 }, .{ .fixnum = 2 } };
-    var inner = Value{ .array = elems[0..] };
+    var elems_arr = value_mod.Array{ .header = undefined, .items = elems[0..], .storage = .static };
+    var inner = Value{ .array = &elems_arr };
     const tagged = Value{ .tagged = .{ .tag = &tagged_type, .inner = &inner } };
 
     const dummy: dictionary_mod.NativeFn = struct {

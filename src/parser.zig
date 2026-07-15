@@ -1191,7 +1191,12 @@ fn executeParseTimeWordForArray(
     }
 }
 
-pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, opening_line: usize) ParseError![]const Value {
+/// Parse a `{ ... }` array literal into a static-storage Array. The struct and
+/// its backing live on `allocator` (instruction memory) and are reclaimed with
+/// it; refcount traffic can never free the literal's backing. The container
+/// release list drops the literal's creation reference at teardown, which
+/// releases any parse-time container elements the literal owns.
+pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, opening_line: usize) ParseError!*value_mod.Array {
     var values: std.ArrayListUnmanaged(Value) = .{};
     errdefer values.deinit(allocator);
 
@@ -1203,7 +1208,8 @@ pub fn parseArray(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Context, o
             const nested = try parseArray(allocator, tokenizer, ctx, tok.line);
             values.append(allocator, .{ .array = nested }) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "}")) {
-            return values.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+            const items = values.toOwnedSlice(allocator) catch return ParseError.OutOfMemory;
+            return value_mod.Array.createStatic(allocator, items) catch return ParseError.OutOfMemory;
         } else if (std.mem.eql(u8, token, "[")) {
             // Quotations inside arrays don't execute parse-time words (arrays are data)
             const quot = try parseQuotation(allocator, tokenizer, null, tok.line);
@@ -1322,27 +1328,32 @@ test "unmatched open bracket" {
 }
 
 test "parse simple array" {
-    var tokenizer = Tokenizer.init("1 2 3 }");
-    const arr = try parseArray(std.testing.allocator, &tokenizer, null, 0);
-    defer std.testing.allocator.free(arr);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
 
-    try std.testing.expectEqual(@as(usize, 3), arr.len);
-    try std.testing.expectEqual(@as(i64, 1), arr[0].fixnum);
-    try std.testing.expectEqual(@as(i64, 2), arr[1].fixnum);
-    try std.testing.expectEqual(@as(i64, 3), arr[2].fixnum);
+    var tokenizer = Tokenizer.init("1 2 3 }");
+    const arr = try parseArray(arena.allocator(), &tokenizer, null, 0);
+
+    try std.testing.expectEqual(.static, arr.storage);
+    try std.testing.expectEqual(@as(usize, 3), arr.items.len);
+    try std.testing.expectEqual(@as(i64, 1), arr.items[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 2), arr.items[1].fixnum);
+    try std.testing.expectEqual(@as(i64, 3), arr.items[2].fixnum);
 }
 
 test "parse nested array" {
-    var tokenizer = Tokenizer.init("{ 1 2 } }");
-    const arr = try parseArray(std.testing.allocator, &tokenizer, null, 0);
-    defer std.testing.allocator.free(arr);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
 
-    try std.testing.expectEqual(@as(usize, 1), arr.len);
-    const nested = arr[0].array;
-    defer std.testing.allocator.free(nested);
-    try std.testing.expectEqual(@as(usize, 2), nested.len);
-    try std.testing.expectEqual(@as(i64, 1), nested[0].fixnum);
-    try std.testing.expectEqual(@as(i64, 2), nested[1].fixnum);
+    var tokenizer = Tokenizer.init("{ 1 2 } }");
+    const arr = try parseArray(arena.allocator(), &tokenizer, null, 0);
+
+    try std.testing.expectEqual(@as(usize, 1), arr.items.len);
+    const nested = arr.items[0].array;
+    try std.testing.expectEqual(.static, nested.storage);
+    try std.testing.expectEqual(@as(usize, 2), nested.items.len);
+    try std.testing.expectEqual(@as(i64, 1), nested.items[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 2), nested.items[1].fixnum);
 }
 
 test "parse array with string" {
@@ -1352,9 +1363,9 @@ test "parse array with string" {
     var tokenizer = Tokenizer.init("\"hello\" 42 }");
     const arr = try parseArray(arena.allocator(), &tokenizer, null, 0);
 
-    try std.testing.expectEqual(@as(usize, 2), arr.len);
-    try std.testing.expectEqualStrings("hello", arr[0].string);
-    try std.testing.expectEqual(@as(i64, 42), arr[1].fixnum);
+    try std.testing.expectEqual(@as(usize, 2), arr.items.len);
+    try std.testing.expectEqualStrings("hello", arr.items[0].string);
+    try std.testing.expectEqual(@as(i64, 42), arr.items[1].fixnum);
 }
 
 test "unmatched open brace" {
@@ -1684,9 +1695,9 @@ test "doc-comment in array is skipped" {
     var tokenizer = Tokenizer.init("1 \\\\ comment inside array\n2 }");
     const arr = try parseArray(arena.allocator(), &tokenizer, null, 0);
 
-    try std.testing.expectEqual(@as(usize, 2), arr.len);
-    try std.testing.expectEqual(@as(i64, 1), arr[0].fixnum);
-    try std.testing.expectEqual(@as(i64, 2), arr[1].fixnum);
+    try std.testing.expectEqual(@as(usize, 2), arr.items.len);
+    try std.testing.expectEqual(@as(i64, 1), arr.items[0].fixnum);
+    try std.testing.expectEqual(@as(i64, 2), arr.items[1].fixnum);
 }
 
 test "parse row-polymorphic stack effect sets is_row_variable" {

@@ -59,8 +59,9 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const markers_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(markers_val);
     const markers_array = switch (markers_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", markers_val);
             return error.TypeMismatch;
@@ -120,11 +121,11 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
     const inner_type_raw = src_map.map.get("inner-type") orelse return error.MissingField;
     const inner_type_val = switch (inner_type_raw) {
         .array => |arr| blk: {
-            if (arr.len != 1) {
-                helpers.setErrorContext(ctx, "virtual{{ expects exactly one inner type, got {d}", .{arr.len});
+            if (arr.items.len != 1) {
+                helpers.setErrorContext(ctx, "virtual{{ expects exactly one inner type, got {d}", .{arr.items.len});
                 return error.ParseError;
             }
-            break :blk arr[0];
+            break :blk arr.items[0];
         },
         else => inner_type_raw,
     };
@@ -203,7 +204,7 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
         .mutable_map => |struct_desc| {
             const fields_val = struct_desc.map.get("fields") orelse return error.MissingField;
             const fields_array = switch (fields_val) {
-                .array => |arr| arr,
+                .array => |arr| arr.items,
                 else => {
                     helpers.setErrorContext(ctx, "virtual{{ struct descriptor 'fields' must be an array, got {s}", .{helpers.valueTypeName(fields_val)});
                     return error.TypeMismatch;
@@ -793,7 +794,12 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
 
     // Like typedValidateAndPromote, every branch re-stores the popped
     // sequence (or an in-place-promoted version of it) into its slot, so
-    // transfer ownership via pushMoved instead of retaining again.
+    // transfer ownership via pushMoved instead of retaining again. Any error
+    // exit must drop the popped reference instead; the promoted-array path
+    // clears the flag once it hands the reference off explicitly.
+    var seq_owned = true;
+    errdefer if (seq_owned) container_backing.releaseValue(seq);
+
     const params = vt.type_params orelse {
         try ctx.stack.pushMoved(seq);
         return;
@@ -805,7 +811,7 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
 
     const expected_tv = params[0];
     const items: []const Value = switch (seq) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         .vector => |v| v.list.items,
         else => {
             try ctx.stack.pushMoved(seq);
@@ -813,7 +819,16 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
         },
     };
 
+    // For an array source, the promoted result becomes a fresh owned array,
+    // so copied originals are retained as they enter the new backing;
+    // promoted elements are fresh references either way. The retained copies
+    // drop on any error exit; `toOwnedSlice` empties the list on the success
+    // path, so this covers exactly the abandoned partial builds.
+    const seq_is_array = seq == .array;
     var promoted_items: ?std.ArrayListUnmanaged(Value) = null;
+    errdefer if (seq_is_array) {
+        if (promoted_items) |*pi| container_backing.releaseValues(pi.items);
+    };
     for (items, 0..) |elem, i| {
         const actual_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
         if (actual_tv != expected_tv) {
@@ -822,6 +837,7 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
                     promoted_items = std.ArrayListUnmanaged(Value){};
                     promoted_items.?.ensureTotalCapacity(alloc, items.len) catch return error.OutOfMemory;
                     promoted_items.?.appendSlice(alloc, items[0..i]) catch return error.OutOfMemory;
+                    if (seq_is_array) container_backing.retainValues(promoted_items.?.items);
                 }
                 promoted_items.?.append(alloc, promoted) catch return error.OutOfMemory;
             } else {
@@ -829,13 +845,28 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
                 return error.TypeMismatch;
             }
         } else if (promoted_items) |*pi| {
+            if (seq_is_array) container_backing.retainValue(elem);
             pi.append(alloc, elem) catch return error.OutOfMemory;
         }
     }
 
-    if (promoted_items) |pi| {
+    if (promoted_items) |*pi| {
         switch (seq) {
-            .array => try ctx.stack.pushMoved(.{ .array = pi.items }),
+            .array => {
+                const new_items = pi.toOwnedSlice(alloc) catch return error.OutOfMemory;
+                const new_arr = value_mod.Array.fromOwnedSlice(alloc, new_items) catch |e| {
+                    container_backing.releaseValues(new_items);
+                    alloc.free(new_items);
+                    return e;
+                };
+                // The promoted array replaces the popped original.
+                seq_owned = false;
+                container_backing.releaseValue(seq);
+                ctx.stack.pushMoved(.{ .array = new_arr }) catch |err| {
+                    container_backing.releaseValue(.{ .array = new_arr });
+                    return err;
+                };
+            },
             .vector => |v| {
                 v.list.items = pi.items;
                 v.list.capacity = pi.capacity;
@@ -1008,9 +1039,6 @@ fn typedFreezeDispatch(ctx: *Context) anyerror!void {
         },
     };
 
-    // Dupe items to create raw array
-    const items = try alloc.dupe(Value, vec.list.items);
-
     // Construct target type name: "array(" ++ elem_type ++ ")"
     const params = vt.type_params orelse {
         helpers.setErrorContext(ctx, "freeze: {s} has no type parameters", .{vt.name});
@@ -1024,8 +1052,8 @@ fn typedFreezeDispatch(ctx: *Context) anyerror!void {
         return error.WordNotFound;
     };
 
-    // Push raw array and execute the wrap word
-    try ctx.stack.push(.{ .array = items });
+    // Snapshot the vector's items into a raw array and execute the wrap word
+    try helpers.pushCopiedArray(ctx, ctx.allocator, vec.list.items);
     switch (wrap_word.action) {
         .native, .host_callback => try wrap_word.invoke(ctx),
         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
@@ -1075,25 +1103,34 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
             switch (val) {
                 .array => |arr| {
                     var promoted_arr: ?[]Value = null;
-                    for (arr, 0..) |elem, i| {
+                    for (arr.items, 0..) |elem, i| {
                         const elem_tv = dispatch_mod.dispatchTypeValue(elem, ctx);
                         if (elem_tv != expected_tv) {
                             if (tryPromoteElement(alloc, elem, expected_tv.name)) |promoted| {
                                 if (promoted_arr == null) {
-                                    promoted_arr = try alloc.alloc(Value, arr.len);
-                                    @memcpy(promoted_arr.?[0..i], arr[0..i]);
+                                    promoted_arr = try alloc.alloc(Value, arr.items.len);
+                                    @memcpy(promoted_arr.?[0..i], arr.items[0..i]);
+                                    // Copied originals become new owning
+                                    // references; promoted elements are fresh.
+                                    container_backing.retainValues(promoted_arr.?[0..i]);
                                 }
                                 promoted_arr.?[i] = promoted;
                             } else {
+                                if (promoted_arr) |pa| container_backing.releaseValues(pa[0..i]);
                                 helpers.setErrorContext(ctx, ">{s} element at index {d} has type {s}, expected {s}", .{ vt.name, i, elem_tv.name, expected_tv.name });
                                 return error.TypeMismatch;
                             }
                         } else if (promoted_arr) |pa| {
+                            container_backing.retainValue(elem);
                             pa[i] = elem;
                         }
                     }
                     if (promoted_arr) |pa| {
-                        val = .{ .array = pa };
+                        const new_arr = try value_mod.Array.fromOwnedSlice(alloc, pa);
+                        // Swap in the promoted array, dropping the popped
+                        // original's reference.
+                        container_backing.releaseValue(val);
+                        val = .{ .array = new_arr };
                     }
                 },
                 .struct_instance => |si| {
@@ -1427,8 +1464,9 @@ fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const markers_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(markers_val);
     const markers_array = switch (markers_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", markers_val);
             return error.TypeMismatch;

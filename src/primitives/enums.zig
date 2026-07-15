@@ -137,8 +137,9 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
     const unary = ctx.getDispatchUnarySentinel();
 
     const markers_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(markers_val);
     const markers_array = switch (markers_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", markers_val);
             return error.TypeMismatch;
@@ -171,7 +172,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
         return error.MissingField;
     };
     const variants_array = switch (variants_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", variants_val);
             return error.TypeMismatch;
@@ -232,7 +233,7 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
                     alloc,
                     ctx,
                     .{ .type = base_tv },
-                    variants_array[vi + 2].array,
+                    variants_array[vi + 2].array.items,
                     &enum_param_map,
                     &next_param_pos,
                     "enum",
@@ -541,7 +542,7 @@ fn nativeEnumVariants(ctx: *Context) anyerror!void {
         result[i] = .{ .symbol = vt.name };
     }
 
-    try ctx.stack.push(.{ .array = result });
+    try helpers.pushAdoptedArray(ctx, alloc, result);
 }
 
 /// match ( val branches -- ... )
@@ -552,8 +553,11 @@ fn nativeEnumVariants(ctx: *Context) anyerror!void {
 /// are pushed onto the stack before the body executes.
 fn nativeMatch(ctx: *Context) anyerror!void {
     const branches_val = try ctx.stack.pop();
+    // The matched branch body executes before the deferred release runs; its
+    // quotation instructions live in instruction memory, not the array.
+    defer container_backing.releaseValue(branches_val);
     const branches = switch (branches_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", branches_val);
             return error.TypeMismatch;
@@ -561,6 +565,10 @@ fn nativeMatch(ctx: *Context) anyerror!void {
     };
 
     const val = try ctx.stack.pop();
+    // The unwrapped payload fields (or the raw value on the default branch)
+    // are re-pushed with their own retains, so the popped reference drops
+    // here once the matched body has run.
+    defer container_backing.releaseValue(val);
     const tag = switch (val) {
         .tagged => |t| t,
         else => {
@@ -724,8 +732,11 @@ fn lookupVariantEnum(ctx: *const Context, variant_name: []const u8) ?EnumInfo {
 /// and checks exhaustiveness.
 fn nativeValidateMatchBlock(ctx: *Context) anyerror!void {
     const arr_val = try ctx.stack.pop();
+    // On success the popped reference transfers back to the stack; on any
+    // validation error it must be dropped here.
+    errdefer container_backing.releaseValue(arr_val);
     const arr = switch (arr_val) {
-        .array => |a| a,
+        .array => |a| a.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", arr_val);
             return error.TypeMismatch;
@@ -840,5 +851,5 @@ fn nativeValidateMatchBlock(ctx: *Context) anyerror!void {
         return error.ParseError;
     }
 
-    try ctx.stack.push(arr_val);
+    try ctx.stack.pushMoved(arr_val);
 }

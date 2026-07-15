@@ -41,5 +41,21 @@ test-two-hop-share: ( -- ) [
   ] task-scope
 ] ;
 
+\ Array analogue of the buffered hash test: the runtime-built array's shared
+\ backing must stay valid after the sending task has been reaped.
+test-buffered-array-share-survives-sender-reap: ( -- ) [
+  [
+    1 <buffered-channel>
+    dup [
+      [ { 10 20 } 30 #push swap send ] curry spawn drop
+    ] curry task-scope
+    receive
+    dup 0 #nth 10 "array first element survives sender reap" assert=
+    dup 1 #nth 20 "array second element survives sender reap" assert=
+    2 #nth 30 "array pushed element survives sender reap" assert=
+  ] task-scope
+] ;
+
 test-buffered-share-survives-sender-reap
 test-two-hop-share
+test-buffered-array-share-survives-sender-reap

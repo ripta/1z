@@ -3,6 +3,7 @@ const std = @import("std");
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const value_mod = @import("../value.zig");
+const container_backing = @import("../container_backing.zig");
 const Instruction = value_mod.Instruction;
 const Quotation = value_mod.Quotation;
 const Value = value_mod.Value;
@@ -116,15 +117,22 @@ fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
     };
 
     const old_items = switch (current) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => &[_]Value{},
     };
 
     const new_items = alloc.alloc(Value, old_items.len + 1) catch return error.OutOfMemory;
     @memcpy(new_items[0..old_items.len], old_items);
+    // The copied elements become new owning references held by the array;
+    // quot_val's reference transfers into the last slot.
+    container_backing.retainValues(new_items[0..old_items.len]);
     new_items[old_items.len] = quot_val;
 
-    try ctx.setParameterInTopFrame(param.name, .{ .array = new_items });
+    const arr = try value_mod.Array.fromOwnedSlice(alloc, new_items);
+    // The parameter frame slot retains on store; drop the creation reference
+    // so the binding is the sole owner.
+    defer container_backing.releaseValue(.{ .array = arr });
+    try ctx.setParameterInTopFrame(param.name, .{ .array = arr });
 }
 
 /// Fire all scoped hooks stored in a dynamic parameter.
@@ -137,7 +145,7 @@ pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Valu
 
     const hook_array = ctx.getParameterBinding(param_name) orelse return;
     const items = switch (hook_array) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => return,
     };
     if (items.len == 0) return;

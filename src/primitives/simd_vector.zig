@@ -365,7 +365,7 @@ fn nativeSimdToArray(ctx: *Context) anyerror!void {
         },
     }
 
-    try ctx.stack.push(.{ .array = result });
+    try helpers.pushAdoptedArray(ctx, alloc, result);
 }
 
 // ---------------------------------------------------------------------------
@@ -529,7 +529,7 @@ fn nativeSimdShuffle(ctx: *Context) anyerror!void {
     const bytes = try validateSimdSize(ctx, ba);
 
     const indices_arr = switch (indices_val) {
-        .array => |a| a,
+        .array => |a| a.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", indices_val);
             return error.TypeMismatch;

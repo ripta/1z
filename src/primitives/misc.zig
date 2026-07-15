@@ -584,7 +584,8 @@ fn nativeImport(ctx: *Context) anyerror!void {
     const top_val = try ctx.stack.pop();
 
     switch (top_val) {
-        .array => |names| {
+        .array => |names_arr| {
+            const names = names_arr.items;
             if (names.len == 0) {
                 addImportError(ctx, "empty-import", "cannot import empty array");
                 return error.EmptyImport;
@@ -680,7 +681,7 @@ fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
         arr[i] = .{ .string = arg };
     }
 
-    try ctx.stack.push(.{ .array = arr });
+    try helpers.pushAdoptedArray(ctx, alloc, arr);
 }
 
 /// sys-exit ( code -- ) - Exit the process with the given exit code
@@ -706,8 +707,8 @@ fn native1Array(ctx: *Context) anyerror!void {
     arr[0] = elem;
 
     // `elem` was moved into the array slot, which already owns its reference;
-    // publish without re-retaining.
-    try ctx.stack.pushMoved(.{ .array = arr });
+    // the fresh array adopts it and transfers to the stack without re-retaining.
+    try helpers.pushAdoptedArray(ctx, alloc, arr);
 }
 
 const ResolverState = struct {
@@ -1363,20 +1364,21 @@ fn nativeRecordImport(ctx: *Context) anyerror!void {
     fields[1] = .{ .fixnum = @intCast(ctx.parse_time_source_line) };
     fields[2] = .{ .fixnum = @intCast(ctx.parse_time_source_column) };
     fields[3] = .{ .string = try arena.dupe(u8, module_path) };
+    // The popped reference transfers into the record and is never released:
+    // import history lives for the context. Callers only pass `f` or a
+    // parse-time static selection array of symbols, so nothing here can leak.
     fields[4] = words_or_f;
     fields[5] = .{ .string = try arena.dupe(u8, resolved_path) };
 
-    try ctx.import_history.append(ctx.allocator, .{ .array = fields });
+    const arr = try value_mod.Array.fromOwnedSlice(arena, fields);
+    try ctx.import_history.append(ctx.allocator, .{ .array = arr });
 }
 
 // ( -- array )
 // Return the accumulated import history as an array of arrays.
 fn nativeImportHistory(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-    const items = ctx.import_history.items;
-    const result = try alloc.alloc(Value, items.len);
-    @memcpy(result, items);
-    try ctx.stack.push(.{ .array = result });
+    // The history entries stay owned by the context; the result copies them.
+    try helpers.pushCopiedArray(ctx, ctx.quotationAllocator(), ctx.import_history.items);
 }
 
 // ( -- file line column )

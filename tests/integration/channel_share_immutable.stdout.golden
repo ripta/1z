@@ -1,7 +1,12 @@
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
 PASS: hash value one survives sender reap
 PASS: hash value two survives sender reap
 Stack: [ ]
 PASS: hash intact after two hops
+Stack: [ ]
+PASS: array first element survives sender reap
+PASS: array second element survives sender reap
+PASS: array pushed element survives sender reap
 Stack: [ ]

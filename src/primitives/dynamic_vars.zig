@@ -48,8 +48,9 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     const markers_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(markers_val);
     const markers_array = switch (markers_val) {
-        .array => |arr| arr,
+        .array => |arr| arr.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array", markers_val);
             return error.TypeMismatch;

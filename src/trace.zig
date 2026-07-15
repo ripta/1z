@@ -247,7 +247,7 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
             }
         },
         .symbol => |s| try writer.print("{s}:", .{s}),
-        .array => |items| try writer.print("<array:{d}>", .{items.len}),
+        .array => |arr| try writer.print("<array:{d}>", .{arr.items.len}),
         .vector => |v| try writer.print("<vector:{d}>", .{v.list.items.len}),
         .byte_array => |b| try writer.print("<byte-array:{d}>", .{b.slice().len}),
         .set => |s| try writer.print("<set:{d}>", .{s.map.count()}),

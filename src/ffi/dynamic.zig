@@ -402,6 +402,9 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
     const alloc = ctx.arena.allocator();
 
     const sig_val = try ctx.stack.pop();
+    // The signature struct carries the params array; everything read out of
+    // it is parsed into the native FfiSignature before this release runs.
+    defer container_backing.releaseValue(sig_val);
     const ffi_fn_val = try ctx.stack.pop();
 
     // Validate ffi-fn resource
@@ -434,7 +437,7 @@ fn nativeBindSig(ctx: *Context) anyerror!void {
     // Extract params from field 0
     const params_val = si.fields[0];
     const params_array = switch (params_val) {
-        .array => |a| a,
+        .array => |a| a.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array for params", params_val);
             return error.TypeMismatch;
@@ -908,8 +911,9 @@ fn nativeFfiCallVariadic(ctx: *Context, ffi_fn: *Resource, sig: *const FfiSignat
 
     // Pop the variadic args array from top of stack
     const varargs_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(varargs_val);
     const varargs = switch (varargs_val) {
-        .array => |a| a,
+        .array => |a| a.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array for variadic arguments", varargs_val);
             return error.TypeMismatch;
@@ -1819,6 +1823,9 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
     const alloc = ctx.arena.allocator();
 
     const sig_val = try ctx.stack.pop();
+    // The signature struct carries the params array; everything read out of
+    // it is parsed into the native FfiSignature before this release runs.
+    defer container_backing.releaseValue(sig_val);
     const quot_val = try ctx.stack.pop();
 
     const quotation = switch (quot_val) {
@@ -1843,7 +1850,7 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
 
     const params_val = si.fields[0];
     const params_array = switch (params_val) {
-        .array => |a| a,
+        .array => |a| a.items,
         else => {
             helpers.setTypeMismatchError(ctx, "array for params", params_val);
             return error.TypeMismatch;
