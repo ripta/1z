@@ -46,6 +46,17 @@ fn accountBackingDestroyed() void {
     _ = live_backings.fetchSub(1, .monotonic);
 }
 
+/// Memoized answer to "are this backing's contents deeply immutable?".
+///
+/// `.unknown` means no scan has run yet. The memo is never invalidated:
+/// it is only written for containers whose contents cannot change after
+/// construction, so a scanned state holds for the backing's lifetime.
+pub const Shareable = enum(u8) {
+    unknown,
+    immutable,
+    not_immutable,
+};
+
 /// Refcounted, mutex-guarded header for mutable container backings.
 ///
 /// `ContainerHeader` is the foundation for the cross-worker safe lifecycle
@@ -63,6 +74,9 @@ fn accountBackingDestroyed() void {
 ///     storage-specific resources and the header itself
 ///   - a reserved `flags` word for future cycle-handling work; the
 ///     layout is intentionally undefined here
+///   - a tri-state `shareable` memo recording whether the backing's
+///     contents are deeply immutable, populated lazily by
+///     `memoDeeplyImmutable`
 ///
 /// Atomic ordering:
 ///
@@ -74,6 +88,10 @@ fn accountBackingDestroyed() void {
 ///     every other thread's mutations. This matches the codebase pattern
 ///     in `scheduler.zig` / `task.zig` for similar count-down-and-act
 ///     decrements.
+///   - `shareable` uses `.monotonic` loads and stores. Concurrent writers
+///     race benignly: the memo is a pure function of contents that are
+///     immutable once the value is visible to more than one thread, so
+///     every writer stores the same state.
 ///
 /// The per-container mutex is a plain `std.Thread.Mutex`. Integration
 /// with `LockOrderTracker` (a new container lock level) lands alongside
@@ -87,6 +105,7 @@ pub const ContainerHeader = struct {
     allocator: std.mem.Allocator,
     destroy_fn: *const fn (*ContainerHeader) void,
     flags: u64,
+    shareable: std.atomic.Value(Shareable),
 
     /// Initialize a header in-place with refcount=1, an unlocked mutex,
     /// zeroed `len`/`capacity`/`storage`, and a zeroed `flags` word.
@@ -109,6 +128,7 @@ pub const ContainerHeader = struct {
             .allocator = allocator,
             .destroy_fn = destroy_fn,
             .flags = 0,
+            .shareable = std.atomic.Value(Shareable).init(.unknown),
         };
         accountBackingCreated();
     }
@@ -150,6 +170,17 @@ pub const ContainerHeader = struct {
     /// the value is racy in the presence of other holders.
     pub fn refcountValue(self: *const ContainerHeader) u32 {
         return self.refcount.load(.monotonic);
+    }
+
+    /// Current state of the deep-immutability memo.
+    pub fn shareableState(self: *const ContainerHeader) Shareable {
+        return self.shareable.load(.monotonic);
+    }
+
+    /// Record the deep-immutability memo. Concurrent stores race
+    /// benignly; see the ordering notes on the header doc comment.
+    pub fn setShareable(self: *ContainerHeader, state: Shareable) void {
+        self.shareable.store(state, .monotonic);
     }
 };
 
@@ -285,6 +316,66 @@ fn valuesCarryBacking(items: []const Value) bool {
         if (valueCarriesBacking(item)) return true;
     }
     return false;
+}
+
+/// Whether a value tree is deeply immutable: every node is an immutable leaf or an immutable
+/// container of deeply-immutable elements.
+///
+/// The classification is deliberately strict. Mutable containers, `struct_instance` (field setters
+/// mutate in place), code values (`quotation`, `closure`, whose literals can capture mutable
+/// containers), `error_value`, and stateful runtime handles all classify as not immutable, even
+/// where a deep copy would share the same pointer unchanged. Coverage can widen later without
+/// changing callers.
+pub fn valueDeeplyImmutable(v: Value) bool {
+    return switch (v) {
+        .fixnum,
+        .float,
+        .boolean,
+        .unit,
+        .string,
+        .symbol,
+        .doc_string,
+        .bignum,
+        .template,
+        .stack_effect,
+        => true,
+        .array => |items| valuesDeeplyImmutable(items),
+        // Hash keys are immutable byte slices; only the values need scanning.
+        .hash => |h| blk: {
+            var iter = h.iterator();
+            while (iter.next()) |entry| {
+                if (!valueDeeplyImmutable(entry.value_ptr.*)) break :blk false;
+            }
+            break :blk true;
+        },
+        .set => |s| valuesDeeplyImmutable(s.keys()),
+        .tagged => |t| valueDeeplyImmutable(t.inner.*),
+        else => false,
+    };
+}
+
+fn valuesDeeplyImmutable(items: []const Value) bool {
+    for (items) |item| {
+        if (!valueDeeplyImmutable(item)) return false;
+    }
+    return true;
+}
+
+/// Memoized deep-immutability check for a headered container. Scans `contents` once on the first
+/// call and records the result in the header's `shareable` state; repeat calls are O(1).
+///
+/// Sound only for containers whose contents cannot change after construction, since the memo is
+/// never invalidated.
+pub fn memoDeeplyImmutable(header: *ContainerHeader, contents: Value) bool {
+    switch (header.shareableState()) {
+        .immutable => return true,
+        .not_immutable => return false,
+        .unknown => {},
+    }
+
+    const immutable = valueDeeplyImmutable(contents);
+    header.setShareable(if (immutable) .immutable else .not_immutable);
+    return immutable;
 }
 
 /// Retain every value in a slice. Used by container builders that copy a
@@ -801,6 +892,175 @@ test "instructionsHaveContainerLiteral: detects container push_literal operands"
         .{ .op = .{ .push_literal = .{ .vector = dummy_vec } }, .line = 0 },
     };
     try testing.expect(instructionsHaveContainerLiteral(&with_vector));
+}
+
+test "Shareable: header initializes to unknown and accessors roundtrip" {
+    const backing = try createTestBacking(testing.allocator, 8);
+    defer backing.header.release();
+
+    try testing.expectEqual(Shareable.unknown, backing.header.shareableState());
+
+    backing.header.setShareable(.immutable);
+    try testing.expectEqual(Shareable.immutable, backing.header.shareableState());
+
+    backing.header.setShareable(.not_immutable);
+    try testing.expectEqual(Shareable.not_immutable, backing.header.shareableState());
+}
+
+test "valueDeeplyImmutable: immutable leaves" {
+    const segments = [_]value_mod.TemplateSegment{.{ .literal = "hi" }};
+    var big = try value_mod.BigIntManaged.initSet(testing.allocator, 42);
+    defer big.deinit();
+
+    const cases = [_]Value{
+        .{ .fixnum = 1 },
+        .{ .float = 2.5 },
+        .{ .boolean = false },
+        .unit,
+        .{ .string = "s" },
+        .{ .symbol = "sym" },
+        .{ .doc_string = "doc" },
+        .{ .bignum = &big },
+        .{ .template = &segments },
+        .{ .stack_effect = .{ .inputs = &.{}, .outputs = &.{} } },
+    };
+    for (cases) |v| try testing.expect(valueDeeplyImmutable(v));
+}
+
+test "valueDeeplyImmutable: mutable containers are not immutable" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    defer vec.header.release();
+    const mm = try value_mod.MutableMap.create(testing.allocator);
+    defer mm.header.release();
+    const ba = try value_mod.ByteArray.create(testing.allocator);
+    defer ba.header.release();
+
+    try testing.expect(!valueDeeplyImmutable(.{ .vector = vec }));
+    try testing.expect(!valueDeeplyImmutable(.{ .mutable_map = mm }));
+    try testing.expect(!valueDeeplyImmutable(.{ .byte_array = ba }));
+}
+
+test "valueDeeplyImmutable: struct instances, code values, and handles are not immutable" {
+    var fields = [_]Value{.{ .fixnum = 1 }};
+    var st = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
+    var inst = value_mod.StructInstance{ .struct_type = &st, .fields = &fields };
+    try testing.expect(!valueDeeplyImmutable(.{ .struct_instance = &inst }));
+
+    const quot = value_mod.Quotation{
+        .instructions = &.{},
+        .effect = null,
+        .code_ptr = null,
+    };
+    try testing.expect(!valueDeeplyImmutable(.{ .quotation = quot }));
+
+    var items = [_]Value{.{ .fixnum = 1 }};
+    var it = Iterator{ .kind = .{ .array = .{ .items = &items, .index = 0 } } };
+    try testing.expect(!valueDeeplyImmutable(.{ .iterator = &it }));
+}
+
+test "valueDeeplyImmutable: recurses through array, hash, set, and tagged" {
+    const vec = try value_mod.Vector.create(testing.allocator);
+    defer vec.header.release();
+
+    var flat = [_]Value{ .{ .fixnum = 1 }, .{ .string = "s" } };
+    try testing.expect(valueDeeplyImmutable(.{ .array = &flat }));
+
+    var with_vec = [_]Value{ .{ .fixnum = 1 }, .{ .vector = vec } };
+    try testing.expect(!valueDeeplyImmutable(.{ .array = &with_vec }));
+
+    var ok_inner = [_]Value{.{ .fixnum = 2 }};
+    var ok_outer = [_]Value{.{ .array = &ok_inner }};
+    try testing.expect(valueDeeplyImmutable(.{ .array = &ok_outer }));
+
+    var bad_inner = [_]Value{.{ .vector = vec }};
+    var bad_outer = [_]Value{.{ .array = &bad_inner }};
+    try testing.expect(!valueDeeplyImmutable(.{ .array = &bad_outer }));
+
+    var h = value_mod.HashTable{};
+    defer h.deinit(testing.allocator);
+    try h.put(testing.allocator, "k", .{ .string = "v" });
+    try testing.expect(valueDeeplyImmutable(.{ .hash = &h }));
+    try h.put(testing.allocator, "m", .{ .vector = vec });
+    try testing.expect(!valueDeeplyImmutable(.{ .hash = &h }));
+
+    var s = value_mod.Set{};
+    defer s.deinit(testing.allocator);
+    try s.put(testing.allocator, .{ .fixnum = 3 }, {});
+    try testing.expect(valueDeeplyImmutable(.{ .set = &s }));
+    try s.put(testing.allocator, .{ .vector = vec }, {});
+    try testing.expect(!valueDeeplyImmutable(.{ .set = &s }));
+
+    var dummy_vt: value_mod.VirtualType = undefined;
+    var imm_inner: Value = .{ .fixnum = 4 };
+    try testing.expect(valueDeeplyImmutable(.{ .tagged = .{ .tag = &dummy_vt, .inner = &imm_inner } }));
+    var mut_inner: Value = .{ .vector = vec };
+    try testing.expect(!valueDeeplyImmutable(.{ .tagged = .{ .tag = &dummy_vt, .inner = &mut_inner } }));
+}
+
+test "memoDeeplyImmutable: scans once and memoizes in the header" {
+    const backing = try createTestBacking(testing.allocator, 8);
+    defer backing.header.release();
+
+    var flat = [_]Value{.{ .fixnum = 1 }};
+    try testing.expectEqual(Shareable.unknown, backing.header.shareableState());
+    try testing.expect(memoDeeplyImmutable(&backing.header, .{ .array = &flat }));
+    try testing.expectEqual(Shareable.immutable, backing.header.shareableState());
+
+    // Repeat calls answer from the memo, not a rescan: a contradictory
+    // value passed after the state is recorded does not change the answer.
+    const vec = try value_mod.Vector.create(testing.allocator);
+    defer vec.header.release();
+    var with_vec = [_]Value{.{ .vector = vec }};
+    try testing.expect(memoDeeplyImmutable(&backing.header, .{ .array = &with_vec }));
+}
+
+test "memoDeeplyImmutable: records not-immutable contents" {
+    const backing = try createTestBacking(testing.allocator, 8);
+    defer backing.header.release();
+
+    const vec = try value_mod.Vector.create(testing.allocator);
+    defer vec.header.release();
+    var with_vec = [_]Value{.{ .vector = vec }};
+
+    try testing.expect(!memoDeeplyImmutable(&backing.header, .{ .array = &with_vec }));
+    try testing.expectEqual(Shareable.not_immutable, backing.header.shareableState());
+
+    var flat = [_]Value{.{ .fixnum = 1 }};
+    try testing.expect(!memoDeeplyImmutable(&backing.header, .{ .array = &flat }));
+}
+
+const MemoWorkerArgs = struct {
+    backing: *TestBacking,
+    contents: Value,
+    iters: u32,
+};
+
+fn memoWorker(args: MemoWorkerArgs) void {
+    var i: u32 = 0;
+    while (i < args.iters) : (i += 1) {
+        std.debug.assert(memoDeeplyImmutable(&args.backing.header, args.contents));
+    }
+}
+
+test "memoDeeplyImmutable: concurrent callers converge on one state" {
+    const backing = try createTestBacking(testing.allocator, 8);
+    defer backing.header.release();
+
+    var flat = [_]Value{ .{ .fixnum = 1 }, .{ .string = "s" } };
+    const contents: Value = .{ .array = &flat };
+
+    const thread_count: u32 = 4;
+    var threads: [thread_count]std.Thread = undefined;
+    for (&threads) |*t| {
+        t.* = try std.Thread.spawn(.{}, memoWorker, .{MemoWorkerArgs{
+            .backing = backing,
+            .contents = contents,
+            .iters = 1_000,
+        }});
+    }
+    for (threads) |t| t.join();
+
+    try testing.expectEqual(Shareable.immutable, backing.header.shareableState());
 }
 
 test "releaseInstructionsContainerLiterals: shallow walk over push_literal operands" {
