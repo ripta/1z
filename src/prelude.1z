@@ -363,6 +363,7 @@ EUseAfterClose:       ( -- sym ) [ use-after-close: ] ;
 EMissingDocComment:   ( -- sym ) [ missing-doc-comment: ] ;
 ENonTailRecursion:    ( -- sym ) [ non-tail-recursion: ] ;
 EStackOverflow:       ( -- sym ) [ stack-overflow: ] ;
+ETaskArenaEscape:     ( -- sym ) [ task-arena-escape: ] ;
 
 \ TODO(ripta): the pattern is a bit repetitive and odd; maybe a parse-time?
 \\ Construct and throw a no-matching-branch error with the given data.

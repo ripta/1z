@@ -436,7 +436,7 @@ port>> 9999 "serve config port" assert=
       [ drop "deliberate error" throw ]
       [ path>> "text/plain; charset=utf-8" ok over -rot> send-response stream-close ]
       if
-    ] [ drop ] recover
+    ] [ drop stream-close ] recover
   ] curry spawn
   100 milliseconds sleep
   "127.0.0.1" 39493 make-addr:tcp connect

@@ -170,7 +170,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
         try helpers.checkCancellation(ctx);
 
         if (scope.firstFailedChildError()) |err_obj| {
-            ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
+            try adoptChildError(ctx, err_obj);
             return error.UserThrown;
         }
 
@@ -258,7 +258,7 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
     }
 
     if (scope.firstFailedChildError()) |err_obj| {
-        ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
+        try adoptChildError(ctx, err_obj);
         return error.UserThrown;
     }
 }
@@ -554,7 +554,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
             if (main_task.result) |result| {
                 // The copy (or share) carries its own +1 owning reference, which transfers to the
                 // stack slot; a retaining push would double-count it.
-                const copied = try deepCopyValue(result, ctx.arena.allocator(), ctx.allocator);
+                const copied = try deepCopyForTransfer(ctx, result, ctx.arena.allocator(), ctx.allocator);
                 try ctx.stack.pushMoved(copied);
             } else {
                 try ctx.stack.push(.{ .boolean = false });
@@ -562,7 +562,7 @@ fn nativeWithTimeout(ctx: *Context) anyerror!void {
         },
         .failed => {
             if (main_task.error_obj) |err_obj| {
-                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
+                try adoptChildError(ctx, err_obj);
             } else {
                 ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "task-error",
@@ -713,7 +713,7 @@ fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
         .completed, .cancelled => {},
         .failed => {
             if (task.error_obj) |err_obj| {
-                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
+                try adoptChildError(ctx, err_obj);
             } else {
                 ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "task-error",
@@ -796,7 +796,7 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
         switch (task.getStatus()) {
             .failed => {
                 if (task.error_obj) |err_obj| {
-                    ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
+                    try adoptChildError(ctx, err_obj);
                 } else {
                     ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                         .error_type = "task-error",
@@ -819,16 +819,21 @@ fn nativeAwaitAll(ctx: *Context) anyerror!void {
 
     const alloc = ctx.arena.allocator();
     const results = try alloc.alloc(Value, tasks.len);
+    // A failed copy unwinds past the loop, so the owning references already collected in
+    // `results` must be released or they leak.
+    var copied: usize = 0;
+    errdefer container_backing.releaseValues(results[0..copied]);
     for (tasks, 0..) |item, i| {
         const task = item.task;
         if (task.result) |result| {
             // XXX(ripta): Potentially expensive deep copy of each result. We have to do this
             //             before checking for errors/cancellations in order to preserve the
             //             correct error precedence. Unsure if there's a better way.
-            results[i] = try deepCopyValue(result, alloc, ctx.allocator);
+            results[i] = try deepCopyForTransfer(ctx, result, alloc, ctx.allocator);
         } else {
             results[i] = .{ .boolean = false };
         }
+        copied = i + 1;
     }
 
     // Each element carries its own +1 owning reference from the copy or share
@@ -846,7 +851,7 @@ fn handleAwaitResult(ctx: *Context, task: *Task) anyerror!void {
             if (task.result) |result| {
                 // The copy (or share) carries its own +1 owning reference, which transfers to the
                 // stack slot; a retaining push would double-count it.
-                const copied = try deepCopyValue(result, ctx.arena.allocator(), ctx.allocator);
+                const copied = try deepCopyForTransfer(ctx, result, ctx.arena.allocator(), ctx.allocator);
                 try ctx.stack.pushMoved(copied);
             } else {
                 try ctx.stack.push(.{ .boolean = false });
@@ -854,7 +859,7 @@ fn handleAwaitResult(ctx: *Context, task: *Task) anyerror!void {
         },
         .failed => {
             if (task.error_obj) |err_obj| {
-                ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
+                try adoptChildError(ctx, err_obj);
             } else {
                 ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
                     .error_type = "task-error",
@@ -874,16 +879,20 @@ fn handleAwaitResult(ctx: *Context, task: *Task) anyerror!void {
     }
 }
 
+const DeepCopyError = Allocator.Error || error{TaskArenaEscape};
+
 /// Deep-copy a Value into a destination allocator. Recursive for compound types.
-/// Reference types (stream, parameter, module, marker, struct_type, benchmark_report,
-/// task) are returned as-is since they are not owned by the task arena.
+///
+/// Reference types owned by process-lifetime memory (channel, task, module, type values,
+/// and the parse-time variants) are returned as-is. Arena-owned reference types (iterator,
+/// parameter, benchmark_report, resource, stream) fail with `error.TaskArenaEscape`: they
+/// die with the sending task's arena, so passing them through would hand the receiver a
+/// dangling pointer. Boundary callers convert that error via `deepCopyForTransfer`.
 ///
 /// `longlived` is the process-lifetime allocator (`ctx.allocator`); a headered container whose
 /// backing lives on it and whose contents are self-contained is shared by refcount bump instead
 /// of copied. The returned value carries a +1 owning reference either way: a fresh copy's
 /// creation reference, or the share's retain.
-const DeepCopyError = Allocator.Error;
-
 pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCopyError!Value {
     return switch (val) {
         .fixnum, .float, .boolean, .unit => val,
@@ -1033,9 +1042,65 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
 
         .doc_string => |s| .{ .doc_string = try alloc.dupe(u8, s) },
 
-        // NOTE(ripta): Reference types not owned by the task arena so it's safe to share without copying
-        .stream, .parameter, .module, .marker, .struct_type, .benchmark_report, .task, .channel, .iterator, .resource, .type_val, .type_descriptor, .protocol_descriptor, .constraint_combinator, .sandbox_spec => val,
+        // These reference types are owned by process-lifetime memory, so sharing the pointer is
+        // safe. The parse-time variants (marker, struct_type, sandbox_spec, constraint_combinator)
+        // are main-context-owned in practice; `eval-string` inside a task can produce arena-owned
+        // ones that this tag-based check cannot distinguish, a documented limitation.
+        .module, .marker, .struct_type, .task, .channel, .type_val, .type_descriptor, .protocol_descriptor, .constraint_combinator, .sandbox_spec => val,
+
+        // Arena-owned reference types die with the sending task's arena. A new variant must be
+        // classified here deliberately; never default a reference type to pass-through.
+        .stream, .parameter, .benchmark_report, .iterator, .resource => error.TaskArenaEscape,
     };
+}
+
+/// Throw `task-arena-escape:` for the arena-owned variant reachable from `val`, with a
+/// per-type remedy in the message.
+pub fn throwTaskArenaEscape(ctx: *Context, val: Value) anyerror {
+    const message = if (value_mod.findTaskArenaOwned(val)) |tag| switch (tag) {
+        .iterator => "iterator cannot cross task boundary; materialize it with #collect and send the array instead",
+        .stream => "stream cannot cross task boundary; send the file descriptor and rebuild with fd>stream in the receiving task",
+        .parameter => "parameter cannot cross task boundary; create it with make-parameter in the receiving task, bindings resolve by name",
+        .benchmark_report => "benchmark report cannot cross task boundary; print or aggregate it in the task that built it",
+        .resource => "resource cannot cross task boundary; open the resource in the task that uses it",
+        else => "value cannot cross task boundary; it is owned by the sending task's arena",
+    } else "value cannot cross task boundary; it is owned by the sending task's arena";
+
+    ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "task-arena-escape",
+        .message = message,
+    });
+    return error.UserThrown;
+}
+
+/// Copy or share a value across a task boundary, converting an arena-escape failure into
+/// the thrown `task-arena-escape:` error. Every boundary copy (channel transfer, await,
+/// await-all, with-timeout results) goes through here rather than calling `deepCopyValue`
+/// directly.
+///
+/// The scan runs before the copy: rejecting up front keeps a failed transfer from leaving
+/// a partially built copy whose already-copied shared elements were retained and would
+/// leak on unwind. The catch below is the drift backstop for a copy path the scan misses.
+pub fn deepCopyForTransfer(ctx: *Context, val: Value, alloc: Allocator, longlived: Allocator) anyerror!Value {
+    if (value_mod.findTaskArenaOwned(val) != null) {
+        return throwTaskArenaEscape(ctx, val);
+    }
+
+    return deepCopyValue(val, alloc, longlived) catch |err| switch (err) {
+        error.TaskArenaEscape => throwTaskArenaEscape(ctx, val),
+        else => err,
+    };
+}
+
+/// Copy a failed child's error object into this context as the thrown error. Error data
+/// carrying an arena-owned value is rejected the same way result copies are, and the
+/// up-front scan keeps a rejected copy from leaking partially retained elements.
+fn adoptChildError(ctx: *Context, err_obj: *value_mod.ErrorObject) anyerror!void {
+    if (value_mod.findTaskArenaOwned(.{ .error_value = err_obj }) != null) {
+        return throwTaskArenaEscape(ctx, .{ .error_value = err_obj });
+    }
+
+    ctx.thrown_error = try deepCopyErrorObject(err_obj, ctx.quotationAllocator(), ctx.quotationAllocator(), ctx.allocator);
 }
 
 fn deepCopyQuotation(quot: value_mod.Quotation, alloc: Allocator, longlived: Allocator) DeepCopyError!value_mod.Quotation {
@@ -1377,6 +1442,52 @@ test "deepCopyValue: shares a self-contained set by refcount bump" {
 
     container_backing.releaseValue(copied);
     try testing.expectEqual(@as(u32, 1), s.header.refcountValue());
+}
+
+test "deepCopyValue: an arena-owned reference type fails with TaskArenaEscape" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var res = value_mod.Resource{ .type_name = "test-resource" };
+    try testing.expectError(error.TaskArenaEscape, deepCopyValue(.{ .resource = &res }, arena.allocator(), testing.allocator));
+}
+
+test "deepCopyValue: an arena-owned reference type nested in an array fails with TaskArenaEscape" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var res = value_mod.Resource{ .type_name = "test-resource" };
+    var items = [_]Value{
+        .{ .fixnum = 1 },
+        .{ .resource = &res },
+    };
+    const arr = try value_mod.Array.createStatic(arena.allocator(), items[0..]);
+    try testing.expectError(error.TaskArenaEscape, deepCopyValue(.{ .array = arr }, arena.allocator(), testing.allocator));
+}
+
+test "deepCopyForTransfer: rejects before retaining shared elements" {
+    const testing = std.testing;
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const h = try value_mod.HashTable.create(testing.allocator);
+    defer container_backing.releaseValue(.{ .hash = h });
+
+    var res = value_mod.Resource{ .type_name = "test-resource" };
+    var items = [_]Value{
+        .{ .hash = h },
+        .{ .resource = &res },
+    };
+    const arr = try value_mod.Array.createStatic(ctx.quotationAllocator(), items[0..]);
+
+    try testing.expectError(error.UserThrown, deepCopyForTransfer(&ctx, .{ .array = arr }, ctx.quotationAllocator(), testing.allocator));
+    try testing.expect(ctx.thrown_error != null);
+    try testing.expectEqualStrings("task-arena-escape", ctx.thrown_error.?.error_type);
+
+    // The rejection fired before the copy, so the shareable sibling was never retained.
+    try testing.expectEqual(@as(u32, 1), h.header.refcountValue());
 }
 
 test "deepCopyValue: shares a self-contained array by refcount bump" {

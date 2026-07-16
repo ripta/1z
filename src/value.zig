@@ -407,6 +407,91 @@ fn containsBorrowedInSlice(items: []const Value) bool {
     return false;
 }
 
+/// Return the tag of the first task-arena-owned reference variant reachable from `val`,
+/// or null when there is none.
+///
+/// The five matched variants are allocated on the creating task's arena and dangle once
+/// that task is reaped, so the cross-task copy funnel refuses them. The walk mirrors
+/// `deepCopyValue`'s recursion, including closure segment captures, so a non-null result
+/// is exactly a copy that fails with `error.TaskArenaEscape`.
+pub fn findTaskArenaOwned(val: Value) ?std.meta.Tag(Value) {
+    return switch (val) {
+        .iterator, .parameter, .benchmark_report, .resource, .stream => std.meta.activeTag(val),
+        .array => |arr| findArenaOwnedInSlice(arr.items),
+        .vector => |v| findArenaOwnedInSlice(v.list.items),
+        .quotation => |quot| blk: {
+            for (quot.instructions) |instr| {
+                switch (instr.op) {
+                    .push_literal => |literal| {
+                        if (findTaskArenaOwned(literal)) |tag| break :blk tag;
+                    },
+                    .call_word, .call_word_direct => {},
+                }
+            }
+            break :blk null;
+        },
+        .closure => |c| blk: {
+            if (findTaskArenaOwned(.{ .quotation = c.asQuotation() })) |tag| break :blk tag;
+            for (c.segments) |seg| {
+                if (findArenaOwnedInSlice(seg.captures)) |tag| break :blk tag;
+            }
+            break :blk null;
+        },
+        .hash => |h| blk: {
+            var iter = h.map.iterator();
+            while (iter.next()) |entry| {
+                if (findTaskArenaOwned(entry.value_ptr.*)) |tag| break :blk tag;
+            }
+            break :blk null;
+        },
+        .set => |s| blk: {
+            for (s.map.keys()) |key| {
+                if (findTaskArenaOwned(key)) |tag| break :blk tag;
+            }
+            break :blk null;
+        },
+        .mutable_map => |m| blk: {
+            var iter = m.map.iterator();
+            while (iter.next()) |entry| {
+                if (findTaskArenaOwned(entry.value_ptr.*)) |tag| break :blk tag;
+            }
+            break :blk null;
+        },
+        .struct_instance => |si| findArenaOwnedInSlice(si.fields),
+        .tagged => |t| findTaskArenaOwned(t.inner.*),
+        .error_value => |err| if (err.data) |data| findTaskArenaOwned(data.*) else null,
+        .fixnum,
+        .float,
+        .boolean,
+        .unit,
+        .bignum,
+        .string,
+        .symbol,
+        .byte_array,
+        .marker,
+        .type_val,
+        .type_descriptor,
+        .protocol_descriptor,
+        .constraint_combinator,
+        .task,
+        .channel,
+        .stack_effect,
+        .struct_type,
+        .template,
+        .doc_string,
+        .module,
+        .sandbox_spec,
+        => null,
+    };
+}
+
+fn findArenaOwnedInSlice(items: []const Value) ?std.meta.Tag(Value) {
+    for (items) |item| {
+        if (findTaskArenaOwned(item)) |tag| return tag;
+    }
+    return null;
+}
+
 /// Context for hashing and comparing Values in hash-based containers.
 pub const ValueContext = struct {
     pub fn hash(self: @This(), key: Value) u32 {
@@ -2152,6 +2237,38 @@ test "valueContainsBorrowedBuffer detects direct packed and nested borrowed buff
     try std.testing.expect(valueContainsBorrowedBuffer(.{ .struct_instance = &struct_instance }));
     try std.testing.expect(valueContainsBorrowedBuffer(.{ .error_value = &err_obj }));
     try std.testing.expect(!valueContainsBorrowedBuffer(.{ .fixnum = 42 }));
+}
+
+test "findTaskArenaOwned finds direct nested and captured arena-owned variants" {
+    var res = Resource{ .type_name = "test-resource" };
+    const res_val = Value{ .resource = &res };
+
+    var nested_array_items = [_]Value{
+        .{ .fixnum = 1 },
+        res_val,
+    };
+    var nested_array = Array{ .header = undefined, .items = nested_array_items[0..], .storage = .static };
+
+    const captures = [_]Value{res_val};
+    const segments = [_]Segment{.{ .captures = captures[0..], .base_code_ptr = &nested_array }};
+    var closure = Closure{
+        .instructions = &.{},
+        .segments = segments[0..],
+    };
+
+    var err_data = res_val;
+    var err_obj = ErrorObject{
+        .error_type = "test-error",
+        .message = "test",
+        .data = &err_data,
+    };
+
+    try std.testing.expectEqual(.resource, findTaskArenaOwned(res_val));
+    try std.testing.expectEqual(.resource, findTaskArenaOwned(.{ .array = &nested_array }));
+    try std.testing.expectEqual(.resource, findTaskArenaOwned(.{ .closure = &closure }));
+    try std.testing.expectEqual(.resource, findTaskArenaOwned(.{ .error_value = &err_obj }));
+    try std.testing.expectEqual(null, findTaskArenaOwned(.{ .fixnum = 42 }));
+    try std.testing.expectEqual(null, findTaskArenaOwned(.{ .string = "hello" }));
 }
 
 test "array equality" {

@@ -50,15 +50,17 @@ fn ensureSendValueEscapable(ctx: *Context, value: Value) anyerror!void {
 /// freed, before a buffered value is received, so the buffer must never hold a value whose bytes
 /// live on the sender's arena.
 ///
-/// Reference types cross unchanged and shareable values are retained, mirroring the
-/// `deepCopyValue` fast paths. Anything else is deep-copied into a per-entry arena that lives on
-/// the channel's allocator until the entry is destroyed.
-fn adoptForBuffer(ctx: *Context, ch: *Channel, value: Value) Allocator.Error!channel_mod.BufferedValue {
+/// Process-lifetime reference types cross unchanged and shareable values are retained, mirroring
+/// the `deepCopyValue` fast paths. Arena-owned reference types throw `task-arena-escape:`.
+/// Anything else is deep-copied into a per-entry arena that lives on the channel's allocator
+/// until the entry is destroyed.
+fn adoptForBuffer(ctx: *Context, ch: *Channel, value: Value) anyerror!channel_mod.BufferedValue {
     switch (value) {
-        .stream, .parameter, .module, .marker, .struct_type, .benchmark_report, .task, .channel, .iterator, .resource, .type_val, .type_descriptor, .protocol_descriptor, .constraint_combinator, .sandbox_spec => {
+        .module, .marker, .struct_type, .task, .channel, .type_val, .type_descriptor, .protocol_descriptor, .constraint_combinator, .sandbox_spec => {
             container_backing.retainValue(value);
             return .{ .value = value };
         },
+        .stream, .parameter, .benchmark_report, .iterator, .resource => return tasks.throwTaskArenaEscape(ctx, value),
         else => {},
     }
 
@@ -72,7 +74,7 @@ fn adoptForBuffer(ctx: *Context, ch: *Channel, value: Value) Allocator.Error!cha
     arena.* = std.heap.ArenaAllocator.init(ch.allocator);
     errdefer arena.deinit();
 
-    const copied = try tasks.deepCopyValue(value, arena.allocator(), ctx.allocator);
+    const copied = try tasks.deepCopyForTransfer(ctx, value, arena.allocator(), ctx.allocator);
     return .{ .value = copied, .arena = arena };
 }
 
@@ -168,16 +170,29 @@ fn nativeSend(ctx: *Context) anyerror!void {
 
     // if there are waiting receivers, hand the value directly to the first eligible one
     while (ch.waiting_receivers.items.len > 0) {
+        if (ch.waiting_receivers.items[0].select_ctx) |sel| {
+            if (sel.fired) {
+                _ = ch.waiting_receivers.orderedRemove(0);
+                continue;
+            }
+        }
+
+        // Copy before dequeuing or firing the select, so a rejected arena-owned value fails
+        // the sender here while the receiver stays queued and undisturbed.
+        const copied = tasks.deepCopyForTransfer(ctx, value, ch.waiting_receivers.items[0].task.ctx.arena.allocator(), ctx.allocator) catch |err| {
+            releaseChannel(ctx, ch);
+            container_backing.releaseValue(value);
+            return err;
+        };
+
         const receiver_entry = ch.waiting_receivers.orderedRemove(0);
         const receiver = receiver_entry.task;
 
         if (receiver_entry.select_ctx) |sel| {
-            if (sel.fired) continue;
             sel.fired = true;
-            sel.result_value = try tasks.deepCopyValue(value, receiver.ctx.arena.allocator(), ctx.allocator);
+            sel.result_value = copied;
             sel.result_channel = ch;
         } else {
-            const copied = try tasks.deepCopyValue(value, receiver.ctx.arena.allocator(), ctx.allocator);
             try receiver.ctx.stack.pushMoved(copied);
         }
 
@@ -287,15 +302,16 @@ fn nativeReceive(ctx: *Context) anyerror!void {
     // move its value into the freed slot and wake the sender.
     if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
         const entry = ch.buffer.pop();
-        const copied = try tasks.deepCopyValue(entry.value, ctx.arena.allocator(), ctx.allocator);
+        const copied = try tasks.deepCopyForTransfer(ctx, entry.value, ctx.arena.allocator(), ctx.allocator);
         try ctx.stack.pushMoved(copied);
 
         // The buffer's ownership of the popped entry ends here.
         entry.destroy(ch.allocator);
 
         if (ch.waiting_senders.items.len > 0) {
-            // Adopt before removing the entry: on out-of-memory the sender simply stays queued
-            // for a later receive, instead of being woken with its value silently dropped.
+            // Adopt before removing the entry: on out-of-memory or a rejected arena-owned
+            // value the sender simply stays queued for a later receive, instead of being
+            // woken with its value silently dropped.
             if (adoptForBuffer(ctx, ch, ch.waiting_senders.items[0].value)) |refill| {
                 const sender_entry = ch.waiting_senders.orderedRemove(0);
 
@@ -304,7 +320,11 @@ fn nativeReceive(ctx: *Context) anyerror!void {
                 sender_entry.task.blocked_on_channel = null;
                 sender_entry.task.value_delivered = true;
                 try scheduler.wakeTask(sender_entry.task);
-            } else |_| {}
+            } else |refill_err| {
+                // This receive already succeeded; a rejected refill must not surface its
+                // thrown error here.
+                if (refill_err == error.UserThrown) ctx.thrown_error = null;
+            }
         }
 
         releaseChannel(ctx, ch);
@@ -314,10 +334,15 @@ fn nativeReceive(ctx: *Context) anyerror!void {
     // buffer empty: always the case for an unbuffered channel
     // if sender is waiting, take its value directly and wake it
     if (ch.waiting_senders.items.len > 0) {
+        // Copy before dequeuing, so a rejected arena-owned value leaves the sender queued
+        // instead of removed and never woken.
+        const copied = tasks.deepCopyForTransfer(ctx, ch.waiting_senders.items[0].value, ctx.arena.allocator(), ctx.allocator) catch |err| {
+            releaseChannel(ctx, ch);
+            return err;
+        };
+
         const sender_entry = ch.waiting_senders.orderedRemove(0);
         const sender = sender_entry.task;
-
-        const copied = try tasks.deepCopyValue(sender_entry.value, ctx.arena.allocator(), ctx.allocator);
         try ctx.stack.pushMoved(copied);
 
         sender.blocked_on_channel = null;
@@ -387,15 +412,16 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
     // an unbuffered channel has an empty buffer and falls through
     if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
         const entry = ch.buffer.pop();
-        const copied = try tasks.deepCopyValue(entry.value, ctx.arena.allocator(), ctx.allocator);
+        const copied = try tasks.deepCopyForTransfer(ctx, entry.value, ctx.arena.allocator(), ctx.allocator);
         try ctx.stack.pushMoved(copied);
         try ctx.stack.push(.{ .boolean = true });
         // The buffer's ownership of the popped entry ends here.
         entry.destroy(ch.allocator);
 
         if (ch.waiting_senders.items.len > 0) {
-            // Adopt before removing the entry: on out-of-memory the sender simply stays queued
-            // for a later receive, instead of being woken with its value silently dropped.
+            // Adopt before removing the entry: on out-of-memory or a rejected arena-owned
+            // value the sender simply stays queued for a later receive, instead of being
+            // woken with its value silently dropped.
             if (adoptForBuffer(ctx, ch, ch.waiting_senders.items[0].value)) |refill| {
                 const sender_entry = ch.waiting_senders.orderedRemove(0);
                 // The buffer holds its own reference or copy; the woken sender releases its own reference.
@@ -403,14 +429,21 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
                 sender_entry.task.blocked_on_channel = null;
                 sender_entry.task.value_delivered = true;
                 try scheduler.wakeTask(sender_entry.task);
-            } else |_| {}
+            } else |refill_err| {
+                // This receive already succeeded; a rejected refill must not surface its
+                // thrown error here.
+                if (refill_err == error.UserThrown) ctx.thrown_error = null;
+            }
         }
         return;
     }
 
     if (ch.waiting_senders.items.len > 0) {
+        // Copy before dequeuing, so a rejected arena-owned value leaves the sender queued
+        // instead of removed and never woken.
+        const copied = try tasks.deepCopyForTransfer(ctx, ch.waiting_senders.items[0].value, ctx.arena.allocator(), ctx.allocator);
+
         const sender_entry = ch.waiting_senders.orderedRemove(0);
-        const copied = try tasks.deepCopyValue(sender_entry.value, ctx.arena.allocator(), ctx.allocator);
         try ctx.stack.pushMoved(copied);
         try ctx.stack.push(.{ .boolean = true });
         sender_entry.task.blocked_on_channel = null;
@@ -550,7 +583,7 @@ fn nativeSelect(ctx: *Context) anyerror!void {
     for (channels) |ch| {
         if (ch.capacity > 0 and !ch.buffer.isEmpty()) {
             const entry = ch.buffer.pop();
-            const copied = try tasks.deepCopyValue(entry.value, alloc, ctx.allocator);
+            const copied = try tasks.deepCopyForTransfer(ctx, entry.value, alloc, ctx.allocator);
 
             try ctx.stack.pushMoved(copied);
             try ctx.stack.push(.{ .channel = ch });
@@ -558,9 +591,9 @@ fn nativeSelect(ctx: *Context) anyerror!void {
             entry.destroy(ch.allocator);
 
             if (ch.waiting_senders.items.len > 0) {
-                // Adopt before removing the entry: on out-of-memory the sender simply stays
-                // queued for a later receive, instead of being woken with its value silently
-                // dropped.
+                // Adopt before removing the entry: on out-of-memory or a rejected
+                // arena-owned value the sender simply stays queued for a later receive,
+                // instead of being woken with its value silently dropped.
                 if (adoptForBuffer(ctx, ch, ch.waiting_senders.items[0].value)) |refill| {
                     const sender_entry = ch.waiting_senders.orderedRemove(0);
                     // The buffer holds its own reference or copy; the woken sender releases its
@@ -568,15 +601,25 @@ fn nativeSelect(ctx: *Context) anyerror!void {
                     ch.buffer.push(refill);
                     sender_entry.task.blocked_on_channel = null;
                     try scheduler.wakeTask(sender_entry.task);
-                } else |_| {}
+                } else |refill_err| {
+                    // This select already succeeded; a rejected refill must not surface its
+                    // thrown error here.
+                    if (refill_err == error.UserThrown) ctx.thrown_error = null;
+                }
             }
             unlockChannelsOrdered(ctx, channels);
             return;
         }
 
         if (ch.waiting_senders.items.len > 0) {
+            // Copy before dequeuing, so a rejected arena-owned value leaves the sender
+            // queued instead of removed and never woken.
+            const copied = tasks.deepCopyForTransfer(ctx, ch.waiting_senders.items[0].value, alloc, ctx.allocator) catch |err| {
+                unlockChannelsOrdered(ctx, channels);
+                return err;
+            };
+
             const sender_entry = ch.waiting_senders.orderedRemove(0);
-            const copied = try tasks.deepCopyValue(sender_entry.value, alloc, ctx.allocator);
             try ctx.stack.pushMoved(copied);
             try ctx.stack.push(.{ .channel = ch });
 

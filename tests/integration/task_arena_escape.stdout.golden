@@ -1,0 +1,48 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: iterator rejected at await
+Stack: [ ]
+PASS: parameter rejected at await
+Stack: [ ]
+PASS: benchmark report rejected at await
+Stack: [ ]
+PASS: resource rejected at await
+Stack: [ ]
+PASS: stream rejected at await
+Stack: [ ]
+PASS: iterator rejected at with-timeout
+Stack: [ ]
+PASS: parameter rejected at with-timeout
+Stack: [ ]
+PASS: benchmark report rejected at with-timeout
+Stack: [ ]
+PASS: resource rejected at with-timeout
+Stack: [ ]
+PASS: stream rejected at with-timeout
+Stack: [ ]
+PASS: iterator rejected at await-all
+Stack: [ ]
+PASS: iterator inside array rejected
+Stack: [ ]
+PASS: iterator inside hash rejected
+Stack: [ ]
+PASS: iterator captured in quotation rejected
+Stack: [ ]
+PASS: shareable plus arena-owned mix rejected
+Stack: [ ]
+PASS: collected iterator crosses as an array
+Stack: [ ]

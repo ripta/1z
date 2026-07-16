@@ -1,0 +1,135 @@
+use "testing" ;
+use "time" ;
+
+\ Every shape below sends an arena-owned value across a task boundary. The
+\ cross-task copy funnel rejects it with task-arena-escape: instead of handing
+\ the receiver a pointer into the sender's reaped arena.
+
+\ -- 1. await rejects each arena-owned variant --
+
+test-await-iterator: ( -- ) [
+  [
+    [ [ { 1 2 3 } >iterator ] spawn await ] task-scope
+  ] task-arena-escape: "iterator rejected at await" assert-error-type
+] ;
+
+test-await-parameter: ( -- ) [
+  [
+    [ [ p: [ 42 ] make-parameter ] spawn await ] task-scope
+  ] task-arena-escape: "parameter rejected at await" assert-error-type
+] ;
+
+test-await-benchmark-report: ( -- ) [
+  [
+    [ [ make-benchmark-report ] spawn await ] task-scope
+  ] task-arena-escape: "benchmark report rejected at await" assert-error-type
+] ;
+
+test-await-resource: ( -- ) [
+  [
+    [ [ "dummy" <test-resource> ] spawn await ] task-scope
+  ] task-arena-escape: "resource rejected at await" assert-error-type
+] ;
+
+\ The stream is closed before it escapes so its GPA-backed buffer is freed; a
+\ closed stream still carries the stream tag and is still rejected.
+test-await-stream: ( -- ) [
+  [
+    [ [ 64 <string-stream> dup stream-close ] spawn await ] task-scope
+  ] task-arena-escape: "stream rejected at await" assert-error-type
+] ;
+
+\ -- 2. with-timeout rejects each arena-owned variant in its result --
+
+test-timeout-iterator: ( -- ) [
+  [
+    [ [ { 1 2 3 } >iterator ] 100 milliseconds with-timeout ] task-scope
+  ] task-arena-escape: "iterator rejected at with-timeout" assert-error-type
+] ;
+
+test-timeout-parameter: ( -- ) [
+  [
+    [ [ p: [ 42 ] make-parameter ] 100 milliseconds with-timeout ] task-scope
+  ] task-arena-escape: "parameter rejected at with-timeout" assert-error-type
+] ;
+
+test-timeout-benchmark-report: ( -- ) [
+  [
+    [ [ make-benchmark-report ] 100 milliseconds with-timeout ] task-scope
+  ] task-arena-escape: "benchmark report rejected at with-timeout" assert-error-type
+] ;
+
+test-timeout-resource: ( -- ) [
+  [
+    [ [ "dummy" <test-resource> ] 100 milliseconds with-timeout ] task-scope
+  ] task-arena-escape: "resource rejected at with-timeout" assert-error-type
+] ;
+
+test-timeout-stream: ( -- ) [
+  [
+    [ [ 64 <string-stream> dup stream-close ] 100 milliseconds with-timeout ] task-scope
+  ] task-arena-escape: "stream rejected at with-timeout" assert-error-type
+] ;
+
+\ -- 3. await-all rejects an arena-owned result --
+
+test-await-all-iterator: ( -- ) [
+  [
+    [ [ { 1 2 3 } >iterator ] spawn 1 array-n await-all ] task-scope
+  ] task-arena-escape: "iterator rejected at await-all" assert-error-type
+] ;
+
+\ -- 4. Nested arena-owned values are found by the recursive walk --
+
+test-await-nested-array: ( -- ) [
+  [
+    [ [ { 1 2 3 } >iterator 1 array-n ] spawn await ] task-scope
+  ] task-arena-escape: "iterator inside array rejected" assert-error-type
+] ;
+
+test-await-nested-hash: ( -- ) [
+  [
+    [ [ H{ } it: { 1 2 3 } >iterator @set ] spawn await ] task-scope
+  ] task-arena-escape: "iterator inside hash rejected" assert-error-type
+] ;
+
+test-await-nested-capture: ( -- ) [
+  [
+    [ [ { 1 2 3 } >iterator [ drop 7 ] curry ] spawn await ] task-scope
+  ] task-arena-escape: "iterator captured in quotation rejected" assert-error-type
+] ;
+
+\ -- 5. A composite mixing a shareable and an arena-owned element is rejected before the
+\ copy starts, so the already-shareable sibling is never retained and cannot leak --
+
+test-await-mixed-share: ( -- ) [
+  [
+    [ [ H{ a: 1 } freeze "dummy" <test-resource> 2 array-n ] spawn await ] task-scope
+  ] task-arena-escape: "shareable plus arena-owned mix rejected" assert-error-type
+] ;
+
+\ -- 6. The documented workaround crosses fine --
+
+test-await-collected-iterator: ( -- ) [
+  [
+    [ { 1 2 3 } >iterator #collect ] spawn
+    await { 1 2 3 } "collected iterator crosses as an array" assert=
+  ] task-scope
+] ;
+
+test-await-iterator
+test-await-parameter
+test-await-benchmark-report
+test-await-resource
+test-await-stream
+test-timeout-iterator
+test-timeout-parameter
+test-timeout-benchmark-report
+test-timeout-resource
+test-timeout-stream
+test-await-all-iterator
+test-await-nested-array
+test-await-nested-hash
+test-await-nested-capture
+test-await-mixed-share
+test-await-collected-iterator
