@@ -11,14 +11,20 @@
 \ sidecar.
 \
 \ Before spawn-detached, serve-loop used `spawn drop` and every completed handler
-\ task was retained in the scope until it exited. serve-forever never exits, so
-\ the retained tasks accumulate at roughly 285 KB each and a regression back to
-\ that behavior exhausts the cap partway through the loop and dies with a
-\ memory-limit error instead of printing the marker.
+\ task was retained in the scope until it exited. serve-forever never exits, so the retained
+\ tasks accumulate and a regression back to that behavior exhausts the cap partway through the
+\ loop and dies with a memory-limit error instead of printing the marker.
 \
 \ The client uses the library `connect`. Its Happy-Eyeballs race spawns tasks
 \ per call, but scope-exit reaping now releases them when connect's internal
 \ scope exits, so the client side stays bounded across the repeated dials.
+\
+\ The iteration count and cap are sized empirically as a pair, because per-task retention has
+\ shrunk since the guarded regression was first measured: with serve-loop reverted to
+\ `spawn drop`, 500 iterations peak past 24 MB and fail reliably under the 16 MB cap, while the
+\ healthy steady state stays under 8 MB at any count. Healthy runs take about 2.2 seconds
+\ standalone against the 10-second harness cap, a margin that survives a fully loaded parallel
+\ suite run.
 \
 \ NOTE: this is a fixed-port socket test, so it carries some inherent flakiness
 \ (port reuse, listen-before-connect timing). If it proves very flaky, it can be
@@ -45,7 +51,7 @@ use "time" ;
 
   100 milliseconds sleep
 
-  800 [
+  500 [
     "127.0.0.1" 39422 make-addr:tcp connect
     dup "ping\n" stream-write drop
     dup stream-read-line drop

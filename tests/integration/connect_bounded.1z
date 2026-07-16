@@ -20,6 +20,11 @@
 \ through the loop, dying with a memory-limit error instead of printing the
 \ marker.
 \
+\ The iteration count is sized empirically: with scope-exit reaping disabled, the cap trips
+\ between 75 and 150 iterations, so 400 fails reliably while running about 1.6 seconds
+\ standalone against the 10-second harness cap. That margin survives a fully loaded parallel
+\ suite run.
+\
 \ NOTE: This is a fixed-port socket test, so it carries some inherent flakiness
 \       from port reuse and listen-before-connect timing. If it proves very flaky,
 \       it can be temporarily disabled.
@@ -38,7 +43,7 @@ use "time" ;
 
   100 milliseconds sleep
 
-  1000 [
+  400 [
     "127.0.0.1" 39525 make-addr:tcp connect
     stream-close
   ] times

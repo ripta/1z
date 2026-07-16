@@ -19,9 +19,13 @@
 \
 \ Bounded completion proves no leak. Clean termination proves no deadlock. Running the real binary
 \ surfaces any use-after-free or stale diagnostic pointer.
+\
+\ The iteration count is sized empirically: with the routing dropped, the cap trips between 500 and
+\ 750 iterations, so 1500 fails reliably while running about 1.2 seconds standalone against the
+\ 10-second harness cap. That margin survives a fully loaded parallel suite run.
 
 [
-  6000 [
+  1500 [
     [
       [ 1 1 + drop ] spawn drop
       [ 2 2 + drop ] spawn drop
