@@ -22,7 +22,7 @@ Warning: '2dip' parameter 'quot' has row-variable effect; quotation call falls b
 Warning: 'using-iterator' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: '1apply' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Error: --interpreter-fallback=false rejects compound-fallback dispatch; 1 callsite still routes through the interpreter
-  'pragma-get' -> 'pragma-get?' (line 1195)
+  'pragma-get' -> 'pragma-get?' (line 1190)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 AOT interpreter fallbacks: 311 total (native=304 compound-uncompiled=1 quotation=6)

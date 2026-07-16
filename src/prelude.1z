@@ -550,11 +550,6 @@ pick: ( a b c -- a b c a ) [ [ over ] dip swap ] ;
 \\ Apply a quotation to each of three values separately.
 3apply: ( ..a x y z quot: ( ..a x -- ..b ) -- ..b ) [ 3 apply-n ] ;
 
-\\ Keep a byte-array on the stack while extracting its raw FFI pointer.
-bytes>ffi-ptr: ( byte-array -- byte-array ptr ) [ dup bytes>ffi-ptr+len drop ] ;
-\\ Allocate a byte-array and leave both the byte-array and raw FFI pointer.
-bytes-alloc-ptr: ( n -- byte-array ptr ) [ bytes-alloc dup bytes>ffi-ptr+len drop ] ;
-
 \ Arithmetic operators
 \\ Negate a number.
 -@: ( a -- -a ) [ 0 swap - ] ;

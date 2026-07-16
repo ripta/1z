@@ -1,0 +1,17 @@
+use "testing" ;
+
+"bytes>ffi-ptr and bytes-alloc-ptr are not prelude words" test-section
+[ 4 bytes-alloc bytes>ffi-ptr ] unknown-word: "bytes>ffi-ptr unknown without lib/ffi" assert-error-type
+[ 8 bytes-alloc-ptr ] unknown-word: "bytes-alloc-ptr unknown without lib/ffi" assert-error-type
+
+use "ffi" ;
+
+"bytes>ffi-ptr and bytes-alloc-ptr resolve via lib/ffi" test-section
+4 bytes-alloc bytes>ffi-ptr
+resource? "bytes>ffi-ptr leaves a pointer resource on top" assert-true
+byte-array? "bytes>ffi-ptr keeps the byte-array below" assert-true
+
+8 bytes-alloc-ptr
+resource? "bytes-alloc-ptr leaves a pointer resource on top" assert-true
+dup byte-array? "bytes-alloc-ptr leaves the byte-array below" assert-true
+#len 8 "bytes-alloc-ptr allocates n bytes" assert=

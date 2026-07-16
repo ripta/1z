@@ -88,6 +88,12 @@ ffi-callback: ( quotation sig -- ffi-callback ) [ native.ffi-callback ] ;
 \\ dangling if the byte array is resized or freed.
 bytes>ffi-ptr+len: ( byte-array -- resource fixnum ) [ native.bytes-raw-ptr ] ;
 
+\\ Keep a byte-array on the stack while extracting its raw FFI pointer.
+bytes>ffi-ptr: ( byte-array -- byte-array ptr ) [ dup bytes>ffi-ptr+len drop ] ;
+
+\\ Allocate a byte-array and leave both the byte-array and raw FFI pointer.
+bytes-alloc-ptr: ( n -- byte-array ptr ) [ bytes-alloc dup bytes>ffi-ptr+len drop ] ;
+
 \\ True iff sym is one of the errno failure sentinels: neg1, null, or neg.
 (valid-errno-sentinel?): ( sym -- bool ) [
   dup neg1: = over null: = or swap neg: = or

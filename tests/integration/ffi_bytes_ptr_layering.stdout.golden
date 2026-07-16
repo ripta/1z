@@ -1,0 +1,20 @@
+=== bytes>ffi-ptr and bytes-alloc-ptr are not prelude words ===
+Stack: [ ]
+PASS: bytes>ffi-ptr unknown without lib/ffi
+Stack: [ ]
+PASS: bytes-alloc-ptr unknown without lib/ffi
+Stack: [ ]
+=== bytes>ffi-ptr and bytes-alloc-ptr resolve via lib/ffi ===
+Stack: [ ]
+Stack: [ B{ 0x00 0x00 0x00 0x00 } <resource:ffi-bytes> ]
+PASS: bytes>ffi-ptr leaves a pointer resource on top
+Stack: [ B{ 0x00 0x00 0x00 0x00 } ]
+PASS: bytes>ffi-ptr keeps the byte-array below
+Stack: [ ]
+Stack: [ B{ 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 } <resource:ffi-bytes> ]
+PASS: bytes-alloc-ptr leaves a pointer resource on top
+Stack: [ B{ 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 } ]
+PASS: bytes-alloc-ptr leaves the byte-array below
+Stack: [ B{ 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 } ]
+PASS: bytes-alloc-ptr allocates n bytes
+Stack: [ ]
