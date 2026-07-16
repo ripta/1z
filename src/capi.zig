@@ -22,6 +22,7 @@ const errors_mod = @import("primitives/errors.zig");
 const pascalToKebabRuntime = errors_mod.pascalToKebabRuntime;
 
 const misc = @import("primitives/misc.zig");
+const hooks = @import("primitives/hooks.zig");
 const dictionary_mod = @import("dictionary.zig");
 const HostCallback = dictionary_mod.HostCallback;
 const HostCallbackFn = dictionary_mod.HostCallbackFn;
@@ -2156,6 +2157,15 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     }
 
     return if (status == 0) 0 else 1;
+}
+
+/// Fire the registered `on:exit` hooks with the exit code, matching the
+/// interpreter's fire-at-exit behavior. The AOT-generated main calls this
+/// after the entry word finishes and before `onez_deinit`; embedders may
+/// call it when the host process is about to terminate.
+export fn onez_fire_exit_hooks(ptr: ?*anyopaque, code: i32) void {
+    const handle = castHandle(ptr) orelse return;
+    hooks.fireHooks(handle.ctx, "on:exit", &.{.{ .fixnum = code }});
 }
 
 export fn onez_print_error(ptr: ?*anyopaque) void {

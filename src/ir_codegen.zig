@@ -9085,6 +9085,7 @@ pub fn emitProgramC(
         \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
         \\extern int32_t onez_runtime_register_quotations(void *rt, int32_t (**table)(uintptr_t), uint32_t size);
         \\extern int32_t onez_runtime_run(void *rt, uint32_t entry_word_id);
+        \\extern void onez_fire_exit_hooks(void *rt, int32_t code);
         \\extern void onez_print_error(void *rt);
         \\extern void onez_deinit(void *rt);
         \\extern int onez_set_static_libs(void *rt, const char **names, unsigned int count);
@@ -10538,6 +10539,11 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, id_str);
     try out.appendSlice(allocator, ");\n");
     try out.appendSlice(allocator, "    if (status != 0) onez_print_error(rt);\n");
+
+    if (!interpreter_free and !meta.freestanding) {
+        try out.appendSlice(allocator, "    onez_fire_exit_hooks(rt, (status != 0) ? 1 : 0);\n");
+    }
+
     try out.appendSlice(allocator, "    onez_deinit(rt);\n");
     try out.appendSlice(allocator, "    return (status != 0) ? 1 : 0;\n");
     try out.appendSlice(allocator, "}\n");
