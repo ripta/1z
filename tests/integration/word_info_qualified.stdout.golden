@@ -1,0 +1,23 @@
+Stack: [ ]
+=== qualified word info ===
+Stack: [ ]
+PASS: carries the bare word name
+Stack: [ ]
+PASS: compound word
+Stack: [ ]
+PASS: doc comment
+Stack: [ ]
+=== qualified generated conversion word ===
+Stack: [ ]
+PASS: generated conversion word resolves
+Stack: [ ]
+PASS: dispatch methods are visible
+Stack: [ ]
+=== qualified name misses ===
+Stack: [ ]
+PASS: missing word in a bound module
+Stack: [ ]
+PASS: safe variant returns none
+Stack: [ ]
+PASS: unbound module path
+Stack: [ ]

@@ -453,25 +453,10 @@ pub const InferenceEngine = struct {
     }
 
     fn resolveQualifiedName(self: *const InferenceEngine, name: []const u8) ?value_mod.ModuleWord {
-        const dot_index = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
-        const module_path = name[0..dot_index];
-        const word_name = name[dot_index + 1 ..];
-        if (module_path.len == 0 or word_name.len == 0) return null;
-
-        const module_word_def = self.lookupWord(module_path) orelse return null;
-        const instrs = switch (module_word_def.action) {
-            .compound => |i| i,
-            .native, .host_callback => return null,
-        };
-        if (instrs.len != 1) return null;
-        const module_ptr = switch (instrs[0].op) {
-            .push_literal => |val| switch (val) {
-                .module => |m| m,
-                else => return null,
-            },
-            else => return null,
-        };
-        return module_ptr.words.get(word_name);
+        const qn = Context.splitQualifiedName(name) orelse return null;
+        const binding = self.lookupWord(qn.module_path) orelse return null;
+        const module = Context.moduleLiteralFromWordDef(binding) orelse return null;
+        return module.words.get(qn.word_name);
     }
 
     fn inferWord(self: *InferenceEngine, name: []const u8) Allocator.Error!InferenceResult {

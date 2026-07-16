@@ -187,7 +187,10 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
         .native, .host_callback => .{ .boolean = false },
     };
 
-    const dispatch_pairs = try ctx.dispatchEntriesForWord(name, alloc);
+    // Use the definition's own dispatch id rather than re-resolving the name
+    // in scope: a module-qualified word's bare name is not in scope, and a
+    // shadowed name would resolve to the wrong definition's methods.
+    const dispatch_pairs = try ctx.dispatchEntriesForId(word.dispatch_id, alloc);
     const methods_arr = try alloc.alloc(Value, dispatch_pairs.len);
     for (dispatch_pairs, 0..) |pair, i| {
         const type_a_name = ctx.lookupTypeNameByDescriptor(pair.key.type_a) orelse "<unknown>";
@@ -650,13 +653,27 @@ fn nativeToWord(ctx: *Context) anyerror!void {
         },
     };
 
-    const mod_word = module.words.get(name) orelse {
-        helpers.setErrorContext(ctx, "word not found: {s}", .{name});
-        return error.NameError;
-    };
+    if (module.words.get(name)) |mod_word| {
+        const word = moduleWordToWordDef(name, mod_word);
+        try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
+        return;
+    }
 
-    const word = moduleWordToWordDef(name, mod_word);
-    try ctx.stack.push(try buildWordInfo(alloc, ctx, name, word));
+    // A qualified name like `math.sin` is not a key in the scope snapshot.
+    // Resolve it through the module binding's literal, the same inspect-only
+    // path dispatch registration and effect inference use. The word info
+    // carries the bare word name, since dispatch entries and compile records
+    // are keyed by it.
+    if (Context.splitQualifiedName(name)) |qn| {
+        if (ctx.resolveQualifiedModuleWord(name)) |mod_word| {
+            const word = moduleWordToWordDef(qn.word_name, mod_word);
+            try ctx.stack.push(try buildWordInfo(alloc, ctx, qn.word_name, word));
+            return;
+        }
+    }
+
+    helpers.setErrorContext(ctx, "word not found: {s}", .{name});
+    return error.NameError;
 }
 
 /// >constraint-info ( constraint -- array ) - Convert a constraint value into the same

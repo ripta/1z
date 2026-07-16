@@ -125,9 +125,9 @@ pub const FreezeResult = struct {
 ///   `MissingStackEffects` error path, and the surrounding FreezeResult
 ///   is deinit'd before consumers can observe `call_targets`.
 pub const UnresolvedReason = enum {
-    /// Neither `Context.lookupWord` nor `resolveQualifiedModuleWord` returned
-    /// a definition for the name. The callee is genuinely absent from the
-    /// dictionary visible at freeze time.
+    /// Neither `Context.lookupWord` nor `Context.resolveQualifiedModuleWord`
+    /// returned a definition for the name. The callee is genuinely absent
+    /// from the dictionary visible at freeze time.
     not_in_dictionary,
     /// The name resolves to a compound word marked `parse_time_only`. The
     /// existing BFS skips such words because they have no runtime presence
@@ -154,7 +154,7 @@ pub const UnresolvedReason = enum {
 ///   `WordDefinition` entries whose bodies invoke the qualified natives
 ///   `native.struct-field-get` / `native.struct-field-set`. Both the
 ///   accessor (direct `ctx.lookupWord`) and the inner native call
-///   (`resolveQualifiedModuleWord`) are resolvable by freeze BFS, so call
+///   (`Context.resolveQualifiedModuleWord`) are resolvable by freeze BFS, so call
 ///   sites surface as `compound` or `native` `ResolvedCallee` rows.
 /// - **Virtual constructors** (`<name>`, `make-name`, `>name`, `name>`,
 ///   `name?`) materialize during `;` execution of `virtual{ ... }`.
@@ -962,7 +962,7 @@ fn drainWorklist(
             // Generated words from struct{, virtual{, and enum{ call native
             // operations via qualified names that lookupWord cannot resolve
             // directly.
-            if (resolveQualifiedModuleWord(ctx, name)) |mod_word| {
+            if (ctx.resolveQualifiedModuleWord(name)) |mod_word| {
                 switch (mod_word.action) {
                     .native, .host_callback => {
                         // Polymorphic natives without a declared stack effect
@@ -1043,7 +1043,7 @@ fn classifyCallee(ctx: *const Context, name: []const u8) PendingResolution {
             .compound => .{ .compound_name = name },
         };
     }
-    if (resolveQualifiedModuleWord(ctx, name)) |mod_word| {
+    if (ctx.resolveQualifiedModuleWord(name)) |mod_word| {
         return switch (mod_word.action) {
             .native, .host_callback => .{ .native_name = name },
             .compound => .{ .compound_name = name },
@@ -1741,7 +1741,7 @@ fn isInterpreterDependentNative(ctx: *const Context, name: []const u8) bool {
             .compound => return false,
         }
     }
-    if (resolveQualifiedModuleWord(ctx, name)) |mod_word| {
+    if (ctx.resolveQualifiedModuleWord(name)) |mod_word| {
         switch (mod_word.action) {
             .native, .host_callback => {
                 const word = wordDefFromModuleWord(name, mod_word);
@@ -1751,32 +1751,6 @@ fn isInterpreterDependentNative(ctx: *const Context, name: []const u8) bool {
         }
     }
     return false;
-}
-
-/// Resolve a module-qualified name (e.g., "native.struct-field-get") to
-/// its ModuleWord without executing the module word. Splits on the last
-/// dot, looks up the module in the dictionary, and extracts the word from
-/// the module's word map.
-fn resolveQualifiedModuleWord(ctx: *const Context, name: []const u8) ?value_mod.ModuleWord {
-    const dot_index = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
-    const module_path = name[0..dot_index];
-    const word_name = name[dot_index + 1 ..];
-    if (module_path.len == 0 or word_name.len == 0) return null;
-
-    const module_word_def = ctx.lookupWord(module_path) orelse return null;
-    const instrs = switch (module_word_def.action) {
-        .compound => |i| i,
-        .native, .host_callback => return null,
-    };
-    if (instrs.len != 1) return null;
-    const module_ptr = switch (instrs[0].op) {
-        .push_literal => |val| switch (val) {
-            .module => |m| m,
-            else => return null,
-        },
-        else => return null,
-    };
-    return module_ptr.words.get(word_name);
 }
 
 /// Convert a ModuleWord to a WordDefinition, using the given qualified
@@ -1805,7 +1779,7 @@ fn wordDefFromModuleWord(name: []const u8, mod_word: value_mod.ModuleWord) WordD
 /// polymorphic struct native words (which have no fixed stack_effect).
 fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *DiscoveredWords, allocator: Allocator) Allocator.Error!void {
     // Try module-qualified resolution first
-    if (resolveQualifiedModuleWord(ctx, call_name)) |mod_word| {
+    if (ctx.resolveQualifiedModuleWord(call_name)) |mod_word| {
         switch (mod_word.action) {
             .native, .host_callback => {
                 try discovered.native_names.append(allocator, call_name);
@@ -1857,7 +1831,7 @@ fn bannedDynamicFeatureForCall(ctx: *const Context, name: []const u8, class: Art
     if (ctx.lookupWord(name)) |def| {
         return bannedDynamicMarker(def, class);
     }
-    if (resolveQualifiedModuleWord(ctx, name)) |mod_word| {
+    if (ctx.resolveQualifiedModuleWord(name)) |mod_word| {
         return bannedDynamicMarker(wordDefFromModuleWord(name, mod_word), class);
     }
     return null;
@@ -1896,7 +1870,7 @@ pub fn computeReachabilityForMarker(
                 for (def.markers) |mk| {
                     if (mk == target_marker) break :blk true;
                 }
-            } else if (resolveQualifiedModuleWord(ctx, w.name)) |mod_word| {
+            } else if (ctx.resolveQualifiedModuleWord(w.name)) |mod_word| {
                 for (mod_word.markers) |mk| {
                     if (mk == target_marker) break :blk true;
                 }

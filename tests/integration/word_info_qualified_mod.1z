@@ -1,0 +1,6 @@
+\ Module for >word-info qualified-name tests.
+
+hue: enum{ red: unit green: unit blue: unit } ;
+
+\\ Double a number.
+double: ( n -- n ) [ 2 * ] ;

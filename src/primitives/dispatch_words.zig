@@ -227,13 +227,7 @@ fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
         };
     }
 
-    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
-    const module_path = name[0..dot];
-    const word_name = name[dot + 1 ..];
-    if (module_path.len == 0 or word_name.len == 0) return null;
-
-    const module = resolveModuleLiteral(ctx, module_path) orelse return null;
-    const mod_word = module.words.get(word_name) orelse return null;
+    const mod_word = ctx.resolveQualifiedModuleWord(name) orelse return null;
     return .{
         .dispatch_id = mod_word.dispatch_id,
         .markers = mod_word.markers,
@@ -248,13 +242,7 @@ fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
 /// Resolve a dot-qualified type name (e.g., "ea.color") to a TypeValue by
 /// inspecting the module word's literal and looking up the type in that module.
 fn resolveQualifiedTypeValue(ctx: *Context, name: []const u8) ?*const value_mod.TypeValue {
-    const dot = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
-    const module_path = name[0..dot];
-    const type_name = name[dot + 1 ..];
-    if (module_path.len == 0 or type_name.len == 0) return null;
-
-    const module = resolveModuleLiteral(ctx, module_path) orelse return null;
-    const mod_word = module.words.get(type_name) orelse return null;
+    const mod_word = ctx.resolveQualifiedModuleWord(name) orelse return null;
     switch (mod_word.action) {
         .compound => |instrs| {
             if (instrs.len == 1) {
@@ -271,25 +259,6 @@ fn resolveQualifiedTypeValue(ctx: *Context, name: []const u8) ?*const value_mod.
         },
         .native, .host_callback => return null,
     }
-}
-
-/// Resolve a module path to a Module by inspecting the word's literal value.
-/// Only accepts single-instruction compound words that push a module literal,
-/// matching the pattern produced by `load`. Does not execute any code.
-fn resolveModuleLiteral(ctx: *Context, module_path: []const u8) ?*const value_mod.Module {
-    const module_word = ctx.lookupWord(module_path) orelse return null;
-    const instrs = switch (module_word.action) {
-        .compound => |i| i,
-        .native, .host_callback => return null,
-    };
-    if (instrs.len != 1) return null;
-    return switch (instrs[0].op) {
-        .push_literal => |val| switch (val) {
-            .module => |m| m,
-            else => null,
-        },
-        else => null,
-    };
 }
 
 // =============================================================================

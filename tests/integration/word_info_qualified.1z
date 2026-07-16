@@ -1,0 +1,20 @@
+\ >word-info on dot-qualified names resolves through the module binding
+\ without executing it.
+
+use "testing" ;
+
+wq: "word_info_qualified_mod.1z" load ;
+
+"qualified word info" test-section
+wq.double: >word-info name>> "double" "carries the bare word name" assert=
+wq.double: >word-info native?>> f "compound word" assert=
+wq.double: >word-info doc>> "Double a number." "doc comment" assert=
+
+"qualified generated conversion word" test-section
+wq.>hue: >word-info name>> ">hue" "generated conversion word resolves" assert=
+wq.>hue: >word-info methods>> #len 1 "dispatch methods are visible" assert=
+
+"qualified name misses" test-section
+[ wq.nope: >word-info ] name-error: "missing word in a bound module" assert-error-type
+wq.nope: >word-info? option:none? t "safe variant returns none" assert=
+[ nomod.double: >word-info ] name-error: "unbound module path" assert-error-type

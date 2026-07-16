@@ -3941,22 +3941,60 @@ pub const Context = struct {
         return slice;
     }
 
-    /// Check if a name is a qualified name (contains a dot).
-    fn isQualifiedName(name: []const u8) bool {
-        return std.mem.indexOfScalar(u8, name, '.') != null;
+    /// A dot-qualified name split into its module path and word name.
+    pub const QualifiedName = struct {
+        module_path: []const u8,
+        word_name: []const u8,
+    };
+
+    /// Split a name on its rightmost dot. Returns null when there is no dot
+    /// or either half is empty.
+    ///
+    /// This is the canonical qualified-name split. Every resolver that
+    /// handles dot-qualified names must go through it so the rules cannot
+    /// drift between the interpreter, introspection, and analysis passes.
+    pub fn splitQualifiedName(name: []const u8) ?QualifiedName {
+        const dot_index = std.mem.lastIndexOfScalar(u8, name, '.') orelse return null;
+        const module_path = name[0..dot_index];
+        const word_name = name[dot_index + 1 ..];
+        if (module_path.len == 0 or word_name.len == 0) return null;
+        return .{ .module_path = module_path, .word_name = word_name };
+    }
+
+    /// Extract the module literal from a `load`-produced binding: a compound
+    /// whose single instruction pushes a module value. Does not execute any
+    /// code, so a binding that computes its module is not resolvable here.
+    pub fn moduleLiteralFromWordDef(def: WordDefinition) ?*value_mod.Module {
+        const instrs = switch (def.action) {
+            .compound => |i| i,
+            .native, .host_callback => return null,
+        };
+        if (instrs.len != 1) return null;
+        return switch (instrs[0].op) {
+            .push_literal => |val| switch (val) {
+                .module => |m| m,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    /// Resolve a dot-qualified name to its ModuleWord by inspecting the
+    /// module binding's literal, without executing it.
+    pub fn resolveQualifiedModuleWord(self: *const Context, name: []const u8) ?value_mod.ModuleWord {
+        const qn = splitQualifiedName(name) orelse return null;
+        const binding = self.lookupWord(qn.module_path) orelse return null;
+        const module = moduleLiteralFromWordDef(binding) orelse return null;
+        return module.words.get(qn.word_name);
     }
 
     /// Execute a qualified name like "math.double".
     /// Splits on the rightmost dot, executes the module word to get a module,
     /// then looks up and executes the word in that module.
     fn executeQualifiedName(self: *Context, name: []const u8, line: usize, column: usize) anyerror!void {
-        const dot_index = std.mem.lastIndexOfScalar(u8, name, '.') orelse return ExecutionError.UnknownWord;
-
-        const module_path = name[0..dot_index];
-        const word_name = name[dot_index + 1 ..];
-        if (module_path.len == 0 or word_name.len == 0) {
-            return ExecutionError.UnknownWord;
-        }
+        const qn = splitQualifiedName(name) orelse return ExecutionError.UnknownWord;
+        const module_path = qn.module_path;
+        const word_name = qn.word_name;
 
         if (self.lookupWord(module_path)) |module_word| {
             self.pushCallFrame(module_path, self.current_source, line, column);
@@ -5603,7 +5641,7 @@ pub const Context = struct {
                             .proceed => {},
                             .tail_call_set => return,
                         }
-                    } else if (isQualifiedName(name)) {
+                    } else if (splitQualifiedName(name) != null) {
                         self.executeQualifiedName(name, instr.line, instr.column) catch |err| {
                             self.pushCallFrame(name, self.current_source, instr.line, instr.column);
                             self.captureCallStackOnError(err);
