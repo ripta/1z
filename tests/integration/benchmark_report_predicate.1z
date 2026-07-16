@@ -1,0 +1,6 @@
+use "testing" ;
+
+make-benchmark-report benchmark-report? "benchmark report satisfies predicate" assert-true
+42 benchmark-report? "fixnum is not a benchmark report" assert-false
+"hello" benchmark-report? "string is not a benchmark report" assert-false
+make-benchmark-report type-of benchmark-report = "type-of matches the type word" assert-true

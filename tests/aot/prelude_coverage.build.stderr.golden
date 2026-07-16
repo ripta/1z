@@ -1,11 +1,8 @@
-Prelude compilation: 408/412 words compiled (99.0%)
+Prelude compilation: 410/413 words compiled (99.3%)
   word 'bytes-alloc-ptr' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
   word 'bytes>ffi-ptr' cannot be compiled
-      NC.11: instruction pre-scan rejected the word before compilation started
-      hint: blocked until the called word is in the AOT compilation set
-  word 'benchmark-report?' cannot be compiled
       NC.11: instruction pre-scan rejected the word before compilation started
       hint: blocked until the called word is in the AOT compilation set
   word 'pragma-get?' cannot be compiled
@@ -13,29 +10,29 @@ Prelude compilation: 408/412 words compiled (99.0%)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
 Inline PIC sites: 33/79 generic call sites preseeded
-AOT interpreter fallbacks: 321 total
-  native: 303
+AOT interpreter fallbacks: 322 total
+  native: 304
   compound-uncompiled: 1
   quotation: 17
   sites:
     native: provenance? -> native.struct-type-predicate (line 0)
-    native: nan? -> = (line 433)
-    quotation: run-benchmarks -> <quotation> (line 897)
-    quotation: (any-loop) -> <quotation> (line 463)
-    native: quotation? -> = (line 397)
+    native: nan? -> = (line 434)
+    quotation: run-benchmarks -> <quotation> (line 898)
+    quotation: (any-loop) -> <quotation> (line 464)
+    native: quotation? -> = (line 398)
     native: unmake-descriptor-variant -> native.struct-instance-destructure (line 0)
     native: value>> -> native.struct-field-get (line 0)
     native: inputs>> -> native.struct-field-get (line 0)
-    native: >iterator -> native.make-callback-iter (line 954)
-    native: >iterator -> native.>iterator (line 956)
+    native: >iterator -> native.make-callback-iter (line 955)
+    native: >iterator -> native.>iterator (line 957)
     native: >dispatch-provenance -> native.hash-to-struct (line 0)
     native: >option:some -> native.virtual-struct-wrap (line 0)
     native: descriptor-variant? -> native.struct-type-predicate (line 0)
-    native: . -> inspect (line 709)
+    native: . -> inspect (line 710)
     native: >method-info -> native.hash-to-struct (line 0)
     native: >on -> native.enum-from-symbol (line 0)
-    ... 305 more
-  static-check: jitInterpretedCall=1/1 jitNativeWordCall=303/303 jitCallQuotation=17/17 (matches build-time inventory)
+    ... 306 more
+  static-check: jitInterpretedCall=1/1 jitNativeWordCall=304/304 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter

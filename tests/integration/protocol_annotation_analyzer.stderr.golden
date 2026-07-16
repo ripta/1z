@@ -1,3 +1,3 @@
 tests/integration/protocol_annotation_analyzer.1z:47: warning: fail-pipeline: land: type 'rock' does not satisfy protocol 'flyable' for parameter 'x'
-tests/integration/protocol_annotation_analyzer.1z:261: warning: flyable: word has no declared stack effect
-tests/integration/protocol_annotation_analyzer.1z:261: warning: swimmable: word has no declared stack effect
+tests/integration/protocol_annotation_analyzer.1z:262: warning: flyable: word has no declared stack effect
+tests/integration/protocol_annotation_analyzer.1z:262: warning: swimmable: word has no declared stack effect

@@ -2,7 +2,7 @@
 \ --interpreter-fallback=false mode, a compiled caller that dispatches
 \ to an uncompiled compound callee must fail the build with a diagnostic
 \ that names the caller, the callee, the line, and the callee's
-\ NotCompilableReason. The prelude word `benchmark-report?` stays
+\ NotCompilableReason. The prelude word `pragma-get?` stays
 \ uncompilable in the AOT set, so calling it from compiled code must
 \ surface as a build error rather than a runtime fallback.
-5 benchmark-report? .
+missing: pragma-get? .

@@ -1,2 +1,2 @@
-Fatal: word 'benchmark-report?' requires interpreter fallback; rebuild with --interpreter-fallback=true
+Fatal: word 'pragma-get?' requires interpreter fallback; rebuild with --interpreter-fallback=true
 error.interpreter-fallback-disabled

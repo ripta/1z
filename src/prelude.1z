@@ -70,6 +70,7 @@ type-descriptor: M{ type: builtin-type: numeric: f exact: f integer: f mutable: 
 constraint: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 unit: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 sandbox-spec: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
+benchmark-report: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 
 \\ Word array literal syntax. Tokenizes words as strings without requiring quotes.
 W{: parse-time [ "}" parse-tokens-until ] ;

@@ -1,0 +1,8 @@
+PASS: benchmark report satisfies predicate
+Stack: [ ]
+PASS: fixnum is not a benchmark report
+Stack: [ ]
+PASS: string is not a benchmark report
+Stack: [ ]
+PASS: type-of matches the type word
+Stack: [ ]

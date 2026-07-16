@@ -1,6 +1,6 @@
 \ Test: ONEZ_INTERPRETER_FALLBACK=0 disables fallback at runtime.
-\ The prelude word `benchmark-report?` stays uncompilable in the AOT set, so a
+\ The prelude word `pragma-get?` stays uncompilable in the AOT set, so a
 \ compiled caller reaches it through the interpreter fallback path. With fallback
 \ disabled, this should crash with a diagnostic.
-5 benchmark-report?
+missing: pragma-get?
 .
