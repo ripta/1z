@@ -1,0 +1,5 @@
+\ Control for the metadata-only rejection: the hash-buried quotation reaches
+\ only prelude words (`dup`, `+`), which the linked interpreter reloads with
+\ real bodies, so a default build stays correct and must keep building.
+3 H{ go: [ dup + ] } go: @get call
+.

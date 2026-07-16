@@ -42,6 +42,11 @@
 \ the lint bootstrap compiles end to end. This probe now builds successfully
 \ (exit 0); the runtime-image lint driver is exercised by lint_driver, and the
 \ interpreter-free residual by lint_driver_free.
+\
+\ Built with --emit-runtime-image: the buried rule and lexer quotations reach
+\ non-prelude words the freezer does not compile, so a default metadata-only
+\ build is rejected rather than shipping their empty bodies. The image shape
+\ does not change the compile coverage this probe tracks.
 use "lint" ;
 use "lint-rules" ;
 { } run-lint drop

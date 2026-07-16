@@ -1,0 +1,4 @@
+Error: interpreted quotations reach 1 non-prelude word the compiler did not compile
+      hint: the default build embeds a metadata-only image whose word bodies are empty; rebuild with --emit-runtime-image
+AOT interpreter fallbacks: 2 total (native=1 quotation=1)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=1/1 jitCallQuotation=1/1 (matches build-time inventory)

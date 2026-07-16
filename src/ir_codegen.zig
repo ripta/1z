@@ -67,6 +67,11 @@ pub const IrCodegenError = error{
     /// going through `noteAotFallbackEmission`, so the inventory and the
     /// final C disagree.
     JitInterpretedCallLeaked,
+    /// An interpreter-linked metadata-only build would drop the body of a
+    /// non-prelude word reachable from an interpreted quotation, so the
+    /// call would silently run the empty rehydrated body. Only a full
+    /// runtime image (`--emit-runtime-image`) carries such bodies.
+    RuntimeImageRequired,
     OutOfMemory,
 };
 
@@ -325,6 +330,24 @@ pub const AotFallbackSite = struct {
     line: u32,
     callee_reason: ?NotCompilableReason = null,
     callee_is_native: bool = false,
+};
+
+/// A non-prelude word the freezer did not compile, reachable from a composite-buried quotation
+/// that runs interpreted at its dispatch site.
+///
+/// A metadata-only image rehydrates such a word's dictionary row with an empty body, so an
+/// interpreted call to it silently runs nothing. The freeze detection records each offending
+/// callee with the composite literal that buries the reaching quotation, and codegen rejects the
+/// interpreter-linked metadata-only build when any are present.
+pub const InterpretedReachViolation = struct {
+    callee_name: []const u8,
+    /// The word whose body pushes the burying composite literal, or `__entry__` for a top-level
+    /// literal.
+    caller_word: []const u8,
+    /// Source file of the caller word, when known.
+    source_file: ?[]const u8,
+    /// 1-based line of the burying composite literal. Zero when unknown.
+    line: usize,
 };
 
 /// Result of cross-checking the build-time fallback inventory against the
@@ -1152,32 +1175,28 @@ const PolyArithOp = enum {
 /// The operands are already in physical memory at slot_a and slot_b.
 /// The native pops both and pushes one result, leaving it at slot_a (dest_slot).
 ///
-/// If the resolver is unavailable or cannot resolve the operation, emits a bail return instead..
+/// Without the native the body is NotCompilable, matching `emitResolvedNativeCallback`. This arm
+/// covers fixnum overflow and non-fixnum/float operands, so only the native's numeric-tower
+/// promotion is a correct continuation. A terminal error stub here would misreport overflow as a
+/// type mismatch. It also left this arm's control dead while the caller merged it with the numeric
+/// path, and `emitC` runs no SCCP pass to delete a dead merge input, so `ir_build_cfg` followed the
+/// dangling control edge and looped forever.
 fn emitPerOperationFallback(
     state: *CompileState,
     op_name: []const u8,
     slot_a: usize,
     slot_b: usize,
     line: usize,
-) void {
+) IrCodegenError!void {
     const ctx = state.ctx;
 
-    // Without a resolver, report a type error.
     const res = state.resolver orelse {
-        if (state.type_mismatch_error_fn != c.IR_UNUSED) {
-            emitErrorReturn(state, state.type_mismatch_error_fn);
-        } else {
-            c._ir_RETURN(ctx, state.bail_status);
-        }
-        return;
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
     };
     const resolved = res.resolve(op_name, res.user_data) orelse {
-        if (state.type_mismatch_error_fn != c.IR_UNUSED) {
-            emitErrorReturn(state, state.type_mismatch_error_fn);
-        } else {
-            c._ir_RETURN(ctx, state.bail_status);
-        }
-        return;
+        state.not_compilable_reason = .unresolvable_word;
+        return IrCodegenError.NotCompilable;
     };
 
     // Store physical SP so the native sees both operands.
@@ -1228,7 +1247,7 @@ fn emitPolymorphicBinaryArith(
     dest_slot: usize,
     op: PolyArithOp,
     line: usize,
-) void {
+) IrCodegenError!void {
     const ctx = state.ctx;
 
     // Check both operands for numeric tags (no bail on mismatch).
@@ -1388,7 +1407,7 @@ fn emitPolymorphicBinaryArith(
         // Save state refs before the callback (it may refresh them).
         const saved_items_ptr = state.items_ptr;
         const saved_base_addr = state.base_addr;
-        emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
+        try emitPerOperationFallback(state, op_name, slot_a, slot_b, line);
         // Restore so the MERGE sees consistent refs from both paths.
         state.items_ptr = saved_items_ptr;
         state.base_addr = saved_base_addr;
@@ -5944,7 +5963,7 @@ fn emitIntrinsicGt(ec: EmitCtx) IrCodegenError!ControlFlow {
 /// operands, false when the caller should emit its concrete-type path. The
 /// caller must have already popped the two operands (so they sit at sp and
 /// sp+1).
-fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) bool {
+fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
     const state = ec.state;
     const ctx = state.ctx;
     const stack = ec.stack;
@@ -5965,7 +5984,7 @@ fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) bool {
             break;
         }
     }
-    emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, dest_slot, op, ec.line);
+    try emitPolymorphicBinaryArith(state, entry_a.raw_at_slot, entry_b.raw_at_slot, dest_slot, op, ec.line);
     stack[sp.*] = .{ .raw_at_slot = sp.* };
     sp.* += 1;
     return true;
@@ -5984,7 +6003,7 @@ fn emitOverflowArith(ec: EmitCtx, poly_op: PolyArithOp, comptime ov_op: comptime
     if (sp.* < 2) return IrCodegenError.StackUnderflow;
     sp.* -= 2;
 
-    if (emitPolyArithFastPath(ec, poly_op)) return .next;
+    if (try emitPolyArithFastPath(ec, poly_op)) return .next;
 
     const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
     switch (resolved) {
@@ -6018,7 +6037,7 @@ fn emitIntrinsicDiv(ec: EmitCtx) IrCodegenError!ControlFlow {
     if (sp.* < 2) return IrCodegenError.StackUnderflow;
     sp.* -= 2;
 
-    if (emitPolyArithFastPath(ec, .div)) return .next;
+    if (try emitPolyArithFastPath(ec, .div)) return .next;
 
     const resolved = try resolveOperandPair(stack[sp.*], stack[sp.* + 1], state);
     switch (resolved) {
@@ -6040,7 +6059,7 @@ fn emitIntrinsicMod(ec: EmitCtx) IrCodegenError!ControlFlow {
     if (sp.* < 2) return IrCodegenError.StackUnderflow;
     sp.* -= 2;
 
-    if (emitPolyArithFastPath(ec, .mod)) return .next;
+    if (try emitPolyArithFastPath(ec, .mod)) return .next;
 
     const a = try requireI64(stack[sp.*], state);
     const b = try requireI64(stack[sp.* + 1], state);
@@ -9029,6 +9048,10 @@ pub fn emitProgramC(
     /// manifest, and emit the `onez_image_v1` runtime image alongside
     /// the dispatch table. Requires `interp_ctx` to be non-null.
     emit_runtime_image: bool,
+    /// Freeze-detected non-prelude uncompiled words reachable from
+    /// composite-buried quotations. Non-empty in an interpreter-linked
+    /// metadata-only build rejects the build with `RuntimeImageRequired`.
+    interpreted_reach: []const InterpretedReachViolation,
     allocator: Allocator,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .{};
@@ -9741,7 +9764,12 @@ pub fn emitProgramC(
                 }
                 continue;
             }
-            if (!q.compiled and q.inferred_effect != null) {
+            // A composite-buried body keeps its callees undiscovered by design, so
+            // failing to compile it is expected, not a compiler gap: it runs
+            // interpreted at its dispatch site (the compiled `call` emits a
+            // `jitCallQuotation` fallback that links the interpreter), or traps
+            // through the interpreter-free `call` path under strict mode.
+            if (!q.compiled and q.inferred_effect != null and !q.from_composite) {
                 try uncompiled_q.append(allocator, .{
                     .quotation_id = q.quotation_id,
                     .c_name = q.c_name,
@@ -10200,6 +10228,17 @@ pub fn emitProgramC(
         diagnostics.aot_fallback_report.static_check.observed_jit_interpreted_calls > 0)
     {
         return IrCodegenError.JitInterpretedCallLeaked;
+    }
+
+    // An interpreter-linked build without `--emit-runtime-image` embeds a
+    // metadata-only image whose word bodies are empty. When freeze detection
+    // found a non-prelude uncompiled word reachable from a composite-buried
+    // quotation, an interpreted dispatch of that quotation would run the
+    // word's empty rehydrated body as a silent no-op, so the build must fail
+    // instead of producing a silently wrong binary. Prelude reach stays fine:
+    // the linked interpreter reloads the prelude with real bodies.
+    if (!interpreter_free and interp_ctx != null and !emit_runtime_image and interpreted_reach.len > 0) {
+        return IrCodegenError.RuntimeImageRequired;
     }
 
     // Emit the interpreter-linked sentinel as a non-static global. The linker
@@ -12924,6 +12963,31 @@ fn makeInstructions(comptime ops: anytype) [ops.len]Instruction {
     return instrs;
 }
 
+/// Resolve the polymorphic arithmetic ops to a dummy word id for unit tests.
+///
+/// Arithmetic on two runtime-unknown operands emits a cold fallback arm that
+/// calls the polymorphic native, so the op must resolve or the body is
+/// NotCompilable. Tests that exercise the fast path with fixnum inputs never
+/// take the arm, so the dummy id is never dispatched.
+fn resolveArithOpForTest(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+    _ = user_data;
+    const ops = [_][]const u8{ "+", "-", "*", "/", "%" };
+    for (ops) |op| {
+        if (std.mem.eql(u8, name, op)) {
+            return .{ .word_id = 0, .input_count = 2, .output_count = 1, .is_native = true };
+        }
+    }
+    return null;
+}
+
+var arith_test_resolver_dummy: u8 = 0;
+
+const arith_test_resolver = WordResolver{
+    .resolve = &resolveArithOpForTest,
+    .user_data = @ptrCast(&arith_test_resolver_dummy),
+    .dispatch_table_ptr = @ptrCast(&arith_test_resolver_dummy),
+};
+
 /// Default metadata for unit tests. Static field values keep the
 /// emitted C source byte-for-byte stable across hosts.
 const test_aot_metadata: AotMetadata = .{
@@ -13230,7 +13294,7 @@ test "emitProgramC: generated word forward declaration carries qualified asm-nam
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "asm(\"Person/name>>\")") != null);
@@ -13252,7 +13316,7 @@ test "emitProgramC: generated word with null parent falls back to bare asm-name"
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "asm(\"lonely?\")") != null);
@@ -13279,7 +13343,7 @@ test "emitProgramC: compiled quotation forward declaration carries asm-name" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_q_0(uintptr_t jit_ctx) asm(\"main/quot@7:11\");") != null);
@@ -13293,7 +13357,7 @@ test "emitProgramC: hosted preamble contains libc includes and main shim" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdio.h>") != null);
@@ -13322,7 +13386,7 @@ test "emitProgramC: freestanding preamble drops libc and emits kernel_main" {
     meta.target_triple = "riscv64-freestanding-none";
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, meta, &diag, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, meta, &diag, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdio.h>") == null);
@@ -13366,7 +13430,7 @@ test "compile (a+3)*4" {
 
 test "compile a+b with two inputs" {
     const instrs = makeInstructions(.{"+"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -13380,7 +13444,7 @@ test "compiled direct call preserves aliased lower stack values" {
     defer dispatch.deinit();
 
     const callee_instrs = makeInstructions(.{"+"});
-    const callee = try compileWord(&callee_instrs, 2, 1, null, null, null, null, null);
+    const callee = try compileWord(&callee_instrs, 2, 1, arith_test_resolver, null, null, null, null);
     const callee_id = try dispatch.assignId("sum2");
     dispatch.update(callee_id, callee.code_ptr, callee.jit_buf, callee.peak_stack_depth);
 
@@ -13391,7 +13455,7 @@ test "compiled direct call preserves aliased lower stack values" {
     const Resolver = struct {
         fn resolve(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
             const state: *ResolverState = @ptrCast(@alignCast(user_data));
-            if (!std.mem.eql(u8, name, "sum2")) return null;
+            if (!std.mem.eql(u8, name, "sum2")) return resolveArithOpForTest(name, user_data);
             return .{
                 .word_id = state.callee_id,
                 .input_count = 2,
@@ -13454,7 +13518,7 @@ test "relocation across a direct compiled call preserves a lower-stack alias" {
     for (0..deep) |i| callee_ops[deep + i] = .{ .op = .{ .call_word = "drop" }, .line = 1 };
     callee_ops[2 * deep] = .{ .op = .{ .call_word = "+" }, .line = 1 };
 
-    const callee = try compileWord(&callee_ops, 2, 1, null, null, null, null, null);
+    const callee = try compileWord(&callee_ops, 2, 1, arith_test_resolver, null, null, null, null);
     const callee_id = try dispatch.assignId("deepsum");
     dispatch.update(callee_id, callee.code_ptr, callee.jit_buf, callee.peak_stack_depth);
 
@@ -13463,7 +13527,7 @@ test "relocation across a direct compiled call preserves a lower-stack alias" {
     const Resolver = struct {
         fn resolve(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
             const state: *ResolverState = @ptrCast(@alignCast(user_data));
-            if (!std.mem.eql(u8, name, "deepsum")) return null;
+            if (!std.mem.eql(u8, name, "deepsum")) return resolveArithOpForTest(name, user_data);
             return .{ .word_id = state.callee_id, .input_count = 2, .output_count = 1 };
         }
     };
@@ -13508,7 +13572,7 @@ test "relocation across a recursive compiled call preserves a lower-stack alias"
     const Resolver = struct {
         fn resolve(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
             const state: *ResolverState = @ptrCast(@alignCast(user_data));
-            if (!std.mem.eql(u8, name, "fact")) return null;
+            if (!std.mem.eql(u8, name, "fact")) return resolveArithOpForTest(name, user_data);
             return .{ .word_id = state.fact_id, .input_count = 1, .output_count = 1 };
         }
     };
@@ -13557,7 +13621,7 @@ test "no relocation: swap arithmetic on a real context stays correct" {
     // Non-hazard regression guard: with ample capacity the stack never moves,
     // so the live-derivation change must reproduce the existing swap behavior.
     const instrs = makeInstructions(.{ "swap", "-" });
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     var ctx = Context.init(testing.allocator);
@@ -13600,28 +13664,11 @@ test "overflow preserves sp on non-polymorphic path" {
     try testing.expectEqual(@as(usize, 1), sp);
 }
 
-test "division by zero returns error_propagate" {
+test "polymorphic division without a resolver is not compilable" {
     const instrs = makeInstructions(.{"/"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
-    defer result.jit_buf.deinit();
-
-    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var out: i64 = undefined;
-    // Div-by-zero goes to native fallback; without a resolver it returns error_propagate (2).
-    try testing.expectEqual(@as(i32, 2), callCompiled(func, &.{ 10, 0 }, &out));
-    try testing.expectEqual(@as(i32, 0), callCompiled(func, &.{ 10, 2 }, &out));
-    try testing.expectEqual(@as(i64, 5), out);
-}
-
-test "division minInt/-1 returns error_propagate" {
-    const instrs = makeInstructions(.{"/"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
-    defer result.jit_buf.deinit();
-
-    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var out: i64 = undefined;
-    // minInt/-1 overflow goes to native fallback; without a resolver it returns error_propagate (2).
-    try testing.expectEqual(@as(i32, 2), callCompiled(func, &.{ std.math.minInt(i64), -1 }, &out));
+    // The fallback arm covers div-by-zero and minInt/-1; without the
+    // polymorphic native there is no correct continuation for it.
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 2, 1, null, null, null, null, null));
 }
 
 test "bail on non-fixnum input" {
@@ -13641,7 +13688,7 @@ test "bail on non-fixnum input" {
 
 test "bail on stack underflow" {
     const instrs = makeInstructions(.{"+"});
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -13736,21 +13783,14 @@ test "compile unit literal" {
     try testing.expect(values[0] == .unit);
 }
 
-test "arithmetic on opaque operand returns error_propagate" {
+test "polymorphic arithmetic without a resolver is not compilable" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 2 },
     };
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
-    defer result.jit_buf.deinit();
-
-    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
-    var values: [4]Value = undefined;
-    values[0] = .{ .fixnum = 1 };
-    var sp: usize = 1;
-    const status = callCompiledValues(func, &values, &sp);
-    // Non-numeric operand goes to native fallback; without a resolver returns error_propagate.
-    try testing.expectEqual(@as(i32, 2), status);
+    // Two runtime-unknown operands take the polymorphic path, whose fallback
+    // arm needs the native; without a resolver the body is not compilable.
+    try testing.expectError(IrCodegenError.NotCompilable, compileWord(&instrs, 1, 1, null, null, null, null, null));
 }
 
 test "bail on float input to arithmetic" {
@@ -13940,7 +13980,7 @@ test "compile abs on negative fixnum" {
 
 test "compile dup * (square)" {
     const instrs = makeInstructions(.{ "dup", "*" });
-    const result = try compileWord(&instrs, 1, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 1, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -13953,7 +13993,7 @@ test "compile dup * (square)" {
 
 test "compile swap - (reverse subtract)" {
     const instrs = makeInstructions(.{ "swap", "-" });
-    const result = try compileWord(&instrs, 2, 1, null, null, null, null, null);
+    const result = try compileWord(&instrs, 2, 1, arith_test_resolver, null, null, null, null);
     defer result.jit_buf.deinit();
 
     const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
@@ -15669,7 +15709,7 @@ test "emitProgramC generates complete C source" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -15713,7 +15753,7 @@ test "emitProgramC omits legacy name-lookup typed-literal helpers" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "jitPushWordLiteral") == null);
@@ -15731,7 +15771,7 @@ test "emitProgramC dispatch table has correct entries" {
     };
 
     var diag2: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -15756,7 +15796,7 @@ test "emitProgramC quotation table with all compiled entries" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // Table exists with all entries
@@ -15794,7 +15834,7 @@ test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
     try testing.expectError(error.UncompiledQuotations, result);
 
     // Diagnostics report the uncompiled quotation
@@ -15824,7 +15864,7 @@ test "emitProgramC applies Option C to an escaping uncompiled quotation" {
             .{ .quotation_id = 0, .instructions = &bad_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
         };
         var diag: CodegenDiagnostics = .{};
-        const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .false, true, test_aot_metadata, &diag, null, false, testing.allocator);
+        const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
         try testing.expectError(error.UncompiledQuotations, result);
         try testing.expectEqual(@as(usize, 1), diag.uncompiled_quotations.len);
         try testing.expectEqualStrings("onez_q_0", diag.uncompiled_quotations[0].c_name);
@@ -15840,7 +15880,7 @@ test "emitProgramC applies Option C to an escaping uncompiled quotation" {
             .{ .quotation_id = 0, .instructions = &bad_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
         };
         var diag: CodegenDiagnostics = .{};
-        const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+        const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
         defer testing.allocator.free(source);
         try testing.expectEqual(@as(usize, 0), diag.uncompiled_quotations.len);
     }
@@ -15854,7 +15894,7 @@ test "emitProgramC no quotation table when quotations empty" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // No quotation table emitted (extern decl exists but table and call do not)
@@ -15872,7 +15912,7 @@ test "emitProgramC output compiles with cc" {
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});

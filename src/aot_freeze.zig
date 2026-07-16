@@ -57,6 +57,11 @@ pub const AotQuotationDesc = struct {
     /// reached generic. Distinguishes method bodies from literal quotations so the codegen can
     /// apply the interpreter-run fallback and the method-body-specific build diagnostic to them.
     is_method_body: bool = false,
+    /// True when this quotation was reached only through a composite literal (a hash, array, or
+    /// dispatch container) rather than as a direct quotation literal. Buried bodies keep their
+    /// callees undiscovered by design, so they compile opportunistically: an uncompiled one runs
+    /// interpreted at its dispatch site instead of failing the build.
+    from_composite: bool = false,
 };
 
 pub const FreezeResult = struct {
@@ -72,6 +77,11 @@ pub const FreezeResult = struct {
     /// Word Discovery BFS and remapped to caller word ids in buildAotDescs.
     /// Stable ordering: insertion order from the BFS.
     call_targets: []const CallTargetEntry = &.{},
+    /// Non-prelude words the freezer did not compile that are reachable from composite-buried
+    /// quotations, deduped by callee name. Empty in strict builds, whose promoting walks discover
+    /// those callees. Codegen rejects an interpreter-linked metadata-only build when any are
+    /// present, since the interpreted call would run the word's empty rehydrated body.
+    interpreted_reach: []const ir_codegen.InterpretedReachViolation = &.{},
 
     pub fn deinit(self: *FreezeResult, allocator: Allocator) void {
         allocator.free(self.entry_instrs);
@@ -89,6 +99,7 @@ pub const FreezeResult = struct {
             if (entry.quotation_path.len > 0) allocator.free(entry.quotation_path);
         }
         allocator.free(self.call_targets);
+        allocator.free(self.interpreted_reach);
     }
 };
 
@@ -339,7 +350,7 @@ pub fn freezeModuleGraphOpts(
     // Phase 2: Discover all reachable compound words via BFS.
     // The entry file's local frame is still on the stack, so lookupWord
     // finds entry-file definitions and their imports.
-    var discovered = discoverReachableWords(ctx, entry_instrs, diagnostics, options.artifact_class, options.strict_interpreter_free, allocator) catch |err| {
+    var discovered = discoverReachableWords(ctx, entry_instrs, entry_file, &prelude_words, diagnostics, options.artifact_class, options.strict_interpreter_free, allocator) catch |err| {
         ctx.popPragmaFrame();
         ctx.popLocalFrame();
         return switch (err) {
@@ -350,6 +361,8 @@ pub fn freezeModuleGraphOpts(
     };
     defer discovered.names.deinit(ctx.quotationAllocator());
     defer discovered.method_body_ptrs.deinit(ctx.quotationAllocator());
+    defer discovered.composite_body_ptrs.deinit(ctx.quotationAllocator());
+    defer discovered.interpreted_reach.deinit(ctx.quotationAllocator());
     defer discovered.defs.deinit(ctx.quotationAllocator());
     defer discovered.native_names.deinit(ctx.quotationAllocator());
     defer discovered.native_defs.deinit(ctx.quotationAllocator());
@@ -453,6 +466,8 @@ pub fn freezeModuleGraphOpts(
         result.deinit(allocator);
         return error.MissingStackEffects;
     }
+
+    result.interpreted_reach = try allocator.dupe(ir_codegen.InterpretedReachViolation, discovered.interpreted_reach.items);
 
     // Success: path slices have been duped into result.call_targets. Free
     // the BFS-time originals; the idempotent free renders the errdefer
@@ -621,6 +636,11 @@ const DiscoveredWords = struct {
     /// Instruction-slice pointers of the quotation bodies that are `method{` dispatch bodies, used
     /// to set `AotQuotationDesc.is_method_body` at manifest-build time.
     method_body_ptrs: std.AutoHashMapUnmanaged(usize, void) = .{},
+    /// Instruction-slice pointers of the quotation bodies reached only through composite literals,
+    /// used to set `AotQuotationDesc.from_composite` at manifest-build time.
+    composite_body_ptrs: std.AutoHashMapUnmanaged(usize, void) = .{},
+    /// Violations found by the interpreted-reach detection walk, deduped by callee name.
+    interpreted_reach: std.ArrayListUnmanaged(ir_codegen.InterpretedReachViolation) = .{},
     /// One entry per reachable `call_word` instruction encountered during
     /// BFS. Caller is recorded by name here; buildAotDescs remaps to the
     /// assigned word id when producing FreezeResult.call_targets. The
@@ -668,9 +688,14 @@ fn decodeWordIdentity(identity: []const u8) struct { module: ?[]const u8, name: 
 
 /// BFS over call_word references starting from entry instructions,
 /// collecting all reachable compound words.
+///
+/// `entry_file` and `prelude_words` feed the interpreted-reach detection walk
+/// that runs after discovery in non-strict builds.
 fn discoverReachableWords(
     ctx: *Context,
     entry_instrs: []const Instruction,
+    entry_file: []const u8,
+    prelude_words: *const std.StringHashMapUnmanaged(void),
     diagnostics: *FreezeDiagnostics,
     artifact_class: ArtifactClass,
     strict_interpreter_free: bool,
@@ -734,7 +759,7 @@ fn discoverReachableWords(
     // promote callees of composite-nested quotations in the entry instructions before draining,
     // so a runtime-selected dispatch, e.g., `H{ ... match: [ ... ] }`, has its branch quot
     // callees compile.
-    if (strict_interpreter_free) collectCompositeQuotationsPromoting(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
+    if (strict_interpreter_free) collectCompositeQuotationsPromoting(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
         freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
         result.names.deinit(temp_allocator);
         result.defs.deinit(temp_allocator);
@@ -772,7 +797,7 @@ fn discoverReachableWords(
             const worklist_len_before = worklist.items.len;
 
             if (!scanned_entry) {
-                collectDispatchContainerQuotationsPromoting(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
+                collectDispatchContainerQuotationsPromoting(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
                     freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
                     result.names.deinit(temp_allocator);
                     result.defs.deinit(temp_allocator);
@@ -791,7 +816,7 @@ fn discoverReachableWords(
                     .compound => |c| c,
                     .native, .host_callback => continue,
                 };
-                collectDispatchContainerQuotationsPromoting(ctx, body, result.names.items[scanned_def_count], &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
+                collectDispatchContainerQuotationsPromoting(ctx, body, result.names.items[scanned_def_count], &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
                     freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
                     result.names.deinit(temp_allocator);
                     result.defs.deinit(temp_allocator);
@@ -831,13 +856,46 @@ fn discoverReachableWords(
     // The dispatch-container promoting walk above runs first so `result.defs` already includes
     // every word discovered via promotion by the time this pass collects their composite-nested
     // quotation bodies too.
-    try collectCompositeQuotations(entry_instrs, &result.quotation_bodies, &quotation_seen, temp_allocator);
+    try collectCompositeQuotations(entry_instrs, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, temp_allocator);
     for (result.defs.items) |def| {
         const body = switch (def.action) {
             .compound => |c| c,
             .native, .host_callback => continue,
         };
-        try collectCompositeQuotations(body, &result.quotation_bodies, &quotation_seen, temp_allocator);
+        try collectCompositeQuotations(body, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, temp_allocator);
+    }
+
+    // Detect interpreted reach to non-prelude words the BFS never discovered.
+    //
+    // Composite-buried quotations run interpreted when uncompiled, and a
+    // metadata-only image drops the bodies of the words they call, so codegen
+    // must know whether any buried quotation reaches a non-prelude word with
+    // no compiled dispatch. Skipped in strict builds: the promoting walks
+    // above discover those callees, so the violation set is empty there by
+    // construction, and `jitCallQuotation` refuses to run under strict mode
+    // anyway. Runs inside discovery so name resolution sees the same module
+    // deps frames the BFS used.
+    if (!strict_interpreter_free) {
+        var discovered_names = std.StringHashMapUnmanaged(void){};
+        defer discovered_names.deinit(temp_allocator);
+        for (result.names.items) |name| {
+            try discovered_names.put(temp_allocator, name, {});
+        }
+
+        var detect_quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+        defer detect_quotation_seen.deinit(temp_allocator);
+        var callee_seen = std.StringHashMapUnmanaged(void){};
+        defer callee_seen.deinit(temp_allocator);
+
+        const entry_source_file: ?[]const u8 = if (entry_file.len > 0) entry_file else null;
+        try detectInterpretedReach(ctx, entry_instrs, "__entry__", entry_source_file, prelude_words, &discovered_names, &detect_quotation_seen, &callee_seen, &result.interpreted_reach, temp_allocator);
+        for (result.names.items, result.defs.items) |name, def| {
+            const body = switch (def.action) {
+                .compound => |c| c,
+                .native, .host_callback => continue,
+            };
+            try detectInterpretedReach(ctx, body, name, def.source_file, prelude_words, &discovered_names, &detect_quotation_seen, &callee_seen, &result.interpreted_reach, temp_allocator);
+        }
     }
 
     return result;
@@ -1155,12 +1213,12 @@ fn collectCallWords(
 /// composite values, so this fills that gap. Nested quotation literals are descended into
 /// here only to find composites buried inside them; the literals themselves were already
 /// collected by the main BFS.
-fn collectCompositeQuotations(instrs: []const Instruction, quotation_bodies: *std.ArrayListUnmanaged([]const Instruction), quotation_seen: *std.AutoHashMapUnmanaged(usize, void), allocator: Allocator) Allocator.Error!void {
+fn collectCompositeQuotations(instrs: []const Instruction, quotation_bodies: *std.ArrayListUnmanaged([]const Instruction), quotation_seen: *std.AutoHashMapUnmanaged(usize, void), composite_body_ptrs: *std.AutoHashMapUnmanaged(usize, void), allocator: Allocator) Allocator.Error!void {
     for (instrs) |instr| {
         switch (instr.op) {
             .push_literal => |val| switch (val) {
-                .quotation => |q| try collectCompositeQuotations(q.instructions, quotation_bodies, quotation_seen, allocator),
-                .array, .hash, .vector, .mutable_map, .struct_instance => try collectQuotationsInValue(val, quotation_bodies, quotation_seen, allocator),
+                .quotation => |q| try collectCompositeQuotations(q.instructions, quotation_bodies, quotation_seen, composite_body_ptrs, allocator),
+                .array, .hash, .vector, .mutable_map, .struct_instance => try collectQuotationsInValue(val, quotation_bodies, quotation_seen, composite_body_ptrs, allocator),
                 else => {},
             },
             else => {},
@@ -1179,25 +1237,26 @@ fn collectCompositeQuotations(instrs: []const Instruction, quotation_bodies: *st
 /// literal composites are parse-constructed and acyclic, matching the
 /// acyclic-instruction-tree assumption the discovery already relies on, so no
 /// cycle guard is needed.
-fn collectQuotationsInValue(val: Value, quotation_bodies: *std.ArrayListUnmanaged([]const Instruction), quotation_seen: *std.AutoHashMapUnmanaged(usize, void), allocator: Allocator) Allocator.Error!void {
+fn collectQuotationsInValue(val: Value, quotation_bodies: *std.ArrayListUnmanaged([]const Instruction), quotation_seen: *std.AutoHashMapUnmanaged(usize, void), composite_body_ptrs: *std.AutoHashMapUnmanaged(usize, void), allocator: Allocator) Allocator.Error!void {
     switch (val) {
         .quotation => |q| {
             const ptr_key = @intFromPtr(q.instructions.ptr);
             const qgop = try quotation_seen.getOrPut(allocator, ptr_key);
             if (!qgop.found_existing) {
                 try quotation_bodies.append(allocator, q.instructions);
-                try collectNestedQuotations(q.instructions, quotation_bodies, quotation_seen, allocator);
+                try composite_body_ptrs.put(allocator, ptr_key, {});
+                try collectNestedQuotations(q.instructions, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
             }
         },
         .array => |arr| {
-            for (arr.items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, allocator);
+            for (arr.items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
         },
         .hash => |h| {
             var it = h.map.iterator();
-            while (it.next()) |entry| try collectQuotationsInValue(entry.value_ptr.*, quotation_bodies, quotation_seen, allocator);
+            while (it.next()) |entry| try collectQuotationsInValue(entry.value_ptr.*, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
         },
         .vector => |v| {
-            for (v.list.items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, allocator);
+            for (v.list.items) |elem| try collectQuotationsInValue(elem, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
         },
         // Module-private mutable state serialized into the runtime image -- the
         // lint registry's `(lint-registry-storage)` map holds rule struct
@@ -1207,10 +1266,10 @@ fn collectQuotationsInValue(val: Value, quotation_bodies: *std.ArrayListUnmanage
         // they must be collected here to compile and get a `code_ptr`.
         .mutable_map => |m| {
             var it = m.map.iterator();
-            while (it.next()) |entry| try collectQuotationsInValue(entry.value_ptr.*, quotation_bodies, quotation_seen, allocator);
+            while (it.next()) |entry| try collectQuotationsInValue(entry.value_ptr.*, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
         },
         .struct_instance => |si| {
-            for (si.fields) |field| try collectQuotationsInValue(field, quotation_bodies, quotation_seen, allocator);
+            for (si.fields) |field| try collectQuotationsInValue(field, quotation_bodies, quotation_seen, composite_body_ptrs, allocator);
         },
         else => {},
     }
@@ -1240,6 +1299,7 @@ fn collectCompositeQuotationsPromoting(
     seen: *std.StringHashMapUnmanaged(void),
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    composite_body_ptrs: *std.AutoHashMapUnmanaged(usize, void),
     pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
     quotation_path: *std.ArrayListUnmanaged(u32),
     diagnostics: *FreezeDiagnostics,
@@ -1250,8 +1310,8 @@ fn collectCompositeQuotationsPromoting(
     for (instrs) |instr| {
         switch (instr.op) {
             .push_literal => |val| switch (val) {
-                .quotation => |q| try collectCompositeQuotationsPromoting(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
-                .array, .hash, .vector => try collectQuotationsInValuePromoting(ctx, val, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
+                .quotation => |q| try collectCompositeQuotationsPromoting(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
+                .array, .hash, .vector => try collectQuotationsInValuePromoting(ctx, val, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
                 else => {},
             },
             else => {},
@@ -1270,6 +1330,7 @@ fn collectQuotationsInValuePromoting(
     seen: *std.StringHashMapUnmanaged(void),
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    composite_body_ptrs: *std.AutoHashMapUnmanaged(usize, void),
     pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
     quotation_path: *std.ArrayListUnmanaged(u32),
     diagnostics: *FreezeDiagnostics,
@@ -1278,16 +1339,16 @@ fn collectQuotationsInValuePromoting(
     path_allocator: Allocator,
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
     switch (val) {
-        .quotation => |q| try promoteQuotationCallees(ctx, q, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
+        .quotation => |q| try promoteQuotationCallees(ctx, q, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
         .array => |arr| {
-            for (arr.items) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+            for (arr.items) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         .hash => |h| {
             var it = h.map.iterator();
-            while (it.next()) |entry| try collectQuotationsInValuePromoting(ctx, entry.value_ptr.*, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+            while (it.next()) |entry| try collectQuotationsInValuePromoting(ctx, entry.value_ptr.*, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         .vector => |v| {
-            for (v.list.items) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+            for (v.list.items) |elem| try collectQuotationsInValuePromoting(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         else => {},
     }
@@ -1311,6 +1372,7 @@ fn promoteQuotationCallees(
     seen: *std.StringHashMapUnmanaged(void),
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    composite_body_ptrs: *std.AutoHashMapUnmanaged(usize, void),
     pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
     quotation_path: *std.ArrayListUnmanaged(u32),
     diagnostics: *FreezeDiagnostics,
@@ -1322,6 +1384,7 @@ fn promoteQuotationCallees(
     const qgop = try quotation_seen.getOrPut(allocator, ptr_key);
     if (!qgop.found_existing) {
         try quotation_bodies.append(allocator, q.instructions);
+        try composite_body_ptrs.put(allocator, ptr_key, {});
         collectCallWords(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.DisallowedDynamicFeature, error.DisallowedNativeInterpreterDependency => {},
@@ -1351,6 +1414,7 @@ fn collectDispatchContainerQuotationsPromoting(
     seen: *std.StringHashMapUnmanaged(void),
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    composite_body_ptrs: *std.AutoHashMapUnmanaged(usize, void),
     pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
     quotation_path: *std.ArrayListUnmanaged(u32),
     diagnostics: *FreezeDiagnostics,
@@ -1361,8 +1425,8 @@ fn collectDispatchContainerQuotationsPromoting(
     for (instrs) |instr| {
         switch (instr.op) {
             .push_literal => |val| switch (val) {
-                .quotation => |q| try collectDispatchContainerQuotationsPromoting(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
-                .mutable_map, .struct_instance, .hash => try walkDispatchContainerValue(ctx, val, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
+                .quotation => |q| try collectDispatchContainerQuotationsPromoting(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
+                .mutable_map, .struct_instance, .hash => try walkDispatchContainerValue(ctx, val, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
                 else => {},
             },
             else => {},
@@ -1386,6 +1450,7 @@ fn walkDispatchContainerValue(
     seen: *std.StringHashMapUnmanaged(void),
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    composite_body_ptrs: *std.AutoHashMapUnmanaged(usize, void),
     pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
     quotation_path: *std.ArrayListUnmanaged(u32),
     diagnostics: *FreezeDiagnostics,
@@ -1395,23 +1460,23 @@ fn walkDispatchContainerValue(
 ) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
     switch (val) {
         .array => |arr| {
-            for (arr.items) |elem| try walkDispatchContainerValue(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+            for (arr.items) |elem| try walkDispatchContainerValue(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         .vector => |v| {
-            for (v.list.items) |elem| try walkDispatchContainerValue(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+            for (v.list.items) |elem| try walkDispatchContainerValue(ctx, elem, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         .mutable_map => |m| {
             var it = m.map.iterator();
-            while (it.next()) |entry| try walkDispatchContainerValue(ctx, entry.value_ptr.*, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+            while (it.next()) |entry| try walkDispatchContainerValue(ctx, entry.value_ptr.*, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
         },
         .struct_instance => |si| {
             for (si.struct_type.fields, 0..) |field_name, i| {
                 if (std.mem.eql(u8, field_name, dispatch_struct_field_check)) {
                     if (si.fields[i] == .quotation) {
-                        try promoteQuotationCallees(ctx, si.fields[i].quotation, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+                        try promoteQuotationCallees(ctx, si.fields[i].quotation, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
                     }
                 } else {
-                    try walkDispatchContainerValue(ctx, si.fields[i], caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+                    try walkDispatchContainerValue(ctx, si.fields[i], caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
                 }
             }
         },
@@ -1420,10 +1485,10 @@ fn walkDispatchContainerValue(
             while (it.next()) |entry| {
                 if (std.mem.eql(u8, entry.key_ptr.*, dispatch_hash_key_match)) {
                     if (entry.value_ptr.* == .quotation) {
-                        try promoteQuotationCallees(ctx, entry.value_ptr.*.quotation, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+                        try promoteQuotationCallees(ctx, entry.value_ptr.*.quotation, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
                     }
                 } else {
-                    try walkDispatchContainerValue(ctx, entry.value_ptr.*, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+                    try walkDispatchContainerValue(ctx, entry.value_ptr.*, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
                 }
             }
         },
@@ -1439,12 +1504,142 @@ fn collectNestedQuotations(
     instrs: []const Instruction,
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    composite_body_ptrs: *std.AutoHashMapUnmanaged(usize, void),
     allocator: Allocator,
 ) Allocator.Error!void {
     for (instrs) |instr| {
         switch (instr.op) {
-            .push_literal => |val| try collectQuotationsInValue(val, quotation_bodies, quotation_seen, allocator),
+            .push_literal => |val| try collectQuotationsInValue(val, quotation_bodies, quotation_seen, composite_body_ptrs, allocator),
             else => {},
+        }
+    }
+}
+
+/// Detect-only mirror of `collectCompositeQuotations` for the non-strict
+/// build: descend to each composite-buried quotation and classify its callees
+/// instead of collecting its body. Never seeds the BFS worklist, so it cannot
+/// repeat the compile-set regression that scoped the promoting walks.
+fn detectInterpretedReach(
+    ctx: *const Context,
+    instrs: []const Instruction,
+    caller_name: []const u8,
+    source_file: ?[]const u8,
+    prelude_words: *const std.StringHashMapUnmanaged(void),
+    discovered_names: *const std.StringHashMapUnmanaged(void),
+    quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    callee_seen: *std.StringHashMapUnmanaged(void),
+    violations: *std.ArrayListUnmanaged(ir_codegen.InterpretedReachViolation),
+    allocator: Allocator,
+) Allocator.Error!void {
+    for (instrs) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| switch (val) {
+                .quotation => |q| try detectInterpretedReach(ctx, q.instructions, caller_name, source_file, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
+                .array, .hash, .vector, .mutable_map, .struct_instance => try detectReachInValue(ctx, val, caller_name, source_file, instr.line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
+                else => {},
+            },
+            else => {},
+        }
+    }
+}
+
+/// Recurse through a composite literal Value to each buried `.quotation`,
+/// deduped by pointer identity, and classify that body's callees. `line` is
+/// the burying composite literal's source line, carried onto each violation.
+fn detectReachInValue(
+    ctx: *const Context,
+    val: Value,
+    caller_name: []const u8,
+    source_file: ?[]const u8,
+    line: usize,
+    prelude_words: *const std.StringHashMapUnmanaged(void),
+    discovered_names: *const std.StringHashMapUnmanaged(void),
+    quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    callee_seen: *std.StringHashMapUnmanaged(void),
+    violations: *std.ArrayListUnmanaged(ir_codegen.InterpretedReachViolation),
+    allocator: Allocator,
+) Allocator.Error!void {
+    switch (val) {
+        .quotation => |q| {
+            const gop = try quotation_seen.getOrPut(allocator, @intFromPtr(q.instructions.ptr));
+            if (!gop.found_existing) {
+                try detectBuriedCallees(ctx, q.instructions, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
+            }
+        },
+        .array => |arr| {
+            for (arr.items) |elem| try detectReachInValue(ctx, elem, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
+        },
+        .hash => |h| {
+            var it = h.map.iterator();
+            while (it.next()) |entry| try detectReachInValue(ctx, entry.value_ptr.*, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
+        },
+        .vector => |v| {
+            for (v.list.items) |elem| try detectReachInValue(ctx, elem, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
+        },
+        .mutable_map => |m| {
+            var it = m.map.iterator();
+            while (it.next()) |entry| try detectReachInValue(ctx, entry.value_ptr.*, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
+        },
+        .struct_instance => |si| {
+            for (si.fields) |field| try detectReachInValue(ctx, field, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
+        },
+        else => {},
+    }
+}
+
+/// Classify every callee of a composite-buried quotation body, descending
+/// nested quotation literals and deeper composites, since a buried body was
+/// never visited by the main BFS.
+///
+/// A callee is a violation when it is not a prelude word and resolves to a
+/// compound word outside the discovered set: it will carry no compiled
+/// dispatch, so an interpreted call runs its empty metadata-image body. A
+/// prelude callee is fine (the linked interpreter reloads the prelude), a
+/// native lives in the binary, and an unresolvable name fails runtime lookup
+/// loudly rather than silently.
+fn detectBuriedCallees(
+    ctx: *const Context,
+    instrs: []const Instruction,
+    caller_name: []const u8,
+    source_file: ?[]const u8,
+    line: usize,
+    prelude_words: *const std.StringHashMapUnmanaged(void),
+    discovered_names: *const std.StringHashMapUnmanaged(void),
+    quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    callee_seen: *std.StringHashMapUnmanaged(void),
+    violations: *std.ArrayListUnmanaged(ir_codegen.InterpretedReachViolation),
+    allocator: Allocator,
+) Allocator.Error!void {
+    for (instrs) |instr| {
+        switch (instr.op) {
+            .call_word, .call_word_direct => {
+                const name = instr.op.callTargetName().?;
+                if (prelude_words.contains(name)) continue;
+                switch (classifyCallee(ctx, name)) {
+                    .compound_name => {
+                        if (discovered_names.contains(name)) continue;
+                        const gop = try callee_seen.getOrPut(allocator, name);
+                        if (gop.found_existing) continue;
+                        try violations.append(allocator, .{
+                            .callee_name = name,
+                            .caller_word = caller_name,
+                            .source_file = source_file,
+                            .line = line,
+                        });
+                    },
+                    .native_name, .unresolved => {},
+                }
+            },
+            .push_literal => |val| switch (val) {
+                .quotation => |q| {
+                    const gop = try quotation_seen.getOrPut(allocator, @intFromPtr(q.instructions.ptr));
+                    if (!gop.found_existing) {
+                        try detectBuriedCallees(ctx, q.instructions, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator);
+                    }
+                },
+                .array, .hash, .vector, .mutable_map, .struct_instance => try detectReachInValue(ctx, val, caller_name, source_file, line, prelude_words, discovered_names, quotation_seen, callee_seen, violations, allocator),
+                else => {},
+            },
         }
     }
 }
@@ -2324,6 +2519,7 @@ fn buildAotDescs(
             .source_column = if (entry) |e| e.column else 0,
             .defining_word = if (entry) |e| e.defining_word else null,
             .is_method_body = discovered.method_body_ptrs.contains(@intFromPtr(body.ptr)),
+            .from_composite = discovered.composite_body_ptrs.contains(@intFromPtr(body.ptr)),
         });
     }
     const max_quotation_id = if (next_q_id > 0) next_q_id - 1 else 0;
@@ -3542,8 +3738,10 @@ test "collectCompositeQuotations collects a quotation nested in an array literal
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
 
-    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, &composite_body_ptrs, allocator);
 
     // The nested quotation body joins the compilation manifest, deduped by
     // instruction-pointer identity.
@@ -3570,8 +3768,10 @@ test "collectCompositeQuotations collects a quotation nested in a hash literal" 
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
 
-    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, &composite_body_ptrs, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
     try testing.expectEqual(@intFromPtr(inner_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
@@ -3604,8 +3804,10 @@ test "collectCompositeQuotations collects a quotation nested in a nested composi
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
 
-    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, &composite_body_ptrs, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
     try testing.expectEqual(@intFromPtr(inner_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
@@ -3628,8 +3830,10 @@ test "collectCompositeQuotations does not collect a top-level quotation literal"
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
 
-    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, &composite_body_ptrs, allocator);
 
     try testing.expectEqual(@as(usize, 0), quotation_bodies.items.len);
 }
@@ -3655,8 +3859,10 @@ test "collectCompositeQuotations dedupes a quotation reached twice" {
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
 
-    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, &composite_body_ptrs, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
 }
@@ -3681,8 +3887,10 @@ test "collectCompositeQuotations collects a quotation nested in a mutable_map li
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
 
-    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, &composite_body_ptrs, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
     try testing.expectEqual(@intFromPtr(inner_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
@@ -3710,8 +3918,10 @@ test "collectCompositeQuotations collects a quotation in a struct_instance field
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
 
-    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, allocator);
+    try collectCompositeQuotations(outer_instrs, &quotation_bodies, &quotation_seen, &composite_body_ptrs, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
     try testing.expectEqual(@intFromPtr(inner_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
@@ -3756,9 +3966,11 @@ test "collectDispatchContainerQuotationsPromoting promotes the check field quota
     defer freePendingCallTargetPaths(&pending_call_targets, allocator);
     var quotation_path = std.ArrayListUnmanaged(u32){};
     defer quotation_path.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectDispatchContainerQuotationsPromoting(&ctx, outer_instrs, "registry-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectDispatchContainerQuotationsPromoting(&ctx, outer_instrs, "registry-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &composite_body_ptrs, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expect(seen.contains("promoted-callee"));
     try testing.expectEqual(@as(usize, 1), worklist.items.len);
@@ -3797,9 +4009,11 @@ test "collectDispatchContainerQuotationsPromoting promotes the match key quotati
     defer freePendingCallTargetPaths(&pending_call_targets, allocator);
     var quotation_path = std.ArrayListUnmanaged(u32){};
     defer quotation_path.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectDispatchContainerQuotationsPromoting(&ctx, outer_instrs, "lexer-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectDispatchContainerQuotationsPromoting(&ctx, outer_instrs, "lexer-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &composite_body_ptrs, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expect(seen.contains("promoted-rule-callee"));
     try testing.expectEqual(@as(usize, 1), worklist.items.len);
@@ -3840,9 +4054,11 @@ test "collectDispatchContainerQuotationsPromoting does not promote a struct_inst
     defer freePendingCallTargetPaths(&pending_call_targets, allocator);
     var quotation_path = std.ArrayListUnmanaged(u32){};
     defer quotation_path.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectDispatchContainerQuotationsPromoting(&ctx, outer_instrs, "registry-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectDispatchContainerQuotationsPromoting(&ctx, outer_instrs, "registry-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &composite_body_ptrs, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expect(!seen.contains("should-not-promote"));
     try testing.expectEqual(@as(usize, 0), worklist.items.len);
@@ -3878,9 +4094,11 @@ test "collectDispatchContainerQuotationsPromoting does not promote a hash entry 
     defer freePendingCallTargetPaths(&pending_call_targets, allocator);
     var quotation_path = std.ArrayListUnmanaged(u32){};
     defer quotation_path.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectDispatchContainerQuotationsPromoting(&ctx, outer_instrs, "lexer-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectDispatchContainerQuotationsPromoting(&ctx, outer_instrs, "lexer-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &composite_body_ptrs, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expect(!seen.contains("should-not-promote-2"));
     try testing.expectEqual(@as(usize, 0), worklist.items.len);
@@ -3936,10 +4154,12 @@ test "discoverReachableWords re-drains the BFS to reach a promoted callee's own 
     };
 
     var diagnostics: FreezeDiagnostics = .{};
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    defer prelude_words.deinit(allocator);
     // result.names/defs/native_names/native_defs/quotation_bodies/method_body_ptrs are all
     // appended with ctx.quotationAllocator() (an arena), freed wholesale by ctx.deinit() above;
     // only pending_call_targets' quotation_path dupes use the passed-in result_allocator.
-    var result = try discoverReachableWords(&ctx, entry_instrs, &diagnostics, .interpreter_free_aot, true, allocator);
+    var result = try discoverReachableWords(&ctx, entry_instrs, "", &prelude_words, &diagnostics, .interpreter_free_aot, true, allocator);
     defer freePendingCallTargetPaths(&result.pending_call_targets, allocator);
 
     try testing.expect(wordNamesContain(result.names.items, "promoted-callee"));
@@ -4676,7 +4896,9 @@ test "discoverReachableWords includes reached generic's method bodies and exclud
     defer allocator.free(entry_instrs);
 
     var diagnostics: FreezeDiagnostics = .{};
-    var result = try discoverReachableWords(&ctx, entry_instrs, &diagnostics, .runtime_image_aot, false, allocator);
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    defer prelude_words.deinit(allocator);
+    var result = try discoverReachableWords(&ctx, entry_instrs, "", &prelude_words, &diagnostics, .runtime_image_aot, false, allocator);
     defer freePendingCallTargetPaths(&result.pending_call_targets, allocator);
 
     try testing.expect(quotationBodiesContain(result.quotation_bodies.items, area_body_a));

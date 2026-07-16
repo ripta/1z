@@ -1,0 +1,9 @@
+\ A default build (no --emit-runtime-image) embeds a metadata-only image whose
+\ word bodies are empty. `floor` is a module word reachable only through the
+\ hash-buried quotation dispatched at runtime, so the freezer never compiles
+\ it, and the interpreted call would run its empty image body silently. The
+\ build must reject this shape and direct the user to --emit-runtime-image,
+\ which carries the module word's body.
+use { floor: } "math" ;
+3.7 H{ go: [ floor ] } go: @get call
+.

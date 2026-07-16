@@ -2955,6 +2955,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         &codegen_diagnostics,
         ctx,
         emit_runtime_image_flag,
+        freeze_result.interpreted_reach,
         allocator,
     ) catch |err| {
         printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);
@@ -3045,6 +3046,16 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 &codegen_diagnostics.aot_fallback_report,
                 err_writer,
             );
+        } else if (err == error.RuntimeImageRequired) {
+            const n = freeze_result.interpreted_reach.len;
+            err_writer.print(
+                "Error: interpreted quotations reach {d} non-prelude word{s} the compiler did not compile\n",
+                .{ n, if (n == 1) @as([]const u8, "") else "s" },
+            ) catch {};
+            err_writer.writeAll(
+                "      hint: the default build embeds a metadata-only image whose word bodies are empty; " ++
+                    "rebuild with --emit-runtime-image\n",
+            ) catch {};
         } else {
             err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
         }
