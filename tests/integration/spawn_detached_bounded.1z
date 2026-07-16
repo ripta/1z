@@ -9,14 +9,18 @@
 \ `.flags` sidecar.
 \
 \ Before reaping existed, every completed child was retained until scope
-\ exit. 16000 retained tasks hold roughly 16 MB of context and task structs,
-\ so a regression back to that behavior exhausts the cap around the halfway
-\ point and the run dies with a memory-limit error instead of printing the
-\ marker. The harness runs integration tests single-worker by default, which
-\ makes the reap-before-next-spawn pacing deterministic.
+\ exit, so a regression back to that behavior exhausts the cap partway through the loop and the
+\ run dies with a memory-limit error instead of printing the marker. The harness runs
+\ integration tests single-worker by default, which makes the reap-before-next-spawn pacing
+\ deterministic.
+\
+\ The iteration count is sized empirically: with the completion-time reap disabled, the cap
+\ trips between 2000 and 3000 iterations, so 8000 fails reliably while running about 1.5 seconds
+\ standalone against the 10-second harness cap. That margin survives a fully loaded parallel
+\ suite run.
 
 [
-  16000 [
+  8000 [
     [ 1 1 + drop ] spawn-detached
     yield yield
   ] times

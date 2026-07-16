@@ -5,6 +5,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const test_case_timeout_secs = b.option(u32, "test-case-timeout", "Per-test timeout in seconds") orelse 10;
+    const aot_build_timeout_secs = b.option(u32, "aot-build-timeout", "Per-AOT-build-step timeout in seconds (default: 4x test-case-timeout)") orelse test_case_timeout_secs * 4;
     const test_filter = b.option([]const u8, "test-filter", "Comma-separated substring filter for test names");
     const test_threads = b.option([]const u8, "test-threads", "Default --threads=<value> for integration tests; overridable per-test via .flags") orelse "1";
     const verbose_test_reporting = envFlagIsSet(b, "VERBOSE");
@@ -383,7 +384,7 @@ pub fn build(b: *std.Build) void {
         defer aot_dir.close();
 
         const aot_entries = collectAotTestEntries(b, &aot_dir) catch return;
-        addAotTests(b, exe, test_case_helper, aot_test_step, &update_aot_files, &aot_status_files, aot_entries, has_diff, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter);
+        addAotTests(b, exe, test_case_helper, aot_test_step, &update_aot_files, &aot_status_files, aot_entries, has_diff, test_case_timeout_secs, aot_build_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter);
     }
 
     update_aot_golden_step.dependOn(&update_aot_files.step);
@@ -1373,6 +1374,7 @@ fn addAotTests(
     aot_entries: []const AotTestEntry,
     has_diff: bool,
     timeout_secs: u32,
+    build_timeout_secs: u32,
     verbose_test_reporting: bool,
     slow_test_threshold_ms: u64,
     test_filter: ?[]const u8,
@@ -1390,12 +1392,15 @@ fn addAotTests(
         const expected_exit: u8 = te.expected_exit_code orelse 0;
 
         // Compile: 1z build <file.1z> -o <output>
+        //
+        // AOT builds are categorically heavier than runs (freeze, C emission, C compilation), so
+        // they get their own timeout budget rather than the per-case run timeout.
         const compile_label = b.fmt("aot build: {s}", .{te.name_without_ext});
         const compile_run = addWrappedCommand(
             b,
             helper,
             compile_label,
-            timeout_secs,
+            build_timeout_secs,
             verbose_test_reporting,
             slow_test_threshold_ms,
             null,

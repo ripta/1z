@@ -4,6 +4,11 @@ SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
 TEST_CASE_TIMEOUT ?= 10
 AOT_TIMEOUT ?= 10
+
+# AOT build steps compile C and are categorically heavier than test runs, so
+# they get four times the per-case budget. The heaviest fixture (lint_driver_free)
+# measured 22.3s in a fully uncached -j14 pass against 8s standalone.
+AOT_BUILD_TIMEOUT ?= $(shell expr $(TEST_CASE_TIMEOUT) \* 4)
 ZIG_PREFIX ?= zig-out
 DOCKER_IMAGE ?= gcr.io/$(GCP_PROJECT_ID)/zag:v0.15.2
 TEST_FILTER_ARG = $(if $(TEST_FILTER),-Dtest-filter=$(TEST_FILTER))
@@ -68,7 +73,7 @@ test-threads-1: ## Run all tests with default --threads=1 for integration tests
 	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 	$(MAKE) lib-test
 
 test-threads-auto: ## Run all tests with default --threads=auto for integration tests
@@ -78,7 +83,7 @@ test-threads-auto: ## Run all tests with default --threads=auto for integration 
 	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 	$(MAKE) lib-test
 
 unit-test: ## Run unit tests
@@ -136,7 +141,7 @@ aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
 	timeout $(AOT_TIMEOUT) $(_aot_tmp)
 
 aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check ## Run AOT build integration tests
-	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directives at word and quotation function entries
 	$(eval _bin := $(shell mktemp /tmp/1z-line-directives-XXXXXX))
