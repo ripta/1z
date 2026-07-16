@@ -1,4 +1,4 @@
-Error: --interpreter-fallback=false rejects compound-fallback dispatch; 1 call site still route through the interpreter
+Error: --interpreter-fallback=false rejects compound-fallback dispatch; 1 callsite still routes through the interpreter
   '__entry__' -> 'pragma-get?' (line 7)
       callee uncompiled: NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled

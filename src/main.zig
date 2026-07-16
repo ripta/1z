@@ -2359,8 +2359,12 @@ fn printCompoundFallbackRequiredError(
     const total = report.totals[@intFromEnum(ir_codegen.AotFallbackCategory.compound_uncompiled)];
     err_writer.print(
         "Error: --interpreter-fallback=false rejects compound-fallback dispatch; " ++
-            "{d} call site{s} still route through the interpreter\n",
-        .{ total, if (total == 1) @as([]const u8, "") else "s" },
+            "{d} callsite{s} still route{s} through the interpreter\n",
+        .{
+            total,
+            if (total == 1) @as([]const u8, "") else "s",
+            if (total == 1) @as([]const u8, "s") else "",
+        },
     ) catch {};
     for (report.sites) |site| {
         if (site.category != .compound_uncompiled) continue;
