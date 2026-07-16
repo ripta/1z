@@ -255,20 +255,20 @@ aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides
 		echo "FAIL: missing asm-name clause for prelude word 'print-line'"; \
 		grep -E '^int32_t onez_w_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
-	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("pick-quot/quot@17:1"\);' "$$saved"; then \
-		echo "FAIL: missing asm-name for compiled quotation pick-quot/quot@17:1"; \
+	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("pick-quot/quot@17:3"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name for compiled quotation pick-quot/quot@17:3"; \
 		grep -E '^int32_t onez_q_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
-	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("pick-quot/quot@18:1"\);' "$$saved"; then \
-		echo "FAIL: missing asm-name for compiled quotation pick-quot/quot@18:1"; \
+	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("pick-quot/quot@18:3"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name for compiled quotation pick-quot/quot@18:3"; \
 		grep -E '^int32_t onez_q_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
-	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("flip/quot@26:18"\);' "$$saved"; then \
-		echo "FAIL: missing asm-name for compiled quotation flip/quot@26:18 (same-line sibling)"; \
+	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("flip/quot@25:18"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name for compiled quotation flip/quot@25:18 (same-line sibling)"; \
 		grep -E '^int32_t onez_q_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
-	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("flip/quot@26:38"\);' "$$saved"; then \
-		echo "FAIL: missing asm-name for compiled quotation flip/quot@26:38 (same-line sibling)"; \
+	if ! grep -qE 'int32_t onez_q_[0-9]+\(uintptr_t jit_ctx\) asm\("flip/quot@25:38"\);' "$$saved"; then \
+		echo "FAIL: missing asm-name for compiled quotation flip/quot@25:38 (same-line sibling)"; \
 		grep -E '^int32_t onez_q_.* asm\(' "$$saved" || true; exit 1; \
 	fi; \
 	if ! grep -qE 'int32_t onez_w_serial_G_G\(uintptr_t jit_ctx\) asm\("person/serial>>"\);' "$$saved"; then \
@@ -291,12 +291,12 @@ aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides
 		echo "FAIL: nm did not report 'print-line' as a linker symbol (prelude)"; \
 		nm $(_bin) | grep -E ' T (parse-json|>foo|print-line)' || true; exit 1; \
 	fi; \
-	if ! nm $(_bin) | grep -qE ' T pick-quot/quot@17:1$$'; then \
-		echo "FAIL: nm did not report 'pick-quot/quot@17:1' as a linker symbol"; \
+	if ! nm $(_bin) | grep -qE ' T pick-quot/quot@17:3$$'; then \
+		echo "FAIL: nm did not report 'pick-quot/quot@17:3' as a linker symbol"; \
 		nm $(_bin) | grep -E ' T (pick-quot|flip)/quot@' || true; exit 1; \
 	fi; \
-	if ! nm $(_bin) | grep -qE ' T flip/quot@26:38$$'; then \
-		echo "FAIL: nm did not report 'flip/quot@26:38' as a linker symbol"; \
+	if ! nm $(_bin) | grep -qE ' T flip/quot@25:38$$'; then \
+		echo "FAIL: nm did not report 'flip/quot@25:38' as a linker symbol"; \
 		nm $(_bin) | grep -E ' T (pick-quot|flip)/quot@' || true; exit 1; \
 	fi; \
 	if ! nm $(_bin) | grep -qE ' T person/serial>>$$'; then \

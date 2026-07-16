@@ -19,10 +19,9 @@ pick-quot: ( ? -- ) [
   if
 ] ;
 
-\ Twin one-line siblings, distinguishable only by column within the same source line. Statement-line
-\ leading whitespace is stripped before tokenization, so columns are accurate within a line but not
-\ across multi-line statements; this single-line case is the one that exercises true column-based
-\ disambiguation.
+\ Twin one-line siblings, distinguishable only by column within the same source line. This
+\ single-line case exercises true column-based disambiguation; the multi-line `pick-quot` case
+\ above exercises source-accurate columns on indented continuation lines.
 flip: ( ? -- ) [ [ "lo" print-line ] [ "hi" print-line ] if ] ;
 
 \ A struct with a uniquely-named field exercises the devirtualized field-accessor path: the dispatch

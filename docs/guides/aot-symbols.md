@@ -20,7 +20,7 @@ documents what it covers and the per-tool surprises it surfaced.
 |---|---|---|
 | User-defined word | the 1z word name, verbatim | `parse-json?`, `>foo` |
 | Prelude word | the 1z word name, verbatim | `print-line` |
-| Compiled quotation | `<defining-word>/quot@<line>:<col>` | `pick-quot/quot@17:1` |
+| Compiled quotation | `<defining-word>/quot@<line>:<col>` | `pick-quot/quot@17:3` |
 | Generated word (struct accessor, enum predicate) | `<parent>/<synthesized-name>` | `person/id>>`, `status/status?` |
 
 Characters that are illegal in C identifiers (`-`, `?`, `>`, `<`, `#`, `!`)
@@ -63,14 +63,14 @@ verbatim names appear:
 ```
 $ nm zig-out/aot-symbol-verify-workload | grep -E ' T (parse-json|>foo|pick-quot)'
 0000000100ae8aec T >foo
-0000000100af00d0 T >foo/quot@15:8
+0000000100af00d0 T >foo/quot@15:10
 0000000100ae7c58 T parse-json?
-0000000100af05d0 T parse-json?/quot@11:8
+0000000100af05d0 T parse-json?/quot@11:10
 0000000100ae93fc T pick-quot
-0000000100aee068 T pick-quot/quot@19:1
-0000000100aee978 T pick-quot/quot@19:10
-0000000100aeee78 T pick-quot/quot@20:1
-0000000100aef788 T pick-quot/quot@20:10
+0000000100aee068 T pick-quot/quot@19:3
+0000000100aee978 T pick-quot/quot@19:12
+0000000100aeee78 T pick-quot/quot@20:3
+0000000100aef788 T pick-quot/quot@20:12
 ```
 
 That is the macOS output. The same binary built inside the Linux build image
@@ -188,8 +188,8 @@ show up in the report.
 On Linux ELF, `@` inside a symbol name is reserved for symbol versioning
 (`name@version`). The toolchain strips the `@<line>:<col>` suffix from the
 asm-name when constructing the symbol table, so four sibling compiled
-quotations -- emitted as `pick-quot/quot@19:1`, `pick-quot/quot@19:10`,
-`pick-quot/quot@20:1`, `pick-quot/quot@20:10` -- all collapse to
+quotations -- emitted as `pick-quot/quot@19:3`, `pick-quot/quot@19:12`,
+`pick-quot/quot@20:3`, `pick-quot/quot@20:12` -- all collapse to
 `pick-quot/quot`. The four distinct functions still exist at distinct
 addresses, but `nm`, `perf`, and `samply` cannot disambiguate them by name;
 samples land in a single bucket labeled `pick-quot/quot`.

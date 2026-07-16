@@ -51,16 +51,13 @@ pub const StatementProcessor = struct {
     // Feed a line of input. Returns the result of attempting to parse.
     // If ctx is provided, parse-time words will be executed during parsing.
     pub fn feedLine(self: *StatementProcessor, allocator: Allocator, line: []const u8, ctx: ?*Context) Result {
-        const trimmed = std.mem.trim(u8, line, " \t\r\n");
-        if (trimmed.len == 0) {
-            if (self.stmt_len > 0) {
-                // Preserve the newline for multiline strings with empty lines
-                if (self.stmt_len < self.stmt_buf.len) {
-                    self.stmt_buf[self.stmt_len] = '\n';
-                    self.stmt_len += 1;
-                }
-                return .needs_more_input;
-            }
+        // Strip only the line terminator. The rest of the line is copied verbatim so the
+        // tokenizer's column counter matches the source file; the tokenizer skips inter-token
+        // whitespace itself, and multiline string literals keep their source bytes.
+        const body = std.mem.trimRight(u8, line, "\r\n");
+        const blank = std.mem.trim(u8, body, " \t").len == 0;
+
+        if (blank and self.stmt_len == 0) {
             return .{ .complete = &.{} };
         }
 
@@ -70,10 +67,15 @@ pub const StatementProcessor = struct {
             self.stmt_len += 1;
         }
 
-        // Copy trimmed line to buffer
-        const copy_len = @min(trimmed.len, self.stmt_buf.len - self.stmt_len);
-        @memcpy(self.stmt_buf[self.stmt_len..][0..copy_len], trimmed[0..copy_len]);
+        const copy_len = @min(body.len, self.stmt_buf.len - self.stmt_len);
+        @memcpy(self.stmt_buf[self.stmt_len..][0..copy_len], body[0..copy_len]);
         self.stmt_len += copy_len;
+
+        // A blank line cannot complete a statement, so don't resume the parser; resuming
+        // without a new token would make it treat the input as finished.
+        if (blank) {
+            return .needs_more_input;
+        }
 
         // Attempt to parse
         if (self.coroutine != null) {
@@ -242,6 +244,32 @@ test "StatementProcessor multiline input" {
         .complete => |instrs| {
             try std.testing.expectEqual(@as(usize, 1), instrs.len);
             try std.testing.expectEqual(@as(usize, 2), instrs[0].line);
+        },
+        else => return error.UnexpectedResult,
+    }
+}
+
+test "StatementProcessor preserves continuation-line columns" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    processor.trackLine(1);
+    switch (processor.feedLine(arena.allocator(), "[", null)) {
+        .needs_more_input => {},
+        else => return error.UnexpectedResult,
+    }
+
+    // The `1` sits at source column 3; the pre-fix trim reported column 1.
+    processor.trackLine(2);
+    switch (processor.feedLine(arena.allocator(), "  1 ]", null)) {
+        .complete => |instrs| {
+            try std.testing.expectEqual(@as(usize, 1), instrs.len);
+            const nested = instrs[0].op.push_literal.quotation.instructions;
+            try std.testing.expectEqual(@as(usize, 1), nested.len);
+            try std.testing.expectEqual(@as(usize, 3), nested[0].column);
         },
         else => return error.UnexpectedResult,
     }
