@@ -26,6 +26,11 @@ ZIG_CPU_ARG = $(if $(ZIG_CPU),-Dcpu=$(ZIG_CPU))
 JOBS ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 ZIG_JOBS_ARG = -j$(JOBS)
 
+# Process-spawning test passes use >1 core per slot; size them to the P-core
+# count to avoid saturation.
+TEST_JOBS ?= $(shell sysctl -n hw.perflevel0.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+ZIG_TEST_JOBS_ARG = -j$(TEST_JOBS)
+
 # Using kcov for code coverage. kcov's ptrace tracing is flaky on macOS under
 # heavy parallelism, so integration coverage runs at a reduced worker count and
 # retries any crashed file serially; raise COVERAGE_JOBS on Linux where kcov is
@@ -69,21 +74,21 @@ leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 test-threads-1: ## Run all tests with default --threads=1 for integration tests
 	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
 	$(MAKE) embed-stdlib-test
-	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=1 $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 	$(MAKE) lib-test
 
 test-threads-auto: ## Run all tests with default --threads=auto for integration tests
 	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
 	$(MAKE) embed-stdlib-test
-	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Dtest-threads=auto $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
-	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 	$(MAKE) lib-test
 
 unit-test: ## Run unit tests
@@ -116,10 +121,10 @@ coverage: unit-coverage integration-coverage ## Measure combined unit + integrat
 	@pct=$$(grep -o '"percent_covered": "[0-9.]*"' $(COVERAGE_DIR)/combined/kcov-merged/coverage.json | tail -1 | grep -o '[0-9.]*'); echo "Combined coverage (union of both): $${pct:-?}%, report at $(COVERAGE_DIR)/combined/index.html"
 
 integration-test: ## Run integration tests
-	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 lib-test: build ## Run *_test.1z unit tests under lib/
-	find lib -name '*_test.1z' -print0 | xargs -0 -P $(JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z test
+	find lib -name '*_test.1z' -print0 | xargs -0 -P $(TEST_JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z test
 
 jit-build: ## Build only the 1z-jit binary
 	timeout $(TIMEOUT) zig build jit-build --prefix $(ZIG_PREFIX)
@@ -128,7 +133,7 @@ jit-test: ## Run integration tests with JIT auto-compilation
 	timeout $(TARGET_TIMEOUT) zig build integration-test --prefix $(ZIG_PREFIX) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
 
 eager-test: ## Run integration tests with eager compilation
-	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build eager-integration-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 fmt-test: ## Run formatter tests
 	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
@@ -141,7 +146,7 @@ aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
 	timeout $(AOT_TIMEOUT) $(_aot_tmp)
 
 aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check ## Run AOT build integration tests
-	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
+	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directives at word and quotation function entries
 	$(eval _bin := $(shell mktemp /tmp/1z-line-directives-XXXXXX))
