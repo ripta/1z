@@ -432,50 +432,11 @@ pub fn freezeModuleGraphOpts(
             };
 
             for (instrs_list) |instrs| {
-                for (instrs) |instr| {
-                    switch (instr.op) {
-                        .call_word, .call_word_direct => {
-                            const call_name = instr.op.callTargetName().?;
-                            if (qual_seen.contains(call_name)) continue;
-                            try qual_seen.put(temp_allocator, call_name, {});
-                            if (options.artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
-                                diagnostics.fatal_native_interpreter_dependency = .{
-                                    .caller_name = def.name,
-                                    .feature_name = call_name,
-                                };
-                                ctx.popPragmaFrame();
-                                ctx.popLocalFrame();
-                                return error.DisallowedNativeInterpreterDependency;
-                            }
-                            try discoverCalleeWord(ctx, call_name, &discovered, temp_allocator);
-                        },
-                        .push_literal => |val| {
-                            // Also scan nested quotations
-                            if (val == .quotation) {
-                                for (val.quotation.instructions) |q_instr| {
-                                    switch (q_instr.op) {
-                                        .call_word, .call_word_direct => {
-                                            const call_name = q_instr.op.callTargetName().?;
-                                            if (qual_seen.contains(call_name)) continue;
-                                            try qual_seen.put(temp_allocator, call_name, {});
-                                            if (options.artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
-                                                diagnostics.fatal_native_interpreter_dependency = .{
-                                                    .caller_name = def.name,
-                                                    .feature_name = call_name,
-                                                };
-                                                ctx.popPragmaFrame();
-                                                ctx.popLocalFrame();
-                                                return error.DisallowedNativeInterpreterDependency;
-                                            }
-                                            try discoverCalleeWord(ctx, call_name, &discovered, temp_allocator);
-                                        },
-                                        else => {},
-                                    }
-                                }
-                            }
-                        },
-                    }
-                }
+                scanUnresolvedCallees(ctx, instrs, def.name, &qual_seen, &discovered, diagnostics, options.artifact_class, temp_allocator) catch |err| {
+                    ctx.popPragmaFrame();
+                    ctx.popLocalFrame();
+                    return err;
+                };
             }
         }
     }
@@ -499,6 +460,47 @@ pub fn freezeModuleGraphOpts(
     freePendingCallTargetPaths(&discovered.pending_call_targets, allocator);
 
     return result;
+}
+
+/// Phase 2b helper: resolve every unseen callee in `instrs` into the discovered set, descending
+/// nested quotation literals to arbitrary depth.
+///
+/// Under the interpreter-free artifact class an interpreter-dependent native is fatal; the
+/// diagnostic is set here and the caller owns the frame cleanup on that error path.
+fn scanUnresolvedCallees(
+    ctx: *const Context,
+    instrs: []const Instruction,
+    caller_name: []const u8,
+    qual_seen: *std.StringHashMapUnmanaged(void),
+    discovered: *DiscoveredWords,
+    diagnostics: *FreezeDiagnostics,
+    artifact_class: ArtifactClass,
+    temp_allocator: Allocator,
+) (Allocator.Error || error{DisallowedNativeInterpreterDependency})!void {
+    for (instrs) |instr| {
+        switch (instr.op) {
+            .call_word, .call_word_direct => {
+                const call_name = instr.op.callTargetName().?;
+                if (qual_seen.contains(call_name)) continue;
+                try qual_seen.put(temp_allocator, call_name, {});
+
+                if (artifact_class == .interpreter_free_aot and isInterpreterDependentNative(ctx, call_name)) {
+                    diagnostics.fatal_native_interpreter_dependency = .{
+                        .caller_name = caller_name,
+                        .feature_name = call_name,
+                    };
+                    return error.DisallowedNativeInterpreterDependency;
+                }
+
+                try discoverCalleeWord(ctx, call_name, discovered, temp_allocator);
+            },
+            .push_literal => |val| {
+                if (val == .quotation) {
+                    try scanUnresolvedCallees(ctx, val.quotation.instructions, caller_name, qual_seen, discovered, diagnostics, artifact_class, temp_allocator);
+                }
+            },
+        }
+    }
 }
 
 /// Accumulated non-definition instructions from the entry file and

@@ -1,0 +1,3 @@
+on:exit [ "hook ran" print-line ] add-hook
+"main done" print-line
+0 sys-exit
