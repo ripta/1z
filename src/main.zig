@@ -2411,6 +2411,37 @@ fn printJitInterpretedCallLeakedError(
     ) catch {};
 }
 
+/// Render the `RuntimeImageRequired` build error: the metadata-only image of a
+/// default build would drop the interpreter-runnable bodies of the named words,
+/// so the build is rejected rather than producing a silently wrong binary.
+fn printRuntimeImageRequiredError(
+    violations: []const ir_codegen.InterpretedReachViolation,
+    err_writer: anytype,
+) void {
+    const n = violations.len;
+    err_writer.print(
+        "Error: interpreted quotations reach {d} non-prelude word{s} the compiler did not compile\n",
+        .{ n, if (n == 1) @as([]const u8, "") else "s" },
+    ) catch {};
+    for (violations) |v| {
+        if (v.line == 0) {
+            err_writer.print(
+                "  '{s}' reached from a quotation in '{s}'\n",
+                .{ v.callee_name, v.caller_word },
+            ) catch {};
+        } else {
+            err_writer.print(
+                "  '{s}' reached from a quotation in '{s}' (line {d})\n",
+                .{ v.callee_name, v.caller_word, v.line },
+            ) catch {};
+        }
+    }
+    err_writer.writeAll(
+        "      hint: the default build embeds a metadata-only image whose word bodies are empty; " ++
+            "rebuild with --emit-runtime-image\n",
+    ) catch {};
+}
+
 fn handleHighlight(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
@@ -3047,15 +3078,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
                 err_writer,
             );
         } else if (err == error.RuntimeImageRequired) {
-            const n = freeze_result.interpreted_reach.len;
-            err_writer.print(
-                "Error: interpreted quotations reach {d} non-prelude word{s} the compiler did not compile\n",
-                .{ n, if (n == 1) @as([]const u8, "") else "s" },
-            ) catch {};
-            err_writer.writeAll(
-                "      hint: the default build embeds a metadata-only image whose word bodies are empty; " ++
-                    "rebuild with --emit-runtime-image\n",
-            ) catch {};
+            printRuntimeImageRequiredError(freeze_result.interpreted_reach, err_writer);
         } else {
             err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
         }

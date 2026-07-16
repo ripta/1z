@@ -1,0 +1,7 @@
+\ The same broken shape as metadata_only_nonprelude_reach.1z, built with
+\ --emit-runtime-image. The full image carries the module word's body, so the
+\ build must succeed and the binary must run correctly, confirming the
+\ rejection is specific to the metadata-only path.
+use { floor: } "math" ;
+3.7 H{ go: [ floor ] } go: @get call
+.
