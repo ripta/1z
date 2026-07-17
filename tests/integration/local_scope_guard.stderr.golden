@@ -1,1 +1,1 @@
-src/prelude.1z:1163: error 'invalid-scope' local-scope: no enclosing transient frame; call inside a quotation via `[ ... ] call` at word 'native.local-scope'
+src/prelude.1z:1179: error 'invalid-scope' local-scope: no enclosing transient frame; call inside a quotation via `[ ... ] call` at word 'native.local-scope'

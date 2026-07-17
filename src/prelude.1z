@@ -944,6 +944,22 @@ try: ( ..a quot: ( ..a -- x ) -- result ) [ [ call >result:ok ] [ >result:err ] 
 \\ Get the last element of a sequence, returning some(value) or none if empty.
 #last?: ( seq -- option ) [ [ #last >option:some ] [ drop option:none ] recover ] ;
 
+\\ Test if sequence starts with prefix.
+#starts-with?: ( seq prefix -- ? ) [
+  over #len over #len <
+  [ 2drop f ]
+  [ dup #len swap [ 0 swap #slice ] dip = ]
+  if
+] ;
+
+\\ Test if sequence ends with suffix.
+#ends-with?: ( seq suffix -- ? ) [
+  over #len over #len <
+  [ 2drop f ]
+  [ over #len over #len - swap [ over #len #slice ] dip = ]
+  if
+] ;
+
 \\ Try to receive from a channel. Returns some(value) on success, none if closed and empty.
 receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recover ] ;
 
