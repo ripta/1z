@@ -260,7 +260,6 @@ fn nativeSortBy(ctx: *Context) anyerror!void {
 const SequenceIterator = sequence.SequenceIterator;
 const SequenceBuilder = sequence.SequenceBuilder;
 const SequenceKind = sequence.SequenceKind;
-const sequenceLength = sequence.sequenceLength;
 const classifySequence = sequence.classifySequence;
 const sequenceToValues = sequence.sequenceToValues;
 const utf8NthCodepoint = sequence.utf8NthCodepoint;
@@ -606,7 +605,6 @@ pub const primitives = [_]Primitive{
     .{ .name = "#unshift!", .stack_effect = "vec elem -- vec", .doc = "Mutably add element to start of vector.", .func = nativeUnshiftMut },
     .{ .name = "#shift!", .stack_effect = "vec -- vec elem", .doc = "Mutably remove first element from vector.", .func = nativeShiftMut },
     // Sequence predicates
-    .{ .name = "#empty?", .stack_effect = "seq -- ?", .doc = "Test if sequence is empty.", .func = nativeEmpty },
     .{ .name = "#starts-with?", .stack_effect = "seq prefix -- ?", .doc = "Test if sequence starts with prefix.", .func = nativeStartsWith },
     .{ .name = "#ends-with?", .stack_effect = "seq suffix -- ?", .doc = "Test if sequence ends with suffix.", .func = nativeEndsWith },
     .{ .name = "#in?", .stack_effect = "seq elem -- ?", .doc = "Test if sequence contains element (substring test for strings).", .func = nativeIn },
@@ -1980,17 +1978,6 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
         container_backing.releaseValue(elem);
         return err;
     };
-}
-
-/// #empty? ( seq -- ? ) - Is sequence empty?
-fn nativeEmpty(ctx: *Context) anyerror!void {
-    const val = try ctx.stack.pop();
-    defer container_backing.releaseValue(val);
-    const len = sequenceLength(val) orelse {
-        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
-        return error.TypeMismatch;
-    };
-    try ctx.stack.push(.{ .boolean = len == 0 });
 }
 
 /// #starts-with? ( seq prefix -- ? ) - Does seq start with prefix?

@@ -478,6 +478,8 @@ bytes-resize!: ( byte-array n -- byte-array ) [ over #len over < [ 0x00 native.#
 #none: ( seq quot -- ? ) [ #any not ] ;
 \\ Test whether all elements satisfy the predicate. Short-circuits.
 #all: ( seq quot -- ? ) [ swap >iterator swap (all-loop) ] ;
+\\ Test if sequence is empty.
+#empty?: ( seq -- ? ) [ #len 0 = ] ;
 
 \ Stack-shuffling
 \\ Drop the item at stack depth `n`, counting from the top (0 is the top item).

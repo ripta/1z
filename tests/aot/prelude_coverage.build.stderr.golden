@@ -1,32 +1,32 @@
-Prelude compilation: 410/411 words compiled (99.8%)
+Prelude compilation: 411/412 words compiled (99.8%)
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
 Inline PIC sites: 33/79 generic call sites preseeded
-AOT interpreter fallbacks: 322 total
-  native: 304
+AOT interpreter fallbacks: 323 total
+  native: 305
   compound-uncompiled: 1
   quotation: 17
   sites:
     native: provenance? -> native.struct-type-predicate (line 0)
     native: nan? -> = (line 434)
-    quotation: run-benchmarks -> <quotation> (line 893)
+    quotation: run-benchmarks -> <quotation> (line 895)
     quotation: (any-loop) -> <quotation> (line 464)
     native: quotation? -> = (line 398)
     native: unmake-descriptor-variant -> native.struct-instance-destructure (line 0)
     native: value>> -> native.struct-field-get (line 0)
     native: inputs>> -> native.struct-field-get (line 0)
-    native: >iterator -> native.make-callback-iter (line 950)
-    native: >iterator -> native.>iterator (line 952)
+    native: >iterator -> native.make-callback-iter (line 952)
+    native: >iterator -> native.>iterator (line 954)
     native: >dispatch-provenance -> native.hash-to-struct (line 0)
     native: >option:some -> native.virtual-struct-wrap (line 0)
     native: descriptor-variant? -> native.struct-type-predicate (line 0)
-    native: . -> inspect (line 705)
+    native: . -> inspect (line 707)
     native: >method-info -> native.hash-to-struct (line 0)
     native: >on -> native.enum-from-symbol (line 0)
-    ... 306 more
-  static-check: jitInterpretedCall=1/1 jitNativeWordCall=304/304 jitCallQuotation=17/17 (matches build-time inventory)
+    ... 307 more
+  static-check: jitInterpretedCall=1/1 jitNativeWordCall=305/305 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
