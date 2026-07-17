@@ -4,6 +4,7 @@ const build_options = @import("build_options");
 const populate_core = @import("aot_image_populate_core.zig");
 const value_mod = @import("value.zig");
 const dispatch_mod = @import("dispatch.zig");
+const satisfies_core = @import("satisfies_core.zig");
 
 const BigIntManaged = opaque {};
 const HashTable = opaque {};
@@ -217,6 +218,8 @@ comptime {
         @export(&jitInterpretedCall, .{ .name = "jitInterpretedCall" });
         @export(&jitNativeWordCall, .{ .name = "jitNativeWordCall" });
         @export(&aotTryDispatchGenericOrCall, .{ .name = "aotTryDispatchGenericOrCall" });
+        @export(&aotSatisfiesAndDispatch, .{ .name = "aotSatisfiesAndDispatch" });
+        @export(&aotSatisfiesAndDispatchCombinator, .{ .name = "aotSatisfiesAndDispatchCombinator" });
         @export(&jitOverflowError, .{ .name = "jitOverflowError" });
         @export(&jitDivisionByZeroError, .{ .name = "jitDivisionByZeroError" });
         @export(&jitStackUnderflowError, .{ .name = "jitStackUnderflowError" });
@@ -242,6 +245,15 @@ var freestanding_fba = std.heap.FixedBufferAllocator.init(&freestanding_heap_buf
 var freestanding_handle: ?OnezHandle = null;
 
 const OnezWordFn = *const fn (*JitContext) callconv(.c) i32;
+
+/// Satisfies-memo key: the pointer pair the hosted `ProtocolSatisfiesKey` hashes, as raw
+/// addresses so the map needs no custom hash context.
+const SatisfiesMemoKey = struct {
+    td: usize,
+    pd: usize,
+};
+
+const SatisfiesMemo = std.AutoHashMapUnmanaged(SatisfiesMemoKey, bool);
 
 const OnezHandle = struct {
     allocator: std.mem.Allocator,
@@ -284,6 +296,13 @@ const OnezHandle = struct {
     method_dispatch: ?dispatch_mod.DispatchTable = null,
     dispatch_any_sentinel: ?*value_mod.TypeValue = null,
     dispatch_unary_sentinel: ?*value_mod.TypeValue = null,
+
+    // Satisfies-check state for protocol-bounded call sites: the `self`/`any`
+    // annotation sentinels the shared core compares against, and the memo
+    // mirroring the hosted Context's `protocol_satisfies_cache`.
+    self_type_sentinel: ?*value_mod.TypeValue = null,
+    any_type_sentinel: ?*value_mod.TypeValue = null,
+    protocol_satisfies_memo: SatisfiesMemo = .{},
 };
 
 pub const JitContext = extern struct {
@@ -728,6 +747,22 @@ fn ensureDispatchSentinels(handle: *OnezHandle) !void {
     }
 }
 
+/// Lazily create the `self`/`any` annotation sentinels the satisfies walk compares against,
+/// mirroring the hosted `initSentinelTypeValues`. Image-decoded stack effects drop type
+/// annotations, so no decoded annotation can ever reference these; they exist so the shared
+/// core's pointer comparisons have distinct identities to miss against.
+fn ensureAnnotationSentinels(handle: *OnezHandle) !void {
+    if (handle.self_type_sentinel != null and handle.any_type_sentinel != null) return;
+
+    const desc = try value_mod.createSentinelTypeDescriptor(handle.allocator);
+    const self_tv = try handle.allocator.create(value_mod.TypeValue);
+    self_tv.* = .{ .name = "self", .descriptor = desc };
+    const any_tv = try handle.allocator.create(value_mod.TypeValue);
+    any_tv.* = .{ .name = "any", .descriptor = desc };
+    handle.self_type_sentinel = self_tv;
+    handle.any_type_sentinel = any_tv;
+}
+
 /// Mirror of the hosted loader's `resolveDispatchTypeDescriptor`: the
 /// reserved sentinels map to the handle's synthetic descriptors, and a real
 /// slot resolves through the retained typevalue slot table. Requires
@@ -813,16 +848,21 @@ fn onez_replay_method_dispatch(ptr: ?*anyopaque) callconv(.c) c_int {
     return ONEZ_OK;
 }
 
-/// Resolve a TypeDescriptor from the retained image typevalue slot table by type name. Slot 0 is
+/// Resolve a TypeValue from the retained image typevalue slot table by type name. Slot 0 is
 /// the reserved lookup-miss sentinel, so the scan starts at 1.
-fn lookupImageDescriptorByName(handle: *OnezHandle, name: []const u8) ?*const value_mod.TypeDescriptor {
+fn lookupImageTypeValueByName(handle: *OnezHandle, name: []const u8) ?*const value_mod.TypeValue {
     const slots = handle.image_typevalue_slots orelse return null;
     var slot: u32 = 1;
     while (slot < handle.image_typevalue_slot_count) : (slot += 1) {
         const tv = slots[slot] orelse continue;
-        if (std.mem.eql(u8, tv.name, name)) return tv.descriptor;
+        if (std.mem.eql(u8, tv.name, name)) return tv;
     }
     return null;
+}
+
+fn lookupImageDescriptorByName(handle: *OnezHandle, name: []const u8) ?*const value_mod.TypeDescriptor {
+    const tv = lookupImageTypeValueByName(handle, name) orelse return null;
+    return tv.descriptor;
 }
 
 /// Freestanding mirror of `dispatch_mod.dispatchDescriptor`, producing the dispatch key
@@ -1033,6 +1073,289 @@ fn aotTryDispatchGenericOrCall(ctx_raw: usize, dispatch_id_raw: usize, word_id_r
         .ctx = handle,
     };
     return code_ptr(&jit_ctx);
+}
+
+/// Freestanding environment for the shared satisfies core.
+///
+/// Method-name resolution scans the stashed dispatch-entry rows instead of the hosted
+/// name-to-id map. The rows already carry each generic's name, the images are small, and the
+/// memo bounds repeat walks.
+///
+/// The error sink is the owned `last_error` allocation. `saveThrown` detaches it and
+/// `restoreThrown` reinstalls it, so the walk's own `setLastError` cannot free the caller's
+/// message out from under a probing check. The hosted shell can leave its thrown-error pointer
+/// in place because it is arena-boxed and never freed; here the detach is what keeps the
+/// save/restore free-safe.
+const FreestandingSatisfiesEnv = struct {
+    handle: *OnezHandle,
+
+    pub const ThrownState = ?[:0]const u8;
+
+    pub fn resolveDispatchId(self: FreestandingSatisfiesEnv, name: []const u8) ?u32 {
+        const rows = self.handle.image_dispatch_entry_descriptions orelse return null;
+        var i: u32 = 0;
+        while (i < self.handle.image_dispatch_entry_count) : (i += 1) {
+            const row = rows[i];
+            const row_name = row.generic_name orelse continue;
+            if (std.mem.eql(u8, row_name[0..row.generic_name_len], name)) return row.dispatch_id;
+        }
+        return null;
+    }
+
+    pub fn hasUnaryDispatch(self: FreestandingSatisfiesEnv, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) bool {
+        const table: *const dispatch_mod.DispatchTable = if (self.handle.method_dispatch) |*t| t else return false;
+        const any_desc = self.handle.dispatch_any_sentinel.?.descriptor.?;
+        const unary_desc = self.handle.dispatch_unary_sentinel.?.descriptor.?;
+        return table.lookupUnary(dispatch_id, type_a, any_desc, unary_desc) != null;
+    }
+
+    pub fn hasBinaryDispatch(self: FreestandingSatisfiesEnv, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) bool {
+        const table: *const dispatch_mod.DispatchTable = if (self.handle.method_dispatch) |*t| t else return false;
+        const any_desc = self.handle.dispatch_any_sentinel.?.descriptor.?;
+        return table.lookupBinary(dispatch_id, type_a, type_b, any_desc) != null;
+    }
+
+    pub fn dispatchKeysForWord(self: FreestandingSatisfiesEnv, name: []const u8, alloc: std.mem.Allocator) anyerror![]dispatch_mod.DispatchKey {
+        const did = self.resolveDispatchId(name) orelse return alloc.alloc(dispatch_mod.DispatchKey, 0);
+        const table: *const dispatch_mod.DispatchTable = if (self.handle.method_dispatch) |*t| t else return alloc.alloc(dispatch_mod.DispatchKey, 0);
+        return table.keysForDispatchId(did, alloc);
+    }
+
+    pub fn selfTypeSentinel(self: FreestandingSatisfiesEnv) *const value_mod.TypeValue {
+        return self.handle.self_type_sentinel.?;
+    }
+
+    pub fn anyTypeSentinel(self: FreestandingSatisfiesEnv) *const value_mod.TypeValue {
+        return self.handle.any_type_sentinel.?;
+    }
+
+    pub fn dispatchUnarySentinel(self: FreestandingSatisfiesEnv) *const value_mod.TypeValue {
+        return self.handle.dispatch_unary_sentinel.?;
+    }
+
+    pub fn dispatchAnySentinel(self: FreestandingSatisfiesEnv) *const value_mod.TypeValue {
+        return self.handle.dispatch_any_sentinel.?;
+    }
+
+    pub fn lookupSatisfies(self: FreestandingSatisfiesEnv, td: *const value_mod.TypeDescriptor, pd: *const value_mod.ProtocolDescriptor) ?bool {
+        return self.handle.protocol_satisfies_memo.get(.{ .td = @intFromPtr(td), .pd = @intFromPtr(pd) });
+    }
+
+    pub fn storeSatisfies(self: FreestandingSatisfiesEnv, td: *const value_mod.TypeDescriptor, pd: *const value_mod.ProtocolDescriptor, value: bool) void {
+        self.handle.protocol_satisfies_memo.put(self.handle.allocator, .{ .td = @intFromPtr(td), .pd = @intFromPtr(pd) }, value) catch {};
+    }
+
+    pub fn typeValueByName(self: FreestandingSatisfiesEnv, name: []const u8) ?*value_mod.TypeValue {
+        return @constCast(lookupImageTypeValueByName(self.handle, name));
+    }
+
+    pub fn scratchAllocator(self: FreestandingSatisfiesEnv) std.mem.Allocator {
+        return self.handle.allocator;
+    }
+
+    pub fn setProtocolError(self: FreestandingSatisfiesEnv, message: []const u8) void {
+        setLastError(self.handle, "{s}", .{message});
+    }
+
+    pub fn setErrorContext(self: FreestandingSatisfiesEnv, comptime fmt: []const u8, args: anytype) void {
+        setLastError(self.handle, fmt, args);
+    }
+
+    pub fn saveThrown(self: FreestandingSatisfiesEnv) ThrownState {
+        const saved = self.handle.last_error;
+        self.handle.last_error = null;
+        return saved;
+    }
+
+    // A satisfies-check that succeeds never restores, so the detached message would be dropped.
+    // That only leaks when `last_error` is non-null on entry to a memo-miss check that then
+    // succeeds. A bounded call site enters with `last_error` null, and every succeeding check
+    // leaves it null, so the invariant holds and the drop is unreachable in practice.
+    pub fn restoreThrown(self: FreestandingSatisfiesEnv, state: ThrownState) void {
+        clearLastError(self.handle);
+        self.handle.last_error = state;
+    }
+};
+
+const FreestandingCore = satisfies_core.SatisfiesCore(FreestandingSatisfiesEnv);
+
+/// Operand arity of a bounded call site. Mirrors the hosted
+/// `dispatch_helpers.ProtocolArity` tag values compiled call sites bake.
+const ProtocolArity = enum { unary, binary };
+
+/// The bound a compiled call site checks operands against, mirroring the
+/// hosted `dispatch_helpers.BoundedConstraint`.
+const FreestandingBoundedConstraint = union(enum) {
+    protocol: *const value_mod.ProtocolDescriptor,
+    combinator: *const value_mod.ConstraintCombinator,
+};
+
+/// Freestanding mirror of `dispatch_mod.dispatchTypeValue`, the TypeValue-level sibling of
+/// `freestandingDispatchDescriptor`. A null return means the operand's type is unresolvable on
+/// this substrate; the caller leaves such an operand to the dispatch lookup.
+fn freestandingResolveValueTypeValue(handle: *OnezHandle, v: Value) ?*const value_mod.TypeValue {
+    switch (v) {
+        .tagged => |t| {
+            const vt: *const value_mod.VirtualType = @ptrCast(@alignCast(t.tag));
+            if (vt.type_val) |tv| return tv;
+            return lookupImageTypeValueByName(handle, "tagged");
+        },
+        .struct_instance => |si_raw| {
+            const si: *const value_mod.StructInstance = @ptrCast(@alignCast(si_raw));
+            if (si.struct_type.type_val) |tv| return tv;
+            return lookupImageTypeValueByName(handle, "struct-instance");
+        },
+        // No resource typevalue registry exists on this substrate.
+        .resource => return null,
+        inline else => |_, tag| {
+            const name = comptime dispatch_mod.builtinTypeName(@field(std.meta.Tag(value_mod.Value), @tagName(tag)));
+            return lookupImageTypeValueByName(handle, name);
+        },
+    }
+}
+
+/// Freestanding mirror of the hosted `checkOperand`: a value whose type cannot be resolved, or
+/// has no descriptor, is left to the dispatch lookup rather than failing the bound. Returns 0
+/// when the operand passes and 2 with `last_error` carrying the hosted diagnostic text when it
+/// fails.
+fn freestandingCheckOperand(handle: *OnezHandle, v: Value, constraint: FreestandingBoundedConstraint) i32 {
+    const val_tv = freestandingResolveValueTypeValue(handle, v) orelse return 0;
+    if (val_tv.descriptor == null) return 0;
+
+    const env = FreestandingSatisfiesEnv{ .handle = handle };
+    switch (constraint) {
+        .protocol => |descriptor| {
+            const ok = FreestandingCore.satisfiesByDescriptor(env, val_tv, descriptor) catch |err| {
+                setLastError(handle, "protocol satisfies check failed: {s}", .{@errorName(err)});
+                return 2;
+            };
+            if (ok) return 0;
+            setLastError(handle, "type '{s}' does not satisfy protocol '{s}'", .{ val_tv.name, descriptor.name });
+            return 2;
+        },
+        .combinator => |cc| {
+            const ok = FreestandingCore.typeSatisfiesConstraint(env, val_tv, .{ .combinator = cc }) catch |err| {
+                setLastError(handle, "protocol satisfies check failed: {s}", .{@errorName(err)});
+                return 2;
+            };
+            if (ok) return 0;
+            setLastError(handle, "type '{s}' does not satisfy the required constraint", .{val_tv.name});
+            return 2;
+        },
+    }
+}
+
+/// Freestanding mirror of the hosted `satisfiesAndDispatch` minus call frames, tracing, and
+/// locks: satisfies-check each dispatched operand against the bound, then resolve the
+/// concrete-type method through the replayed registry and run it. Satisfied operands with no
+/// resolvable method surface the hosted "no method found" failure; a bounded site has no
+/// default-body fallback.
+fn freestandingSatisfiesAndDispatch(
+    handle: *OnezHandle,
+    dispatch_id: u32,
+    constraint: FreestandingBoundedConstraint,
+    arity: ProtocolArity,
+) i32 {
+    ensureDispatchSentinels(handle) catch {
+        setLastError(handle, "satisfies check failed: out of memory", .{});
+        return 2;
+    };
+    ensureAnnotationSentinels(handle) catch {
+        setLastError(handle, "satisfies check failed: out of memory", .{});
+        return 2;
+    };
+
+    switch (arity) {
+        .binary => {
+            if (handle.stack_len < 2) {
+                setLastError(handle, "value stack underflow", .{});
+                return 2;
+            }
+            const a = handle.stack[handle.stack_len - 2];
+            const b = handle.stack[handle.stack_len - 1];
+            const a_status = freestandingCheckOperand(handle, a, constraint);
+            if (a_status != 0) return a_status;
+            const b_status = freestandingCheckOperand(handle, b, constraint);
+            if (b_status != 0) return b_status;
+
+            if (handle.method_dispatch) |*table| {
+                if (freestandingLookupBinary(handle, table, dispatch_id, a, b)) |hit| {
+                    if (hit.unwrap_a) handle.stack[handle.stack_len - 2] = handle.stack[handle.stack_len - 2].tagged.inner.*;
+                    if (hit.unwrap_b) handle.stack[handle.stack_len - 1] = handle.stack[handle.stack_len - 1].tagged.inner.*;
+                    return runFreestandingDispatchBody(handle, hit.entry);
+                }
+            }
+        },
+        .unary => {
+            if (handle.stack_len < 1) {
+                setLastError(handle, "value stack underflow", .{});
+                return 2;
+            }
+            const a = handle.stack[handle.stack_len - 1];
+            const status = freestandingCheckOperand(handle, a, constraint);
+            if (status != 0) return status;
+
+            if (handle.method_dispatch) |*table| {
+                if (freestandingLookupUnary(handle, table, dispatch_id, a)) |hit| {
+                    if (hit.unwrap_a) handle.stack[handle.stack_len - 1] = handle.stack[handle.stack_len - 1].tagged.inner.*;
+                    return runFreestandingDispatchBody(handle, hit.entry);
+                }
+            }
+        },
+    }
+
+    setLastError(handle, "no method found for generic word", .{});
+    return 2;
+}
+
+/// Freestanding body for the protocol-bounded dispatch helper compiled call sites emit,
+/// mirroring the hosted export in `ir_codegen.zig`: resolve the protocol descriptor from the
+/// retained image slot table by slot index, then satisfies-check and dispatch. The line argument
+/// feeds hosted call frames, which this substrate does not keep.
+fn aotSatisfiesAndDispatch(ctx_raw: usize, dispatch_id_raw: usize, slot_idx_raw: usize, arity_raw: usize, line_raw: usize) callconv(.c) i32 {
+    _ = line_raw;
+    const handle = handleFromContext(ctx_raw) orelse return 1;
+    const slots = handle.image_protocoldescriptor_slots orelse {
+        setLastError(handle, "runtime-image protocol descriptor slots are not available on this build", .{});
+        return 2;
+    };
+    if (slot_idx_raw >= handle.image_protocoldescriptor_slot_count) {
+        setLastError(handle, "runtime-image protocol descriptor slot {d} is out of range", .{slot_idx_raw});
+        return 2;
+    }
+    const descriptor = slots[slot_idx_raw] orelse {
+        setLastError(handle, "runtime-image protocol descriptor slot {d} is not initialized", .{slot_idx_raw});
+        return 2;
+    };
+    const arity = std.meta.intToEnum(ProtocolArity, arity_raw) catch {
+        setLastError(handle, "invalid bounded dispatch arity {d}", .{arity_raw});
+        return 2;
+    };
+    return freestandingSatisfiesAndDispatch(handle, @intCast(dispatch_id_raw), .{ .protocol = descriptor }, arity);
+}
+
+/// Combinator-bounded counterpart of `aotSatisfiesAndDispatch`, resolving through the retained
+/// constraint-combinator slot table.
+fn aotSatisfiesAndDispatchCombinator(ctx_raw: usize, dispatch_id_raw: usize, slot_idx_raw: usize, arity_raw: usize, line_raw: usize) callconv(.c) i32 {
+    _ = line_raw;
+    const handle = handleFromContext(ctx_raw) orelse return 1;
+    const slots = handle.image_constraintcombinator_slots orelse {
+        setLastError(handle, "runtime-image constraint combinator slots are not available on this build", .{});
+        return 2;
+    };
+    if (slot_idx_raw >= handle.image_constraintcombinator_slot_count) {
+        setLastError(handle, "runtime-image constraint combinator slot {d} is out of range", .{slot_idx_raw});
+        return 2;
+    }
+    const combinator = slots[slot_idx_raw] orelse {
+        setLastError(handle, "runtime-image constraint combinator slot {d} is not initialized", .{slot_idx_raw});
+        return 2;
+    };
+    const arity = std.meta.intToEnum(ProtocolArity, arity_raw) catch {
+        setLastError(handle, "invalid bounded dispatch arity {d}", .{arity_raw});
+        return 2;
+    };
+    return freestandingSatisfiesAndDispatch(handle, @intCast(dispatch_id_raw), .{ .combinator = combinator }, arity);
 }
 
 fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) callconv(.c) i32 {
@@ -1770,6 +2093,23 @@ fn dispatchTestRow(dispatch_id: u32, type_a_slot: u32, type_b_slot: u32, quotati
     };
 }
 
+/// A unary dispatch-entry row carrying its generic name, which the satisfies-check Env scans to
+/// resolve a protocol method name back to its dispatch id.
+fn boundedDispatchRow(dispatch_id: u32, type_a_slot: u32, quotation_id: u32, generic_name: []const u8) populate_core.DispatchEntryDescription {
+    return .{
+        .dispatch_id = dispatch_id,
+        .type_a_slot = type_a_slot,
+        .type_b_slot = populate_core.dispatch_type_unary,
+        .quotation_id = quotation_id,
+        .module_name = null,
+        .module_name_len = 0,
+        .generic_name = generic_name.ptr,
+        .generic_name_len = @intCast(generic_name.len),
+        .body_bytecode = null,
+        .body_bytecode_len = 0,
+    };
+}
+
 test "freestanding replay registers compiled dispatch entries at the freeze-time dispatch id" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -2199,4 +2539,206 @@ test "freestanding replay no-ops on a zero-entry image" {
     try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
     try std.testing.expect(handle.method_dispatch == null);
     try std.testing.expect(handle.dispatch_any_sentinel == null);
+}
+
+test "freestanding protocol-bounded dispatch checks the operand and dispatches" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [4]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+    defer if (handle.method_dispatch) |*table| table.deinit();
+    defer handle.protocol_satisfies_memo.deinit(handle.allocator);
+
+    const descs = [_]populate_core.TypeDescriptor{
+        std.mem.zeroes(populate_core.TypeDescriptor),
+        std.mem.zeroes(populate_core.TypeDescriptor),
+    };
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "fixnum", .name_len = 6, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = "string", .name_len = 6, .slot = 2, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    const methods = [_]populate_core.ProtocolMethod{
+        .{ .name = "label", .name_len = 5, .stack_effect_idx = 0 },
+    };
+    const pd_rows = [_]populate_core.ProtocolDescriptorDescription{
+        .{ .name = "labeled", .name_len = 7, .slot = 0, .protocol_id = 1, .method_count = 1, .methods = &methods },
+    };
+    const rows = [_]populate_core.DispatchEntryDescription{
+        boundedDispatchRow(7, 1, 0, "label"),
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+    header.protocoldescriptor_slot_count = 1;
+    header.protocoldescriptor_descriptions = &pd_rows;
+    header.dispatch_entry_slot_count = rows.len;
+    header.dispatch_entry_descriptions = &rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null, null };
+    var pd_slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        @ptrCast(&pd_slots),
+        null,
+    ));
+
+    var quotations = [_]?OnezWordFn{&methodBodyPush101};
+    handle.quotation_table = quotations[0..];
+    try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
+
+    const ctx_raw = @intFromPtr(&handle);
+    const unary = @as(usize, @intFromEnum(ProtocolArity.unary));
+
+    // fixnum registers `label`, so it satisfies `labeled` and the method runs.
+    handle.stack[0] = .{ .fixnum = 42 };
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 0), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0));
+    try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
+    try std.testing.expectEqual(@as(i64, 101), handle.stack[1].fixnum);
+
+    // A second satisfied call takes the memo path and still dispatches.
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 0), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0));
+    try std.testing.expectEqual(@as(i64, 101), handle.stack[1].fixnum);
+
+    // string has a descriptor but no `label` method, so the bound is violated and the operand
+    // stays on the stack.
+    handle.stack[0] = .{ .string = "x" };
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0));
+    try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
+    const msg = onez_last_error(&handle) orelse return error.TestExpectedError;
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(msg), "type 'string' does not satisfy protocol 'labeled'") != null);
+}
+
+test "freestanding combinator-bounded dispatch enforces an intersection of protocols" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [4]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+    defer if (handle.method_dispatch) |*table| table.deinit();
+    defer handle.protocol_satisfies_memo.deinit(handle.allocator);
+
+    const descs = [_]populate_core.TypeDescriptor{
+        std.mem.zeroes(populate_core.TypeDescriptor),
+        std.mem.zeroes(populate_core.TypeDescriptor),
+    };
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "fixnum", .name_len = 6, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = "string", .name_len = 6, .slot = 2, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    const label_methods = [_]populate_core.ProtocolMethod{
+        .{ .name = "label", .name_len = 5, .stack_effect_idx = 0 },
+    };
+    const size_methods = [_]populate_core.ProtocolMethod{
+        .{ .name = "size-class", .name_len = 10, .stack_effect_idx = 0 },
+    };
+    const pd_rows = [_]populate_core.ProtocolDescriptorDescription{
+        .{ .name = "labeled", .name_len = 7, .slot = 0, .protocol_id = 1, .method_count = 1, .methods = &label_methods },
+        .{ .name = "sized", .name_len = 5, .slot = 1, .protocol_id = 2, .method_count = 1, .methods = &size_methods },
+    };
+    const elements = [_]populate_core.CombinatorElement{
+        .{ .kind = 2, .slot = 0 },
+        .{ .kind = 2, .slot = 1 },
+    };
+    const cc_rows = [_]populate_core.ConstraintCombinatorDescription{
+        .{ .slot = 0, .combinator_id = 1, .kind = 0, .element_count = 2, .elements = &elements },
+    };
+    const rows = [_]populate_core.DispatchEntryDescription{
+        boundedDispatchRow(7, 1, 0, "label"),
+        boundedDispatchRow(8, 1, 1, "size-class"),
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+    header.protocoldescriptor_slot_count = 2;
+    header.protocoldescriptor_descriptions = &pd_rows;
+    header.constraintcombinator_slot_count = 1;
+    header.constraintcombinator_descriptions = &cc_rows;
+    header.dispatch_entry_slot_count = rows.len;
+    header.dispatch_entry_descriptions = &rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null, null };
+    var pd_slots = [_]?*const value_mod.ProtocolDescriptor{ null, null };
+    var cc_slots = [_]?*const value_mod.ConstraintCombinator{null};
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        @ptrCast(&pd_slots),
+        @ptrCast(&cc_slots),
+    ));
+
+    var quotations = [_]?OnezWordFn{ &methodBodyPush101, &methodBodyPush202 };
+    handle.quotation_table = quotations[0..];
+    try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
+
+    const ctx_raw = @intFromPtr(&handle);
+    const unary = @as(usize, @intFromEnum(ProtocolArity.unary));
+
+    // fixnum registers both `label` and `size-class`, so it satisfies the intersection and
+    // dispatches the `size-class` method (dispatch id 8).
+    handle.stack[0] = .{ .fixnum = 42 };
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 0), aotSatisfiesAndDispatchCombinator(ctx_raw, 8, 0, unary, 0));
+    try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
+    try std.testing.expectEqual(@as(i64, 202), handle.stack[1].fixnum);
+
+    // string implements neither protocol, so the intersection is unsatisfied.
+    handle.stack[0] = .{ .string = "x" };
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatchCombinator(ctx_raw, 8, 0, unary, 0));
+    try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
+    const msg = onez_last_error(&handle) orelse return error.TestExpectedError;
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(msg), "type 'string' does not satisfy the required constraint") != null);
+}
+
+test "freestanding bounded dispatch reports missing tables and out-of-range slots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [2]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+    defer clearLastError(&handle);
+
+    const ctx_raw = @intFromPtr(&handle);
+    const unary = @as(usize, @intFromEnum(ProtocolArity.unary));
+    handle.stack[0] = .{ .fixnum = 1 };
+    handle.stack_len = 1;
+
+    // No protocol/combinator slot tables were loaded.
+    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatch(ctx_raw, 7, 0, unary, 0));
+    const proto_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(proto_msg), "protocol descriptor slots are not available") != null);
+
+    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatchCombinator(ctx_raw, 7, 0, unary, 0));
+    const combo_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(combo_msg), "constraint combinator slots are not available") != null);
+
+    // A table present but the index past its end.
+    var pd_slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    handle.image_protocoldescriptor_slots = @ptrCast(&pd_slots);
+    handle.image_protocoldescriptor_slot_count = 1;
+    try std.testing.expectEqual(@as(i32, 2), aotSatisfiesAndDispatch(ctx_raw, 7, 5, unary, 0));
+    const range_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(range_msg), "slot 5 is out of range") != null);
 }

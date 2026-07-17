@@ -3,3 +3,5 @@ a string
 unknown
 two fixnums
 mixed
+labeled fixnum
+sized fixnum

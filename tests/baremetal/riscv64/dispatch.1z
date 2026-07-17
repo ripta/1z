@@ -15,3 +15,21 @@ combine: method{ fixnum fixnum } [ drop drop "two fixnums" ] ;
 t describe print-line
 1 2 combine print-line
 "x" 3 combine print-line
+
+\ Protocol- and combinator-bounded dispatch on bare metal: a call site whose
+\ parameter is bounded by a protocol emits the satisfies-and-dispatch helper,
+\ and one bounded by an intersection emits the combinator variant. fixnum
+\ implements both protocols' methods, so both bounds are satisfied and both
+\ helpers dispatch positively.
+
+labeled: protocol{ label: } ;
+sized: protocol{ size-class: } ;
+
+label: generic ( x: labeled -- s ) [ drop "unlabeled" ] ;
+label: method{ fixnum } [ drop "labeled fixnum" ] ;
+
+size-class: generic ( x: labeled & sized -- s ) [ drop "unsized" ] ;
+size-class: method{ fixnum } [ drop "sized fixnum" ] ;
+
+7 label print-line
+7 size-class print-line
