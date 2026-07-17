@@ -1,0 +1,20 @@
+\ Default-build control for the word-body match-table shape: before branch
+\ tables were promoted, the fail-clean detection rejected this program with
+\ the --emit-runtime-image hint because `#prefix` was reachable only through
+\ the table. Promotion runs in every AOT build, so the default build now
+\ compiles the arm callees through and the program runs.
+
+use "sequences" ;
+
+box: struct{ value rest } ;
+chain: enum{ link: box end: unit } ;
+
+chain>array: ( chain -- array ) [
+  {
+    chain:link: [ chain>array #prefix ]
+    chain:end: [ { } ]
+  } unchecked-match
+] ;
+
+1 2 3 chain:end make-chain:link make-chain:link make-chain:link
+chain>array inspect print-line

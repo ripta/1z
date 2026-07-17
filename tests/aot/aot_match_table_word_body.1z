@@ -1,0 +1,32 @@
+\ A word-body match table parses to an array-literal push immediately followed
+\ by the consuming combinator call. The arm callees (`#prefix`, `#suffix`) are
+\ module words reachable only through the table, so the freeze walk must
+\ promote them into the must-compile set. Before that promotion, a strict
+\ build compiled the arm to an interpreted fallback whose callees resolved
+\ from the metadata-only image to empty bodies and silently no-opped, leaving
+\ the unwrapped variant payload as the word's result.
+
+use "sequences" ;
+
+box: struct{ value rest } ;
+chain: enum{ link: box end: unit } ;
+
+\ Raw unchecked-match table.
+chain>array: ( chain -- array ) [
+  {
+    chain:link: [ chain>array #prefix ]
+    chain:end: [ { } ]
+  } unchecked-match
+] ;
+
+\ match{ desugars to the same table push plus an unchecked-match call.
+chain>array-reversed: ( chain -- array ) [
+  match{
+    chain:link: [ chain>array-reversed swap #suffix ]
+    chain:end: [ { } ]
+  }
+] ;
+
+1 2 3 chain:end make-chain:link make-chain:link make-chain:link
+dup chain>array inspect print-line
+chain>array-reversed inspect print-line

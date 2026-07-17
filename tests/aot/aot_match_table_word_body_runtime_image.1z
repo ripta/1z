@@ -1,0 +1,19 @@
+\ Runtime-image control for the word-body match-table shape: an
+\ --emit-runtime-image build carries interpreter-runnable bodies, so it ran
+\ this program correctly even before branch-table promotion. It must keep
+\ doing so with the promotion in place.
+
+use "sequences" ;
+
+box: struct{ value rest } ;
+chain: enum{ link: box end: unit } ;
+
+chain>array: ( chain -- array ) [
+  {
+    chain:link: [ chain>array #prefix ]
+    chain:end: [ { } ]
+  } unchecked-match
+] ;
+
+1 2 3 chain:end make-chain:link make-chain:link make-chain:link
+chain>array inspect print-line

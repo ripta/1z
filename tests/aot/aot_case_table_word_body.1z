@@ -1,0 +1,33 @@
+\ Word-body `case` and `cond` tables share the branch-table promotion with
+\ the match family: the table is an array-literal push immediately followed
+\ by the consuming call, and the arm callees (`#prefix`, `#suffix`) are
+\ module words reachable only through the table. Before promotion, a strict
+\ build left the arms uncompiled and their dispatch trapped on a null code
+\ pointer at runtime.
+
+use "sequences" ;
+
+pick-seq: ( n -- seq ) [
+  {
+    { 1 [ 10 { } #prefix ] }
+    { 2 [ { 20 } 21 #suffix ] }
+    [ drop { } ]
+  } case
+] ;
+
+\ cond's trailing default arm consumes the scrutinee itself, so the arm
+\ body pushes the result without a drop.
+sign-seq: ( n -- seq ) [
+  {
+    { [ dup 0 > ] [ drop 1 { } #prefix ] }
+    { [ dup 0 < ] [ drop { } -1 #suffix ] }
+    [ { } ]
+  } cond
+] ;
+
+1 pick-seq inspect print-line
+2 pick-seq inspect print-line
+3 pick-seq inspect print-line
+5 sign-seq inspect print-line
+-5 sign-seq inspect print-line
+0 sign-seq inspect print-line

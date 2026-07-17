@@ -723,6 +723,15 @@ fn discoverReachableWords(
         .quotation_bodies = .{},
         .pending_call_targets = .{},
     };
+    errdefer {
+        freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
+        result.names.deinit(temp_allocator);
+        result.defs.deinit(temp_allocator);
+        result.native_names.deinit(temp_allocator);
+        result.native_defs.deinit(temp_allocator);
+        result.quotation_bodies.deinit(temp_allocator);
+        result.pending_call_targets.deinit(temp_allocator);
+    }
 
     // Push deps frames for every loaded module so that lookupWord can find
     // module-private words during BFS. At runtime the executor pushes a
@@ -745,68 +754,42 @@ fn discoverReachableWords(
     }
 
     // Seed worklist from entry instructions
-    collectCallWords(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
-        freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
-        result.names.deinit(temp_allocator);
-        result.defs.deinit(temp_allocator);
-        result.native_names.deinit(temp_allocator);
-        result.native_defs.deinit(temp_allocator);
-        result.quotation_bodies.deinit(temp_allocator);
-        result.pending_call_targets.deinit(temp_allocator);
-        return err;
-    };
+    try collectCallWords(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
 
     // promote callees of composite-nested quotations in the entry instructions before draining,
     // so a runtime-selected dispatch, e.g., `H{ ... match: [ ... ] }`, has its branch quot
     // callees compile.
-    if (strict_interpreter_free) collectCompositeQuotationsPromoting(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
-        freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
-        result.names.deinit(temp_allocator);
-        result.defs.deinit(temp_allocator);
-        result.native_names.deinit(temp_allocator);
-        result.native_defs.deinit(temp_allocator);
-        result.quotation_bodies.deinit(temp_allocator);
-        result.pending_call_targets.deinit(temp_allocator);
-        return err;
-    };
+    if (strict_interpreter_free) try collectCompositeQuotationsPromoting(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
 
     // BFS
-    drainWorklist(ctx, &worklist, &seen, &quotation_seen, &quotation_path, &result, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
-        freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
-        result.names.deinit(temp_allocator);
-        result.defs.deinit(temp_allocator);
-        result.native_names.deinit(temp_allocator);
-        result.native_defs.deinit(temp_allocator);
-        result.quotation_bodies.deinit(temp_allocator);
-        result.pending_call_targets.deinit(temp_allocator);
-        return err;
-    };
+    try drainWorklist(ctx, &worklist, &seen, &quotation_seen, &quotation_path, &result, diagnostics, artifact_class, temp_allocator, result_allocator);
 
-    // Word-body-scoped promoting walk for runtime-image dispatch containers (the lint registry's
-    // `.mutable_map` / `.struct_instance` and the lexer rules' `.hash`): promote the callees of a
-    // quotation found at a named dispatch slot (the struct `check` field, the hash `match` key) so
-    // that quotation's own compilation succeeds and it carries a real `code_ptr`. Scoped to these two
-    // known shapes plus named-slot keying, not arbitrary word bodies: promoting composite callees
-    // found anywhere in a word body was tried once and regressed by pulling unrelated module-cached
-    // generic-dispatch getters and effect-less consts into the must-compile set. Re-drains the BFS in
-    // a fixed-point loop, since a newly-promoted callee may itself call further undiscovered words.
-    if (strict_interpreter_free) {
+    // Word-body-scoped promoting walks, re-draining the BFS in a fixed-point loop since a
+    // newly-promoted callee may itself call further undiscovered words. Two walks share the loop:
+    //
+    // Runtime-image dispatch containers (strict builds only): the lint registry's `.mutable_map` /
+    // `.struct_instance` and the lexer rules' `.hash`. Promote the callees of a quotation found at
+    // a named dispatch slot (the struct `check` field, the hash `match` key) so that quotation's
+    // own compilation succeeds and it carries a real `code_ptr`.
+    //
+    // Branch tables (every build): a table literal immediately consumed by `unchecked-match` /
+    // `case` / `cond`. Promote the buried arm callees so the arms compile and the word matches
+    // interpreter behavior instead of dropping to an uncompiled arm at runtime.
+    //
+    // Both walks are keyed -- to the two known container shapes plus named slots, and to the
+    // consuming combinator call -- not applied to arbitrary word-body composites: promoting
+    // composite callees found anywhere in a word body was tried once and regressed by pulling
+    // unrelated module-cached generic-dispatch getters and effect-less consts into the
+    // must-compile set.
+    {
         var scanned_entry = false;
         var scanned_def_count: usize = 0;
         while (true) {
             const worklist_len_before = worklist.items.len;
 
             if (!scanned_entry) {
-                collectDispatchContainerQuotationsPromoting(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
-                    freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
-                    result.names.deinit(temp_allocator);
-                    result.defs.deinit(temp_allocator);
-                    result.native_names.deinit(temp_allocator);
-                    result.native_defs.deinit(temp_allocator);
-                    result.quotation_bodies.deinit(temp_allocator);
-                    result.pending_call_targets.deinit(temp_allocator);
-                    return err;
-                };
+                if (strict_interpreter_free) try collectDispatchContainerQuotationsPromoting(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
+                try collectBranchTableQuotationsPromoting(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
                 scanned_entry = true;
             }
 
@@ -816,30 +799,13 @@ fn discoverReachableWords(
                     .compound => |c| c,
                     .native, .host_callback => continue,
                 };
-                collectDispatchContainerQuotationsPromoting(ctx, body, result.names.items[scanned_def_count], &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
-                    freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
-                    result.names.deinit(temp_allocator);
-                    result.defs.deinit(temp_allocator);
-                    result.native_names.deinit(temp_allocator);
-                    result.native_defs.deinit(temp_allocator);
-                    result.quotation_bodies.deinit(temp_allocator);
-                    result.pending_call_targets.deinit(temp_allocator);
-                    return err;
-                };
+                if (strict_interpreter_free) try collectDispatchContainerQuotationsPromoting(ctx, body, result.names.items[scanned_def_count], &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
+                try collectBranchTableQuotationsPromoting(ctx, body, result.names.items[scanned_def_count], &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
             }
 
             if (worklist.items.len == worklist_len_before) break;
 
-            drainWorklist(ctx, &worklist, &seen, &quotation_seen, &quotation_path, &result, diagnostics, artifact_class, temp_allocator, result_allocator) catch |err| {
-                freePendingCallTargetPaths(&result.pending_call_targets, result_allocator);
-                result.names.deinit(temp_allocator);
-                result.defs.deinit(temp_allocator);
-                result.native_names.deinit(temp_allocator);
-                result.native_defs.deinit(temp_allocator);
-                result.quotation_bodies.deinit(temp_allocator);
-                result.pending_call_targets.deinit(temp_allocator);
-                return err;
-            };
+            try drainWorklist(ctx, &worklist, &seen, &quotation_seen, &quotation_path, &result, diagnostics, artifact_class, temp_allocator, result_allocator);
         }
     }
 
@@ -1202,11 +1168,13 @@ fn collectCallWords(
 }
 
 /// Walk a discovered instruction stream looking for composite literal `push_literal` values
-/// (`.array`, `.hash`, `.vector`) that bury branch quotations. `case` / `cond` tables are a
-/// single `.array`. The lexer's `H{ ... match: [ ... ] }` rules a single `.hash`.
+/// (`.array`, `.hash`, `.vector`) that bury quotations. The lexer's `H{ ... match: [ ... ] }`
+/// rules are a single `.hash`.
 ///
 /// The buried quotation bodies are collected into the compilation manifest; the words those
-/// bodies call are intentionally left undiscovered.
+/// bodies call are intentionally left undiscovered. Branch tables consumed by a combinator call
+/// were already promoted -- callees and all -- by `collectBranchTableQuotationsPromoting`, so the
+/// pointer-identity dedupe skips them here.
 ///
 /// This is the second discovery pass. The main BFS (`collectCallWords`) collects quotations
 /// reachable through direct calls and nested quotation *literals* but never descends into
@@ -1321,7 +1289,8 @@ fn collectCompositeQuotationsPromoting(
 
 /// Recurse through a composite literal Value to reach every nested `.quotation`.
 ///
-/// The companion to `collectQuotationsInValue` for the promoting (entry-scope) walk.
+/// The companion to `collectQuotationsInValue` for the promoting walks: entry-scope composites
+/// and consumer-keyed branch tables.
 fn collectQuotationsInValuePromoting(
     ctx: *const Context,
     val: Value,
@@ -1357,8 +1326,8 @@ fn collectQuotationsInValuePromoting(
 /// Dedupe a quotation body by pointer identity, collect it into the compilation manifest, and seed
 /// the BFS worklist with the words it calls, so a runtime-selected dispatch of it has a compiled
 /// `code_ptr`. Shared by every promoting walk that reaches a `.quotation` value: entry-scope
-/// composites (`collectQuotationsInValuePromoting`) and the word-body dispatch-container named-slot
-/// walk (`walkDispatchContainerValue`).
+/// composites and branch tables (`collectQuotationsInValuePromoting`) and the word-body
+/// dispatch-container named-slot walk (`walkDispatchContainerValue`).
 ///
 /// A banned native inside the quotation (e.g. `>quotation`) is NOT promoted to a build rejection
 /// here: the quotation stays uncompiled (its `code_ptr` stays null) and a runtime-selected dispatch
@@ -1399,13 +1368,70 @@ fn promoteQuotationCallees(
 const dispatch_struct_field_check = "check";
 const dispatch_hash_key_match = "match";
 
-/// Entry point for the word-body-scoped promoting walk: scans `push_literal` instructions for the
-/// two known runtime-image dispatch-container shapes (`.mutable_map` / `.struct_instance` for the
-/// lint registry, `.hash` for lexer rules) and promotes the callees of the quotation found at a
-/// named dispatch slot inside each. Deliberately does NOT trigger on bare `.array` / `.vector` at
-/// this level -- those are common word-body literals (e.g. `cond` / `case` tables) unrelated to a
-/// runtime-image dispatch container, and treating them as promotable here would repeat the regression
-/// documented on the call site in `discoverReachableWords`.
+/// The combinators whose table argument the branch-table promoting walk recognizes. `match{`
+/// desugars to a table push plus an `unchecked-match` call, so it is covered by the same key.
+const branch_table_consumers = [_][]const u8{ "unchecked-match", "case", "cond" };
+
+fn isBranchTableConsumer(name: []const u8) bool {
+    for (branch_table_consumers) |consumer| {
+        if (std.mem.eql(u8, name, consumer)) return true;
+    }
+    return false;
+}
+
+/// Promoting walk for branch tables, run over the entry instructions and every discovered word
+/// body in every AOT build.
+///
+/// A `match{` / `unchecked-match` / `case` / `cond` table parses to a single `.array` push_literal
+/// immediately followed by the consuming `call_word`, so the walk promotes the quotations buried
+/// in an array literal only when the next instruction calls one of those combinators.
+///
+/// An arm left uncompiled would drop to the interpreter at dispatch, where a metadata-only image
+/// no-ops its callees, so the arms must compile with their callees discovered.
+///
+/// Bare arrays with no consuming call are left alone; promoting arbitrary word-body composites
+/// regressed once, as documented on the call site in `discoverReachableWords`.
+fn collectBranchTableQuotationsPromoting(
+    ctx: *const Context,
+    instrs: []const Instruction,
+    caller_name: []const u8,
+    worklist: *std.ArrayListUnmanaged([]const u8),
+    seen: *std.StringHashMapUnmanaged(void),
+    quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
+    quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
+    composite_body_ptrs: *std.AutoHashMapUnmanaged(usize, void),
+    pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
+    quotation_path: *std.ArrayListUnmanaged(u32),
+    diagnostics: *FreezeDiagnostics,
+    artifact_class: ArtifactClass,
+    allocator: Allocator,
+    path_allocator: Allocator,
+) (Allocator.Error || error{ DisallowedDynamicFeature, DisallowedNativeInterpreterDependency })!void {
+    for (instrs, 0..) |instr, idx| {
+        switch (instr.op) {
+            .push_literal => |val| switch (val) {
+                .quotation => |q| try collectBranchTableQuotationsPromoting(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator),
+                .array => {
+                    if (idx + 1 >= instrs.len) continue;
+                    const next_name = instrs[idx + 1].op.callTargetName() orelse continue;
+                    if (!isBranchTableConsumer(next_name)) continue;
+                    try collectQuotationsInValuePromoting(ctx, val, caller_name, worklist, seen, quotation_bodies, quotation_seen, composite_body_ptrs, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+                },
+                else => {},
+            },
+            else => {},
+        }
+    }
+}
+
+/// Entry point for the word-body-scoped dispatch-container promoting walk: scans `push_literal`
+/// instructions for the two known runtime-image dispatch-container shapes (`.mutable_map` /
+/// `.struct_instance` for the lint registry, `.hash` for lexer rules) and promotes the callees of
+/// the quotation found at a named dispatch slot inside each. Deliberately does NOT trigger on bare
+/// `.array` / `.vector` at this level -- branch tables are promoted separately by
+/// `collectBranchTableQuotationsPromoting`, keyed on the consuming combinator call, and promoting
+/// other bare word-body composites would repeat the regression documented on the call site in
+/// `discoverReachableWords`.
 fn collectDispatchContainerQuotationsPromoting(
     ctx: *const Context,
     instrs: []const Instruction,
@@ -4076,6 +4102,146 @@ test "collectDispatchContainerQuotationsPromoting does not promote a hash entry 
 
     try testing.expect(!seen.contains("should-not-promote-2"));
     try testing.expectEqual(@as(usize, 0), worklist.items.len);
+}
+
+test "collectBranchTableQuotationsPromoting promotes arm callees of a table consumed by case" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // A `case` table is an `.array` of `{ key quot }` pair sub-arrays pushed
+    // immediately before the consuming call; the arm callee is reachable only
+    // through the table.
+    const arm_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "branch-arm-callee" }, .line = 1 },
+    };
+    const pair_elems = [_]Value{
+        .{ .fixnum = 1 },
+        .{ .quotation = .{ .instructions = arm_instrs } },
+    };
+    var pair_arr = value_mod.Array{ .header = undefined, .items = &pair_elems, .storage = .static };
+    const table_elems = [_]Value{.{ .array = &pair_arr }};
+    var table_arr = value_mod.Array{ .header = undefined, .items = &table_elems, .storage = .static };
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .array = &table_arr } }, .line = 1 },
+        .{ .op = .{ .call_word = "case" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectBranchTableQuotationsPromoting(&ctx, outer_instrs, "case-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &composite_body_ptrs, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+
+    try testing.expect(seen.contains("branch-arm-callee"));
+    try testing.expectEqual(@as(usize, 1), worklist.items.len);
+    try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
+    try testing.expectEqual(@intFromPtr(arm_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
+}
+
+test "collectBranchTableQuotationsPromoting ignores an array with no consuming combinator call" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Consumer keying: the same table followed by an unrelated call must not
+    // promote, or arbitrary word-body arrays would regress the must-compile
+    // set.
+    const arm_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "should-not-promote-arm" }, .line = 1 },
+    };
+    const table_elems = [_]Value{
+        .{ .quotation = .{ .instructions = arm_instrs } },
+    };
+    var table_arr = value_mod.Array{ .header = undefined, .items = &table_elems, .storage = .static };
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .array = &table_arr } }, .line = 1 },
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectBranchTableQuotationsPromoting(&ctx, outer_instrs, "table-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &composite_body_ptrs, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+
+    try testing.expect(!seen.contains("should-not-promote-arm"));
+    try testing.expectEqual(@as(usize, 0), worklist.items.len);
+    try testing.expectEqual(@as(usize, 0), quotation_bodies.items.len);
+}
+
+test "collectBranchTableQuotationsPromoting promotes an unchecked-match table inside a nested quotation literal" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // An `unchecked-match` table (alternating symbol/quotation pairs) sitting
+    // inside a quotation literal, e.g. an `if` arm, is reached through the
+    // walk's recursion into nested quotation bodies.
+    const arm_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "match-arm-callee" }, .line = 1 },
+    };
+    const table_elems = [_]Value{
+        .{ .symbol = "cons" },
+        .{ .quotation = .{ .instructions = arm_instrs } },
+    };
+    var table_arr = value_mod.Array{ .header = undefined, .items = &table_elems, .storage = .static };
+    const inner_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .array = &table_arr } }, .line = 1 },
+        .{ .op = .{ .call_word = "unchecked-match" }, .line = 1 },
+    };
+    const outer_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner_instrs } } }, .line = 1 },
+    };
+
+    var seen = std.StringHashMapUnmanaged(void){};
+    defer seen.deinit(allocator);
+    var worklist = std.ArrayListUnmanaged([]const u8){};
+    defer worklist.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var quotation_path = std.ArrayListUnmanaged(u32){};
+    defer quotation_path.deinit(allocator);
+    var composite_body_ptrs = std.AutoHashMapUnmanaged(usize, void){};
+    defer composite_body_ptrs.deinit(allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try collectBranchTableQuotationsPromoting(&ctx, outer_instrs, "match-holder", &worklist, &seen, &quotation_bodies, &quotation_seen, &composite_body_ptrs, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+
+    try testing.expect(seen.contains("match-arm-callee"));
+    try testing.expectEqual(@as(usize, 1), worklist.items.len);
+    try testing.expectEqualStrings("match-arm-callee", worklist.items[0]);
 }
 
 test "discoverReachableWords re-drains the BFS to reach a promoted callee's own callee" {

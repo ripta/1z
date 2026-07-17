@@ -6,9 +6,10 @@
 \ cons-cell struct, so its backing struct must survive serialization, and
 \ match/head/tail rely on the enum-variant registry being rebuilt at load.
 \
-\ Recursive match bodies (cons-list>array, list-reverse-acc) still miscompute
-\ under AOT; that combinator-reentry defect is tracked separately, so this
-\ test stays on the construction and non-recursive access path.
+\ The conversion words (cons-list>array, list-reverse-acc) recurse inside
+\ word-body unchecked-match tables whose arm callees the freeze walk promotes
+\ into the must-compile set, so they exercise branch-table promotion under a
+\ strict build.
 
 use "cons-list" ;
 
@@ -16,3 +17,5 @@ use "cons-list" ;
 { 10 20 30 } >cons-list tail head .
 { 10 20 30 } >cons-list cons? .
 nil nil? .
+{ 1 2 3 } >cons-list cons-list>array inspect print-line
+{ 1 2 3 } >cons-list list-reverse cons-list>array inspect print-line
