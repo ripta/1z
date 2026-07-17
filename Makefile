@@ -40,6 +40,11 @@ COVERAGE_DIR ?= $(ZIG_PREFIX)/coverage
 KCOV_ARGS ?= --include-path=src
 COVERAGE_JOBS ?= 4
 
+# mktemp inside $(shell ...) yields an empty string on failure and make keeps
+# going, so a later `-o $(VAR)` would swallow the next argument as the output
+# path. Abort the recipe instead.
+mktemp_or_die = $(or $(shell mktemp $(1)),$(error mktemp failed for $(1)))
+
 all: build test
 
 branch-info: ## Print branch, HEAD, and describe before building/testing
@@ -139,7 +144,7 @@ fmt-test: ## Run formatter tests
 	timeout $(TARGET_TIMEOUT) zig build fmt-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
-	$(eval _aot_tmp := $(shell mktemp /tmp/1z-aot-run-XXXXXX))
+	$(eval _aot_tmp := $(call mktemp_or_die,/tmp/1z-aot-run-XXXXXX))
 	@trap 'rm -f $(_aot_tmp)' EXIT; \
 	timeout $(AOT_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z build $(FILE) -o $(_aot_tmp) $(ARGS) && \
 	chmod +x $(_aot_tmp) && \
@@ -149,8 +154,8 @@ aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-che
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directives at word and quotation function entries
-	$(eval _bin := $(shell mktemp /tmp/1z-line-directives-XXXXXX))
-	$(eval _stderr := $(shell mktemp /tmp/1z-line-directives-stderr-XXXXXX))
+	$(eval _bin := $(call mktemp_or_die,/tmp/1z-line-directives-XXXXXX))
+	$(eval _stderr := $(call mktemp_or_die,/tmp/1z-line-directives-stderr-XXXXXX))
 	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
 	./$(ZIG_PREFIX)/bin/1z build --save-temps -o $(_bin) tests/aot/aot_line_directives.1z 2>$(_stderr); \
 	saved=$$(grep -m1 '^Saved: ' $(_stderr) | sed 's/^Saved: //'); \
@@ -188,8 +193,8 @@ aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directi
 	echo "PASS: AOT-emitted C carries #line directives for user words, quotations, prelude, if arms, and loop bodies"
 
 aot-trace-instr-check: build ## Verify --trace-aot=instr fires per-instruction for a non-recursive word and locates its NC.13
-	$(eval _bin := $(shell mktemp /tmp/1z-trace-instr-XXXXXX))
-	$(eval _stderr := $(shell mktemp /tmp/1z-trace-instr-stderr-XXXXXX))
+	$(eval _bin := $(call mktemp_or_die,/tmp/1z-trace-instr-XXXXXX))
+	$(eval _stderr := $(call mktemp_or_die,/tmp/1z-trace-instr-stderr-XXXXXX))
 	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
 	: 'TraceWriter re-creates a File.Writer per line, so a seekable stderr overwrites at offset 0; pipe stderr through cat to keep it non-seekable and preserve every line.'; \
 	./$(ZIG_PREFIX)/bin/1z build tests/aot/aot_trace_instr.1z -o $(_bin) --interpreter-fallback=false --trace-aot=instr 2>&1 1>/dev/null | cat > $(_stderr) || true; \
@@ -208,8 +213,8 @@ aot-trace-instr-check: build ## Verify --trace-aot=instr fires per-instruction f
 	echo "PASS: --trace-aot=instr fires for a non-recursive word and locates its NC.13 underflow to an instruction"
 
 aot-trace-word-filter-check: build ## Verify --trace-aot-word=PAT scopes the trace to matching words on a per-word and the instr axis
-	$(eval _bin := $(shell mktemp /tmp/1z-trace-word-XXXXXX))
-	$(eval _stderr := $(shell mktemp /tmp/1z-trace-word-stderr-XXXXXX))
+	$(eval _bin := $(call mktemp_or_die,/tmp/1z-trace-word-XXXXXX))
+	$(eval _stderr := $(call mktemp_or_die,/tmp/1z-trace-word-stderr-XXXXXX))
 	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
 	: 'TraceWriter re-creates a File.Writer per line, so a seekable stderr overwrites at offset 0; pipe stderr through cat to keep it non-seekable and preserve every line.'; \
 	./$(ZIG_PREFIX)/bin/1z build tests/aot/aot_trace_word_filter.1z -o $(_bin) --interpreter-fallback=false --trace-aot=freeze --trace-aot-word=keep-me 2>&1 1>/dev/null | cat > $(_stderr) || true; \
@@ -233,8 +238,8 @@ aot-trace-word-filter-check: build ## Verify --trace-aot-word=PAT scopes the tra
 	echo "PASS: --trace-aot-word=PAT scopes both a per-word axis and the instr firehose to the matching word"
 
 aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides so linker symbols show verbatim 1z names
-	$(eval _bin := $(shell mktemp /tmp/1z-asm-name-XXXXXX))
-	$(eval _stderr := $(shell mktemp /tmp/1z-asm-name-stderr-XXXXXX))
+	$(eval _bin := $(call mktemp_or_die,/tmp/1z-asm-name-XXXXXX))
+	$(eval _stderr := $(call mktemp_or_die,/tmp/1z-asm-name-stderr-XXXXXX))
 	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
 	./$(ZIG_PREFIX)/bin/1z build --save-temps -o $(_bin) tests/aot/aot_asm_names.1z 2>$(_stderr); \
 	saved=$$(grep -m1 '^Saved: ' $(_stderr) | sed 's/^Saved: //'); \
@@ -310,8 +315,8 @@ aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides
 	echo "PASS: AOT-emitted C carries asm-name overrides for user words, prelude words, compiled quotations, and generated words; nm shows verbatim symbols"
 
 aot-string-literal-direct-check: build ## Verify AOT string literals are constructed inline with no jitPushString trampoline or allocation
-	$(eval _bin := $(shell mktemp /tmp/1z-string-literal-XXXXXX))
-	$(eval _stderr := $(shell mktemp /tmp/1z-string-literal-stderr-XXXXXX))
+	$(eval _bin := $(call mktemp_or_die,/tmp/1z-string-literal-XXXXXX))
+	$(eval _stderr := $(call mktemp_or_die,/tmp/1z-string-literal-stderr-XXXXXX))
 	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
 	./$(ZIG_PREFIX)/bin/1z build --save-temps -o $(_bin) tests/aot/aot_string_literal_direct.1z 2>$(_stderr); \
 	saved=$$(grep -m1 '^Saved: ' $(_stderr) | sed 's/^Saved: //'); \
@@ -331,8 +336,8 @@ aot-string-literal-direct-check: build ## Verify AOT string literals are constru
 	echo "PASS: AOT string literals are constructed inline via ValueLayout offsets with no jitPushString trampoline"
 
 aot-symbol-literal-direct-check: build ## Verify AOT symbol literals are constructed inline with no jitPushSymbol trampoline or allocation
-	$(eval _bin := $(shell mktemp /tmp/1z-symbol-literal-XXXXXX))
-	$(eval _stderr := $(shell mktemp /tmp/1z-symbol-literal-stderr-XXXXXX))
+	$(eval _bin := $(call mktemp_or_die,/tmp/1z-symbol-literal-XXXXXX))
+	$(eval _stderr := $(call mktemp_or_die,/tmp/1z-symbol-literal-stderr-XXXXXX))
 	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
 	./$(ZIG_PREFIX)/bin/1z build --save-temps -o $(_bin) tests/aot/aot_symbol_literal_direct.1z 2>$(_stderr); \
 	saved=$$(grep -m1 '^Saved: ' $(_stderr) | sed 's/^Saved: //'); \
@@ -352,11 +357,11 @@ aot-symbol-literal-direct-check: build ## Verify AOT symbol literals are constru
 	echo "PASS: AOT symbol literals are constructed inline via ValueLayout offsets with no jitPushSymbol trampoline"
 
 aot-symbol-verify: build ## Verify nm + samply + perf consume verbatim 1z names from AOT binaries
-	$(eval _bin := $(shell mktemp /tmp/1z-symbol-verify-XXXXXX))
-	$(eval _samply_profile := $(shell mktemp /tmp/1z-symbol-verify-samply-XXXXXX).json.gz)
-	$(eval _samply_log := $(shell mktemp /tmp/1z-symbol-verify-samply-log-XXXXXX))
-	$(eval _perf_data := $(shell mktemp /tmp/1z-symbol-verify-perf-XXXXXX))
-	$(eval _perf_report := $(shell mktemp /tmp/1z-symbol-verify-perf-report-XXXXXX))
+	$(eval _bin := $(call mktemp_or_die,/tmp/1z-symbol-verify-XXXXXX))
+	$(eval _samply_profile := $(call mktemp_or_die,/tmp/1z-symbol-verify-samply-XXXXXX).json.gz)
+	$(eval _samply_log := $(call mktemp_or_die,/tmp/1z-symbol-verify-samply-log-XXXXXX))
+	$(eval _perf_data := $(call mktemp_or_die,/tmp/1z-symbol-verify-perf-XXXXXX))
+	$(eval _perf_report := $(call mktemp_or_die,/tmp/1z-symbol-verify-perf-report-XXXXXX))
 	@trap 'rm -f $(_bin) $(_samply_profile) $(_samply_profile).syms.json $(_samply_log) $(_perf_data) $(_perf_report)' EXIT; \
 	./$(ZIG_PREFIX)/bin/1z build -o $(_bin) tests/aot/aot_symbol_verify_workload.1z > /dev/null 2>&1; \
 	echo "--- nm ---"; \
@@ -431,8 +436,8 @@ aot-symbol-verify-linux: ## Run aot-symbol-verify inside the project's Debian Do
 	    bash -c 'echo 1 > /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true; make build && make aot-symbol-verify'
 
 aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader from interpreter-free AOT binaries
-	$(eval _free_bin := $(shell mktemp /tmp/1z-strip-check-free-XXXXXX))
-	$(eval _linked_bin := $(shell mktemp /tmp/1z-strip-check-linked-XXXXXX))
+	$(eval _free_bin := $(call mktemp_or_die,/tmp/1z-strip-check-free-XXXXXX))
+	$(eval _linked_bin := $(call mktemp_or_die,/tmp/1z-strip-check-linked-XXXXXX))
 	@trap 'rm -f $(_free_bin) $(_linked_bin)' EXIT; \
 	./$(ZIG_PREFIX)/bin/1z build --interpreter-fallback=false --lock-interpreter-setting -o $(_free_bin) tests/aot/interpreter_free_lock_explicit.1z && \
 	./$(ZIG_PREFIX)/bin/1z build --interpreter-fallback=true -o $(_linked_bin) tests/aot/interpreter_free_lock_explicit.1z && \
@@ -472,7 +477,7 @@ aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader
 
 bail-stats: ## Build with bail instrumentation and AOT-run a file (FILE=)
 	zig build --prefix $(ZIG_PREFIX) -Dbail-stats=true
-	$(eval _aot_tmp := $(shell mktemp /tmp/1z-bail-stats-XXXXXX))
+	$(eval _aot_tmp := $(call mktemp_or_die,/tmp/1z-bail-stats-XXXXXX))
 	@trap 'rm -f $(_aot_tmp)' EXIT; \
 	timeout $(AOT_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z build $(FILE) -o $(_aot_tmp) && \
 	chmod +x $(_aot_tmp) && \

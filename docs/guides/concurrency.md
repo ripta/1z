@@ -73,6 +73,19 @@ not affect the other. As an optimization, a provably immutable container is
 shared by reference count instead of copied; that sharing is unobservable,
 because such a value cannot be mutated by either side.
 
+A few reference types live on the task's arena and cannot cross a task
+boundary at all: iterators, parameters, benchmark reports, resources, and
+streams. Returning one from a task, or sending one through a channel, throws
+`task-arena-escape:`. The error message names a per-type workaround: for
+example, materialize an iterator with `#collect` and send the array, or send
+a file descriptor and rebuild the stream with `fd>stream` in the receiving
+task. This applies even when the value is nested inside a container or
+captured in a quotation. One known limitation: values created by parse-time
+words (markers, struct types, sandbox specs, constraint combinators) are not
+checked, because they normally belong to the main context, which lives for
+the whole process. `eval-string` inside a task can produce arena-owned ones
+that escape undetected.
+
 If a task pushes nothing, `await` returns `f`:
 
 ```

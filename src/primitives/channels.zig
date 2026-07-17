@@ -44,6 +44,12 @@ fn ensureSendValueEscapable(ctx: *Context, value: Value) anyerror!void {
     if (value_mod.valueContainsBorrowedBuffer(value)) {
         return throwBorrowedBufferEscape(ctx, "borrowed buffer cannot cross task boundary via channel send; call >byte-array first");
     }
+
+    // An unbuffered send parks the raw value until a receiver copies it, so the copy funnels
+    // cannot fail the sender; this pre-check does, before the value parks.
+    if (value_mod.findTaskArenaOwned(value) != null) {
+        return tasks.throwTaskArenaEscape(ctx, value);
+    }
 }
 
 /// Take channel-buffer ownership of a sender's value. The sender can be reaped, and its arena
@@ -753,6 +759,45 @@ test "send rejects borrowed buffer before buffered channel insertion" {
     try std.testing.expectError(error.UserThrown, nativeSend(&ctx));
     try std.testing.expect(ctx.thrown_error != null);
     try std.testing.expectEqualStrings("borrowed-buffer-escape", ctx.thrown_error.?.error_type);
+    try std.testing.expectEqual(@as(usize, 0), ch.buffer.count);
+    try std.testing.expectEqual(@as(usize, 0), ch.waiting_senders.items.len);
+}
+
+test "send rejects arena-owned value before unbuffered parking" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var scheduler = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    var scope = task_mod.TaskScope.init(std.testing.allocator);
+    defer scope.deinit();
+
+    var current = Task{
+        .id = 1,
+        .name = null,
+        .status = std.atomic.Value(task_mod.TaskStatus).init(.running),
+        .ctx = &ctx,
+        .scope = &scope,
+        .quotation = .{ .instructions = &.{}, .effect = null },
+    };
+    scheduler.current_task = &current;
+    ctx.scheduler = &scheduler;
+
+    const ch = try Channel.init(std.testing.allocator, 0);
+    defer {
+        ch.deinit();
+        std.testing.allocator.destroy(ch);
+    }
+
+    var res = value_mod.Resource{ .type_name = "test-resource" };
+
+    try ctx.stack.push(.{ .resource = &res });
+    try ctx.stack.push(.{ .channel = ch });
+
+    try std.testing.expectError(error.UserThrown, nativeSend(&ctx));
+    try std.testing.expect(ctx.thrown_error != null);
+    try std.testing.expectEqualStrings("task-arena-escape", ctx.thrown_error.?.error_type);
     try std.testing.expectEqual(@as(usize, 0), ch.buffer.count);
     try std.testing.expectEqual(@as(usize, 0), ch.waiting_senders.items.len);
 }

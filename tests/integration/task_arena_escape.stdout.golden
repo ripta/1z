@@ -14,6 +14,18 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
 PASS: iterator rejected at await
 Stack: [ ]
 PASS: parameter rejected at await
@@ -43,6 +55,30 @@ Stack: [ ]
 PASS: iterator captured in quotation rejected
 Stack: [ ]
 PASS: shareable plus arena-owned mix rejected
+Stack: [ ]
+PASS: iterator rejected at unbuffered send
+Stack: [ ]
+PASS: parameter rejected at unbuffered send
+Stack: [ ]
+PASS: benchmark report rejected at unbuffered send
+Stack: [ ]
+PASS: resource rejected at unbuffered send
+Stack: [ ]
+PASS: stream rejected at unbuffered send
+Stack: [ ]
+PASS: iterator rejected at buffered send
+Stack: [ ]
+PASS: parameter rejected at buffered send
+Stack: [ ]
+PASS: benchmark report rejected at buffered send
+Stack: [ ]
+PASS: resource rejected at buffered send
+Stack: [ ]
+PASS: stream rejected at buffered send
+Stack: [ ]
+PASS: iterator inside array rejected at send
+Stack: [ ]
+PASS: detached sender rejected at send
 Stack: [ ]
 PASS: collected iterator crosses as an array
 Stack: [ ]

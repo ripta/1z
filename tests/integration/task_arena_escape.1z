@@ -108,7 +108,97 @@ test-await-mixed-share: ( -- ) [
   ] task-arena-escape: "shareable plus arena-owned mix rejected" assert-error-type
 ] ;
 
-\ -- 6. The documented workaround crosses fine --
+\ -- 6. Channel send rejects each arena-owned variant synchronously. On an
+\ unbuffered channel with no receiver the value would otherwise park on the
+\ waiting-senders list and the rejection would surface in the receiver --
+
+test-send-unbuffered-iterator: ( -- ) [
+  [
+    [ <channel> { 1 2 3 } >iterator swap send ] task-scope
+  ] task-arena-escape: "iterator rejected at unbuffered send" assert-error-type
+] ;
+
+test-send-unbuffered-parameter: ( -- ) [
+  [
+    [ <channel> p: [ 42 ] make-parameter swap send ] task-scope
+  ] task-arena-escape: "parameter rejected at unbuffered send" assert-error-type
+] ;
+
+test-send-unbuffered-benchmark-report: ( -- ) [
+  [
+    [ <channel> make-benchmark-report swap send ] task-scope
+  ] task-arena-escape: "benchmark report rejected at unbuffered send" assert-error-type
+] ;
+
+test-send-unbuffered-resource: ( -- ) [
+  [
+    [ <channel> "dummy" <test-resource> swap send ] task-scope
+  ] task-arena-escape: "resource rejected at unbuffered send" assert-error-type
+] ;
+
+test-send-unbuffered-stream: ( -- ) [
+  [
+    [ <channel> 64 <string-stream> dup stream-close swap send ] task-scope
+  ] task-arena-escape: "stream rejected at unbuffered send" assert-error-type
+] ;
+
+test-send-buffered-iterator: ( -- ) [
+  [
+    [ 1 <buffered-channel> { 1 2 3 } >iterator swap send ] task-scope
+  ] task-arena-escape: "iterator rejected at buffered send" assert-error-type
+] ;
+
+test-send-buffered-parameter: ( -- ) [
+  [
+    [ 1 <buffered-channel> p: [ 42 ] make-parameter swap send ] task-scope
+  ] task-arena-escape: "parameter rejected at buffered send" assert-error-type
+] ;
+
+test-send-buffered-benchmark-report: ( -- ) [
+  [
+    [ 1 <buffered-channel> make-benchmark-report swap send ] task-scope
+  ] task-arena-escape: "benchmark report rejected at buffered send" assert-error-type
+] ;
+
+test-send-buffered-resource: ( -- ) [
+  [
+    [ 1 <buffered-channel> "dummy" <test-resource> swap send ] task-scope
+  ] task-arena-escape: "resource rejected at buffered send" assert-error-type
+] ;
+
+test-send-buffered-stream: ( -- ) [
+  [
+    [ 1 <buffered-channel> 64 <string-stream> dup stream-close swap send ] task-scope
+  ] task-arena-escape: "stream rejected at buffered send" assert-error-type
+] ;
+
+test-send-nested-array: ( -- ) [
+  [
+    [ <channel> { 1 2 3 } >iterator 1 array-n swap send ] task-scope
+  ] task-arena-escape: "iterator inside array rejected at send" assert-error-type
+] ;
+
+\ -- 7. The bug report's repro shape: a detached sender. Detached failures are
+\ isolated, so the sender catches the rejection and forwards its type through
+\ the channel. Before the fix the receiver got a dangling iterator that
+\ collected to { } under a release build --
+
+test-send-detached-repro: ( -- ) [
+  [
+    1 <buffered-channel>
+    dup [
+      [
+        dup [ { 1 2 3 } >iterator swap send ] curry
+        swap [ swap error-type: @get swap send ] curry
+        recover
+      ] curry spawn-detached
+    ] curry task-scope
+    receive
+    task-arena-escape: "detached sender rejected at send" assert=
+  ] task-scope
+] ;
+
+\ -- 8. The documented workaround crosses fine --
 
 test-await-collected-iterator: ( -- ) [
   [
@@ -132,4 +222,16 @@ test-await-nested-array
 test-await-nested-hash
 test-await-nested-capture
 test-await-mixed-share
+test-send-unbuffered-iterator
+test-send-unbuffered-parameter
+test-send-unbuffered-benchmark-report
+test-send-unbuffered-resource
+test-send-unbuffered-stream
+test-send-buffered-iterator
+test-send-buffered-parameter
+test-send-buffered-benchmark-report
+test-send-buffered-resource
+test-send-buffered-stream
+test-send-nested-array
+test-send-detached-repro
 test-await-collected-iterator
