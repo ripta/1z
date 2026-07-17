@@ -1,0 +1,2 @@
+--target=riscv64-freestanding-none
+--interpreter-fallback=false

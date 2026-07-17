@@ -2442,6 +2442,24 @@ fn printRuntimeImageRequiredError(
     ) catch {};
 }
 
+/// Render the `FreestandingDispatchReplayUnsupported` build error: the image
+/// carries method dispatch entries, and the freestanding runtime has no replay
+/// entrypoint to register them, so the build is rejected rather than silently
+/// dropping the program's method registrations.
+fn printFreestandingDispatchReplayError(
+    dispatch_entry_count: u32,
+    err_writer: anytype,
+) void {
+    err_writer.print(
+        "Error: freestanding target cannot replay method dispatch entries; the image carries {d} {s}\n",
+        .{ dispatch_entry_count, if (dispatch_entry_count == 1) @as([]const u8, "entry") else "entries" },
+    ) catch {};
+    err_writer.writeAll(
+        "      hint: the freestanding runtime does not support method-dispatch replay; " ++
+            "remove method definitions or build for a hosted target\n",
+    ) catch {};
+}
+
 fn handleHighlight(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     const stderr_file: File = .stderr();
     var stderr_buf: [4096]u8 = undefined;
@@ -3079,6 +3097,12 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
             );
         } else if (err == error.RuntimeImageRequired) {
             printRuntimeImageRequiredError(freeze_result.interpreted_reach, err_writer);
+        } else if (err == error.FreestandingDispatchReplayUnsupported) {
+            const count = if (codegen_diagnostics.image_stats) |stats|
+                stats.dispatch_entry_slot_count
+            else
+                0;
+            printFreestandingDispatchReplayError(count, err_writer);
         } else {
             err_writer.print("Error generating C source: {s}\n", .{@errorName(err)}) catch {};
         }
