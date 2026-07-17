@@ -412,7 +412,10 @@ pub fn build(b: *std.Build) void {
     update_lsp_golden_step.dependOn(&update_lsp_files.step);
     if (verbose_test_reporting) addVerboseSummary(b, test_case_helper, lsp_test_step, "lsp", lsp_status_files.items);
 
-    addBaremetalRiscv64VirtTest(b, exe, optimize, options, embedded_stdlib_path);
+    // The baremetal step needs no QEMU, so aot-test carries the freestanding
+    // link and symbol-verify in the default test path.
+    const baremetal_step = addBaremetalRiscv64VirtTest(b, exe, optimize, options, embedded_stdlib_path);
+    aot_test_step.dependOn(baremetal_step);
 }
 
 fn addBaremetalRiscv64VirtTest(
@@ -421,7 +424,7 @@ fn addBaremetalRiscv64VirtTest(
     optimize: std.builtin.OptimizeMode,
     options: *std.Build.Step.Options,
     embedded_stdlib_path: std.Build.LazyPath,
-) void {
+) *std.Build.Step {
     const target = b.resolveTargetQuery(.{
         .cpu_arch = .riscv64,
         .os_tag = .freestanding,
@@ -589,6 +592,8 @@ fn addBaremetalRiscv64VirtTest(
     test_step.dependOn(&runtime_stub.step);
     test_step.dependOn(&verify.step);
     test_step.dependOn(&install_hello.step);
+
+    return test_step;
 }
 
 const baremetal_verify_script =
