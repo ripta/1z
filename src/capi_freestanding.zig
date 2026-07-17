@@ -216,6 +216,7 @@ comptime {
         @export(&jitWithParameter, .{ .name = "jitWithParameter" });
         @export(&jitInterpretedCall, .{ .name = "jitInterpretedCall" });
         @export(&jitNativeWordCall, .{ .name = "jitNativeWordCall" });
+        @export(&aotTryDispatchGenericOrCall, .{ .name = "aotTryDispatchGenericOrCall" });
         @export(&jitOverflowError, .{ .name = "jitOverflowError" });
         @export(&jitDivisionByZeroError, .{ .name = "jitDivisionByZeroError" });
         @export(&jitStackUnderflowError, .{ .name = "jitStackUnderflowError" });
@@ -810,6 +811,228 @@ fn onez_replay_method_dispatch(ptr: ?*anyopaque) callconv(.c) c_int {
         };
     }
     return ONEZ_OK;
+}
+
+/// Resolve a TypeDescriptor from the retained image typevalue slot table by type name. Slot 0 is
+/// the reserved lookup-miss sentinel, so the scan starts at 1.
+fn lookupImageDescriptorByName(handle: *OnezHandle, name: []const u8) ?*const value_mod.TypeDescriptor {
+    const slots = handle.image_typevalue_slots orelse return null;
+    var slot: u32 = 1;
+    while (slot < handle.image_typevalue_slot_count) : (slot += 1) {
+        const tv = slots[slot] orelse continue;
+        if (std.mem.eql(u8, tv.name, name)) return tv.descriptor;
+    }
+    return null;
+}
+
+/// Freestanding mirror of `dispatch_mod.dispatchDescriptor`, producing the dispatch key
+/// descriptor for a live stack value.
+///
+/// Every descriptor the replay registered came from the image typevalue slot table, so pointer
+/// identity holds when a builtin operand resolves by name through the same table. Tagged and
+/// struct-instance operands carry their type through the runtime objects the populate core
+/// allocated, which are real `value_mod` instances behind this file's opaque mirror types.
+///
+/// A null return means the image never referenced the operand's type; the caller substitutes the
+/// any-sentinel descriptor, reducing the lookup to its wildcard arms.
+fn freestandingDispatchDescriptor(handle: *OnezHandle, v: Value) ?*const value_mod.TypeDescriptor {
+    switch (v) {
+        .tagged => |t| {
+            const vt: *const value_mod.VirtualType = @ptrCast(@alignCast(t.tag));
+            if (vt.type_val) |tv| if (tv.descriptor) |d| return d;
+            return lookupImageDescriptorByName(handle, "tagged");
+        },
+        .struct_instance => |si_raw| {
+            const si: *const value_mod.StructInstance = @ptrCast(@alignCast(si_raw));
+            if (si.struct_type.type_val) |tv| if (tv.descriptor) |d| return d;
+            return lookupImageDescriptorByName(handle, "struct-instance");
+        },
+        // No resource typevalue registry exists on this substrate.
+        .resource => return null,
+        inline else => |_, tag| {
+            const name = comptime dispatch_mod.builtinTypeName(@field(std.meta.Tag(value_mod.Value), @tagName(tag)));
+            return lookupImageDescriptorByName(handle, name);
+        },
+    }
+}
+
+fn tagVirtualType(v: Value) ?*const value_mod.VirtualType {
+    return switch (v) {
+        .tagged => |t| @ptrCast(@alignCast(t.tag)),
+        else => null,
+    };
+}
+
+/// Enum-parent fallback descriptor for a tagged enum variant, mirroring
+/// `dispatch_mod.dispatchEnumTypeValue`.
+fn enumFallbackDescriptor(v: Value) ?*const value_mod.TypeDescriptor {
+    const vt = tagVirtualType(v) orelse return null;
+    const parent = vt.parent_type orelse return null;
+    return parent.descriptor;
+}
+
+/// Base-type fallback descriptor for a parameterized tagged value, mirroring
+/// `dispatch_mod.dispatchBaseTypeValue`.
+fn baseFallbackDescriptor(v: Value) ?*const value_mod.TypeDescriptor {
+    const vt = tagVirtualType(v) orelse return null;
+    const base = vt.base_type orelse return null;
+    return base.descriptor;
+}
+
+const FreestandingDispatchHit = struct {
+    entry: dispatch_mod.DispatchEntry,
+    unwrap_a: bool,
+    unwrap_b: bool,
+};
+
+/// Freestanding mirror of the hosted `lookupBinaryWithFallback`: exact descriptors first, then
+/// the enum-parent fallback, then the base-type fallback that auto-unwraps parameterized tagged
+/// operands.
+fn freestandingLookupBinary(
+    handle: *OnezHandle,
+    table: *const dispatch_mod.DispatchTable,
+    dispatch_id: u32,
+    a: Value,
+    b: Value,
+) ?FreestandingDispatchHit {
+    const any_desc = handle.dispatch_any_sentinel.?.descriptor.?;
+    const a_type = freestandingDispatchDescriptor(handle, a) orelse any_desc;
+    const b_type = freestandingDispatchDescriptor(handle, b) orelse any_desc;
+    if (table.lookupBinary(dispatch_id, a_type, b_type, any_desc)) |entry|
+        return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+
+    const a_enum = enumFallbackDescriptor(a);
+    const b_enum = enumFallbackDescriptor(b);
+    if (a_enum) |ae| {
+        if (table.lookupBinary(dispatch_id, ae, b_type, any_desc)) |entry|
+            return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+    }
+    if (b_enum) |be| {
+        if (table.lookupBinary(dispatch_id, a_type, be, any_desc)) |entry|
+            return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+    }
+    if (a_enum) |ae| {
+        if (b_enum) |be| {
+            if (table.lookupBinary(dispatch_id, ae, be, any_desc)) |entry|
+                return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+        }
+    }
+
+    const a_base = baseFallbackDescriptor(a);
+    const b_base = baseFallbackDescriptor(b);
+    if (a_base) |ab| {
+        if (table.lookupBinary(dispatch_id, ab, b_type, any_desc)) |entry|
+            return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
+    }
+    if (b_base) |bb| {
+        if (table.lookupBinary(dispatch_id, a_type, bb, any_desc)) |entry|
+            return .{ .entry = entry, .unwrap_a = false, .unwrap_b = true };
+    }
+    if (a_base) |ab| {
+        if (b_base) |bb| {
+            if (table.lookupBinary(dispatch_id, ab, bb, any_desc)) |entry|
+                return .{ .entry = entry, .unwrap_a = true, .unwrap_b = true };
+        }
+    }
+
+    return null;
+}
+
+/// Freestanding mirror of the hosted `lookupUnaryWithFallback`.
+fn freestandingLookupUnary(
+    handle: *OnezHandle,
+    table: *const dispatch_mod.DispatchTable,
+    dispatch_id: u32,
+    a: Value,
+) ?FreestandingDispatchHit {
+    const any_desc = handle.dispatch_any_sentinel.?.descriptor.?;
+    const unary_desc = handle.dispatch_unary_sentinel.?.descriptor.?;
+    const a_type = freestandingDispatchDescriptor(handle, a) orelse any_desc;
+    if (table.lookupUnary(dispatch_id, a_type, any_desc, unary_desc)) |entry|
+        return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+
+    if (enumFallbackDescriptor(a)) |ae| {
+        if (table.lookupUnary(dispatch_id, ae, any_desc, unary_desc)) |entry|
+            return .{ .entry = entry, .unwrap_a = false, .unwrap_b = false };
+    }
+
+    if (baseFallbackDescriptor(a)) |ab| {
+        if (table.lookupUnary(dispatch_id, ab, any_desc, unary_desc)) |entry|
+            return .{ .entry = entry, .unwrap_a = true, .unwrap_b = false };
+    }
+
+    return null;
+}
+
+/// Run a replayed method body with a fresh JitContext, returning its status raw -- the
+/// freestanding nested-call convention. Replay only registers compiled quotation bodies, so any
+/// other shape is a malformed table.
+fn runFreestandingDispatchBody(handle: *OnezHandle, entry: dispatch_mod.DispatchEntry) i32 {
+    switch (entry.body) {
+        .quotation => |q| {
+            const raw = q.code_ptr orelse {
+                setLastError(handle, "method dispatch body is not runnable on this build", .{});
+                return 2;
+            };
+            const func: OnezWordFn = @ptrCast(@alignCast(raw));
+            var jit_ctx = JitContext{
+                .items_ptr = handle.stack.ptr,
+                .sp_ptr = &handle.stack_len,
+                .capacity = handle.stack.len,
+                .ctx = handle,
+            };
+            return func(&jit_ctx);
+        },
+        else => {
+            setLastError(handle, "method dispatch body is not runnable on this build", .{});
+            return 2;
+        },
+    }
+}
+
+/// Freestanding mirror of the hosted `tryDispatchGenericById` minus the PIC path: binary attempt
+/// when two operands are present, then unary. Returns the body's status on a hit, null on a
+/// miss. A null registry means replay never ran (zero-entry image), which is a plain miss.
+fn tryFreestandingGenericDispatch(handle: *OnezHandle, dispatch_id: u32) ?i32 {
+    const table: *const dispatch_mod.DispatchTable = if (handle.method_dispatch) |*t| t else return null;
+
+    if (handle.stack_len >= 2) {
+        const a = handle.stack[handle.stack_len - 2];
+        const b = handle.stack[handle.stack_len - 1];
+        if (freestandingLookupBinary(handle, table, dispatch_id, a, b)) |hit| {
+            if (hit.unwrap_a) handle.stack[handle.stack_len - 2] = handle.stack[handle.stack_len - 2].tagged.inner.*;
+            if (hit.unwrap_b) handle.stack[handle.stack_len - 1] = handle.stack[handle.stack_len - 1].tagged.inner.*;
+            return runFreestandingDispatchBody(handle, hit.entry);
+        }
+    }
+
+    if (handle.stack_len >= 1) {
+        const a = handle.stack[handle.stack_len - 1];
+        if (freestandingLookupUnary(handle, table, dispatch_id, a)) |hit| {
+            if (hit.unwrap_a) handle.stack[handle.stack_len - 1] = handle.stack[handle.stack_len - 1].tagged.inner.*;
+            return runFreestandingDispatchBody(handle, hit.entry);
+        }
+    }
+
+    return null;
+}
+
+/// Freestanding body for the plain generic-dispatch helper compiled call sites emit, mirroring
+/// the hosted export in `ir_codegen.zig`: try the replayed method table for the operand type(s);
+/// on a miss run the generic's own default compiled body, registered under `word_id_raw`.
+fn aotTryDispatchGenericOrCall(ctx_raw: usize, dispatch_id_raw: usize, word_id_raw: usize) callconv(.c) i32 {
+    const handle = handleFromContext(ctx_raw) orelse return 1;
+    if (tryFreestandingGenericDispatch(handle, @intCast(dispatch_id_raw))) |status| return status;
+
+    if (word_id_raw >= handle.dispatch_table.len) return 1;
+    const code_ptr = handle.dispatch_table[word_id_raw] orelse return 1;
+    var jit_ctx = JitContext{
+        .items_ptr = handle.stack.ptr,
+        .sp_ptr = &handle.stack_len,
+        .capacity = handle.stack.len,
+        .ctx = handle,
+    };
+    return code_ptr(&jit_ctx);
 }
 
 fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) callconv(.c) i32 {
@@ -1676,6 +1899,279 @@ test "freestanding replay fails loudly on unresolvable rows" {
         const msg = onez_last_error(&handle) orelse return error.TestExpectedError;
         try std.testing.expect(std.mem.indexOf(u8, std.mem.span(msg), case.expect_msg) != null);
     }
+}
+
+fn pushDispatchMarker(jit_ctx: *JitContext, marker: i64) i32 {
+    const sp = jit_ctx.sp_ptr;
+    if (sp.* >= jit_ctx.capacity) return 2;
+    jit_ctx.items_ptr[sp.*] = .{ .fixnum = marker };
+    sp.* += 1;
+    return 0;
+}
+
+fn methodBodyPush101(jit_ctx: *JitContext) callconv(.c) i32 {
+    return pushDispatchMarker(jit_ctx, 101);
+}
+
+fn methodBodyPush202(jit_ctx: *JitContext) callconv(.c) i32 {
+    return pushDispatchMarker(jit_ctx, 202);
+}
+
+fn defaultBodyPush303(jit_ctx: *JitContext) callconv(.c) i32 {
+    return pushDispatchMarker(jit_ctx, 303);
+}
+
+test "freestanding generic dispatch runs replayed methods and falls back to the default body" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [4]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+    defer if (handle.method_dispatch) |*table| table.deinit();
+
+    const descs = [_]populate_core.TypeDescriptor{
+        std.mem.zeroes(populate_core.TypeDescriptor),
+        std.mem.zeroes(populate_core.TypeDescriptor),
+    };
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "fixnum", .name_len = 6, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = "string", .name_len = 6, .slot = 2, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    const rows = [_]populate_core.DispatchEntryDescription{
+        dispatchTestRow(7, 1, populate_core.dispatch_type_unary, 0),
+        dispatchTestRow(7, 1, 2, 1),
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+    header.dispatch_entry_slot_count = rows.len;
+    header.dispatch_entry_descriptions = &rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    var quotations = [_]?OnezWordFn{ &methodBodyPush101, &methodBodyPush202 };
+    handle.quotation_table = quotations[0..];
+    var words = [_]?OnezWordFn{&defaultBodyPush303};
+    handle.dispatch_table = words[0..];
+    try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
+
+    const ctx_raw = @intFromPtr(&handle);
+
+    // Unary exact hit on the fixnum method.
+    handle.stack[0] = .{ .fixnum = 42 };
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 0), aotTryDispatchGenericOrCall(ctx_raw, 7, 0));
+    try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
+    try std.testing.expectEqual(@as(i64, 101), handle.stack[1].fixnum);
+
+    // Binary exact hit on the (fixnum, string) method.
+    handle.stack[0] = .{ .fixnum = 1 };
+    handle.stack[1] = .{ .string = "x" };
+    handle.stack_len = 2;
+    try std.testing.expectEqual(@as(i32, 0), aotTryDispatchGenericOrCall(ctx_raw, 7, 0));
+    try std.testing.expectEqual(@as(usize, 3), handle.stack_len);
+    try std.testing.expectEqual(@as(i64, 202), handle.stack[2].fixnum);
+
+    // A boolean operand has no method, so the miss runs the default body.
+    handle.stack[0] = .{ .boolean = true };
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 0), aotTryDispatchGenericOrCall(ctx_raw, 7, 0));
+    try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
+    try std.testing.expectEqual(@as(i64, 303), handle.stack[1].fixnum);
+
+    // A miss with no runnable default body reports the hosted contract's 1.
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 1), aotTryDispatchGenericOrCall(ctx_raw, 7, 99));
+}
+
+test "freestanding generic dispatch matches wildcard rows for types absent from the image" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [4]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+    defer if (handle.method_dispatch) |*table| table.deinit();
+
+    const descs = [_]populate_core.TypeDescriptor{std.mem.zeroes(populate_core.TypeDescriptor)};
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "fixnum", .name_len = 6, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    const rows = [_]populate_core.DispatchEntryDescription{
+        dispatchTestRow(9, populate_core.dispatch_type_any, populate_core.dispatch_type_unary, 0),
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+    header.dispatch_entry_slot_count = rows.len;
+    header.dispatch_entry_descriptions = &rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    var quotations = [_]?OnezWordFn{&methodBodyPush202};
+    handle.quotation_table = quotations[0..];
+    try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
+
+    // The image has no boolean typevalue, so the operand's descriptor is unresolvable;
+    // the wildcard row must still match.
+    handle.stack[0] = .{ .boolean = true };
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 0), aotTryDispatchGenericOrCall(@intFromPtr(&handle), 9, 0));
+    try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
+    try std.testing.expectEqual(@as(i64, 202), handle.stack[1].fixnum);
+}
+
+test "freestanding generic dispatch falls back to the enum parent type" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [4]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+    defer if (handle.method_dispatch) |*table| table.deinit();
+
+    const descs = [_]populate_core.TypeDescriptor{std.mem.zeroes(populate_core.TypeDescriptor)};
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "color", .name_len = 5, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    const rows = [_]populate_core.DispatchEntryDescription{
+        dispatchTestRow(11, 1, populate_core.dispatch_type_unary, 0),
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+    header.dispatch_entry_slot_count = rows.len;
+    header.dispatch_entry_descriptions = &rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    var quotations = [_]?OnezWordFn{&methodBodyPush101};
+    handle.quotation_table = quotations[0..];
+    var words = [_]?OnezWordFn{&defaultBodyPush303};
+    handle.dispatch_table = words[0..];
+    try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
+
+    // A variant whose own descriptor has no method must dispatch through its parent enum's
+    // descriptor, without unwrapping.
+    var variant_desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
+    var variant_tv = value_mod.TypeValue{ .name = "color:red", .descriptor = &variant_desc };
+    const vt = value_mod.VirtualType{
+        .name = "color:red",
+        .inner_type = "",
+        .parent_type = tv_slots[1].?,
+        .type_val = &variant_tv,
+    };
+    const inner = Value{ .fixnum = 5 };
+    handle.stack[0] = .{ .tagged = .{ .tag = @ptrCast(&vt), .inner = &inner } };
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 0), aotTryDispatchGenericOrCall(@intFromPtr(&handle), 11, 0));
+    try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
+    try std.testing.expectEqual(@as(i64, 101), handle.stack[1].fixnum);
+    try std.testing.expect(handle.stack[0] == .tagged);
+}
+
+test "freestanding generic dispatch unwraps parameterized operands on the base-type fallback" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [4]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+    defer if (handle.method_dispatch) |*table| table.deinit();
+
+    const descs = [_]populate_core.TypeDescriptor{std.mem.zeroes(populate_core.TypeDescriptor)};
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "array", .name_len = 5, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    const rows = [_]populate_core.DispatchEntryDescription{
+        dispatchTestRow(13, 1, populate_core.dispatch_type_unary, 0),
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+    header.dispatch_entry_slot_count = rows.len;
+    header.dispatch_entry_descriptions = &rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    var quotations = [_]?OnezWordFn{&methodBodyPush101};
+    handle.quotation_table = quotations[0..];
+    try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
+
+    // A parameterized wrapper whose own descriptor has no method must dispatch through its
+    // base type's descriptor and unwrap to the inner value first.
+    var wrapper_desc = value_mod.TypeDescriptor{ .kind = .{ .builtin = {} } };
+    var wrapper_tv = value_mod.TypeValue{ .name = "array(fixnum)", .descriptor = &wrapper_desc };
+    const vt = value_mod.VirtualType{
+        .name = "array(fixnum)",
+        .inner_type = "array",
+        .base_type = tv_slots[1].?,
+        .type_val = &wrapper_tv,
+    };
+    const inner = Value{ .fixnum = 5 };
+    handle.stack[0] = .{ .tagged = .{ .tag = @ptrCast(&vt), .inner = &inner } };
+    handle.stack_len = 1;
+    try std.testing.expectEqual(@as(i32, 0), aotTryDispatchGenericOrCall(@intFromPtr(&handle), 13, 0));
+    try std.testing.expectEqual(@as(usize, 2), handle.stack_len);
+    try std.testing.expectEqual(@as(i64, 101), handle.stack[1].fixnum);
+    try std.testing.expectEqual(@as(i64, 5), handle.stack[0].fixnum);
 }
 
 test "freestanding replay no-ops on a zero-entry image" {

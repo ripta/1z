@@ -1,0 +1,17 @@
+\ Plain generic dispatch on bare metal: method hits on two builtin types, two
+\ default-body misses, and a binary method, printed through the UART-backed
+\ output stream. The boolean operand's type never appears in the runtime image,
+\ so it exercises the wildcard-only lookup path.
+
+describe: generic ( x -- s ) [ drop "unknown" ] ;
+describe: method{ fixnum } [ drop "a fixnum" ] ;
+describe: method{ string } [ drop "a string" ] ;
+
+combine: generic ( a b -- s ) [ drop drop "mixed" ] ;
+combine: method{ fixnum fixnum } [ drop drop "two fixnums" ] ;
+
+42 describe print-line
+"hello" describe print-line
+t describe print-line
+1 2 combine print-line
+"x" 3 combine print-line

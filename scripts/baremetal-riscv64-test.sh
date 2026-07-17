@@ -48,4 +48,4 @@ if ! tail -n "$lines" "$serial" | diff -u "$golden" - >/dev/null; then
     exit 1
 fi
 
-echo "PASS: bare-metal hello world booted under QEMU, serial output matched, exit 0"
+echo "PASS: $(basename "$elf") booted under QEMU, serial output matched, exit 0"
