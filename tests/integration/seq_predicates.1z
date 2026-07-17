@@ -75,6 +75,11 @@ B{ 65 66 67 } 68 #in? "byte 68 not found" assert-false
 { "a" "b" "c" } "c" #index-of 2 "index-of c" assert=
 { "a" "b" "c" } "d" #index-of f "index-of d not found" assert=
 
+"#index-of - vectors" test-section
+V{ 10 20 30 } 20 #index-of 1 "vector index-of 20" assert=
+V{ 10 20 30 } 50 #index-of f "vector index-of 50 not found" assert=
+V{ 10 20 30 } 10 #index-of 0 "vector index-of first" assert=
+
 "#index-of - byte arrays" test-section
 B{ 65 66 67 } 66 #index-of 1 "byte index-of 66" assert=
 B{ 65 66 67 } 68 #index-of f "byte index-of 68 not found" assert=

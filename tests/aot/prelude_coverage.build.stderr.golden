@@ -1,11 +1,11 @@
-Prelude compilation: 414/415 words compiled (99.8%)
+Prelude compilation: 415/416 words compiled (99.8%)
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
 Inline PIC sites: 33/83 generic call sites preseeded
-AOT interpreter fallbacks: 335 total
-  native: 316
+AOT interpreter fallbacks: 336 total
+  native: 317
   per-op-native: 1
   compound-uncompiled: 1
   quotation: 17
@@ -18,16 +18,16 @@ AOT interpreter fallbacks: 335 total
     native: unmake-descriptor-variant -> native.struct-instance-destructure (line 0)
     native: value>> -> native.struct-field-get (line 0)
     native: inputs>> -> native.struct-field-get (line 0)
-    native: >iterator -> native.make-callback-iter (line 975)
-    native: >iterator -> native.>iterator (line 977)
+    native: >iterator -> native.make-callback-iter (line 987)
+    native: >iterator -> native.>iterator (line 989)
     native: >dispatch-provenance -> native.hash-to-struct (line 0)
     native: >option:some -> native.virtual-struct-wrap (line 0)
     native: descriptor-variant? -> native.struct-type-predicate (line 0)
     native: . -> inspect (line 707)
     native: #ends-with? -> #len (line 957)
     native: #ends-with? -> #len (line 957)
-    ... 319 more
-  static-check: jitInterpretedCall=1/1 jitNativeWordCall=317/317 jitCallQuotation=17/17 (matches build-time inventory)
+    ... 320 more
+  static-check: jitInterpretedCall=1/1 jitNativeWordCall=318/318 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter

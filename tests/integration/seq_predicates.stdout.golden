@@ -120,6 +120,14 @@ PASS: index-of c
 Stack: [ ]
 PASS: index-of d not found
 Stack: [ ]
+=== #index-of - vectors ===
+Stack: [ ]
+PASS: vector index-of 20
+Stack: [ ]
+PASS: vector index-of 50 not found
+Stack: [ ]
+PASS: vector index-of first
+Stack: [ ]
 === #index-of - byte arrays ===
 Stack: [ ]
 PASS: byte index-of 66

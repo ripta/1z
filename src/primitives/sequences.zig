@@ -553,6 +553,12 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try dispatch.registerNative(in_did, byte_array, any_tv, nativeInByteArray);
     try dispatch.registerNative(in_did, set, any_tv, nativeInSet);
 
+    // #index-of : same container-keyed split as #in?. string and byte-array stay
+    // native; array/vector are 1z method{} entries. Sets are unordered and have no arm.
+    const index_of_did = ctx.resolveDispatchId("#index-of").?;
+    try dispatch.registerNative(index_of_did, string, any_tv, nativeIndexOfString);
+    try dispatch.registerNative(index_of_did, byte_array, any_tv, nativeIndexOfByteArray);
+
     // >array : unary entries
     const to_array_did = ctx.resolveDispatchId(">array").?;
     try dispatch.registerNative(to_array_did, vector, unary, nativeToArrayVector);
@@ -614,7 +620,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#shift!", .stack_effect = "vec -- vec elem", .doc = "Mutably remove first element from vector.", .func = nativeShiftMut },
     // Sequence predicates
     .{ .name = "#in?", .stack_effect = "seq elem -- ?", .doc = "Test if sequence contains element (substring test for strings).", .func = nativeIn, .markers = &.{@constCast(&markers_mod.generic_marker)} },
-    .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .doc = "Find index of element, or f if not found.", .func = nativeIndexOf },
+    .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .doc = "Find index of element, or f if not found.", .func = nativeIndexOf, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#index-of-from", .stack_effect = "str needle start -- n/f", .doc = "Find index of substring starting from codepoint position.", .func = nativeIndexOfFrom },
     .{ .name = "#byte-index-of-from", .stack_effect = "str needle start-byte -- byte-n/f", .doc = "Find byte offset of substring starting from a byte offset; no codepoint accounting.", .func = nativeByteIndexOfFrom },
     // Container conversion
@@ -2064,70 +2070,84 @@ fn nativeInSet(ctx: *Context) anyerror!void {
 }
 
 /// #index-of ( seq elem -- n/f ) - Index of element, or f if not found
-fn nativeIndexOf(ctx: *Context) anyerror!void {
+///
+/// Generic word. The string and byte-array arms are native dispatch entries registered in
+/// registerNativeDispatch; array and vector are 1z method{} entries. The counted iterator scan below
+/// is the fallback for a built-in container whose dispatch arm is absent, such as a custom prelude
+/// missing the array and vector method entries. Sets are unordered, so they are rejected here rather
+/// than scanned. A value that is not a scannable sequence errors here.
+pub fn nativeIndexOf(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "#index-of")) return;
+
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(elem);
     defer container_backing.releaseValue(seq);
+    const alloc = ctx.quotationAllocator();
 
-    switch (seq) {
-        .string => |s| {
-            const needle = switch (elem) {
-                .string => |es| es,
-                else => {
-                    setErrorContext(ctx, "#index-of on string requires string element, got {s}", .{valueTypeName(elem)});
-                    return error.TypeMismatch;
-                },
-            };
-            if (std.mem.indexOf(u8, s, needle)) |byte_idx| {
-                const cp_idx = sequence.utf8CodepointCount(s[0..byte_idx]);
-                try ctx.stack.push(.{ .fixnum = @intCast(cp_idx) });
-            } else {
-                try ctx.stack.push(.{ .boolean = false });
-            }
-        },
-        .array => |arr| {
-            for (arr.items, 0..) |item, idx| {
-                if (item.eql(elem)) {
-                    try ctx.stack.push(.{ .fixnum = @intCast(idx) });
-                    return;
-                }
-            }
-            try ctx.stack.push(.{ .boolean = false });
-        },
-        .vector => |vec| {
-            for (vec.list.items, 0..) |item, idx| {
-                if (item.eql(elem)) {
-                    try ctx.stack.push(.{ .fixnum = @intCast(idx) });
-                    return;
-                }
-            }
-            try ctx.stack.push(.{ .boolean = false });
-        },
-        .byte_array => |b| {
-            const byte_val: u8 = switch (elem) {
-                .fixnum => |i| blk: {
-                    if (i < 0 or i > 255) {
-                        setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
-                        return error.FixnumOverflow;
-                    }
-                    break :blk @intCast(i);
-                },
-                else => {
-                    setErrorContext(ctx, "#index-of on byte-array requires fixnum element, got {s}", .{valueTypeName(elem)});
-                    return error.TypeMismatch;
-                },
-            };
-            if (simd.indexOfScalar(b.slice(), byte_val)) |idx| {
-                try ctx.stack.push(.{ .fixnum = @intCast(idx) });
-            } else {
-                try ctx.stack.push(.{ .boolean = false });
-            }
-        },
+    if (seq == .set) {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    }
+
+    var iter = SequenceIterator.init(seq, alloc) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
+
+    var idx: usize = 0;
+    while (try iter.next()) |item| : (idx += 1) {
+        if (item.eql(elem)) {
+            try ctx.stack.push(.{ .fixnum = @intCast(idx) });
+            return;
+        }
+    }
+
+    try ctx.stack.push(.{ .boolean = false });
+}
+
+fn nativeIndexOfString(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(elem);
+    defer container_backing.releaseValue(seq);
+    const needle = switch (elem) {
+        .string => |es| es,
         else => {
-            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+            setErrorContext(ctx, "#index-of on string requires string element, got {s}", .{valueTypeName(elem)});
             return error.TypeMismatch;
         },
+    };
+    if (std.mem.indexOf(u8, seq.string, needle)) |byte_idx| {
+        const cp_idx = sequence.utf8CodepointCount(seq.string[0..byte_idx]);
+        try ctx.stack.push(.{ .fixnum = @intCast(cp_idx) });
+    } else {
+        try ctx.stack.push(.{ .boolean = false });
+    }
+}
+
+fn nativeIndexOfByteArray(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(elem);
+    defer container_backing.releaseValue(seq);
+    const byte_val: u8 = switch (elem) {
+        .fixnum => |i| blk: {
+            if (i < 0 or i > 255) {
+                setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
+                return error.FixnumOverflow;
+            }
+            break :blk @intCast(i);
+        },
+        else => {
+            setErrorContext(ctx, "#index-of on byte-array requires fixnum element, got {s}", .{valueTypeName(elem)});
+            return error.TypeMismatch;
+        },
+    };
+    if (simd.indexOfScalar(seq.byte_array.slice(), byte_val)) |idx| {
+        try ctx.stack.push(.{ .fixnum = @intCast(idx) });
+    } else {
+        try ctx.stack.push(.{ .boolean = false });
     }
 }
 

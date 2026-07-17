@@ -964,6 +964,18 @@ try: ( ..a quot: ( ..a -- x ) -- result ) [ [ call >result:ok ] [ >result:err ] 
 #in?: method{ array any } [ [ = ] curry #any ] ;
 #in?: method{ vector any } [ [ = ] curry #any ] ;
 
+\ Scan-with-counter helper for the #index-of array/vector arms. Short-circuits on match.
+(index-of-loop): ( iter target idx -- n/f ) [
+  pick #next?
+  dup option:some? [
+    option:some> pick = [ nip nip ] [ 1 + (index-of-loop) ] if
+  ] [ drop 3drop f ] if
+] ;
+
+\\ The 1z #index-of arms for array and vector; string and byte-array stay native.
+#index-of: method{ array any } [ swap >iterator swap 0 (index-of-loop) ] ;
+#index-of: method{ vector any } [ swap >iterator swap 0 (index-of-loop) ] ;
+
 \\ Try to receive from a channel. Returns some(value) on success, none if closed and empty.
 receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recover ] ;
 
