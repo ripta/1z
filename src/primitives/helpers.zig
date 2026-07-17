@@ -142,20 +142,7 @@ pub fn resolveValueTypeValue(ctx: *Context, val: Value) ?*const TypeValue {
     return dispatch_mod.dispatchTypeValue(val, ctx);
 }
 
-/// Check whether an actual type satisfies an expected type constraint. Supports anonymous union constraints
-/// on the expected type.
-pub fn typeMatchesConstraint(actual_tv: *const TypeValue, expected_tv: *const TypeValue) bool {
-    if (actual_tv == expected_tv) return true;
-
-    if (expected_tv.member_types) |members| {
-        for (members) |member_tv| {
-            if (typeMatchesConstraint(actual_tv, member_tv)) return true;
-        }
-        return false;
-    }
-
-    return false;
-}
+pub const typeMatchesConstraint = @import("../satisfies_core.zig").typeMatchesConstraint;
 
 /// Check whether a value satisfies an expected type annotation.
 /// Supports `any`, enum parent types, and tagged base types.

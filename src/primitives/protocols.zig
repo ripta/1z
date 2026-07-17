@@ -2,7 +2,6 @@ const std = @import("std");
 
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
-const ProtocolSatisfiesKey = context_mod.ProtocolSatisfiesKey;
 
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
@@ -17,6 +16,7 @@ const StackEffect = stack_effect_mod.StackEffect;
 const markers_mod = @import("markers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const container_backing = @import("../container_backing.zig");
+const satisfies_core = @import("../satisfies_core.zig");
 
 const helpers = @import("helpers.zig");
 
@@ -33,6 +33,88 @@ pub const primitives = [_]Primitive{
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "protocol-check", .func = protocolCheckHelper, .stack_effect = "type-name descriptor --" },
 };
+
+/// Hosted environment for the shared satisfies core. Each method delegates to the locked
+/// `Context` accessor, so dispatch-frame overlays, the parent-context chain, and memo locking
+/// all stay behind this boundary.
+const HostedEnv = struct {
+    ctx: *Context,
+
+    pub const ThrownState = ?*value_mod.ErrorObject;
+
+    pub fn resolveDispatchId(self: HostedEnv, name: []const u8) ?u32 {
+        return self.ctx.resolveDispatchId(name);
+    }
+
+    pub fn hasUnaryDispatch(self: HostedEnv, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor) bool {
+        return self.ctx.lookupUnaryDispatch(dispatch_id, type_a) != null;
+    }
+
+    pub fn hasBinaryDispatch(self: HostedEnv, dispatch_id: u32, type_a: *const value_mod.TypeDescriptor, type_b: *const value_mod.TypeDescriptor) bool {
+        return self.ctx.lookupBinaryDispatch(dispatch_id, type_a, type_b) != null;
+    }
+
+    pub fn dispatchKeysForWord(self: HostedEnv, name: []const u8, alloc: std.mem.Allocator) anyerror![]dispatch_mod.DispatchKey {
+        return self.ctx.dispatchKeysForWord(name, alloc);
+    }
+
+    pub fn selfTypeSentinel(self: HostedEnv) *const value_mod.TypeValue {
+        return self.ctx.getSelfTypeSentinel();
+    }
+
+    pub fn anyTypeSentinel(self: HostedEnv) *const value_mod.TypeValue {
+        return self.ctx.getAnyTypeSentinel();
+    }
+
+    pub fn dispatchUnarySentinel(self: HostedEnv) *const value_mod.TypeValue {
+        return self.ctx.getDispatchUnarySentinel();
+    }
+
+    pub fn dispatchAnySentinel(self: HostedEnv) *const value_mod.TypeValue {
+        return self.ctx.getDispatchAnySentinel();
+    }
+
+    pub fn lookupSatisfies(self: HostedEnv, td: *const value_mod.TypeDescriptor, pd: *const ProtocolDescriptor) ?bool {
+        return self.ctx.lookupProtocolSatisfies(.{ .type_descriptor = td, .protocol_descriptor = pd });
+    }
+
+    pub fn storeSatisfies(self: HostedEnv, td: *const value_mod.TypeDescriptor, pd: *const ProtocolDescriptor, value: bool) void {
+        self.ctx.storeProtocolSatisfies(.{ .type_descriptor = td, .protocol_descriptor = pd }, value);
+    }
+
+    pub fn typeValueByName(self: HostedEnv, name: []const u8) ?*value_mod.TypeValue {
+        return self.ctx.lookupTypeValueByName(name);
+    }
+
+    pub fn scratchAllocator(self: HostedEnv) std.mem.Allocator {
+        return self.ctx.arena.allocator();
+    }
+
+    pub fn setProtocolError(self: HostedEnv, message: []const u8) void {
+        self.ctx.thrown_error = value_mod.boxErrorObject(self.ctx.quotationAllocator(), .{
+            .error_type = "protocol-error",
+            .message = message,
+        }) catch null;
+    }
+
+    pub fn setErrorContext(self: HostedEnv, comptime fmt: []const u8, args: anytype) void {
+        helpers.setErrorContext(self.ctx, fmt, args);
+    }
+
+    pub fn saveThrown(self: HostedEnv) ThrownState {
+        return self.ctx.thrown_error;
+    }
+
+    pub fn restoreThrown(self: HostedEnv, state: ThrownState) void {
+        self.ctx.thrown_error = state;
+    }
+};
+
+const Core = satisfies_core.SatisfiesCore(HostedEnv);
+
+fn hostedEnv(ctx: *Context) HostedEnv {
+    return .{ .ctx = ctx };
+}
 
 /// define-protocol ( name: descriptor markers -- )
 ///
@@ -229,90 +311,31 @@ pub fn satisfiesByDescriptor(
     type_tv: *const value_mod.TypeValue,
     descriptor: *const ProtocolDescriptor,
 ) !bool {
-    const key = ProtocolSatisfiesKey{
-        .type_descriptor = type_tv.descriptor.?,
-        .protocol_descriptor = descriptor,
-    };
-
-    if (ctx.lookupProtocolSatisfies(key)) |cached| {
-        return cached;
-    }
-
-    const saved_thrown = ctx.thrown_error;
-    if (validateProtocolObligationUncached(ctx, type_tv, descriptor)) |_| {
-        ctx.storeProtocolSatisfies(key, true);
-        return true;
-    } else |err| {
-        if (err == error.UserThrown) {
-            ctx.thrown_error = saved_thrown;
-            ctx.storeProtocolSatisfies(key, false);
-            return false;
-        }
-        return err;
-    }
+    return Core.satisfiesByDescriptor(hostedEnv(ctx), type_tv, descriptor);
 }
 
 /// Check whether a resolved type satisfies a constraint element: a concrete
-/// type, a protocol bound, or a combinator. Intersection requires every
-/// element to be satisfied; union requires any one; nested combinators recurse.
-/// Reuses the memoized protocol satisfies-check for the protocol case and the
-/// anonymous-union-aware type match for the type case. Never raises
-/// `protocol-error`; programming errors (e.g. a malformed descriptor) propagate.
+/// type, a protocol bound, or a combinator. Never raises `protocol-error`;
+/// programming errors (e.g. a malformed descriptor) propagate.
 pub fn typeSatisfiesConstraint(
     ctx: *Context,
     type_tv: *const value_mod.TypeValue,
     element: value_mod.ConstraintCombinator.Element,
 ) anyerror!bool {
-    return switch (element) {
-        .type => |expected| helpers.typeMatchesConstraint(type_tv, expected),
-        .protocol => |descriptor| try satisfiesByDescriptor(ctx, type_tv, descriptor),
-        .combinator => |cc| switch (cc.kind) {
-            .intersection => {
-                for (cc.elements) |sub| {
-                    if (!try typeSatisfiesConstraint(ctx, type_tv, sub)) return false;
-                }
-                return true;
-            },
-            .@"union" => {
-                for (cc.elements) |sub| {
-                    if (try typeSatisfiesConstraint(ctx, type_tv, sub)) return true;
-                }
-                return false;
-            },
-        },
-    };
+    return Core.typeSatisfiesConstraint(hostedEnv(ctx), type_tv, element);
 }
 
 /// Same-type-only counterpart to `typeSatisfiesConstraint`, used by the
-/// module-load deferral. Protocol elements route through
-/// `satisfiesByDescriptorSameTypeOnly`, which skips cross-type (`any`-marked)
-/// methods and leaves them to the runtime call-site check; type elements and
-/// combinator recursion behave exactly as in the full check. This keeps a
-/// top-level combinator `assert-satisfies` consistent with how a bare-protocol
-/// `assert-satisfies` already treats cross-type methods at load time.
+/// module-load deferral. Cross-type (`any`-marked) methods are skipped and
+/// left to the runtime call-site check. This keeps a top-level combinator
+/// `assert-satisfies` consistent with how a bare-protocol `assert-satisfies`
+/// already treats cross-type methods at load time.
 pub fn typeSatisfiesConstraintSameTypeOnly(
     ctx: *Context,
     type_tv: *const value_mod.TypeValue,
     element: value_mod.ConstraintCombinator.Element,
 ) anyerror!bool {
-    return switch (element) {
-        .type => |expected| helpers.typeMatchesConstraint(type_tv, expected),
-        .protocol => |descriptor| try satisfiesByDescriptorSameTypeOnly(ctx, type_tv, descriptor),
-        .combinator => |cc| switch (cc.kind) {
-            .intersection => {
-                for (cc.elements) |sub| {
-                    if (!try typeSatisfiesConstraintSameTypeOnly(ctx, type_tv, sub)) return false;
-                }
-                return true;
-            },
-            .@"union" => {
-                for (cc.elements) |sub| {
-                    if (try typeSatisfiesConstraintSameTypeOnly(ctx, type_tv, sub)) return true;
-                }
-                return false;
-            },
-        },
-    };
+    return Core.typeSatisfiesConstraintSameTypeOnly(hostedEnv(ctx), type_tv, element);
 }
 
 /// Runtime validation of a combinator obligation: full check, raising
@@ -378,145 +401,36 @@ pub fn valueMatchesElement(
 }
 
 /// Parse-time satisfies check that only verifies same-type methods.
-/// Cross-type methods (those with `any` annotations or non-self concrete
-/// annotations) are skipped because the contributing modules may not have
-/// loaded yet; the runtime check at the call site remains authoritative
+/// Cross-type methods are skipped because the contributing modules may not
+/// have loaded yet; the runtime check at the call site remains authoritative
 /// for those.
-///
-/// Returns true when every same-type method in the descriptor has a
-/// matching dispatch entry for `type_tv`, including the trivial case
-/// where the descriptor contains only cross-type methods.
 pub fn satisfiesByDescriptorSameTypeOnly(
     ctx: *Context,
     type_tv: *const value_mod.TypeValue,
     descriptor: *const ProtocolDescriptor,
 ) !bool {
-    const methods_array = descriptor.methods;
-    var i: usize = 0;
-    while (i < methods_array.len) {
-        const method_val = methods_array[i];
-        const method_name = switch (method_val) {
-            .symbol => |s| s,
-            else => {
-                helpers.setErrorContext(ctx, "protocol method entries must be symbols", .{});
-                return error.TypeMismatch;
-            },
-        };
-        i += 1;
-
-        if (i < methods_array.len and methods_array[i] == .stack_effect) {
-            const effect = methods_array[i].stack_effect;
-            i += 1;
-            if (isCrossTypeMethod(ctx, effect)) continue;
-            if (!sameTypeMethodRegistered(ctx, method_name, effect, type_tv)) return false;
-        } else {
-            const did = ctx.resolveDispatchId(method_name) orelse return false;
-            const has_method = ctx.lookupUnaryDispatch(did, type_tv.descriptor.?) != null or
-                ctx.lookupBinaryDispatch(did, type_tv.descriptor.?, type_tv.descriptor.?) != null;
-            if (!has_method) return false;
-        }
-    }
-    return true;
-}
-
-/// Check that a same-type method has a dispatch entry for `type_tv`.
-/// Caller must have verified `isCrossTypeMethod(ctx, effect) == false`,
-/// so every input is either unannotated or carries the `self` sentinel.
-fn sameTypeMethodRegistered(
-    ctx: *Context,
-    method_name: []const u8,
-    effect: StackEffect,
-    type_tv: *const value_mod.TypeValue,
-) bool {
-    const did = ctx.resolveDispatchId(method_name) orelse return false;
-    const n_inputs = @min(effect.inputs.len, 2);
-    if (n_inputs <= 1) {
-        return ctx.lookupUnaryDispatch(did, type_tv.descriptor.?) != null;
-    }
-    return ctx.lookupBinaryDispatch(did, type_tv.descriptor.?, type_tv.descriptor.?) != null;
+    return Core.satisfiesByDescriptorSameTypeOnly(hostedEnv(ctx), type_tv, descriptor);
 }
 
 /// Validate a single protocol obligation: check that all required methods
-/// are registered in the dispatch table. Consults the per-`Context`
-/// satisfies-check memo so the steady-state path is a single hash lookup;
-/// on miss, runs the full walk and caches the outcome. Coarse invalidation
-/// in `registerDispatchLocked` / `popDispatchFrameLocked` keeps the memo
-/// honest across REPL definitions and runtime module loads.
+/// are registered in the dispatch table. The steady-state path is a single
+/// memo lookup. Coarse invalidation in `registerDispatchLocked` /
+/// `popDispatchFrameLocked` keeps the memo honest across REPL definitions
+/// and runtime module loads.
 pub fn validateProtocolObligation(
     ctx: *Context,
     type_name: []const u8,
     descriptor: *const ProtocolDescriptor,
 ) !void {
-    const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
-        helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
-        return error.TypeMismatch;
-    };
-    const key = ProtocolSatisfiesKey{
-        .type_descriptor = type_tv.descriptor.?,
-        .protocol_descriptor = descriptor,
-    };
-
-    if (ctx.lookupProtocolSatisfies(key)) |cached| {
-        if (cached) return;
-        // Cached failure: re-walk to throw a method-specific protocol error.
-    }
-
-    validateProtocolObligationUncached(ctx, type_tv, descriptor) catch |err| {
-        ctx.storeProtocolSatisfies(key, false);
-        return err;
-    };
-    ctx.storeProtocolSatisfies(key, true);
-}
-
-/// Full satisfies-check walk. Same-type and bare methods are checked
-/// immediately; cross-type (`any`) methods are checked immediately as well
-/// (they enumerate dispatch entries).
-fn validateProtocolObligationUncached(
-    ctx: *Context,
-    type_tv: *const value_mod.TypeValue,
-    descriptor: *const ProtocolDescriptor,
-) !void {
-    const methods_array = descriptor.methods;
-    const protocol_name = descriptor.name;
-    const type_name = type_tv.name;
-    var i: usize = 0;
-    while (i < methods_array.len) {
-        const method_val = methods_array[i];
-        const method_name = switch (method_val) {
-            .symbol => |s| s,
-            else => {
-                helpers.setErrorContext(ctx, "protocol method entries must be symbols", .{});
-                return error.TypeMismatch;
-            },
-        };
-        i += 1;
-
-        if (i < methods_array.len and methods_array[i] == .stack_effect) {
-            const effect = methods_array[i].stack_effect;
-            i += 1;
-
-            try validateTypedMethod(ctx, method_name, effect, type_tv, protocol_name);
-        } else {
-            const has_method = if (ctx.resolveDispatchId(method_name)) |did|
-                ctx.lookupUnaryDispatch(did, type_tv.descriptor.?) != null or
-                    ctx.lookupBinaryDispatch(did, type_tv.descriptor.?, type_tv.descriptor.?) != null
-            else
-                false;
-
-            if (!has_method) {
-                throwProtocolError(ctx, type_name, method_name, protocol_name);
-                return error.UserThrown;
-            }
-        }
-    }
+    return Core.validateProtocolObligation(hostedEnv(ctx), type_name, descriptor);
 }
 
 /// Validate deferred protocol obligations.
 pub fn validateObligationsSameType(ctx: *Context) !void {
     for (ctx.protocol_obligations.items) |obligation| {
         switch (obligation.constraint) {
-            .protocol => |descriptor| try validateObligationSameTypeOnly(
-                ctx,
+            .protocol => |descriptor| try Core.validateObligationSameTypeOnly(
+                hostedEnv(ctx),
                 obligation.type_name,
                 descriptor,
             ),
@@ -531,203 +445,6 @@ pub fn validateObligationsSameType(ctx: *Context) !void {
     ctx.protocol_obligations.clearRetainingCapacity();
 }
 
-/// Validate a single obligation, but skip any method that involves a cross-type
-/// `ˀany` marker, which are left to runtime checks.
-fn validateObligationSameTypeOnly(
-    ctx: *Context,
-    type_name: []const u8,
-    descriptor: *const ProtocolDescriptor,
-) !void {
-    const methods_array = descriptor.methods;
-    const protocol_name = descriptor.name;
-    const type_tv = ctx.lookupTypeValueByName(type_name) orelse {
-        helpers.setErrorContext(ctx, "unknown type '{s}' in protocol validation", .{type_name});
-        return error.TypeMismatch;
-    };
-    var i: usize = 0;
-    while (i < methods_array.len) {
-        const method_val = methods_array[i];
-        const method_name = switch (method_val) {
-            .symbol => |s| s,
-            else => {
-                helpers.setErrorContext(ctx, "protocol method entries must be symbols", .{});
-                return error.TypeMismatch;
-            },
-        };
-        i += 1;
-
-        if (i < methods_array.len and methods_array[i] == .stack_effect) {
-            const effect = methods_array[i].stack_effect;
-            i += 1;
-
-            if (isCrossTypeMethod(ctx, effect)) continue;
-
-            try validateTypedMethod(ctx, method_name, effect, type_tv, protocol_name);
-        } else {
-            const has_method = if (ctx.resolveDispatchId(method_name)) |did|
-                ctx.lookupUnaryDispatch(did, type_tv.descriptor.?) != null or
-                    ctx.lookupBinaryDispatch(did, type_tv.descriptor.?, type_tv.descriptor.?) != null
-            else
-                false;
-
-            if (!has_method) {
-                throwProtocolError(ctx, type_name, method_name, protocol_name);
-                return error.UserThrown;
-            }
-        }
-    }
-}
-
-/// Returns true if the stack effect has any non-self type annotation,
-/// i.e., the `any` sentinel or a concrete type that is not `self`.
-/// A protocol-bound input is treated as cross-type (it describes a set of
-/// types rather than the implementing one), so validation defers to runtime.
-fn isCrossTypeMethod(ctx: *Context, effect: StackEffect) bool {
-    const n_inputs = @min(effect.inputs.len, 2);
-    for (0..n_inputs) |pos| {
-        if (effect.inputs[pos].type_annotation) |ann| {
-            switch (ann) {
-                .type => |tv| {
-                    if (tv == ctx.getAnyTypeSentinel()) return true;
-                    if (tv != ctx.getSelfTypeSentinel()) return true;
-                },
-                .protocol, .combination => return true,
-            }
-        }
-    }
-    return false;
-}
-
-/// Validate a typed method by examining the stack effect's input type annotations.
-/// Substitutes `self` sentinels with the implementing type name and handles `any`
-/// sentinels by enumerating dispatch entries.
-fn validateTypedMethod(
-    ctx: *Context,
-    method_name: []const u8,
-    effect: StackEffect,
-    type_tv: *const value_mod.TypeValue,
-    protocol_name: []const u8,
-) !void {
-    const inputs = effect.inputs;
-    const type_name = type_tv.name;
-
-    // Determine concrete TypeValues for each input position, substituting sentinels
-    var has_any = false;
-    var any_position: usize = 0;
-    var concrete_types: [2]*const value_mod.TypeValue = .{ ctx.getDispatchUnarySentinel(), ctx.getDispatchUnarySentinel() };
-    const n_inputs = @min(inputs.len, 2);
-
-    for (0..n_inputs) |pos| {
-        if (inputs[pos].type_annotation) |ann| {
-            switch (ann) {
-                .type => |tv| {
-                    if (tv == ctx.getSelfTypeSentinel()) {
-                        concrete_types[pos] = type_tv;
-                    } else if (tv == ctx.getAnyTypeSentinel()) {
-                        has_any = true;
-                        any_position = pos;
-                        concrete_types[pos] = ctx.getDispatchAnySentinel();
-                    } else {
-                        concrete_types[pos] = tv;
-                    }
-                },
-                // A protocol-bound or combinator-bound input describes a set of
-                // types that satisfy the constraint, not a single dispatch
-                // type. Treat it as the implementing type for validation
-                // purposes; the runtime check carries the real enforcement.
-                .protocol, .combination => concrete_types[pos] = type_tv,
-            }
-        } else {
-            // Unannotated input -- treat as `self`
-            concrete_types[pos] = type_tv;
-        }
-    }
-
-    if (n_inputs == 0 or n_inputs == 1) {
-        // Unary dispatch
-        const type_a = if (n_inputs == 1) concrete_types[0] else type_tv;
-        if (!has_any) {
-            const unary_did = ctx.resolveDispatchId(method_name) orelse {
-                throwProtocolError(ctx, type_name, method_name, protocol_name);
-                return error.UserThrown;
-            };
-            if (ctx.lookupUnaryDispatch(unary_did, type_a.descriptor.?) == null) {
-                throwProtocolError(ctx, type_name, method_name, protocol_name);
-                return error.UserThrown;
-            }
-        } else {
-            // `any` in unary position: check that at least one entry exists
-            if (!hasAnyMatchingEntry(ctx, method_name, type_tv, true, 0)) {
-                throwProtocolError(ctx, type_name, method_name, protocol_name);
-                return error.UserThrown;
-            }
-        }
-    } else {
-        // Binary dispatch
-        if (!has_any) {
-            const binary_did = ctx.resolveDispatchId(method_name) orelse {
-                throwProtocolError(ctx, type_name, method_name, protocol_name);
-                return error.UserThrown;
-            };
-            if (ctx.lookupBinaryDispatch(binary_did, concrete_types[0].descriptor.?, concrete_types[1].descriptor.?) == null) {
-                throwProtocolError(ctx, type_name, method_name, protocol_name);
-                return error.UserThrown;
-            }
-        } else {
-            // `any` in one position: check that at least one dispatch entry exists
-            // where the non-any position matches the implementing type
-            if (!hasAnyMatchingEntry(ctx, method_name, type_tv, false, any_position)) {
-                throwProtocolError(ctx, type_name, method_name, protocol_name);
-                return error.UserThrown;
-            }
-        }
-    }
-}
-
-/// Check if at least one dispatch entry exists for the given method where the
-/// implementing type appears in the non-any position.
-fn hasAnyMatchingEntry(
-    ctx: *Context,
-    method_name: []const u8,
-    type_tv: *const value_mod.TypeValue,
-    is_unary: bool,
-    any_position: usize,
-) bool {
-    const alloc = ctx.arena.allocator();
-    const keys = ctx.dispatchKeysForWord(method_name, alloc) catch return false;
-    defer alloc.free(keys);
-
-    for (keys) |key| {
-        if (is_unary) {
-            if (key.type_b == ctx.getDispatchUnarySentinel().descriptor.?) {
-                if (key.type_a == type_tv.descriptor.? or
-                    key.type_a == ctx.getDispatchAnySentinel().descriptor.?)
-                {
-                    return true;
-                }
-            }
-        } else {
-            if (key.type_b == ctx.getDispatchUnarySentinel().descriptor.?) continue;
-            if (any_position == 0) {
-                // any is first position, self must be in second
-                if (key.type_b == type_tv.descriptor.? or
-                    key.type_b == ctx.getDispatchAnySentinel().descriptor.?)
-                {
-                    return true;
-                }
-            } else {
-                // any is second position, self must be in first
-                if (key.type_a == type_tv.descriptor.? or
-                    key.type_a == ctx.getDispatchAnySentinel().descriptor.?)
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
-
 /// Box a `protocol-error` carrying `message` into `ctx.thrown_error` and signal it.
 /// Caller supplies the formatted message.
 pub fn raiseProtocolError(ctx: *Context, message: []const u8) error{UserThrown} {
@@ -736,19 +453,6 @@ pub fn raiseProtocolError(ctx: *Context, message: []const u8) error{UserThrown} 
         .message = message,
     }) catch null;
     return error.UserThrown;
-}
-
-fn throwProtocolError(ctx: *Context, type_name: []const u8, method_name: []const u8, protocol_name: []const u8) void {
-    const msg = std.fmt.allocPrint(
-        ctx.arena.allocator(),
-        "type '{s}' does not implement '{s}' required by protocol '{s}'",
-        .{ type_name, method_name, protocol_name },
-    ) catch "protocol validation failed";
-
-    ctx.thrown_error = value_mod.boxErrorObject(ctx.quotationAllocator(), .{
-        .error_type = "protocol-error",
-        .message = msg,
-    }) catch null;
 }
 
 const testing = std.testing;
