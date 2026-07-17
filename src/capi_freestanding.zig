@@ -133,6 +133,11 @@ const ImageParameterDescription = extern struct {
     default_quotation_bytecode_len: u32,
 };
 
+/// Mirror of the emitted `onez_image_header_t` (see `emitImageTypedefs` in
+/// `src/aot_image_emit.zig` and the hosted `Header` in
+/// `src/aot_image_loader.zig`). Field order and count must match exactly:
+/// a missing field shifts every later pointer read and silently corrupts
+/// the load. Fields this runtime does not consume stay `?*const anyopaque`.
 const ImageHeader = extern struct {
     format_version: u32,
     module_count: u32,
@@ -146,6 +151,8 @@ const ImageHeader = extern struct {
     parameter_slot_count: u32,
     tagged_slot_count: u32,
     mutable_map_slot_count: u32,
+    struct_instance_slot_count: u32,
+    vector_slot_count: u32,
     protocoldescriptor_slot_count: u32,
     constraintcombinator_slot_count: u32,
     dispatch_entry_slot_count: u32,
@@ -160,6 +167,8 @@ const ImageHeader = extern struct {
     parameter_descriptions: ?[*]const ImageParameterDescription,
     tagged_descriptions: ?*const anyopaque,
     mutable_map_descriptions: ?*const anyopaque,
+    struct_instance_descriptions: ?*const anyopaque,
+    vector_descriptions: ?*const anyopaque,
     protocoldescriptor_descriptions: ?*const anyopaque,
     constraintcombinator_descriptions: ?*const anyopaque,
     dispatch_entry_descriptions: ?*const anyopaque,

@@ -1925,6 +1925,10 @@ const CompileState = struct {
     /// interpreter re-entry at runtime must be rejected at build time rather
     /// than compiled to a path that fatals at runtime.
     interpreter_free: bool = false,
+    /// True when the build targets a freestanding triple. Native word calls
+    /// then route through `jitNativeWordCall` instead of the direct `onez_n_*`
+    /// wrapper symbols, which are exported by the hosted runtime only.
+    freestanding: bool = false,
     /// Set of compiled word names available in AOT mode. Used to decide whether
     /// a compound word call can be a direct function call or must fall through
     /// to `jitInterpretedCall` (permissive AOT only; strict AOT rejects the
@@ -8237,8 +8241,9 @@ pub fn emitWordCAot(
     emit_slot_table_literals: bool,
     source_file: ?[]const u8,
     interpreter_free: bool,
+    freestanding: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -8269,15 +8274,16 @@ fn emitWordCAotWithCName(
     emit_slot_table_literals: bool,
     source_file: ?[]const u8,
     interpreter_free: bool,
+    freestanding: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, false) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, false) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, discovered.row_aware_self_loop) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, discovered.row_aware_self_loop) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -8329,6 +8335,7 @@ fn emitWordCAotPass(
     emit_slot_table_literals: bool,
     source_file: ?[]const u8,
     interpreter_free: bool,
+    freestanding: bool,
     row_aware_self_loop: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
@@ -8605,6 +8612,7 @@ fn emitWordCAotPass(
         .append_builtin_trace_frame_fn = c.IR_UNUSED,
         .aot_mode = true,
         .interpreter_free = interpreter_free,
+        .freestanding = freestanding,
         .aot_compiled_names = aot_compiled_names,
         .aot_proto_1arg = proto_1arg,
         .aot_proto_2arg = proto_2arg,
@@ -9305,6 +9313,7 @@ pub fn emitProgramC(
                     emit_slot_table_literals,
                     w.source_file,
                     strict_interpreter_free,
+                    meta.freestanding,
                     false,
                 ) catch continue;
                 if (discovered.body) |b| allocator.free(b);
@@ -9369,6 +9378,7 @@ pub fn emitProgramC(
             emit_slot_table_literals,
             w.source_file,
             strict_interpreter_free,
+            meta.freestanding,
         ) catch |err| {
             const rejected: ?NotCompilableReason = if (reason) |r|
                 r
@@ -9408,7 +9418,7 @@ pub fn emitProgramC(
             var ic: u8 = 0;
             while (ic <= max_discovered_quotation_arity) : (ic += 1) {
                 var dreason: ?NotCompilableReason = null;
-                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, null, null, null, allocator, null, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, false) catch {
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, null, null, null, allocator, null, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, false) catch {
                     emitAotEffectTrace(interp_ctx, q.c_name, ic, null, dreason);
                     continue;
                 };
@@ -9447,6 +9457,7 @@ pub fn emitProgramC(
             emit_slot_table_literals,
             q.source_file,
             strict_interpreter_free,
+            meta.freestanding,
         ) catch {
             emitAotCodegenTrace(interp_ctx, "quot", q.c_name, qreason orelse .unknown_reason);
             continue;
@@ -9517,6 +9528,7 @@ pub fn emitProgramC(
             emit_slot_table_literals,
             w.source_file,
             strict_interpreter_free,
+            meta.freestanding,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -9561,6 +9573,7 @@ pub fn emitProgramC(
             emit_slot_table_literals,
             q.source_file,
             strict_interpreter_free,
+            meta.freestanding,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -11295,12 +11308,19 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
         // native, whose slow path must keep routing through `jitNativeWordCall` so
         // generic dispatch fires for uncached operand types. The wrapper takes the
         // call-site line so it can rebuild the native's call frame for error reporting.
-        if (aot_wrappers.registryWrapperSymbol(name)) |symbol| {
-            const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, symbol.ptr), state.aot_proto_2arg);
-            const line_arg = c.ir_const_addr(ictx, line);
-            const call_result = c._ir_CALL_2(ictx, c.IR_I32, callee_fn, ctx_val, line_arg);
-            emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
-            return;
+        //
+        // The `onez_n_*` wrapper symbols are exported by the hosted runtime only, so a
+        // freestanding build routes every native through `jitNativeWordCall`, whose
+        // freestanding export implements the supported set in `callFreestandingNative`
+        // and errors on the rest.
+        if (!state.freestanding) {
+            if (aot_wrappers.registryWrapperSymbol(name)) |symbol| {
+                const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, symbol.ptr), state.aot_proto_2arg);
+                const line_arg = c.ir_const_addr(ictx, line);
+                const call_result = c._ir_CALL_2(ictx, c.IR_I32, callee_fn, ctx_val, line_arg);
+                emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
+                return;
+            }
         }
         const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
         const line_const = c.ir_const_addr(ictx, line);
@@ -15241,7 +15261,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const dup_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 1 },
     };
-    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, null, &reason, null, null, null, null, null, null, null, false, null, false, false);
+    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false);
     if (dup_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 2), dup_res.discovered_output);
 
@@ -15249,7 +15269,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const drop_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
     };
-    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, null, &reason, null, null, null, null, null, null, null, false, null, false, false);
+    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false);
     if (drop_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 0), drop_res.discovered_output);
 }
@@ -15562,6 +15582,7 @@ test "emitWordCAot emits named callback for safepoint" {
         false,
         null,
         false,
+        false,
     ) catch |err| {
         // times requires a quotation on stack which we don't have in this
         // minimal test -- NotCompilable is expected. Skip this test case
@@ -15606,6 +15627,7 @@ test "emitWordCAot basic arithmetic" {
         false,
         null,
         false,
+        false,
     );
     defer testing.allocator.free(source);
 
@@ -15646,6 +15668,7 @@ test "emitWordCAot quotation call emits code_ptr dispatch" {
         null,
         false,
         null,
+        false,
         false,
     ) catch |err| {
         if (err == error.NotCompilable) return;
@@ -15706,6 +15729,7 @@ test "emitWordCAot interpreter-free quotation call traps instead of interpreter 
         false,
         null,
         true, // interpreter_free
+        false,
     );
     defer testing.allocator.free(source);
 
@@ -15713,6 +15737,91 @@ test "emitWordCAot interpreter-free quotation call traps instead of interpreter 
     // fallback (jitCallQuotation) is emitted.
     try testing.expect(std.mem.indexOf(u8, source, "jitCallValue(") != null);
     try testing.expect(std.mem.indexOf(u8, source, "jitCallQuotation(") == null);
+}
+
+test "emitWordCAot freestanding routes non-generic natives through jitNativeWordCall" {
+    // The `onez_n_*` direct wrapper symbols are exported by the hosted runtime
+    // only, so a freestanding build must route every native through
+    // `jitNativeWordCall`. A hosted build keeps the direct wrapper call.
+    const Resolver = struct {
+        fn resolve(name: []const u8, _: *anyopaque) ?ResolvedWord {
+            if (std.mem.eql(u8, name, "stream-flush")) {
+                return .{ .word_id = 0, .input_count = 1, .output_count = 0, .is_native = true };
+            }
+            return null;
+        }
+    };
+    var dummy: u8 = 0;
+    const resolver = WordResolver{
+        .resolve = Resolver.resolve,
+        .user_data = @ptrCast(&dummy),
+        .dispatch_table_ptr = @ptrFromInt(1),
+    };
+    const instrs = makeInstructions(.{"stream-flush"});
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    const hosted = try emitWordCAot(
+        &instrs,
+        1,
+        0,
+        "flush-it",
+        resolver,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+        false,
+    );
+    defer testing.allocator.free(hosted);
+
+    try testing.expect(std.mem.indexOf(u8, hosted, "onez_n_stream_flush") != null);
+    try testing.expect(std.mem.indexOf(u8, hosted, "jitNativeWordCall") == null);
+
+    const freestanding = try emitWordCAot(
+        &instrs,
+        1,
+        0,
+        "flush-it",
+        resolver,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        false,
+        null,
+        false,
+        true, // freestanding
+    );
+    defer testing.allocator.free(freestanding);
+
+    try testing.expect(std.mem.indexOf(u8, freestanding, "onez_n_") == null);
+    try testing.expect(std.mem.indexOf(u8, freestanding, "jitNativeWordCall") != null);
 }
 
 test "emitProgramC generates complete C source" {
@@ -17279,6 +17388,7 @@ test "row underflow: a word reaching below its declared inputs compiles in AOT m
         false,
         null,
         false,
+        false,
     );
     defer testing.allocator.free(source);
     // The word body compiled to a C function rather than being rejected.
@@ -17331,6 +17441,7 @@ test "epilogue reifies an escaping quotation output instead of bailing" {
         null,
         false,
         null,
+        false,
         false,
     );
     defer testing.allocator.free(source);
@@ -17388,6 +17499,7 @@ test "branch merge reifies an escaping quotation arm instead of bailing" {
         false,
         null,
         false,
+        false,
     );
     defer testing.allocator.free(source);
     try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
@@ -17436,6 +17548,7 @@ test "loop carry reifies an escaping quotation before the loop header" {
         null,
         false,
         null,
+        false,
         false,
     );
     defer testing.allocator.free(source);
@@ -17501,6 +17614,7 @@ test "self-tail-call carry reifies an escaping quotation argument" {
         false,
         null,
         false,
+        false,
     );
     defer testing.allocator.free(source);
     try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
@@ -17558,6 +17672,7 @@ test "swap over a row compiles in AOT mode with the row pinned at slot 0" {
         null,
         false,
         null,
+        false,
         false,
     );
     defer testing.allocator.free(source);
