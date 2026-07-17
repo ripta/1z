@@ -992,6 +992,74 @@ pub fn typeParameterPosition(tv: *const TypeValue) ?u32 {
     };
 }
 
+/// Collect the distinct type parameters referenced by a type, ordered by first appearance,
+/// appending into `params` and deduped by pointer.
+///
+/// A bare type-parameter hole is collected directly; a parameterized virtual type is walked so
+/// parameters buried in its type_params tuple are surfaced too.
+///
+/// Concrete types contribute nothing.
+fn collectTypeParams(alloc: std.mem.Allocator, params: *std.ArrayListUnmanaged(*const TypeValue), tv: *const TypeValue) !void {
+    if (isTypeParameter(tv)) {
+        const seen = for (params.items) |p| {
+            if (p == tv) break true;
+        } else false;
+        if (!seen) try params.append(alloc, tv);
+        return;
+    }
+    const desc = tv.descriptor orelse return;
+    switch (desc.kind) {
+        .virtual => |vd| {
+            for (vd.type_params) |p| try collectTypeParams(alloc, params, p);
+        },
+        else => {},
+    }
+}
+
+/// Collect the distinct type parameters referenced by a struct's field types, ordered by first
+/// appearance.
+///
+/// A field typed as a bare parameter hole, or as a parameterized type carrying parameter holes
+/// in its type_params, contributes its parameters. A parameter shared by several fields is
+/// returned once. Returns an empty slice for a concrete struct.
+pub fn deriveStructTypeParams(alloc: std.mem.Allocator, field_types: []const ?ConstraintCombinator.Element) ![]const *const TypeValue {
+    var params = std.ArrayListUnmanaged(*const TypeValue){};
+    errdefer params.deinit(alloc);
+    for (field_types) |ft| {
+        const element = ft orelse continue;
+        const tv = switch (element) {
+            .type => |t| t,
+            else => continue,
+        };
+        try collectTypeParams(alloc, &params, tv);
+    }
+    if (params.items.len == 0) {
+        params.deinit(alloc);
+        return &.{};
+    }
+    return params.toOwnedSlice(alloc);
+}
+
+/// Collect the distinct enum-level type parameters referenced by a list of
+/// variant type values, ordered by first appearance and deduped by pointer.
+///
+/// A parameterized variant base (`result-value bind{ T: }`) is a virtual
+/// type whose `type_params` tuple carries the enum parameters it binds;
+/// walking those surfaces the enum's declared parameters. A concrete variant
+/// base (a plain struct, or `unit`) contributes nothing.
+pub fn deriveEnumTypeParams(alloc: std.mem.Allocator, variant_tvs: []const *const TypeValue) ![]const *const TypeValue {
+    var params = std.ArrayListUnmanaged(*const TypeValue){};
+    errdefer params.deinit(alloc);
+    for (variant_tvs) |tv| {
+        try collectTypeParams(alloc, &params, tv);
+    }
+    if (params.items.len == 0) {
+        params.deinit(alloc);
+        return &.{};
+    }
+    return params.toOwnedSlice(alloc);
+}
+
 /// Returns the stored symbol name for a TypeKindData variant. The 1z
 /// symbol-literal syntax `name:` produces a symbol whose stored name is
 /// `name` (the trailing colon is syntactic), so these strings omit the

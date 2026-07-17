@@ -1,5 +1,8 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const build_options = @import("build_options");
+const populate_core = @import("aot_image_populate_core.zig");
+const value_mod = @import("value.zig");
 
 const BigIntManaged = opaque {};
 const HashTable = opaque {};
@@ -125,55 +128,6 @@ const Closure = struct {
     segments: []const Segment,
 };
 
-const ImageParameterDescription = extern struct {
-    name: [*]const u8,
-    name_len: u32,
-    slot: u32,
-    default_quotation_bytecode: ?[*]const u8,
-    default_quotation_bytecode_len: u32,
-};
-
-/// Mirror of the emitted `onez_image_header_t` (see `emitImageTypedefs` in
-/// `src/aot_image_emit.zig` and the hosted `Header` in
-/// `src/aot_image_loader.zig`). Field order and count must match exactly:
-/// a missing field shifts every later pointer read and silently corrupts
-/// the load. Fields this runtime does not consume stay `?*const anyopaque`.
-const ImageHeader = extern struct {
-    format_version: u32,
-    module_count: u32,
-    word_count: u32,
-    marker_pool_count: u32,
-    typevalue_slot_count: u32,
-    stack_effect_count: u32,
-    typevalue_count: u32,
-    struct_type_count: u32,
-    marker_slot_count: u32,
-    parameter_slot_count: u32,
-    tagged_slot_count: u32,
-    mutable_map_slot_count: u32,
-    struct_instance_slot_count: u32,
-    vector_slot_count: u32,
-    protocoldescriptor_slot_count: u32,
-    constraintcombinator_slot_count: u32,
-    dispatch_entry_slot_count: u32,
-    modules: ?*const anyopaque,
-    words: ?*const anyopaque,
-    markers: ?*const anyopaque,
-    stack_effects: ?*const anyopaque,
-    typevalues: ?*const anyopaque,
-    typedescriptors: ?*const anyopaque,
-    struct_types: ?*const anyopaque,
-    marker_descriptions: ?*const anyopaque,
-    parameter_descriptions: ?[*]const ImageParameterDescription,
-    tagged_descriptions: ?*const anyopaque,
-    mutable_map_descriptions: ?*const anyopaque,
-    struct_instance_descriptions: ?*const anyopaque,
-    vector_descriptions: ?*const anyopaque,
-    protocoldescriptor_descriptions: ?*const anyopaque,
-    constraintcombinator_descriptions: ?*const anyopaque,
-    dispatch_entry_descriptions: ?*const anyopaque,
-};
-
 const Value = union(enum) {
     fixnum: i64,
     float: f64,
@@ -217,6 +171,57 @@ pub const std_options: std.Options = .{
     .page_size_min = 4096,
 };
 
+// Export the C symbol surface only on freestanding targets. Host test builds
+// of this file transitively analyze `ir_codegen.zig`, which exports the same
+// `jit*` names, so unconditional `export fn` collides there.
+comptime {
+    if (builtin.os.tag == .freestanding) {
+        @export(&onez_init_no_prelude, .{ .name = "onez_init_no_prelude" });
+        @export(&onez_init, .{ .name = "onez_init" });
+        @export(&onez_deinit, .{ .name = "onez_deinit" });
+        @export(&onez_freestanding_init_output, .{ .name = "onez_freestanding_init_output" });
+        @export(&onez_freestanding_output_stream, .{ .name = "onez_freestanding_output_stream" });
+        @export(&onez_freestanding_output_parameter, .{ .name = "onez_freestanding_output_parameter" });
+        @export(&onez_freestanding_write_output, .{ .name = "onez_freestanding_write_output" });
+        @export(&onez_set_error, .{ .name = "onez_set_error" });
+        @export(&onez_last_error, .{ .name = "onez_last_error" });
+        @export(&onez_load_runtime_image, .{ .name = "onez_load_runtime_image" });
+        @export(&onez_runtime_register_compiled, .{ .name = "onez_runtime_register_compiled" });
+        @export(&onez_runtime_register_quotations, .{ .name = "onez_runtime_register_quotations" });
+        @export(&onez_runtime_run, .{ .name = "onez_runtime_run" });
+        @export(&onez_set_interpreter_fallback, .{ .name = "onez_set_interpreter_fallback" });
+        @export(&onez_print_error, .{ .name = "onez_print_error" });
+        @export(&onez_set_args, .{ .name = "onez_set_args" });
+        @export(&onez_set_static_libs, .{ .name = "onez_set_static_libs" });
+        @export(&jitCallCodePtr, .{ .name = "jitCallCodePtr" });
+        @export(&jitCallValue, .{ .name = "jitCallValue" });
+        @export(&jitRefreshStack, .{ .name = "jitRefreshStack" });
+        @export(&jitEnsureStackCapacity, .{ .name = "jitEnsureStackCapacity" });
+        @export(&jitRetainSlot, .{ .name = "jitRetainSlot" });
+        @export(&jitReleaseSlot, .{ .name = "jitReleaseSlot" });
+        @export(&jitPushString, .{ .name = "jitPushString" });
+        @export(&jitPushSymbol, .{ .name = "jitPushSymbol" });
+        @export(&jitPushQuotation, .{ .name = "jitPushQuotation" });
+        @export(&jitPushArray, .{ .name = "jitPushArray" });
+        @export(&jitPushTypeValueSlot, .{ .name = "jitPushTypeValueSlot" });
+        @export(&jitPushStructTypeSlot, .{ .name = "jitPushStructTypeSlot" });
+        @export(&jitPushMarkerSlot, .{ .name = "jitPushMarkerSlot" });
+        @export(&jitPushParameterSlot, .{ .name = "jitPushParameterSlot" });
+        @export(&jitPushTaggedSlot, .{ .name = "jitPushTaggedSlot" });
+        @export(&jitPushMutableMapSlot, .{ .name = "jitPushMutableMapSlot" });
+        @export(&jitCallQuotation, .{ .name = "jitCallQuotation" });
+        @export(&jitGet, .{ .name = "jitGet" });
+        @export(&jitWithParameter, .{ .name = "jitWithParameter" });
+        @export(&jitInterpretedCall, .{ .name = "jitInterpretedCall" });
+        @export(&jitNativeWordCall, .{ .name = "jitNativeWordCall" });
+        @export(&jitOverflowError, .{ .name = "jitOverflowError" });
+        @export(&jitDivisionByZeroError, .{ .name = "jitDivisionByZeroError" });
+        @export(&jitStackUnderflowError, .{ .name = "jitStackUnderflowError" });
+        @export(&jitTypeMismatchError, .{ .name = "jitTypeMismatchError" });
+        @export(&jitNullCodePtrError, .{ .name = "jitNullCodePtrError" });
+    }
+}
+
 pub const panic = std.debug.no_panic;
 
 const ONEZ_OK: c_int = 0;
@@ -256,6 +261,16 @@ const OnezHandle = struct {
         .default_quotation = .{ .instructions = &.{} },
     },
     parameter_slots: []?*Parameter = &.{},
+
+    // Slot tables retained from the runtime image, mirroring the hosted
+    // Context's `image_*` caching. Struct types are reachable through the
+    // typevalue descriptors, so no struct-type table is retained.
+    image_typevalue_slots: ?populate_core.SlotTable = null,
+    image_typevalue_slot_count: u32 = 0,
+    image_protocoldescriptor_slots: ?populate_core.ProtocolDescriptorSlotTable = null,
+    image_protocoldescriptor_slot_count: u32 = 0,
+    image_constraintcombinator_slots: ?populate_core.ConstraintCombinatorSlotTable = null,
+    image_constraintcombinator_slot_count: u32 = 0,
 };
 
 pub const JitContext = extern struct {
@@ -423,7 +438,7 @@ fn callFreestandingNative(handle: *OnezHandle, name: []const u8) i32 {
     return unsupportedName(handle, name);
 }
 
-export fn onez_init_no_prelude() ?*anyopaque {
+fn onez_init_no_prelude() callconv(.c) ?*anyopaque {
     if (freestanding_handle) |*existing| return existing;
 
     const alloc = allocator();
@@ -436,16 +451,16 @@ export fn onez_init_no_prelude() ?*anyopaque {
     return &freestanding_handle.?;
 }
 
-export fn onez_init() ?*anyopaque {
+fn onez_init() callconv(.c) ?*anyopaque {
     return onez_init_no_prelude();
 }
 
-export fn onez_deinit(ptr: ?*anyopaque) void {
+fn onez_deinit(ptr: ?*anyopaque) callconv(.c) void {
     const handle = castHandle(ptr) orelse return;
     clearLastError(handle);
 }
 
-export fn onez_freestanding_init_output(ptr: ?*anyopaque, writer_ctx: ?*anyopaque, writer: ?WriterFn) c_int {
+fn onez_freestanding_init_output(ptr: ?*anyopaque, writer_ctx: ?*anyopaque, writer: ?WriterFn) callconv(.c) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const write_fn = writer orelse {
         setLastError(handle, "output writer is required", .{});
@@ -455,17 +470,17 @@ export fn onez_freestanding_init_output(ptr: ?*anyopaque, writer_ctx: ?*anyopaqu
     return ONEZ_OK;
 }
 
-export fn onez_freestanding_output_stream(ptr: ?*anyopaque) ?*anyopaque {
+fn onez_freestanding_output_stream(ptr: ?*anyopaque) callconv(.c) ?*anyopaque {
     const handle = castHandle(ptr) orelse return null;
     return &handle.output_stream;
 }
 
-export fn onez_freestanding_output_parameter(ptr: ?*anyopaque) ?*anyopaque {
+fn onez_freestanding_output_parameter(ptr: ?*anyopaque) callconv(.c) ?*anyopaque {
     const handle = castHandle(ptr) orelse return null;
     return &handle.output_parameter;
 }
 
-export fn onez_freestanding_write_output(ptr: ?*anyopaque, bytes_ptr: ?[*]const u8, bytes_len: usize) c_int {
+fn onez_freestanding_write_output(ptr: ?*anyopaque, bytes_ptr: ?[*]const u8, bytes_len: usize) callconv(.c) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const p = bytes_ptr orelse return ONEZ_ERR_INVALID_ARGUMENT;
     const written = handle.output_stream.vtable.write(&handle.output_stream, p[0..bytes_len]) catch |err| {
@@ -479,18 +494,89 @@ export fn onez_freestanding_write_output(ptr: ?*anyopaque, bytes_ptr: ?[*]const 
     return ONEZ_OK;
 }
 
-export fn onez_set_error(ptr: ?*anyopaque, msg: ?[*]const u8, len: usize) void {
+fn onez_set_error(ptr: ?*anyopaque, msg: ?[*]const u8, len: usize) callconv(.c) void {
     const handle = castHandle(ptr) orelse return;
     const p = msg orelse return;
     setLastError(handle, "{s}", .{p[0..len]});
 }
 
-export fn onez_last_error(ptr: ?*anyopaque) ?[*:0]const u8 {
+fn onez_last_error(ptr: ?*anyopaque) callconv(.c) ?[*:0]const u8 {
     const handle = castHandle(ptr) orelse return null;
     if (handle.last_error) |err| return err.ptr else return null;
 }
 
-export fn onez_load_runtime_image(
+/// Freestanding environment for `SlotPopulateCore`: no prelude and no
+/// registry, so the reuse lookups always miss and the create hooks only
+/// allocate. Name slices point at the binary's static image data.
+const FreestandingPopulateEnv = struct {
+    alloc: std.mem.Allocator,
+
+    pub fn allocator(self: FreestandingPopulateEnv) std.mem.Allocator {
+        return self.alloc;
+    }
+
+    pub fn lookupTypeValueByName(_: FreestandingPopulateEnv, _: []const u8) ?*value_mod.TypeValue {
+        return null;
+    }
+
+    pub fn lookupEnumVariantTypeValueByName(_: FreestandingPopulateEnv, _: []const u8) ?*value_mod.TypeValue {
+        return null;
+    }
+
+    pub fn lookupStructTypeByName(_: FreestandingPopulateEnv, _: []const u8) ?*value_mod.StructType {
+        return null;
+    }
+
+    pub fn lookupProtocolByName(_: FreestandingPopulateEnv, _: []const u8) ?*value_mod.ProtocolDescriptor {
+        return null;
+    }
+
+    pub fn createProtocolDescriptor(
+        self: FreestandingPopulateEnv,
+        name: []const u8,
+        methods: []const value_mod.Value,
+        protocol_id: u32,
+    ) populate_core.LoaderError!*value_mod.ProtocolDescriptor {
+        const pd = self.alloc.create(value_mod.ProtocolDescriptor) catch
+            return populate_core.LoaderError.OutOfMemory;
+        // The caller's methods list is transient; copy it.
+        const methods_dup = self.alloc.alloc(value_mod.Value, methods.len) catch
+            return populate_core.LoaderError.OutOfMemory;
+        @memcpy(methods_dup, methods);
+        pd.* = .{
+            .name = name,
+            .methods = methods_dup,
+            .protocol_id = protocol_id,
+        };
+        return pd;
+    }
+
+    pub fn createConstraintCombinator(
+        self: FreestandingPopulateEnv,
+        kind: value_mod.ConstraintCombinator.Kind,
+        elements: []const value_mod.ConstraintCombinator.Element,
+        combinator_id: u32,
+    ) populate_core.LoaderError!*value_mod.ConstraintCombinator {
+        const cc = self.alloc.create(value_mod.ConstraintCombinator) catch
+            return populate_core.LoaderError.OutOfMemory;
+        // The element list is already on this heap; take ownership.
+        cc.* = .{
+            .kind = kind,
+            .elements = elements,
+            .combinator_id = combinator_id,
+        };
+        return cc;
+    }
+};
+
+const FreestandingPopulate = populate_core.SlotPopulateCore(FreestandingPopulateEnv);
+
+fn reportLoadError(handle: *OnezHandle, err: populate_core.LoaderError) c_int {
+    setLastError(handle, "runtime image load failed: {s}", .{@errorName(err)});
+    return ONEZ_ERR_LOAD_FAILED;
+}
+
+fn onez_load_runtime_image(
     ptr: ?*anyopaque,
     header_ptr: ?*const anyopaque,
     typevalue_slots_ptr: ?*anyopaque,
@@ -503,19 +589,52 @@ export fn onez_load_runtime_image(
     vector_slots_ptr: ?*anyopaque,
     protocoldescriptor_slots_ptr: ?*anyopaque,
     constraintcombinator_slots_ptr: ?*anyopaque,
-) c_int {
-    _ = typevalue_slots_ptr;
-    _ = struct_type_slots_ptr;
+) callconv(.c) c_int {
     _ = marker_slots_ptr;
     _ = tagged_slots_ptr;
     _ = mutable_map_slots_ptr;
     _ = struct_instance_slots_ptr;
     _ = vector_slots_ptr;
-    _ = protocoldescriptor_slots_ptr;
-    _ = constraintcombinator_slots_ptr;
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const header: *const populate_core.Header = @ptrCast(@alignCast(header_ptr orelse return ONEZ_ERR_LOAD_FAILED));
+
+    const typevalue_slots: ?populate_core.SlotTable =
+        if (typevalue_slots_ptr) |p| @ptrCast(@alignCast(p)) else null;
+    const struct_type_slots: ?populate_core.StructTypeSlotTable =
+        if (struct_type_slots_ptr) |p| @ptrCast(@alignCast(p)) else null;
+    const protocol_slots: ?populate_core.ProtocolDescriptorSlotTable =
+        if (protocoldescriptor_slots_ptr) |p| @ptrCast(@alignCast(p)) else null;
+    const combinator_slots: ?populate_core.ConstraintCombinatorSlotTable =
+        if (constraintcombinator_slots_ptr) |p| @ptrCast(@alignCast(p)) else null;
+
+    // Hosted order: protocols, then typevalues, then combinators, whose
+    // elements read both prior tables.
+    const env = FreestandingPopulateEnv{ .alloc = handle.allocator };
+    FreestandingPopulate.populateProtocolDescriptorSlots(env, header, protocol_slots) catch |err|
+        return reportLoadError(handle, err);
+    _ = FreestandingPopulate.populateTypeValueSlots(env, header, typevalue_slots, struct_type_slots) catch |err|
+        return reportLoadError(handle, err);
+    FreestandingPopulate.populateConstraintCombinatorSlots(env, header, .{
+        .typevalues = typevalue_slots,
+        .protocol_descriptors = protocol_slots,
+        .constraint_combinators = combinator_slots,
+    }) catch |err|
+        return reportLoadError(handle, err);
+
+    if (typevalue_slots) |table| {
+        handle.image_typevalue_slots = table;
+        handle.image_typevalue_slot_count = header.typevalue_slot_count;
+    }
+    if (protocol_slots) |table| {
+        handle.image_protocoldescriptor_slots = table;
+        handle.image_protocoldescriptor_slot_count = header.protocoldescriptor_slot_count;
+    }
+    if (combinator_slots) |table| {
+        handle.image_constraintcombinator_slots = table;
+        handle.image_constraintcombinator_slot_count = header.constraintcombinator_slot_count;
+    }
+
     if (parameter_slots_ptr) |slots_raw| {
-        const header: *const ImageHeader = @ptrCast(@alignCast(header_ptr orelse return ONEZ_ERR_LOAD_FAILED));
         const table: [*]?*Parameter = @ptrCast(@alignCast(slots_raw));
         var parameter_slots = handle.allocator.alloc(?*Parameter, header.parameter_slot_count) catch return ONEZ_ERR_LOAD_FAILED;
         for (0..header.parameter_slot_count) |i| parameter_slots[i] = table[i];
@@ -545,7 +664,7 @@ export fn onez_load_runtime_image(
     return ONEZ_OK;
 }
 
-export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, names: [*]const ?[*:0]const u8, size: u32) i32 {
+fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, names: [*]const ?[*:0]const u8, size: u32) callconv(.c) i32 {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const n: usize = @intCast(size);
 
@@ -561,7 +680,7 @@ export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*con
     return ONEZ_OK;
 }
 
-export fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, size: u32) i32 {
+fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, size: u32) callconv(.c) i32 {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const n: usize = @intCast(size);
 
@@ -574,7 +693,7 @@ export fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*c
     return ONEZ_OK;
 }
 
-export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
+fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) callconv(.c) i32 {
     const handle = castHandle(ptr) orelse return 1;
     if (entry_word_id >= handle.dispatch_table.len) return unsupported(handle, "entry word");
     var code_ptr = handle.dispatch_table[entry_word_id] orelse return unsupported(handle, "entry word");
@@ -599,31 +718,31 @@ export fn onez_runtime_run(ptr: ?*anyopaque, entry_word_id: u32) i32 {
     return if (status == 0) 0 else 1;
 }
 
-export fn onez_set_interpreter_fallback(ptr: ?*anyopaque, allowed: bool) c_int {
+fn onez_set_interpreter_fallback(ptr: ?*anyopaque, allowed: bool) callconv(.c) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     handle.interpreter_fallback_allowed = allowed;
     return ONEZ_OK;
 }
 
-export fn onez_print_error(ptr: ?*anyopaque) void {
+fn onez_print_error(ptr: ?*anyopaque) callconv(.c) void {
     _ = ptr;
 }
 
-export fn onez_set_args(ptr: ?*anyopaque, argc: c_int, argv: [*]const [*:0]const u8) c_int {
+fn onez_set_args(ptr: ?*anyopaque, argc: c_int, argv: [*]const [*:0]const u8) callconv(.c) c_int {
     _ = ptr;
     _ = argc;
     _ = argv;
     return ONEZ_OK;
 }
 
-export fn onez_set_static_libs(ptr: ?*anyopaque, names: [*]const [*:0]const u8, count: u32) c_int {
+fn onez_set_static_libs(ptr: ?*anyopaque, names: [*]const [*:0]const u8, count: u32) callconv(.c) c_int {
     _ = ptr;
     _ = names;
     _ = count;
     return ONEZ_ERR_LOAD_FAILED;
 }
 
-export fn jitCallCodePtr(jit_ctx_raw: usize, code_ptr_raw: usize) callconv(.c) i32 {
+fn jitCallCodePtr(jit_ctx_raw: usize, code_ptr_raw: usize) callconv(.c) i32 {
     if (code_ptr_raw == 0) return 1;
     const func: *const fn (*JitContext) callconv(.c) i32 = @ptrFromInt(code_ptr_raw);
     const jit_ctx = contextFromJit(jit_ctx_raw) orelse return 1;
@@ -635,7 +754,7 @@ export fn jitCallCodePtr(jit_ctx_raw: usize, code_ptr_raw: usize) callconv(.c) i
 /// traps cleanly if it was never compiled); a closure pushes each segment's
 /// captured prefix and calls that segment's base. The fixed freestanding stack
 /// never reallocates, so no retain or buffer refresh is needed.
-export fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i32 {
+fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i32 {
     if (value_ptr_raw == 0) return 1;
     const jit_ctx = contextFromJit(jit_ctx_raw) orelse return 1;
     const handle: *OnezHandle = @ptrCast(@alignCast(jit_ctx.ctx));
@@ -668,7 +787,7 @@ export fn jitCallValue(jit_ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i3
     }
 }
 
-export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
+fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
     const jc = contextFromJit(jit_ctx_raw) orelse return 0;
     const handle: *OnezHandle = @ptrCast(@alignCast(jc.ctx));
     jc.items_ptr = handle.stack.ptr;
@@ -676,7 +795,7 @@ export fn jitRefreshStack(jit_ctx_raw: usize) callconv(.c) i32 {
     return 0;
 }
 
-export fn jitEnsureStackCapacity(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
+fn jitEnsureStackCapacity(jit_ctx_raw: usize, needed: usize) callconv(.c) i32 {
     const jc = contextFromJit(jit_ctx_raw) orelse return 2;
     if (needed <= jc.capacity) return 0;
     const handle: *OnezHandle = @ptrCast(@alignCast(jc.ctx));
@@ -684,17 +803,17 @@ export fn jitEnsureStackCapacity(jit_ctx_raw: usize, needed: usize) callconv(.c)
     return 2;
 }
 
-export fn jitRetainSlot(value_ptr: usize) callconv(.c) i32 {
+fn jitRetainSlot(value_ptr: usize) callconv(.c) i32 {
     _ = value_ptr;
     return 0;
 }
 
-export fn jitReleaseSlot(value_ptr: usize) callconv(.c) i32 {
+fn jitReleaseSlot(value_ptr: usize) callconv(.c) i32 {
     _ = value_ptr;
     return 0;
 }
 
-export fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
+fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
     const handle = handleFromContext(ctx_raw) orelse return 1;
     const src: [*]const u8 = @ptrFromInt(str_ptr);
     const copy = handle.allocator.dupe(u8, src[0..str_len]) catch {
@@ -704,7 +823,7 @@ export fn jitPushString(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
     return pushValue(handle, .{ .string = copy });
 }
 
-export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
+fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv(.c) i32 {
     const handle = handleFromContext(ctx_raw) orelse return 1;
     const src: [*]const u8 = @ptrFromInt(str_ptr);
     const copy = handle.allocator.dupe(u8, src[0..str_len]) catch {
@@ -714,7 +833,7 @@ export fn jitPushSymbol(ctx_raw: usize, str_ptr: usize, str_len: usize) callconv
     return pushValue(handle, .{ .symbol = copy });
 }
 
-export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize, quotation_id: usize) callconv(.c) i32 {
+fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize, quotation_id: usize) callconv(.c) i32 {
     _ = data_ptr;
     _ = data_len;
     _ = dest_raw;
@@ -722,28 +841,28 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
     return unsupportedJit(ctx_raw, "quotation literals");
 }
 
-export fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callconv(.c) i32 {
+fn jitPushArray(ctx_raw: usize, data_ptr: usize, data_len: usize) callconv(.c) i32 {
     _ = data_ptr;
     _ = data_len;
     return unsupportedJit(ctx_raw, "array literals");
 }
 
-export fn jitPushTypeValueSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+fn jitPushTypeValueSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     _ = slot;
     return unsupportedJit(ctx_raw, "runtime-image typevalue slots");
 }
 
-export fn jitPushStructTypeSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+fn jitPushStructTypeSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     _ = slot;
     return unsupportedJit(ctx_raw, "runtime-image struct-type slots");
 }
 
-export fn jitPushMarkerSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+fn jitPushMarkerSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     _ = slot;
     return unsupportedJit(ctx_raw, "runtime-image marker slots");
 }
 
-export fn jitPushParameterSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+fn jitPushParameterSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     const handle = handleFromContext(ctx_raw) orelse return 1;
     if (slot >= handle.parameter_slots.len) {
         setLastError(handle, "runtime-image parameter slot {d} is not available on this build", .{slot});
@@ -756,21 +875,21 @@ export fn jitPushParameterSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     return pushValue(handle, .{ .parameter = param });
 }
 
-export fn jitPushTaggedSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+fn jitPushTaggedSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     _ = slot;
     return unsupportedJit(ctx_raw, "runtime-image tagged slots");
 }
 
-export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
+fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     _ = slot;
     return unsupportedJit(ctx_raw, "runtime-image mutable-map slots");
 }
 
-export fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
+fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
     return unsupportedJit(ctx_raw, "quotation calls");
 }
 
-export fn jitGet(ctx_raw: usize) callconv(.c) i32 {
+fn jitGet(ctx_raw: usize) callconv(.c) i32 {
     const handle = handleFromContext(ctx_raw) orelse return 1;
     const parameter_value = popValue(handle) orelse return 2;
     if (valuesAreSameParameter(parameter_value, &handle.output_parameter)) {
@@ -780,17 +899,17 @@ export fn jitGet(ctx_raw: usize) callconv(.c) i32 {
     return 2;
 }
 
-export fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
+fn jitWithParameter(ctx_raw: usize) callconv(.c) i32 {
     return unsupportedJit(ctx_raw, "dynamic parameter scopes");
 }
 
-export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
     _ = word_id_raw;
     _ = line_raw;
     return unsupportedJit(ctx_raw, "interpreter fallback");
 }
 
-export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
+fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
     _ = line_raw;
     const handle = handleFromContext(ctx_raw) orelse return 1;
     if (word_id_raw >= handle.word_names.len) return unsupportedJit(ctx_raw, "native helper calls");
@@ -798,27 +917,27 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
     return callFreestandingNative(handle, std.mem.span(name_ptr));
 }
 
-export fn jitOverflowError(ctx_raw: usize) callconv(.c) i32 {
+fn jitOverflowError(ctx_raw: usize) callconv(.c) i32 {
     _ = ctx_raw;
     return 2;
 }
 
-export fn jitDivisionByZeroError(ctx_raw: usize) callconv(.c) i32 {
+fn jitDivisionByZeroError(ctx_raw: usize) callconv(.c) i32 {
     _ = ctx_raw;
     return 2;
 }
 
-export fn jitStackUnderflowError(ctx_raw: usize) callconv(.c) i32 {
+fn jitStackUnderflowError(ctx_raw: usize) callconv(.c) i32 {
     _ = ctx_raw;
     return 2;
 }
 
-export fn jitTypeMismatchError(ctx_raw: usize) callconv(.c) i32 {
+fn jitTypeMismatchError(ctx_raw: usize) callconv(.c) i32 {
     _ = ctx_raw;
     return 2;
 }
 
-export fn jitNullCodePtrError(ctx_raw: usize) callconv(.c) i32 {
+fn jitNullCodePtrError(ctx_raw: usize) callconv(.c) i32 {
     _ = ctx_raw;
     return 2;
 }
@@ -944,4 +1063,344 @@ test "freestanding output parameter binding writes through stream native" {
     try std.testing.expectEqual(@as(usize, 1), handle.stack_len);
     try std.testing.expectEqual(@as(i64, 5), handle.stack[0].fixnum);
     try std.testing.expectEqualStrings("hello", written.items);
+}
+
+fn emptyTestImageHeader() populate_core.Header {
+    return .{
+        .format_version = 1,
+        .module_count = 0,
+        .word_count = 0,
+        .marker_pool_count = 0,
+        .typevalue_slot_count = 1,
+        .stack_effect_count = 0,
+        .typevalue_count = 0,
+        .struct_type_count = 0,
+        .marker_slot_count = 0,
+        .parameter_slot_count = 0,
+        .tagged_slot_count = 0,
+        .mutable_map_slot_count = 0,
+        .struct_instance_slot_count = 0,
+        .vector_slot_count = 0,
+        .protocoldescriptor_slot_count = 0,
+        .constraintcombinator_slot_count = 0,
+        .dispatch_entry_slot_count = 0,
+        .modules = null,
+        .words = null,
+        .markers = null,
+        .stack_effects = null,
+        .typevalues = null,
+        .typedescriptors = null,
+        .struct_types = null,
+        .marker_descriptions = null,
+        .parameter_descriptions = null,
+        .tagged_descriptions = null,
+        .mutable_map_descriptions = null,
+        .struct_instance_descriptions = null,
+        .vector_descriptions = null,
+        .protocoldescriptor_descriptions = null,
+        .constraintcombinator_descriptions = null,
+        .dispatch_entry_descriptions = null,
+    };
+}
+
+test "freestanding loader retains typevalue slots from a synthetic image" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [1]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+
+    const descs = [_]populate_core.TypeDescriptor{
+        std.mem.zeroes(populate_core.TypeDescriptor),
+        std.mem.zeroes(populate_core.TypeDescriptor),
+    };
+    const rows = [_]populate_core.TypeValueRow{
+        .{ .name = "alpha", .name_len = 5, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = "beta", .name_len = 4, .slot = 2, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = rows.len;
+    header.typevalues = &rows;
+    header.typedescriptors = &descs;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    try std.testing.expectEqual(@as(u32, 3), handle.image_typevalue_slot_count);
+    try std.testing.expectEqual(@as(?populate_core.SlotTable, @ptrCast(&tv_slots)), handle.image_typevalue_slots);
+    try std.testing.expectEqualStrings("alpha", tv_slots[1].?.name);
+    try std.testing.expectEqualStrings("beta", tv_slots[2].?.name);
+    try std.testing.expect(tv_slots[1].?.descriptor != null);
+}
+
+test "freestanding loader resolves the typevalue-to-struct-type interlink" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [1]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+
+    const point_field_names = [_][*]const u8{ "x", "y" };
+    const point_field_lens = [_]u32{ 1, 1 };
+    const struct_rows = [_]populate_core.StructType{
+        .{
+            .name = "point",
+            .name_len = 5,
+            .field_names = &point_field_names,
+            .field_name_lens = &point_field_lens,
+            .field_count = 2,
+            .field_type_slots = null,
+            .field_type_count = 0,
+        },
+    };
+    var virtual_desc = std.mem.zeroes(populate_core.TypeDescriptor);
+    virtual_desc.kind = 3;
+    virtual_desc.anon_struct_idx = 0;
+    virtual_desc.parent_type_slot = 0;
+    const descs = [_]populate_core.TypeDescriptor{virtual_desc};
+    const rows = [_]populate_core.TypeValueRow{
+        .{ .name = "point", .name_len = 5, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = rows.len;
+    header.typevalues = &rows;
+    header.typedescriptors = &descs;
+    header.struct_type_count = struct_rows.len;
+    header.struct_types = &struct_rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null };
+    var st_slots = [_]?*value_mod.StructType{null};
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        @ptrCast(&st_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    const tv = tv_slots[1].?;
+    const st = st_slots[0].?;
+    try std.testing.expectEqualStrings("point", st.name);
+    try std.testing.expectEqual(@as(usize, 2), st.fields.len);
+    try std.testing.expectEqual(@as(?*const value_mod.StructType, st), tv.descriptor.?.kind.virtual.anon_struct);
+    try std.testing.expectEqual(@as(?*value_mod.TypeValue, @constCast(tv)), st.type_val);
+    try std.testing.expectEqual(@as(?*value_mod.TypeValue, @constCast(tv)), tv.virtual_type.?.type_val);
+}
+
+test "freestanding loader retains protocol descriptor slots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [1]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+
+    const methods = [_]populate_core.ProtocolMethod{
+        .{ .name = "area", .name_len = 4, .stack_effect_idx = 0 },
+    };
+    const rows = [_]populate_core.ProtocolDescriptorDescription{
+        .{ .name = "shape", .name_len = 5, .slot = 0, .protocol_id = 7, .method_count = 1, .methods = &methods },
+    };
+    var header = emptyTestImageHeader();
+    header.protocoldescriptor_slot_count = 1;
+    header.protocoldescriptor_descriptions = &rows;
+
+    var pd_slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        @ptrCast(&pd_slots),
+        null,
+    ));
+
+    try std.testing.expectEqual(@as(u32, 1), handle.image_protocoldescriptor_slot_count);
+    try std.testing.expectEqual(@as(?populate_core.ProtocolDescriptorSlotTable, @ptrCast(&pd_slots)), handle.image_protocoldescriptor_slots);
+    const pd = pd_slots[0].?;
+    try std.testing.expectEqualStrings("shape", pd.name);
+    try std.testing.expectEqual(@as(u32, 7), pd.protocol_id);
+    try std.testing.expectEqual(@as(usize, 1), pd.methods.len);
+    try std.testing.expectEqualStrings("area", pd.methods[0].symbol);
+}
+
+test "freestanding loader retains constraint combinator slots" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [1]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+
+    const descs = [_]populate_core.TypeDescriptor{std.mem.zeroes(populate_core.TypeDescriptor)};
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "alpha", .name_len = 5, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    const pd_rows = [_]populate_core.ProtocolDescriptorDescription{
+        .{ .name = "shape", .name_len = 5, .slot = 0, .protocol_id = 1, .method_count = 0, .methods = null },
+    };
+    const first_elements = [_]populate_core.CombinatorElement{
+        .{ .kind = 1, .slot = 1 },
+        .{ .kind = 2, .slot = 0 },
+    };
+    const nested_elements = [_]populate_core.CombinatorElement{
+        .{ .kind = 3, .slot = 0 },
+    };
+    const cc_rows = [_]populate_core.ConstraintCombinatorDescription{
+        .{ .slot = 0, .combinator_id = 4, .kind = 0, .element_count = 2, .elements = &first_elements },
+        .{ .slot = 1, .combinator_id = 5, .kind = 1, .element_count = 1, .elements = &nested_elements },
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+    header.protocoldescriptor_slot_count = 1;
+    header.protocoldescriptor_descriptions = &pd_rows;
+    header.constraintcombinator_slot_count = 2;
+    header.constraintcombinator_descriptions = &cc_rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null };
+    var pd_slots = [_]?*const value_mod.ProtocolDescriptor{null};
+    var cc_slots = [_]?*const value_mod.ConstraintCombinator{ null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        @ptrCast(&pd_slots),
+        @ptrCast(&cc_slots),
+    ));
+
+    try std.testing.expectEqual(@as(u32, 2), handle.image_constraintcombinator_slot_count);
+    try std.testing.expectEqual(@as(?populate_core.ConstraintCombinatorSlotTable, @ptrCast(&cc_slots)), handle.image_constraintcombinator_slots);
+    const first = cc_slots[0].?;
+    try std.testing.expectEqual(value_mod.ConstraintCombinator.Kind.intersection, first.kind);
+    try std.testing.expectEqual(@as(u32, 4), first.combinator_id);
+    try std.testing.expectEqual(tv_slots[1].?, first.elements[0].type);
+    try std.testing.expectEqual(pd_slots[0].?, first.elements[1].protocol);
+    const nested = cc_slots[1].?;
+    try std.testing.expectEqual(value_mod.ConstraintCombinator.Kind.@"union", nested.kind);
+    try std.testing.expectEqual(first, nested.elements[0].combinator);
+}
+
+test "freestanding loader rejects malformed synthetic images" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [1]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+
+    const descs = [_]populate_core.TypeDescriptor{std.mem.zeroes(populate_core.TypeDescriptor)};
+    const bad_slot_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "alpha", .name_len = 5, .slot = 9, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = bad_slot_rows.len;
+    header.typevalues = &bad_slot_rows;
+    header.typedescriptors = &descs;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null };
+    try std.testing.expectEqual(ONEZ_ERR_LOAD_FAILED, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+    const slot_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(slot_msg), "BadSlotIndex") != null);
+
+    var bad_struct_desc = std.mem.zeroes(populate_core.TypeDescriptor);
+    bad_struct_desc.kind = 3;
+    bad_struct_desc.anon_struct_idx = 3;
+    const bad_struct_descs = [_]populate_core.TypeDescriptor{bad_struct_desc};
+    const rows = [_]populate_core.TypeValueRow{
+        .{ .name = "alpha", .name_len = 5, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    header.typevalue_count = rows.len;
+    header.typevalues = &rows;
+    header.typedescriptors = &bad_struct_descs;
+
+    try std.testing.expectEqual(ONEZ_ERR_LOAD_FAILED, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+    const struct_msg = onez_last_error(&handle) orelse return error.TestExpectedError;
+    try std.testing.expect(std.mem.indexOf(u8, std.mem.span(struct_msg), "BadStructTypeIndex") != null);
+}
+
+test "freestanding loader leaves the handle untouched on a zero-count image" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [1]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+
+    var header = emptyTestImageHeader();
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    try std.testing.expectEqual(@as(?populate_core.SlotTable, null), handle.image_typevalue_slots);
+    try std.testing.expectEqual(@as(u32, 0), handle.image_typevalue_slot_count);
+    try std.testing.expectEqual(@as(?populate_core.ProtocolDescriptorSlotTable, null), handle.image_protocoldescriptor_slots);
+    try std.testing.expectEqual(@as(u32, 0), handle.image_protocoldescriptor_slot_count);
+    try std.testing.expectEqual(@as(?populate_core.ConstraintCombinatorSlotTable, null), handle.image_constraintcombinator_slots);
+    try std.testing.expectEqual(@as(u32, 0), handle.image_constraintcombinator_slot_count);
 }

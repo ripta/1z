@@ -3491,72 +3491,18 @@ pub const Context = struct {
         return desc;
     }
 
-    /// Collect the distinct type parameters referenced by a type, ordered by first appearance,
-    /// appending into `params` and deduped by pointer.
-    ///
-    /// A bare type-parameter hole is collected directly; a parameterized virtual type is walked so
-    /// parameters buried in its type_params tuple are surfaced too.
-    ///
-    /// Concrete types contribute nothing.
-    fn collectTypeParams(alloc: std.mem.Allocator, params: *std.ArrayListUnmanaged(*const value_mod.TypeValue), tv: *const value_mod.TypeValue) !void {
-        if (value_mod.isTypeParameter(tv)) {
-            const seen = for (params.items) |p| {
-                if (p == tv) break true;
-            } else false;
-            if (!seen) try params.append(alloc, tv);
-            return;
-        }
-        const desc = tv.descriptor orelse return;
-        switch (desc.kind) {
-            .virtual => |vd| {
-                for (vd.type_params) |p| try collectTypeParams(alloc, params, p);
-            },
-            else => {},
-        }
-    }
-
-    /// Collect the distinct type parameters referenced by a struct's field types, ordered by first
-    /// appearance.
-    ///
-    /// A field typed as a bare parameter hole, or as a parameterized type carrying parameter holes
-    /// in its type_params, contributes its parameters. A parameter shared by several fields is
-    /// returned once. Returns an empty slice for a concrete struct.
+    /// Collect the distinct type parameters referenced by a struct's field
+    /// types. Delegates to `value_mod.deriveStructTypeParams`; kept on Context
+    /// as the hosted-facing entry point.
     pub fn deriveStructTypeParams(alloc: std.mem.Allocator, field_types: []const ?value_mod.ConstraintCombinator.Element) ![]const *const value_mod.TypeValue {
-        var params = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
-        errdefer params.deinit(alloc);
-        for (field_types) |ft| {
-            const element = ft orelse continue;
-            const tv = switch (element) {
-                .type => |t| t,
-                else => continue,
-            };
-            try collectTypeParams(alloc, &params, tv);
-        }
-        if (params.items.len == 0) {
-            params.deinit(alloc);
-            return &.{};
-        }
-        return params.toOwnedSlice(alloc);
+        return value_mod.deriveStructTypeParams(alloc, field_types);
     }
 
     /// Collect the distinct enum-level type parameters referenced by a list of
-    /// variant type values, ordered by first appearance and deduped by pointer.
-    ///
-    /// A parameterized variant base (`result-value bind{ T: }`) is a virtual
-    /// type whose `type_params` tuple carries the enum parameters it binds;
-    /// walking those surfaces the enum's declared parameters. A concrete variant
-    /// base (a plain struct, or `unit`) contributes nothing.
+    /// variant type values. Delegates to `value_mod.deriveEnumTypeParams`; kept
+    /// on Context as the hosted-facing entry point.
     pub fn deriveEnumTypeParams(alloc: std.mem.Allocator, variant_tvs: []const *const value_mod.TypeValue) ![]const *const value_mod.TypeValue {
-        var params = std.ArrayListUnmanaged(*const value_mod.TypeValue){};
-        errdefer params.deinit(alloc);
-        for (variant_tvs) |tv| {
-            try collectTypeParams(alloc, &params, tv);
-        }
-        if (params.items.len == 0) {
-            params.deinit(alloc);
-            return &.{};
-        }
-        return params.toOwnedSlice(alloc);
+        return value_mod.deriveEnumTypeParams(alloc, variant_tvs);
     }
 
     pub fn getOrCreateStructDescriptor(

@@ -1,5 +1,11 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Dictionary = @import("dictionary.zig").Dictionary;
+
+/// `std.posix.termios` does not exist on freestanding targets, which resolve
+/// this struct's layout through the Context type graph without constructing
+/// one; a void stand-in keeps the declaration analyzable there.
+const Termios = if (builtin.os.tag == .freestanding) void else std.posix.termios;
 
 /// A single UTF-8 encoded codepoint (1-4 bytes).
 pub const Utf8Char = struct {
@@ -42,7 +48,7 @@ const max_history = 4096;
 
 /// LineEditor provides character-by-character line editing with raw terminal mode.
 pub const LineEditor = struct {
-    original_termios: std.posix.termios,
+    original_termios: Termios,
     raw_mode_enabled: bool = false,
     allocator: std.mem.Allocator,
     buf: [4096]u8 = undefined,

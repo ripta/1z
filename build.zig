@@ -190,7 +190,7 @@ pub fn build(b: *std.Build) void {
     });
     const run_freestanding_capi_unit_tests = b.addRunArtifact(freestanding_capi_unit_tests);
     run_freestanding_capi_unit_tests.setName("freestanding capi unit tests");
-    if (test_filter) |filter| run_freestanding_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", filter);
+    run_freestanding_capi_unit_tests.setEnvironmentVariable("ONEZ_TEST_FILTER", test_filter orelse "freestanding");
 
     // Hosted C-API (embedding library) unit tests. Exposed under its own
     // `capi-test` step rather than `test` because several tests load stdlib
