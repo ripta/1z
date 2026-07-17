@@ -690,7 +690,7 @@ fn decodeWordIdentity(identity: []const u8) struct { module: ?[]const u8, name: 
 /// collecting all reachable compound words.
 ///
 /// `entry_file` and `prelude_words` feed the interpreted-reach detection walk
-/// that runs after discovery in non-strict builds.
+/// that runs after discovery.
 fn discoverReachableWords(
     ctx: *Context,
     entry_instrs: []const Instruction,
@@ -833,15 +833,17 @@ fn discoverReachableWords(
 
     // Detect interpreted reach to non-prelude words the BFS never discovered.
     //
-    // Composite-buried quotations run interpreted when uncompiled, and a
-    // metadata-only image drops the bodies of the words they call, so codegen
-    // must know whether any buried quotation reaches a non-prelude word with
-    // no compiled dispatch. Skipped in strict builds: the promoting walks
-    // above discover those callees, so the violation set is empty there by
-    // construction, and `jitCallQuotation` refuses to run under strict mode
-    // anyway. Runs inside discovery so name resolution sees the same module
-    // deps frames the BFS used.
-    if (!strict_interpreter_free) {
+    // Composite-buried quotations run interpreted when uncompiled, and a metadata-only image drops
+    // the bodies of the words they call, so codegen must know whether any buried quotation reaches
+    // a non-prelude word with no compiled dispatch.
+    //
+    // Runs in every build: the promoting walks above cover only keyed shapes (named dispatch slots,
+    // branch tables), so this is the backstop that converts any shape they miss into a build-time
+    // rejection instead of a dropped body at runtime. Callees the walks did promote are in the
+    // discovered set and produce no violations.
+    //
+    // Runs inside discovery so name resolution sees the same module deps frames the BFS used.
+    {
         var discovered_names = std.StringHashMapUnmanaged(void){};
         defer discovered_names.deinit(temp_allocator);
         for (result.names.items) |name| {
@@ -1541,10 +1543,10 @@ fn collectNestedQuotations(
     }
 }
 
-/// Detect-only mirror of `collectCompositeQuotations` for the non-strict
-/// build: descend to each composite-buried quotation and classify its callees
-/// instead of collecting its body. Never seeds the BFS worklist, so it cannot
-/// repeat the compile-set regression that scoped the promoting walks.
+/// Detect-only mirror of `collectCompositeQuotations`.
+///
+/// Descend to each composite-buried quotation and classify its callees instead of collecting its body.
+/// Never seeds the BFS worklist, so it cannot repeat the compile-set regression that scoped the promoting walks.
 fn detectInterpretedReach(
     ctx: *const Context,
     instrs: []const Instruction,

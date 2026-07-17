@@ -10248,14 +10248,14 @@ pub fn emitProgramC(
         return IrCodegenError.JitInterpretedCallLeaked;
     }
 
-    // An interpreter-linked build without `--emit-runtime-image` embeds a
-    // metadata-only image whose word bodies are empty. When freeze detection
-    // found a non-prelude uncompiled word reachable from a composite-buried
-    // quotation, an interpreted dispatch of that quotation would run the
-    // word's empty rehydrated body as a silent no-op, so the build must fail
-    // instead of producing a silently wrong binary. Prelude reach stays fine:
-    // the linked interpreter reloads the prelude with real bodies.
-    if (!interpreter_free and interp_ctx != null and !emit_runtime_image and interpreted_reach.len > 0) {
+    // A build without `--emit-runtime-image` embeds a metadata-only image whose word bodies are
+    // empty. When freeze detection found a non-prelude uncompiled word reachable from a
+    // composite-buried quotation, that body can never run correctly: an interpreter-linked build
+    // would dispatch the quotation interpreted and run the word's empty rehydrated body as a
+    // silent no-op, and an interpreter-free build cannot run it at all. The build must fail
+    // instead of producing a silently wrong binary. Prelude reach stays fine: the linked
+    // interpreter reloads the prelude with real bodies.
+    if (interp_ctx != null and !emit_runtime_image and interpreted_reach.len > 0) {
         return IrCodegenError.RuntimeImageRequired;
     }
 

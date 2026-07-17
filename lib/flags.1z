@@ -64,6 +64,11 @@ define-flag: ( name fields markers -- ) [
   [ drop ]
   if
 
+  \ HACK(ripta): The `define:` quotation is parse-time machinery, which `;` has already consumed.
+  \              Stored in the registry, it rode into the AOT image as an interpreted-reach
+  \              violation, so we unfortunately have to strip it.
+  [ define: @remove! ] dip
+
   [ ] make-mutable-map
   swap markers: swap @set!
   swap descriptor: swap @set!

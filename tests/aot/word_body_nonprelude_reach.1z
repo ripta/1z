@@ -1,0 +1,10 @@
+\ The word-body counterpart of metadata_only_nonprelude_reach: the hash-buried
+\ quotation lives inside a word definition instead of the entry instructions.
+\ `floor` is a module word reachable only through that quotation, so the
+\ freezer never compiles it, and the interpreted call would run its empty
+\ metadata-image body silently. The build must reject this shape and direct
+\ the user to --emit-runtime-image.
+use { floor: } "math" ;
+runner: ( x -- y ) [ H{ go: [ floor ] } go: @get call ] ;
+3.7 runner
+.

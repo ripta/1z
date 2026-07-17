@@ -1,0 +1,8 @@
+\ Same word-body shape as word_body_nonprelude_reach, built strict. The
+\ strict promoting walks do not promote the `@get call` shape, so the
+\ interpreted-reach detection is the backstop: the build must fail with the
+\ --emit-runtime-image diagnostic instead of trapping at runtime.
+use { floor: } "math" ;
+runner: ( x -- y ) [ H{ go: [ floor ] } go: @get call ] ;
+3.7 runner
+.

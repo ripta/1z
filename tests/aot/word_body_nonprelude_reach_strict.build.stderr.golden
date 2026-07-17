@@ -1,0 +1,5 @@
+Error: interpreted quotations reach 1 non-prelude word the compiler did not compile
+  'floor' reached from a quotation in 'runner' (line 6)
+      hint: the build embeds a metadata-only image whose word bodies are empty; rebuild with --emit-runtime-image
+AOT interpreter fallbacks: 1 total (native=1)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=1/1 jitCallQuotation=0/0 (matches build-time inventory)

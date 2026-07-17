@@ -2411,9 +2411,9 @@ fn printJitInterpretedCallLeakedError(
     ) catch {};
 }
 
-/// Render the `RuntimeImageRequired` build error: the metadata-only image of a
-/// default build would drop the interpreter-runnable bodies of the named words,
-/// so the build is rejected rather than producing a silently wrong binary.
+/// Render the `RuntimeImageRequired` build error: a metadata-only image would drop the interpreter-
+/// runnable bodies of the named words, so the build is rejected rather than producing a silently
+/// wrong binary.
 fn printRuntimeImageRequiredError(
     violations: []const ir_codegen.InterpretedReachViolation,
     err_writer: anytype,
@@ -2437,7 +2437,7 @@ fn printRuntimeImageRequiredError(
         }
     }
     err_writer.writeAll(
-        "      hint: the default build embeds a metadata-only image whose word bodies are empty; " ++
+        "      hint: the build embeds a metadata-only image whose word bodies are empty; " ++
             "rebuild with --emit-runtime-image\n",
     ) catch {};
 }
