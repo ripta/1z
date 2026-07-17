@@ -45,7 +45,11 @@ pub const word_id_sentinel: u32 = 0xFFFFFFFF;
 /// was never reached by the freeze and so has no compiled quotation
 /// function: the row's `body_bytecode` carries the interpreter-run body
 /// directly, and the loader skips the quotation-function-table lookup.
-pub const dispatch_interp_quotation_id_sentinel: u32 = 0xFFFFFFFF;
+///
+/// The canonical constant lives in the Context-free populate core so the
+/// freestanding runtime can read it without importing this hosted module.
+pub const dispatch_interp_quotation_id_sentinel =
+    @import("aot_image_populate_core.zig").dispatch_interp_quotation_id_sentinel;
 
 /// Bit positions in `onez_image_word.flags`. Kept in sync with the
 /// emitted C struct.

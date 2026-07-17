@@ -306,6 +306,10 @@ pub const ConstraintCombinatorDescription = extern struct {
 pub const dispatch_type_unary: u32 = 0xFFFFFFFF;
 pub const dispatch_type_any: u32 = 0xFFFFFFFE;
 
+/// Reserved `quotation_id` in a dispatch-entry row marking an interpreter-run body: the method
+/// never compiled, so the row carries `body_bytecode` instead of a quotation-table index.
+pub const dispatch_interp_quotation_id_sentinel: u32 = 0xFFFFFFFF;
+
 /// Zig mirror of `onez_image_dispatch_entry_description_t`.
 ///
 /// One row per reachable user `.quotation` method dispatch entry. The loader resolves

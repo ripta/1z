@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const populate_core = @import("aot_image_populate_core.zig");
 const value_mod = @import("value.zig");
+const dispatch_mod = @import("dispatch.zig");
 
 const BigIntManaged = opaque {};
 const HashTable = opaque {};
@@ -188,6 +189,7 @@ comptime {
         @export(&onez_load_runtime_image, .{ .name = "onez_load_runtime_image" });
         @export(&onez_runtime_register_compiled, .{ .name = "onez_runtime_register_compiled" });
         @export(&onez_runtime_register_quotations, .{ .name = "onez_runtime_register_quotations" });
+        @export(&onez_replay_method_dispatch, .{ .name = "onez_replay_method_dispatch" });
         @export(&onez_runtime_run, .{ .name = "onez_runtime_run" });
         @export(&onez_set_interpreter_fallback, .{ .name = "onez_set_interpreter_fallback" });
         @export(&onez_print_error, .{ .name = "onez_print_error" });
@@ -271,6 +273,16 @@ const OnezHandle = struct {
     image_protocoldescriptor_slot_count: u32 = 0,
     image_constraintcombinator_slots: ?populate_core.ConstraintCombinatorSlotTable = null,
     image_constraintcombinator_slot_count: u32 = 0,
+    image_dispatch_entry_descriptions: ?[*]const populate_core.DispatchEntryDescription = null,
+    image_dispatch_entry_count: u32 = 0,
+
+    // Method-dispatch registry the replay populates, plus the synthetic
+    // unary/any key sentinels, mirroring the hosted Context's `dispatch` and
+    // `dispatch_*_sentinel` fields. Named `method_dispatch` because
+    // `dispatch_table` above is the word-id-to-function table.
+    method_dispatch: ?dispatch_mod.DispatchTable = null,
+    dispatch_any_sentinel: ?*value_mod.TypeValue = null,
+    dispatch_unary_sentinel: ?*value_mod.TypeValue = null,
 };
 
 pub const JitContext = extern struct {
@@ -634,6 +646,11 @@ fn onez_load_runtime_image(
         handle.image_constraintcombinator_slot_count = header.constraintcombinator_slot_count;
     }
 
+    // Stash the dispatch-entry rows for `onez_replay_method_dispatch`, which
+    // runs after the quotation-function table is registered.
+    handle.image_dispatch_entry_descriptions = header.dispatch_entry_descriptions;
+    handle.image_dispatch_entry_count = header.dispatch_entry_slot_count;
+
     if (parameter_slots_ptr) |slots_raw| {
         const table: [*]?*Parameter = @ptrCast(@alignCast(slots_raw));
         var parameter_slots = handle.allocator.alloc(?*Parameter, header.parameter_slot_count) catch return ONEZ_ERR_LOAD_FAILED;
@@ -690,6 +707,108 @@ fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*const an
     }
 
     handle.quotation_table = quotations;
+    return ONEZ_OK;
+}
+
+/// Lazily create the synthetic unary/any dispatch key sentinels, mirroring
+/// the hosted Context's `initSentinelTypeValues`.
+fn ensureDispatchSentinels(handle: *OnezHandle) !void {
+    if (handle.dispatch_any_sentinel == null) {
+        const desc = try value_mod.createSentinelTypeDescriptor(handle.allocator);
+        const tv = try handle.allocator.create(value_mod.TypeValue);
+        tv.* = .{ .name = "*", .descriptor = desc };
+        handle.dispatch_any_sentinel = tv;
+    }
+    if (handle.dispatch_unary_sentinel == null) {
+        const desc = try value_mod.createSentinelTypeDescriptor(handle.allocator);
+        const tv = try handle.allocator.create(value_mod.TypeValue);
+        tv.* = .{ .name = "", .descriptor = desc };
+        handle.dispatch_unary_sentinel = tv;
+    }
+}
+
+/// Mirror of the hosted loader's `resolveDispatchTypeDescriptor`: the
+/// reserved sentinels map to the handle's synthetic descriptors, and a real
+/// slot resolves through the retained typevalue slot table. Requires
+/// `ensureDispatchSentinels` to have run.
+fn resolveFreestandingDispatchTypeDescriptor(handle: *OnezHandle, slot: u32) ?*const value_mod.TypeDescriptor {
+    if (slot == populate_core.dispatch_type_unary) return handle.dispatch_unary_sentinel.?.descriptor.?;
+    if (slot == populate_core.dispatch_type_any) return handle.dispatch_any_sentinel.?.descriptor.?;
+    const tv_or_err = populate_core.lookupSlot(
+        handle.image_typevalue_slots,
+        handle.image_typevalue_slot_count,
+        slot,
+    ) catch return null;
+    const tv = tv_or_err orelse return null;
+    return tv.descriptor;
+}
+
+/// Replay the image's freeze-time method dispatch entries into the handle's
+/// method-dispatch registry, keyed on each row's serialized `dispatch_id`
+/// verbatim -- the same id compiled call sites bake.
+///
+/// Compiled-body arm only: strict freestanding builds refuse non-compilable
+/// replayable bodies at build time, so an interpreter-run row here means a
+/// malformed image and fails the replay rather than being skipped the way
+/// the hosted replay skips it.
+fn onez_replay_method_dispatch(ptr: ?*anyopaque) callconv(.c) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const count = handle.image_dispatch_entry_count;
+    if (count == 0) return ONEZ_OK;
+    const rows = handle.image_dispatch_entry_descriptions orelse return ONEZ_OK;
+
+    ensureDispatchSentinels(handle) catch {
+        setLastError(handle, "method dispatch replay failed: out of memory", .{});
+        return ONEZ_ERR_LOAD_FAILED;
+    };
+    if (handle.method_dispatch == null) {
+        handle.method_dispatch = dispatch_mod.DispatchTable.init(handle.allocator);
+    }
+
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        const row = rows[i];
+
+        const type_a = resolveFreestandingDispatchTypeDescriptor(handle, row.type_a_slot) orelse {
+            setLastError(handle, "method dispatch replay failed: dispatch id {d} has unresolvable type slot {d}", .{ row.dispatch_id, row.type_a_slot });
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+        const type_b = resolveFreestandingDispatchTypeDescriptor(handle, row.type_b_slot) orelse {
+            setLastError(handle, "method dispatch replay failed: dispatch id {d} has unresolvable type slot {d}", .{ row.dispatch_id, row.type_b_slot });
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+
+        if (row.quotation_id == populate_core.dispatch_interp_quotation_id_sentinel) {
+            setLastError(handle, "method dispatch replay failed: dispatch id {d} carries an interpreter-run body", .{row.dispatch_id});
+            return ONEZ_ERR_LOAD_FAILED;
+        }
+        if (row.quotation_id >= handle.quotation_table.len) {
+            setLastError(handle, "method dispatch replay failed: dispatch id {d} references missing compiled body {d}", .{ row.dispatch_id, row.quotation_id });
+            return ONEZ_ERR_LOAD_FAILED;
+        }
+        const body_fn = handle.quotation_table[row.quotation_id] orelse {
+            setLastError(handle, "method dispatch replay failed: dispatch id {d} references missing compiled body {d}", .{ row.dispatch_id, row.quotation_id });
+            return ONEZ_ERR_LOAD_FAILED;
+        };
+
+        const key = dispatch_mod.DispatchKey{
+            .dispatch_id = row.dispatch_id,
+            .type_a = type_a,
+            .type_b = type_b,
+        };
+        const entry = dispatch_mod.DispatchEntry{
+            .body = .{ .quotation = .{ .instructions = &.{}, .code_ptr = @ptrCast(body_fn) } },
+        };
+        handle.method_dispatch.?.register(key, entry, false) catch |err| switch (err) {
+            // A duplicate key can only come from the image registering the same
+            // method twice; the bodies are identical, so keeping the first is safe.
+            error.DuplicateMethod => {},
+            else => {
+                setLastError(handle, "method dispatch replay failed: out of memory", .{});
+                return ONEZ_ERR_LOAD_FAILED;
+            },
+        };
+    }
     return ONEZ_OK;
 }
 
@@ -1403,4 +1522,185 @@ test "freestanding loader leaves the handle untouched on a zero-count image" {
     try std.testing.expectEqual(@as(u32, 0), handle.image_protocoldescriptor_slot_count);
     try std.testing.expectEqual(@as(?populate_core.ConstraintCombinatorSlotTable, null), handle.image_constraintcombinator_slots);
     try std.testing.expectEqual(@as(u32, 0), handle.image_constraintcombinator_slot_count);
+}
+
+fn fakeMethodBodyA(_: *JitContext) callconv(.c) i32 {
+    return 0;
+}
+
+fn fakeMethodBodyB(_: *JitContext) callconv(.c) i32 {
+    return 0;
+}
+
+fn dispatchTestRow(dispatch_id: u32, type_a_slot: u32, type_b_slot: u32, quotation_id: u32) populate_core.DispatchEntryDescription {
+    return .{
+        .dispatch_id = dispatch_id,
+        .type_a_slot = type_a_slot,
+        .type_b_slot = type_b_slot,
+        .quotation_id = quotation_id,
+        .module_name = null,
+        .module_name_len = 0,
+        .generic_name = null,
+        .generic_name_len = 0,
+        .body_bytecode = null,
+        .body_bytecode_len = 0,
+    };
+}
+
+test "freestanding replay registers compiled dispatch entries at the freeze-time dispatch id" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [1]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+    defer if (handle.method_dispatch) |*table| table.deinit();
+
+    const descs = [_]populate_core.TypeDescriptor{
+        std.mem.zeroes(populate_core.TypeDescriptor),
+        std.mem.zeroes(populate_core.TypeDescriptor),
+    };
+    const tv_rows = [_]populate_core.TypeValueRow{
+        .{ .name = "alpha", .name_len = 5, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = "beta", .name_len = 4, .slot = 2, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+    };
+    const rows = [_]populate_core.DispatchEntryDescription{
+        dispatchTestRow(7, 1, 2, 0),
+        dispatchTestRow(9, 1, populate_core.dispatch_type_unary, 1),
+        dispatchTestRow(9, populate_core.dispatch_type_any, populate_core.dispatch_type_unary, 0),
+    };
+    var header = emptyTestImageHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = tv_rows.len;
+    header.typevalues = &tv_rows;
+    header.typedescriptors = &descs;
+    header.dispatch_entry_slot_count = rows.len;
+    header.dispatch_entry_descriptions = &rows;
+
+    var tv_slots = [_]?*const value_mod.TypeValue{ null, null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        @ptrCast(&tv_slots),
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    const quotations = [_]?*const anyopaque{ @ptrCast(&fakeMethodBodyA), @ptrCast(&fakeMethodBodyB) };
+    try std.testing.expectEqual(@as(i32, ONEZ_OK), onez_runtime_register_quotations(&handle, &quotations, quotations.len));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
+
+    const alpha_desc = tv_slots[1].?.descriptor.?;
+    const beta_desc = tv_slots[2].?.descriptor.?;
+    const any_desc = handle.dispatch_any_sentinel.?.descriptor.?;
+    const unary_desc = handle.dispatch_unary_sentinel.?.descriptor.?;
+    const table = &handle.method_dispatch.?;
+
+    const binary = table.lookupBinary(7, alpha_desc, beta_desc, any_desc).?;
+    try std.testing.expectEqual(@intFromPtr(&fakeMethodBodyA), @intFromPtr(binary.body.quotation.code_ptr.?));
+
+    const unary_exact = table.lookupUnary(9, alpha_desc, any_desc, unary_desc).?;
+    try std.testing.expectEqual(@intFromPtr(&fakeMethodBodyB), @intFromPtr(unary_exact.body.quotation.code_ptr.?));
+
+    const unary_wildcard = table.lookupUnary(9, beta_desc, any_desc, unary_desc).?;
+    try std.testing.expectEqual(@intFromPtr(&fakeMethodBodyA), @intFromPtr(unary_wildcard.body.quotation.code_ptr.?));
+
+    try std.testing.expect(table.lookupBinary(99, alpha_desc, beta_desc, any_desc) == null);
+}
+
+test "freestanding replay fails loudly on unresolvable rows" {
+    const bad_rows = [_]struct {
+        row: populate_core.DispatchEntryDescription,
+        expect_msg: []const u8,
+    }{
+        .{
+            .row = dispatchTestRow(7, 1, 1, populate_core.dispatch_interp_quotation_id_sentinel),
+            .expect_msg = "dispatch id 7 carries an interpreter-run body",
+        },
+        .{
+            .row = dispatchTestRow(8, 1, 1, 5),
+            .expect_msg = "dispatch id 8 references missing compiled body 5",
+        },
+        .{
+            .row = dispatchTestRow(9, 0, 1, 0),
+            .expect_msg = "dispatch id 9 has unresolvable type slot 0",
+        },
+    };
+
+    for (bad_rows) |case| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var stack: [1]Value align(16) = undefined;
+        var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+        defer if (handle.method_dispatch) |*table| table.deinit();
+
+        const descs = [_]populate_core.TypeDescriptor{std.mem.zeroes(populate_core.TypeDescriptor)};
+        const tv_rows = [_]populate_core.TypeValueRow{
+            .{ .name = "alpha", .name_len = 5, .slot = 1, .descriptor = null, .member_type_slots = null, .member_type_count = 0 },
+        };
+        const rows = [_]populate_core.DispatchEntryDescription{case.row};
+        var header = emptyTestImageHeader();
+        header.typevalue_slot_count = 2;
+        header.typevalue_count = tv_rows.len;
+        header.typevalues = &tv_rows;
+        header.typedescriptors = &descs;
+        header.dispatch_entry_slot_count = rows.len;
+        header.dispatch_entry_descriptions = &rows;
+
+        var tv_slots = [_]?*const value_mod.TypeValue{ null, null };
+        try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+            &handle,
+            &header,
+            @ptrCast(&tv_slots),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+        ));
+
+        const quotations = [_]?*const anyopaque{@ptrCast(&fakeMethodBodyA)};
+        try std.testing.expectEqual(@as(i32, ONEZ_OK), onez_runtime_register_quotations(&handle, &quotations, quotations.len));
+
+        try std.testing.expectEqual(ONEZ_ERR_LOAD_FAILED, onez_replay_method_dispatch(&handle));
+        const msg = onez_last_error(&handle) orelse return error.TestExpectedError;
+        try std.testing.expect(std.mem.indexOf(u8, std.mem.span(msg), case.expect_msg) != null);
+    }
+}
+
+test "freestanding replay no-ops on a zero-entry image" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var stack: [1]Value align(16) = undefined;
+    var handle = OnezHandle{ .allocator = arena.allocator(), .stack = stack[0..] };
+
+    var header = emptyTestImageHeader();
+    try std.testing.expectEqual(ONEZ_OK, onez_load_runtime_image(
+        &handle,
+        &header,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+    ));
+
+    try std.testing.expectEqual(ONEZ_OK, onez_replay_method_dispatch(&handle));
+    try std.testing.expect(handle.method_dispatch == null);
+    try std.testing.expect(handle.dispatch_any_sentinel == null);
 }

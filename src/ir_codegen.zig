@@ -72,11 +72,6 @@ pub const IrCodegenError = error{
     /// call would silently run the empty rehydrated body. Only a full
     /// runtime image (`--emit-runtime-image`) carries such bodies.
     RuntimeImageRequired,
-    /// A freestanding build's image carries method dispatch entries, but the
-    /// freestanding runtime does not export the dispatch-replay entrypoint or
-    /// the dispatch registry it would populate. Suppressing the replay would
-    /// silently drop the program's method registrations, so the build fails.
-    FreestandingDispatchReplayUnsupported,
     OutOfMemory,
 };
 
@@ -10579,16 +10574,10 @@ pub fn emitProgramC(
     // quotations (a method reached only through an interpreted quotation has
     // no compiled body but still needs its dispatch entry registered).
     //
-    // The freestanding runtime does not export the replay entrypoint. With
-    // zero entries there is nothing to replay, so the call is skipped. With
-    // entries present the program's method registrations would be silently
-    // dropped, so the build fails instead.
+    // On freestanding the call is skipped when the image carries zero
+    // entries, keeping the zero-dispatch binary free of the replay path.
     if (meta.runtime_image_present or meta.metadata_image_present) {
-        if (meta.freestanding) {
-            if (meta.runtime_image_dispatch_entry_slot_count > 0) {
-                return IrCodegenError.FreestandingDispatchReplayUnsupported;
-            }
-        } else {
+        if (!meta.freestanding or meta.runtime_image_dispatch_entry_slot_count > 0) {
             try out.appendSlice(allocator,
                 \\    if (onez_replay_method_dispatch(rt) != 0) {
                 \\        onez_print_error(rt);
