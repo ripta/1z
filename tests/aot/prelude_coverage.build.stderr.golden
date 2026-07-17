@@ -1,9 +1,9 @@
-Prelude compilation: 411/412 words compiled (99.8%)
+Prelude compilation: 412/413 words compiled (99.8%)
   word 'pragma-get?' cannot be compiled
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
-Inline PIC sites: 33/79 generic call sites preseeded
+Inline PIC sites: 33/81 generic call sites preseeded
 AOT interpreter fallbacks: 323 total
   native: 305
   compound-uncompiled: 1
@@ -17,8 +17,8 @@ AOT interpreter fallbacks: 323 total
     native: unmake-descriptor-variant -> native.struct-instance-destructure (line 0)
     native: value>> -> native.struct-field-get (line 0)
     native: inputs>> -> native.struct-field-get (line 0)
-    native: >iterator -> native.make-callback-iter (line 952)
-    native: >iterator -> native.>iterator (line 954)
+    native: >iterator -> native.make-callback-iter (line 955)
+    native: >iterator -> native.>iterator (line 957)
     native: >dispatch-provenance -> native.hash-to-struct (line 0)
     native: >option:some -> native.virtual-struct-wrap (line 0)
     native: descriptor-variant? -> native.struct-type-predicate (line 0)

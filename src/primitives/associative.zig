@@ -20,7 +20,6 @@ const extractKeyString = data_structures.extractKeyString;
 
 pub const primitives = [_]Primitive{
     .{ .name = "@get", .stack_effect = "assoc key -- value", .doc = "Get value by key from an associative type.", .func = nativeAtGet },
-    .{ .name = "@get-or", .stack_effect = "assoc key default -- value", .doc = "Get value by key, or return default if missing.", .func = nativeAtGetOr },
     .{ .name = "@has?", .stack_effect = "assoc key -- ?", .doc = "Check if key exists in an associative type.", .func = nativeAtHas },
     .{ .name = "@set", .stack_effect = "assoc key value -- assoc'", .doc = "Set value by key, returns new hash.", .func = nativeAtSet },
     .{ .name = "@keys", .stack_effect = "assoc -- array", .doc = "Get all keys from an associative type.", .func = nativeAtKeys },
@@ -131,72 +130,6 @@ pub fn nativeAtGet(ctx: *Context) anyerror!void {
             } else {
                 setErrorContext(ctx, "key '{s}' not found in module", .{key_str});
                 return error.KeyNotFound;
-            }
-        },
-        else => {
-            setErrorContext(ctx, "expected associative type, got {s}", .{valueTypeName(obj)});
-            return error.TypeMismatch;
-        },
-    }
-}
-
-/// @get-or ( assoc key default -- value ) - Get value by key, or default if missing
-/// Polymorphic on hash, mutable-map, error, module
-fn nativeAtGetOr(ctx: *Context) anyerror!void {
-    const default = try ctx.stack.pop();
-    defer container_backing.releaseValue(default);
-    const key = try ctx.stack.pop();
-    defer container_backing.releaseValue(key);
-    const obj_orig = try ctx.stack.pop();
-    defer container_backing.releaseValue(obj_orig);
-    const obj = dispatch_mod.unwrapBaseType(obj_orig);
-
-    const key_str = try extractKeyString(ctx, key);
-
-    switch (obj) {
-        .hash => |h| {
-            if (h.map.get(key_str)) |val| {
-                try ctx.stack.push(val);
-            } else {
-                try ctx.stack.push(default);
-            }
-        },
-        .mutable_map => |m| {
-            if (m.map.get(key_str)) |val| {
-                try ctx.stack.push(val);
-            } else {
-                try ctx.stack.push(default);
-            }
-        },
-        .error_value => |err| {
-            const val = getErrorField(ctx, err, key_str) catch |e| {
-                if (e == error.KeyNotFound) {
-                    try ctx.stack.push(default);
-                    return;
-                }
-                return e;
-            };
-            try ctx.stack.pushMoved(val);
-        },
-        .module => |mod| {
-            if (mod.words.get(key_str)) |word| {
-                switch (word.action) {
-                    .compound => |instrs| {
-                        const alloc = ctx.quotationAllocator();
-                        var quot = Quotation{ .instructions = instrs };
-                        if (word.stack_effect) |effect| {
-                            const effect_ptr = alloc.create(@TypeOf(effect)) catch return error.OutOfMemory;
-                            effect_ptr.* = effect;
-                            quot.effect = effect_ptr;
-                        }
-                        try ctx.stack.push(.{ .quotation = quot });
-                    },
-                    .native, .host_callback => {
-                        try word.invoke(ctx);
-                    },
-                }
-            } else {
-                try ctx.stack.push(default);
             }
         },
         else => {

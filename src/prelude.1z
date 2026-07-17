@@ -932,6 +932,9 @@ try: ( ..a quot: ( ..a -- x ) -- result ) [ [ call >result:ok ] [ >result:err ] 
 \\ Look up a key in an associative, returning some(value) or none.
 @get?: ( assoc key -- option ) [ 2dup @has? [ @get >option:some ] [ 2drop option:none ] if ] ;
 
+\\ Get value by key, or return default if missing.
+@get-or: ( assoc key default -- value ) [ -rot> 2dup @has? [ @get nip ] [ 2drop ] if ] ;
+
 \\ Get the nth element of a sequence, returning some(value) or none if out of bounds.
 #nth?: ( seq n -- option ) [ [ #nth >option:some ] [ drop option:none ] recover ] ;
 
