@@ -960,6 +960,10 @@ try: ( ..a quot: ( ..a -- x ) -- result ) [ [ call >result:ok ] [ >result:err ] 
   if
 ] ;
 
+\\ The 1z #in? arms for array and vector; string, byte-array, and set stay native.
+#in?: method{ array any } [ [ = ] curry #any ] ;
+#in?: method{ vector any } [ [ = ] curry #any ] ;
+
 \\ Try to receive from a channel. Returns some(value) on success, none if closed and empty.
 receive?: ( ch -- option ) [ [ receive >option:some ] [ drop option:none ] recover ] ;
 

@@ -5,7 +5,7 @@ build-mode: <build-mode>
 interpreter: linked=no, fallback=auto, locked=no
 aot-callbacks: jit-interpreted-call=no
 runtime-image: present=yes, format-version=12, blob-present=no, word-count=0
-dispatch-entries: 90
+dispatch-entries: 92
 dynamic-features: dynamic-eval
 1z-version: <version>
 prelude-hash: <prelude-hash>

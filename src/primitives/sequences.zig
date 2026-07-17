@@ -545,6 +545,14 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try dispatch.registerNative(last_did, vector, unary, nativeLastVector);
     try dispatch.registerNative(last_did, byte_array, unary, nativeLastByteArray);
 
+    // #in? : container-keyed entries (type_b = any, so any element type routes
+    // to the arm, which validates it). array/vector are 1z method{} entries.
+    const in_did = ctx.resolveDispatchId("#in?").?;
+    const any_tv = ctx.getDispatchAnySentinel();
+    try dispatch.registerNative(in_did, string, any_tv, nativeInString);
+    try dispatch.registerNative(in_did, byte_array, any_tv, nativeInByteArray);
+    try dispatch.registerNative(in_did, set, any_tv, nativeInSet);
+
     // >array : unary entries
     const to_array_did = ctx.resolveDispatchId(">array").?;
     try dispatch.registerNative(to_array_did, vector, unary, nativeToArrayVector);
@@ -605,7 +613,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#unshift!", .stack_effect = "vec elem -- vec", .doc = "Mutably add element to start of vector.", .func = nativeUnshiftMut },
     .{ .name = "#shift!", .stack_effect = "vec -- vec elem", .doc = "Mutably remove first element from vector.", .func = nativeShiftMut },
     // Sequence predicates
-    .{ .name = "#in?", .stack_effect = "seq elem -- ?", .doc = "Test if sequence contains element (substring test for strings).", .func = nativeIn },
+    .{ .name = "#in?", .stack_effect = "seq elem -- ?", .doc = "Test if sequence contains element (substring test for strings).", .func = nativeIn, .markers = &.{@constCast(&markers_mod.generic_marker)} },
     .{ .name = "#index-of", .stack_effect = "seq elem -- n/f", .doc = "Find index of element, or f if not found.", .func = nativeIndexOf },
     .{ .name = "#index-of-from", .stack_effect = "str needle start -- n/f", .doc = "Find index of substring starting from codepoint position.", .func = nativeIndexOfFrom },
     .{ .name = "#byte-index-of-from", .stack_effect = "str needle start-byte -- byte-n/f", .doc = "Find byte offset of substring starting from a byte offset; no codepoint accounting.", .func = nativeByteIndexOfFrom },
@@ -1979,81 +1987,80 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
 }
 
 /// #in? ( seq elem -- ? ) - Does seq contain element? (substring for strings)
-fn nativeIn(ctx: *Context) anyerror!void {
+///
+/// Generic word. The string, byte-array, and set arms are native dispatch entries registered in
+/// registerNativeDispatch; array and vector are 1z method{} entries. The iterator scan below is the
+/// fallback for a built-in container whose dispatch arm is absent, such as a custom prelude missing
+/// the array and vector method entries. A value that is not a scannable sequence errors here.
+pub fn nativeIn(ctx: *Context) anyerror!void {
+    if (try dispatch_helpers.tryDispatchBinary(ctx, "#in?")) return;
+
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(elem);
     defer container_backing.releaseValue(seq);
     const alloc = ctx.quotationAllocator();
 
-    switch (seq) {
-        .string => |s| {
-            const needle = switch (elem) {
-                .string => |es| es,
-                else => {
-                    setErrorContext(ctx, "#in? on string requires string element, got {s}", .{valueTypeName(elem)});
-                    return error.TypeMismatch;
-                },
-            };
+    var iter = SequenceIterator.init(seq, alloc) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
 
-            const found = std.mem.indexOf(u8, s, needle) != null;
-            try ctx.stack.push(.{ .boolean = found });
+    while (try iter.next()) |item| {
+        if (item.eql(elem)) {
+            try ctx.stack.push(.{ .boolean = true });
+            return;
+        }
+    }
+
+    try ctx.stack.push(.{ .boolean = false });
+}
+
+fn nativeInString(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(elem);
+    defer container_backing.releaseValue(seq);
+    const needle = switch (elem) {
+        .string => |es| es,
+        else => {
+            setErrorContext(ctx, "#in? on string requires string element, got {s}", .{valueTypeName(elem)});
+            return error.TypeMismatch;
         },
-        .array => |arr| {
-            for (arr.items) |item| {
-                if (item.eql(elem)) {
-                    try ctx.stack.push(.{ .boolean = true });
-                    return;
-                }
+    };
+    const found = std.mem.indexOf(u8, seq.string, needle) != null;
+    try ctx.stack.push(.{ .boolean = found });
+}
+
+fn nativeInByteArray(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(elem);
+    defer container_backing.releaseValue(seq);
+    const byte_val: u8 = switch (elem) {
+        .fixnum => |i| blk: {
+            if (i < 0 or i > 255) {
+                setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
+                return error.FixnumOverflow;
             }
-            try ctx.stack.push(.{ .boolean = false });
-        },
-        .vector => |vec| {
-            for (vec.list.items) |item| {
-                if (item.eql(elem)) {
-                    try ctx.stack.push(.{ .boolean = true });
-                    return;
-                }
-            }
-            try ctx.stack.push(.{ .boolean = false });
-        },
-        .byte_array => |b| {
-            const byte_val: u8 = switch (elem) {
-                .fixnum => |i| blk: {
-                    if (i < 0 or i > 255) {
-                        setErrorContext(ctx, "byte value {d} out of range 0-255", .{i});
-                        return error.FixnumOverflow;
-                    }
-                    break :blk @intCast(i);
-                },
-                else => {
-                    setErrorContext(ctx, "#in? on byte-array requires fixnum element, got {s}", .{valueTypeName(elem)});
-                    return error.TypeMismatch;
-                },
-            };
-            const found = std.mem.indexOfScalar(u8, b.slice(), byte_val) != null;
-            try ctx.stack.push(.{ .boolean = found });
-        },
-        .set => |set| {
-            const found = set.map.contains(elem);
-            try ctx.stack.push(.{ .boolean = found });
+            break :blk @intCast(i);
         },
         else => {
-            var iter = SequenceIterator.init(seq, alloc) orelse {
-                setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-                return error.TypeMismatch;
-            };
-
-            while (try iter.next()) |item| {
-                if (item.eql(elem)) {
-                    try ctx.stack.push(.{ .boolean = true });
-                    return;
-                }
-            }
-
-            try ctx.stack.push(.{ .boolean = false });
+            setErrorContext(ctx, "#in? on byte-array requires fixnum element, got {s}", .{valueTypeName(elem)});
+            return error.TypeMismatch;
         },
-    }
+    };
+    const found = std.mem.indexOfScalar(u8, seq.byte_array.slice(), byte_val) != null;
+    try ctx.stack.push(.{ .boolean = found });
+}
+
+fn nativeInSet(ctx: *Context) anyerror!void {
+    const elem = try ctx.stack.pop();
+    const seq = try ctx.stack.pop();
+    defer container_backing.releaseValue(elem);
+    defer container_backing.releaseValue(seq);
+    const found = seq.set.map.contains(elem);
+    try ctx.stack.push(.{ .boolean = found });
 }
 
 /// #index-of ( seq elem -- n/f ) - Index of element, or f if not found
