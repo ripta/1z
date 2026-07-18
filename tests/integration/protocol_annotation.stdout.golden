@@ -35,16 +35,16 @@ PASS: type-bound input is not protocol-bound?
 Stack: [ ]
 === constraint-info>> yields the same shape as `>word-info protocol>>` ===
 Stack: [ ]
-Stack: [ constraint-info{ name: "doubleable" kind: protocol: methods: { *: ( a: self b: self -- c: self ) } elements: f id: 3 } ]
+Stack: [ constraint-info{ name: "doubleable" kind: protocol: methods: { *: ( a: self b: self -- c: self ) } elements: f id: 4 } ]
 PASS: constraint-info>> returns a struct on a protocol-bound input
-Stack: [ constraint-info{ name: "doubleable" kind: protocol: methods: { *: ( a: self b: self -- c: self ) } elements: f id: 3 } ]
+Stack: [ constraint-info{ name: "doubleable" kind: protocol: methods: { *: ( a: self b: self -- c: self ) } elements: f id: 4 } ]
 PASS: constraint-info>> name is doubleable
-Stack: [ constraint-info{ name: "doubleable" kind: protocol: methods: { *: ( a: self b: self -- c: self ) } elements: f id: 3 } ]
+Stack: [ constraint-info{ name: "doubleable" kind: protocol: methods: { *: ( a: self b: self -- c: self ) } elements: f id: 4 } ]
 PASS: constraint-info>> kind is protocol
-Stack: [ constraint-info{ name: "doubleable" kind: protocol: methods: { *: ( a: self b: self -- c: self ) } elements: f id: 3 } ]
+Stack: [ constraint-info{ name: "doubleable" kind: protocol: methods: { *: ( a: self b: self -- c: self ) } elements: f id: 4 } ]
 PASS: constraint-info>> id is a fixnum
 Stack: [ ]
-Stack: [ constraint-info{ name: "doubleable" kind: protocol: methods: { *: ( a: self b: self -- c: self ) } elements: f id: 3 } ]
+Stack: [ constraint-info{ name: "doubleable" kind: protocol: methods: { *: ( a: self b: self -- c: self ) } elements: f id: 4 } ]
 PASS: constraint-info>> works symmetrically on outputs
 Stack: [ ]
 === constraint-info>> is f on a concrete-typed parameter ===

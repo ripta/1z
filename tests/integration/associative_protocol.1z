@@ -1,0 +1,62 @@
+\ Integration tests for the associative read protocol.
+\ The protocol names the read contract: @get, @has?, @keys, @values. A user
+\ type that registers all four via method{} satisfies it; one missing a read
+\ word does not, and assert-satisfies throws protocol-error.
+
+use "testing" ;
+
+"builtin types satisfy associative" test-section
+hash: associative satisfies? "hash satisfies associative" assert-true
+mutable-map: associative satisfies? "mutable-map satisfies associative" assert-true
+error: associative satisfies? "error satisfies associative" assert-true
+
+\ module implements @get / @has? / @keys but has no @values arm, so it is a
+\ partial implementer that does not satisfy the full read contract.
+module: associative satisfies? f "module does not satisfy associative" assert=
+
+\ A full user implementation: an association list backed by an array of
+\ { key value } pairs, registering all four read words.
+fullmap: virtual{ array } ;
+
+(fullmap-find): ( pairs key -- value/f ) [
+  over #len 0 =
+  [ 2drop f ]
+  [
+    2dup swap 0 #nth 0 #nth =
+    [ drop 0 #nth 1 #nth ]
+    [ swap 1 #drop swap (fullmap-find) ]
+    if
+  ]
+  if
+] ;
+
+@get: method{ fullmap } [
+  swap unmake-fullmap swap (fullmap-find)
+  dup f = [ drop f "key not found in fullmap" EKeyNotFound make-error throw ] when
+] ;
+
+@has?: method{ fullmap } [ swap unmake-fullmap swap (fullmap-find) f = not ] ;
+
+@keys: method{ fullmap } [ unmake-fullmap [ 0 #nth ] #map #collect ] ;
+
+@values: method{ fullmap } [ unmake-fullmap [ 1 #nth ] #map #collect ] ;
+
+"full user type satisfies associative" test-section
+fullmap: associative satisfies? "fullmap satisfies associative" assert-true
+fullmap: associative assert-satisfies
+t "fullmap assert-satisfies does not throw" assert-true
+
+\ An incomplete implementation registers only @get and @has?, omitting @keys
+\ and @values.
+partialmap: virtual{ array } ;
+
+@get: method{ partialmap } [ 2drop f ] ;
+
+@has?: method{ partialmap } [ 2drop f ] ;
+
+"incomplete user type fails associative" test-section
+partialmap: associative satisfies? f "partialmap does not satisfy associative" assert=
+[ partialmap: associative assert-satisfies ] "incomplete assert-satisfies throws" assert-error
+[ partialmap: associative assert-satisfies ] protocol-error: "incomplete throws protocol-error" assert-error-type
+
+"associative protocol tests complete" print-line

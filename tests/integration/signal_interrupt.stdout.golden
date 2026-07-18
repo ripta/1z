@@ -6,7 +6,7 @@ PASS: interrupted error type
 Stack: [ ]
 === interrupted error catchable by try ===
 Stack: [ ]
-Stack: [ <result:err result-error{ error: <error interrupted: interrupted by signal [src/prelude.1z:13:throw <- src/prelude.1z:1119:call <- src/prelude.1z:1119:recover]> }> ]
+Stack: [ <result:err result-error{ error: <error interrupted: interrupted by signal [src/prelude.1z:13:throw <- src/prelude.1z:1122:call <- src/prelude.1z:1122:recover]> }> ]
 PASS: try wraps interrupted error
 Stack: [ ]
 === interrupted error message ===

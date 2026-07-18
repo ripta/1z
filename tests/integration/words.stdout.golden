@@ -451,6 +451,7 @@ and ( ? ? -- ? )
 array ( -- type )
 array? ( val -- ? )
 assert-no-shadow ( module names -- )
+associative
 benchmark ( quot -- hash )
 benchmark-auto ( report label quot -- report )
 benchmark-n ( report label n quot -- report )

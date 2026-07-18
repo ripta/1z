@@ -280,6 +280,9 @@ inspectable: protocol{ inspect: } ;
 \\ Protocol for types that support human-friendly display via >string.
 stringable: protocol{ >string: } ;
 
+\\ Protocol for the associative read contract: @get, @has?, @keys, and @values.
+associative: protocol{ @get: @has?: @keys: @values: } ;
+
 \\ Dynamic variable definition syntax. Reads a default quotation between `{` and
 \\ `}` and produces a definition descriptor that `;` hands to `define-parameter`.
 parameter{: parse-time [

@@ -1,0 +1,36 @@
+=== builtin types satisfy associative ===
+Stack: [ ]
+PASS: hash satisfies associative
+Stack: [ ]
+PASS: mutable-map satisfies associative
+Stack: [ ]
+PASS: error satisfies associative
+Stack: [ ]
+PASS: module does not satisfy associative
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== full user type satisfies associative ===
+Stack: [ ]
+PASS: fullmap satisfies associative
+Stack: [ ]
+Stack: [ ]
+PASS: fullmap assert-satisfies does not throw
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== incomplete user type fails associative ===
+Stack: [ ]
+PASS: partialmap does not satisfy associative
+Stack: [ ]
+PASS: incomplete assert-satisfies throws
+Stack: [ ]
+PASS: incomplete throws protocol-error
+Stack: [ ]
+associative protocol tests complete
+Stack: [ ]

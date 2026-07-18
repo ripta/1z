@@ -944,7 +944,7 @@ static const onez_image_protocol_method_t onez_image_pd_0_methods[] = {
 };
 
 static const onez_image_protocoldescriptor_description_t onez_image_protocoldescriptor_descriptions_storage[] = {
-    { .name = onez_image_pd_0_name, .name_len = 8, .slot = 0, .protocol_id = 3, .method_count = 2, .methods = onez_image_pd_0_methods },
+    { .name = onez_image_pd_0_name, .name_len = 8, .slot = 0, .protocol_id = 4, .method_count = 2, .methods = onez_image_pd_0_methods },
 };
 
 static const char onez_image_w_0_name[] = "by-cmp";

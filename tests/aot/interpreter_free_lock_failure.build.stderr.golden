@@ -4,5 +4,5 @@ Error: --interpreter-fallback=false --lock-interpreter-setting was set, but at l
 AOT interpreter fallbacks: 1 total
   native: 1
   sites:
-    native: . -> inspect (line 705)
+    native: . -> inspect (line 708)
   static-check: jitInterpretedCall=0/0 jitNativeWordCall=1/1 jitCallQuotation=0/0 (matches build-time inventory)

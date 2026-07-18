@@ -23,30 +23,30 @@ PASS: comparable id is a fixnum
 Stack: [ ]
 === a named intersection surfaces an intersection-kind record ===
 Stack: [ ]
-Stack: [ constraint-info{ name: "both" kind: intersection: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 4 } } id: 0 } ]
+Stack: [ constraint-info{ name: "both" kind: intersection: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 5 } } id: 0 } ]
 PASS: intersection name is the defining word
-Stack: [ constraint-info{ name: "both" kind: intersection: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 4 } } id: 0 } ]
+Stack: [ constraint-info{ name: "both" kind: intersection: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 5 } } id: 0 } ]
 PASS: kind is intersection
-Stack: [ constraint-info{ name: "both" kind: intersection: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 4 } } id: 0 } ]
+Stack: [ constraint-info{ name: "both" kind: intersection: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 5 } } id: 0 } ]
 PASS: a combinator record has no methods
-Stack: [ constraint-info{ name: "both" kind: intersection: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 4 } } id: 0 } ]
+Stack: [ constraint-info{ name: "both" kind: intersection: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 5 } } id: 0 } ]
 PASS: intersection has two elements
-Stack: [ constraint-info{ name: "both" kind: intersection: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 4 } } id: 0 } ]
+Stack: [ constraint-info{ name: "both" kind: intersection: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 5 } } id: 0 } ]
 PASS: intersection id is a fixnum
 Stack: [ ]
 === a named union surfaces a union-kind record ===
 Stack: [ ]
 PASS: kind is union
-Stack: [ constraint-info{ name: "either" kind: union: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 4 } } id: 1 } ]
+Stack: [ constraint-info{ name: "either" kind: union: methods: f elements: { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 5 } } id: 1 } ]
 PASS: union has two elements
 Stack: [ ]
 === intersection elements are protocol-kind records carrying their names ===
 Stack: [ ]
-Stack: [ { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 4 } } ]
+Stack: [ { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 5 } } ]
 PASS: first element is a protocol
-Stack: [ { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 4 } } ]
+Stack: [ { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 5 } } ]
 PASS: first element name
-Stack: [ { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 4 } } ]
+Stack: [ { constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } constraint-info{ name: "namable" kind: protocol: methods: { label: } elements: f id: 5 } } ]
 PASS: second element name
 Stack: [ ]
 === a nested mixed combinator round-trips its structure ===
@@ -76,9 +76,9 @@ PASS: nested second element is namable
 Stack: [ ]
 === constraint-element-name normalizes heterogeneous leaves ===
 Stack: [ ]
-Stack: [ { <type:fixnum> constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } } ]
+Stack: [ { <type:fixnum> constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } } ]
 PASS: element-name on a type leaf
-Stack: [ { <type:fixnum> constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 3 } } ]
+Stack: [ { <type:fixnum> constraint-info{ name: "showable" kind: protocol: methods: { show: } elements: f id: 4 } } ]
 PASS: element-name on a protocol leaf
 Stack: [ ]
 === a non-constraint word has no constraint record ===
