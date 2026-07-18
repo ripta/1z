@@ -54,4 +54,8 @@ Stack: [ ]
 Get value by key from an associative type.
 @get ( assoc key -- value ) \native
 
+  method{ error }
+  method{ hash }
+  method{ module }
+  method{ mutable-map }
 Stack: [ ]

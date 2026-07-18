@@ -1,0 +1,81 @@
+\ Integration tests for @-family dispatch.
+\ A user type becomes associative by implementing @get/@has?/@keys/@values/@set
+\ via method{}, and the derived surface (@get?, @get-or) works against it.
+
+use "testing" ;
+
+\ An association list backed by an array of { key value } pairs. Array-backed,
+\ not hash-backed, so the user methods below are genuinely required -- there is
+\ no base-type unwrap to a builtin hash arm.
+pairmap: virtual{ array } ;
+
+\ Linear scan for `key`, returning its value or f when absent. Newest pair wins
+\ because @set prepends.
+(pairmap-find): ( pairs key -- value/f ) [
+  over #len 0 =
+  [ 2drop f ]
+  [
+    2dup swap 0 #nth 0 #nth =
+    [ drop 0 #nth 1 #nth ]
+    [ swap 1 #drop swap (pairmap-find) ]
+    if
+  ]
+  if
+] ;
+
+@get: method{ pairmap } [
+  swap unmake-pairmap swap (pairmap-find)
+  dup f =
+  [ drop f "key not found in pairmap" EKeyNotFound make-error throw ]
+  when
+] ;
+
+@has?: method{ pairmap } [ swap unmake-pairmap swap (pairmap-find) f = not ] ;
+
+@keys: method{ pairmap } [ unmake-pairmap [ 0 #nth ] #map #collect ] ;
+
+@values: method{ pairmap } [ unmake-pairmap [ 1 #nth ] #map #collect ] ;
+
+@set: method{ pairmap } [
+  2 array-n
+  swap unmake-pairmap
+  swap #unshift
+  >pairmap
+] ;
+
+pm: [ { { name: "Alice" } { age: 30 } } >pairmap ] ;
+
+"user type @get / @has?" test-section
+pm name: @get "Alice" "user @get present key" assert=
+pm age: @get 30 "user @get integer value" assert=
+pm name: @has? "user @has? present" assert-true
+pm missing: @has? "user @has? absent" assert-false
+[ pm missing: @get ] "user @get missing key throws" assert-error
+
+"user type @keys / @values" test-section
+pm @keys #len 2 "user @keys count" assert=
+pm @values #len 2 "user @values count" assert=
+
+"user type @set" test-section
+pm city: "NYC" @set city: @get "NYC" "user @set adds a key" assert=
+pm name: "Bob" @set name: @get "Bob" "user @set updates a key" assert=
+pm name: @get "Alice" "user @set is immutable" assert=
+
+"derived surface lights up on user type" test-section
+pm name: @get? option:some? "user @get? some for present" assert-true
+pm missing: @get? option:some? not "user @get? none for absent" assert-true
+pm name: "default" @get-or "Alice" "user @get-or present key" assert=
+pm missing: "default" @get-or "default" "user @get-or absent key" assert=
+
+"builtin arms preserved" test-section
+H{ a: 1 b: 2 } a: @get 1 "hash @get still native" assert=
+H{ a: 1 } b: 2 @set b: @get 2 "hash @set still native" assert=
+H{ a: 1 b: 2 } @keys #len 2 "hash @keys still native" assert=
+[ [ 1 0 / ] [ ] recover x: 1 @set ] "@set on error object still rejects" assert-error
+
+"module @keys works, @values has no arm" test-section
+math: "math" load ;
+math @keys #len 0 > "module @keys returns names" assert-true
+[ math @values ] "@values on module throws" assert-error
+
+"@-family dispatch tests complete" print-line

@@ -24,6 +24,7 @@ const arithmetic_mod = @import("primitives/arithmetic.zig");
 const bitwise_mod = @import("primitives/bitwise.zig");
 const sequences_mod = @import("primitives/sequences.zig");
 const strings_mod = @import("primitives/strings.zig");
+const associative_mod = @import("primitives/associative.zig");
 
 const Context = @import("context.zig").Context;
 
@@ -54,6 +55,7 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try bitwise_mod.registerNativeDispatch(dispatch, ctx);
     try sequences_mod.registerNativeDispatch(dispatch, ctx);
     try strings_mod.registerNativeDispatch(dispatch, ctx);
+    try associative_mod.registerNativeDispatch(dispatch, ctx);
 }
 
 pub fn createNativeModule(dict: *Dictionary, allocator: Allocator, dispatch_counter: *std.atomic.Value(u32)) !void {

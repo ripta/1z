@@ -1,0 +1,63 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== user type @get / @has? ===
+Stack: [ ]
+PASS: user @get present key
+Stack: [ ]
+PASS: user @get integer value
+Stack: [ ]
+PASS: user @has? present
+Stack: [ ]
+PASS: user @has? absent
+Stack: [ ]
+PASS: user @get missing key throws
+Stack: [ ]
+=== user type @keys / @values ===
+Stack: [ ]
+PASS: user @keys count
+Stack: [ ]
+PASS: user @values count
+Stack: [ ]
+=== user type @set ===
+Stack: [ ]
+PASS: user @set adds a key
+Stack: [ ]
+PASS: user @set updates a key
+Stack: [ ]
+PASS: user @set is immutable
+Stack: [ ]
+=== derived surface lights up on user type ===
+Stack: [ ]
+PASS: user @get? some for present
+Stack: [ ]
+PASS: user @get? none for absent
+Stack: [ ]
+PASS: user @get-or present key
+Stack: [ ]
+PASS: user @get-or absent key
+Stack: [ ]
+=== builtin arms preserved ===
+Stack: [ ]
+PASS: hash @get still native
+Stack: [ ]
+PASS: hash @set still native
+Stack: [ ]
+PASS: hash @keys still native
+Stack: [ ]
+PASS: @set on error object still rejects
+Stack: [ ]
+=== module @keys works, @values has no arm ===
+Stack: [ ]
+Stack: [ ]
+PASS: module @keys returns names
+Stack: [ ]
+PASS: @values on module throws
+Stack: [ ]
+@-family dispatch tests complete
+Stack: [ ]

@@ -276,6 +276,49 @@ fn tryDispatchUnaryById(ctx: *Context, dispatch_id: u32) !bool {
     return false;
 }
 
+/// Dispatch a container-keyed word whose container operand sits `depth` slots below the top of stack, the
+/// `#nth!` / `#poke!` shape. The dispatch key is the container's type with the unary sentinel, so a user
+/// type registers `method{ your-type }` and the key/value operands above the container ride along untouched.
+///
+/// When `unwrap_base` is true, a tagged container carrying a base type is unwrapped in place before its
+/// base-type arm runs, reproducing the `unwrapBaseType` behavior of `@get`/`@has?`/`@keys`/`@values`. When
+/// false, a tagged base-typed container is left to fall through, matching `@set`'s rejection of tagged
+/// values without unwrapping.
+///
+/// Returns true when an arm ran. Returns false when no arm matched, leaving the stack untouched so the
+/// caller can pop and report its own type error.
+pub fn tryDispatchContainerAtDepth(ctx: *Context, word_name: []const u8, depth: usize, unwrap_base: bool) !bool {
+    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
+    if (ctx.stack.depth() < depth + 1) return false;
+
+    const peeked = try ctx.stack.peekN(depth);
+    const a_type = dispatch_mod.dispatchDescriptor(peeked, ctx);
+    if (ctx.lookupUnaryDispatch(dispatch_id, a_type)) |entry| {
+        try executeDispatchBody(ctx, entry);
+        return true;
+    }
+
+    if (dispatch_mod.dispatchEnumTypeValue(peeked)) |ae| {
+        if (ctx.lookupUnaryDispatch(dispatch_id, ae.descriptor.?)) |entry| {
+            try executeDispatchBody(ctx, entry);
+            return true;
+        }
+    }
+
+    if (unwrap_base) {
+        if (dispatch_mod.dispatchBaseTypeValue(peeked)) |bt| {
+            if (ctx.lookupUnaryDispatch(dispatch_id, bt.descriptor.?)) |entry| {
+                const len = ctx.stack.items.items.len;
+                ctx.stack.items.items[len - (depth + 1)] = peeked.tagged.inner.*;
+                try executeDispatchBody(ctx, entry);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 /// Try to derive a comparison result from a `cmp` dispatch method.
 ///
 /// When a user type has a `cmp` method but no direct `=`/`<`/`>` method,
