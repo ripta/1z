@@ -1,0 +1,26 @@
+=== current-scope arm ===
+Stack: [ ]
+Stack: [ ]
+PASS: borrowed private is imported into scope
+Stack: [ ]
+Stack: [ ]
+PASS: borrowed private resolves at runtime
+Stack: [ ]
+=== finalized-module arm ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: injected private resolves through the target's deps frame
+Stack: [ ]
+PASS: borrowed private lands in deps, not the module's public words
+Stack: [ ]
+=== error handling ===
+Stack: [ ]
+PASS: non-module source throws
+Stack: [ ]
+PASS: target that is neither a module nor f throws
+Stack: [ ]
+PASS: boolean-true target throws
+Stack: [ ]

@@ -1,0 +1,5 @@
+\ Target module for the finalized-module arm of borrow_deps.1z. It calls `(secret)` by name, which is
+\ undefined at load time. An unknown callee is deferred to runtime, so this loads cleanly. The test
+\ injects `(secret)` into this module's deps via native.borrow-deps before calling run-secret.
+
+run-secret: ( -- string ) [ (secret) ] ;

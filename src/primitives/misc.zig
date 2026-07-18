@@ -46,6 +46,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "parse-source-loc", .func = nativeParseSrcLoc, .stack_effect = "-- file line column" },
     .{ .name = "module-name", .func = nativeModuleName, .stack_effect = "module -- name" },
     .{ .name = "load-check-file", .func = nativeLoadCheckFile, .stack_effect = "cache filename -- module", .capability = .io_fs },
+    .{ .name = "borrow-deps", .func = nativeBorrowDeps, .stack_effect = "source-module target-or-f --" },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
@@ -570,12 +571,16 @@ fn mergeDispatchEntries(ctx: *Context, from_id: u32, to_id: u32) !void {
 }
 
 fn addImportError(ctx: *Context, error_type: []const u8, message: []const u8) void {
+    addNamedImportError(ctx, error_type, message, "import");
+}
+
+fn addNamedImportError(ctx: *Context, error_type: []const u8, message: []const u8, word_name: []const u8) void {
     ctx.error_details.append(ctx.allocator, .{
         .error_type = error_type,
         .message = message,
         .source = ctx.ownedCurrentSource(),
         .line = if (ctx.call_stack.items.len > 0) ctx.call_stack.items[ctx.call_stack.items.len - 1].line else 0,
-        .word_name = "import",
+        .word_name = word_name,
     }) catch {};
 }
 
@@ -669,6 +674,77 @@ fn nativeExport(ctx: *Context) anyerror!void {
     };
 
     entry.imported = false;
+}
+
+/// borrow-deps ( source-module target-or-f -- ) - Import a module's private `deps` words, the
+/// low-level piece the `borrow` word and the test runner share. `import` exposes only
+/// `module.words`; this exposes `module.deps`.
+///
+/// A `f` target imports `source`'s deps into the live import frame, so they route into the
+/// borrowing module's own `deps` at finalization, exactly like a word `use`d during load. A module
+/// target augments an already-finalized module in place and rebuilds its `deps_template`, the path
+/// the runner takes once the borrowing module is loaded.
+///
+/// The module-target arm is the first in-place mutator of a finalized, templated module. It follows
+/// the deps-template escape documented on `buildModuleDepsTemplate`. A cached module's deps map and
+/// template are owned by the primary worker's arena, so this arm is restricted to the primary
+/// worker; there `quotationAllocator` is that same arena, and the `put` grows the map while the
+/// rebuild overwrites the template without freeing anything.
+fn nativeBorrowDeps(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+    const target_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(target_val);
+
+    const source = helpers.popModule(ctx) catch {
+        addNamedImportError(ctx, "type-mismatch", "expected source module, got non-module", "borrow-deps");
+        return error.TypeMismatch;
+    };
+    if (!source.importable) {
+        const msg = std.fmt.allocPrint(alloc, "module '{s}' cannot be imported", .{source.name}) catch "module cannot be imported";
+        addNamedImportError(ctx, "import-error", msg, "borrow-deps");
+        return error.EmptyImport;
+    }
+
+    switch (target_val) {
+        .boolean => |b| {
+            if (b) {
+                addNamedImportError(ctx, "type-mismatch", "borrow-deps target must be a module or f", "borrow-deps");
+                return error.TypeMismatch;
+            }
+            var iter = source.deps.iterator();
+            while (iter.next()) |entry| {
+                try importWord(ctx, entry.key_ptr.*, entry.value_ptr.*, source);
+            }
+        },
+        .module => |target| {
+            if (ctx.scheduler) |sched| {
+                if (sched.isBackgroundWorker()) {
+                    ctx.thrown_error = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+                        .error_type = "non-primary-worker",
+                        .message = "borrow-deps cannot mutate a finalized module from a non-primary worker",
+                    });
+                    return error.UserThrown;
+                }
+            }
+
+            // Copy the ModuleWords verbatim rather than routing through `importWord`, which defines
+            // into the live import frame and merges generic dispatch. A finalized module has no
+            // frame. `source.deps` may carry generic imports, so a same-named target generic under a
+            // different dispatch_id is clobbered rather than merged; the shadow check the `borrow`
+            // word and the runner compose governs that collision, so the raw injection stays simple.
+            var iter = source.deps.iterator();
+            while (iter.next()) |entry| {
+                try target.deps.put(alloc, entry.key_ptr.*, entry.value_ptr.*);
+            }
+            try Context.buildModuleDepsTemplate(target, alloc);
+        },
+        else => {
+            const type_name = helpers.valueTypeName(target_val);
+            const msg = std.fmt.allocPrint(alloc, "expected module or f, got {s}", .{type_name}) catch "expected module or f";
+            addNamedImportError(ctx, "type-mismatch", msg, "borrow-deps");
+            return error.TypeMismatch;
+        },
+    }
 }
 
 /// command-line-args ( -- args ) - Push program arguments as an array of strings

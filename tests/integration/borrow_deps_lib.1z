@@ -1,0 +1,9 @@
+\ Helper module for borrow_deps.1z. It holds a private helper captured into its deps, plus a public
+\ word. `(secret)` must land in this module's deps, and a borrower reaches it through
+\ native.borrow-deps.
+
+private{
+  (secret): ( -- string ) [ "shh" ] ;
+}
+
+visible: ( -- string ) [ "seen" ] ;

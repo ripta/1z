@@ -1,0 +1,33 @@
+use "testing" ;
+
+"current-scope arm" test-section
+
+\ Import the helper's private deps into the live import frame. The borrowed
+\ private lands in this file's own scope, exactly like a word use'd during load.
+"borrow_deps_lib.1z" load f native.borrow-deps
+"(secret)" native.locally-defined? t "borrowed private is imported into scope" assert=
+
+use-secret: ( -- string ) [ (secret) ] ;
+use-secret "shh" "borrowed private resolves at runtime" assert=
+
+"finalized-module arm" test-section
+
+\ Inject the helper's private deps into an already-loaded module and confirm the
+\ module's own word resolves the private through its rebuilt deps template.
+tgt: "borrow_deps_target.1z" load ;
+l: "borrow_deps_lib.1z" load ;
+l tgt native.borrow-deps
+
+tgt import
+run-secret "shh" "injected private resolves through the target's deps frame" assert=
+
+tgt (secret): @has? f "borrowed private lands in deps, not the module's public words" assert=
+
+"error handling" test-section
+
+\ A non-module source and a non-module/non-f target both throw. The container
+\ operands here would leak on a mishandled error path, so the golden leak-check
+\ guards the release of the popped target.
+[ 5 H{ } native.borrow-deps ] "non-module source throws" assert-error
+[ l H{ } native.borrow-deps ] "target that is neither a module nor f throws" assert-error
+[ l t native.borrow-deps ] "boolean-true target throws" assert-error
