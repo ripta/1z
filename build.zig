@@ -231,6 +231,32 @@ pub fn build(b: *std.Build) void {
         .dest_dir = .{ .override = .{ .custom = "ext" } },
     });
 
+    // zig-out/ext/liblua5.4.{dylib,so}: the vendored Lua library, driven through the dynamic FFI
+    // by lib/lua.1z.
+    //
+    // Built as a standalone shared library on the toy pattern rather than compiled into the
+    // interpreter, so a program that never loads lib/lua.1z pays nothing.
+    //
+    // Installed on the default step so an installed interpreter finds it as a sibling.
+    const lua_shared_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        // Vendored third-party C; disable UBSan so Lua's own benign patterns do
+        // not trap in the Debug default build. Not ours to fix.
+        .sanitize_c = .off,
+    });
+    addLuaSources(b, lua_shared_module);
+    const lua_shared = b.addLibrary(.{
+        .name = "lua5.4",
+        .root_module = lua_shared_module,
+        .linkage = .dynamic,
+    });
+    const install_lua_shared = b.addInstallArtifact(lua_shared, .{
+        .dest_dir = .{ .override = .{ .custom = "ext" } },
+    });
+    b.getInstallStep().dependOn(&install_lua_shared.step);
+
     const has_diff: bool = (b.findProgram(&.{"diff"}, &.{}) catch null) != null;
 
     // Open the test directory once for both integration test steps
@@ -2248,4 +2274,37 @@ fn addIrSources(b: *std.Build, module: *std.Build.Module) void {
     module.addIncludePath(b.path("ext/ir"));
     module.addIncludePath(b.path("ext/ir/dynasm"));
     module.addIncludePath(b.path("ext/ir/generated"));
+}
+
+fn addLuaSources(b: *std.Build, module: *std.Build.Module) void {
+    // The platform define selects Lua's OS integration (dlopen-based require,
+    // POSIX os/io behavior). It matches the canonical upstream build per target.
+    const platform_flag: []const u8 = switch (module.resolved_target.?.result.os.tag) {
+        .macos => "-DLUA_USE_MACOSX",
+        .linux => "-DLUA_USE_LINUX",
+        else => "-DLUA_USE_POSIX",
+    };
+
+    // Every core and standard-library source under ext/lua/. The standalone
+    // interpreter (lua.c) and the bytecode compiler (luac.c) are not vendored.
+    const lua_c_files = [_][]const u8{
+        "lapi.c",     "lauxlib.c", "lbaselib.c", "lcode.c",   "lcorolib.c",
+        "lctype.c",   "ldblib.c",  "ldebug.c",   "ldo.c",     "ldump.c",
+        "lfunc.c",    "lgc.c",     "linit.c",    "liolib.c",  "llex.c",
+        "lmathlib.c", "lmem.c",    "loadlib.c",  "lobject.c", "lopcodes.c",
+        "loslib.c",   "lparser.c", "lstate.c",   "lstring.c", "lstrlib.c",
+        "ltable.c",   "ltablib.c", "ltm.c",      "lundump.c", "lutf8lib.c",
+        "lvm.c",      "lzio.c",
+    };
+
+    const flags: []const []const u8 = &.{platform_flag};
+
+    for (lua_c_files) |name| {
+        module.addCSourceFile(.{
+            .file = b.path(b.fmt("ext/lua/{s}", .{name})),
+            .flags = flags,
+        });
+    }
+
+    module.addIncludePath(b.path("ext/lua"));
 }

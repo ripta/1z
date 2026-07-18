@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -491,6 +491,9 @@ ir-check-upstream: ## Also report whether ext/ir/ patches still apply at upstrea
 
 ir-vendor: ## Re-vendor ext/ir/ (set IR_COMMIT=<sha> to bump the pin)
 	IR_COMMIT=$(IR_COMMIT) ./ext/ir/vendor.sh
+
+lua-vendor: ## Re-vendor ext/lua/ (set LUA_VERSION and LUA_SHA256 to bump the pin)
+	./ext/lua/vendor.sh
 
 lsp-test: ## Run LSP server tests
 	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
