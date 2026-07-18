@@ -1,0 +1,1 @@
+tests/integration/borrow_word_conflict.1z:6: error 'import-conflict' borrow would shadow existing words: taken

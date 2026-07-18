@@ -806,6 +806,136 @@ use: parse-time [
   if
 ] ;
 
+\ Private-word borrowing for tests.
+\   whole scope:      borrow "file.1z" ;
+\   named subset:     borrow { (helper): } "file.1z" ;
+\   allow shadowing:  borrow "file.1z" shadow-ok ;
+
+\\ Load a module and import both its public `words` and its private `deps` into the current scope.
+\\ Borrowed deps land in the borrowing module's own `deps`, so they never leak to ordinary `import`.
+\\ Optionally restrict the borrowed deps with a set of symbols; the public words always come in full.
+\\ Insert `shadow-ok` before `;` to suppress the shadow check.
+\\ Insert `reload` before `;` to bypass the module cache.
+borrow: parse-time [
+  \ True when `name` resolves to the same definition in the incoming `module` and in the current
+  \ scope.
+  \
+  \ Word identity is the source module: two imports of one word from one cached module share its
+  \ source-module pointer, so this dedupes the diamond where a borrowed module and the borrower both
+  \ `use` a third module. A word with no source module (`f`) is never a match.
+  (borrow-same-source?): ( module name -- ? ) [
+    2dup native.word-source                            \ module name incoming-src
+    over native.current-scope swap native.word-source  \ module name incoming-src local-src
+    over module? over module? and
+    [ = ] [ 2drop f ] if  \ module name same?
+    nip nip
+  ] ;
+
+  \ The `borrow` shadow check: an identity-deduped variant of `assert-no-shadow`.
+  \
+  \ `names` are the incoming words; `module` supplies their source and markers. A name only conflicts
+  \ when it is already locally defined, is not the same definition (identity dedupe), and is not a
+  \ generic merging into an existing generic. Genuine conflicts throw `import-conflict`.
+  (assert-no-borrow-shadow): ( module names -- ) [
+    { } swap
+    [
+      dup native.locally-defined?
+      [
+        2 pick-n over (borrow-same-source?)
+        [ drop ]
+        [
+          dup generic?
+          [ 2 pick-n over native.word-markers [ generic = ] #any [ drop ] [ 1array #append ] if ]
+          [ 1array #append ]
+          if
+        ]
+        if
+      ]
+      [ drop ]
+      if
+    ] #each
+    dup #empty?
+    [ drop drop ]
+    [
+      "" swap
+      [
+        >string
+        dup native.current-scope swap native.word-source dup
+        [ inspect swap " (from " #append swap #append ")" #append ]
+        [ drop ]
+        if
+        swap dup #empty? [ swap #append ] [ ", " #append swap #append ] if
+      ] #each
+      "borrow would shadow existing words: " swap #append
+      f swap EImportConflict make-error throw
+    ]
+    if
+  ] ;
+
+  \ Shadow-check the whole borrow surface: the module's public words and all its private deps.
+  (borrow-shadow-check-all): ( module -- ) [
+    dup dup @keys (assert-no-borrow-shadow)
+    native.module-deps dup @keys (assert-no-borrow-shadow)
+  ] ;
+
+  \ Shadow-check a subset borrow: the module's public words and only the selected deps.
+  (borrow-subset-check): ( selection module -- selection module ) [
+    dup dup @keys (assert-no-borrow-shadow)
+    over over native.module-deps
+    swap (assert-no-borrow-shadow)
+  ] ;
+
+  (validate-borrow-tail): ( values -- ) [
+    [
+      dup shadow-ok = swap "reload" = or not
+      [ inspect "unrecognized token in borrow: " swap #append
+        f swap EInvalidArgument make-error throw
+      ]
+      when
+    ] #each
+  ] ;
+
+  (borrow-load): ( filename modifiers -- module ) [
+    "reload" #in? [ reload ] [ load ] if
+  ] ;
+
+  (record-borrow): ( filename words-or-f -- ) [
+    over native.resolve-load-path
+    native.record-import
+  ] ;
+
+  parse-literal
+  dup string?
+  [
+    \ borrow "filename" [modifiers] ;
+    dup  \ filename filename
+    [
+      ";" parse-values-until dup (validate-borrow-tail)
+      dup [ (borrow-load) ] dip
+      shadow-ok #in? not
+      [ dup (borrow-shadow-check-all) ] when
+      dup import
+      f native.borrow-deps
+    ] dip  \ filename
+    f (record-borrow)
+  ]
+  [
+    \ borrow { selection } "filename" [modifiers] ;
+    parse-literal  \ selection filename
+    over over      \ selection filename selection filename
+    [
+      ";" parse-values-until dup (validate-borrow-tail)
+      dup [ (borrow-load) ] dip  \ selection module modifiers
+      shadow-ok #in? not
+      [ (borrow-subset-check) ] when
+      dup import
+      swap native.borrow-deps  \ module selection -- import the selected deps
+    ] 2dip                     \ selection filename
+    swap (record-borrow)
+  ]
+  if
+] ;
+
 \\ Reexport all words from a module as public definitions.
 reexport: ( module -- ) [
   dup native.module-name swap  \ module-name module

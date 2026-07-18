@@ -46,7 +46,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "parse-source-loc", .func = nativeParseSrcLoc, .stack_effect = "-- file line column" },
     .{ .name = "module-name", .func = nativeModuleName, .stack_effect = "module -- name" },
     .{ .name = "load-check-file", .func = nativeLoadCheckFile, .stack_effect = "cache filename -- module", .capability = .io_fs },
-    .{ .name = "borrow-deps", .func = nativeBorrowDeps, .stack_effect = "source-module target-or-f --" },
+    .{ .name = "borrow-deps", .func = nativeBorrowDeps, .stack_effect = "source-module target --" },
 };
 
 fn nativeToModule(ctx: *Context) anyerror!void {
@@ -676,14 +676,15 @@ fn nativeExport(ctx: *Context) anyerror!void {
     entry.imported = false;
 }
 
-/// borrow-deps ( source-module target-or-f -- ) - Import a module's private `deps` words, the
+/// borrow-deps ( source-module target -- ) - Import a module's private `deps` words, the
 /// low-level piece the `borrow` word and the test runner share. `import` exposes only
 /// `module.words`; this exposes `module.deps`.
 ///
-/// A `f` target imports `source`'s deps into the live import frame, so they route into the
-/// borrowing module's own `deps` at finalization, exactly like a word `use`d during load. A module
-/// target augments an already-finalized module in place and rebuilds its `deps_template`, the path
-/// the runner takes once the borrowing module is loaded.
+/// A `f` target imports all of `source`'s deps into the live import frame, so they route into the
+/// borrowing module's own `deps` at finalization, exactly like a word `use`d during load. An array
+/// target imports only the named subset into the live frame, validating each name against
+/// `source.deps` first. A module target augments an already-finalized module in place and rebuilds
+/// its `deps_template`, the path the runner takes once the borrowing module is loaded.
 ///
 /// The module-target arm is the first in-place mutator of a finalized, templated module. It follows
 /// the deps-template escape documented on `buildModuleDepsTemplate`. A cached module's deps map and
@@ -708,12 +709,31 @@ fn nativeBorrowDeps(ctx: *Context) anyerror!void {
     switch (target_val) {
         .boolean => |b| {
             if (b) {
-                addNamedImportError(ctx, "type-mismatch", "borrow-deps target must be a module or f", "borrow-deps");
+                addNamedImportError(ctx, "type-mismatch", "borrow-deps target must be a module, an array, or f", "borrow-deps");
                 return error.TypeMismatch;
             }
             var iter = source.deps.iterator();
             while (iter.next()) |entry| {
                 try importWord(ctx, entry.key_ptr.*, entry.value_ptr.*, source);
+            }
+        },
+        .array => |names_arr| {
+            for (names_arr.items) |name_val| {
+                const name = switch (name_val) {
+                    .symbol, .string => |s| s,
+                    else => {
+                        const type_name = helpers.valueTypeName(name_val);
+                        const msg = std.fmt.allocPrint(alloc, "expected symbol, got {s}", .{type_name}) catch "expected symbol";
+                        addNamedImportError(ctx, "type-mismatch", msg, "borrow-deps");
+                        return error.TypeMismatch;
+                    },
+                };
+                const dep_word = source.deps.get(name) orelse {
+                    const msg = std.fmt.allocPrint(alloc, "module '{s}' has no private dep '{s}'", .{ source.name, name }) catch "unknown private dep";
+                    addNamedImportError(ctx, "import-error", msg, "borrow-deps");
+                    return error.KeyNotFound;
+                };
+                try importWord(ctx, name, dep_word, source);
             }
         },
         .module => |target| {
@@ -740,7 +760,7 @@ fn nativeBorrowDeps(ctx: *Context) anyerror!void {
         },
         else => {
             const type_name = helpers.valueTypeName(target_val);
-            const msg = std.fmt.allocPrint(alloc, "expected module or f, got {s}", .{type_name}) catch "expected module or f";
+            const msg = std.fmt.allocPrint(alloc, "expected module, array, or f, got {s}", .{type_name}) catch "expected module, array, or f";
             addNamedImportError(ctx, "type-mismatch", msg, "borrow-deps");
             return error.TypeMismatch;
         },

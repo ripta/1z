@@ -1,0 +1,37 @@
+=== whole-scope borrow ===
+Stack: [ ]
+PASS: public word resolves after borrow
+Stack: [ ]
+PASS: public helper is in scope
+Stack: [ ]
+PASS: borrowed private resolves and reaches the enclosing public
+Stack: [ ]
+PASS: second borrowed private resolves
+Stack: [ ]
+=== named-subset borrow ===
+Stack: [ ]
+PASS: selected private resolves
+Stack: [ ]
+PASS: unselected private stays out of scope
+Stack: [ ]
+PASS: public words come in full even for a subset borrow
+Stack: [ ]
+Stack: [ [ "borrow { (missing): } "borrow_word_subset_lib.1z" ;" eval-string ] ]
+PASS: subset borrow of an unknown dep name throws
+Stack: [ ]
+=== collision and shadow-ok ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ [ "borrow "borrow_word_collide_lib.1z" ;" eval-string ] ]
+PASS: a colliding public word throws
+Stack: [ ]
+Stack: [ 7 ]
+PASS: shadow-ok suppresses the collision and imports the lib word
+Stack: [ ]
+=== non-leakage to ordinary import ===
+Stack: [ ]
+PASS: the borrower's public word works through its borrowed private
+Stack: [ ]
+Stack: [ ]
+PASS: borrowed private did not leak into the borrower's public words
+Stack: [ ]

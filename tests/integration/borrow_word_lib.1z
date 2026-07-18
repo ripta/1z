@@ -1,0 +1,17 @@
+\ Helper module for borrow_word.1z. It uses testing (so its deps carry testing's words, exercising
+\ the diamond dedupe against a borrower that also uses testing), holds two private helpers, and
+\ exposes public words. The private `(greet-impl)` calls the public `prefix`, so a borrower must see
+\ both the private and the enclosing public for it to resolve.
+
+use "testing" ;
+
+private{
+  (greet-impl): ( -- string ) [ prefix "hi" #append ] ;
+  (other-secret): ( -- string ) [ "other" ] ;
+}
+
+prefix: ( -- string ) [ ">> " ] ;
+
+greet: ( -- string ) [ (greet-impl) ] ;
+
+conflicting: ( -- fixnum ) [ 1 ] ;

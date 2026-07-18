@@ -33,6 +33,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "all-words", .func = nativeAllWords, .stack_effect = "-- array" },
     .{ .name = "current-scope", .func = nativeCurrentScope, .stack_effect = "-- module" },
     .{ .name = "local-scope", .func = nativeLocalScope, .stack_effect = "-- module" },
+    .{ .name = "module-deps", .func = nativeModuleDeps, .stack_effect = "module -- module" },
     .{ .name = ">constraint-info", .func = nativeConstraintToInfo, .stack_effect = "constraint -- array" },
     .{ .name = "dead-definitions", .func = nativeDeadDefinitions },
     .{ .name = "defined?", .func = nativeDefined, .stack_effect = "module name -- ?" },
@@ -625,6 +626,37 @@ fn nativeLocalScope(ctx: *Context) anyerror!void {
     var iter = ctx.local_frames.items[ctx.local_frames.items.len - 1].iterator();
     while (iter.next()) |entry| {
         try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+    }
+
+    try ctx.stack.push(.{ .module = module });
+}
+
+/// module-deps ( module -- module ) - Snapshot a module's private `deps` into an introspectable
+/// module whose `.words` mirror the deps.
+///
+/// `import` and every module-introspection native read `module.words`, never `module.deps`, so a
+/// module's private helpers are otherwise invisible from 1z. This exposes them under the same
+/// `@keys` / `word-source` / `word-markers` / `defined?` surface the public words use, which is what
+/// the `borrow` shadow check reads. The result is non-importable: it is for inspection, not for
+/// promoting privates into public API.
+fn nativeModuleDeps(ctx: *Context) anyerror!void {
+    const alloc = ctx.quotationAllocator();
+
+    const src_val = try ctx.stack.pop();
+    const source = switch (src_val) {
+        .module => |m| m,
+        else => {
+            helpers.setTypeMismatchError(ctx, "module", src_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    const module = try alloc.create(Module);
+    module.* = .{ .name = "<module-deps>", .words = .{}, .importable = false };
+
+    var iter = source.deps.iterator();
+    while (iter.next()) |entry| {
+        try module.words.put(alloc, entry.key_ptr.*, entry.value_ptr.*);
     }
 
     try ctx.stack.push(.{ .module = module });

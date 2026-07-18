@@ -1,0 +1,9 @@
+\ Helper module for borrow_word.1z's named-subset test. Two private helpers plus a public word; a
+\ subset borrow pulls in only the selected private.
+
+private{
+  (sub-a): ( -- string ) [ "AAA" ] ;
+  (sub-b): ( -- string ) [ "BBB" ] ;
+}
+
+sub-pub: ( -- fixnum ) [ 5 ] ;

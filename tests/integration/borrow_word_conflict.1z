@@ -1,0 +1,6 @@
+\ A genuine top-level borrow collision aborts at parse time with an import-conflict. `taken` is
+\ defined first, then a borrow of a module whose public `taken` shadows it.
+
+taken: ( -- fixnum ) [ 99 ] ;
+
+borrow "borrow_word_collide_lib.1z" ;

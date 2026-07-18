@@ -466,6 +466,7 @@ bl ( -- )
 body>> ( instance: word-info -- body: any )
 boolean ( -- type )
 boolean? ( val -- ? )
+borrow
 borrowed? ( val -- ? )
 byte-array ( -- type )
 byte-array? ( val -- ? )

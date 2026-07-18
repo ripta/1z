@@ -1,0 +1,4 @@
+\ Helper module for borrow_word.1z's collision test. Its public `taken` collides with a word the
+\ borrower defines first, so borrowing it without shadow-ok throws import-conflict.
+
+taken: ( -- fixnum ) [ 7 ] ;

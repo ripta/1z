@@ -1,0 +1,7 @@
+\ A module that borrows borrow_word_lib.1z's private helper and exposes it through a public word.
+\ borrow_word.1z imports this module and asserts the borrowed private did not leak into this
+\ module's public surface: `reveal` works, but `(greet-impl)` is not visible to an ordinary import.
+
+borrow "borrow_word_lib.1z" ;
+
+reveal: ( -- string ) [ (greet-impl) ] ;

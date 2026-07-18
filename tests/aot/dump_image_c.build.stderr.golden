@@ -418,8 +418,8 @@ __attribute__((used)) const struct onez_typevalue *onez_image_typevalue_slots[66
 };
 
 __attribute__((used)) struct onez_marker *onez_image_marker_slots[2] = {
-    NULL, /* slot 0: marker shadow-ok (filled by the loader). */
-    NULL, /* slot 1: marker generic (filled by the loader). */
+    NULL, /* slot 0: marker generic (filled by the loader). */
+    NULL, /* slot 1: marker shadow-ok (filled by the loader). */
 };
 
 __attribute__((used)) struct onez_parameter *onez_image_parameter_slots[6] = {
@@ -444,12 +444,12 @@ __attribute__((used)) const struct onez_value *onez_image_tagged_slots[10] = {
     NULL, /* slot 9: tagged ordering:gt (filled by the loader). */
 };
 
-static const char onez_image_marker_desc_0_name[] = "shadow-ok";
-static const char onez_image_marker_desc_1_name[] = "generic";
+static const char onez_image_marker_desc_0_name[] = "generic";
+static const char onez_image_marker_desc_1_name[] = "shadow-ok";
 
 static const onez_image_marker_description_t onez_image_marker_descriptions_storage[] = {
-    { .name = onez_image_marker_desc_0_name, .name_len = 9, .slot = 0 },
-    { .name = onez_image_marker_desc_1_name, .name_len = 7, .slot = 1 },
+    { .name = onez_image_marker_desc_0_name, .name_len = 7, .slot = 0 },
+    { .name = onez_image_marker_desc_1_name, .name_len = 9, .slot = 1 },
 };
 
 static const char onez_image_param_desc_0_name[] = "module-loaded-hooks";

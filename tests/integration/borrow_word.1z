@@ -1,0 +1,43 @@
+use "testing" ;
+
+"whole-scope borrow" test-section
+
+\ The borrower also uses testing; the lib uses testing too. The diamond dedupe keeps this silent.
+borrow "borrow_word_lib.1z" ;
+
+greet ">> hi" "public word resolves after borrow" assert=
+prefix ">> " "public helper is in scope" assert=
+(greet-impl) ">> hi" "borrowed private resolves and reaches the enclosing public" assert=
+(other-secret) "other" "second borrowed private resolves" assert=
+
+"named-subset borrow" test-section
+
+borrow { (sub-a): } "borrow_word_subset_lib.1z" ;
+
+(sub-a) "AAA" "selected private resolves" assert=
+"(sub-b)" native.locally-defined? f "unselected private stays out of scope" assert=
+sub-pub 5 "public words come in full even for a subset borrow" assert=
+
+[ "borrow { (missing): } \"borrow_word_subset_lib.1z\" ;" eval-string ]
+"subset borrow of an unknown dep name throws" assert-error
+
+"collision and shadow-ok" test-section
+
+taken: ( -- fixnum ) [ 99 ] ;
+
+\ Through eval-string the import-conflict surfaces wrapped as a parse-time-execution-error; the
+\ raw import-conflict type and message are asserted by borrow_word_conflict.1z.
+[ "borrow \"borrow_word_collide_lib.1z\" ;" eval-string ]
+"a colliding public word throws" assert-error
+
+"borrow \"borrow_word_collide_lib.1z\" shadow-ok ; taken" eval-string
+7 "shadow-ok suppresses the collision and imports the lib word" assert=
+
+"non-leakage to ordinary import" test-section
+
+use "borrow_word_borrower.1z" ;
+
+reveal ">> hi" "the borrower's public word works through its borrowed private" assert=
+
+borrow_word_borrower: "borrow_word_borrower.1z" load ;
+borrow_word_borrower (greet-impl): @has? f "borrowed private did not leak into the borrower's public words" assert=
