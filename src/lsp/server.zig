@@ -389,6 +389,7 @@ pub const Server = struct {
             .err,
             .err,
             .err,
+            .warning,
             self.ctx,
         );
         defer engine.deinit();

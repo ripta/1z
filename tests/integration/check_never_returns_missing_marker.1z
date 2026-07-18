@@ -1,0 +1,3 @@
+\ A word declared `-- *` but not marked never-returns violates the biconditional.
+\ The check defaults to a warning, so --check warns but exits 0.
+bottom-no-marker: ( -- * ) [ 0 ] ;

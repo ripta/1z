@@ -777,6 +777,7 @@ export fn onez_check(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
         settings.type_check_mode,
         settings.arity_check_mode,
         settings.default_arm_mode,
+        settings.never_returns_mode,
         ctx,
     );
     defer engine.deinit();

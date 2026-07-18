@@ -1,1 +1,2 @@
+tests/integration/check_dead_code_user_marked.1z:2: warning: fatal-error: carries the never-returns marker but does not declare a `-- *` output
 tests/integration/check_dead_code_user_marked.1z:3: warning: caller: dead code: unreachable after call to never-returns word 'fatal-error'

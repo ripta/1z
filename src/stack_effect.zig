@@ -196,6 +196,15 @@ pub const StackEffect = struct {
         return false;
     }
 
+    /// True if the outputs declare the bottom output `-- *`: a single output named `*`.
+    ///
+    /// This is the honest output shape of a word that never returns to its caller. The
+    /// `*` is stored as an ordinary named output, not a row variable, so its presence is
+    /// detected by name.
+    pub fn isBottomOutput(self: StackEffect) bool {
+        return self.outputs.len == 1 and std.mem.eql(u8, self.outputs[0].name, "*");
+    }
+
     /// True if every row variable in inputs also appears in outputs and vice versa.
     pub fn hasBalancedRowVariables(self: StackEffect) bool {
         const input_vars = self.inputRowVariableNames();

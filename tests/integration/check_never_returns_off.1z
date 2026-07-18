@@ -1,0 +1,5 @@
+\ pragma{ never-returns-consistency: "off" } suppresses the check entirely, so a
+\ `-- *` word without the never-returns marker produces no diagnostic.
+pragma{ never-returns-consistency: "off" }
+
+bottom-no-marker: ( -- * ) [ 0 ] ;

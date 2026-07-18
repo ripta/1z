@@ -1242,6 +1242,10 @@ pub const Context = struct {
             .native_validator = &control.nativeMissingDefaultArmValidator,
         });
 
+        try self.pragma_registry.put(self.allocator, "never-returns-consistency", .{
+            .native_validator = &control.nativeNeverReturnsConsistencyValidator,
+        });
+
         try self.pragma_registry.put(self.allocator, "allow-uninhabited-constraint", .{});
 
         // Split prelude into lines and process incrementally

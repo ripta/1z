@@ -1,0 +1,1 @@
+tests/integration/check_never_returns_missing_marker.1z:3: warning: bottom-no-marker: declares a `-- *` output but is not marked never-returns

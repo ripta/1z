@@ -1,0 +1,5 @@
+\ pragma{ never-returns-consistency: "error" } escalates the violation to an
+\ error, so a `-- *` word without the never-returns marker fails --check (exit 1).
+pragma{ never-returns-consistency: "error" }
+
+bottom-no-marker: ( -- * ) [ 0 ] ;

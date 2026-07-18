@@ -201,6 +201,27 @@ pub fn nativeTypeCheckValidator(ctx: *Context) anyerror!void {
     }
 }
 
+/// Native validator for the never-returns-consistency pragma.
+/// Accepts "error", "warning", or "off".
+pub fn nativeNeverReturnsConsistencyValidator(ctx: *Context) anyerror!void {
+    const val = try ctx.stack.pop();
+    switch (val) {
+        .string => |s| {
+            if (std.mem.eql(u8, s, "error") or std.mem.eql(u8, s, "warning") or std.mem.eql(u8, s, "off")) {
+                try ctx.stack.push(.{ .string = s });
+                try ctx.stack.push(.{ .boolean = true });
+            } else {
+                try ctx.stack.push(.{ .string = "never-returns-consistency: expected \"error\", \"warning\", or \"off\"" });
+                try ctx.stack.push(.{ .boolean = false });
+            }
+        },
+        else => {
+            try ctx.stack.push(.{ .string = "never-returns-consistency: expected \"error\", \"warning\", or \"off\"" });
+            try ctx.stack.push(.{ .boolean = false });
+        },
+    }
+}
+
 /// Native validator for the missing-default-arm pragma.
 /// Accepts "error", "warning", or "off".
 pub fn nativeMissingDefaultArmValidator(ctx: *Context) anyerror!void {
