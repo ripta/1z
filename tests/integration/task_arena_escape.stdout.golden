@@ -22,15 +22,9 @@ Stack: [ ]
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-Stack: [ ]
-Stack: [ ]
-Stack: [ ]
-Stack: [ ]
 PASS: iterator rejected at await
 Stack: [ ]
 PASS: parameter rejected at await
-Stack: [ ]
-PASS: benchmark report rejected at await
 Stack: [ ]
 PASS: resource rejected at await
 Stack: [ ]
@@ -39,8 +33,6 @@ Stack: [ ]
 PASS: iterator rejected at with-timeout
 Stack: [ ]
 PASS: parameter rejected at with-timeout
-Stack: [ ]
-PASS: benchmark report rejected at with-timeout
 Stack: [ ]
 PASS: resource rejected at with-timeout
 Stack: [ ]
@@ -60,8 +52,6 @@ PASS: iterator rejected at unbuffered send
 Stack: [ ]
 PASS: parameter rejected at unbuffered send
 Stack: [ ]
-PASS: benchmark report rejected at unbuffered send
-Stack: [ ]
 PASS: resource rejected at unbuffered send
 Stack: [ ]
 PASS: stream rejected at unbuffered send
@@ -69,8 +59,6 @@ Stack: [ ]
 PASS: iterator rejected at buffered send
 Stack: [ ]
 PASS: parameter rejected at buffered send
-Stack: [ ]
-PASS: benchmark report rejected at buffered send
 Stack: [ ]
 PASS: resource rejected at buffered send
 Stack: [ ]

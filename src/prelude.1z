@@ -70,7 +70,6 @@ type-descriptor: M{ type: builtin-type: numeric: f exact: f integer: f mutable: 
 constraint: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 unit: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 sandbox-spec: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
-benchmark-report: M{ type: builtin-type: numeric: f exact: f integer: f mutable: f define: [ define-builtin-type ] } ;
 
 \\ Word array literal syntax. Tokenizes words as strings without requiring quotes.
 W{: parse-time [ "}" parse-tokens-until ] ;
@@ -405,10 +404,9 @@ stream?:      ( val -- ? ) [ type-of stream = ] ;
 parameter?:   ( val -- ? ) [ type-of parameter = ] ;
 module?:      ( val -- ? ) [ type-of module = ] ;
 marker?:      ( val -- ? ) [ type-of marker = ] ;
-benchmark-report?: ( val -- ? ) [ type-of benchmark-report = ] ;
-iterator?: ( val -- ? ) [ type-of iterator = ] ;
-float?: ( val -- ? ) [ type-of float = ] ;
-bignum?: ( val -- ? ) [ type-of bignum = ] ;
+iterator?:    ( val -- ? ) [ type-of iterator = ] ;
+float?:       ( val -- ? ) [ type-of float = ] ;
+bignum?:      ( val -- ? ) [ type-of bignum = ] ;
 
 \\ True for any numeric type.
 number?: ( val -- ? ) [ "numeric" type-has-property? ] ;
@@ -890,6 +888,197 @@ fmt: ( source string -- string ) [ >template interpolate ] ;
 fmt-line: ( source string -- ) [ fmt print-line ] ;
 
 \ Benchmarking
+
+\\ A benchmark report collects labelled timing entries. Each entry is the raw
+\\ timing hash returned by (benchmark-n) with a "label" key added. The entries
+\\ live in an immutable array so appending a refcounted hash releases cleanly.
+benchmark-report: virtual{ array } ;
+
+\\ Create an empty benchmark report collector.
+make-benchmark-report: ( -- report ) [ { } >benchmark-report ] ;
+
+\ Append a labelled timing hash to a report, returning a new report.
+(bench-report-push): ( report entry -- report ) [ [ unmake-benchmark-report ] dip #push >benchmark-report ] ;
+
+\ Number formatting, mirroring src/benchmark.zig byte-for-byte.
+
+\ Left-pad a string with '0' to a minimum width.
+(bench-zpad): ( str width -- str ) [
+  over #len over < [ [ "0" swap #append ] dip (bench-zpad) ] [ drop ] if
+] ;
+
+\ n copies of a space / dash. Recursion depth is a small column width.
+(bench-spaces): stack-recursive ( n -- str ) [ dup 0 > [ 1 - (bench-spaces) " " #append ] [ drop "" ] if ] ;
+(bench-dashes): stack-recursive ( n -- str ) [ dup 0 > [ 1 - (bench-dashes) "-" #append ] [ drop "" ] if ] ;
+
+\ Left-align (trailing spaces) and right-align (leading spaces) to a width.
+(bench-pad-right): ( str width -- str ) [ over #len - dup 0 > [ (bench-spaces) #append ] [ drop ] if ] ;
+(bench-pad-left): ( str width -- str ) [ over #len - dup 0 > [ (bench-spaces) swap #append ] [ drop ] if ] ;
+
+\ Insert thousands separators into a non-negative decimal string.
+(bench-commas): stack-recursive ( digits -- str ) [
+  dup #len 3 <=
+  [ ]
+  [ dup #len 3 - 2dup #take -rot> #drop swap (bench-commas) "," #append swap #append ]
+  if
+] ;
+
+\ formatNumber / formatTime / formatBytes equivalents.
+(bench-fmt-num): ( n -- str ) [ >string (bench-commas) ] ;
+
+(bench-fmt-time): ( ns -- str ) [
+  dup 0 <
+  [ drop "N/A" ]
+  [ dup 1000000 >=
+    [ dup 1000000 div >string
+      swap 1000000 rem 1000 div >string 3 (bench-zpad)
+      swap "." #append swap #append " ms" #append
+    ]
+    [ dup 1000 >=
+      [ dup 1000 div >string
+        swap 1000 rem >string 3 (bench-zpad)
+        swap "." #append swap #append " us" #append
+      ]
+      [ >string " ns" #append ]
+      if
+    ]
+    if
+  ]
+  if
+] ;
+
+(bench-fmt-bytes): ( n -- str ) [
+  dup 1048576 >=
+  [ dup 1048576 div >string
+    swap 1048576 rem 100 * 1048576 div >string 2 (bench-zpad)
+    swap "." #append swap #append " MB" #append
+  ]
+  [ dup 1024 >=
+    [ dup 1024 div >string
+      swap 1024 rem 100 * 1024 div >string 2 (bench-zpad)
+      swap "." #append swap #append " KB" #append
+    ]
+    [ >string " B" #append ]
+    if
+  ]
+  if
+] ;
+
+\ Per-column cell strings for one entry hash.
+(bench-iters):        ( entry -- n )   [ "iterations" @get 1 max ] ;
+(bench-cell-name):    ( entry -- str ) [ "label" @get ] ;
+(bench-cell-iters):   ( entry -- str ) [ (bench-iters) (bench-fmt-num) ] ;
+(bench-cell-elapsed): ( entry -- str ) [ "elapsed_ns" @get (bench-fmt-time) ] ;
+(bench-cell-epi):     ( entry -- str ) [ dup "elapsed_ns" @get swap (bench-iters) div (bench-fmt-time) ] ;
+(bench-cell-ipi):     ( entry -- str ) [ dup "total_instructions" @get swap (bench-iters) div (bench-fmt-num) ] ;
+(bench-cell-peak):    ( entry -- str ) [ "peak_stack_depth" @get (bench-fmt-num) ] ;
+(bench-cell-allocs):  ( entry -- str ) [ "total_allocations" @get (bench-fmt-num) ] ;
+(bench-cell-bytes):   ( entry -- str ) [ "total_bytes" @get (bench-fmt-bytes) ] ;
+
+\ One row: an array of formatted cell strings. The alloc/bytes columns are
+\ present only when the run collected allocation stats (--benchmark).
+(bench-row): ( entry -- cells ) [
+  { }
+  over (bench-cell-name) #push
+  over (bench-cell-iters) #push
+  over (bench-cell-elapsed) #push
+  over (bench-cell-epi) #push
+  over (bench-cell-ipi) #push
+  over (bench-cell-peak) #push
+  over "total_allocations" @has?
+  [ over (bench-cell-allocs) #push over (bench-cell-bytes) #push ] when
+  nip
+] ;
+
+(bench-headers): ( has-allocs -- headers ) [
+  [ { "Name" "Iters" "Elapsed" "Elapsed/iter" "Instrs/iter" "Peak Stack" "Allocs" "Bytes" } ]
+  [ { "Name" "Iters" "Elapsed" "Elapsed/iter" "Instrs/iter" "Peak Stack" } ]
+  if
+] ;
+
+\ { 0 1 .. n-1 }.
+(bench-iota): ( n -- array ) [ { } 0 <rot- (bench-iota-loop) ] ;
+(bench-iota-loop): ( acc i n -- acc' ) [
+  2dup < [ [ dup [ #push ] dip 1 + ] dip (bench-iota-loop) ] [ 2drop ] if
+] ;
+
+\ Per-column width: max of the header cell and every data cell in that column.
+(bench-col-cell-max): ( acc row i -- acc' ) [ #nth #len max ] ;
+(bench-rows-col-max): ( rows i -- maxlen ) [ [ (bench-col-cell-max) ] curry 0 swap #reduce ] ;
+(bench-widths): ( rows headers -- widths ) [
+  { } swap #push swap #append  \ allrows = { headers } ++ rows
+  dup 0 #nth #len (bench-iota)
+  swap [ swap (bench-rows-col-max) ] curry
+  #map #collect
+] ;
+
+\ Render one line: align each cell to its column width, 3-space gutter between
+\ columns, column 0 left-aligned and the rest right-aligned.
+(bench-align): ( cell width first? -- padded ) [ [ (bench-pad-right) ] [ (bench-pad-left) ] if ] ;
+(bench-render-line): ( cells widths -- line ) [ dup #len 0 "" (bench-render-loop) ] ;
+(bench-render-loop): ( cells widths n i acc -- line ) [
+  1 pick-n 3 pick-n <
+  [ 4 pick-n 2 pick-n #nth
+    4 pick-n 3 pick-n #nth
+    3 pick-n 0 = (bench-align)
+    2 pick-n 0 > [ "   " swap #append ] when
+    #append
+    swap 1 + swap
+    (bench-render-loop)
+  ]
+  [ nip nip nip nip ]
+  if
+] ;
+
+\ Print an array of entry hashes as a formatted table.
+(bench-print-entries): ( entries -- ) [
+  dup #empty?
+  [ drop ]
+  [ dup [ (bench-row) ] #map #collect
+    swap 0 #nth "total_allocations" @has? (bench-headers)
+    2dup (bench-widths)
+    2dup (bench-render-line) print-line
+    dup [ (bench-dashes) ] #map #collect over (bench-render-line) print-line
+    swap drop
+    [ (bench-render-line) print-line ] curry #each
+  ]
+  if
+] ;
+
+\ Auto-calibration: grow the iteration count until one window reaches ~100ms,
+\ mirroring the native scaling rule (cap 1e9 iterations).
+(bench-recompute-n): ( n elapsed -- n' ) [
+  dup 0 >
+  [ over 100000000 * swap div over 2 * max 1000000000 min ]
+  [ drop dup 2 * 1000000000 min ]
+  if
+  2dup < [ nip ] [ drop 2 * ] if
+  1000000000 min
+] ;
+(bench-auto-loop): ( n quot -- hash ) [
+  2dup (benchmark-n)
+  dup "elapsed_ns" @get
+  dup 100000000 >=
+  4 pick-n 1000000000 >= or
+  [ drop nip nip ]
+  [ nip swap [ (bench-recompute-n) ] dip (bench-auto-loop) ]
+  if
+] ;
+
+\\ Benchmark a quotation once, returning a timing hash.
+benchmark: ( quot -- hash ) [ 1 swap (benchmark-n) ] ;
+
+\\ Benchmark a quotation once and add a labelled entry to a report.
+benchmark-run: ( report label quot -- report ) [ 1 swap (benchmark-n) swap "label" swap @set (bench-report-push) ] ;
+
+\\ Benchmark a quotation n times and add a labelled entry to a report.
+benchmark-n: ( report label n quot -- report ) [ (benchmark-n) swap "label" swap @set (bench-report-push) ] ;
+
+\\ Auto-calibrate iterations targeting ~100ms and add a labelled entry to a report.
+benchmark-auto: ( report label quot -- report ) [ 1 swap (bench-auto-loop) swap "label" swap @set (bench-report-push) ] ;
+
+\\ Print a benchmark report as a formatted table.
+print-benchmark-report: ( report -- ) [ unmake-benchmark-report (bench-print-entries) ] ;
 
 \\ Run a quotation as a benchmark suite and print the report.
 run-benchmarks: ( quot -- ) [ make-benchmark-report swap call print-benchmark-report ] ;

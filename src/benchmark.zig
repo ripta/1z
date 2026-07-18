@@ -695,7 +695,6 @@ const VariantHistogramWalker = struct {
             .marker,
             .struct_type,
             .template,
-            .benchmark_report,
             .stack_effect,
             .task,
             .channel,

@@ -57,7 +57,6 @@ const TypeValue = opaque {};
 const TypeDescriptor = opaque {};
 const ProtocolDescriptor = opaque {};
 const ConstraintCombinator = opaque {};
-const BenchmarkReportHandle = opaque {};
 const ErrorObject = opaque {};
 const Task = opaque {};
 const Channel = opaque {};
@@ -154,7 +153,6 @@ const Value = union(enum) {
     struct_instance: *StructInstance,
     tagged: struct { tag: *const VirtualType, inner: *const Value },
     template: []const TemplateSegment,
-    benchmark_report: *BenchmarkReportHandle,
     stack_effect: StackEffect,
     error_value: *ErrorObject,
     task: *Task,

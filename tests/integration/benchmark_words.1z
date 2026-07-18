@@ -1,0 +1,43 @@
+use "testing" ;
+
+\ Each line fully consumes its report so nothing non-deterministic (a live
+\ benchmark timing) is left on the stack when --show-stack snapshots.
+
+"benchmark report type" test-section
+
+make-benchmark-report benchmark-report? "empty report is a benchmark-report" assert-true
+make-benchmark-report type-of benchmark-report = "type-of matches the type word" assert-true
+make-benchmark-report unmake-benchmark-report #len 0 = "empty report has no entries" assert-true
+42 benchmark-report? "fixnum is not a benchmark report" assert-false
+
+"benchmark building blocks" test-section
+
+[ 1 2 + drop ] benchmark "iterations" @get 1 "benchmark runs once" assert=
+[ 1 2 + drop ] benchmark "elapsed_ns" @get 0 >= "benchmark records elapsed" assert-true
+
+make-benchmark-report "add" [ 1 2 + drop ] benchmark-run unmake-benchmark-report #len 1 "benchmark-run adds one entry" assert=
+make-benchmark-report "add" [ 1 2 + drop ] benchmark-run unmake-benchmark-report 0 #nth "label" @get "add" "benchmark-run keeps the label" assert=
+make-benchmark-report "loop" 5 [ 1 drop ] benchmark-n unmake-benchmark-report 0 #nth "iterations" @get 5 "benchmark-n records n iterations" assert=
+make-benchmark-report "one" [ ] benchmark-run "two" [ ] benchmark-run unmake-benchmark-report #len 2 "two runs give two entries" assert=
+make-benchmark-report "auto" [ 1 drop ] benchmark-auto benchmark-report? "benchmark-auto returns a report" assert-true
+make-benchmark-report "auto" [ 1 drop ] benchmark-auto unmake-benchmark-report 0 #nth "iterations" @get 1 >= "benchmark-auto calibrates iterations" assert-true
+
+"number formatting" test-section
+
+1234567 (bench-fmt-num) "1,234,567" "thousands separators" assert=
+0 (bench-fmt-num) "0" "zero" assert=
+500 (bench-fmt-time) "500 ns" "nanoseconds" assert=
+1500 (bench-fmt-time) "1.500 us" "microseconds" assert=
+1500000 (bench-fmt-time) "1.500 ms" "milliseconds" assert=
+1234000000 (bench-fmt-time) "1234.000 ms" "large milliseconds" assert=
+512 (bench-fmt-bytes) "512 B" "bytes" assert=
+1536 (bench-fmt-bytes) "1.50 KB" "kilobytes" assert=
+1572864 (bench-fmt-bytes) "1.50 MB" "megabytes" assert=
+
+"table rendering" test-section
+
+"5" 3 (bench-zpad) "005" "zero pad" assert=
+"ab" 5 (bench-pad-right) "ab   " "left align" assert=
+"ab" 5 (bench-pad-left) "   ab" "right align" assert=
+{ "ab" "5" } { 4 5 } (bench-render-line) "ab         5" "render aligns columns" assert=
+3 (bench-iota) inspect "{ 0 1 2 }" "iota" assert=

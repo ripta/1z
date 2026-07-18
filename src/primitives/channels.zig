@@ -66,7 +66,7 @@ fn adoptForBuffer(ctx: *Context, ch: *Channel, value: Value) anyerror!channel_mo
             container_backing.retainValue(value);
             return .{ .value = value };
         },
-        .stream, .parameter, .benchmark_report, .iterator, .resource => return tasks.throwTaskArenaEscape(ctx, value),
+        .stream, .parameter, .iterator, .resource => return tasks.throwTaskArenaEscape(ctx, value),
         else => {},
     }
 

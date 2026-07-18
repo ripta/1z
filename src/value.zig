@@ -6,7 +6,6 @@ const Context = context_mod.Context;
 const StackEffect = @import("stack_effect.zig").StackEffect;
 const StackEffectParam = @import("stack_effect.zig").StackEffectParam;
 
-const BenchmarkReportHandle = @import("benchmark_report.zig").BenchmarkReportHandle;
 const Task = @import("task.zig").Task;
 const Iterator = @import("iterator.zig").Iterator;
 const Channel = @import("channel.zig").Channel;
@@ -393,7 +392,6 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
         .struct_type,
         .template,
         .doc_string,
-        .benchmark_report,
         .module,
         .sandbox_spec,
         => false,
@@ -410,13 +408,13 @@ fn containsBorrowedInSlice(items: []const Value) bool {
 /// Return the tag of the first task-arena-owned reference variant reachable from `val`,
 /// or null when there is none.
 ///
-/// The five matched variants are allocated on the creating task's arena and dangle once
+/// The four matched variants are allocated on the creating task's arena and dangle once
 /// that task is reaped, so the cross-task copy funnel refuses them. The walk mirrors
 /// `deepCopyValue`'s recursion, including closure segment captures, so a non-null result
 /// is exactly a copy that fails with `error.TaskArenaEscape`.
 pub fn findTaskArenaOwned(val: Value) ?std.meta.Tag(Value) {
     return switch (val) {
-        .iterator, .parameter, .benchmark_report, .resource, .stream => std.meta.activeTag(val),
+        .iterator, .parameter, .resource, .stream => std.meta.activeTag(val),
         .array => |arr| findArenaOwnedInSlice(arr.items),
         .vector => |v| findArenaOwnedInSlice(v.list.items),
         .quotation => |quot| blk: {
@@ -457,9 +455,11 @@ pub fn findTaskArenaOwned(val: Value) ?std.meta.Tag(Value) {
             }
             break :blk null;
         },
+
         .struct_instance => |si| findArenaOwnedInSlice(si.fields),
         .tagged => |t| findTaskArenaOwned(t.inner.*),
         .error_value => |err| if (err.data) |data| findTaskArenaOwned(data.*) else null,
+
         .fixnum,
         .float,
         .boolean,
@@ -1398,7 +1398,6 @@ pub const Value = union(enum) {
     struct_instance: *StructInstance,
     tagged: struct { tag: *const VirtualType, inner: *const Value },
     template: []const TemplateSegment,
-    benchmark_report: *BenchmarkReportHandle,
     stack_effect: StackEffect,
     error_value: *ErrorObject,
     task: *Task,
@@ -1562,7 +1561,6 @@ pub const Value = union(enum) {
                 }
                 try writer.writeByte('"');
             },
-            .benchmark_report => try writer.writeAll("<benchmark-report>"),
             .stack_effect => |effect| try effect.write(writer),
             .error_value => |err| try err.write(writer),
             .task => |t| {
@@ -1719,8 +1717,6 @@ pub const Value = union(enum) {
                 }
                 return true;
             },
-            // Benchmark reports are equal if they refer to the same object
-            .benchmark_report => |a| a == other.benchmark_report,
             .stack_effect => |a| a.eql(other.stack_effect),
             .error_value => |a| a.eql(other.error_value.*),
             .task => |a| a == other.task,
@@ -1900,11 +1896,6 @@ pub const Value = union(enum) {
                         .indexed => |idx| hasher.update(std.mem.asBytes(&idx.index)),
                     }
                 }
-            },
-            // Benchmark reports hash by pointer identity
-            .benchmark_report => |br| {
-                const ptr_val = @intFromPtr(br);
-                hasher.update(std.mem.asBytes(&ptr_val));
             },
             .stack_effect => |effect| {
                 for (effect.inputs) |param| {

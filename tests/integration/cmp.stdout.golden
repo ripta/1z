@@ -35,15 +35,15 @@ Stack: [ ]
 === cmp NaN ===
 Stack: [ ]
 PASS: nan left is error
-Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [src/prelude.1z:1:native.cmp <- src/prelude.1z:25:cmp <- src/prelude.1z:930:call <- src/prelude.1z:930:recover <- tests/integration/cmp.1z:25:try]> }> ]
+Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [src/prelude.1z:1:native.cmp <- src/prelude.1z:25:cmp <- src/prelude.1z:1119:call <- src/prelude.1z:1119:recover <- tests/integration/cmp.1z:25:try]> }> ]
 PASS: nan left error type
 Stack: [ ]
 PASS: nan right is error
-Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [src/prelude.1z:1:native.cmp <- src/prelude.1z:27:cmp <- src/prelude.1z:930:call <- src/prelude.1z:930:recover <- tests/integration/cmp.1z:27:try]> }> ]
+Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [src/prelude.1z:1:native.cmp <- src/prelude.1z:27:cmp <- src/prelude.1z:1119:call <- src/prelude.1z:1119:recover <- tests/integration/cmp.1z:27:try]> }> ]
 PASS: nan right error type
 Stack: [ ]
 PASS: nan both is error
-Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [src/prelude.1z:1:native.cmp <- src/prelude.1z:29:cmp <- src/prelude.1z:930:call <- src/prelude.1z:930:recover <- tests/integration/cmp.1z:29:try]> }> ]
+Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [src/prelude.1z:1:native.cmp <- src/prelude.1z:29:cmp <- src/prelude.1z:1119:call <- src/prelude.1z:1119:recover <- tests/integration/cmp.1z:29:try]> }> ]
 PASS: nan both error type
 Stack: [ ]
 === cmp cross-type fixnum+float ===
@@ -85,11 +85,11 @@ Stack: [ ]
 === cmp not-comparable types ===
 Stack: [ ]
 PASS: string vs fixnum is error
-Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [src/prelude.1z:210:native.cmp <- src/prelude.1z:930:call <- src/prelude.1z:930:recover <- tests/integration/cmp.1z:56:try]> }> ]
+Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [src/prelude.1z:209:native.cmp <- src/prelude.1z:1119:call <- src/prelude.1z:1119:recover <- tests/integration/cmp.1z:56:try]> }> ]
 PASS: string vs fixnum error type
 Stack: [ ]
 PASS: array vs fixnum is error
-Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [src/prelude.1z:210:native.cmp <- src/prelude.1z:930:call <- src/prelude.1z:930:recover <- tests/integration/cmp.1z:58:try]> }> ]
+Stack: [ <result:err result-error{ error: <error not-comparable: not-comparable [src/prelude.1z:209:native.cmp <- src/prelude.1z:1119:call <- src/prelude.1z:1119:recover <- tests/integration/cmp.1z:58:try]> }> ]
 PASS: array vs fixnum error type
 Stack: [ ]
 === cmp fallback: = derived from cmp ===

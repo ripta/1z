@@ -122,7 +122,6 @@ fn freezeCopy(ctx: *Context, val: Value) anyerror!FreezeResult {
         .module,
         .marker,
         .struct_type,
-        .benchmark_report,
         .task,
         .channel,
         .iterator,

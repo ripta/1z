@@ -58,16 +58,15 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     const unary = ctx.getDispatchUnarySentinel();
 
     const inspect_type_names = [_][]const u8{
-        "fixnum",      "float",            "bignum",
-        "boolean",     "string",           "symbol",
-        "array",       "quotation",        "hash",
-        "vector",      "byte-array",       "set",
-        "mutable-map", "stream",           "parameter",
-        "module",      "marker",           "struct-type",
-        "template",    "benchmark-report", "stack-effect",
-        "error",       "task",             "channel",
-        "iterator",    "doc-string",       "type",
-        "unit",
+        "fixnum",      "float",        "bignum",
+        "boolean",     "string",       "symbol",
+        "array",       "quotation",    "hash",
+        "vector",      "byte-array",   "set",
+        "mutable-map", "stream",       "parameter",
+        "module",      "marker",       "struct-type",
+        "template",    "stack-effect", "error",
+        "task",        "channel",      "iterator",
+        "doc-string",  "type",         "unit",
     };
 
     const inspect_id = ctx.resolveDispatchId("inspect").?;

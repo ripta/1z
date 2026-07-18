@@ -885,7 +885,7 @@ const DeepCopyError = Allocator.Error || error{TaskArenaEscape};
 ///
 /// Reference types owned by process-lifetime memory (channel, task, module, type values,
 /// and the parse-time variants) are returned as-is. Arena-owned reference types (iterator,
-/// parameter, benchmark_report, resource, stream) fail with `error.TaskArenaEscape`: they
+/// parameter, resource, stream) fail with `error.TaskArenaEscape`: they
 /// die with the sending task's arena, so passing them through would hand the receiver a
 /// dangling pointer. Boundary callers convert that error via `deepCopyForTransfer`.
 ///
@@ -1050,7 +1050,7 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
 
         // Arena-owned reference types die with the sending task's arena. A new variant must be
         // classified here deliberately; never default a reference type to pass-through.
-        .stream, .parameter, .benchmark_report, .iterator, .resource => error.TaskArenaEscape,
+        .stream, .parameter, .iterator, .resource => error.TaskArenaEscape,
     };
 }
 
@@ -1061,7 +1061,6 @@ pub fn throwTaskArenaEscape(ctx: *Context, val: Value) anyerror {
         .iterator => "iterator cannot cross task boundary; materialize it with #collect and send the array instead",
         .stream => "stream cannot cross task boundary; send the file descriptor and rebuild with fd>stream in the receiving task",
         .parameter => "parameter cannot cross task boundary; create it with make-parameter in the receiving task, bindings resolve by name",
-        .benchmark_report => "benchmark report cannot cross task boundary; print or aggregate it in the task that built it",
         .resource => "resource cannot cross task boundary; open the resource in the task that uses it",
         else => "value cannot cross task boundary; it is owned by the sending task's arena",
     } else "value cannot cross task boundary; it is owned by the sending task's arena";

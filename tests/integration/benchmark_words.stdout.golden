@@ -1,0 +1,60 @@
+=== benchmark report type ===
+Stack: [ ]
+PASS: empty report is a benchmark-report
+Stack: [ ]
+PASS: type-of matches the type word
+Stack: [ ]
+PASS: empty report has no entries
+Stack: [ ]
+PASS: fixnum is not a benchmark report
+Stack: [ ]
+=== benchmark building blocks ===
+Stack: [ ]
+PASS: benchmark runs once
+Stack: [ ]
+PASS: benchmark records elapsed
+Stack: [ ]
+PASS: benchmark-run adds one entry
+Stack: [ ]
+PASS: benchmark-run keeps the label
+Stack: [ ]
+PASS: benchmark-n records n iterations
+Stack: [ ]
+PASS: two runs give two entries
+Stack: [ ]
+PASS: benchmark-auto returns a report
+Stack: [ ]
+PASS: benchmark-auto calibrates iterations
+Stack: [ ]
+=== number formatting ===
+Stack: [ ]
+PASS: thousands separators
+Stack: [ ]
+PASS: zero
+Stack: [ ]
+PASS: nanoseconds
+Stack: [ ]
+PASS: microseconds
+Stack: [ ]
+PASS: milliseconds
+Stack: [ ]
+PASS: large milliseconds
+Stack: [ ]
+PASS: bytes
+Stack: [ ]
+PASS: kilobytes
+Stack: [ ]
+PASS: megabytes
+Stack: [ ]
+=== table rendering ===
+Stack: [ ]
+PASS: zero pad
+Stack: [ ]
+PASS: left align
+Stack: [ ]
+PASS: right align
+Stack: [ ]
+PASS: render aligns columns
+Stack: [ ]
+PASS: iota
+Stack: [ ]

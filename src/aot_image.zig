@@ -184,7 +184,6 @@ pub fn classifyValue(val: Value) Classification {
         .module,
         .stream,
         .resource,
-        .benchmark_report,
         .error_value,
         .task,
         .channel,

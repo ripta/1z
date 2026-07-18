@@ -19,12 +19,6 @@ test-await-parameter: ( -- ) [
   ] task-arena-escape: "parameter rejected at await" assert-error-type
 ] ;
 
-test-await-benchmark-report: ( -- ) [
-  [
-    [ [ make-benchmark-report ] spawn await ] task-scope
-  ] task-arena-escape: "benchmark report rejected at await" assert-error-type
-] ;
-
 test-await-resource: ( -- ) [
   [
     [ [ "dummy" <test-resource> ] spawn await ] task-scope
@@ -51,12 +45,6 @@ test-timeout-parameter: ( -- ) [
   [
     [ [ p: [ 42 ] make-parameter ] 100 milliseconds with-timeout ] task-scope
   ] task-arena-escape: "parameter rejected at with-timeout" assert-error-type
-] ;
-
-test-timeout-benchmark-report: ( -- ) [
-  [
-    [ [ make-benchmark-report ] 100 milliseconds with-timeout ] task-scope
-  ] task-arena-escape: "benchmark report rejected at with-timeout" assert-error-type
 ] ;
 
 test-timeout-resource: ( -- ) [
@@ -124,12 +112,6 @@ test-send-unbuffered-parameter: ( -- ) [
   ] task-arena-escape: "parameter rejected at unbuffered send" assert-error-type
 ] ;
 
-test-send-unbuffered-benchmark-report: ( -- ) [
-  [
-    [ <channel> make-benchmark-report swap send ] task-scope
-  ] task-arena-escape: "benchmark report rejected at unbuffered send" assert-error-type
-] ;
-
 test-send-unbuffered-resource: ( -- ) [
   [
     [ <channel> "dummy" <test-resource> swap send ] task-scope
@@ -152,12 +134,6 @@ test-send-buffered-parameter: ( -- ) [
   [
     [ 1 <buffered-channel> p: [ 42 ] make-parameter swap send ] task-scope
   ] task-arena-escape: "parameter rejected at buffered send" assert-error-type
-] ;
-
-test-send-buffered-benchmark-report: ( -- ) [
-  [
-    [ 1 <buffered-channel> make-benchmark-report swap send ] task-scope
-  ] task-arena-escape: "benchmark report rejected at buffered send" assert-error-type
 ] ;
 
 test-send-buffered-resource: ( -- ) [
@@ -209,12 +185,10 @@ test-await-collected-iterator: ( -- ) [
 
 test-await-iterator
 test-await-parameter
-test-await-benchmark-report
 test-await-resource
 test-await-stream
 test-timeout-iterator
 test-timeout-parameter
-test-timeout-benchmark-report
 test-timeout-resource
 test-timeout-stream
 test-await-all-iterator
@@ -224,12 +198,10 @@ test-await-nested-capture
 test-await-mixed-share
 test-send-unbuffered-iterator
 test-send-unbuffered-parameter
-test-send-unbuffered-benchmark-report
 test-send-unbuffered-resource
 test-send-unbuffered-stream
 test-send-buffered-iterator
 test-send-buffered-parameter
-test-send-buffered-benchmark-report
 test-send-buffered-resource
 test-send-buffered-stream
 test-send-nested-array

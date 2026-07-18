@@ -268,7 +268,6 @@ pub fn writeValuePreview(val: Value, writer: anytype) !void {
         .marker => try writer.writeAll("<marker>"),
         .struct_type => try writer.writeAll("<struct-type>"),
         .template => try writer.writeAll("<template>"),
-        .benchmark_report => try writer.writeAll("<benchmark-report>"),
         .stack_effect => try writer.writeAll("<stack-effect>"),
         .error_value => try writer.writeAll("<error>"),
         .doc_string => try writer.writeAll("<doc-string>"),

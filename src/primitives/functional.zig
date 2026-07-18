@@ -12,26 +12,18 @@ const Closure = value_mod.Closure;
 const Segment = value_mod.Segment;
 const benchmark_mod = @import("../benchmark.zig");
 const BenchmarkStats = benchmark_mod.BenchmarkStats;
-const BenchmarkReport = @import("../benchmark_report.zig").BenchmarkReport(Value);
-const BenchmarkReportHandle = @import("../benchmark_report.zig").BenchmarkReportHandle;
 
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
 const container_backing = @import("../container_backing.zig");
 
 const popQuotation = helpers.popQuotation;
-const popString = helpers.popString;
 const popFixnum = helpers.popFixnum;
 
 pub const primitives = [_]Primitive{
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .doc = "Partially apply a value to a quotation.", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .doc = "Concatenate two quotations into one.", .func = nativeCompose },
-    .{ .name = "benchmark", .stack_effect = "quot -- hash", .doc = "Execute quotation once and return timing stats as a hash.", .func = nativeBenchmark },
-    .{ .name = "make-benchmark-report", .stack_effect = "-- report", .doc = "Create a benchmark report collector.", .func = nativeMakeBenchmarkReport },
-    .{ .name = "benchmark-run", .stack_effect = "report label quot -- report", .doc = "Benchmark a quotation once and add to report.", .func = nativeBenchmarkRun },
-    .{ .name = "benchmark-n", .stack_effect = "report label n quot -- report", .doc = "Benchmark a quotation N times and add to report.", .func = nativeBenchmarkN },
-    .{ .name = "benchmark-auto", .stack_effect = "report label quot -- report", .doc = "Auto-calibrate iterations targeting ~100ms and add to report.", .func = nativeBenchmarkAuto },
-    .{ .name = "print-benchmark-report", .stack_effect = "report --", .doc = "Print benchmark results as a formatted table.", .func = nativePrintBenchmarkReport },
+    .{ .name = "(benchmark-n)", .stack_effect = "n quot -- hash", .doc = "Run quot n times in one timing window; return the raw timing hash.", .func = nativeBenchmarkNRaw },
 };
 
 /// The callable instruction body of a quotation or closure, or null for a
@@ -236,12 +228,6 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
     }
 }
 
-/// Execute a quotation and return benchmark results as a hash.
-/// Shared core logic for `benchmark` and `benchmark-run`.
-fn executeBenchmark(ctx: *Context, quot: Quotation) !*HashTable {
-    return executeBenchmarkN(ctx, quot, 1);
-}
-
 /// Execute a quotation N times inside a single timing window.
 fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
     // Create temporary benchmark stats for this execution
@@ -319,346 +305,14 @@ fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
     return hash;
 }
 
-/// benchmark ( quot -- hash ) - Execute quotation and return benchmark stats
-pub fn nativeBenchmark(ctx: *Context) anyerror!void {
+/// (benchmark-n) ( n quot -- hash ) - Run quot n times in one timing window and
+/// return the raw timing hash. The building block for the 1z benchmark words.
+pub fn nativeBenchmarkNRaw(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
-    const hash = try executeBenchmark(ctx, quot);
-    try ctx.stack.pushMoved(.{ .hash = hash });
-}
-
-/// make-benchmark-report ( -- report ) - Create a benchmark report collector
-fn nativeMakeBenchmarkReport(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-    const report = alloc.create(BenchmarkReport) catch return error.OutOfMemory;
-    report.* = BenchmarkReport.init(alloc);
-    try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
-}
-
-/// benchmark-run ( report label quot -- report ) - Benchmark a quotation once and add to report
-fn nativeBenchmarkRun(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-
-    const label = try popString(ctx);
-    const val = try ctx.stack.pop();
-    const report = switch (val) {
-        .benchmark_report => |r| @as(*BenchmarkReport, @ptrCast(@alignCast(r))),
-        else => {
-            helpers.setTypeMismatchError(ctx, "benchmark-report", val);
-            return error.TypeMismatch;
-        },
-    };
-
-    const hash = try executeBenchmark(ctx, quot);
-    defer hash.header.release();
-    try report.addEntry(label, try snapshotResults(ctx, hash));
-    try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
-}
-
-/// Copy a benchmark result hash's entries into a raw arena-lifetime map for
-/// a report entry. The report outlives the refcounted hash, and every stored
-/// value is a fixnum, so a shallow arena copy is the whole ownership story.
-fn snapshotResults(ctx: *Context, hash: *HashTable) !*std.StringHashMapUnmanaged(Value) {
-    const alloc = ctx.quotationAllocator();
-    const copy = alloc.create(std.StringHashMapUnmanaged(Value)) catch return error.OutOfMemory;
-    copy.* = .{};
-    try copy.ensureTotalCapacity(alloc, hash.map.count());
-    var iter = hash.map.iterator();
-    while (iter.next()) |entry| {
-        const key = alloc.dupe(u8, entry.key_ptr.*) catch return error.OutOfMemory;
-        copy.putAssumeCapacityNoClobber(key, entry.value_ptr.*);
-    }
-    return copy;
-}
-
-/// benchmark-n ( report label n quot -- report ) - Benchmark a quotation N times and add to report
-fn nativeBenchmarkN(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-
     const n_raw = try popFixnum(ctx);
     if (n_raw < 1) return error.InvalidArgument;
-    const n: u64 = @intCast(n_raw);
-
-    const label = try popString(ctx);
-    const val = try ctx.stack.pop();
-    const report = switch (val) {
-        .benchmark_report => |r| @as(*BenchmarkReport, @ptrCast(@alignCast(r))),
-        else => {
-            helpers.setTypeMismatchError(ctx, "benchmark-report", val);
-            return error.TypeMismatch;
-        },
-    };
-
-    const hash = try executeBenchmarkN(ctx, quot, n);
-    defer hash.header.release();
-    try report.addEntry(label, try snapshotResults(ctx, hash));
-    try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
-}
-
-/// benchmark-auto ( report label quot -- report ) - Auto-calibrate iterations targeting ~100ms
-fn nativeBenchmarkAuto(ctx: *Context) anyerror!void {
-    const quot = try popQuotation(ctx);
-    const label = try popString(ctx);
-    const val = try ctx.stack.pop();
-    const report = switch (val) {
-        .benchmark_report => |r| @as(*BenchmarkReport, @ptrCast(@alignCast(r))),
-        else => {
-            helpers.setTypeMismatchError(ctx, "benchmark-report", val);
-            return error.TypeMismatch;
-        },
-    };
-
-    const target_ns: u64 = 100_000_000; // 100ms
-    const max_iters: u64 = 1_000_000_000;
-
-    var n: u64 = 1;
-    var final_hash: ?*HashTable = null;
-
-    while (true) {
-        const hash = try executeBenchmarkN(ctx, quot, n);
-        const elapsed_ns: u64 = @intCast(getHashInt(&hash.map, "elapsed_ns") orelse 0);
-
-        if (elapsed_ns >= target_ns or n >= max_iters) {
-            final_hash = hash;
-            break;
-        }
-
-        // Calibration round: this result is discarded, so drop its reference.
-        hash.header.release();
-
-        const scaled = if (elapsed_ns > 0)
-            @min(max_iters, @max(n * 2, n * target_ns / elapsed_ns))
-        else
-            @min(max_iters, n * 2);
-
-        n = if (scaled > n) scaled else n * 2;
-        if (n > max_iters) n = max_iters;
-    }
-
-    defer final_hash.?.header.release();
-    try report.addEntry(label, try snapshotResults(ctx, final_hash.?));
-    try ctx.stack.push(.{ .benchmark_report = @as(*BenchmarkReportHandle, @ptrCast(report)) });
-}
-
-/// print-benchmark-report - Polymorphic:
-///   ( report -- )      print all entries as table
-///   ( label hash -- )  print single benchmark as one-row table
-fn nativePrintBenchmarkReport(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
-    const val = try ctx.stack.pop();
-    defer container_backing.releaseValue(val);
-
-    switch (val) {
-        .benchmark_report => |report| {
-            try printReportTable(ctx, @as(*BenchmarkReport, @ptrCast(@alignCast(report))));
-        },
-        .hash => |hash| {
-            // Single benchmark: label is on the stack
-            const label_val = try ctx.stack.pop();
-            const label = switch (label_val) {
-                .string => |s| s,
-                else => {
-                    helpers.setTypeMismatchError(ctx, "string", label_val);
-                    return error.TypeMismatch;
-                },
-            };
-            // Create a temporary single-entry report
-            var tmp_report = BenchmarkReport.init(alloc);
-            try tmp_report.addEntry(label, try snapshotResults(ctx, hash));
-            try printReportTable(ctx, &tmp_report);
-        },
-        else => {
-            helpers.setTypeMismatchError(ctx, "benchmark-report or hash", val);
-            return error.TypeMismatch;
-        },
-    }
-}
-
-// =============================================================================
-// Table formatter
-// =============================================================================
-
-fn getHashInt(map: *const std.StringHashMapUnmanaged(Value), key: []const u8) ?i64 {
-    const val = map.get(key) orelse return null;
-    return switch (val) {
-        .fixnum => |i| i,
-        else => null,
-    };
-}
-
-fn formatToBuffer(buf: []u8, comptime fmt_fn: enum { time, bytes, number }, value: anytype) []const u8 {
-    var stream = std.io.fixedBufferStream(buf);
-    const writer = stream.writer();
-    switch (fmt_fn) {
-        .time => BenchmarkStats.formatTime(writer, value) catch {},
-        .bytes => BenchmarkStats.formatBytes(writer, @as(usize, @intCast(value))) catch {},
-        .number => BenchmarkStats.formatNumber(writer, @as(u64, @intCast(value))) catch {},
-    }
-    return stream.getWritten();
-}
-
-const Column = struct {
-    header: []const u8,
-    width: usize,
-};
-
-fn printReportTable(_: *Context, report: *BenchmarkReport) !void {
-    const entries = report.entries.items;
-    if (entries.len == 0) return;
-
-    const has_allocs = entries[0].results.get("total_allocations") != null;
-
-    // Columns: Name, Iters, Elapsed, Elapsed/iter, Instrs/iter, Peak Stack [, Allocs, Bytes]
-    const max_col_count = 8;
-
-    var columns: [max_col_count]Column = undefined;
-    var col_count: usize = undefined;
-
-    columns[0] = .{ .header = "Name", .width = 4 };
-    columns[1] = .{ .header = "Iters", .width = 5 };
-    columns[2] = .{ .header = "Elapsed", .width = 7 };
-    columns[3] = .{ .header = "Elapsed/iter", .width = 12 };
-    columns[4] = .{ .header = "Instrs/iter", .width = 11 };
-    columns[5] = .{ .header = "Peak Stack", .width = 10 };
-    col_count = 6;
-
-    if (has_allocs) {
-        columns[6] = .{ .header = "Allocs", .width = 6 };
-        columns[7] = .{ .header = "Bytes", .width = 5 };
-        col_count = 8;
-    }
-
-    const max_entries = 64;
-    const actual_entries = @min(entries.len, max_entries);
-
-    var cell_bufs: [max_entries][max_col_count][64]u8 = undefined;
-    var cell_lens: [max_entries][max_col_count]usize = undefined;
-
-    for (0..actual_entries) |row| {
-        const entry = entries[row];
-        const h = entry.results;
-
-        // Label
-        const label_len = @min(entry.label.len, 64);
-        @memcpy(cell_bufs[row][0][0..label_len], entry.label[0..label_len]);
-        cell_lens[row][0] = label_len;
-
-        // Iters
-        const iters = getHashInt(h, "iterations") orelse 1;
-        const iters_u: u64 = @intCast(if (iters < 1) 1 else iters);
-        const it_str = formatToBuffer(&cell_bufs[row][1], .number, iters_u);
-        cell_lens[row][1] = it_str.len;
-
-        // Elapsed
-        const elapsed_ns = getHashInt(h, "elapsed_ns") orelse 0;
-        const elapsed_str = formatToBuffer(&cell_bufs[row][2], .time, @as(i128, elapsed_ns));
-        cell_lens[row][2] = elapsed_str.len;
-
-        // Elapsed/iter
-        const elapsed_per_iter: i128 = if (iters_u > 0) @divTrunc(@as(i128, elapsed_ns), @as(i128, iters_u)) else @as(i128, elapsed_ns);
-        const epi_str = formatToBuffer(&cell_bufs[row][3], .time, elapsed_per_iter);
-        cell_lens[row][3] = epi_str.len;
-
-        // Instrs/iter
-        const total_i = getHashInt(h, "total_instructions") orelse 0;
-        const total_u: u64 = @intCast(if (total_i < 0) 0 else total_i);
-        const instrs_per_iter: u64 = if (iters_u > 0) total_u / iters_u else total_u;
-        const ipi_str = formatToBuffer(&cell_bufs[row][4], .number, instrs_per_iter);
-        cell_lens[row][4] = ipi_str.len;
-
-        // Peak Stack
-        const peak = getHashInt(h, "peak_stack_depth") orelse 0;
-        const pk_str = formatToBuffer(&cell_bufs[row][5], .number, peak);
-        cell_lens[row][5] = pk_str.len;
-
-        if (has_allocs) {
-            // Total Allocs
-            const allocs = getHashInt(h, "total_allocations") orelse 0;
-            const al_str = formatToBuffer(&cell_bufs[row][6], .number, allocs);
-            cell_lens[row][6] = al_str.len;
-
-            // Total Bytes
-            const bytes = getHashInt(h, "total_bytes") orelse 0;
-            const by_str = formatToBuffer(&cell_bufs[row][7], .bytes, bytes);
-            cell_lens[row][7] = by_str.len;
-        }
-    }
-
-    // Compute column widths (max of header and all cells)
-    for (0..col_count) |col| {
-        for (0..actual_entries) |row| {
-            if (cell_lens[row][col] > columns[col].width) {
-                columns[col].width = cell_lens[row][col];
-            }
-        }
-    }
-
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(report.allocator);
-    const writer = output.writer(report.allocator);
-
-    // Header row
-    for (0..col_count) |col| {
-        if (col > 0) try writer.writeAll("   ");
-        const w = columns[col].width;
-        const h = columns[col].header;
-        if (col == 0) {
-            // Label: left-aligned
-            try writer.writeAll(h);
-            try writeSpaces(writer, w - h.len);
-        } else {
-            // Numeric: right-aligned
-            try writeSpaces(writer, w - h.len);
-            try writer.writeAll(h);
-        }
-    }
-    try writer.writeAll("\n");
-
-    // Sep row
-    for (0..col_count) |col| {
-        if (col > 0) try writer.writeAll("   ");
-        try writeDashes(writer, columns[col].width);
-    }
-    try writer.writeAll("\n");
-
-    // Dem data rows
-    for (0..actual_entries) |row| {
-        for (0..col_count) |col| {
-            if (col > 0) try writer.writeAll("   ");
-            const w = columns[col].width;
-            const cell = cell_bufs[row][col][0..cell_lens[row][col]];
-            if (col == 0) {
-                // Label: left-aligned
-                try writer.writeAll(cell);
-                try writeSpaces(writer, w - cell.len);
-            } else {
-                // Numeric: right-aligned
-                try writeSpaces(writer, w - cell.len);
-                try writer.writeAll(cell);
-            }
-        }
-        try writer.writeAll("\n");
-    }
-
-    // Buffered writes causing problems =\
-    const fd = std.posix.STDOUT_FILENO;
-    var written: usize = 0;
-    while (written < output.items.len) {
-        written += std.posix.write(fd, output.items[written..]) catch break;
-    }
-}
-
-fn writeSpaces(writer: anytype, count: usize) !void {
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        try writer.writeAll(" ");
-    }
-}
-
-fn writeDashes(writer: anytype, count: usize) !void {
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        try writer.writeAll("-");
-    }
+    const hash = try executeBenchmarkN(ctx, quot, @intCast(n_raw));
+    try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
 test "curry over a compiled base produces a closure carrying the base code_ptr" {
