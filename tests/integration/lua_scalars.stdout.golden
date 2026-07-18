@@ -1,0 +1,14 @@
+=== lua scalar exchange ===
+Stack: [ ]
+PASS: eval sets a global; read as fixnum
+PASS: eval>fixnum returns a fixnum result
+PASS: eval>float returns a float result
+PASS: eval>string returns a string result
+PASS: eval>boolean true
+PASS: eval>boolean false
+PASS: fixnum global round-trips
+PASS: float global round-trips
+PASS: string global round-trips
+PASS: boolean true global round-trips
+PASS: boolean false global round-trips
+Stack: [ ]

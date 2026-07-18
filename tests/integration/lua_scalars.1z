@@ -1,0 +1,30 @@
+use "testing" ;
+use "lua" ;
+
+"lua scalar exchange" test-section
+
+[
+  \ eval runs source for side effects; the global it sets reads back
+  dup "answer = 42" eval
+  dup "answer" get-global>fixnum 42 "eval sets a global; read as fixnum" assert=
+
+  \ eval> readers return the single result as each scalar type
+  dup "return 6 * 7" eval>fixnum 42 "eval>fixnum returns a fixnum result" assert=
+  dup "return 3.5 + 1.0" eval>float 4.5 "eval>float returns a float result" assert=
+  dup "return 'hello, ' .. 'lua'" eval>string "hello, lua" "eval>string returns a string result" assert=
+  dup "return 2 > 1" eval>boolean "eval>boolean true" assert-true
+  dup "return 2 < 1" eval>boolean "eval>boolean false" assert-false
+
+  \ set-global / get-global> round-trips one value of each scalar type
+  dup "n" 100 set-global
+  dup "n" get-global>fixnum 100 "fixnum global round-trips" assert=
+  dup "x" 2.5 set-global
+  dup "x" get-global>float 2.5 "float global round-trips" assert=
+  dup "s" "roundtrip" set-global
+  dup "s" get-global>string "roundtrip" "string global round-trips" assert=
+  dup "flag" t set-global
+  dup "flag" get-global>boolean "boolean true global round-trips" assert-true
+  dup "off" f set-global
+  dup "off" get-global>boolean "boolean false global round-trips" assert-false
+  drop
+] using-lua

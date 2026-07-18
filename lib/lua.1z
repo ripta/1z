@@ -60,7 +60,7 @@ use "os/path" ;
   (open-libs):    "luaL_openlibs" ffi{ ptr -> void }
   (close):        "lua_close" ffi{ ptr -> void }
   (load-string):  "luaL_loadstring" ffi{ ptr cstring -> i32 }
-  (pcallk):       "lua_pcallk" ffi{ ptr i32 i32 i32 isize ptr -> i32 }
+  (pcallk):       "lua_pcallk" ffi{ ptr i32 i32 i32 isize isize -> i32 }
   (push-number):  "lua_pushnumber" ffi{ ptr f64 -> void }
   (push-integer): "lua_pushinteger" ffi{ ptr i64 -> void }
   (push-string):  "lua_pushstring" ffi{ ptr cstring -> cstring }
@@ -69,9 +69,9 @@ use "os/path" ;
   (set-global):   "lua_setglobal" ffi{ ptr cstring -> void }
   (get-global):   "lua_getglobal" ffi{ ptr cstring -> i32 }
   (type):       "lua_type" ffi{ ptr i32 -> i32 }
-  (tonumberx):  "lua_tonumberx" ffi{ ptr i32 ptr -> f64 }
-  (tointegerx): "lua_tointegerx" ffi{ ptr i32 ptr -> i64 }
-  (tolstring):  "lua_tolstring" ffi{ ptr i32 ptr -> cstring }
+  (tonumberx):  "lua_tonumberx" ffi{ ptr i32 isize -> f64 }
+  (tointegerx): "lua_tointegerx" ffi{ ptr i32 isize -> i64 }
+  (tolstring):  "lua_tolstring" ffi{ ptr i32 isize -> cstring }
   (toboolean):  "lua_toboolean" ffi{ ptr i32 -> i32 }
   (gettop):     "lua_gettop" ffi{ ptr -> i32 }
   (settop):     "lua_settop" ffi{ ptr i32 -> void }
@@ -97,3 +97,95 @@ close-lua: ( lua-state -- ) [ unmake-lua-state resource-close ] ;
 
 \\ Open a Lua state for the duration of a quotation, closing it on every exit path.
 using-lua: ( ..a quot: ( ..a lua: lua-state -- ..b ) -- ..b ) [ [ open ] dip over [ close-lua ] curry cleanup ] ;
+
+\ Running code and exchanging scalars
+
+\\ The lua_pcall/luaL_loadstring success status.
+LUA_OK: 0 ;
+
+\\ Pass a load or call status through when OK, otherwise fail.
+\\
+\\ The informative Lua error message and status code arrive with the ELuaError mapping.
+\\ Until then a non-OK status fails loudly with a generic error.
+(check-ok): ( state rc -- state ) [
+  LUA_OK = [ ] [ f "lua evaluation failed" EUserThrown make-error throw ] if
+] ;
+
+\\ lua_pcall(state, nargs, nresults, 0): no message handler, no continuation.
+(pcall): ( state nargs nresults -- rc ) [ 0 0 0 (pcallk) ] ;
+
+\\ Compile src and leave the chunk on the Lua stack, failing on a syntax error.
+(load): ( state src -- state ) [ over [ (load-string) ] dip swap (check-ok) ] ;
+
+\\ Call the chunk on top of the Lua stack with no arguments, keeping nresults results.
+(call-n): ( state nresults -- state ) [ over [ 0 swap (pcall) ] dip swap (check-ok) ] ;
+
+\\ Load and run src, keeping nresults results on the Lua stack.
+(eval-n): ( state src nresults -- state ) [ [ (load) ] dip (call-n) ] ;
+
+\\ lua_pop(state, n): drop the top n values off the Lua stack.
+(pop): ( state n -- ) [ -1 * 1 - (settop) ] ;
+
+\ Read the value at Lua stack index idx as each scalar type.
+(to-integer): ( state idx -- fixnum )  [ 0 (tointegerx) ] ;
+(to-number):  ( state idx -- float )   [ 0 (tonumberx) ] ;
+(to-lstring): ( state idx -- string )  [ 0 (tolstring) ] ;
+(to-boolean): ( state idx -- boolean ) [ (toboolean) 1 = ] ;
+
+\\ Read the value on top of the Lua stack with reader, then pop it.
+(read-pop): ( state reader: ( state idx -- value ) -- value ) [
+  [ dup -1 ] dip call swap 1 (pop)
+] ;
+
+\\ Run Lua source for its side effects, discarding any results.
+eval: ( lua: lua-state src: string -- ) [ [ unmake-lua-state ] dip 0 (eval-n) drop ] ;
+
+\\ Run Lua source and read its single result as a fixnum.
+eval>fixnum: ( lua: lua-state src: string -- fixnum ) [ [ unmake-lua-state ] dip 1 (eval-n) [ (to-integer) ] (read-pop) ] ;
+
+\\ Run Lua source and read its single result as a float.
+eval>float: ( lua: lua-state src: string -- float ) [ [ unmake-lua-state ] dip 1 (eval-n) [ (to-number) ] (read-pop) ] ;
+
+\\ Run Lua source and read its single result as a string.
+eval>string: ( lua: lua-state src: string -- string ) [ [ unmake-lua-state ] dip 1 (eval-n) [ (to-lstring) ] (read-pop) ] ;
+
+\\ Run Lua source and read its single result as a boolean.
+eval>boolean: ( lua: lua-state src: string -- boolean ) [ [ unmake-lua-state ] dip 1 (eval-n) [ (to-boolean) ] (read-pop) ] ;
+
+\\ Convert a 1z boolean to the Lua C boolean integer.
+(to-lua-bool): ( boolean -- i32 ) [ [ 1 ] [ 0 ] if ] ;
+
+\\ Push a 1z scalar onto the Lua stack, dispatching on its type.
+(push-value): ( state value -- ) [
+  dup type-name {
+    { "fixnum" [ (push-integer) ] }
+    { "float" [ (push-number) ] }
+    { "string" [ (push-string) drop ] }
+    { "boolean" [ (to-lua-bool) (push-boolean) ] }
+    [ "fixnum, float, string, or boolean" throw-type-error ]
+  } case
+] ;
+
+\\ Push value and assign it to the named Lua global.
+(do-set-global): ( state name value -- ) [ 2 pick-n swap (push-value) (set-global) ] ;
+
+\\ Push the named Lua global onto the stack, discarding its type tag.
+(push-global): ( state name -- state ) [ over [ (get-global) drop ] dip ] ;
+
+\\ Push the named Lua global, read it with reader, then pop it.
+(with-global): ( state name reader: ( state idx -- value ) -- value ) [ [ (push-global) ] dip (read-pop) ] ;
+
+\\ Set a Lua global from a 1z scalar value.
+set-global: ( lua: lua-state name: string value -- ) [ [ unmake-lua-state ] 2dip (do-set-global) ] ;
+
+\\ Read a Lua global as a fixnum.
+get-global>fixnum: ( lua: lua-state name: string -- fixnum ) [ [ unmake-lua-state ] dip [ (to-integer) ] (with-global) ] ;
+
+\\ Read a Lua global as a float.
+get-global>float: ( lua: lua-state name: string -- float ) [ [ unmake-lua-state ] dip [ (to-number) ] (with-global) ] ;
+
+\\ Read a Lua global as a string.
+get-global>string: ( lua: lua-state name: string -- string ) [ [ unmake-lua-state ] dip [ (to-lstring) ] (with-global) ] ;
+
+\\ Read a Lua global as a boolean.
+get-global>boolean: ( lua: lua-state name: string -- boolean ) [ [ unmake-lua-state ] dip [ (to-boolean) ] (with-global) ] ;
