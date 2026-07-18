@@ -1,0 +1,99 @@
+\ lib/lua.1z - Embedded Lua 5.4 via dynamic FFI over the vendored liblua5.4
+
+use "ffi" ;
+use "os/path" ;
+
+\ Dylib resolution
+\
+\ liblua5.4 is vendored and installed beside the interpreter (zig-out/ext), not on
+\ the system loader path. Probe a short list of candidate absolute paths and open
+\ the first that exists. An installed interpreter finds the sibling ext directory
+\ next to a real stdlib directory. In the dev/test tree zig-out/lib is a symlink to
+\ the source lib, so the stdlib anchor resolves into the source tree; the working
+\ directory candidate covers that case, matching the toy-library test convention.
+\
+\ Resolution runs once, at load: the path is chosen, the library opened, and the
+\ close function captured here, so `open` never re-probes or re-opens per call.
+
+\\ Shared-library extension for the host OS.
+(lib-ext): ( -- str ) [ sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if ] ;
+
+\\ True when the path is a string naming an existing file. A non-string (an absent
+\\ candidate reported as f) is not a path.
+(exists-path?): ( path-or-f -- bool ) [ dup string? [ path-exists? ] [ drop f ] if ] ;
+
+\\ Candidate dylib path beside an installed interpreter: the ext directory that is a
+\\ sibling of the standard-library directory. Yields f when the stdlib anchor cannot
+\\ be resolved.
+(install-lua-path): ( -- path-or-f ) [
+  [ "ffi" native.resolve-load-path dirname dirname "/ext/liblua5.4" #append (lib-ext) #append ]
+  [ drop f ] recover
+] ;
+
+\\ Candidate dylib path in the development tree, relative to the working directory.
+\\ Yields f when PWD is unset, which is common under non-shell process launchers.
+(cwd-lua-path): ( -- path-or-f ) [
+  environ "PWD" f @get-or
+  dup string? [ "/zig-out/ext/liblua5.4" #append (lib-ext) #append ] [ ] if
+] ;
+
+\\ Resolved dylib path. Prefers the installed sibling, then the development-tree
+\\ path, then a bare name for a loader-path install.
+(lua-lib-path): ( -- path ) [
+  (install-lua-path) dup (exists-path?) [ ] [
+    drop (cwd-lua-path) dup (exists-path?) [ ] [ drop "lua5.4" ] if
+  ] if
+] ;
+
+\\ Bind the Lua C API and the lua_close function, all resolved once at load.
+\\
+\\ lua_pcall, lua_tonumber, lua_tointeger, lua_tostring, and lua_pop are macros;
+\\ the exported targets are bound here and the macros recomposed in 1z.
+\\
+\\ luaL_newstate raises on a null return via the errno null sentinel.
+\\
+\\ (lua-close-fn) is the raw lua_close ffi-fn, folded into the reexported module so
+\\ `open` can bind it to each state for generic resource-close. ffi-def only exposes
+\\ callable wrappers, so the raw function is looked up separately.
+(lua-lib-path) lib-open dup ffi-def{
+  (new-state):    "luaL_newstate" H{ errno: null: } ffi{ -> ptr:lua-state }
+  (open-libs):    "luaL_openlibs" ffi{ ptr -> void }
+  (close):        "lua_close" ffi{ ptr -> void }
+  (load-string):  "luaL_loadstring" ffi{ ptr cstring -> i32 }
+  (pcallk):       "lua_pcallk" ffi{ ptr i32 i32 i32 isize ptr -> i32 }
+  (push-number):  "lua_pushnumber" ffi{ ptr f64 -> void }
+  (push-integer): "lua_pushinteger" ffi{ ptr i64 -> void }
+  (push-string):  "lua_pushstring" ffi{ ptr cstring -> cstring }
+  (push-boolean): "lua_pushboolean" ffi{ ptr i32 -> void }
+  (push-nil):     "lua_pushnil" ffi{ ptr -> void }
+  (set-global):   "lua_setglobal" ffi{ ptr cstring -> void }
+  (get-global):   "lua_getglobal" ffi{ ptr cstring -> i32 }
+  (type):       "lua_type" ffi{ ptr i32 -> i32 }
+  (tonumberx):  "lua_tonumberx" ffi{ ptr i32 ptr -> f64 }
+  (tointegerx): "lua_tointegerx" ffi{ ptr i32 ptr -> i64 }
+  (tolstring):  "lua_tolstring" ffi{ ptr i32 ptr -> cstring }
+  (toboolean):  "lua_toboolean" ffi{ ptr i32 -> i32 }
+  (gettop):     "lua_gettop" ffi{ ptr -> i32 }
+  (settop):     "lua_settop" ffi{ ptr i32 -> void }
+} call
+over "lua_close" ffi{ ptr -> void } bound-symbol [ ] curry
+"(lua-close-fn)" swap @set!
+swap drop "lua-raw" swap >module reexport
+
+\\ An open Lua interpreter state.
+lua-state: virtual{ resource } ;
+
+\\ Open a Lua state with the standard libraries loaded. lua_close is bound as the
+\\ resource's close function, so generic resource-close frees the state.
+open: ( -- lua-state ) [
+  (new-state)
+  dup (lua-close-fn) bind-close
+  dup (open-libs)
+  >lua-state
+] ;
+
+\\ Close a Lua state opened with `open`. Double-close is a no-op.
+close-lua: ( lua-state -- ) [ unmake-lua-state resource-close ] ;
+
+\\ Open a Lua state for the duration of a quotation, closing it on every exit path.
+using-lua: ( ..a quot: ( ..a lua: lua-state -- ..b ) -- ..b ) [ [ open ] dip over [ close-lua ] curry cleanup ] ;

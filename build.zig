@@ -272,11 +272,13 @@ pub fn build(b: *std.Build) void {
     // Integration tests
     const integration_test_step = b.step("integration-test", "Run integration tests");
     integration_test_step.dependOn(&install_toy_shared.step);
+    integration_test_step.dependOn(&install_lua_shared.step);
     var integration_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
     // Update golden files step
     const update_golden_step = b.step("update-golden", "Update golden files for integration tests");
     update_golden_step.dependOn(&install_toy_shared.step);
+    update_golden_step.dependOn(&install_lua_shared.step);
     var update_files = b.addUpdateSourceFiles();
 
     addIntegrationTests(b, exe, test_case_helper, integration_test_step, &update_files, &integration_status_files, test_entries, has_diff, false, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter, test_threads);
@@ -301,6 +303,7 @@ pub fn build(b: *std.Build) void {
     const eager_test_step = b.step("eager-integration-test", "Run integration tests with eager compilation");
     eager_test_step.dependOn(&install_exe.step);
     eager_test_step.dependOn(&install_toy_shared.step);
+    eager_test_step.dependOn(&install_lua_shared.step);
     var eager_status_files = std.ArrayListUnmanaged(std.Build.LazyPath){};
 
     addIntegrationTests(b, exe, test_case_helper, eager_test_step, null, &eager_status_files, test_entries, has_diff, true, test_case_timeout_secs, verbose_test_reporting, slow_test_threshold_ms, test_filter, test_threads);

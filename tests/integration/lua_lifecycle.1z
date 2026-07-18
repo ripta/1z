@@ -1,0 +1,17 @@
+use "testing" ;
+use "lua" ;
+
+"lua state lifecycle" test-section
+
+\ open returns a lua-state, then closes cleanly
+open dup lua-state? "open returns a lua-state" assert-true
+close-lua
+
+\ double-close is a no-op
+open dup close-lua close-lua
+
+\ using-lua hands the state to the body and closes it after
+[ lua-state? ] using-lua "using-lua provides a lua-state" assert-true
+
+\ generic resource-close frees the state via the bound lua_close
+open unmake-lua-state resource-close

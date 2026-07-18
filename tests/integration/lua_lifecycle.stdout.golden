@@ -1,0 +1,9 @@
+=== lua state lifecycle ===
+Stack: [ ]
+PASS: open returns a lua-state
+Stack: [ <lua-state <resource:lua-state>> ]
+Stack: [ ]
+Stack: [ ]
+PASS: using-lua provides a lua-state
+Stack: [ ]
+Stack: [ ]
