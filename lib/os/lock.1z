@@ -24,7 +24,7 @@ EFileLockError: ( -- sym ) [ file-lock-error: ] ;
 (would-block?): ( name-sym -- bool ) [ dup eagain: = swap ewouldblock: = or ] ;
 
 \ Re-raise a flock posix-error as file-lock-error:, preserving errno:/name:.
-(raise-file-lock-error): ( error -- * ) [
+(raise-file-lock-error): never-returns ( error -- * ) [
   dup data: @get swap message: @get EFileLockError make-error throw
 ] ;
 

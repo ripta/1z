@@ -21,7 +21,7 @@ uri-data: struct{
   uri-has-fragment? uri-fragment
 } ;
 
-(uri-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
+(uri-error): never-returns ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
 
 \ === Public type and constructors ===
 

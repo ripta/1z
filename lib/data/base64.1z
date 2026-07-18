@@ -36,19 +36,19 @@ url-reverse-table: const [
 base64-encode-state: mutable struct{ src pos out } ;
 base64-decode-state: mutable struct{ src pos out table } ;
 
-(base64-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
+(base64-error): never-returns ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
 
-(invalid-char-error): ( idx -- * ) [
+(invalid-char-error): never-returns ( idx -- * ) [
   "invalid base64 character at position " swap >string #append
   (base64-error)
 ] ;
 
-(padding-error): ( idx -- * ) [
+(padding-error): never-returns ( idx -- * ) [
   "invalid base64 padding at position " swap >string #append
   (base64-error)
 ] ;
 
-(truncated-error): ( idx -- * ) [
+(truncated-error): never-returns ( idx -- * ) [
   "truncated base64 input at position " swap >string #append
   (base64-error)
 ] ;

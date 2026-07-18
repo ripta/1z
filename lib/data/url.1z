@@ -2,13 +2,13 @@
 
 use "strings" ;
 
-(url-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
+(url-error): never-returns ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
 
-(invalid-hex-error): ( -- * ) [
+(invalid-hex-error): never-returns ( -- * ) [
   "invalid percent-encoded hex digit" (url-error)
 ] ;
 
-(truncated-error): ( -- * ) [
+(truncated-error): never-returns ( -- * ) [
   "truncated percent-encoded sequence" (url-error)
 ] ;
 

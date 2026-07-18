@@ -17,7 +17,7 @@ private{
     dup (escapes) -rot> @get-or
   ] ;
 
-  (html-error): ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
+  (html-error): never-returns ( msg -- * ) [ f swap EInvalidArgument make-error throw ] ;
 
   (named-entities): ( -- hash ) H{
     "amp" "&"
