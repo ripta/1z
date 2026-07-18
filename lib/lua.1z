@@ -103,12 +103,25 @@ using-lua: ( ..a quot: ( ..a lua: lua-state -- ..b ) -- ..b ) [ [ open ] dip ove
 \\ The lua_pcall/luaL_loadstring success status.
 LUA_OK: 0 ;
 
-\\ Pass a load or call status through when OK, otherwise fail.
+\\ The 1z error type raised for a Lua load or runtime failure, mirroring
+\\ ESqliteError: the numeric status code is the error data, the Lua message the
+\\ error message.
+ELuaError: [ lua-error: ] ;
+
+\\ Read the Lua error object at the top of the stack as a string, pop it, and
+\\ throw ELuaError carrying the status code and message. On a non-OK status Lua
+\\ leaves its error object on top of the stack.
 \\
-\\ The informative Lua error message and status code arrive with the ELuaError mapping.
-\\ Until then a non-OK status fails loudly with a generic error.
+\\ The raw (tolstring) and (settop) bindings are called directly, since the
+\\ (to-lstring) and (pop) helpers are defined later in the file. -1 0 (tolstring)
+\\ reads index -1 with a NULL length pointer; -2 (settop) is lua_pop(state, 1).
+(raise-lua-error): never-returns ( state rc -- * ) [
+  over -1 0 (tolstring) <rot- -2 (settop) ELuaError make-error throw
+] ;
+
+\\ Pass a load or call status through when OK, otherwise raise ELuaError.
 (check-ok): ( state rc -- state ) [
-  LUA_OK = [ ] [ f "lua evaluation failed" EUserThrown make-error throw ] if
+  dup LUA_OK = [ drop ] [ (raise-lua-error) ] if
 ] ;
 
 \\ lua_pcall(state, nargs, nresults, 0): no message handler, no continuation.

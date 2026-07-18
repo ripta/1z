@@ -1,0 +1,21 @@
+use "testing" ;
+use "lua" ;
+
+"lua error mapping" test-section
+
+[
+  \ a syntax error in loaded source propagates as ELuaError
+  dup "this is not (valid lua" [ eval ] curry curry
+  lua-error: "syntax error raises ELuaError" assert-error-type
+
+  \ a runtime error during the call propagates as ELuaError
+  dup "error('boom')" [ eval ] curry curry
+  lua-error: "runtime error raises ELuaError" assert-error-type
+
+  \ the raised error carries the numeric status code and the Lua message
+  dup [ "return 1 +" eval ] [
+    dup data: @get fixnum? "ELuaError carries the numeric status code" assert-true
+    message: @get #len 0 > "ELuaError carries a non-empty message" assert-true
+  ] recover
+  drop
+] using-lua

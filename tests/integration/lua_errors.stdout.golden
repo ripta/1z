@@ -1,0 +1,7 @@
+=== lua error mapping ===
+Stack: [ ]
+PASS: syntax error raises ELuaError
+PASS: runtime error raises ELuaError
+PASS: ELuaError carries the numeric status code
+PASS: ELuaError carries a non-empty message
+Stack: [ ]
