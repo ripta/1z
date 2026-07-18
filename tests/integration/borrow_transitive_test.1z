@@ -1,0 +1,14 @@
+\ The sibling `borrow_transitive.1z` is reached only through
+\ borrow_transitive_via.1z, never imported directly here. The auto-borrow must
+\ not fire, so the sibling's private stays unreachable.
+
+use "testing" ;
+use "borrow_transitive_via.1z" ;
+
+test-via-public-resolves: ( -- ) [
+  via-pub "pub" "transitively-imported public resolves through its own module" assert=
+] ;
+
+test-transitive-private-not-borrowed: ( -- ) [
+  [ (transitive-secret) ] "sibling private is not auto-borrowed when reached only transitively" assert-error
+] ;

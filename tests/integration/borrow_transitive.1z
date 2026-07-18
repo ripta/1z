@@ -1,0 +1,8 @@
+\ Sibling of borrow_transitive_test.1z. The test file imports it only through
+\ borrow_transitive_via.1z, never directly, so its private must stay unreachable.
+
+private{
+  (transitive-secret): ( -- string ) [ "hidden" ] ;
+}
+
+transitive-pub: ( -- string ) [ "pub" ] ;

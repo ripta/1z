@@ -8,10 +8,16 @@
 \ `after-each` words, they run around every test that actually executes;
 \ skipped tests fire neither hook. Leaves the testing library's failure
 \ count on the stack so the caller can derive an exit code.
+\
+\ For a `foo_test.1z` file that imports its same-directory sibling `foo.1z`,
+\ the runner also borrows the sibling's private helpers into the test module,
+\ so test words can call them by name. This is the convention trigger for the
+\ borrow feature; explicit `borrow` covers every other invocation.
 
 use "testing" ;
 use "sequences" ;
 use "strings" ;
+use "os/path" ;
 
 \ Build a tag-spec hash from include and exclude arrays.
 (make-tag-spec): ( includes excludes -- hash ) [
@@ -115,6 +121,69 @@ use "strings" ;
   if
 ] ;
 
+\ Derive the sibling module path for a `*_test.1z` file: same directory, with
+\ the `_test.1z` suffix stripped back to `.1z`. "a/foo_test.1z" -> "a/foo.1z".
+(sibling-path): ( filepath -- path ) [
+  dup dirname swap basename                       \ dir base
+  dup #len "_test.1z" #len - #take ".1z" #append  \ dir sibling-base
+  path-join
+] ;
+
+\ True when the dep word `name` in `deps-mod` is sourced from `sibling`.
+\ A word with no source module yields a non-module `word-source` (f), never a
+\ match. `#any` curries `sibling` then `deps-mod` on top of each key, so the
+\ arguments arrive in this order.
+(dep-sourced-from?): ( name sibling deps-mod -- ? ) [
+  -rot> [ native.word-source ] dip  \ src sibling
+  over module?
+  [ = ]
+  [ 2drop f ]
+  if
+] ;
+
+\ True when the test module directly imported `sibling`: one of its own `deps`
+\ carries a word whose source module is `sibling`. A transitive-only import
+\ leaves no such dep, so it does not match.
+(imports-module?): ( test-module sibling -- ? ) [
+  swap native.module-deps              \ sibling deps-mod
+  dup @keys                            \ sibling deps-mod keys
+  -rot>                                \ keys sibling deps-mod
+  [ (dep-sourced-from?) ] curry curry  \ keys ( name -- ? )
+  #any
+] ;
+
+\ Borrow a `*_test.1z` file's same-directory sibling private helpers into its
+\ already-loaded module, but only when the test file itself imported the
+\ sibling. The sibling module is taken from the cache by canonical path, so no
+\ load the test did not declare is ever initiated. A non-`*_test.1z` name, an
+\ unresolvable sibling, an uncached sibling, or a merely transitive import all
+\ leave the module untouched.
+(borrow-sibling): ( filepath module -- ) [
+  swap  \ module filepath
+  dup basename "_test.1z" #ends-with?
+  [
+    (sibling-path)                                   \ module sibling-path
+    [ native.resolve-load-path ] [ drop f ] recover  \ module resolved-or-f
+    dup
+    [
+      module-cache get over @has?
+      [
+        module-cache get swap @get  \ module sibling-module
+        2dup (imports-module?)
+        [ swap native.borrow-deps ]
+        [ 2drop ]
+        if
+      ]
+      [ drop drop ]
+      if
+    ]
+    [ 2drop ]
+    if
+  ]
+  [ 2drop ]
+  if
+] ;
+
 \ Run every `test-` word defined in the given file.
 \
 \ Stack: ( filepath -- failed )
@@ -122,7 +191,9 @@ use "strings" ;
 \   - filepath: path to a *_test.1z file
 \   - failed: number of failed assertions across all tests in the file
 run-test-file: ( filepath -- failed ) [
-  load
+  dup load
+  tuck
+  (borrow-sibling)
   dup import
   \ stack: module
   (parse-tag-spec)

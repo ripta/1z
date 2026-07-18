@@ -1,0 +1,1 @@
+PASS: explicit borrow composes with the auto-borrow; the private resolves

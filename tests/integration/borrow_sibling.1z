@@ -1,0 +1,9 @@
+\ Sibling module under test for borrow_sibling_test.1z. Its private helper reaches
+\ an enclosing public, so a borrower must see both the private and the public for
+\ it to resolve.
+
+private{
+  (sibling-secret): ( -- string ) [ sibling-pub "!" #append ] ;
+}
+
+sibling-pub: ( -- string ) [ "secret" ] ;

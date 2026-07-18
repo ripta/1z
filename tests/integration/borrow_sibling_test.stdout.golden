@@ -1,0 +1,2 @@
+PASS: auto-borrowed sibling private resolves and reaches its enclosing public
+PASS: sibling public resolves via ordinary use

@@ -1,0 +1,13 @@
+\ The runner infers the sibling `borrow_sibling.1z` and borrows its privates,
+\ because this file imports it. A test word then calls a private by name.
+
+use "testing" ;
+use "borrow_sibling.1z" ;
+
+test-sibling-private-resolves: ( -- ) [
+  (sibling-secret) "secret!" "auto-borrowed sibling private resolves and reaches its enclosing public" assert=
+] ;
+
+test-sibling-public-resolves: ( -- ) [
+  sibling-pub "secret" "sibling public resolves via ordinary use" assert=
+] ;

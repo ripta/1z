@@ -1,0 +1,10 @@
+\ An explicit borrow of the sibling composes with the runner's auto-borrow: both
+\ target the same module, and they compose silently with no shadow-ok because the
+\ explicit borrow shadow-checks before the publics are in scope.
+
+use "testing" ;
+borrow "borrow_sibling_compose.1z" ;
+
+test-compose-private-resolves: ( -- ) [
+  (compose-secret) "shared!" "explicit borrow composes with the auto-borrow; the private resolves" assert=
+] ;

@@ -1,0 +1,8 @@
+\ Sibling of borrow_sibling_compose_test.1z, which borrows it explicitly while
+\ the runner's auto-borrow also fires on the same module.
+
+private{
+  (compose-secret): ( -- string ) [ compose-pub "!" #append ] ;
+}
+
+compose-pub: ( -- string ) [ "shared" ] ;

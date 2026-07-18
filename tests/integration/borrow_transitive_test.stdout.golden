@@ -1,0 +1,2 @@
+PASS: sibling private is not auto-borrowed when reached only transitively
+PASS: transitively-imported public resolves through its own module

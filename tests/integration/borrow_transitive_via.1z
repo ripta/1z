@@ -1,0 +1,6 @@
+\ Imports borrow_transitive.1z so that borrow_transitive_test.1z reaches it only
+\ transitively.
+
+use "borrow_transitive.1z" ;
+
+via-pub: ( -- string ) [ transitive-pub ] ;

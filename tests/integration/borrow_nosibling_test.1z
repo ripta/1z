@@ -1,0 +1,8 @@
+\ There is no `borrow_nosibling.1z` on disk, so the runner silently skips the
+\ sibling borrow and the file runs normally.
+
+use "testing" ;
+
+test-runs-without-sibling: ( -- ) [
+  t "a test file with no sibling module runs normally" assert-true
+] ;
