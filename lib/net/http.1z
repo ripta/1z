@@ -81,15 +81,17 @@ private{
   (parse-request-line)
 ] ;
 
-\ Read the next request line, non-throwing. Returns option:none on a clean
-\ close at a request boundary (stream-read-line yields f), else option:some the line.
-(read-request-line?): ( stream -- option ) [
-  stream-read-line
-  dup f =
-  [ drop option:none ]
-  [ >option:some ]
-  if
-] ;
+private{
+  \ Read the next request line, non-throwing. Returns option:none on a clean
+  \ close at a request boundary (stream-read-line yields f), else option:some the line.
+  (read-request-line?): ( stream -- option ) [
+    stream-read-line
+    dup f =
+    [ drop option:none ]
+    [ >option:some ]
+    if
+  ] ;
+}
 
 \\ Maximum number of bytes the server reads for a request body. A request whose
 \\ Content-Length exceeds this cap is answered with 413 Content Too Large and the
@@ -132,11 +134,13 @@ with-requests-per-connection: ( count quot -- ) [ requests-per-connection swap w
   recover
 ] ;
 
-\ True when the request's declared Content-Length exceeds the max-request-body
-\ cap. A missing content-length reads as 0 and is never too large.
-(body-too-large?): ( headers -- too-large? ) [
-  "content-length" "0" @get-or parse-integer max-request-body get >
-] ;
+private{
+  \ True when the request's declared Content-Length exceeds the max-request-body
+  \ cap. A missing content-length reads as 0 and is never too large.
+  (body-too-large?): ( headers -- too-large? ) [
+    "content-length" "0" @get-or parse-integer max-request-body get >
+  ] ;
+}
 
 \ Parse a header value as a case-insensitive comma-separated token set. A missing
 \ header yields a single empty token, which no real token matches.
@@ -144,13 +148,15 @@ with-requests-per-connection: ( count quot -- ) [ requests-per-connection swap w
   "" @get-or lowercase "," split [ trim ] #map #collect
 ] ;
 
-\ True when the request declares Transfer-Encoding: chunked. The header value is
-\ a case-insensitive comma-separated token list. A chunked body is not
-\ Content-Length framed, so the eager body read cannot frame it; such a request
-\ is rejected with 411 rather than desynchronizing the stream.
-(chunked-request?): ( headers -- chunked? ) [
-  "transfer-encoding" (header-tokens) "chunked" #in?
-] ;
+private{
+  \ True when the request declares Transfer-Encoding: chunked. The header value is
+  \ a case-insensitive comma-separated token list. A chunked body is not
+  \ Content-Length framed, so the eager body read cannot frame it; such a request
+  \ is rejected with 411 rather than desynchronizing the stream.
+  (chunked-request?): ( headers -- chunked? ) [
+    "transfer-encoding" (header-tokens) "chunked" #in?
+  ] ;
+}
 
 \ Negotiated default connection disposition for a request, per RFC 7230. A client
 \ Connection: close closes on any version. HTTP/1.1 is persistent by default.

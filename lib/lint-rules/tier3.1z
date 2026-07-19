@@ -7,6 +7,7 @@
 use "lint" ;
 use "lint-rules/tier2" ;
 use "char" ;
+use { split: } "strings" ;
 
 \ --- Helpers for doc-example-format ---
 
@@ -832,4 +833,45 @@ make-lint-rule register-lint-rule
 ] ;
 
 "broad-import" info: [ (check-broad-import) ] f
+make-lint-rule register-lint-rule
+
+\ --- Rule: borrow-in-production ---
+
+\ True when the linted path is a test file.
+\
+\ A basename matching *_test.1z or a "tests" path segment qualifies. borrow reads
+\ another module's private words, so it belongs only in tests.
+(lint-test-path?): ( path -- ? ) [
+  dup "/" split #last "_test.1z" #ends-with?
+  swap "/" split "tests" #in?
+  or
+] ;
+
+(check-borrow-in-production): ( path source tokens line-index semantic-context -- diagnostics ) [
+  drop
+  \ stack: path source tokens line-index
+  3 pick-n (lint-test-path?) [
+    drop drop drop drop
+    V{ }
+  ] [
+    V{ }
+    \ stack: path source tokens line-index results
+    2 pick-n [
+      dup kind>> word: = [
+        dup value>> "borrow" = [
+          pos>>
+          "borrow-in-production" warning:
+          7 pick-n 5 pick-n 4 pick-n
+          "borrow is for tests only; place this file under tests/ or name it *_test.1z"
+          (make-diag)
+          2 pick-n swap #push! drop
+          drop
+        ] [ drop ] if
+      ] [ drop ] if
+    ] #each
+    [ drop drop drop drop ] dip
+  ] if
+] ;
+
+"borrow-in-production" warning: [ (check-borrow-in-production) ] f
 make-lint-rule register-lint-rule

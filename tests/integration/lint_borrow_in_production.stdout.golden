@@ -1,0 +1,15 @@
+Stack: [ ]
+=== borrow-in-production ===
+Stack: [ ]
+Stack: [ 1 ]
+PASS: production borrow flagged
+Stack: [ ]
+Stack: [ 0 ]
+PASS: borrow under tests/ not flagged
+Stack: [ ]
+Stack: [ 0 ]
+PASS: borrow in a *_test.1z file not flagged
+Stack: [ ]
+Stack: [ 0 ]
+PASS: no borrow means no diagnostic
+Stack: [ ]

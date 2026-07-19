@@ -1,5 +1,5 @@
 use "testing" ;
-use "net/http" ;
+borrow { (read-request-line?): (body-too-large?): (chunked-request?): } "net/http" ;
 use "net" ;
 use "net/tcp" ;
 use "net/server" ;

@@ -1,0 +1,33 @@
+use "testing" ;
+use "lint" ;
+use "lint-rules/tier3" ;
+use "1z-tokens" ;
+use "lexer" ;
+
+\ Run the borrow-in-production check against a fabricated path and source,
+\ returning the diagnostic count.
+\
+\ Fabricating the path exercises both the production and test-file branches
+\ without a physical fixture, since every lint fixture necessarily lives under
+\ tests/.
+run-borrow-check: ( path source -- n ) [
+  dup 1z-tokenize #collect
+  over (build-line-index)
+  f
+  (check-borrow-in-production)
+  #len
+] ;
+
+"borrow-in-production" test-section
+
+"lib/net/http.1z" "borrow" run-borrow-check
+1 "production borrow flagged" assert=
+
+"tests/integration/a.1z" "borrow" run-borrow-check
+0 "borrow under tests/ not flagged" assert=
+
+"lib/foo_test.1z" "borrow" run-borrow-check
+0 "borrow in a *_test.1z file not flagged" assert=
+
+"lib/net/http.1z" "1 2 +" run-borrow-check
+0 "no borrow means no diagnostic" assert=
