@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Context = @import("../context.zig").Context;
 const helpers = @import("helpers.zig");
 const popFixnum = helpers.popFixnum;
@@ -6,7 +7,16 @@ const popString = helpers.popString;
 const setErrorContext = helpers.setErrorContext;
 
 const Primitive = @import("types.zig").Primitive;
-const Scheduler = @import("../scheduler.zig").Scheduler;
+const scheduler_mod = @import("../scheduler.zig");
+const monotonicNowNs = scheduler_mod.monotonicNowNs;
+
+const is_freestanding = builtin.os.tag == .freestanding;
+const is_wasm = builtin.cpu.arch == .wasm32 and builtin.os.tag == .freestanding;
+
+// The `is_wasm` bodies below are not yet compile-checked against wasm32-freestanding: this
+// file takes `*Context`, and even the `ctx.stack.push` on the wasm path resolves `Value`,
+// whose `@sizeOf(Value) == 40` assertion does not hold on wasm32's 32-bit pointers. That is
+// interpreter no-libc porting work, not this file's.
 
 pub const primitives = [_]Primitive{
     .{ .name = "clock-realtime", .stack_effect = "-- sec nsec", .doc = "Current wall-clock time (UTC) since Unix epoch.", .func = nativeClockRealtime },
@@ -14,8 +24,20 @@ pub const primitives = [_]Primitive{
     .{ .name = "tz-decompose", .stack_effect = "sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev", .doc = "Decompose epoch seconds in a named timezone via libc localtime_r.", .func = nativeTzDecompose },
 };
 
+/// Host-provided wall clock, resolved by the browser's `WebAssembly.instantiate()`
+/// import object. Backed by `Date.now()`, which is natively millisecond-precision.
+extern "env" fn onez_host_realtime_now_ms() i64;
+
 /// clock-realtime ( -- sec nsec ) - Current wall-clock time (UTC) since Unix epoch
 fn nativeClockRealtime(ctx: *Context) anyerror!void {
+    if (is_wasm) {
+        const ms = onez_host_realtime_now_ms();
+        try ctx.stack.push(.{ .fixnum = @divFloor(ms, 1000) });
+        try ctx.stack.push(.{ .fixnum = @mod(ms, 1000) * std.time.ns_per_ms });
+        return;
+    }
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "clock-realtime");
+
     const ts = std.posix.clock_gettime(.REALTIME) catch |err| {
         return switch (err) {
             error.UnsupportedClock => error.InvalidType,
@@ -41,6 +63,14 @@ fn nativeClockMonotonic(ctx: *Context) anyerror!void {
             .real => {},
         }
     }
+
+    if (is_wasm) {
+        const ns = monotonicNowNs();
+        try ctx.stack.push(.{ .fixnum = @intCast(@divFloor(ns, std.time.ns_per_s)) });
+        try ctx.stack.push(.{ .fixnum = @intCast(@mod(ns, std.time.ns_per_s)) });
+        return;
+    }
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "clock-monotonic");
 
     const ts = std.posix.clock_gettime(.MONOTONIC) catch |err| {
         return switch (err) {
@@ -86,6 +116,8 @@ var tz_mutex = std.Thread.Mutex{};
 /// If tz-name is empty, uses the system's local timezone.
 /// Pushes 10 raw values for consumption by 1z-level struct/hash builders.
 fn nativeTzDecompose(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "tz-decompose");
+
     const alloc = ctx.quotationAllocator();
 
     const tz_name = try popString(ctx);

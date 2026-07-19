@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const scheduler_mod = @import("scheduler.zig");
 const Scheduler = scheduler_mod.Scheduler;
@@ -450,7 +451,14 @@ pub const WorkerPool = struct {
     }
 
     /// Spawn OS threads for workers[1..]. Worker[0] runs on the calling thread.
+    /// No-op under single_threaded builds: `std.Thread.spawn` is a hard compile
+    /// error under `single_threaded = true`, regardless of whether this loop
+    /// ever iterates, since Zig analyzes the call site, not the runtime bound.
+    /// Every target that sets `single_threaded = true` today also forces the
+    /// worker count to 1 in `primitives/tasks.zig`, via a separate
+    /// `is_freestanding` check -- not because of this guard.
     pub fn startBackgroundWorkers(self: *WorkerPool) !void {
+        if (builtin.single_threaded) return;
         for (self.workers[1..]) |*w| {
             w.thread = try std.Thread.spawn(.{}, Worker.runThread, .{w});
         }
@@ -873,6 +881,18 @@ test "WorkerPool startBackgroundWorkers and join" {
     for (pool.workers[1..]) |*w| {
         try std.testing.expect(w.thread == null);
     }
+}
+
+test "startBackgroundWorkers spawns no threads with a single worker" {
+    var pool: WorkerPool = undefined;
+    try pool.init(std.testing.allocator, 1);
+    defer pool.deinit();
+
+    try pool.startBackgroundWorkers();
+    pool.join();
+
+    try std.testing.expectEqual(@as(usize, 1), pool.workers.len);
+    try std.testing.expect(pool.workers[0].thread == null);
 }
 
 test "pickLeastLoaded returns worker with smallest active count" {

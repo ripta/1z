@@ -120,6 +120,28 @@ pub fn build(b: *std.Build) void {
         b.getInstallStep().dependOn(&symlink_step.step);
     }
 
+    const is_wasm_target = target.result.cpu.arch == .wasm32 and target.result.os.tag == .freestanding;
+    if (is_wasm_target) {
+        // Compile-check the wasm clock host import and the no-op multiplexer against the real
+        // wasm32-freestanding target. Built as a static library (like capi_wasm.zig itself),
+        // not `b.addTest`, because the default test runner needs posix I/O to report results
+        // and does not compile for this target -- unrelated to whether our own code is
+        // portable. See src/wasm_compile_probe.zig for what this deliberately does and does
+        // not cover.
+        const wasm_probe_module = createCommonModule(b, target, optimize, options, b.path("src/wasm_compile_probe.zig"), embedded_stdlib_path);
+        const wasm_probe_lib = b.addLibrary(.{
+            .name = "wasm-clock-check",
+            .root_module = wasm_probe_module,
+            .linkage = .static,
+        });
+        const wasm_clock_check_step = b.step(
+            "wasm-clock-check",
+            "Compile-check the wasm clock host import and no-op multiplexer for wasm32-freestanding",
+        );
+        wasm_clock_check_step.dependOn(&wasm_probe_lib.step);
+        b.getInstallStep().dependOn(wasm_clock_check_step);
+    }
+
     if (is_freestanding) {
         // The freestanding build is only the static library; no executables to
         // run, document, or test against. Bail before the rest of the wiring.

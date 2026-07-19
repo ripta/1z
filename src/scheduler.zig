@@ -16,6 +16,7 @@ const profile = @import("profile.zig");
 const ProfileStats = profile.ProfileStats;
 
 const is_freestanding = builtin.os.tag == .freestanding;
+const is_wasm = builtin.cpu.arch == .wasm32 and builtin.os.tag == .freestanding;
 
 /// Entry in the sleep queue: a task and its absolute monotonic wake time in nanoseconds.
 pub const SleepEntry = struct {
@@ -43,7 +44,9 @@ pub const ProcessWaitEntry = struct {
 
 /// Read the monotonic clock and return the current time as a single i128 nanosecond value.
 pub fn monotonicNowNs() i128 {
-    if (is_freestanding) {
+    if (is_wasm) {
+        return wasmMonotonicNowNs();
+    } else if (is_freestanding) {
         return baremetalNowNs();
     } else {
         const ts = std.posix.clock_gettime(.MONOTONIC) catch unreachable;
@@ -62,6 +65,14 @@ fn baremetalNowNs() i128 {
         : [ticks] "=r" (ticks),
     );
     return @as(i128, ticks) * 100;
+}
+
+/// Host-provided monotonic clock, resolved by the browser's `WebAssembly.instantiate()`
+/// import object. Backed by `performance.now()`, converted to nanoseconds on the JS side.
+extern "env" fn onez_host_monotonic_now_ns() i64;
+
+fn wasmMonotonicNowNs() i128 {
+    return @as(i128, onez_host_monotonic_now_ns());
 }
 
 pub const ClockMode = union(enum) {

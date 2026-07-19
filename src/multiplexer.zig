@@ -294,7 +294,7 @@ pub const Multiplexer = struct {
 /// back-pointer. It does not own the multiplexer fd; only the eventfd it
 /// allocated on Linux is owned and closed on `deinit`.
 pub const WakeSource = struct {
-    mux_fd: std.posix.fd_t,
+    mux_fd: i32,
     ident: u64,
     fd: if (is_epoll) std.posix.fd_t else void,
 
