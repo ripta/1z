@@ -467,6 +467,21 @@ fn parseExecutionFlag(
         state.trace_config.dump_jit_bin_dir = value;
         return .consumed;
     }
+    if (std.mem.eql(u8, arg, "--dump-jit-word")) {
+        err_writer.print("Error: --dump-jit-word requires a value (e.g. --dump-jit-word=my-word)\n", .{}) catch {};
+        err_writer.flush() catch {};
+        return error.InvalidFlagValue;
+    }
+    if (std.mem.startsWith(u8, arg, "--dump-jit-word=")) {
+        const value = arg["--dump-jit-word=".len..];
+        if (value.len == 0) {
+            err_writer.print("Error: --dump-jit-word requires a non-empty pattern\n", .{}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        }
+        state.trace_config.dump_jit_word_pattern = value;
+        return .consumed;
+    }
     if (std.mem.eql(u8, arg, "--deadlock-detect")) {
         state.deadlock_detect_ns = 5 * std.time.ns_per_s;
         return .consumed;
@@ -646,6 +661,7 @@ const execution_flags_help =
     \\  --dump-scope=WORD         Dump scope after loading WORD
     \\  --dump-jit-bytes          Dump JIT native code bytes to stderr (xxd format)
     \\  --dump-jit-bin-dir=DIR    Write per-word JIT native code to DIR/ID-name.bin
+    \\  --dump-jit-word=PAT       Restrict JIT dumps to comma-separated word names
     \\  --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
     \\  --test-timeout=SECS       Set test timeout in seconds
     \\  -b, --benchmark           Enable benchmarking
@@ -916,6 +932,13 @@ const ExecutionContext = struct {
                     exec.compile_mode = .hybrid;
                 }
             }
+        }
+
+        if (exec.compile_mode == .off and
+            (exec.trace_config.dump_jit_bytes or exec.trace_config.dump_jit_bin_dir != null))
+        {
+            err_writer.print("Note: JIT dump flags require --compile=eager or --compile=hybrid; no dumps will be produced.\n", .{}) catch {};
+            err_writer.flush() catch {};
         }
 
         const ec = gpa.create(ExecutionContext) catch {
@@ -4644,6 +4667,31 @@ test "parseExecutionFlag: malformed and missing --dump-jit-bin-dir value" {
         var state = ExecutionFlags{};
         try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--dump-jit-bin-dir=", &state, &w));
         try std.testing.expectEqualStrings("Error: --dump-jit-bin-dir requires a non-empty directory\n", w.buffered());
+    }
+}
+
+test "parseExecutionFlag: --dump-jit-word filter" {
+    var buf: [256]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectEqual(FlagParseResult.consumed, try parseExecutionFlag("--dump-jit-word=double,triple", &state, &w));
+        try std.testing.expectEqualStrings("double,triple", state.trace_config.dump_jit_word_pattern.?);
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--dump-jit-word", &state, &w));
+        try std.testing.expectEqualStrings("Error: --dump-jit-word requires a value (e.g. --dump-jit-word=my-word)\n", w.buffered());
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--dump-jit-word=", &state, &w));
+        try std.testing.expectEqualStrings("Error: --dump-jit-word requires a non-empty pattern\n", w.buffered());
     }
 }
 

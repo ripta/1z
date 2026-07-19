@@ -900,7 +900,8 @@ fn hasExcludedJitFlag(flags_lines: ?[]const u8) bool {
             std.mem.eql(u8, trimmed, "--no-jit") or
             std.mem.startsWith(u8, trimmed, "--trace-") or
             std.mem.startsWith(u8, trimmed, "--break=") or
-            std.mem.startsWith(u8, trimmed, "--dump-scope="))
+            std.mem.startsWith(u8, trimmed, "--dump-scope=") or
+            std.mem.startsWith(u8, trimmed, "--dump-jit-"))
         {
             return true;
         }

@@ -1,0 +1,7 @@
+\ A JIT dump sink flag with a filter that matches no compiled word must produce no dump.
+\ `triple` does compile under --compile=eager, so the run has a real compile event for the
+\ non-matching filter to suppress.
+\
+\ The bin-dir sink shares the same gate, so it is covered by construction.
+triple: ( n -- n ) [ 3 * ] ;
+5 triple .

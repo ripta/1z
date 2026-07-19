@@ -33,6 +33,7 @@ Execution options:
   --dump-scope=WORD         Dump scope after loading WORD
   --dump-jit-bytes          Dump JIT native code bytes to stderr (xxd format)
   --dump-jit-bin-dir=DIR    Write per-word JIT native code to DIR/ID-name.bin
+  --dump-jit-word=PAT       Restrict JIT dumps to comma-separated word names
   --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
   --test-timeout=SECS       Set test timeout in seconds
   -b, --benchmark           Enable benchmarking

@@ -1,0 +1,3 @@
+--compile=eager
+--dump-jit-bytes
+--dump-jit-word=__no_such_word__

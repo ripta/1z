@@ -1,0 +1,3 @@
+\ A JIT dump flag with compilation disabled prints a one-line stderr note and still runs
+\ the program normally.
+"ran" print-line

@@ -1157,7 +1157,8 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
     }
 
     const dump_cfg = jit_dump.DumpConfig{ .dump_bytes = ctx.trace.dump_jit_bytes, .bin_dir = ctx.trace.dump_jit_bin_dir };
-    if (dump_cfg.enabled()) jit_dump.dumpJitCode(dump_cfg, sym, final_id, compiled.code_ptr, compiled.jit_buf.size);
+    if (dump_cfg.enabled() and trace_mod.matchesPattern(sym, ctx.trace.dump_jit_word_pattern))
+        jit_dump.dumpJitCode(dump_cfg, sym, final_id, compiled.code_ptr, compiled.jit_buf.size);
 }
 
 /// Write word_id to whichever scope lookupWord would find the word in:

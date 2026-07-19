@@ -148,6 +148,9 @@ pub const TraceConfig = struct {
     dump_jit_bytes: bool = false,
     dump_jit_bin_dir: ?[]const u8 = null,
 
+    // `--dump-jit-word=PAT` name filter over both dump sinks. Null matches every word.
+    dump_jit_word_pattern: ?[]const u8 = null,
+
     // Periodic task/memory sampler axes and interval. Independent of the
     // trace flags above; the sampler is driven by the scheduler, not the
     // word-execution path, so it is excluded from `isEnabled`.

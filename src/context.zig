@@ -2293,7 +2293,8 @@ pub const Context = struct {
         }
 
         const dump_cfg = jit_dump.DumpConfig{ .dump_bytes = self.trace.dump_jit_bytes, .bin_dir = self.trace.dump_jit_bin_dir };
-        if (dump_cfg.enabled()) jit_dump.dumpJitCode(dump_cfg, name, final_id, compiled.code_ptr, compiled.jit_buf.size);
+        if (dump_cfg.enabled() and trace_mod.matchesPattern(name, self.trace.dump_jit_word_pattern))
+            jit_dump.dumpJitCode(dump_cfg, name, final_id, compiled.code_ptr, compiled.jit_buf.size);
     }
 
     /// Assign a word_id without compiling. Used in hybrid mode so the dispatch
