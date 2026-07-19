@@ -1,0 +1,65 @@
+\\ A compact, hand-composed sample combining the grammar's main syntax
+\\ categories in realistic shapes, annotated for highlights.scm's capture
+\\ assertions. The isolated corpus/ cases cover edge cases; this file covers
+\\ what real, combined 1z code looks like.
+\ <- comment.documentation
+
+use "testing" ;
+\ <- keyword
+\   ^ string
+
+point: struct{ x y } ;
+\ <- function
+\      ^ keyword
+\                  ^ punctuation.bracket
+\                    ^ punctuation.delimiter
+shape: virtual{ point } ;
+\ <- function
+\      ^ keyword
+rank: enum{ low: unit mid: unit high: unit } ;
+\ <- function
+\      ^ keyword
+\            ^ string.special.symbol
+
+\\ Doubles a number.
+\ <- comment.documentation
+double: ( n -- n ) [ 2 * ] ;
+\ <- function
+\       ^ punctuation.bracket
+\           ^ punctuation.delimiter
+\                  ^ punctuation.bracket
+\                    ^ number
+
+classify: ( n -- rank ) [
+  dup 10 < [ drop low: ] [ dup 100 < [ drop mid: ] [ drop high: ] if ] if
+  \   ^ number
+  \               ^ string.special.symbol
+  \                            ^ number
+  \                                                               ^ keyword
+] ;
+
+keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x ) [ over [ call ] dip ] ;
+\ <- function
+\             ^ string.special.symbol
+
+throw-type-error: never-returns ( value expected-str -- * ) [
+  \                                                     ^ operator
+  0xFF 0b1010 0o17 3.14 1.5e10 -42 drop drop drop drop drop drop
+  \ <- number
+  \                ^ number.float
+] ;
+
+config: H{ retries: 3 delay: 0.5 tags: V{ "fast" "safe" } } ;
+\ <- function
+\       ^ punctuation.bracket
+\          ^ string.special.symbol
+\                   ^ number
+\                                      ^ punctuation.bracket
+
+"5 doubled: " print
+\ <- string
+5 double . "escaped:\n\ttab and \"quote\"" print-line
+\ <- number
+\          ^ string
+\                   ^ string.escape
+\                     ^ string.escape

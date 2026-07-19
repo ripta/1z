@@ -1,0 +1,45 @@
+\\ A second sample emphasizing method dispatch, match, and protocols, which
+\\ examples/sample.1z does not exercise.
+\ <- comment.documentation
+
+vec2: struct{ x y } ;
+\ <- function
+\     ^ keyword
+
++: method{ vec2 vec2 } [
+  2dup [ x>> ] dip x>> +
+  [ 2dup [ y>> ] dip y>> + ] dip
+  swap make-vec2
+  [ 2drop ] dip
+] ;
+
+drawable: protocol{ draw: } ;
+\ <- function
+\         ^ keyword
+\                   ^ string.special.symbol
+
+heading: enum{ north: unit east: unit south: unit west: unit } ;
+\ <- function
+\        ^ keyword
+\              ^ string.special.symbol
+
+describe-heading: ( h -- str ) [
+  match{
+    heading:north: [ "heading north" ]
+    \ <- string.special.symbol
+    \                ^ string
+    heading:east:  [ "heading east" ]
+    heading:south: [ "heading south" ]
+    heading:west:  [ "heading west" ]
+  }
+] ;
+
+v1: ( -- vec2 ) const [ 1 2 make-vec2 ] ;
+\ <- function
+\               ^ keyword
+\                       ^ number
+v2: ( -- vec2 ) const [ 3 4 make-vec2 ] ;
+\               ^ keyword
+
+v1 v2 + x>> .
+heading:north describe-heading print-line
