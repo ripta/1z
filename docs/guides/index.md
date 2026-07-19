@@ -35,6 +35,8 @@ definitions, and control flow.
     on QEMU riscv64 with no operating system
 17. [Coming from Forth or Factor](coming-from-forth.md) -- side-by-side syntax
     comparison for experienced stack-language programmers
+18. [Tree-sitter Grammar](tree-sitter.md) -- installing and registering the 1z
+    tree-sitter parser in Neovim, Helix, and Zed
 
 All examples are runnable. Save any snippet to a `.1z` file and run it with
 `./zig-out/bin/1z file.1z`.
