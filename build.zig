@@ -26,7 +26,18 @@ pub fn build(b: *std.Build) void {
 
     const embedded_stdlib_path = generateEmbeddedStdlib(b, embed_stdlib);
 
-    const is_freestanding = target.result.os.tag == .freestanding;
+    const is_freestanding = isBareTarget(target);
+    const is_wasm = isWasmTarget(target);
+
+    // The wasm tier has no filesystem, so the stdlib fallback backing store
+    // is its only way to resolve `use` imports at runtime.
+    if (is_wasm and !embed_stdlib) {
+        std.debug.print(
+            "Error: -Dtarget=wasm32-freestanding requires -Dembed-stdlib=true (no filesystem access to load lib/ at runtime)\n",
+            .{},
+        );
+        @panic("wasm build requires -Dembed-stdlib=true");
+    }
 
     // Freestanding builds only emit the static capi library; the executables
     // and shared library both require an OS-level entry point and dynamic
@@ -64,7 +75,9 @@ pub fn build(b: *std.Build) void {
     // zig-out/clib/lib1z.a (static library)
     // Installed to clib/ instead of lib/ because zig-out/lib is symlinked
     // to the stdlib directory.
-    const capi_static_root = if (is_freestanding)
+    const capi_static_root = if (is_wasm)
+        b.path("src/capi_wasm.zig")
+    else if (is_freestanding)
         b.path("src/capi_freestanding.zig")
     else
         b.path("src/capi.zig");
@@ -445,6 +458,14 @@ pub fn build(b: *std.Build) void {
     // link and symbol-verify in the default test path.
     const baremetal_step = addBaremetalRiscv64VirtTest(b, exe, optimize, options, embedded_stdlib_path);
     aot_test_step.dependOn(baremetal_step);
+}
+
+fn isBareTarget(target: std.Build.ResolvedTarget) bool {
+    return target.result.os.tag == .freestanding;
+}
+
+fn isWasmTarget(target: std.Build.ResolvedTarget) bool {
+    return isBareTarget(target) and target.result.cpu.arch == .wasm32;
 }
 
 fn addBaremetalRiscv64VirtTest(
@@ -2122,12 +2143,14 @@ fn createCommonModule(
     root_source_file: std.Build.LazyPath,
     embedded_stdlib_path: std.Build.LazyPath,
 ) *std.Build.Module {
-    const is_freestanding = target.result.os.tag == .freestanding;
+    const is_freestanding = isBareTarget(target);
+    const is_wasm = isWasmTarget(target);
     const module = b.createModule(.{
         .root_source_file = root_source_file,
         .target = target,
         .optimize = optimize,
         .link_libc = !is_freestanding,
+        .single_threaded = if (is_wasm) true else null, // wasm has no threads
     });
     // Freestanding builds skip the C dependencies (libffi, toy tokenizer,
     // minicoro coroutines, ir JIT backend). The native words that would
