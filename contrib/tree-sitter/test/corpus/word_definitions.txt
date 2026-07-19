@@ -1,0 +1,116 @@
+================================================================================
+Basic word definition with stack effect
+================================================================================
+
+double: ( n -- n ) [ 2 * ] ;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (word_definition
+    name: (symbol)
+    effect: (stack_effect (word) (word))
+    body: (quotation (integer) (word))))
+
+================================================================================
+Marker before the stack effect, as real prelude usage does
+================================================================================
+
+cmp: generic ( a b -- ordering ) [ 1 ] ;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (word_definition
+    name: (symbol)
+    marker: (marker)
+    effect: (stack_effect (word) (word) (word))
+    body: (quotation (integer))))
+
+================================================================================
+Multiple markers before the stack effect
+================================================================================
+
+while: loop-combinator ( ..a pred: ( ..a -- ..b ? ) body: ( ..b -- ..a ) -- ..b ) [ 1 ] ;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (word_definition
+    name: (symbol)
+    marker: (marker)
+    effect: (stack_effect
+      (word)
+      (stack_effect_annotation
+        name: (symbol)
+        value: (stack_effect (word) (word) (word)))
+      (stack_effect_annotation
+        name: (symbol)
+        value: (stack_effect (word) (word)))
+      (word))
+    body: (quotation (integer))))
+
+================================================================================
+never-returns marker with the `*` wildcard output, no marker before the effect
+================================================================================
+
+throw-type-error: never-returns ( value expected-str -- * ) [ 1 ] ;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (word_definition
+    name: (symbol)
+    marker: (marker)
+    effect: (stack_effect (word) (word) (stack_effect_wildcard))
+    body: (quotation (integer))))
+
+================================================================================
+Brace form as the definition body, no quotation, no marker
+================================================================================
+
+point: struct{ x y } ;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (word_definition
+    name: (symbol)
+    form: (brace_form (brace_prefixed_open) (word) (word))))
+
+================================================================================
+Brace form as a dispatch-type marker before the quotation body
+================================================================================
+
+cmp: method{ fixnum fixnum } [ 1 ] ;
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (word_definition
+    name: (symbol)
+    form: (brace_form (brace_prefixed_open) (word) (word))
+    body: (quotation (integer))))
+
+================================================================================
+A brace form with no preceding symbol and no trailing semicolon is not a
+word_definition -- just a standalone statement
+================================================================================
+
+pragma{ redefinition-arity-mismatch: warning: }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (brace_form (brace_prefixed_open) (symbol) (symbol)))
+
+================================================================================
+A symbol followed by content that cannot complete a definition (a string)
+parses as an ordinary pushed value, not an attempted word_definition
+================================================================================
+
+dup kind>> word: "dup kind" assert=
+
+--------------------------------------------------------------------------------
+
+(source_file (word) (word) (symbol) (string) (word))

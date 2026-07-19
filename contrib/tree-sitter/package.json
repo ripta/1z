@@ -1,0 +1,14 @@
+{
+  "name": "tree-sitter-1z",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the 1z programming language",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.26.0"
+  },
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test"
+  }
+}

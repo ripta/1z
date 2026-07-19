@@ -1,0 +1,30 @@
+\\ A second sample emphasizing method dispatch, match, and protocols, which
+\\ examples/sample.1z does not exercise.
+
+vec2: struct{ x y } ;
+
++: method{ vec2 vec2 } [
+  2dup [ x>> ] dip x>> +
+  [ 2dup [ y>> ] dip y>> + ] dip
+  swap make-vec2
+  [ 2drop ] dip
+] ;
+
+drawable: protocol{ draw: } ;
+
+heading: enum{ north: unit east: unit south: unit west: unit } ;
+
+describe-heading: ( h -- str ) [
+  match{
+    heading:north: [ "heading north" ]
+    heading:east:  [ "heading east" ]
+    heading:south: [ "heading south" ]
+    heading:west:  [ "heading west" ]
+  }
+] ;
+
+v1: ( -- vec2 ) const [ 1 2 make-vec2 ] ;
+v2: ( -- vec2 ) const [ 3 4 make-vec2 ] ;
+
+v1 v2 + x>> .
+heading:north describe-heading print-line

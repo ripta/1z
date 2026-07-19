@@ -1,0 +1,28 @@
+\\ A compact, hand-composed sample combining the grammar's main syntax
+\\ categories in realistic shapes, for smoke-parsing and highlight-query
+\\ tests. The isolated corpus/ cases cover edge cases; this file covers what
+\\ real, combined 1z code looks like.
+
+use "testing" ;
+
+point: struct{ x y } ;
+shape: virtual{ point } ;
+rank:  enum{ low: unit mid: unit high: unit } ;
+
+\\ Doubles a number.
+double: ( n -- n ) [ 2 * ] ;
+
+classify: ( n -- rank ) [
+  dup 10 < [ drop low: ] [ dup 100 < [ drop mid: ] [ drop high: ] if ] if
+] ;
+
+keep: ( ..a x quot: ( ..a x -- ..b ) -- ..b x ) [ over [ call ] dip ] ;
+
+throw-type-error: never-returns ( value expected-str -- * ) [
+  0xFF 0b1010 0o17 3.14 1.5e10 -42 drop drop drop drop drop drop
+] ;
+
+config: H{ retries: 3 delay: 0.5 tags: V{ "fast" "safe" } } ;
+
+"5 doubled: " print
+5 double . "escaped:\n\ttab and \"quote\"" print-line

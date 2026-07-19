@@ -1,0 +1,125 @@
+================================================================================
+Empty stack effect
+================================================================================
+
+( -- )
+
+--------------------------------------------------------------------------------
+
+(source_file (stack_effect))
+
+================================================================================
+Basic inputs and outputs
+================================================================================
+
+( a b -- c )
+
+--------------------------------------------------------------------------------
+
+(source_file (stack_effect (word) (word) (word)))
+
+================================================================================
+Row variables are plain words lexically
+================================================================================
+
+( ..a x -- ..b x )
+
+--------------------------------------------------------------------------------
+
+(source_file (stack_effect (word) (word) (word) (word)))
+
+================================================================================
+Typed parameter annotation
+================================================================================
+
+( n: fixnum -- m )
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (stack_effect
+    (stack_effect_annotation name: (symbol) value: (constraint_expression (word)))
+    (word)))
+
+================================================================================
+Never-returns wildcard output
+================================================================================
+
+( value expected-str -- * )
+
+--------------------------------------------------------------------------------
+
+(source_file (stack_effect (word) (word) (stack_effect_wildcard)))
+
+================================================================================
+Variable-arity wildcard output
+================================================================================
+
+( scanner -- new-scanner token | f )
+
+--------------------------------------------------------------------------------
+
+(source_file (stack_effect (word) (word) (word) (stack_effect_wildcard) (word)))
+
+================================================================================
+Recursive quotation-effect annotation
+================================================================================
+
+( ..a x quot: ( ..a x -- ..b ) -- ..b x )
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (stack_effect
+    (word)
+    (word)
+    (stack_effect_annotation
+      name: (symbol)
+      value: (stack_effect (word) (word) (word)))
+    (word)
+    (word)))
+
+================================================================================
+Multiple quotation-effect annotations
+================================================================================
+
+( ..a x p: ( ..a x -- ..b ) q: ( ..a x -- ..c ) -- ..b ..c )
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (stack_effect
+    (word)
+    (word)
+    (stack_effect_annotation
+      name: (symbol)
+      value: (stack_effect (word) (word) (word)))
+    (stack_effect_annotation
+      name: (symbol)
+      value: (stack_effect (word) (word) (word)))
+    (word)
+    (word)))
+
+================================================================================
+Constraint chain: union and intersection
+================================================================================
+
+( n: fixnum | bignum | float -- ) ( x: comparable & stringable -- )
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (stack_effect
+    (stack_effect_annotation
+      name: (symbol)
+      value: (constraint_expression
+        (constraint_expression
+          (constraint_expression (word))
+          (word))
+        (word))))
+  (stack_effect
+    (stack_effect_annotation
+      name: (symbol)
+      value: (constraint_expression
+        (constraint_expression (word))
+        (word)))))

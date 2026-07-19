@@ -1,0 +1,57 @@
+================================================================================
+Data-literal brace prefixes
+================================================================================
+
+H{ a: 1 } V{ 1 2 3 } B{ 1 2 } S{ 1 2 } M{ a: 1 } W{ foo bar }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (brace_form (brace_prefixed_open) (symbol) (integer))
+  (brace_form (brace_prefixed_open) (integer) (integer) (integer))
+  (brace_form (brace_prefixed_open) (integer) (integer))
+  (brace_form (brace_prefixed_open) (integer) (integer))
+  (brace_form (brace_prefixed_open) (symbol) (integer))
+  (brace_form (brace_prefixed_open) (word) (word)))
+
+================================================================================
+Definition-form brace prefixes
+================================================================================
+
+struct{ x y } virtual{ x } enum{ lt: unit } match{ } method{ fixnum } protocol{ cmp: } private{ } pragma{ }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (brace_form (brace_prefixed_open) (word) (word))
+  (brace_form (brace_prefixed_open) (word))
+  (brace_form (brace_prefixed_open) (symbol) (word))
+  (brace_form (brace_prefixed_open))
+  (brace_form (brace_prefixed_open) (word))
+  (brace_form (brace_prefixed_open) (symbol))
+  (brace_form (brace_prefixed_open))
+  (brace_form (brace_prefixed_open)))
+
+================================================================================
+User-defined brace prefix (not an enumerated builtin list)
+================================================================================
+
+C{ 1.0 0.0 }
+
+--------------------------------------------------------------------------------
+
+(source_file (brace_form (brace_prefixed_open) (float) (float)))
+
+================================================================================
+Nested container literals
+================================================================================
+
+H{ foo: V{ 1 2 3 } }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (brace_form
+    (brace_prefixed_open)
+    (symbol)
+    (brace_form (brace_prefixed_open) (integer) (integer) (integer))))
