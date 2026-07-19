@@ -143,6 +143,11 @@ pub const TraceConfig = struct {
     trace_container_detect: bool = false,
     dump_scope: ?[]const u8 = null,
 
+    // JIT native-code byte dumps. Fired on the compile path, not the word-execution path, so they
+    // are excluded from `isEnabled` the same way the AOT and sampler axes are.
+    dump_jit_bytes: bool = false,
+    dump_jit_bin_dir: ?[]const u8 = null,
+
     // Periodic task/memory sampler axes and interval. Independent of the
     // trace flags above; the sampler is driven by the scheduler, not the
     // word-execution path, so it is excluded from `isEnabled`.

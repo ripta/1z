@@ -448,6 +448,25 @@ fn parseExecutionFlag(
         state.trace_config.dump_scope = arg["--dump-scope=".len..];
         return .consumed;
     }
+    if (std.mem.eql(u8, arg, "--dump-jit-bytes")) {
+        state.trace_config.dump_jit_bytes = true;
+        return .consumed;
+    }
+    if (std.mem.eql(u8, arg, "--dump-jit-bin-dir")) {
+        err_writer.print("Error: --dump-jit-bin-dir requires a value (e.g. --dump-jit-bin-dir=DIR)\n", .{}) catch {};
+        err_writer.flush() catch {};
+        return error.InvalidFlagValue;
+    }
+    if (std.mem.startsWith(u8, arg, "--dump-jit-bin-dir=")) {
+        const value = arg["--dump-jit-bin-dir=".len..];
+        if (value.len == 0) {
+            err_writer.print("Error: --dump-jit-bin-dir requires a non-empty directory\n", .{}) catch {};
+            err_writer.flush() catch {};
+            return error.InvalidFlagValue;
+        }
+        state.trace_config.dump_jit_bin_dir = value;
+        return .consumed;
+    }
     if (std.mem.eql(u8, arg, "--deadlock-detect")) {
         state.deadlock_detect_ns = 5 * std.time.ns_per_s;
         return .consumed;
@@ -625,6 +644,8 @@ const execution_flags_help =
     \\  --trace-pic               Trace inline PIC hits
     \\  --trace-container-detect  Trace container CPU/memory detection fallbacks
     \\  --dump-scope=WORD         Dump scope after loading WORD
+    \\  --dump-jit-bytes          Dump JIT native code bytes to stderr (xxd format)
+    \\  --dump-jit-bin-dir=DIR    Write per-word JIT native code to DIR/ID-name.bin
     \\  --deadlock-detect[=SECS]  Enable deadlock detection (default 5s)
     \\  --test-timeout=SECS       Set test timeout in seconds
     \\  -b, --benchmark           Enable benchmarking
@@ -4585,6 +4606,44 @@ test "parseExecutionFlag: malformed and missing sampling-tick value" {
         var state = ExecutionFlags{};
         try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--sampling-tick", &state, &w));
         try std.testing.expectEqualStrings("Error: --sampling-tick requires a value (e.g. --sampling-tick=1000ms)\n", w.buffered());
+    }
+}
+
+test "parseExecutionFlag: JIT dump flags" {
+    var buf: [256]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectEqual(FlagParseResult.consumed, try parseExecutionFlag("--dump-jit-bytes", &state, &w));
+        try std.testing.expect(state.trace_config.dump_jit_bytes);
+        try std.testing.expectEqual(@as(?[]const u8, null), state.trace_config.dump_jit_bin_dir);
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectEqual(FlagParseResult.consumed, try parseExecutionFlag("--dump-jit-bin-dir=/tmp/x", &state, &w));
+        try std.testing.expectEqualStrings("/tmp/x", state.trace_config.dump_jit_bin_dir.?);
+        try std.testing.expect(!state.trace_config.dump_jit_bytes);
+    }
+}
+
+test "parseExecutionFlag: malformed and missing --dump-jit-bin-dir value" {
+    var buf: [256]u8 = undefined;
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--dump-jit-bin-dir", &state, &w));
+        try std.testing.expectEqualStrings("Error: --dump-jit-bin-dir requires a value (e.g. --dump-jit-bin-dir=DIR)\n", w.buffered());
+    }
+
+    {
+        var w = std.Io.Writer.fixed(&buf);
+        var state = ExecutionFlags{};
+        try std.testing.expectError(error.InvalidFlagValue, parseExecutionFlag("--dump-jit-bin-dir=", &state, &w));
+        try std.testing.expectEqualStrings("Error: --dump-jit-bin-dir requires a non-empty directory\n", w.buffered());
     }
 }
 

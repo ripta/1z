@@ -43,6 +43,7 @@ const ProfileStats = @import("profile.zig").ProfileStats;
 const StatementProcessor = @import("statement.zig").StatementProcessor;
 
 const trace_mod = @import("trace.zig");
+const jit_dump = @import("jit_dump.zig");
 const TraceConfig = trace_mod.TraceConfig;
 
 const pascalToKebabRuntime = @import("primitives/errors.zig").pascalToKebabRuntime;
@@ -2290,6 +2291,9 @@ pub const Context = struct {
             var tw = trace_mod.TraceWriter.init();
             trace_mod.traceJitCompile(&tw, name, final_id);
         }
+
+        const dump_cfg = jit_dump.DumpConfig{ .dump_bytes = self.trace.dump_jit_bytes, .bin_dir = self.trace.dump_jit_bin_dir };
+        if (dump_cfg.enabled()) jit_dump.dumpJitCode(dump_cfg, name, final_id, compiled.code_ptr, compiled.jit_buf.size);
     }
 
     /// Assign a word_id without compiling. Used in hybrid mode so the dispatch

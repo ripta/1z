@@ -14,6 +14,7 @@ const protocols = @import("protocols.zig");
 const Primitive = @import("types.zig").Primitive;
 const Capability = @import("types.zig").Capability;
 const trace_mod = @import("../trace.zig");
+const jit_dump = @import("../jit_dump.zig");
 const call_graph_mod = @import("../call_graph.zig");
 const ir_codegen = @import("../ir_codegen.zig");
 const stack_effect_mod = @import("../stack_effect.zig");
@@ -1154,6 +1155,9 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
         var tw = trace_mod.TraceWriter.init();
         trace_mod.traceJitCompile(&tw, sym, final_id);
     }
+
+    const dump_cfg = jit_dump.DumpConfig{ .dump_bytes = ctx.trace.dump_jit_bytes, .bin_dir = ctx.trace.dump_jit_bin_dir };
+    if (dump_cfg.enabled()) jit_dump.dumpJitCode(dump_cfg, sym, final_id, compiled.code_ptr, compiled.jit_buf.size);
 }
 
 /// Write word_id to whichever scope lookupWord would find the word in:
