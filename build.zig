@@ -26,17 +26,17 @@ pub fn build(b: *std.Build) void {
 
     const embedded_stdlib_path = generateEmbeddedStdlib(b, embed_stdlib);
 
-    const is_freestanding = isBareTarget(target);
-    const is_wasm = isWasmTarget(target);
+    const build_target = resolveBuildTarget(target);
+    const is_freestanding = !build_target.has_filesystem;
 
-    // The wasm tier has no filesystem, so the stdlib fallback backing store
-    // is its only way to resolve `use` imports at runtime.
-    if (is_wasm and !embed_stdlib) {
+    // A target that resolves `use` imports at runtime but has no filesystem to load lib/ from
+    // needs the embedded stdlib fallback backing store.
+    if (build_target.needs_stdlib_at_runtime and !build_target.has_filesystem and !embed_stdlib) {
         std.debug.print(
-            "Error: -Dtarget=wasm32-freestanding requires -Dembed-stdlib=true (no filesystem access to load lib/ at runtime)\n",
+            "Error: this target has no filesystem and requires -Dembed-stdlib=true to resolve `use` imports at runtime\n",
             .{},
         );
-        @panic("wasm build requires -Dembed-stdlib=true");
+        @panic("build requires -Dembed-stdlib=true");
     }
 
     // Freestanding builds only emit the static capi library; the executables
@@ -75,12 +75,7 @@ pub fn build(b: *std.Build) void {
     // zig-out/clib/lib1z.a (static library)
     // Installed to clib/ instead of lib/ because zig-out/lib is symlinked
     // to the stdlib directory.
-    const capi_static_root = if (is_wasm)
-        b.path("src/capi_wasm.zig")
-    else if (is_freestanding)
-        b.path("src/capi_freestanding.zig")
-    else
-        b.path("src/capi.zig");
+    const capi_static_root = b.path(build_target.capi_root);
     const capi_static_module = createCommonModule(b, target, optimize, options, capi_static_root, embedded_stdlib_path);
 
     const static_lib = b.addLibrary(.{
@@ -460,12 +455,40 @@ pub fn build(b: *std.Build) void {
     aot_test_step.dependOn(baremetal_step);
 }
 
-fn isBareTarget(target: std.Build.ResolvedTarget) bool {
-    return target.result.os.tag == .freestanding;
-}
+const BuildTarget = struct {
+    has_filesystem: bool,
+    needs_stdlib_at_runtime: bool,
+    single_threaded: ?bool,
+    capi_root: []const u8,
+};
 
-fn isWasmTarget(target: std.Build.ResolvedTarget) bool {
-    return isBareTarget(target) and target.result.cpu.arch == .wasm32;
+fn resolveBuildTarget(target: std.Build.ResolvedTarget) BuildTarget {
+    if (target.result.cpu.arch == .wasm32 and target.result.os.tag == .freestanding) {
+        return .{
+            .has_filesystem = false,
+            .needs_stdlib_at_runtime = true,
+            // wasm32-freestanding has no native threading model, so Mutex/RwLock already fall
+            // back to their no-op single-threaded impls; this makes that fallback the default.
+            .single_threaded = true,
+            .capi_root = "src/capi_wasm.zig",
+        };
+    }
+    if (target.result.os.tag == .freestanding) {
+        // The riscv64 AOT-replay root never resolves `use` imports at runtime, so it has no
+        // stdlib dependency despite also lacking a filesystem.
+        return .{
+            .has_filesystem = false,
+            .needs_stdlib_at_runtime = false,
+            .single_threaded = null,
+            .capi_root = "src/capi_freestanding.zig",
+        };
+    }
+    return .{
+        .has_filesystem = true,
+        .needs_stdlib_at_runtime = true,
+        .single_threaded = null,
+        .capi_root = "src/capi.zig",
+    };
 }
 
 fn addBaremetalRiscv64VirtTest(
@@ -2143,14 +2166,14 @@ fn createCommonModule(
     root_source_file: std.Build.LazyPath,
     embedded_stdlib_path: std.Build.LazyPath,
 ) *std.Build.Module {
-    const is_freestanding = isBareTarget(target);
-    const is_wasm = isWasmTarget(target);
+    const build_target = resolveBuildTarget(target);
+    const is_freestanding = !build_target.has_filesystem;
     const module = b.createModule(.{
         .root_source_file = root_source_file,
         .target = target,
         .optimize = optimize,
         .link_libc = !is_freestanding,
-        .single_threaded = if (is_wasm) true else null, // wasm has no threads
+        .single_threaded = build_target.single_threaded,
     });
     // Freestanding builds skip the C dependencies (libffi, toy tokenizer,
     // minicoro coroutines, ir JIT backend). The native words that would
