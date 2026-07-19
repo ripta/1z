@@ -15,6 +15,8 @@ const Context = context_mod.Context;
 const statement_mod = @import("statement.zig");
 const StatementProcessor = statement_mod.StatementProcessor;
 
+const capi_core = @import("capi_core.zig");
+
 const effect_inference = @import("effect_inference.zig");
 const call_graph = @import("call_graph.zig");
 
@@ -119,26 +121,26 @@ const OnezHandle = struct {
 };
 
 // Type constants for onez_stack_type return values.
-pub const ONEZ_TYPE_UNKNOWN: c_int = 0;
-pub const ONEZ_TYPE_FIXNUM: c_int = 1;
-pub const ONEZ_TYPE_FLOAT: c_int = 2;
-pub const ONEZ_TYPE_BOOLEAN: c_int = 3;
-pub const ONEZ_TYPE_STRING: c_int = 4;
-pub const ONEZ_TYPE_SYMBOL: c_int = 5;
-pub const ONEZ_TYPE_ARRAY: c_int = 6;
-pub const ONEZ_TYPE_QUOTATION: c_int = 7;
-pub const ONEZ_TYPE_HASH: c_int = 8;
-pub const ONEZ_TYPE_VECTOR: c_int = 9;
-pub const ONEZ_TYPE_BYTE_ARRAY: c_int = 10;
-pub const ONEZ_TYPE_SET: c_int = 11;
-pub const ONEZ_TYPE_MUTABLE_MAP: c_int = 12;
-pub const ONEZ_TYPE_STREAM: c_int = 13;
-pub const ONEZ_TYPE_RESOURCE: c_int = 14;
-pub const ONEZ_TYPE_TAGGED: c_int = 15;
-pub const ONEZ_TYPE_ITERATOR: c_int = 16;
-pub const ONEZ_TYPE_TYPE_VAL: c_int = 17;
-pub const ONEZ_TYPE_UNIT: c_int = 18;
-pub const ONEZ_TYPE_STRUCT: c_int = 19;
+pub const ONEZ_TYPE_UNKNOWN: c_int = capi_core.ONEZ_TYPE_UNKNOWN;
+pub const ONEZ_TYPE_FIXNUM: c_int = capi_core.ONEZ_TYPE_FIXNUM;
+pub const ONEZ_TYPE_FLOAT: c_int = capi_core.ONEZ_TYPE_FLOAT;
+pub const ONEZ_TYPE_BOOLEAN: c_int = capi_core.ONEZ_TYPE_BOOLEAN;
+pub const ONEZ_TYPE_STRING: c_int = capi_core.ONEZ_TYPE_STRING;
+pub const ONEZ_TYPE_SYMBOL: c_int = capi_core.ONEZ_TYPE_SYMBOL;
+pub const ONEZ_TYPE_ARRAY: c_int = capi_core.ONEZ_TYPE_ARRAY;
+pub const ONEZ_TYPE_QUOTATION: c_int = capi_core.ONEZ_TYPE_QUOTATION;
+pub const ONEZ_TYPE_HASH: c_int = capi_core.ONEZ_TYPE_HASH;
+pub const ONEZ_TYPE_VECTOR: c_int = capi_core.ONEZ_TYPE_VECTOR;
+pub const ONEZ_TYPE_BYTE_ARRAY: c_int = capi_core.ONEZ_TYPE_BYTE_ARRAY;
+pub const ONEZ_TYPE_SET: c_int = capi_core.ONEZ_TYPE_SET;
+pub const ONEZ_TYPE_MUTABLE_MAP: c_int = capi_core.ONEZ_TYPE_MUTABLE_MAP;
+pub const ONEZ_TYPE_STREAM: c_int = capi_core.ONEZ_TYPE_STREAM;
+pub const ONEZ_TYPE_RESOURCE: c_int = capi_core.ONEZ_TYPE_RESOURCE;
+pub const ONEZ_TYPE_TAGGED: c_int = capi_core.ONEZ_TYPE_TAGGED;
+pub const ONEZ_TYPE_ITERATOR: c_int = capi_core.ONEZ_TYPE_ITERATOR;
+pub const ONEZ_TYPE_TYPE_VAL: c_int = capi_core.ONEZ_TYPE_TYPE_VAL;
+pub const ONEZ_TYPE_UNIT: c_int = capi_core.ONEZ_TYPE_UNIT;
+pub const ONEZ_TYPE_STRUCT: c_int = capi_core.ONEZ_TYPE_STRUCT;
 
 // Error code constants.
 pub const ONEZ_OK: c_int = 0;
@@ -472,38 +474,23 @@ export fn onez_eval(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
         const line = source[start..end];
         start = end + 1;
 
-        switch (processor.feedLine(alloc, line, ctx)) {
+        switch (capi_core.evalStep(ctx, &processor, alloc, line)) {
             .needs_more_input => continue,
-            .parse_error => |err| {
+            .parse_error, .exec_error => |err| {
                 captureError(handle, err);
                 return 1;
             },
-            .complete => |instrs| {
-                if (instrs.len > 0) {
-                    ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
-                        captureError(handle, err);
-                        return 1;
-                    };
-                }
-                processor.reset();
-            },
+            .complete => {},
         }
     }
 
-    switch (processor.flush(alloc, ctx)) {
+    switch (capi_core.evalFlush(ctx, &processor, alloc)) {
         .needs_more_input => {},
-        .parse_error => |err| {
+        .parse_error, .exec_error => |err| {
             captureError(handle, err);
             return 1;
         },
-        .complete => |instrs| {
-            if (instrs.len > 0) {
-                ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
-                    captureError(handle, err);
-                    return 1;
-                };
-            }
-        },
+        .complete => {},
     }
 
     return ONEZ_OK;
@@ -553,20 +540,13 @@ export fn onez_eval_file(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
     while (true) {
         const line = reader.interface.takeDelimiterInclusive('\n') catch |err| switch (err) {
             error.EndOfStream => {
-                switch (processor.flush(alloc, ctx)) {
+                switch (capi_core.evalFlush(ctx, &processor, alloc)) {
                     .needs_more_input => {},
-                    .parse_error => |e| {
+                    .parse_error, .exec_error => |e| {
                         captureError(handle, e);
                         return 1;
                     },
-                    .complete => |instrs| {
-                        if (instrs.len > 0) {
-                            ctx.executeQuotation(.{ .instructions = instrs }) catch |e2| {
-                                captureError(handle, e2);
-                                return 1;
-                            };
-                        }
-                    },
+                    .complete => {},
                 }
                 break;
             },
@@ -576,21 +556,13 @@ export fn onez_eval_file(ptr: ?*anyopaque, path: ?[*:0]const u8) c_int {
             },
         };
 
-        switch (processor.feedLine(alloc, line, ctx)) {
+        switch (capi_core.evalStep(ctx, &processor, alloc, line)) {
             .needs_more_input => continue,
-            .parse_error => |err| {
+            .parse_error, .exec_error => |err| {
                 captureError(handle, err);
                 return 1;
             },
-            .complete => |instrs| {
-                if (instrs.len > 0) {
-                    ctx.executeQuotation(.{ .instructions = instrs }) catch |err| {
-                        captureError(handle, err);
-                        return 1;
-                    };
-                }
-                processor.reset();
-            },
+            .complete => {},
         }
     }
 
@@ -923,14 +895,7 @@ export fn onez_register_word(ptr: ?*anyopaque, name: ?[*:0]const u8, callback: ?
     };
     errdefer _ = handle.host_words.pop();
 
-    handle.ctx.defineWord(name_copy, .{
-        .name = name_copy,
-        .action = .{ .host_callback = HostCallback{
-            .handle = ptr,
-            .callback = callback_fn,
-            .user_data = user_data,
-        } },
-    }) catch |err| {
+    capi_core.defineHostWord(handle.ctx, name_copy, null, callback_fn, ptr, user_data) catch |err| {
         if (handle.ctx.pending_error_message) |msg| {
             setLastError(handle, "{s}", .{msg});
         } else {
@@ -1010,15 +975,7 @@ export fn onez_register_word_with_effect(
     };
     errdefer _ = handle.host_words.pop();
 
-    handle.ctx.defineWord(name_copy, .{
-        .name = name_copy,
-        .stack_effect = parsed_effect,
-        .action = .{ .host_callback = HostCallback{
-            .handle = ptr,
-            .callback = callback_fn,
-            .user_data = user_data,
-        } },
-    }) catch |err| {
+    capi_core.defineHostWord(handle.ctx, name_copy, parsed_effect, callback_fn, ptr, user_data) catch |err| {
         if (handle.ctx.pending_error_message) |msg| {
             setLastError(handle, "{s}", .{msg});
         } else {
@@ -1182,7 +1139,7 @@ export fn onez_register_method(
 
 export fn onez_push_int(ptr: ?*anyopaque, value: i64) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    handle.ctx.stack.push(.{ .fixnum = value }) catch {
+    capi_core.pushInt(handle.ctx, value) catch {
         setLastError(handle, "allocation failure pushing int", .{});
         return ONEZ_ERR_ALLOC;
     };
@@ -1191,7 +1148,7 @@ export fn onez_push_int(ptr: ?*anyopaque, value: i64) c_int {
 
 export fn onez_push_double(ptr: ?*anyopaque, value: f64) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    handle.ctx.stack.push(.{ .float = value }) catch {
+    capi_core.pushDouble(handle.ctx, value) catch {
         setLastError(handle, "allocation failure pushing double", .{});
         return ONEZ_ERR_ALLOC;
     };
@@ -1200,7 +1157,7 @@ export fn onez_push_double(ptr: ?*anyopaque, value: f64) c_int {
 
 export fn onez_push_bool(ptr: ?*anyopaque, value: bool) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    handle.ctx.stack.push(.{ .boolean = value }) catch {
+    capi_core.pushBool(handle.ctx, value) catch {
         setLastError(handle, "allocation failure pushing bool", .{});
         return ONEZ_ERR_ALLOC;
     };
@@ -1209,11 +1166,7 @@ export fn onez_push_bool(ptr: ?*anyopaque, value: bool) c_int {
 
 export fn onez_push_string(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const copy = handle.ctx.quotationAllocator().dupe(u8, data[0..len]) catch {
-        setLastError(handle, "allocation failure copying string", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    handle.ctx.stack.push(.{ .string = copy }) catch {
+    capi_core.pushString(handle.ctx, data[0..len]) catch {
         setLastError(handle, "allocation failure pushing string", .{});
         return ONEZ_ERR_ALLOC;
     };
@@ -1222,18 +1175,18 @@ export fn onez_push_string(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_in
 
 export fn onez_pop_value(ptr: ?*anyopaque, out: *?*anyopaque) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const val = handle.ctx.stack.pop() catch {
-        setLastError(handle, "stack underflow: cannot pop value from empty stack", .{});
-        return ONEZ_ERR_STACK_UNDERFLOW;
+    const slot = capi_core.popValueBoxed(handle.ctx) catch |err| switch (err) {
+        error.StackUnderflow => {
+            setLastError(handle, "stack underflow: cannot pop value from empty stack", .{});
+            return ONEZ_ERR_STACK_UNDERFLOW;
+        },
+        else => {
+            setLastError(handle, "allocation failure creating value handle", .{});
+            return ONEZ_ERR_ALLOC;
+        },
     };
-    const slot = handle.ctx.quotationAllocator().create(Value) catch {
-        handle.ctx.stack.pushMoved(val) catch {};
-        setLastError(handle, "allocation failure creating value handle", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    slot.* = val;
     handle.popped_values.append(handle.allocator, slot) catch {
-        handle.ctx.stack.pushMoved(val) catch {};
+        handle.ctx.stack.pushMoved(slot.*) catch {};
         setLastError(handle, "allocation failure tracking value handle", .{});
         return ONEZ_ERR_ALLOC;
     };
@@ -1248,7 +1201,7 @@ export fn onez_push_value(ptr: ?*anyopaque, val_ptr: ?*anyopaque) c_int {
         return ONEZ_ERR_NULL_VALUE;
     };
     const value: *const Value = @ptrCast(@alignCast(vp));
-    handle.ctx.stack.push(value.*) catch {
+    capi_core.pushBoxedValue(handle.ctx, value) catch {
         setLastError(handle, "allocation failure pushing value", .{});
         return ONEZ_ERR_ALLOC;
     };
@@ -1399,11 +1352,7 @@ export fn onez_struct_get(ptr: ?*anyopaque, val_ptr: ?*anyopaque, field: [*]cons
 
 export fn onez_push_symbol(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const copy = handle.ctx.quotationAllocator().dupe(u8, data[0..len]) catch {
-        setLastError(handle, "allocation failure copying symbol", .{});
-        return ONEZ_ERR_ALLOC;
-    };
-    handle.ctx.stack.push(.{ .symbol = copy }) catch {
+    capi_core.pushSymbol(handle.ctx, data[0..len]) catch {
         setLastError(handle, "allocation failure pushing symbol", .{});
         return ONEZ_ERR_ALLOC;
     };
@@ -1480,81 +1429,68 @@ export fn onez_virtual_unwrap(ptr: ?*anyopaque, val_ptr: ?*anyopaque, out: *?*an
 
 export fn onez_pop_int(ptr: ?*anyopaque, out: *i64) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const val = handle.ctx.stack.pop() catch {
-        setLastError(handle, "stack underflow: cannot pop int from empty stack", .{});
-        return ONEZ_ERR_STACK_UNDERFLOW;
-    };
-    switch (val) {
-        .fixnum => |v| {
-            out.* = v;
-            return ONEZ_OK;
-        },
-        else => {
-            // The pop transferred the slot's owning reference; a retaining push here would
-            // double-count it.
-            handle.ctx.stack.pushMoved(val) catch {};
-            setLastError(handle, "type mismatch: expected fixnum, got {s}", .{@tagName(val)});
+    var mismatched: Value = undefined;
+    out.* = capi_core.popInt(handle.ctx, &mismatched) catch |err| switch (err) {
+        error.TypeMismatch => {
+            setLastError(handle, "type mismatch: expected fixnum, got {s}", .{@tagName(mismatched)});
             return ONEZ_ERR_TYPE_MISMATCH;
         },
-    }
+        else => {
+            setLastError(handle, "stack underflow: cannot pop int from empty stack", .{});
+            return ONEZ_ERR_STACK_UNDERFLOW;
+        },
+    };
+    return ONEZ_OK;
 }
 
 export fn onez_pop_double(ptr: ?*anyopaque, out: *f64) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const val = handle.ctx.stack.pop() catch {
-        setLastError(handle, "stack underflow: cannot pop double from empty stack", .{});
-        return ONEZ_ERR_STACK_UNDERFLOW;
-    };
-    switch (val) {
-        .float => |v| {
-            out.* = v;
-            return ONEZ_OK;
-        },
-        else => {
-            handle.ctx.stack.pushMoved(val) catch {};
-            setLastError(handle, "type mismatch: expected float, got {s}", .{@tagName(val)});
+    var mismatched: Value = undefined;
+    out.* = capi_core.popDouble(handle.ctx, &mismatched) catch |err| switch (err) {
+        error.TypeMismatch => {
+            setLastError(handle, "type mismatch: expected float, got {s}", .{@tagName(mismatched)});
             return ONEZ_ERR_TYPE_MISMATCH;
         },
-    }
+        else => {
+            setLastError(handle, "stack underflow: cannot pop double from empty stack", .{});
+            return ONEZ_ERR_STACK_UNDERFLOW;
+        },
+    };
+    return ONEZ_OK;
 }
 
 export fn onez_pop_bool(ptr: ?*anyopaque, out: *bool) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const val = handle.ctx.stack.pop() catch {
-        setLastError(handle, "stack underflow: cannot pop bool from empty stack", .{});
-        return ONEZ_ERR_STACK_UNDERFLOW;
-    };
-    switch (val) {
-        .boolean => |v| {
-            out.* = v;
-            return ONEZ_OK;
-        },
-        else => {
-            handle.ctx.stack.pushMoved(val) catch {};
-            setLastError(handle, "type mismatch: expected boolean, got {s}", .{@tagName(val)});
+    var mismatched: Value = undefined;
+    out.* = capi_core.popBool(handle.ctx, &mismatched) catch |err| switch (err) {
+        error.TypeMismatch => {
+            setLastError(handle, "type mismatch: expected boolean, got {s}", .{@tagName(mismatched)});
             return ONEZ_ERR_TYPE_MISMATCH;
         },
-    }
+        else => {
+            setLastError(handle, "stack underflow: cannot pop bool from empty stack", .{});
+            return ONEZ_ERR_STACK_UNDERFLOW;
+        },
+    };
+    return ONEZ_OK;
 }
 
 export fn onez_pop_string(ptr: ?*anyopaque, out_ptr: *[*]const u8, out_len: *usize) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const val = handle.ctx.stack.pop() catch {
-        setLastError(handle, "stack underflow: cannot pop string from empty stack", .{});
-        return ONEZ_ERR_STACK_UNDERFLOW;
-    };
-    switch (val) {
-        .string => |s| {
-            out_ptr.* = s.ptr;
-            out_len.* = s.len;
-            return ONEZ_OK;
-        },
-        else => {
-            handle.ctx.stack.pushMoved(val) catch {};
-            setLastError(handle, "type mismatch: expected string, got {s}", .{@tagName(val)});
+    var mismatched: Value = undefined;
+    const s = capi_core.popString(handle.ctx, &mismatched) catch |err| switch (err) {
+        error.TypeMismatch => {
+            setLastError(handle, "type mismatch: expected string, got {s}", .{@tagName(mismatched)});
             return ONEZ_ERR_TYPE_MISMATCH;
         },
-    }
+        else => {
+            setLastError(handle, "stack underflow: cannot pop string from empty stack", .{});
+            return ONEZ_ERR_STACK_UNDERFLOW;
+        },
+    };
+    out_ptr.* = s.ptr;
+    out_len.* = s.len;
+    return ONEZ_OK;
 }
 
 export fn onez_stack_depth(ptr: ?*anyopaque) usize {
@@ -1989,9 +1925,10 @@ export fn onez_debug_local_kind(ptr: ?*anyopaque, index: usize) c_int {
 /// Non-destructive read of the value at stack position `index` (0 = top).
 export fn onez_stack_peek(ptr: ?*anyopaque, index: usize, out: *?*anyopaque) c_int {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
-    const val = handle.ctx.stack.peekN(index) catch return ONEZ_ERR_INDEX_OUT_OF_RANGE;
-    const slot = handle.ctx.quotationAllocator().create(Value) catch return ONEZ_ERR_ALLOC;
-    slot.* = val;
+    const slot = capi_core.peekBoxed(handle.ctx, index) catch |err| switch (err) {
+        error.StackUnderflow => return ONEZ_ERR_INDEX_OUT_OF_RANGE,
+        else => return ONEZ_ERR_ALLOC,
+    };
     out.* = slot;
     return ONEZ_OK;
 }
@@ -2257,70 +2194,13 @@ fn setLastError(handle: *OnezHandle, comptime fmt: []const u8, args: anytype) vo
 
 fn captureError(handle: *OnezHandle, err: anyerror) void {
     clearLastError(handle);
-
-    const details = handle.ctx.error_details.items;
-    if (details.len > 0) {
-        const detail = details[0];
-        // A host callback's custom message (set via onez_set_error) is folded
-        // into the innermost detail's message by captureCallStackOnError, so
-        // surface it the same way onez_print_error does: append it when it
-        // carries more than the word name.
-        if (detail.word_name != null and !std.mem.eql(u8, detail.message, detail.word_name.?)) {
-            handle.last_error = allocPrintZ(
-                handle.allocator,
-                "{s}:{d}: error '{s}' {s}",
-                .{ detail.source, detail.line, detail.error_type, detail.message },
-            ) catch null;
-        } else {
-            handle.last_error = allocPrintZ(
-                handle.allocator,
-                "{s}:{d}: error '{s}'",
-                .{ detail.source, detail.line, detail.error_type },
-            ) catch null;
-        }
-    } else if (handle.ctx.pending_error_message) |msg| {
-        handle.last_error = allocPrintZ(handle.allocator, "{s}", .{msg}) catch null;
-    } else {
-        handle.last_error = allocPrintZ(
-            handle.allocator,
-            "{s}",
-            .{@errorName(err)},
-        ) catch null;
-    }
+    handle.last_error = capi_core.formatCapturedError(handle.ctx, handle.allocator, err);
 }
 
-fn allocPrintZ(alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ![:0]const u8 {
-    const str = try std.fmt.allocPrint(alloc, fmt, args);
-    const buf = try alloc.alloc(u8, str.len + 1);
-    @memcpy(buf[0..str.len], str);
-    buf[str.len] = 0;
-    alloc.free(str);
-    return buf[0..str.len :0];
-}
+const allocPrintZ = capi_core.allocPrintZ;
 
 fn valueTypeToInt(val: Value) c_int {
-    return switch (val) {
-        .fixnum => ONEZ_TYPE_FIXNUM,
-        .float => ONEZ_TYPE_FLOAT,
-        .boolean => ONEZ_TYPE_BOOLEAN,
-        .string => ONEZ_TYPE_STRING,
-        .symbol => ONEZ_TYPE_SYMBOL,
-        .array => ONEZ_TYPE_ARRAY,
-        .quotation => ONEZ_TYPE_QUOTATION,
-        .hash => ONEZ_TYPE_HASH,
-        .vector => ONEZ_TYPE_VECTOR,
-        .byte_array => ONEZ_TYPE_BYTE_ARRAY,
-        .set => ONEZ_TYPE_SET,
-        .mutable_map => ONEZ_TYPE_MUTABLE_MAP,
-        .stream => ONEZ_TYPE_STREAM,
-        .resource => ONEZ_TYPE_RESOURCE,
-        .tagged => ONEZ_TYPE_TAGGED,
-        .iterator => ONEZ_TYPE_ITERATOR,
-        .type_val => ONEZ_TYPE_TYPE_VAL,
-        .unit => ONEZ_TYPE_UNIT,
-        .struct_instance => ONEZ_TYPE_STRUCT,
-        else => ONEZ_TYPE_UNKNOWN,
-    };
+    return capi_core.valueTypeToInt(val);
 }
 
 var test_host_callback_expected_handle: ?*anyopaque = null;

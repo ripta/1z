@@ -1,6 +1,763 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const build_options = @import("build_options");
 
-// The interpreter, stack, and register-word plumbing land later, so this file exists only to give
-// the wasm32-freestanding build path a root module to compile.
+// This root is only ever selected as capi_root for a genuine wasm32-freestanding build
+// (build.zig's resolveBuildTarget); is_freestanding is true there.
+//
+// It is also compiled and run natively for `capi-test` so its logic gets a real test run, not
+// just a cross-compile check. That host-test path needs a real growable allocator instead of the
+// tiny static buffer the actual wasm target is limited to, since repeated onez_init calls across
+// many test cases would otherwise exhaust it.
+const is_freestanding = builtin.os.tag == .freestanding;
 
+const context_mod = @import("context.zig");
+const Context = context_mod.Context;
+
+const statement_mod = @import("statement.zig");
+const StatementProcessor = statement_mod.StatementProcessor;
+
+const capi_core = @import("capi_core.zig");
+
+const value_mod = @import("value.zig");
+const Value = value_mod.Value;
+const Stream = value_mod.Stream;
+const StreamVTable = value_mod.StreamVTable;
+const container_backing = @import("container_backing.zig");
+
+const dictionary_mod = @import("dictionary.zig");
+const HostCallbackFn = dictionary_mod.HostCallbackFn;
+const StackEffect = @import("stack_effect.zig").StackEffect;
+
+const helpers = @import("primitives/helpers.zig");
+
+// The wasm build is always freestanding, so this root gives the linker no OS entry point and no
+// stdio-backed panic handler to call into.
 pub const panic = std.debug.no_panic;
+
+// Error code constants, mirroring capi.zig's so a host familiar with the hosted embedding API
+// reads the same values here.
+pub const ONEZ_OK: c_int = 0;
+pub const ONEZ_ERR_NULL_HANDLE: c_int = -1;
+pub const ONEZ_ERR_NULL_VALUE: c_int = -2;
+pub const ONEZ_ERR_TYPE_MISMATCH: c_int = 1;
+pub const ONEZ_ERR_STACK_UNDERFLOW: c_int = 2;
+pub const ONEZ_ERR_ALLOC: c_int = 3;
+pub const ONEZ_ERR_INDEX_OUT_OF_RANGE: c_int = 4;
+pub const ONEZ_ERR_KEY_NOT_FOUND: c_int = 5;
+pub const ONEZ_ERR_NOT_HOST_WORD: c_int = 7;
+pub const ONEZ_ERR_INVALID_EFFECT: c_int = 8;
+
+// Three-way status for `onez_wasm_eval`. The host accumulates its own source buffer and re-sends
+// the whole thing on every call; it grows the buffer further only on ONEZ_EVAL_NEEDS_MORE_INPUT.
+pub const ONEZ_EVAL_COMPLETE: c_int = 0;
+pub const ONEZ_EVAL_NEEDS_MORE_INPUT: c_int = 1;
+pub const ONEZ_EVAL_ERROR: c_int = 2;
+
+/// Host-supplied output sink: the host writes `len` bytes starting at `data` wherever it likes
+/// (a browser console, a DOM node, ...) and returns the number of bytes it accepted.
+pub const WriterFn = *const fn (writer_ctx: ?*anyopaque, data: [*]const u8, len: usize) callconv(.c) usize;
+
+const output_parameter_name = "output-stream";
+
+fn outputUnsupportedRead(_: *Stream, _: []u8, _: *Context) anyerror!usize {
+    return error.NotOpenForReading;
+}
+
+fn outputWrite(stream: *Stream, bytes: []const u8, _: *Context) anyerror!usize {
+    const handle: *OnezHandle = @ptrCast(@alignCast(stream.impl orelse return error.NotOpenForWriting));
+    const writer = handle.output_writer orelse return error.NotOpenForWriting;
+    return writer(handle.output_writer_ctx, bytes.ptr, bytes.len);
+}
+
+fn outputClose(stream: *Stream) void {
+    stream.closed = true;
+}
+
+fn outputFlush(_: *Stream) anyerror!void {}
+
+const output_vtable = StreamVTable{
+    .read = outputUnsupportedRead,
+    .write = outputWrite,
+    .close = outputClose,
+    .flush = outputFlush,
+};
+
+const HostWordRegistration = struct {
+    name: []const u8,
+};
+
+const OnezHandle = struct {
+    allocator: std.mem.Allocator,
+    /// Non-null only on the host-test path, where the GPA is a heap-allocated stateful object
+    /// that `onez_deinit` leak-checks and frees. The real wasm target's static-buffer allocator
+    /// carries no such object.
+    gpa: ?*HostGpa,
+    ctx: *Context,
+    last_error: ?[:0]const u8 = null,
+    host_words: std.ArrayListUnmanaged(HostWordRegistration) = .{},
+    popped_values: std.ArrayListUnmanaged(*Value) = .{},
+
+    output_writer_ctx: ?*anyopaque = null,
+    output_writer: ?WriterFn = null,
+    output_stream: Stream = .{
+        .vtable = &output_vtable,
+        .fd = -1,
+        .mode = .write,
+        .name = output_parameter_name,
+    },
+};
+
+// wasm32-freestanding has no OS heap; every allocation is carved out of a static region sized by
+// the existing `freestanding-heap-mib` build option, mirroring wasm_compile_probe.zig.
+//
+// The host-test path uses a fresh GeneralPurposeAllocator per onez_init call instead, mirroring
+// capi.zig's own hosted RootAllocator: a long-lived static allocator shared across every test case
+// in the binary would need to outlive individual onez_deinit calls to get leak diagnostics, and a
+// full Context.init is heavy enough that a fixed static buffer sized for one wasm page's lifetime
+// does not stretch across many sequential test cases in one process.
+const HostGpa = std.heap.GeneralPurposeAllocator(.{});
+
+const heap_size: usize = @as(usize, build_options.freestanding_heap_mib) << 20;
+var heap_buf: [if (is_freestanding) heap_size else 0]u8 align(16) = undefined;
+var freestanding_fba: std.heap.FixedBufferAllocator = undefined;
+var freestanding_fba_inited = false;
+
+const RootAllocator = struct {
+    allocator: std.mem.Allocator,
+    gpa: ?*HostGpa,
+};
+
+fn acquireRootAllocator() ?RootAllocator {
+    if (is_freestanding) {
+        if (!freestanding_fba_inited) {
+            freestanding_fba = std.heap.FixedBufferAllocator.init(&heap_buf);
+            freestanding_fba_inited = true;
+        }
+        return .{ .allocator = freestanding_fba.allocator(), .gpa = null };
+    }
+    const gpa = std.heap.page_allocator.create(HostGpa) catch return null;
+    gpa.* = .{};
+    return .{ .allocator = gpa.allocator(), .gpa = gpa };
+}
+
+fn castHandle(ptr: ?*anyopaque) ?*OnezHandle {
+    const p = ptr orelse return null;
+    return @ptrCast(@alignCast(p));
+}
+
+fn clearLastError(handle: *OnezHandle) void {
+    if (handle.last_error) |msg| {
+        handle.allocator.free(@as([]const u8, msg.ptr[0 .. msg.len + 1]));
+        handle.last_error = null;
+    }
+}
+
+fn setLastError(handle: *OnezHandle, comptime fmt: []const u8, args: anytype) void {
+    clearLastError(handle);
+    handle.last_error = capi_core.allocPrintZ(handle.allocator, fmt, args) catch null;
+}
+
+fn captureError(handle: *OnezHandle, err: anyerror) void {
+    clearLastError(handle);
+    handle.last_error = capi_core.formatCapturedError(handle.ctx, handle.allocator, err);
+}
+
+/// Create the interpreter and load the embedded prelude. Returns null on failure.
+export fn onez_init() ?*anyopaque {
+    const root = acquireRootAllocator() orelse return null;
+    const alloc = root.allocator;
+
+    const ctx = alloc.create(Context) catch return null;
+    ctx.* = Context.init(alloc);
+    ctx.loadPrelude(null) catch {
+        ctx.deinit();
+        return null;
+    };
+
+    const handle = alloc.create(OnezHandle) catch {
+        ctx.deinit();
+        return null;
+    };
+    handle.* = .{ .allocator = alloc, .gpa = root.gpa, .ctx = ctx };
+    handle.output_stream.impl = handle;
+    return handle;
+}
+
+/// Tear down the interpreter. On the real wasm target the FixedBufferAllocator-backed heap is
+/// never freed -- the module either keeps running or the page unloads it -- so this only
+/// releases owning references that would otherwise report as leaked, matching the freestanding
+/// precedent in capi.zig.
+///
+/// The host-test path actually frees: each `onez_init` call there got its own heap-allocated GPA
+/// (`acquireRootAllocator`), so `.deinit()` here gives that one test case's leak diagnostics
+/// rather than accumulating state across every test in the binary.
+export fn onez_deinit(ptr: ?*anyopaque) void {
+    const handle = castHandle(ptr) orelse return;
+    const alloc = handle.allocator;
+
+    clearLastError(handle);
+
+    for (handle.host_words.items) |entry| alloc.free(entry.name);
+    handle.host_words.deinit(alloc);
+
+    for (handle.popped_values.items) |slot| {
+        container_backing.releaseValue(slot.*);
+    }
+    handle.popped_values.deinit(alloc);
+
+    handle.ctx.deinit();
+    if (is_freestanding) return;
+    alloc.destroy(handle.ctx);
+    const gpa = handle.gpa;
+    alloc.destroy(handle);
+    if (gpa) |g| {
+        _ = g.deinit();
+        std.heap.page_allocator.destroy(g);
+    }
+}
+
+export fn onez_last_error(ptr: ?*anyopaque) ?[*:0]const u8 {
+    const handle = castHandle(ptr) orelse return null;
+    if (handle.last_error) |err| return err.ptr else return null;
+}
+
+/// Bind a host writer as the interpreter's default output stream, so `print`/`output-stream get`
+/// resolve to it instead of evaluating the prelude's `[ stdout ]` default. Callable again later
+/// to rebind to a different writer.
+///
+/// Uses the interpreter's existing dynamic-scope Parameter mechanism
+/// (`Context.setParameterInTopFrame`), not an AOT slot-table trick -- this root runs a real
+/// interpreter, not a metadata-only image.
+export fn onez_wasm_init_output(ptr: ?*anyopaque, writer_ctx: ?*anyopaque, writer: ?WriterFn) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const write_fn = writer orelse {
+        setLastError(handle, "output writer is required", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+
+    handle.output_writer_ctx = writer_ctx;
+    handle.output_writer = write_fn;
+    handle.output_stream.impl = handle;
+    handle.output_stream.closed = false;
+
+    handle.ctx.setParameterInTopFrame(output_parameter_name, .{ .stream = &handle.output_stream }) catch {
+        setLastError(handle, "allocation failure binding output-stream parameter", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    return ONEZ_OK;
+}
+
+/// Parse and, if complete, execute one chunk of host-fed source. The host owns accumulation: on
+/// ONEZ_EVAL_NEEDS_MORE_INPUT it grows its buffer and calls again with the whole thing; on
+/// ONEZ_EVAL_COMPLETE or ONEZ_EVAL_ERROR it starts a fresh buffer for the next statement. A fresh
+/// StatementProcessor is used per call and the buffer is reparsed from scratch each time, so no
+/// state carries between calls and no `flush()` is ever needed -- "no more input is coming" is
+/// never a valid assumption for a live REPL session.
+///
+/// On the real wasm32-freestanding target, StatementProcessor.feedLine takes its coroutine-free
+/// `tryParseDirect` path (`comptime is_freestanding`), which this contract is designed around. The
+/// `capi-test` build of this file runs on the host target instead, so its own tests exercise the
+/// ordinary coroutine path here -- the same three-way Result contract, but not tryParseDirect
+/// itself; that path is compile-checked only, via `wasm-freestanding-build`, since no wasm runtime
+/// exists in this repo's test setup to execute it.
+export fn onez_wasm_eval(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const ctx = handle.ctx;
+    const alloc = ctx.quotationAllocator();
+
+    ctx.clearExecutionDetails();
+    clearLastError(handle);
+
+    const old_source = ctx.current_source;
+    ctx.current_source = "<eval>";
+    defer ctx.current_source = old_source;
+
+    var processor: StatementProcessor = .{};
+    defer processor.deinit();
+
+    return switch (capi_core.evalStep(ctx, &processor, alloc, code[0..len])) {
+        .needs_more_input => ONEZ_EVAL_NEEDS_MORE_INPUT,
+        .parse_error, .exec_error => |err| blk: {
+            captureError(handle, err);
+            break :blk ONEZ_EVAL_ERROR;
+        },
+        .complete => ONEZ_EVAL_COMPLETE,
+    };
+}
+
+export fn onez_push_int(ptr: ?*anyopaque, value: i64) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    capi_core.pushInt(handle.ctx, value) catch {
+        setLastError(handle, "allocation failure pushing int", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_push_double(ptr: ?*anyopaque, value: f64) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    capi_core.pushDouble(handle.ctx, value) catch {
+        setLastError(handle, "allocation failure pushing double", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_push_bool(ptr: ?*anyopaque, value: bool) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    capi_core.pushBool(handle.ctx, value) catch {
+        setLastError(handle, "allocation failure pushing bool", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_push_string(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    capi_core.pushString(handle.ctx, data[0..len]) catch {
+        setLastError(handle, "allocation failure pushing string", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_push_symbol(ptr: ?*anyopaque, data: [*]const u8, len: usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    capi_core.pushSymbol(handle.ctx, data[0..len]) catch {
+        setLastError(handle, "allocation failure pushing symbol", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_pop_int(ptr: ?*anyopaque, out: *i64) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    var mismatched: Value = undefined;
+    out.* = capi_core.popInt(handle.ctx, &mismatched) catch |err| switch (err) {
+        error.TypeMismatch => {
+            setLastError(handle, "type mismatch: expected fixnum, got {s}", .{@tagName(mismatched)});
+            return ONEZ_ERR_TYPE_MISMATCH;
+        },
+        else => {
+            setLastError(handle, "stack underflow: cannot pop int from empty stack", .{});
+            return ONEZ_ERR_STACK_UNDERFLOW;
+        },
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_pop_double(ptr: ?*anyopaque, out: *f64) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    var mismatched: Value = undefined;
+    out.* = capi_core.popDouble(handle.ctx, &mismatched) catch |err| switch (err) {
+        error.TypeMismatch => {
+            setLastError(handle, "type mismatch: expected float, got {s}", .{@tagName(mismatched)});
+            return ONEZ_ERR_TYPE_MISMATCH;
+        },
+        else => {
+            setLastError(handle, "stack underflow: cannot pop double from empty stack", .{});
+            return ONEZ_ERR_STACK_UNDERFLOW;
+        },
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_pop_bool(ptr: ?*anyopaque, out: *bool) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    var mismatched: Value = undefined;
+    out.* = capi_core.popBool(handle.ctx, &mismatched) catch |err| switch (err) {
+        error.TypeMismatch => {
+            setLastError(handle, "type mismatch: expected boolean, got {s}", .{@tagName(mismatched)});
+            return ONEZ_ERR_TYPE_MISMATCH;
+        },
+        else => {
+            setLastError(handle, "stack underflow: cannot pop bool from empty stack", .{});
+            return ONEZ_ERR_STACK_UNDERFLOW;
+        },
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_pop_string(ptr: ?*anyopaque, out_ptr: *[*]const u8, out_len: *usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    var mismatched: Value = undefined;
+    const s = capi_core.popString(handle.ctx, &mismatched) catch |err| switch (err) {
+        error.TypeMismatch => {
+            setLastError(handle, "type mismatch: expected string, got {s}", .{@tagName(mismatched)});
+            return ONEZ_ERR_TYPE_MISMATCH;
+        },
+        else => {
+            setLastError(handle, "stack underflow: cannot pop string from empty stack", .{});
+            return ONEZ_ERR_STACK_UNDERFLOW;
+        },
+    };
+    out_ptr.* = s.ptr;
+    out_len.* = s.len;
+    return ONEZ_OK;
+}
+
+export fn onez_pop_value(ptr: ?*anyopaque, out: *?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const slot = capi_core.popValueBoxed(handle.ctx) catch |err| switch (err) {
+        error.StackUnderflow => {
+            setLastError(handle, "stack underflow: cannot pop value from empty stack", .{});
+            return ONEZ_ERR_STACK_UNDERFLOW;
+        },
+        else => {
+            setLastError(handle, "allocation failure creating value handle", .{});
+            return ONEZ_ERR_ALLOC;
+        },
+    };
+    handle.popped_values.append(handle.allocator, slot) catch {
+        handle.ctx.stack.pushMoved(slot.*) catch {};
+        setLastError(handle, "allocation failure tracking value handle", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    out.* = slot;
+    return ONEZ_OK;
+}
+
+export fn onez_push_value(ptr: ?*anyopaque, val_ptr: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const vp = val_ptr orelse {
+        setLastError(handle, "null value handle passed to onez_push_value", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const value: *const Value = @ptrCast(@alignCast(vp));
+    capi_core.pushBoxedValue(handle.ctx, value) catch {
+        setLastError(handle, "allocation failure pushing value", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    return ONEZ_OK;
+}
+
+export fn onez_value_type(val_ptr: ?*anyopaque) c_int {
+    const vp = val_ptr orelse return capi_core.ONEZ_TYPE_UNKNOWN;
+    const value: *const Value = @ptrCast(@alignCast(vp));
+    return capi_core.valueTypeToInt(value.*);
+}
+
+export fn onez_stack_depth(ptr: ?*anyopaque) usize {
+    const handle = castHandle(ptr) orelse return 0;
+    return handle.ctx.stack.depth();
+}
+
+export fn onez_stack_type(ptr: ?*anyopaque, index: usize) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const val = handle.ctx.stack.peekN(index) catch return ONEZ_ERR_NULL_HANDLE;
+    return capi_core.valueTypeToInt(val);
+}
+
+/// Non-destructive read of the value at stack position `index` (0 = top).
+export fn onez_stack_peek(ptr: ?*anyopaque, index: usize, out: *?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    const slot = capi_core.peekBoxed(handle.ctx, index) catch |err| switch (err) {
+        error.StackUnderflow => return ONEZ_ERR_INDEX_OUT_OF_RANGE,
+        else => return ONEZ_ERR_ALLOC,
+    };
+    out.* = slot;
+    return ONEZ_OK;
+}
+
+/// Strip optional surrounding parentheses and whitespace from an effect string.
+fn stripEffectParens(raw: []const u8) []const u8 {
+    var s = std.mem.trim(u8, raw, " \t");
+    if (s.len >= 2 and s[0] == '(' and s[s.len - 1] == ')') {
+        s = std.mem.trim(u8, s[1 .. s.len - 1], " \t");
+    }
+    return s;
+}
+
+export fn onez_register_word(ptr: ?*anyopaque, name: ?[*:0]const u8, callback: ?HostCallbackFn, user_data: ?*anyopaque) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    clearLastError(handle);
+    handle.ctx.clearExecutionDetails();
+
+    const name_ptr = name orelse {
+        setLastError(handle, "null name passed to onez_register_word", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const callback_fn = callback orelse {
+        setLastError(handle, "null callback passed to onez_register_word", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+
+    const name_slice = std.mem.span(name_ptr);
+    if (name_slice.len == 0) {
+        setLastError(handle, "empty name passed to onez_register_word", .{});
+        return ONEZ_ERR_TYPE_MISMATCH;
+    }
+
+    const name_copy = handle.allocator.dupe(u8, name_slice) catch {
+        setLastError(handle, "allocation failure copying word name", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    errdefer handle.allocator.free(name_copy);
+
+    handle.host_words.append(handle.allocator, .{ .name = name_copy }) catch {
+        setLastError(handle, "allocation failure tracking host word", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    errdefer _ = handle.host_words.pop();
+
+    capi_core.defineHostWord(handle.ctx, name_copy, null, callback_fn, ptr, user_data) catch |err| {
+        if (handle.ctx.pending_error_message) |msg| {
+            setLastError(handle, "{s}", .{msg});
+        } else {
+            captureError(handle, err);
+        }
+        return 1;
+    };
+
+    return ONEZ_OK;
+}
+
+export fn onez_register_word_with_effect(
+    ptr: ?*anyopaque,
+    name: ?[*:0]const u8,
+    effect_str: ?[*:0]const u8,
+    callback: ?HostCallbackFn,
+    user_data: ?*anyopaque,
+) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    clearLastError(handle);
+    handle.ctx.clearExecutionDetails();
+
+    const name_ptr = name orelse {
+        setLastError(handle, "null name passed to onez_register_word_with_effect", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const callback_fn = callback orelse {
+        setLastError(handle, "null callback passed to onez_register_word_with_effect", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+
+    const name_slice = std.mem.span(name_ptr);
+    if (name_slice.len == 0) {
+        setLastError(handle, "empty name passed to onez_register_word_with_effect", .{});
+        return ONEZ_ERR_TYPE_MISMATCH;
+    }
+
+    const parsed_effect: ?StackEffect = if (effect_str) |eptr| blk: {
+        const raw = std.mem.span(eptr);
+        if (raw.len == 0) break :blk null;
+        const stripped = stripEffectParens(raw);
+        if (std.mem.indexOf(u8, stripped, "--") == null) {
+            setLastError(handle, "stack effect string must contain '--'", .{});
+            return ONEZ_ERR_INVALID_EFFECT;
+        }
+        break :blk helpers.makeSimpleEffect(handle.ctx.quotationAllocator(), stripped) catch {
+            setLastError(handle, "invalid stack effect string", .{});
+            return ONEZ_ERR_INVALID_EFFECT;
+        };
+    } else null;
+
+    const name_copy = handle.allocator.dupe(u8, name_slice) catch {
+        setLastError(handle, "allocation failure copying word name", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    errdefer handle.allocator.free(name_copy);
+
+    handle.host_words.append(handle.allocator, .{ .name = name_copy }) catch {
+        setLastError(handle, "allocation failure tracking host word", .{});
+        return ONEZ_ERR_ALLOC;
+    };
+    errdefer _ = handle.host_words.pop();
+
+    capi_core.defineHostWord(handle.ctx, name_copy, parsed_effect, callback_fn, ptr, user_data) catch |err| {
+        if (handle.ctx.pending_error_message) |msg| {
+            setLastError(handle, "{s}", .{msg});
+        } else {
+            captureError(handle, err);
+        }
+        return 1;
+    };
+
+    return ONEZ_OK;
+}
+
+/// Remove a previously registered host word from the dictionary.
+export fn onez_unregister_word(ptr: ?*anyopaque, name: ?[*:0]const u8) c_int {
+    const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
+    clearLastError(handle);
+    handle.ctx.clearExecutionDetails();
+
+    const name_ptr = name orelse {
+        setLastError(handle, "null name passed to onez_unregister_word", .{});
+        return ONEZ_ERR_NULL_VALUE;
+    };
+    const name_slice = std.mem.span(name_ptr);
+
+    const definition = handle.ctx.lookupWord(name_slice) orelse {
+        setLastError(handle, "word '{s}' not found", .{name_slice});
+        return ONEZ_ERR_KEY_NOT_FOUND;
+    };
+
+    switch (definition.action) {
+        .host_callback => {},
+        else => {
+            setLastError(handle, "word '{s}' is not a host callback", .{name_slice});
+            return ONEZ_ERR_NOT_HOST_WORD;
+        },
+    }
+
+    if (!handle.ctx.removeWord(name_slice)) {
+        setLastError(handle, "word '{s}' could not be removed", .{name_slice});
+        return ONEZ_ERR_KEY_NOT_FOUND;
+    }
+
+    for (handle.host_words.items, 0..) |entry, i| {
+        if (std.mem.eql(u8, entry.name, name_slice)) {
+            handle.allocator.free(entry.name);
+            _ = handle.host_words.swapRemove(i);
+            break;
+        }
+    }
+
+    return ONEZ_OK;
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+test "init/eval/deinit round trip" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, "1 2 +", 5));
+}
+
+test "eval reports needs-more-input for an unterminated bracket" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const src = "[ 1 2 +";
+    try std.testing.expectEqual(ONEZ_EVAL_NEEDS_MORE_INPUT, onez_wasm_eval(handle_ptr, src, src.len));
+}
+
+test "eval completes once the buffer is grown to a full statement" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const partial = "[ 1 2 +";
+    try std.testing.expectEqual(ONEZ_EVAL_NEEDS_MORE_INPUT, onez_wasm_eval(handle_ptr, partial, partial.len));
+
+    const whole = "[ 1 2 + ] call";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, whole, whole.len));
+}
+
+test "eval reports an error for a genuine parse failure" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const src = "}";
+    try std.testing.expectEqual(ONEZ_EVAL_ERROR, onez_wasm_eval(handle_ptr, src, src.len));
+    try std.testing.expect(onez_last_error(handle_ptr) != null);
+}
+
+test "output injection routes print through the host writer" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const Sink = struct {
+        var buf: [256]u8 = undefined;
+        var len: usize = 0;
+
+        fn write(_: ?*anyopaque, data: [*]const u8, n: usize) callconv(.c) usize {
+            @memcpy(buf[len .. len + n], data[0..n]);
+            len += n;
+            return n;
+        }
+    };
+    Sink.len = 0;
+
+    try std.testing.expectEqual(ONEZ_OK, onez_wasm_init_output(handle_ptr, null, Sink.write));
+
+    const src = "\"hi\" print";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+
+    try std.testing.expectEqualStrings("hi", Sink.buf[0..Sink.len]);
+}
+
+test "registered host word is invoked via dictionary lookup" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const Callback = struct {
+        var invocations: usize = 0;
+
+        fn callback(ctx: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
+            invocations += 1;
+            _ = onez_push_int(ctx, 99);
+            return 0;
+        }
+    };
+    Callback.invocations = 0;
+
+    try std.testing.expectEqual(ONEZ_OK, onez_register_word(handle_ptr, "test-host-word", Callback.callback, null));
+
+    const src = "test-host-word";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 1), Callback.invocations);
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 99), out);
+}
+
+test "push/pop int round trip" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 42));
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 42), out);
+}
+
+test "push/pop string round trip" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const input = "hello";
+    try std.testing.expectEqual(ONEZ_OK, onez_push_string(handle_ptr, input.ptr, input.len));
+    var out_ptr: [*]const u8 = undefined;
+    var out_len: usize = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_string(handle_ptr, &out_ptr, &out_len));
+    try std.testing.expectEqualStrings("hello", out_ptr[0..out_len]);
+}
+
+test "pop type mismatch preserves stack" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 42));
+    var out: f64 = 0;
+    try std.testing.expectEqual(ONEZ_ERR_TYPE_MISMATCH, onez_pop_double(handle_ptr, &out));
+    try std.testing.expectEqual(@as(usize, 1), onez_stack_depth(handle_ptr));
+}
+
+test "stack_peek is non-destructive" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    try std.testing.expectEqual(ONEZ_OK, onez_push_int(handle_ptr, 7));
+    var out: ?*anyopaque = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_stack_peek(handle_ptr, 0, &out));
+    try std.testing.expectEqual(@as(usize, 1), onez_stack_depth(handle_ptr));
+
+    const value: *const Value = @ptrCast(@alignCast(out.?));
+    try std.testing.expectEqual(@as(i64, 7), value.fixnum);
+}

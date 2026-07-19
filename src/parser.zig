@@ -91,6 +91,7 @@ pub const ParseError = error{
     UnmatchedOpenParen,
     UnmatchedCloseParen,
     UnmatchedOpenQuote,
+    UnterminatedTokenScan,
     InvalidArrayElement,
     OutOfMemory,
     ParseTimeExecutionError,
@@ -99,7 +100,8 @@ pub const ParseError = error{
 
 /// Returns true if the parse error indicates incomplete input.
 pub fn isIncompleteError(err: anyerror) bool {
-    return err == error.UnmatchedOpenBracket or err == error.UnmatchedOpenBrace or err == error.UnmatchedOpenQuote;
+    return err == error.UnmatchedOpenBracket or err == error.UnmatchedOpenBrace or
+        err == error.UnmatchedOpenQuote or err == error.UnterminatedTokenScan;
 }
 
 fn setUnmatchedDiagnostics(ctx: ?*Context, comptime error_name: []const u8, opening_line: usize) void {
@@ -124,6 +126,23 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 /// ParseError.
 fn handleParseTimeError(c: *Context, err: anyerror) ParseError {
     if (err == error.DebuggerQuit) return ParseError.DebuggerQuit;
+
+    // Incompleteness (ran out of buffered input mid-scan, not a real parse-time
+    // failure) must survive being raised inside a parse-time word's own body.
+    // Laundering it into ParseTimeExecutionError below would make
+    // isIncompleteError blind to it at the top-level caller, turning "needs
+    // more input" into a hard error for constructs like `use "modname"` whose
+    // terminator scan runs through a nested parse-time primitive.
+    if (isIncompleteError(err)) {
+        return switch (err) {
+            error.UnmatchedOpenBracket => ParseError.UnmatchedOpenBracket,
+            error.UnmatchedOpenBrace => ParseError.UnmatchedOpenBrace,
+            error.UnmatchedOpenQuote => ParseError.UnmatchedOpenQuote,
+            error.UnterminatedTokenScan => ParseError.UnterminatedTokenScan,
+            else => unreachable,
+        };
+    }
+
     if (c.parse_diagnostics != null) {
         // Primitive already set diagnostics directly; preserve them.
     } else if (c.thrown_error) |thrown| {
@@ -1998,4 +2017,81 @@ test "parse stack effect rejects adjacent constraint markers" {
         try std.testing.expectError(ParseError.ParseTimeExecutionError, parseStackEffect(arena.allocator(), &tokenizer, &ctx, 0));
         try std.testing.expectEqualStrings("InvalidConstraint", ctx.parse_diagnostics.?.error_type.?);
     }
+}
+
+test "incomplete use statement reports incompleteness without firing load" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    var tokenizer = Tokenizer.init("use \"testing\"");
+    const result = parseTopLevel(alloc, &tokenizer, &ctx);
+
+    try std.testing.expectError(ParseError.UnterminatedTokenScan, result);
+    try std.testing.expect(ctx.lookupWord("assert=") == null);
+}
+
+test "use statement split across an incomplete then complete parse imports exactly once" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.load_paths.clearRetainingCapacity();
+
+    // A minimal, self-contained module so resolution doesn't depend on the
+    // real stdlib's own dependencies or on -Dembed-stdlib.
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var mod_file = try tmp.dir.createFile("use-split-probe.1z", .{});
+    try mod_file.writeAll("probe-word: [ 42 ] ;\n");
+    mod_file.close();
+    const tmp_path = try tmp.dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(tmp_path);
+    ctx.stdlib_path = try ctx.quotationAllocator().dupe(u8, tmp_path);
+
+    const alloc = ctx.quotationAllocator();
+
+    // First attempt: the statement's terminating `;` has not arrived yet.
+    // This mirrors StatementProcessor.tryParseDirect's coroutine-free reparse
+    // path on the first partial line of a multi-line `use` typed at a REPL.
+    {
+        var tokenizer = Tokenizer.init("use \"use-split-probe\"");
+        const result = parseTopLevel(alloc, &tokenizer, &ctx);
+        try std.testing.expectError(ParseError.UnterminatedTokenScan, result);
+    }
+    try std.testing.expect(ctx.lookupWord("probe-word") == null);
+
+    // Second attempt: the host re-sends the whole accumulated buffer now that
+    // the terminator is present, matching tryParseDirect's reparse-from-scratch
+    // contract. `use` is a parse-time word, so the import already happened by
+    // the time parseTopLevel returns.
+    {
+        var tokenizer = Tokenizer.init("use \"use-split-probe\" ;");
+        _ = try parseTopLevel(alloc, &tokenizer, &ctx);
+    }
+    try std.testing.expect(ctx.lookupWord("probe-word") != null);
+}
+
+test "incomplete struct field list reports incompleteness instead of a truncated descriptor" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    var tokenizer = Tokenizer.init("thing: struct{ field1 field2");
+    const result = parseTopLevel(alloc, &tokenizer, &ctx);
+
+    try std.testing.expectError(ParseError.UnterminatedTokenScan, result);
+}
+
+test "bare use with no filename yet reports incompleteness" {
+    // `use`'s parse-time body calls `parse-literal` (nativeParseLiteral) before it ever reaches
+    // parse-values-until, so a coroutine-free scan exhausted on just "use" hit an unfixed sibling
+    // of the parseTokensUntilCore bug: nativeParseLiteral's own exhaustion fallthrough returned a
+    // plain TypeMismatch, not recognized by isIncompleteError.
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    var tokenizer = Tokenizer.init("use");
+    const result = parseTopLevel(alloc, &tokenizer, &ctx);
+
+    try std.testing.expectError(ParseError.UnterminatedTokenScan, result);
 }

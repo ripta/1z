@@ -45,11 +45,21 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
     // leak.
     errdefer for (tokens.items) |item| @import("../container_backing.zig").releaseValue(item);
 
+    // Distinguishes "found the delimiter" from "the tokenizer ran out of
+    // buffered input before the delimiter appeared." Without this, a
+    // coroutine-free scan (StatementProcessor.tryParseDirect, freestanding/wasm
+    // builds) silently treats a not-yet-complete statement -- e.g. `use
+    // "modname"` before its terminating `;` is typed -- as if the delimiter had
+    // been found, running the caller's side effects and returning a truncated
+    // result instead of signaling incompleteness.
+    var found_delimiter = false;
+
     while (tokenizer.nextOrYield()) |tok| {
         if (isSkippable(tok.kind)) continue;
 
         const token = tok.text;
         if (std.mem.eql(u8, token, delimiter)) {
+            found_delimiter = true;
             break;
         }
 
@@ -99,6 +109,8 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
         const token_copy = try alloc.dupe(u8, token);
         try tokens.append(alloc, .{ .string = token_copy });
     }
+
+    if (!found_delimiter) return error.UnterminatedTokenScan;
 
     const result = try tokens.toOwnedSlice(alloc);
     return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, result) };
@@ -246,7 +258,7 @@ fn nativeParseToken(ctx: *Context) anyerror!void {
         try ctx.stack.push(.{ .string = token_copy });
         return;
     }
-    return error.ParseError;
+    return error.UnterminatedTokenScan;
 }
 
 /// peek-token ( -- string ) - Return the next token without consuming it
@@ -260,7 +272,7 @@ fn nativePeekToken(ctx: *Context) anyerror!void {
         try ctx.stack.push(.{ .string = token_copy });
         return;
     }
-    return error.ParseError;
+    return error.UnterminatedTokenScan;
 }
 
 /// resolve-literal ( string -- value true | string false )
@@ -350,6 +362,5 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     }
 
-    helpers.setErrorContext(ctx, "parse-literal: no token available", .{});
-    return error.TypeMismatch;
+    return error.UnterminatedTokenScan;
 }
