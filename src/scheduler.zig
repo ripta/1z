@@ -14,6 +14,7 @@ const trace = @import("trace.zig");
 const value_mod = @import("value.zig");
 const profile = @import("profile.zig");
 const ProfileStats = profile.ProfileStats;
+const portable_atomic = @import("portable_atomic.zig");
 
 const is_freestanding = builtin.os.tag == .freestanding;
 const is_wasm = builtin.cpu.arch == .wasm32 and builtin.os.tag == .freestanding;
@@ -38,7 +39,10 @@ pub const IoWaitEntry = struct {
 
 pub const ProcessWaitEntry = struct {
     task: *Task,
-    pid: std.posix.pid_t,
+    // Plain i32, not std.posix.pid_t: see the comment on drainCancelledIOWaiters's `removals`
+    // in Scheduler, which explains why fd_t/pid_t (void on freestanding) can't carry a real
+    // value there. i32 matches pid_t's real definition on every hosted target.
+    pid: i32,
     handle: ProcessWaitHandle,
 };
 
@@ -52,6 +56,19 @@ pub fn monotonicNowNs() i128 {
         const ts = std.posix.clock_gettime(.MONOTONIC) catch unreachable;
         return @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
     }
+}
+
+/// Nanosecond timestamp for measuring elapsed durations (benchmarking, profiling).
+/// Hosted targets keep calling `std.time.nanoTimestamp()` verbatim, unchanged from before this
+/// helper existed. `std.time.nanoTimestamp()` itself falls through to `posix.clock_gettime`,
+/// which is undefined on the freestanding non-libc stub, so freestanding targets reuse
+/// `monotonicNowNs()` instead. The two clocks differ (wall-clock REALTIME vs MONOTONIC) but
+/// callers only ever use the delta between two calls, for which either is fit for purpose.
+pub fn elapsedTimerNowNs() i128 {
+    if (comptime is_freestanding) {
+        return monotonicNowNs();
+    }
+    return std.time.nanoTimestamp();
 }
 
 /// Freestanding monotonic clock backed by the RISC-V `time` CSR. QEMU's
@@ -185,7 +202,7 @@ pub const Scheduler = struct {
     current_task: ?*Task = null,
     /// Monotonic task-id counter. Atomic so spawn paths on other worker
     /// threads can allocate IDs against this scheduler without locking.
-    next_task_id: std.atomic.Value(u64) = std.atomic.Value(u64).init(1),
+    next_task_id: portable_atomic.WideCounter(u64) = portable_atomic.WideCounter(u64).init(1),
     allocator: Allocator,
     /// Finished tasks whose stacks and arenas are freed on deinit.
     finished_tasks: std.ArrayListUnmanaged(*Task),
@@ -198,8 +215,9 @@ pub const Scheduler = struct {
     channels: std.ArrayListUnmanaged(*Channel) = .{},
     /// Platform I/O multiplexer for async-aware stream operations.
     multiplexer: Multiplexer,
-    /// Maps file descriptors to tasks suspended waiting on I/O readiness.
-    io_wait_map: std.AutoHashMapUnmanaged(std.posix.fd_t, IoWaitEntry) = .{},
+    /// Maps file descriptors to tasks suspended waiting on I/O readiness. Keyed by plain i32,
+    /// not std.posix.fd_t: see the comment on drainCancelledIOWaiters's `removals`.
+    io_wait_map: std.AutoHashMapUnmanaged(i32, IoWaitEntry) = .{},
     /// Maps child-process wait handles to tasks suspended waiting on exit.
     process_wait_map: std.AutoHashMapUnmanaged(u64, ProcessWaitEntry) = .{},
     /// Wall-clock stall detection threshold in nanoseconds.
@@ -674,7 +692,7 @@ pub const Scheduler = struct {
 
     /// Register the current task's interest in an fd and suspend it until readiness.
     /// Called from stream primitives when an I/O operation would block.
-    pub fn ioSuspendCurrentTask(self: *Scheduler, fd: std.posix.fd_t, event: IoEvent) void {
+    pub fn ioSuspendCurrentTask(self: *Scheduler, fd: i32, event: IoEvent) void {
         if (self.current_task) |task| {
             self.multiplexer.register(fd, event) catch {};
             self.io_wait_map.put(self.allocator, fd, .{ .task = task, .event = event }) catch {};
@@ -684,7 +702,7 @@ pub const Scheduler = struct {
     }
 
     /// Suspend the current task until the child process exits.
-    pub fn processSuspendCurrentTask(self: *Scheduler, pid: std.posix.pid_t) !void {
+    pub fn processSuspendCurrentTask(self: *Scheduler, pid: i32) !void {
         const task = self.current_task orelse return;
         const handle = try self.multiplexer.registerProcessExit(pid);
         errdefer self.multiplexer.unregisterProcessExit(handle) catch {};
@@ -703,7 +721,11 @@ pub const Scheduler = struct {
     /// Move cancelled tasks from the I/O wait map to the run queue so they
     /// resume and unwind cooperatively through their cleanup handlers.
     fn drainCancelledIOWaiters(self: *Scheduler) void {
-        var removals = std.ArrayListUnmanaged(std.posix.fd_t){};
+        // Plain i32, not std.posix.fd_t: fd_t is void (zero-sized) on freestanding, and an
+        // ArrayList of a zero-sized element type divides by zero in its own capacity-growth
+        // arithmetic (std.atomic.cache_line / @sizeOf(T)). i32 matches fd_t's real definition on
+        // every hosted target this project supports, so this is a no-op there.
+        var removals = std.ArrayListUnmanaged(i32){};
         defer removals.deinit(self.allocator);
 
         var it = self.io_wait_map.iterator();

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
 const Token = @import("tokenizer.zig").Token;
@@ -9,6 +10,14 @@ const Context = @import("context.zig").Context;
 const pc_mod = @import("parser_coroutine.zig");
 const ParserCoroutine = pc_mod.ParserCoroutine;
 const task_mod = @import("task.zig");
+
+// Freestanding targets have no libc ucontext, so the coroutine-based incremental parse below is
+// unusable there (see parser_coroutine.zig). feedLine takes a coroutine-free fallback instead:
+// reparse the accumulated buffer from scratch via the same direct parser.parseTopLevel path
+// flush() already uses for its own non-coroutine case, detecting incompleteness through
+// parser.isIncompleteError rather than a suspended parse. This never touches self.coroutine or
+// self.coroutine_stack on that target, so no coroutine is ever constructed or resumed there.
+const is_freestanding = builtin.os.tag == .freestanding;
 
 /// StatementProcessor handles accumulating multi-line input and parsing.
 /// Used by both REPL and batch modes to share the core logic.
@@ -77,6 +86,10 @@ pub const StatementProcessor = struct {
             return .needs_more_input;
         }
 
+        if (comptime is_freestanding) {
+            return self.tryParseDirect(allocator, ctx);
+        }
+
         // Attempt to parse
         if (self.coroutine != null) {
             self.coroutine.?.tokenizer.?.input = self.stmt_buf[0..self.stmt_len];
@@ -125,6 +138,23 @@ pub const StatementProcessor = struct {
             },
             .running => unreachable,
         }
+    }
+
+    /// Freestanding-only sibling of handleCoroutineReturn: parses the accumulated buffer
+    /// directly instead of resuming a suspended coroutine, producing the same three-way Result.
+    fn tryParseDirect(self: *StatementProcessor, allocator: Allocator, ctx: ?*Context) Result {
+        var tokenizer = Tokenizer.init(self.stmt_buf[0..self.stmt_len]);
+        const instrs = parser.parseTopLevel(allocator, &tokenizer, ctx) catch |err| {
+            if (parser.isIncompleteError(err)) {
+                return .needs_more_input;
+            }
+            return .{ .parse_error = err };
+        };
+        if (instrs.len == 0 and self.stmt_len > 0 and bufferOnlyHasDocComments(self.stmt_buf[0..self.stmt_len])) {
+            return .needs_more_input;
+        }
+        adjustInstructionLines(instrs, self.start_line);
+        return .{ .complete = instrs };
     }
 
     /// Reset buffer after successful execution or fatal error.

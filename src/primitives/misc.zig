@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const is_freestanding = builtin.os.tag == .freestanding;
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
@@ -154,6 +156,19 @@ fn resolveInDir(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) ?[]
 /// Auto-append .1z, search configured paths only.
 /// Use path mode ("./foo.1z") for relative imports.
 pub fn resolveLoadPath(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator) ?[]const u8 {
+    if (comptime is_freestanding) {
+        // No filesystem on this target: path-mode names (./foo.1z, absolute paths) can never
+        // resolve, so skip straight to the embedded stdlib bundle for search-mode names --
+        // the only backing store this target has (build.zig requires -Dembed-stdlib=true here).
+        if (isPathMode(filename)) return null;
+        if (embedded_stdlib.findEntry(filename) != null) {
+            return std.fmt.allocPrint(alloc, "{s}{s}{s}", .{
+                embedded_stdlib.virtual_prefix, filename, embedded_stdlib.virtual_suffix,
+            }) catch return null;
+        }
+        return null;
+    }
+
     if (isPathMode(filename)) {
         if (std.fs.path.isAbsolute(filename)) {
             return std.fs.cwd().realpathAlloc(alloc, filename) catch null;
@@ -318,9 +333,17 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     }
 
     var file_handle: ?std.fs.File = null;
-    defer if (file_handle) |f| f.close();
+    // file_handle is never non-null on freestanding (the .file arm below never runs there), but
+    // this is a runtime optional check, so it's comptime-elided too: std.fs.File.close forces
+    // std.posix.close to compile, which this target's non-libc posix stub does not provide.
+    defer if (comptime !is_freestanding) {
+        if (file_handle) |f| f.close();
+    };
     switch (resolved_module) {
         .file => |f| {
+            // resolveLoadPath never resolves a .file path on this target (no filesystem), so
+            // this arm is unreachable there; comptime-elided so std.fs.cwd() need not compile.
+            if (comptime is_freestanding) unreachable;
             file_handle = std.fs.cwd().openFile(f.path, .{}) catch {
                 const msg = std.fmt.allocPrint(alloc, "path '{s}'", .{filename}) catch "path '<unknown>'";
                 ctx.error_details.append(ctx.allocator, .{
@@ -399,6 +422,7 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
     var processor: StatementProcessor = .{};
     switch (resolved_module) {
         .file => {
+            if (comptime is_freestanding) unreachable;
             var file_buf: [4096]u8 = undefined;
             var reader = file_handle.?.reader(&file_buf);
             var file_line: usize = 0;
@@ -783,6 +807,8 @@ fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
 
 /// sys-exit ( code -- ) - Exit the process with the given exit code
 fn nativeSysExit(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "sys-exit");
+
     const code = try helpers.popFixnum(ctx);
     hooks.fireHooks(ctx, "on:exit", &.{.{ .fixnum = code }});
     std.process.exit(@intCast(code));
@@ -883,6 +909,8 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
 
 /// compile! ( sym -- ) - JIT-compile a word for integer arithmetic
 fn nativeCompile(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "compile!");
+
     const sym = try helpers.popSymbol(ctx);
     const word = ctx.lookupWord(sym) orelse {
         ctx.pending_error_message = "compile!: word not found";
@@ -1348,6 +1376,8 @@ fn nativeReloadFile(ctx: *Context) anyerror!void {
 /// current_source_dir). This is appropriate for linting, where paths come
 /// from the command line rather than from `use` statements.
 fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "load-check-file");
+
     const alloc = ctx.quotationAllocator();
 
     const filename = try popString(ctx);

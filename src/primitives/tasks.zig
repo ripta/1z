@@ -275,6 +275,11 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
 /// After that scope exits the handle must not be used, because the runtime
 /// may have destroyed the task.
 fn nativeSpawn(ctx: *Context) anyerror!void {
+    // The task-level coroutine (minicoro) has a freestanding stub that never actually resumes
+    // (see task.zig): a spawned task body would silently never run. Fail loudly instead of
+    // shipping that as a silent no-op. Real wasm coroutine support needs its own follow-up.
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn");
+
     const callable = try helpers.popCallableWithScope(ctx);
 
     const scheduler = ctx.scheduler orelse {
@@ -297,6 +302,8 @@ fn nativeSpawn(ctx: *Context) anyerror!void {
 /// Like `spawn`, but assigns a string name to the task. The name is stored
 /// on the Task struct and displayed in task value representations.
 fn nativeSpawnNamed(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn-named");
+
     const name = try helpers.popString(ctx);
     const callable = try helpers.popCallableWithScope(ctx);
 
@@ -327,6 +334,8 @@ fn nativeSpawnNamed(ctx: *Context) anyerror!void {
 /// task handle is pushed: a detached task may be freed the moment it
 /// completes, so there is nothing safe to hand back.
 fn nativeSpawnDetached(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn-detached");
+
     const callable = try helpers.popCallableWithScope(ctx);
 
     const scheduler = ctx.scheduler orelse {
@@ -1290,6 +1299,8 @@ fn memSourceSymbol(s: container_limits.MemorySource) []const u8 {
 
 /// container-limits ( -- hash )
 fn nativeContainerLimits(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "container-limits");
+
     const trace_enabled = ctx.trace.trace_container_detect;
     const cpu = container_limits.detectCpus(trace_enabled);
     const mem = container_limits.detectMemory(trace_enabled);

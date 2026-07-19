@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const is_freestanding = builtin.os.tag == .freestanding;
 const File = std.fs.File;
 const value_mod = @import("value.zig");
 const Value = value_mod.Value;
@@ -180,14 +182,23 @@ pub const ModuleSourceKind = enum {
 };
 
 /// Buffered writer for trace output.
+///
+/// On freestanding targets there is no real stderr to write to (STDERR_FILENO is undefined on
+/// the non-libc posix stub), so `file` stays `void` there and every write is a silent no-op.
+/// Trace output is a diagnostic nicety, not load-bearing behavior; nothing on that target can
+/// set the `--trace-*` flags that gate these calls anyway (no CLI), so this only matters once an
+/// embedder starts flipping trace config programmatically. A real host-injected diagnostic sink
+/// can replace this once one exists.
 pub const TraceWriter = struct {
-    file: File,
+    file: if (is_freestanding) void else File,
 
     pub fn init() TraceWriter {
+        if (comptime is_freestanding) return .{ .file = {} };
         return .{ .file = .stderr() };
     }
 
     pub fn print(self: *TraceWriter, comptime fmt: []const u8, args: anytype) void {
+        if (comptime is_freestanding) return;
         var buf: [4096]u8 = undefined;
         var w = self.file.writer(&buf);
         w.interface.print(fmt, args) catch return;
@@ -195,6 +206,7 @@ pub const TraceWriter = struct {
     }
 
     pub fn writeAll(self: *TraceWriter, bytes: []const u8) void {
+        if (comptime is_freestanding) return;
         var buf: [4096]u8 = undefined;
         var w = self.file.writer(&buf);
         w.interface.writeAll(bytes) catch return;

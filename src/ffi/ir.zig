@@ -1,9 +1,17 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-const c = @cImport({
+// The JIT is unavailable on freestanding targets (build.zig excludes the ir sources from the
+// link for these; see createCommonModule). The @cImport itself would fail there too, since no
+// include path for ir.h/ir_builder.h is added. `ir` resolves to an empty stub namespace so
+// `JitBuffer`'s type still exists for callers that reference it structurally, without ever
+// requiring the real C headers to compile.
+const is_freestanding = builtin.os.tag == .freestanding;
+
+const c = if (!is_freestanding) @cImport({
     @cInclude("ir.h");
     @cInclude("ir_builder.h");
-});
+}) else struct {};
 
 pub const ir = c;
 
@@ -17,7 +25,11 @@ pub const JitBuffer = struct {
     size: usize,
 
     pub fn deinit(self: JitBuffer) void {
-        _ = ir.ir_mem_unmap(self.code, self.size);
+        if (is_freestanding) {
+            unreachable; // never constructed with a real ir-compiled buffer on this target
+        } else {
+            _ = ir.ir_mem_unmap(self.code, self.size);
+        }
     }
 };
 

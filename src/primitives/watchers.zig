@@ -20,6 +20,7 @@ const Scheduler = @import("../scheduler.zig").Scheduler;
 const is_macos = builtin.os.tag == .macos;
 const is_linux = builtin.os.tag == .linux;
 const supports_event_watch = is_macos or is_linux;
+const is_freestanding = builtin.os.tag == .freestanding;
 const default_polling_interval_ns: u64 = 20 * std.time.ns_per_ms;
 
 pub const primitives = [_]Primitive{
@@ -498,6 +499,13 @@ fn nativeWatcherCreate(ctx: *Context) anyerror!void {
             .vtable = &native_watcher_vtable,
         };
     } else if (std.mem.eql(u8, mode, "polling")) {
+        // No filesystem to poll on freestanding targets; comptime-elided so PollingWatcher's
+        // std.fs.cwd().statFile call and std.Thread.sleep need not compile for that target.
+        if (comptime is_freestanding) {
+            helpers.setErrorContext(ctx, "watcher-create: polling watchers are not available on this build", .{});
+            return error.IOFailed;
+        }
+
         const watcher = try PollingWatcher.init(ctx.quotationAllocator());
         handle.* = .{
             .allocator = ctx.quotationAllocator(),

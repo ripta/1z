@@ -1,6 +1,7 @@
 const std = @import("std");
 const BenchmarkStats = @import("benchmark.zig").BenchmarkStats;
 const pprof = @import("pprof.zig");
+const scheduler_mod = @import("scheduler.zig");
 
 /// Configuration for word-attributed profile mode.
 pub const ProfileConfig = struct {
@@ -63,7 +64,7 @@ pub const ProfileStats = struct {
     /// Push a start timestamp onto the pending stack. Called from the
     /// `call_word` instrumentation point in `executeInstructions`.
     pub fn recordWordStart(self: *ProfileStats, alloc: std.mem.Allocator) void {
-        const now = std.time.nanoTimestamp();
+        const now = scheduler_mod.elapsedTimerNowNs();
         self.pending_starts.append(alloc, now) catch {};
     }
 
@@ -73,7 +74,7 @@ pub const ProfileStats = struct {
     pub fn recordWordEnd(self: *ProfileStats, alloc: std.mem.Allocator, name: []const u8) void {
         if (self.pending_starts.items.len == 0) return;
         const start_ns = self.pending_starts.pop() orelse return;
-        const end_ns = std.time.nanoTimestamp();
+        const end_ns = scheduler_mod.elapsedTimerNowNs();
         self.samples.append(alloc, .{
             .name = name,
             .start_ns = start_ns,

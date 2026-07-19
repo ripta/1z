@@ -29,7 +29,8 @@ const PolymorphicCache = pic_mod.PolymorphicCache;
 const JitDispatchTable = @import("jit_dispatch.zig").JitDispatchTable;
 const ir_codegen = @import("ir_codegen.zig");
 const bail_stats_mod = @import("bail_stats.zig");
-const Scheduler = @import("scheduler.zig").Scheduler;
+const scheduler_mod = @import("scheduler.zig");
+const Scheduler = scheduler_mod.Scheduler;
 const WorkerPool = @import("worker.zig").WorkerPool;
 const Tokenizer = @import("tokenizer.zig").Tokenizer;
 const types_mod = @import("primitives/types.zig");
@@ -61,6 +62,12 @@ const signal = @import("signal.zig");
 const control = @import("primitives/control.zig");
 const nativeSuppressChecksValidator = @import("effect_inference.zig").nativeSuppressChecksValidator;
 const helpers = @import("primitives/helpers.zig");
+
+// The JIT is unavailable on freestanding targets (no `ir` link, see build.zig); every call site
+// that would reach into ir_codegen.zig is comptime-gated below and falls back to plain
+// interpretation, which is already what happens at runtime on every target when compile_mode
+// stays .off (the default, and the only mode reachable without a CLI --compile flag).
+const is_freestanding = builtin.os.tag == .freestanding;
 
 /// Embedded prelude source code
 pub const prelude_source = @embedFile("prelude.1z");
@@ -1256,16 +1263,16 @@ pub const Context = struct {
         while (lines.next()) |line| {
             line_num += 1;
             processor.trackLine(line_num);
-            const parse_start = if (self.benchmark != null) std.time.nanoTimestamp() else 0;
+            const parse_start = if (self.benchmark != null) scheduler_mod.elapsedTimerNowNs() else 0;
             const result = processor.feedLine(self.arena.allocator(), line, self);
-            if (self.benchmark) |b| b.prelude_parse_ns += std.time.nanoTimestamp() - parse_start;
+            if (self.benchmark) |b| b.prelude_parse_ns += scheduler_mod.elapsedTimerNowNs() - parse_start;
             switch (result) {
                 .needs_more_input => continue,
                 .complete => |instrs| {
                     if (instrs.len > 0) {
-                        const exec_start = if (self.benchmark != null) std.time.nanoTimestamp() else 0;
+                        const exec_start = if (self.benchmark != null) scheduler_mod.elapsedTimerNowNs() else 0;
                         try self.executeQuotation(.{ .instructions = instrs });
-                        if (self.benchmark) |b| b.prelude_exec_ns += std.time.nanoTimestamp() - exec_start;
+                        if (self.benchmark) |b| b.prelude_exec_ns += scheduler_mod.elapsedTimerNowNs() - exec_start;
                     }
                     processor.reset();
                 },
@@ -1274,15 +1281,15 @@ pub const Context = struct {
         }
 
         // Flush any remaining buffered content
-        const flush_parse_start = if (self.benchmark != null) std.time.nanoTimestamp() else 0;
+        const flush_parse_start = if (self.benchmark != null) scheduler_mod.elapsedTimerNowNs() else 0;
         const flush_result = processor.flush(self.arena.allocator(), self);
-        if (self.benchmark) |b| b.prelude_parse_ns += std.time.nanoTimestamp() - flush_parse_start;
+        if (self.benchmark) |b| b.prelude_parse_ns += scheduler_mod.elapsedTimerNowNs() - flush_parse_start;
         switch (flush_result) {
             .complete => |instrs| {
                 if (instrs.len > 0) {
-                    const exec_start = if (self.benchmark != null) std.time.nanoTimestamp() else 0;
+                    const exec_start = if (self.benchmark != null) scheduler_mod.elapsedTimerNowNs() else 0;
                     try self.executeQuotation(.{ .instructions = instrs });
-                    if (self.benchmark) |b| b.prelude_exec_ns += std.time.nanoTimestamp() - exec_start;
+                    if (self.benchmark) |b| b.prelude_exec_ns += scheduler_mod.elapsedTimerNowNs() - exec_start;
                 }
             },
             .parse_error => |err| return err,
@@ -2226,6 +2233,8 @@ pub const Context = struct {
     /// Attempt JIT compilation of a newly defined word. Silently ignores
     /// all errors so the word falls back to the interpreter.
     fn tryAutoCompile(self: *Context, name: []const u8, def: WordDefinition) void {
+        if (comptime is_freestanding) return;
+
         const instrs = switch (def.action) {
             .compound => |i| i,
             .native, .host_callback => return,
@@ -5131,28 +5140,31 @@ pub const Context = struct {
         try self.pushLocalFrame();
         defer self.popLocalFrame();
 
-        if (quotation.code_ptr) |ptr| {
-            const saved_sp = self.stack.items.items.len;
-            var jit_ctx = ir_codegen.JitContext{
-                .items_ptr = self.stack.items.items.ptr,
-                .sp_ptr = &self.stack.items.items.len,
-                .capacity = self.stack.items.capacity,
-                .ctx = self,
-            };
-            const func: ir_codegen.CompiledFn = @ptrCast(@alignCast(ptr));
-            switch (ir_codegen.ExecResult.fromStatus(func(&jit_ctx))) {
-                .ok => return,
-                .error_propagate => {
-                    const err = self.jit_pending_error orelse error.UserThrown;
-                    self.jit_pending_error = null;
-                    return err;
-                },
-                .bail => {
-                    if (bail_stats_mod.enabled) {
-                        bail_stats_mod.global.recordQuotationBail();
-                    }
-                    self.stack.items.items.len = saved_sp;
-                },
+        // quotation.code_ptr is never set on freestanding targets.
+        if (comptime !is_freestanding) {
+            if (quotation.code_ptr) |ptr| {
+                const saved_sp = self.stack.items.items.len;
+                var jit_ctx = ir_codegen.JitContext{
+                    .items_ptr = self.stack.items.items.ptr,
+                    .sp_ptr = &self.stack.items.items.len,
+                    .capacity = self.stack.items.capacity,
+                    .ctx = self,
+                };
+                const func: ir_codegen.CompiledFn = @ptrCast(@alignCast(ptr));
+                switch (ir_codegen.ExecResult.fromStatus(func(&jit_ctx))) {
+                    .ok => return,
+                    .error_propagate => {
+                        const err = self.jit_pending_error orelse error.UserThrown;
+                        self.jit_pending_error = null;
+                        return err;
+                    },
+                    .bail => {
+                        if (bail_stats_mod.enabled) {
+                            bail_stats_mod.global.recordQuotationBail();
+                        }
+                        self.stack.items.items.len = saved_sp;
+                    },
+                }
             }
         }
 
@@ -5319,59 +5331,63 @@ pub const Context = struct {
         // compiled function exists in jit_dispatch, backfill the id so the compiled
         // function runs. Restricted to empty bodies so real-bodied words -- including
         // quotation-calling combinators -- stay on the interpreter path unchanged.
-        const effective_word_id: ?u32 = word.word_id orelse blk: {
-            if (word.exec_flags.empty_compound_body and self.runtime_image_loaded) {
-                break :blk backfillCompiledWordId(self, name);
-            }
-            break :blk null;
-        };
-        if (effective_word_id) |wid| {
-            if (word.stack_effect) |effect| {
-                if (word.exec_flags.has_param_effects) {
-                    self.validateParameterEffects(&effect) catch |err| {
-                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
-                        return self.wordErrorCleanup(name, err);
-                    };
+        // On freestanding targets word.word_id is never assigned and runtime_image_loaded is
+        // never set, so effective_word_id would always resolve to null anyway.
+        if (comptime !is_freestanding) {
+            const effective_word_id: ?u32 = word.word_id orelse blk: {
+                if (word.exec_flags.empty_compound_body and self.runtime_image_loaded) {
+                    break :blk backfillCompiledWordId(self, name);
                 }
-                if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
-                    self.validateTypeAnnotations(&effect) catch |err| {
-                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
-                        return self.wordErrorCleanup(name, err);
-                    };
-                }
-            }
-            const saved_source = self.current_source;
-            if (word.source_file) |sf| self.current_source = sf;
-            const jit_result = if (word.source_module) |mod| blk: {
-                self.pushModuleDepsFrame(mod) catch |err| {
-                    self.current_source = saved_source;
-                    self.pushCallFrame(name, self.current_source, instr.line, instr.column);
-                    return self.wordErrorCleanup(name, err);
-                };
-                defer self.popModuleDepsFrameTraced(mod);
-                break :blk ir_codegen.executeCompiled(self, wid);
-            } else ir_codegen.executeCompiled(self, wid);
-            self.current_source = saved_source;
-            if (self.trace.trace_jit) {
-                var tw = trace_mod.TraceWriter.init();
-                trace_mod.traceJitDispatch(&tw, name, wid, jit_result != .bail);
-            }
-            switch (jit_result) {
-                .ok => {
-                    if (self.benchmark) |bm| bm.endWordProfile(self.allocator, name);
-                    if (self.profile) |p| p.recordWordEnd(self.allocator, name);
-                    return .proceed;
-                },
-                .error_propagate => {
-                    const err = self.jit_pending_error orelse error.UserThrown;
-                    self.jit_pending_error = null;
-                    return err;
-                },
-                .bail => {
-                    if (self.compile_mode == .hybrid) {
-                        self.tryHybridCompile(wid, name, word);
+                break :blk null;
+            };
+            if (effective_word_id) |wid| {
+                if (word.stack_effect) |effect| {
+                    if (word.exec_flags.has_param_effects) {
+                        self.validateParameterEffects(&effect) catch |err| {
+                            self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                            return self.wordErrorCleanup(name, err);
+                        };
                     }
-                },
+                    if (word.exec_flags.has_type_annotations and !word.exec_flags.skip_type_validation) {
+                        self.validateTypeAnnotations(&effect) catch |err| {
+                            self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                            return self.wordErrorCleanup(name, err);
+                        };
+                    }
+                }
+                const saved_source = self.current_source;
+                if (word.source_file) |sf| self.current_source = sf;
+                const jit_result = if (word.source_module) |mod| blk: {
+                    self.pushModuleDepsFrame(mod) catch |err| {
+                        self.current_source = saved_source;
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        return self.wordErrorCleanup(name, err);
+                    };
+                    defer self.popModuleDepsFrameTraced(mod);
+                    break :blk ir_codegen.executeCompiled(self, wid);
+                } else ir_codegen.executeCompiled(self, wid);
+                self.current_source = saved_source;
+                if (self.trace.trace_jit) {
+                    var tw = trace_mod.TraceWriter.init();
+                    trace_mod.traceJitDispatch(&tw, name, wid, jit_result != .bail);
+                }
+                switch (jit_result) {
+                    .ok => {
+                        if (self.benchmark) |bm| bm.endWordProfile(self.allocator, name);
+                        if (self.profile) |p| p.recordWordEnd(self.allocator, name);
+                        return .proceed;
+                    },
+                    .error_propagate => {
+                        const err = self.jit_pending_error orelse error.UserThrown;
+                        self.jit_pending_error = null;
+                        return err;
+                    },
+                    .bail => {
+                        if (self.compile_mode == .hybrid) {
+                            self.tryHybridCompile(wid, name, word);
+                        }
+                    },
+                }
             }
         }
 
@@ -5545,12 +5561,19 @@ pub const Context = struct {
             null;
 
         for (instructions, 0..) |instr, idx| {
-            if (self.debugger) |dbg| {
-                if (try dbg.shouldPause(instr, self)) {
-                    if (dbg.hasCCallback()) {
-                        dbg.handleCPause(self);
-                    } else {
-                        try dbg.enterPrompt(instr, self);
+            // The stepwise debugger is wired up only from capi.zig (C debugger API) and main.zig
+            // (--debug), neither built for freestanding targets, so ctx.debugger is always null
+            // there. Comptime-excluded so debugger.zig's interactive-prompt machinery (which
+            // assumes a real stdin/stdout terminal, same as the line editor) never needs to
+            // compile for that target.
+            if (comptime !is_freestanding) {
+                if (self.debugger) |dbg| {
+                    if (try dbg.shouldPause(instr, self)) {
+                        if (dbg.hasCCallback()) {
+                            dbg.handleCPause(self);
+                        } else {
+                            try dbg.enterPrompt(instr, self);
+                        }
                     }
                 }
             }

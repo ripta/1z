@@ -1,4 +1,5 @@
 const std = @import("std");
+const scheduler_mod = @import("../scheduler.zig");
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const CapturedScope = context_mod.CapturedScope;
@@ -245,14 +246,17 @@ fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
         null;
 
     // Time and execute
-    const start_time = std.time.nanoTimestamp();
+    const start_time = scheduler_mod.elapsedTimerNowNs();
     var exec_result: anyerror!void = {};
-    for (0..n) |_| {
+    // A while loop with an explicit u64 counter, not `for (0..n)`: n is u64 (a fixnum count),
+    // and `for` range bounds must fit usize, which is only 32 bits on wasm32.
+    var i: u64 = 0;
+    while (i < n) : (i += 1) {
         exec_result = ctx.executeQuotationWithFrame(quot);
         if (exec_result) |_| {} else |_| break;
     }
 
-    const end_time = std.time.nanoTimestamp();
+    const end_time = scheduler_mod.elapsedTimerNowNs();
     const elapsed_ns = end_time - start_time;
 
     // Compute allocation deltas before restoring benchmark pointer

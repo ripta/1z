@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const is_freestanding = builtin.os.tag == .freestanding;
 const Allocator = std.mem.Allocator;
 const Context = @import("../context.zig").Context;
 const dispatch_mod = @import("../dispatch.zig");
@@ -376,6 +378,8 @@ fn buildDeadDefinitionValue(alloc: Allocator, info: DeadDefinitionInfo) !Value {
 /// Return array entries of [ name file line column ] for checked-file compound
 /// words that have no inbound edge from another checked-file component.
 fn nativeDeadDefinitions(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "dead-definitions");
+
     const alloc = ctx.quotationAllocator();
 
     const files_val = try ctx.stack.pop();

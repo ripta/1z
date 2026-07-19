@@ -15,7 +15,13 @@ const is_freestanding = builtin.os.tag == .freestanding;
 // stub keeps the surrounding type references well-formed without ever
 // being called.
 const mc = if (is_freestanding) struct {
-    pub const mco_coro = opaque {};
+    // Not opaque: tasks.zig reads .stack_base/.stack_size off a real (if never-populated, since
+    // mco_create below never actually allocates a coroutine) coro pointer to size the task's
+    // native-stack bounds. Field names/types mirror the real struct in ext/minicoro/minicoro.h.
+    pub const mco_coro = extern struct {
+        stack_base: ?*anyopaque = null,
+        stack_size: usize = 0,
+    };
     pub const mco_desc = extern struct {
         func: ?*const fn (?*mco_coro) callconv(.c) void = null,
         user_data: ?*anyopaque = null,
@@ -46,7 +52,7 @@ const mc = if (is_freestanding) struct {
         _ = co;
         return null;
     }
-    pub fn mco_desc_init(func: anytype, stack_size: usize) callconv(.c) mco_desc {
+    pub fn mco_desc_init(func: ?*const fn (?*mco_coro) callconv(.c) void, stack_size: usize) callconv(.c) mco_desc {
         _ = func;
         _ = stack_size;
         return .{};
@@ -153,8 +159,9 @@ pub const Task = struct {
     scope: *TaskScope,
     cancellation_phase: std.atomic.Value(CancellationPhase) = std.atomic.Value(CancellationPhase).init(.none),
     blocked_on_channel: ?*anyopaque = null,
-    blocked_on_io_fd: ?std.posix.fd_t = null,
-    blocked_on_process_pid: ?std.posix.pid_t = null,
+    // Plain i32, not std.posix.fd_t/pid_t: see the comment on Scheduler.drainCancelledIOWaiters.
+    blocked_on_io_fd: ?i32 = null,
+    blocked_on_process_pid: ?i32 = null,
     blocked_on_process_key: ?u64 = null,
     blocked_on_scope: ?*TaskScope = null,
     /// Set by a sender when it delivers a value directly to this receiver's
@@ -363,7 +370,12 @@ pub fn initCoroContext(
 /// Returns the full allocation of guard plus usable.
 ///
 /// Layout: [guard page (PROT_NONE)] [usable stack space]
+///
+/// Never called on freestanding targets: the parser coroutine that owns this stack is unusable
+/// there (no ucontext), and StatementProcessor's freestanding path never allocates one.
 pub fn allocateTaskStack(size: usize) ![]align(std.heap.page_size_min) u8 {
+    if (comptime is_freestanding) unreachable;
+
     const page_size = std.heap.page_size_min;
     const total_size = size + page_size;
     const mem = std.posix.mmap(
@@ -387,8 +399,11 @@ pub fn allocateTaskStack(size: usize) ![]align(std.heap.page_size_min) u8 {
     return @alignCast(mem);
 }
 
-/// Free a stack allocated by allocateTaskStack.
+/// Free a stack allocated by allocateTaskStack. Never called on freestanding targets; see
+/// allocateTaskStack.
 pub fn freeTaskStack(mem: []align(std.heap.page_size_min) u8) void {
+    if (comptime is_freestanding) unreachable;
+
     std.posix.munmap(mem);
 }
 

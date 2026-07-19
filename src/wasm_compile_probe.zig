@@ -1,15 +1,16 @@
 const std = @import("std");
+const build_options = @import("build_options");
 
 // Build-only root for the `wasm-clock-check` step (build.zig), which cross-compiles this file as
-// a static library for wasm32-freestanding to prove the wasm clock host import and the no-op
-// multiplexer actually compile for that target, not just that their `is_freestanding`-keyed
-// branches look correct by inspection.
+// a static library for wasm32-freestanding to prove the interpreter no-libc porting work
+// actually compiles for that target, not just that its `is_freestanding`-keyed branches look
+// correct by inspection.
 //
-// Scoped deliberately narrow: `Scheduler`/`WorkerPool` are not exercised here, because
-// constructing either pulls in `Task` -> `Context` -> the still-unguarded `ffi/ir.zig`
-// `@cImport`, `value.zig`'s 64-bit-only `@sizeOf(Value) == 40` assertion, and several
-// `std.posix` declarations Zig itself does not fully resolve for wasm32-freestanding. Porting
-// that whole surface is the interpreter no-libc porting work, not this file's job.
+// `onez_wasm_context_probe` now exercises the full chain the earlier, narrower version of this
+// file deliberately deferred: constructing a real Context (`Context.init`) and loading the real
+// prelude (`Context.loadPrelude`), which transitively pulls in the JIT-decoupling comptime
+// guards, the ucontext-free StatementProcessor path, the module resolver's filesystem-free
+// front end, and every freestanding-gated primitive module.
 //
 // `zig build test` pulls in a posix-heavy default test runner that does not compile for
 // wasm32-freestanding either, which is why this is a plain `export fn` forcing real analysis
@@ -18,6 +19,8 @@ const std = @import("std");
 
 const scheduler = @import("scheduler.zig");
 const multiplexer = @import("multiplexer.zig");
+const context_mod = @import("context.zig");
+const Context = context_mod.Context;
 
 pub const panic = std.debug.no_panic;
 
@@ -31,4 +34,16 @@ export fn onez_wasm_compile_probe() void {
     wake.deinit();
     _ = mux.poll(1000) catch {};
     mux.deinit();
+}
+
+// Fixed-size static heap for the probe Context, mirroring capi_freestanding.zig's own
+// FixedBufferAllocator setup: no mmap/OS allocator is available on this target.
+const probe_heap_size: usize = @as(usize, build_options.freestanding_heap_mib) << 20;
+var probe_heap_buf: [probe_heap_size]u8 align(16) = undefined;
+var probe_fba = std.heap.FixedBufferAllocator.init(&probe_heap_buf);
+
+export fn onez_wasm_context_probe() void {
+    var ctx = Context.init(probe_fba.allocator());
+    defer ctx.deinit();
+    ctx.loadPrelude(null) catch {};
 }

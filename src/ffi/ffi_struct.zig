@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+const is_freestanding = builtin.os.tag == .freestanding;
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
@@ -43,6 +45,8 @@ pub const registry_entries = [_]RegistryEntry{
 ///
 /// The descriptor contains a `fields` key with a flat token list of `name: type` pairs parsed by `parse-tokens-until`.
 fn nativeDefineFfiStruct(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "define-ffi-struct");
+
     const alloc = ctx.quotationAllocator();
 
     const markers_val = try ctx.stack.pop();

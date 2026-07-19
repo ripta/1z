@@ -1,5 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
+const is_freestanding = builtin.os.tag == .freestanding;
 const context_mod = @import("../context.zig");
 const Context = context_mod.Context;
 const value_mod = @import("../value.zig");
@@ -75,7 +76,9 @@ pub fn fireHooks(ctx: *Context, event_name: []const u8, args: []const Value) voi
         }
 
         ctx.executeQuotation(quot) catch |err| {
-            if (!builtin.is_test) {
+            // Freestanding has no real stderr (STDOUT/STDERR_FILENO are undefined there); this
+            // diagnostic is a nicety, not load-bearing, so it's silently skipped on that target.
+            if (!builtin.is_test and !is_freestanding) {
                 const stderr_file: std.fs.File = .stderr();
                 var buf: [256]u8 = undefined;
                 var writer = stderr_file.writer(&buf);
@@ -166,7 +169,7 @@ pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Valu
         }
 
         ctx.executeQuotation(quot) catch |err| {
-            if (!builtin.is_test) {
+            if (!builtin.is_test and !is_freestanding) {
                 const stderr_file: std.fs.File = .stderr();
                 var buf: [256]u8 = undefined;
                 var writer = stderr_file.writer(&buf);

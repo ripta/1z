@@ -1,9 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const posix = std.posix;
 
 const Context = @import("context.zig").Context;
 const value_mod = @import("value.zig");
 const Quotation = value_mod.Quotation;
+
+const is_freestanding = builtin.os.tag == .freestanding;
 
 const SIG = posix.SIG;
 
@@ -105,6 +108,12 @@ pub fn isHandleable(signum: i64) bool {
 /// - If no handler and signal is SIGINT: raise "interrupted" error.
 /// - If no handler and not SIGINT: consume and ignore.
 pub fn checkPendingSignals(ctx: *Context) error{UserThrown}!void {
+    // No OS signal delivery on freestanding targets, and signal.install() (the only thing that
+    // could ever mark a signal pending) is wired up only from main.zig, not built for this
+    // target -- signal_pending stays all-false forever there, so this is a no-op. Comptime-gated
+    // so posix.SIG (undefined on the non-libc posix stub) need not compile for that target.
+    if (comptime is_freestanding) return;
+
     for (1..MAX_SIGNALS) |i| {
         if (signal_pending[i].load(.acquire)) {
             signal_pending[i].store(false, .release);

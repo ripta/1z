@@ -11,6 +11,7 @@ const Multiplexer = @import("multiplexer.zig").Multiplexer;
 const WakeSource = @import("multiplexer.zig").WakeSource;
 const trace = @import("trace.zig");
 const MemoryLimitAllocator = @import("memory_limit.zig").MemoryLimitAllocator;
+const portable_atomic = @import("portable_atomic.zig");
 
 /// Static `WorkerOps` table used by every `Worker` so the scheduler can
 /// call back into the worker through type-erased pointers without forming
@@ -384,14 +385,14 @@ pub const WorkerPool = struct {
     /// invoked through a worker draws from here so a single integer
     /// unambiguously identifies a task across the whole program. Drives
     /// deterministic ordering in aggregated diagnostic dumps.
-    next_task_id: std.atomic.Value(u64) = std.atomic.Value(u64).init(1),
+    next_task_id: portable_atomic.WideCounter(u64) = portable_atomic.WideCounter(u64).init(1),
     /// Monotonic timestamp (nanoseconds) of the most recent progress event
     /// observed by any worker -- task completion, sleeper wake, or I/O
     /// readiness. Updated by every worker through `Scheduler.recordProgress`.
     /// Read by every worker's stall-detect computation so a busy
     /// background worker correctly suppresses a stall warning on an idle
     /// primary.
-    last_progress_ns: std.atomic.Value(i128) = std.atomic.Value(i128).init(0),
+    last_progress_ns: portable_atomic.WideCounter(i128) = portable_atomic.WideCounter(i128).init(0),
     /// Stall detection threshold, propagated from `ctx.deadlock_detect_ns`
     /// by `task-scope`. Null disables stall detection. Read by every
     /// worker; never mutated after `task-scope` writes it.
@@ -419,7 +420,7 @@ pub const WorkerPool = struct {
     /// Monotonic deadline of the next sample. The worker that advances it past
     /// `now` via CAS is the sole emitter for that tick, re-arming it to
     /// `now + interval` for a steady cadence.
-    next_sample_ns: std.atomic.Value(i128) = std.atomic.Value(i128).init(0),
+    next_sample_ns: portable_atomic.WideCounter(i128) = portable_atomic.WideCounter(i128).init(0),
     /// Monotonic timestamp when sampling started, for the `t=` elapsed field.
     sampler_started_ns: i128 = 0,
 
@@ -465,6 +466,7 @@ pub const WorkerPool = struct {
     }
 
     pub fn join(self: *WorkerPool) void {
+        if (builtin.single_threaded) return;
         for (self.workers[1..]) |*w| {
             if (w.thread) |t| t.join();
             w.thread = null;

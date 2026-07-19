@@ -4,8 +4,11 @@ const builtin = @import("builtin");
 pub const IoEvent = enum { read, write };
 
 pub const ProcessWaitHandle = union(enum) {
-    pid: std.posix.pid_t,
-    pidfd: std.posix.fd_t,
+    // Plain i32, not std.posix.pid_t/fd_t: those resolve to void on freestanding (no OS
+    // process/fd concept there), while i32 matches their real definition on every hosted target
+    // this project supports (Linux, macOS) -- a no-op retype for hosted, and portable everywhere.
+    pid: i32,
+    pidfd: i32,
 };
 
 pub fn processWaitHandleKey(handle: ProcessWaitHandle) u64 {
@@ -17,12 +20,12 @@ pub fn processWaitHandleKey(handle: ProcessWaitHandle) u64 {
 
 pub const ReadyEvent = union(enum) {
     io: struct {
-        fd: std.posix.fd_t,
+        fd: i32,
         event: IoEvent,
     },
     process_exit: struct {
         handle: ProcessWaitHandle,
-        pid: std.posix.pid_t,
+        pid: i32,
     },
     wake: struct {
         ident: u64,
@@ -108,7 +111,7 @@ pub const Multiplexer = struct {
         std.posix.close(self.mux_fd);
     }
 
-    pub fn register(self: *Multiplexer, fd: std.posix.fd_t, event: IoEvent) !void {
+    pub fn register(self: *Multiplexer, fd: i32, event: IoEvent) !void {
         if (is_kqueue) {
             const filter: i16 = if (event == .read) std.c.EVFILT.READ else std.c.EVFILT.WRITE;
             const ev = std.posix.Kevent{
@@ -134,7 +137,7 @@ pub const Multiplexer = struct {
         }
     }
 
-    pub fn registerProcessExit(self: *Multiplexer, pid: std.posix.pid_t) !ProcessWaitHandle {
+    pub fn registerProcessExit(self: *Multiplexer, pid: i32) !ProcessWaitHandle {
         if (is_kqueue) {
             const ev = std.posix.Kevent{
                 .ident = @intCast(pid),
@@ -163,7 +166,7 @@ pub const Multiplexer = struct {
         }
     }
 
-    pub fn unregister(self: *Multiplexer, fd: std.posix.fd_t, event: IoEvent) !void {
+    pub fn unregister(self: *Multiplexer, fd: i32, event: IoEvent) !void {
         if (is_kqueue) {
             const filter: i16 = if (event == .read) std.c.EVFILT.READ else std.c.EVFILT.WRITE;
             const ev = std.posix.Kevent{
@@ -346,7 +349,7 @@ pub const WakeSource = struct {
     }
 };
 
-fn openPidFd(pid: std.posix.pid_t) !std.posix.fd_t {
+fn openPidFd(pid: i32) !i32 {
     if (!is_epoll) unreachable;
 
     const rc = std.os.linux.pidfd_open(pid, 0);

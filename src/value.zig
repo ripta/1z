@@ -619,7 +619,12 @@ pub const StreamVTable = struct {
 /// descriptor for scheduler integration and fcntl operations.
 pub const Stream = struct {
     vtable: *const StreamVTable,
-    fd: std.posix.fd_t,
+    // Plain i32, not std.posix.fd_t: fd_t is void on freestanding targets
+    // (no OS-level file descriptors), which cannot hold the real fd numbers
+    // or in-memory-stream sentinels this field is assigned throughout
+    // streams.zig. i32 matches fd_t's actual definition on every hosted
+    // target this project supports (Linux, macOS), so this is a no-op there.
+    fd: i32,
     mode: StreamMode,
     closed: bool = false,
     // For display: "stdout", "stderr", file path
@@ -1957,12 +1962,19 @@ pub const Value = union(enum) {
 
 // Size budget for the Value union. The largest variants, which are currently ErrorObject and BigIntManaged,
 // are heap-indirected, so the union body is currently driven by Quotation and StackEffect at 32 bytes plus
-// the 4-byte tag and padding.
+// the 4-byte tag and padding on 64-bit hosts. On wasm32's 4-byte pointers those same variants are 16 bytes
+// (20 with the tag), but an 8-byte-aligned payload elsewhere in the union (e.g. an f64/i64-bearing variant)
+// forces the union's overall alignment to 8, rounding the total up to 24; this is asserted, not merely
+// tolerated, so a genuine wasm32 regression still trips.
 //
 // A regression here multiplies across every stack slot, every array element, every hash bucket value, and
 // every push_literal instruction. If a new variant pushes the union wider, change this assertion deliberately.
 comptime {
-    std.debug.assert(@sizeOf(Value) == 40);
+    if (@sizeOf(usize) == 8) {
+        std.debug.assert(@sizeOf(Value) == 40);
+    } else if (@sizeOf(usize) == 4) {
+        std.debug.assert(@sizeOf(Value) == 24);
+    }
 }
 
 // =============================================================================

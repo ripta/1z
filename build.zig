@@ -122,12 +122,12 @@ pub fn build(b: *std.Build) void {
 
     const is_wasm_target = target.result.cpu.arch == .wasm32 and target.result.os.tag == .freestanding;
     if (is_wasm_target) {
-        // Compile-check the wasm clock host import and the no-op multiplexer against the real
-        // wasm32-freestanding target. Built as a static library (like capi_wasm.zig itself),
-        // not `b.addTest`, because the default test runner needs posix I/O to report results
-        // and does not compile for this target -- unrelated to whether our own code is
-        // portable. See src/wasm_compile_probe.zig for what this deliberately does and does
-        // not cover.
+        // Compile-check the wasm clock host import, the no-op multiplexer, and a real
+        // Context/loadPrelude construction against the real wasm32-freestanding target. Built as
+        // a static library (like capi_wasm.zig itself), not `b.addTest`, because the default
+        // test runner needs posix I/O to report results and does not compile for this target --
+        // unrelated to whether our own code is portable. See src/wasm_compile_probe.zig for what
+        // this covers.
         const wasm_probe_module = createCommonModule(b, target, optimize, options, b.path("src/wasm_compile_probe.zig"), embedded_stdlib_path);
         const wasm_probe_lib = b.addLibrary(.{
             .name = "wasm-clock-check",
@@ -136,7 +136,7 @@ pub fn build(b: *std.Build) void {
         });
         const wasm_clock_check_step = b.step(
             "wasm-clock-check",
-            "Compile-check the wasm clock host import and no-op multiplexer for wasm32-freestanding",
+            "Compile-check the wasm clock, no-op multiplexer, and interpreter Context for wasm32-freestanding",
         );
         wasm_clock_check_step.dependOn(&wasm_probe_lib.step);
         b.getInstallStep().dependOn(wasm_clock_check_step);

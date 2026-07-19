@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const native_os = builtin.os.tag;
+const is_freestanding = native_os == .freestanding;
 
 const Context = @import("../context.zig").Context;
 const value_mod = @import("../value.zig");
@@ -426,6 +427,8 @@ fn closeFdGuarded(fd: std.posix.fd_t) void {
 /// reads go to read-fd and writes go to write-fd. Both fds must be
 /// non-negative.
 pub fn nativeDuplexStream(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "<duplex-stream>");
+
     const write_fd_val = try popFixnum(ctx);
     const read_fd_val = try popFixnum(ctx);
     if (read_fd_val < 0 or write_fd_val < 0) {
@@ -460,11 +463,30 @@ pub fn nativeDuplexStream(ctx: *Context) anyerror!void {
 // Standard streams
 // =============================================================================
 
+/// Stand-in for a standard stream on targets with no real stdio (STDIN/STDOUT/STDERR_FILENO are
+/// undefined there). Backed by the same in-memory vtable `<string-stream>` uses: writes append to
+/// a buffer that is never drained, reads report NotOpenForReading. A real host-writer-backed
+/// stream replaces this once one exists.
+fn createStdInMemoryStream(ctx: *Context, mode: StreamMode, name: []const u8) !Stream {
+    const buf = ctx.allocator.create(MemBuffer) catch return error.OutOfMemory;
+    buf.* = .{ .allocator = ctx.allocator };
+    return Stream{
+        .vtable = &in_memory_vtable,
+        .fd = -1,
+        .mode = mode,
+        .name = name,
+        .impl = buf,
+    };
+}
+
 /// stdin ( -- stream ) - Push standard input stream
 pub fn nativeStdin(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
-    stream.* = createFileStream(std.posix.STDIN_FILENO, .read, "stdin");
+    stream.* = if (comptime is_freestanding)
+        try createStdInMemoryStream(ctx, .read, "stdin")
+    else
+        createFileStream(std.posix.STDIN_FILENO, .read, "stdin");
     stream.buffering = .line;
     try ctx.stack.push(.{ .stream = stream });
 }
@@ -473,7 +495,10 @@ pub fn nativeStdin(ctx: *Context) anyerror!void {
 pub fn nativeStdout(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
-    stream.* = createFileStream(std.posix.STDOUT_FILENO, .write, "stdout");
+    stream.* = if (comptime is_freestanding)
+        try createStdInMemoryStream(ctx, .write, "stdout")
+    else
+        createFileStream(std.posix.STDOUT_FILENO, .write, "stdout");
     stream.buffering = .line;
     try ctx.stack.push(.{ .stream = stream });
 }
@@ -482,7 +507,10 @@ pub fn nativeStdout(ctx: *Context) anyerror!void {
 pub fn nativeStderr(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
-    stream.* = createFileStream(std.posix.STDERR_FILENO, .write, "stderr");
+    stream.* = if (comptime is_freestanding)
+        try createStdInMemoryStream(ctx, .write, "stderr")
+    else
+        createFileStream(std.posix.STDERR_FILENO, .write, "stderr");
     stream.buffering = .line;
     try ctx.stack.push(.{ .stream = stream });
 }
@@ -494,6 +522,8 @@ pub fn nativeStderr(ctx: *Context) anyerror!void {
 /// stream-open ( path mode -- stream ) - Open a file stream
 /// Mode symbols: read: write: append: read-write:
 pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "stream-open");
+
     const mode_sym = try popSymbol(ctx);
     const path = try popString(ctx);
     const alloc = ctx.quotationAllocator();
@@ -732,6 +762,8 @@ pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
 
 /// stream-tell ( stream -- pos ) - Get current stream position
 pub fn nativeStreamTell(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "stream-tell");
+
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
     if (stream.fd < 0) return error.NotSeekable;
@@ -746,6 +778,8 @@ pub fn nativeStreamTell(ctx: *Context) anyerror!void {
 
 /// stream-seek ( stream pos -- ) - Seek to absolute position
 pub fn nativeStreamSeek(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "stream-seek");
+
     const pos = try popFixnum(ctx);
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -763,6 +797,8 @@ pub fn nativeStreamSeek(ctx: *Context) anyerror!void {
 
 /// stream-seek-end ( stream offset -- ) - Seek relative to end of stream
 pub fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "stream-seek-end");
+
     const offset = try popFixnum(ctx);
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -830,6 +866,7 @@ pub fn nativeStreamToFd(ctx: *Context) anyerror!void {
 ///
 /// The resulting stream won't have a meaningful name, so it's just "fd". 😬
 pub fn nativeFdToStream(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "fd>stream");
     if (native_os == .windows) {
         return error.UnsupportedOperation;
     }
@@ -848,6 +885,7 @@ pub fn nativeFdToStream(ctx: *Context) anyerror!void {
 
 /// <pipe> ( -- rd wr ) - Create a Unix pipe, returning read-end and write-end streams
 fn nativePipe(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "<pipe>");
     if (native_os == .windows) {
         return error.UnsupportedOperation;
     }

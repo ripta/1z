@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Context = @import("../context.zig").Context;
 const helpers = @import("../primitives/helpers.zig");
 const error_mapping = @import("../primitives/error_mapping.zig");
@@ -6,9 +7,13 @@ const RegistryEntry = @import("../primitives/types.zig").RegistryEntry;
 const Resource = @import("../value.zig").Resource;
 const container_backing = @import("../container_backing.zig");
 
-const c = @cImport({
+// The toy demo library is a C source excluded from the link on freestanding targets (see
+// build.zig's createCommonModule), so its header is not on the include path there either.
+const is_freestanding = builtin.os.tag == .freestanding;
+
+const c = if (!is_freestanding) @cImport({
     @cInclude("toy.h");
-});
+}) else struct {};
 
 pub const registry_entries = [_]RegistryEntry{
     .{ .name = "toy-add", .func = nativeToyAdd, .capability = .ffi },
@@ -22,6 +27,8 @@ pub const registry_entries = [_]RegistryEntry{
 };
 
 fn nativeToyAdd(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "toy-add");
+
     const b = try helpers.popFixnum(ctx);
     const a = try helpers.popFixnum(ctx);
     const result = c.toy_add(@intCast(a), @intCast(b));
@@ -29,6 +36,8 @@ fn nativeToyAdd(ctx: *Context) anyerror!void {
 }
 
 fn nativeToyStrlen(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "toy-strlen");
+
     const alloc = ctx.arena.allocator();
     const s = try helpers.popString(ctx);
     const cstr = try alloc.dupeZ(u8, s);
@@ -37,6 +46,8 @@ fn nativeToyStrlen(ctx: *Context) anyerror!void {
 }
 
 fn nativeToyGreeting(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "toy-greeting");
+
     const alloc = ctx.arena.allocator();
     const s = try helpers.popString(ctx);
     const cstr = try alloc.dupeZ(u8, s);
@@ -48,6 +59,8 @@ fn nativeToyGreeting(ctx: *Context) anyerror!void {
 }
 
 fn nativeToyChecksum(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "toy-checksum");
+
     const ba = try helpers.popByteArray(ctx);
     defer container_backing.releaseValue(.{ .byte_array = ba });
     const bytes = ba.slice();
@@ -56,6 +69,8 @@ fn nativeToyChecksum(ctx: *Context) anyerror!void {
 }
 
 fn nativeToyFill(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "toy-fill");
+
     const val = try helpers.popFixnum(ctx);
     const ba = try helpers.popByteArray(ctx);
     defer container_backing.releaseValue(.{ .byte_array = ba });
@@ -68,6 +83,8 @@ fn toyCloseFn(ptr: *anyopaque) void {
 }
 
 fn nativeToyOpen(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "toy-open");
+
     const alloc = ctx.arena.allocator();
     const cptr = c.toy_open() orelse return error.OutOfMemory;
     const r = try alloc.create(Resource);
@@ -81,12 +98,16 @@ fn nativeToyOpen(ctx: *Context) anyerror!void {
 }
 
 fn nativeToyIncrement(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "toy-increment");
+
     const r = try helpers.popResource(ctx);
     try error_mapping.ensureResourceOpen(r);
     c.toy_increment(@ptrCast(@alignCast(r.ptr.?)));
 }
 
 fn nativeToyRead(ctx: *Context) anyerror!void {
+    if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "toy-read");
+
     const r = try helpers.popResource(ctx);
     try error_mapping.ensureResourceOpen(r);
     const result = c.toy_read(@ptrCast(@alignCast(r.ptr.?)));
