@@ -1,0 +1,75 @@
+\ lib/game/loop.1z - Frame loop and callbacks for the browser game platform
+\
+\ start-game registers a game's init/update/draw quotations and runs init immediately.
+\ run-frame is called once per real frame (by the requestAnimationFrame driver in JS,
+\ via onez_wasm_eval) and runs zero or more fixed-timestep update ticks (capped, with
+\ excess time dropped rather than carried forward) followed by exactly one draw and a
+\ present-frame.
+
+use "time" ;
+
+private{
+  loop-state: mutable struct{ init update draw tick accumulator last-frame } ;
+
+  \\ The platform's single game-loop instance. A bracket-less top-level local: its
+  \\ initializer runs once, when this module is loaded, and every later reference
+  \\ (including from separate top-level statements, e.g. separate onez_wasm_eval
+  \\ calls) resolves to the same mutable instance.
+  game-loop: f f f 0 0 0 make-loop-state ;
+}
+
+\\ The platform-wide fixed timestep, in nanoseconds. Games (e.g. snake's speed ramp)
+\\ read this to convert a real-world duration into a tick count.
+update-interval-nanos: ( -- n ) const [ 1000000000 60 / ] ;
+
+\\ The maximum number of catch-up update ticks run per real frame. Excess accumulated
+\\ time beyond this is dropped rather than carried into the next frame.
+max-catchup-steps: ( -- n ) const [ 5 ] ;
+
+\\ Register a game's init/update/draw quotations and run init once, immediately.
+\\
+\\ init runs before the first frame. update receives a monotonic tick counter (fixnum)
+\\ each call. draw fills the framebuffer; the platform calls present-frame afterward,
+\\ so a game's draw quotation must not call present-frame itself.
+\\
+\\ Pure stack shuffling throughout, deliberately avoiding name: swap ; locals: a local
+\\ bound to a quotation is invoked (its body runs) whenever the local is referenced,
+\\ not pushed as a value, so the three quotations must stay on the data stack until
+\\ they are stored into game-loop's fields.
+start-game: ( init: quotation update: quotation draw: quotation -- ) [
+  game-loop swap >>draw swap >>update swap >>init
+  0 >>tick 0 >>accumulator
+  monotonic-nanos >>last-frame
+  drop
+  game-loop init>> call
+] ;
+
+\\ Called once per real frame by the requestAnimationFrame driver. Runs zero or more
+\\ fixed-timestep update ticks (capped at max-catchup-steps; excess accumulated time is
+\\ dropped, not carried forward), then draw, then present-frame.
+\\
+\\ Zero name: swap ; locals: run-frame is called 60 times a second for as long as a game
+\\ is open, and a word with named locals leaks memory in proportion to call count. Every
+\\ intermediate value stays on the data stack, threaded through dup/swap/dip/keep.
+run-frame: ( -- ) [
+  \ elapsed = now - last-frame; last-frame = now; accumulator += elapsed
+  game-loop monotonic-nanos [ over last-frame>> - ] keep swap [ >>last-frame drop ] dip
+  game-loop accumulator>> + dup [ game-loop swap >>accumulator drop ] dip
+
+  \ capped = min(accumulator div update-interval-nanos, max-catchup-steps)
+  dup update-interval-nanos div max-catchup-steps min
+
+  \ tentative = accumulator - capped * update-interval-nanos; if that is still a full
+  \ interval or more, the cap was hit, so drop the remainder instead of carrying it.
+  [ update-interval-nanos * - ] keep
+  [ dup update-interval-nanos >= [ drop 0 ] when ] dip
+  [ game-loop swap >>accumulator drop ] dip
+
+  [
+    game-loop dup tick>> 1 + dup [ >>tick drop ] dip
+    game-loop update>> call
+  ] times
+
+  game-loop draw>> call
+  present-frame
+] ;

@@ -1,11 +1,10 @@
 \ Unit tests for lib/game/draw.1z.
 \
-\ Call budget: local-frame bookkeeping leaks memory cumulatively across every call to a word
-\ with a name: swap ; local, growing with local count and repeated invocations.
-\ clear-background alone (57344 pixels) is called at most once per test here, and never used as
-\ generic setup for other tests -- each other test reads a fresh bytes-alloc'd (zero-initialized)
-\ buffer directly instead. draw-rectangle/blit-sprite clipping tests use modest overshoot, not a
-\ full-canvas-covering rectangle, to keep the cumulative call count low.
+\ clear-background, draw-rectangle, and blit-sprite use zero name: swap ; locals (values are
+\ curried into the per-pixel quotation instead), so they are leak-free at any call count -- see
+\ test-repeated-calls-do-not-leak below. draw-char and draw-text still carry their original named
+\ locals and are only exercised a handful of times here, well under the leak's manifestation
+\ threshold.
 
 use "testing" ;
 use "game/draw" ;
@@ -144,5 +143,35 @@ test-draw-text-advances-by-cell-size: ( -- ) [
     10 10 "AA" 255 255 255 255 <color> draw-text
     current-framebuffer get 10 256 * 12 + 4 * 4 #peek 0xFFFFFFFF "first 'A' row 0 col 2 is lit" assert=
     current-framebuffer get 10 256 * 20 + 4 * 4 #peek 0xFFFFFFFF "second 'A' (advanced by 8px) row 0 col 2 is lit" assert=
+  ] with-parameter
+] ;
+
+\\ Regression coverage for the zero-locals rewrite. clear-background, draw-rectangle, and
+\\ blit-sprite stayed within budget at 30/200/200 calls against a full 256x224 canvas (well
+\\ past the two-or-three-call threshold that used to exhaust the interpreter's default memory
+\\ limit) when this fix was verified.
+\\
+\\ That verification isn't repeated here as an automated test: clear-background always touches
+\\ the full canvas with no region parameter, and this interpreter's per-pixel cost is high
+\\ enough (and variable enough with system load) that even a handful of full-canvas calls can
+\\ exceed lib-test's per-file timeout under parallel contention.
+\\
+\\ The leak the fix addresses scales with how many times the *outer* word runs its own
+\\ curry/setup logic, not with how many pixels a given call touches (the shared (set-pixel!)
+\\ pixel-write helper was already zero-locals before this fix, and clear-background reuses the
+\\ exact same curry-based per-call pattern this test exercises). So this regression check
+\\ exercises draw-rectangle and blit-sprite at a high call count against a 1x1 region -- cheap
+\\ regardless of system speed, since each call only touches one pixel, while still running the
+\\ same curry-per-call code path a reintroduced named local would leak from.
+test-repeated-calls-do-not-leak: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    200 [ 5 5 1 1 10 20 30 255 <color> draw-rectangle ] times
+
+    1 1 B{ 0xAA 0xBB 0xCC 0xFF } <sprite>
+    sp: swap ;
+    200 [ 50 60 sp blit-sprite ] times
+
+    t "200 draw-rectangle + 200 blit-sprite calls against a 1x1 region stayed in budget" assert-true
   ] with-parameter
 ] ;

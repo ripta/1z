@@ -90,42 +90,63 @@ private{
 
 draw-pixel: ( x y color -- ) [ (color>packed) (set-pixel!) ] ;
 
+\\ Fill the entire framebuffer with one color.
+\\
+\\ Zero name: swap ; locals: the packed color is curried directly into the per-pixel
+\\ quotation instead of being bound to a local. clear-background, draw-rectangle, and
+\\ blit-sprite are called once per rendered frame over a real gameplay session, so a
+\\ named local here leaks memory in proportion to call count -- see the workaround note
+\\ on (set-pixel!) above.
 clear-background: ( color -- ) [
   (color>packed)
-  cp: swap ;
-  framebuffer-width framebuffer-height * iota >iterator [
-    fi: swap ;
-    fi framebuffer-width % fi framebuffer-width div cp (set-pixel!)
-  ] #each
+  [ swap dup framebuffer-width % [ framebuffer-width div ] dip -rot> swap (set-pixel!) ] curry
+  framebuffer-width framebuffer-height * iota >iterator
+  swap #each
 ] ;
 
+\\ Fill an axis-aligned rectangle. width/height must be non-negative.
+\\
+\\ Zero name: swap ; locals: x, y, width, and the packed color are curried into the
+\\ per-pixel quotation, and the validation reads width/height with non-destructive
+\\ pick-n peeks instead of binding them.
 draw-rectangle: ( x y width height color -- ) [
   (color>packed)
-  rp: swap ;
-  rh: swap ;
-  rw: swap ;
-  ry: swap ;
-  rx: swap ;
-  rw 0 >= rh 0 >= and
+  1 pick-n 0 >= 3 pick-n 0 >= and
   not [ f "draw-rectangle requires non-negative width and height" EInvalidArgument make-error throw ] when
-  rw rh * iota >iterator [
-    ri: swap ;
-    rx ri rw % + ry ri rw div + rp (set-pixel!)
-  ] #each
+
+  [ [ dup ] dip * [ -rot> ] dip ] dip
+  swap
+  [
+    [ [ 2dup div [ % ] dip ] 3dip [ [ swap ] dip [ + ] 2dip + ] dip (set-pixel!) ]
+    curry curry curry curry
+  ] dip
+  swap
+  [ iota >iterator ] dip
+  #each
 ] ;
 
 \\ Copy a sprite's RGBA8888 pixels into current-framebuffer at (x, y). An opaque copy: alpha is
 \\ carried through as-is, with no blending against the destination.
+\\
+\\ Zero name: swap ; locals: x, y, and the sprite are curried into the per-pixel quotation.
 blit-sprite: ( x y sprite -- ) [
-  bs: swap ;
-  by: swap ;
-  bx: swap ;
-  bs width>> bs height>> * iota >iterator [
-    bi: swap ;
-    bs pixels>> bi framebuffer-bytes-per-pixel * #peek32
-    bp: swap ;
-    bx bi bs width>> % + by bi bs width>> div + bp (set-pixel!)
-  ] #each
+  dup dup width>> [ height>> ] dip [ pixels>> ] 2dip
+  dup [ * ] dip
+  swap
+  [ swap [ swap ] dip [ swap ] 2dip ] dip
+  [
+    [
+      [ [ dup ] dip 2dup div [ % ] dip ] 3dip
+      [ [ swap ] dip [ + ] 2dip + ] dip
+      [ swap ] 2dip [ swap ] dip swap
+      framebuffer-bytes-per-pixel * #peek32
+      (set-pixel!)
+    ]
+    curry curry curry curry
+  ] dip
+  swap
+  [ iota >iterator ] dip
+  #each
 ] ;
 
 \\ Draw one character's glyph at (x, y). Characters outside the font's covered range

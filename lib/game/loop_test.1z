@@ -1,0 +1,109 @@
+\ Unit tests for lib/game/loop.1z.
+\
+\ present-frame only exists under the real wasm C-API root (src/capi_wasm.zig). This file
+\ stubs it as a no-op before loading game/loop, so run-frame's call to it resolves on the
+\ hosted interpreter too -- the same shape draw_test.1z already uses for current-framebuffer.
+\
+\ fake-clock/advance-clock require a task-scope, so every test that drives run-frame wraps
+\ its body in one, matching tests/integration/fake_clock.1z. Each test defines its own
+\ init/update/draw stub quotations inline (some repetition across tests) rather than sharing
+\ them through a helper word: a quotation literal's captured-scope resolution is memoized per
+\ literal, keyed by its own instruction pointer, so the same helper-defined literal reused
+\ across separate test invocations resolves a stale capture on the second call.
+
+use "testing" ;
+use "time" ;
+
+present-frame: ( -- ) [ ] ;
+use "game/loop" ;
+
+private{
+  counter: mutable struct{ init-n update-n last-tick draw-n } ;
+  (counter): ( -- counter ) [ 0 0 0 0 make-counter ] ;
+}
+
+test-init-runs-once-before-first-frame: ( -- ) [
+  [
+    fake-clock
+    c: (counter) ;
+    [ c dup init-n>> 1 + >>init-n drop ]
+    [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
+    [ c dup draw-n>> 1 + >>draw-n drop ]
+    start-game
+    c init-n>> 1 "init fires exactly once, synchronously" assert=
+    c update-n>> 0 "update has not fired before the first run-frame" assert=
+  ] task-scope
+] ;
+
+test-one-interval-fires-one-update-and-one-draw: ( -- ) [
+  [
+    fake-clock
+    c: (counter) ;
+    [ c dup init-n>> 1 + >>init-n drop ]
+    [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
+    [ c dup draw-n>> 1 + >>draw-n drop ]
+    start-game
+
+    update-interval-nanos nanoseconds advance-clock
+    run-frame
+    c update-n>> 1 "one interval fires exactly one update" assert=
+    c last-tick>> 1 "the update receives tick 1" assert=
+    c draw-n>> 1 "draw fires once" assert=
+  ] task-scope
+] ;
+
+test-sub-interval-advance-fires-no-update: ( -- ) [
+  [
+    fake-clock
+    c: (counter) ;
+    [ c dup init-n>> 1 + >>init-n drop ]
+    [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
+    [ c dup draw-n>> 1 + >>draw-n drop ]
+    start-game
+
+    update-interval-nanos 2 div nanoseconds advance-clock
+    run-frame
+    c update-n>> 0 "less than one interval fires no update" assert=
+    c draw-n>> 1 "draw still fires every run-frame call" assert=
+  ] task-scope
+] ;
+
+test-catchup-caps-and-drops-remainder: ( -- ) [
+  [
+    fake-clock
+    c: (counter) ;
+    [ c dup init-n>> 1 + >>init-n drop ]
+    [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
+    [ c dup draw-n>> 1 + >>draw-n drop ]
+    start-game
+
+    update-interval-nanos 100 * nanoseconds advance-clock
+    run-frame
+    c update-n>> max-catchup-steps "catch-up runs at most max-catchup-steps updates" assert=
+    c draw-n>> 1 "draw still fires exactly once regardless of catch-up count" assert=
+
+    run-frame
+    c update-n>> max-catchup-steps "dropped remainder triggers no further catch-up" assert=
+    c draw-n>> 2 "draw fires again on the next call" assert=
+  ] task-scope
+] ;
+
+test-many-repeated-frames-stay-correct: ( -- ) [
+  [
+    fake-clock
+    c: (counter) ;
+    [ c dup init-n>> 1 + >>init-n drop ]
+    [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
+    [ c dup draw-n>> 1 + >>draw-n drop ]
+    start-game
+
+    2000 [
+      update-interval-nanos nanoseconds advance-clock
+      run-frame
+    ] times
+
+    c update-n>> 2000 "2000 one-interval frames fire exactly 2000 updates" assert=
+    c last-tick>> 2000 "the tick counter lands on 2000" assert=
+    c draw-n>> 2000 "draw fires exactly once per frame across 2000 frames" assert=
+  ] task-scope
+] ;

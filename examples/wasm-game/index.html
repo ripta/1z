@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>1z WebAssembly Game Platform</title>
+<style>
+  body { font-family: ui-monospace, monospace; max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+  #stage { display: flex; justify-content: center; margin-top: 1rem; background: #000; }
+  canvas { image-rendering: pixelated; image-rendering: crisp-edges; }
+  #status { color: #888; margin-top: 0.5rem; }
+  #status.error { color: #f88; }
+</style>
+</head>
+<body>
+<h1>1z WebAssembly Game Platform</h1>
+<p>The frame-loop smoke test: <code>start-game</code> registers <code>init</code>/<code>update</code>/<code>draw</code>,
+and a <code>requestAnimationFrame</code> driver calls <code>run-frame</code> once per real frame.</p>
+<div id="stage">
+  <canvas id="canvas" width="256" height="224"></canvas>
+</div>
+<p id="status">loading...</p>
+<script type="module" src="demo.js"></script>
+</body>
+</html>

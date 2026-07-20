@@ -1,0 +1,40 @@
+\ examples/wasm-game/demo-game.1z - Frame-loop smoke test: a square bouncing left/right,
+\ its position derived purely from the platform's own tick counter.
+
+use "game" ;
+
+private{
+  demo-state: mutable struct{ tick } ;
+  state: 0 make-demo-state ;
+
+  square-size:     ( -- n ) const [ 16 ] ;
+  travel-distance: ( -- n ) const [ framebuffer-width square-size - ] ;
+  wave-period:     ( -- n ) const [ travel-distance 2 * ] ;
+
+  \\ A triangle wave over [0, travel-distance], so the square bounces smoothly between the
+  \\ left and right edges of the canvas as tick advances.
+  square-x: ( tick -- x ) [
+    wave-period %
+    dup travel-distance >
+    [ wave-period swap - ]
+    when
+  ] ;
+
+  bg-color: ( -- color ) const [ 10 10 30 255 <color> ] ;
+  square-color: ( -- color ) const [ 80 220 120 255 <color> ] ;
+}
+
+demo-init: ( -- ) [ ] ;
+
+demo-update: ( tick -- ) [ state swap >>tick drop ] ;
+
+demo-draw: ( -- ) [
+  bg-color clear-background
+  state tick>> square-x
+  framebuffer-height square-size - 2 div
+  square-size square-size
+  square-color
+  draw-rectangle
+] ;
+
+[ demo-init ] [ demo-update ] [ demo-draw ] start-game

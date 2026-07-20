@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 SHELL := /bin/bash
 TARGET_TIMEOUT ?= 60
@@ -637,14 +637,18 @@ wasm-freestanding-build: ## Compile-check the wasm capi library for wasm32-frees
 	fi
 	@echo "PASS: lib1z.a built for wasm32-freestanding"
 
-wasm: ## Build the wasm32-freestanding browser REPL module and copy it into examples/wasm-repl/
+wasm: ## Build the wasm32-freestanding browser module and copy it into examples/wasm-repl/ and examples/wasm-game/
 	zig build wasm --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)
 	@if [ ! -f $(ZIG_PREFIX)/wasm/1z.wasm ]; then \
 		echo "FAIL: 1z.wasm was not produced"; \
 		exit 1; \
 	fi
 	cp $(ZIG_PREFIX)/wasm/1z.wasm examples/wasm-repl/1z.wasm
-	@echo "PASS: 1z.wasm built and copied into examples/wasm-repl/"
+	cp $(ZIG_PREFIX)/wasm/1z.wasm examples/wasm-game/1z.wasm
+	@echo "PASS: 1z.wasm built and copied into examples/wasm-repl/ and examples/wasm-game/"
+
+wasm-game-verify: wasm ## Headlessly verify the wasm game demo via Node (not part of make test)
+	node --test tests/wasm/verify-game-demo.mjs
 
 baremetal-riscv64-test: ## Build the riscv64 virt platform and AOT freestanding ELFs, then boot them under QEMU and compare serial output
 	timeout $(TARGET_TIMEOUT) zig build baremetal-riscv64-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)
