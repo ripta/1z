@@ -118,6 +118,11 @@ const OnezHandle = struct {
         .mode = .write,
         .name = output_parameter_name,
     },
+
+    /// Borrowed byte-array view over `framebuffer_buf`, constructed once at `onez_init` and
+    /// reused on every `(wasm-framebuffer)` call so repeated calls don't leak one small wrapper
+    /// allocation per call into the arena.
+    framebuffer_ba: ?*value_mod.ByteArray = null,
 };
 
 // wasm32-freestanding has no OS heap; every allocation is carved out of a static region sized by
@@ -199,6 +204,19 @@ export fn onez_init() ?*anyopaque {
         return null;
     };
     capi_core.defineHostWord(ctx, "present-frame", present_frame_effect, presentFrameCallback, null, null) catch {
+        onez_deinit(handle);
+        return null;
+    };
+
+    handle.framebuffer_ba = value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), &framebuffer_buf) catch {
+        onez_deinit(handle);
+        return null;
+    };
+    const framebuffer_bytes_effect = helpers.makeSimpleEffect(ctx.quotationAllocator(), "-- byte-array") catch {
+        onez_deinit(handle);
+        return null;
+    };
+    capi_core.defineHostWord(ctx, "(wasm-framebuffer)", framebuffer_bytes_effect, framebufferBytesCallback, handle, null) catch {
         onez_deinit(handle);
         return null;
     };
@@ -372,6 +390,21 @@ export fn onez_wasm_framebuffer_ptr() [*]u8 {
 
 export fn onez_wasm_framebuffer_len() usize {
     return framebuffer_len;
+}
+
+/// The host callback body for `(wasm-framebuffer)`.
+///
+/// Pushes the cached borrowed byte-array view over `framebuffer_buf`. `Stack.push` retains on
+/// every call. Repeated calls correctly share one underlying buffer instead of allocating a
+/// new wrapper each time.
+fn framebufferBytesCallback(handle_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
+    const handle = castHandle(handle_ptr) orelse return 1;
+    const ba = handle.framebuffer_ba orelse return 1;
+    handle.ctx.stack.push(.{ .byte_array = ba }) catch {
+        setLastError(handle, "allocation failure pushing framebuffer byte-array", .{});
+        return 1;
+    };
+    return 0;
 }
 
 export fn onez_push_int(ptr: ?*anyopaque, value: i64) c_int {
@@ -829,6 +862,37 @@ test "present-frame fills the buffer and signals ready" {
     for (ptr[0..len], 0..) |byte, i| {
         try std.testing.expectEqual(@as(u8, @truncate(i)), byte);
     }
+}
+
+test "(wasm-framebuffer) exposes a mutable byte-array view over framebuffer_buf" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const ptr = onez_wasm_framebuffer_ptr();
+    @memset(ptr[0..onez_wasm_framebuffer_len()], 0);
+
+    const src = "(wasm-framebuffer) 0 0x11223344 4 #poke!";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+
+    // #poke32! writes least-significant byte first: 0x44, 0x33, 0x22, 0x11.
+    try std.testing.expectEqual(@as(u8, 0x44), ptr[0]);
+    try std.testing.expectEqual(@as(u8, 0x33), ptr[1]);
+    try std.testing.expectEqual(@as(u8, 0x22), ptr[2]);
+    try std.testing.expectEqual(@as(u8, 0x11), ptr[3]);
+}
+
+test "(wasm-framebuffer) returns the same shared buffer across calls" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const src = "(wasm-framebuffer) 0 7 1 #poke! drop (wasm-framebuffer) 0 1 #peek";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 7), out);
 }
 
 test "registered host word is invoked via dictionary lookup" {

@@ -1,0 +1,179 @@
+\ lib/game/draw.1z - Drawing words over the browser game platform's framebuffer
+\
+\ The host provides one drawing primitive: present a linear memory buffer to the canvas. Every
+\ actual drawing operation here -- pixels, rectangles, sprites, text -- is composed in 1z over
+\ that single buffer. The native `(wasm-framebuffer)` word (src/capi_wasm.zig) is the only
+\ Zig-level piece: a borrowed, mutable byte-array view over the wasm-owned framebuffer memory.
+\
+\ Two interpreter limitations shape the loop bodies below. A word with named `name: swap ;`
+\ locals leaks memory when called tens of thousands of times, so the per-pixel (set-pixel!)
+\ helper uses none. An inner #each quotation sees a stale snapshot of an outer #each's
+\ per-iteration local, so every pixel-covering loop here is a single flat #each (row/column
+\ derived via div/%) rather than nested #eachs.
+
+use "ranges" ;
+use "sequences" ;
+use "bytes" ;
+use "game/font" ;
+
+framebuffer-width:           256 ;
+framebuffer-height:          224 ;
+framebuffer-bytes-per-pixel: 4 ;
+
+\\ The byte-array every drawing word writes into. Defaults to the real wasm framebuffer; tests
+\\ (and any non-wasm caller) rebind it to a scratch buffer via with-parameter, since
+\\ (wasm-framebuffer) only exists under the wasm C-API root.
+current-framebuffer: parameter{ [ (wasm-framebuffer) ] } ;
+
+color: struct{ r: fixnum g: fixnum b: fixnum a: fixnum } ;
+sprite: struct{ width: fixnum height: fixnum pixels: byte-array } ;
+
+private{
+  (byte-range?): ( n -- ? ) [ dup 0 >= swap 255 <= and ] ;
+}
+
+\\ Validate r/g/b/a are each in [0, 255] and construct a color.
+<color>: ( r g b a -- color ) [
+  ca: swap ;
+  cb: swap ;
+  cg: swap ;
+  cr: swap ;
+  cr (byte-range?) cg (byte-range?) and cb (byte-range?) and ca (byte-range?) and
+  not [ f "<color> components must be in [0, 255]" EInvalidArgument make-error throw ] when
+  cr cg cb ca make-color
+] ;
+
+\\ Validate width/height are non-negative and pixels' length matches width * height * 4
+\\ (RGBA8888, the same layout the framebuffer uses), then construct a sprite.
+<sprite>: ( width height pixels -- sprite ) [
+  sp: swap ;
+  sh: swap ;
+  sw: swap ;
+  sw 0 >= sh 0 >= and sp #len sw sh * framebuffer-bytes-per-pixel * = and
+  not [ f "<sprite> requires non-negative width/height and pixels length == width * height * 4" EInvalidArgument make-error throw ] when
+  sw sh sp make-sprite
+] ;
+
+private{
+  \\ Pack a color's r/g/b/a components into one framebuffer-native fixnum. Little-endian
+  \\ RGBA8888: r lands in the lowest byte, matching #poke32!'s least-significant-byte-first
+  \\ write order, so r/g/b/a end up in that order in memory.
+  (color>packed): ( color -- packed ) [
+    pc: swap ;
+    pc r>> pc g>> 8 shift-left bitor pc b>> 16 shift-left bitor pc a>> 24 shift-left bitor
+  ] ;
+
+  \\ Write one packed RGBA8888 pixel into current-framebuffer at (x, y), silently clipped if
+  \\ outside the canvas -- the standard convention for a 2D framebuffer API.
+  \\
+  \\ No name: swap ; locals at all: x and y are threaded through via dup/over/swap under dip,
+  \\ and the offset-or-invalid result is rearranged with rot-n> instead of naming it. This word
+  \\ is called once per pixel, up to tens of thousands of times per draw call.
+  (set-pixel!): ( x y packed -- ) [
+    [
+      dup 0 >= over framebuffer-height < and
+      [
+        framebuffer-width *
+        swap
+        dup 0 >= over framebuffer-width < and
+        [ + framebuffer-bytes-per-pixel * ] [ drop drop -1 ] if
+      ] [ drop drop -1 ] if
+    ] dip
+    over 0 >=
+    [
+      current-framebuffer get
+      2 rot-n>
+      #poke32! drop
+    ] [ drop drop ] if
+  ] ;
+}
+
+draw-pixel: ( x y color -- ) [ (color>packed) (set-pixel!) ] ;
+
+clear-background: ( color -- ) [
+  (color>packed)
+  cp: swap ;
+  framebuffer-width framebuffer-height * iota >iterator [
+    fi: swap ;
+    fi framebuffer-width % fi framebuffer-width div cp (set-pixel!)
+  ] #each
+] ;
+
+draw-rectangle: ( x y width height color -- ) [
+  (color>packed)
+  rp: swap ;
+  rh: swap ;
+  rw: swap ;
+  ry: swap ;
+  rx: swap ;
+  rw 0 >= rh 0 >= and
+  not [ f "draw-rectangle requires non-negative width and height" EInvalidArgument make-error throw ] when
+  rw rh * iota >iterator [
+    ri: swap ;
+    rx ri rw % + ry ri rw div + rp (set-pixel!)
+  ] #each
+] ;
+
+\\ Copy a sprite's RGBA8888 pixels into current-framebuffer at (x, y). An opaque copy: alpha is
+\\ carried through as-is, with no blending against the destination.
+blit-sprite: ( x y sprite -- ) [
+  bs: swap ;
+  by: swap ;
+  bx: swap ;
+  bs width>> bs height>> * iota >iterator [
+    bi: swap ;
+    bs pixels>> bi framebuffer-bytes-per-pixel * #peek32
+    bp: swap ;
+    bx bi bs width>> % + by bi bs width>> div + bp (set-pixel!)
+  ] #each
+] ;
+
+\\ Draw one character's glyph at (x, y). Characters outside the font's covered range
+\\ (0x20-0x7E) are silently skipped. Background pixels (unset glyph bits) are transparent --
+\\ not drawn in any background color.
+draw-char: ( x y ch color -- ) [
+  (color>packed)
+  dp:  swap ;
+  dch: swap ;
+  dy:  swap ;
+  dx:  swap ;
+  dch >codepoint (font-glyph-offset)
+  dup f =
+  [
+    drop
+  ] [
+    doff: swap ;
+    font-cell-size font-cell-size * iota >iterator [
+      di: swap ;
+      font-glyph-bytes doff di font-cell-size div + #peek8
+      di font-cell-size % shift-right 1 bitand
+      bit: swap ;
+      \ An unset bit steers (set-pixel!) to (-1, -1), which its own bounds check clips as a
+      \ no-op, rather than branching on `bit`.
+      \
+      \ An inner [ ... ] when/if quotation referencing di (or anything derived from it) here
+      \ would see a stale, first-iteration-only snapshot of di instead of the current one.
+      dx di font-cell-size % + 1 + bit * 1 -
+      dy di font-cell-size div + 1 + bit * 1 -
+      dp
+      (set-pixel!)
+    ] #each
+  ] if
+] ;
+
+\\ Draw a string starting at (x, y), advancing by font-cell-size pixels per character.
+\\ Characters outside the font's covered range are silently skipped (via draw-char).
+draw-text: ( x y str color -- ) [
+  tc: swap ;
+  ts: swap ;
+  ty: swap ;
+  tx: swap ;
+  ts #len iota >iterator [
+    ti: swap ;
+    tx ti font-cell-size * +
+    ty
+    ts ti #nth
+    tc
+    draw-char
+  ] #each
+] ;

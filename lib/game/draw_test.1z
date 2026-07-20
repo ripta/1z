@@ -1,0 +1,148 @@
+\ Unit tests for lib/game/draw.1z.
+\
+\ Call budget: local-frame bookkeeping leaks memory cumulatively across every call to a word
+\ with a name: swap ; local, growing with local count and repeated invocations.
+\ clear-background alone (57344 pixels) is called at most once per test here, and never used as
+\ generic setup for other tests -- each other test reads a fresh bytes-alloc'd (zero-initialized)
+\ buffer directly instead. draw-rectangle/blit-sprite clipping tests use modest overshoot, not a
+\ full-canvas-covering rectangle, to keep the cumulative call count low.
+
+use "testing" ;
+use "game/draw" ;
+
+private{
+  (scratch-framebuffer): ( -- byte-array ) [ 256 224 4 * * bytes-alloc ] ;
+}
+
+test-color-valid: ( -- ) [
+  10 20 30 255 <color> r>> 10 "<color> stores r" assert=
+] ;
+
+test-color-rejects-out-of-range-component: ( -- ) [
+  [ 300 0 0 255 <color> ] invalid-argument: "<color> rejects r > 255" assert-error-type
+  [ 0 -1 0 255 <color> ] invalid-argument: "<color> rejects negative g" assert-error-type
+] ;
+
+test-sprite-valid: ( -- ) [
+  2 2 B{ 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 } <sprite>
+  width>> 2 "<sprite> stores width" assert=
+] ;
+
+test-sprite-rejects-wrong-pixel-length: ( -- ) [
+  [ 2 2 B{ 0x01 } <sprite> ] invalid-argument: "<sprite> rejects a too-short pixels array" assert-error-type
+] ;
+
+test-sprite-rejects-negative-dimensions: ( -- ) [
+  [ -2 -2 B{ 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 } <sprite> ]
+  invalid-argument: "<sprite> rejects negative width/height even when width * height * 4 coincidentally matches" assert-error-type
+] ;
+
+test-draw-pixel-writes-packed-rgba: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    10 20 200 100 50 255 <color> draw-pixel
+    current-framebuffer get 20 256 * 10 + 4 * 4 #peek 4281492680
+    "draw-pixel writes the packed little-endian RGBA8888 value" assert=
+  ] with-parameter
+] ;
+
+test-draw-pixel-out-of-bounds-does-not-throw: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    -5 20 200 100 50 255 <color> draw-pixel
+    300 20 200 100 50 255 <color> draw-pixel
+    10 -5 200 100 50 255 <color> draw-pixel
+    10 300 200 100 50 255 <color> draw-pixel
+    t "reaching here means none of the out-of-bounds draws threw" assert-true
+  ] with-parameter
+] ;
+
+test-clear-background-fills-every-corner-and-center: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    10 20 30 255 <color> clear-background
+    current-framebuffer get 0 4 #peek 4280161290 "top-left corner filled" assert=
+    current-framebuffer get 255 4 * 4 #peek 4280161290 "top-right corner filled" assert=
+    current-framebuffer get 223 256 * 4 * 4 #peek 4280161290 "bottom-left corner filled" assert=
+    current-framebuffer get 223 256 * 255 + 4 * 4 #peek 4280161290 "bottom-right corner filled" assert=
+    current-framebuffer get 150 256 * 100 + 4 * 4 #peek 4280161290 "an interior pixel is filled" assert=
+  ] with-parameter
+] ;
+
+test-draw-rectangle-fills-only-its-bounds: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    5 5 3 3 10 20 30 255 <color> draw-rectangle
+    current-framebuffer get 5 256 * 5 + 4 * 4 #peek 4280161290 "top-left of the rect is filled" assert=
+    current-framebuffer get 5 256 * 7 + 4 * 4 #peek 4280161290 "right edge (inclusive) of the rect is filled" assert=
+    current-framebuffer get 7 256 * 5 + 4 * 4 #peek 4280161290 "bottom edge (inclusive) of the rect is filled" assert=
+    current-framebuffer get 4 256 * 5 + 4 * 4 #peek 0 "just left of the rect is untouched" assert=
+    current-framebuffer get 5 256 * 4 + 4 * 4 #peek 0 "just above the rect is untouched" assert=
+    current-framebuffer get 8 256 * 5 + 4 * 4 #peek 0 "just below the rect is untouched" assert=
+  ] with-parameter
+] ;
+
+test-draw-rectangle-rejects-negative-dimensions: ( -- ) [
+  [ 5 5 -3 -3 10 20 30 255 <color> draw-rectangle ]
+  invalid-argument: "draw-rectangle rejects negative width/height" assert-error-type
+] ;
+
+test-draw-rectangle-clips-without-throwing: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    250 218 20 20 200 0 0 255 <color> draw-rectangle
+    current-framebuffer get 223 256 * 255 + 4 * 4 #peek 4278190280
+    "reaching here with the in-bounds corner drawn means the overshoot was clipped, not an error" assert=
+  ] with-parameter
+] ;
+
+test-blit-sprite-copies-pixels-opaquely: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    50 60
+    2 2 B{ 0xAA 0xBB 0xCC 0xFF 0x11 0x22 0x33 0x44 0x55 0x66 0x77 0x88 0x99 0x00 0x11 0x22 } <sprite>
+    blit-sprite
+    current-framebuffer get 60 256 * 50 + 4 * 4 #peek 0xFFCCBBAA "top-left sprite pixel copied" assert=
+    current-framebuffer get 60 256 * 51 + 4 * 4 #peek 0x44332211 "top-right sprite pixel copied" assert=
+    current-framebuffer get 61 256 * 50 + 4 * 4 #peek 0x88776655 "bottom-left sprite pixel copied" assert=
+    current-framebuffer get 61 256 * 51 + 4 * 4 #peek 0x22110099 "bottom-right sprite pixel copied" assert=
+  ] with-parameter
+] ;
+
+test-blit-sprite-clips-without-throwing: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    254 222
+    2 2 B{ 0xAA 0xBB 0xCC 0xFF 0x11 0x22 0x33 0x44 0x55 0x66 0x77 0x88 0x99 0x00 0x11 0x22 } <sprite>
+    blit-sprite
+    current-framebuffer get 222 256 * 254 + 4 * 4 #peek 0xFFCCBBAA
+    "reaching here with the in-bounds sprite pixel drawn means the overhang was clipped, not an error" assert=
+  ] with-parameter
+] ;
+
+test-draw-char-lights-up-a-known-pixel: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    \ 'A' row 0 is 0x0C = 0b00001100: columns 2 and 3 are lit.
+    10 10 "A" 255 255 255 255 <color> draw-char
+    current-framebuffer get 10 256 * 12 + 4 * 4 #peek 0xFFFFFFFF "'A' row 0 col 2 is lit" assert=
+    current-framebuffer get 10 256 * 11 + 4 * 4 #peek 0 "'A' row 0 col 1 is unlit" assert=
+  ] with-parameter
+] ;
+
+test-draw-char-skips-uncovered-codepoint: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    10 10 1 >char 255 255 255 255 <color> draw-char
+    t "a codepoint outside 0x20-0x7E is silently skipped, not an error" assert-true
+  ] with-parameter
+] ;
+
+test-draw-text-advances-by-cell-size: ( -- ) [
+  (scratch-framebuffer) current-framebuffer
+  [
+    10 10 "AA" 255 255 255 255 <color> draw-text
+    current-framebuffer get 10 256 * 12 + 4 * 4 #peek 0xFFFFFFFF "first 'A' row 0 col 2 is lit" assert=
+    current-framebuffer get 10 256 * 20 + 4 * 4 #peek 0xFFFFFFFF "second 'A' (advanced by 8px) row 0 col 2 is lit" assert=
+  ] with-parameter
+] ;

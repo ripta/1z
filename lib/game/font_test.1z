@@ -1,0 +1,42 @@
+\ Unit tests for lib/game/font.1z.
+
+use "testing" ;
+use "game/font" ;
+
+test-glyph-data-length: ( -- ) [
+  font-glyph-bytes #len 760 "95 covered glyphs at 8 bytes each" assert=
+] ;
+
+test-glyph-offset-first-covered: ( -- ) [
+  32 (font-glyph-offset) 0 "space (0x20) is the first glyph, at offset 0" assert=
+] ;
+
+test-glyph-offset-last-covered: ( -- ) [
+  126 (font-glyph-offset) 752 "~ (0x7E) is the last glyph, at offset (94 * 8)" assert=
+] ;
+
+test-glyph-offset-below-range: ( -- ) [
+  31 (font-glyph-offset) f "codepoint below 0x20 has no glyph" assert=
+] ;
+
+test-glyph-offset-above-range: ( -- ) [
+  127 (font-glyph-offset) f "codepoint above 0x7E has no glyph" assert=
+] ;
+
+\ '!' (0x21): rows pinned verbatim against ext/font8x8/font8x8_basic.h.
+test-glyph-bang-rows: ( -- ) [
+  font-glyph-bytes "!" >codepoint (font-glyph-offset) dup 8 + #slice
+  B{ 0x18 0x3C 0x3C 0x18 0x18 0x00 0x18 0x00 } "'!' glyph rows match the vendored source" assert=
+] ;
+
+\ 'A' (0x41): rows pinned verbatim against ext/font8x8/font8x8_basic.h.
+test-glyph-A-rows: ( -- ) [
+  font-glyph-bytes "A" >codepoint (font-glyph-offset) dup 8 + #slice
+  B{ 0x0C 0x1E 0x33 0x33 0x3F 0x33 0x33 0x00 } "'A' glyph rows match the vendored source" assert=
+] ;
+
+\ '0' (0x30): rows pinned verbatim against ext/font8x8/font8x8_basic.h.
+test-glyph-zero-rows: ( -- ) [
+  font-glyph-bytes "0" >codepoint (font-glyph-offset) dup 8 + #slice
+  B{ 0x3E 0x63 0x73 0x7B 0x6F 0x67 0x3E 0x00 } "'0' glyph rows match the vendored source" assert=
+] ;

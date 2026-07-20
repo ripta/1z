@@ -1,0 +1,3 @@
+\ lib/game.1z - Browser game platform bindings top-level re-export
+
+"game/draw" load reexport
