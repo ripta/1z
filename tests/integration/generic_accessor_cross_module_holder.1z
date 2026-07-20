@@ -1,0 +1,12 @@
+\ Companion module for generic_accessor_cross_module_dispatch.1z.
+\
+\ Defines a private struct with a `tick` field and stores/invokes a caller-supplied
+\ quotation, matching the handler/callback pattern (net/server, hooks, event loops)
+\ that triggers the bug this test guards against.
+
+private{
+  holder-state: mutable struct{ payload tick } ;
+}
+
+make-holder: ( q -- holder ) [ 0 make-holder-state ] ;
+run-stored: ( holder -- result ) [ payload>> call ] ;

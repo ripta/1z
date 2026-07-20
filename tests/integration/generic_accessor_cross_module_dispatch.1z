@@ -1,0 +1,25 @@
+\ Regression test: a generic struct-field accessor (FIELD>>) must dispatch correctly
+\ on its runtime argument's type even when a stored quotation referencing it is
+\ `call`ed from inside a different module that independently defines its own struct
+\ with the same field name.
+\
+\ Before the fix, `holder-state` (in the companion module, private) and `my-state`
+\ (here) each defined a `tick` field via `struct{`, and each mutually-invisible scope
+\ minted its own, independent `tick>>` generic word with its own dispatch table.
+\ `run-stored`'s own module-deps frame then shadowed the caller's `tick>>` while its
+\ stored quotation ran, and dispatch failed with "no method found" for `my-state`'s
+\ runtime type, even though it was never itself a `holder-state`.
+
+use "testing" ;
+use "./generic_accessor_cross_module_holder.1z" ;
+
+private{
+  my-state: mutable struct{ tick } ;
+  my-inst: 99 make-my-state ;
+}
+
+"generic accessor cross-module dispatch" test-section
+
+[ my-inst tick>> ] make-holder
+run-stored
+99 "tick>> on a foreign quotation dispatches to the caller's own struct type" assert=

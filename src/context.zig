@@ -596,6 +596,15 @@ pub const Context = struct {
     /// Keys borrow the image's static strings. Populated only on the context
     /// the loader runs on; reads walk the parent chain.
     aot_generic_dispatch_ids: std.StringHashMapUnmanaged(u32) = .{},
+    /// name -> dispatch_id for `struct{`-generated field getters, field setters, and hash
+    /// converters, independent of interpreter lexical scope. `struct{` may run in an unrelated
+    /// module or script scope each time a field of a given name is first seen, which would
+    /// otherwise mint a fresh, disjoint dispatch table per scope for the same generated name
+    /// (e.g. two unrelated structs each defining a `tick` field). This registry makes every
+    /// occurrence of a given generated name share one dispatch table program-wide, regardless of
+    /// which scope's `struct{` happened to define it first. Unrelated to `aot_generic_dispatch_ids`
+    /// above, which reconstitutes dispatch_ids lost to AOT image serialization.
+    generic_accessor_dispatch_ids: std.StringHashMapUnmanaged(u32) = .{},
     /// Set true when `aot_image_loader.loadIntoContext` has populated
     /// this context from an AOT runtime image. Gates the module-cache
     /// fallback in `lookupWordForExecution` so the fallback only fires
@@ -1306,6 +1315,7 @@ pub const Context = struct {
             }
         }
         self.aot_generic_dispatch_ids.deinit(self.allocator);
+        self.generic_accessor_dispatch_ids.deinit(self.allocator);
         for (self.parameter_env.items) |*frame| {
             self.deinitParameterFrame(frame);
         }
@@ -2227,6 +2237,23 @@ pub const Context = struct {
                 try self.dictionary.registerCompoundBody(instrs);
             },
             .native, .host_callback => {},
+        }
+    }
+
+    /// Overwrite the `dispatch_id` of an already-defined word in place, in the same scope
+    /// `defineWordLocked` just wrote to (the topmost local frame, or the dictionary when no frame
+    /// is active). `defineWordLocked` always mints a fresh monotonic id for a newly-defined word;
+    /// this lets a caller then force it onto a dispatch_id shared across scopes instead, e.g. a
+    /// `struct{`-generated field accessor that must dispatch through the same table as an
+    /// identically-named accessor a different, mutually-invisible scope already defined.
+    pub fn overrideWordDispatchId(self: *Context, name: []const u8, dispatch_id: u32) void {
+        self.acquireSharedWrite();
+        defer self.releaseSharedWrite();
+        if (self.local_frames.items.len > 0) {
+            const top = &self.local_frames.items[self.local_frames.items.len - 1];
+            if (top.getPtr(name)) |def| def.dispatch_id = dispatch_id;
+        } else if (self.dictionary.getPtr(name)) |def| {
+            def.dispatch_id = dispatch_id;
         }
     }
 

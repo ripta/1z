@@ -1,0 +1,7 @@
+Stack: [ ]
+=== generic accessor cross-module dispatch ===
+Stack: [ ]
+Stack: [ holder-state{ payload: [ my-inst tick>> ] tick: 0 } ]
+Stack: [ 99 ]
+PASS: tick>> on a foreign quotation dispatches to the caller's own struct type
+Stack: [ ]
