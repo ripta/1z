@@ -32,6 +32,7 @@ const imports = {
     onez_host_write_output: (ptr, len) => {
       appendOutput(new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len)))
     },
+    onez_host_present: () => {},
   },
 }
 

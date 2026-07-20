@@ -193,6 +193,16 @@ export fn onez_init() ?*anyopaque {
     };
     handle.* = .{ .allocator = alloc, .gpa = root.gpa, .ctx = ctx };
     handle.output_stream.impl = handle;
+
+    const present_frame_effect = helpers.makeSimpleEffect(ctx.quotationAllocator(), "--") catch {
+        onez_deinit(handle);
+        return null;
+    };
+    capi_core.defineHostWord(ctx, "present-frame", present_frame_effect, presentFrameCallback, null, null) catch {
+        onez_deinit(handle);
+        return null;
+    };
+
     return handle;
 }
 
@@ -319,6 +329,49 @@ export fn onez_wasm_input_ptr() [*]u8 {
 
 export fn onez_wasm_input_capacity() usize {
     return eval_input_capacity;
+}
+
+// =============================================================================
+// Framebuffer presentation
+// =============================================================================
+
+/// Host-provided buffer is ready signal.
+///
+/// Resolved by the browser's `WebAssembly.instantiate()` import object. Takes no arguments and
+/// returns nothing.
+///
+/// Pixel data is never marshalled through call arguments, since JS reads it directly out of wasm
+/// linear memory at the cached framebuffer pointer.
+extern "env" fn onez_host_present() void;
+
+/// `present-frame`'s host_callback body.
+///
+/// Guarded on `is_freestanding`, since this file also compiles natively for `capi-test`, where no
+/// env host exists to resolve the extern against at link time.
+fn presentFrameCallback(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
+    if (is_freestanding) onez_host_present();
+    return 0;
+}
+
+// The game platform's framebufferi, which s a single 1z-owned static RGBA8888 buffer in wasm linear
+// memory, row-major, top-left origin, and y-down.
+//
+// JS queries its pointer and length once via the exported getters below and caches them.
+//
+// There is no double buffering. The synchronous single-threaded wasm call model guarantees `draw`
+// always completes before control returns to JS.
+const framebuffer_width: usize = 256;
+const framebuffer_height: usize = 224;
+const framebuffer_bytes_per_pixel: usize = 4;
+const framebuffer_len: usize = framebuffer_width * framebuffer_height * framebuffer_bytes_per_pixel;
+var framebuffer_buf: [framebuffer_len]u8 = [_]u8{0} ** framebuffer_len;
+
+export fn onez_wasm_framebuffer_ptr() [*]u8 {
+    return &framebuffer_buf;
+}
+
+export fn onez_wasm_framebuffer_len() usize {
+    return framebuffer_len;
 }
 
 export fn onez_push_int(ptr: ?*anyopaque, value: i64) c_int {
@@ -721,13 +774,12 @@ test "output injection routes print through the host writer" {
     try std.testing.expectEqualStrings("hi", Sink.buf[0..Sink.len]);
 }
 
+// Only proves the wiring compiles and runs
 test "onez_wasm_use_host_output wires the host import trampoline" {
     const handle_ptr = onez_init();
     try std.testing.expect(handle_ptr != null);
     defer onez_deinit(handle_ptr);
 
-    // Only proves the wiring compiles and runs; real host-import delivery needs the actual wasm
-    // target, where JS supplies "env".onez_host_write_output.
     try std.testing.expectEqual(ONEZ_OK, onez_wasm_use_host_output(handle_ptr));
 
     const src = "\"hi\" print";
@@ -750,6 +802,33 @@ test "input buffer pointer and capacity round-trip through eval" {
     var out: i64 = 0;
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
     try std.testing.expectEqual(@as(i64, 3), out);
+}
+
+test "framebuffer pointer and length are exposed" {
+    const ptr = onez_wasm_framebuffer_ptr();
+    const len = onez_wasm_framebuffer_len();
+    try std.testing.expectEqual(@as(usize, 256 * 224 * 4), len);
+    try std.testing.expect(ptr[0..len].len == len);
+}
+
+test "present-frame fills the buffer and signals ready" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const ptr = onez_wasm_framebuffer_ptr();
+    const len = onez_wasm_framebuffer_len();
+    for (ptr[0..len], 0..) |*byte, i| byte.* = @truncate(i);
+
+    // Only proves the wiring compiles and runs, and that present-frame does not touch the
+    // buffer; real delivery to JS needs the actual wasm target, where JS supplies
+    // "env".onez_host_present.
+    const src = "present-frame";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+
+    for (ptr[0..len], 0..) |byte, i| {
+        try std.testing.expectEqual(@as(u8, @truncate(i)), byte);
+    }
 }
 
 test "registered host word is invoked via dictionary lookup" {
