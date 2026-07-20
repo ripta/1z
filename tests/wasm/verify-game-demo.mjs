@@ -5,9 +5,10 @@
 //
 // Run via `make wasm-game-verify` (builds the wasm artifact first). Not part of `make test`:
 // the "run-frame executes repeatedly without exhausting memory" case currently fails against
-// the real wasm build -- see
-// spec/bugs/20260720-wasm-fixedbufferallocator-repeated-call-exhaustion.md. The other cases
-// pass and guard against regressions in the parts that already work.
+// the real wasm build, not from memory exhaustion, but from a generic-accessor dispatch
+// collision: demo-game.1z's demo-state and lib/game/loop.1z's loop-state collide on a shared
+// `tick` field name. The other cases pass and guard against regressions in the parts that
+// already work.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -109,7 +110,7 @@ test('run-frame executes repeatedly without exhausting the wasm heap', async (t)
     if (status === ONEZ_EVAL_ERROR) {
       t.diagnostic(
         'run-frame failed on frame ' + frame + ': ' + onez.lastError() +
-        ' -- see spec/bugs/20260720-wasm-fixedbufferallocator-repeated-call-exhaustion.md'
+        ' -- known generic-accessor dispatch collision on the tick field name'
       )
     }
     assert.equal(status, ONEZ_EVAL_COMPLETE, () => 'run-frame failed on frame ' + frame + ': ' + onez.lastError())

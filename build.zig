@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
     const slow_test_threshold_ms: u64 = 1000;
     const bail_stats = b.option(bool, "bail-stats", "Enable bail frequency instrumentation (writes stats to stderr on exit)") orelse false;
     const embed_stdlib = b.option(bool, "embed-stdlib", "Embed lib/ stdlib source as a fallback module backing store") orelse false;
-    const freestanding_heap_mib = b.option(u32, "freestanding-heap-mib", "Static-region size for the freestanding allocator in MiB") orelse 16;
+    const freestanding_heap_mib = b.option(u32, "freestanding-heap-mib", "Static-region size for the bare-metal freestanding allocator in MiB (wasm targets use a real growable allocator instead)") orelse 16;
 
     const options = b.addOptions();
     options.addOption([]const u8, "version", version);

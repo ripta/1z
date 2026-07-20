@@ -1,14 +1,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 
 // This root is only ever selected as capi_root for a genuine wasm32-freestanding build
 // (build.zig's resolveBuildTarget); is_freestanding is true there.
 //
 // It is also compiled and run natively for `capi-test` so its logic gets a real test run, not
-// just a cross-compile check. That host-test path needs a real growable allocator instead of the
-// tiny static buffer the actual wasm target is limited to, since repeated onez_init calls across
-// many test cases would otherwise exhaust it.
+// just a cross-compile check. That host-test path uses its own per-call GeneralPurposeAllocator
+// (see acquireRootAllocator) rather than std.heap.wasm_allocator, which only compiles for a wasm
+// target, so it gets real leak diagnostics per test case instead of sharing one long-lived
+// allocator across the whole binary.
 const is_freestanding = builtin.os.tag == .freestanding;
 
 const context_mod = @import("context.zig");
@@ -102,7 +102,7 @@ const HostWordRegistration = struct {
 const OnezHandle = struct {
     allocator: std.mem.Allocator,
     /// Non-null only on the host-test path, where the GPA is a heap-allocated stateful object
-    /// that `onez_deinit` leak-checks and frees. The real wasm target's static-buffer allocator
+    /// that `onez_deinit` leak-checks and frees. The real wasm target's `std.heap.wasm_allocator`
     /// carries no such object.
     gpa: ?*HostGpa,
     ctx: *Context,
@@ -125,20 +125,20 @@ const OnezHandle = struct {
     framebuffer_ba: ?*value_mod.ByteArray = null,
 };
 
-// wasm32-freestanding has no OS heap; every allocation is carved out of a static region sized by
-// the existing `freestanding-heap-mib` build option, mirroring wasm_compile_probe.zig.
+// wasm32-freestanding has no OS heap, but it does have `std.heap.wasm_allocator`: a real
+// size-class free-list allocator built into Zig for exactly this target, growing the module's
+// linear memory via `@wasmMemoryGrow` on demand instead of a fixed-size static region. Its `free`
+// returns a block to its size class's free list for reuse by any later allocation, unlike
+// `FixedBufferAllocator`, whose `free` is a silent no-op unless the freed block happens to be the
+// most recent allocation. The interpreter's per-call module-deps-frame clone
+// (`Context.pushModuleDepsFrame`) allocates and frees a same-sized block on every call to a
+// module-defined word; that pattern is net-zero growth under a real free list but was an
+// unrecoverable per-call leak under the fixed-buffer allocator.
 //
 // The host-test path uses a fresh GeneralPurposeAllocator per onez_init call instead, mirroring
 // capi.zig's own hosted RootAllocator: a long-lived static allocator shared across every test case
-// in the binary would need to outlive individual onez_deinit calls to get leak diagnostics, and a
-// full Context.init is heavy enough that a fixed static buffer sized for one wasm page's lifetime
-// does not stretch across many sequential test cases in one process.
+// in the binary would need to outlive individual onez_deinit calls to get leak diagnostics.
 const HostGpa = std.heap.GeneralPurposeAllocator(.{});
-
-const heap_size: usize = @as(usize, build_options.freestanding_heap_mib) << 20;
-var heap_buf: [if (is_freestanding) heap_size else 0]u8 align(16) = undefined;
-var freestanding_fba: std.heap.FixedBufferAllocator = undefined;
-var freestanding_fba_inited = false;
 
 const RootAllocator = struct {
     allocator: std.mem.Allocator,
@@ -147,11 +147,7 @@ const RootAllocator = struct {
 
 fn acquireRootAllocator() ?RootAllocator {
     if (is_freestanding) {
-        if (!freestanding_fba_inited) {
-            freestanding_fba = std.heap.FixedBufferAllocator.init(&heap_buf);
-            freestanding_fba_inited = true;
-        }
-        return .{ .allocator = freestanding_fba.allocator(), .gpa = null };
+        return .{ .allocator = std.heap.wasm_allocator, .gpa = null };
     }
     const gpa = std.heap.page_allocator.create(HostGpa) catch return null;
     gpa.* = .{};
@@ -224,10 +220,10 @@ export fn onez_init() ?*anyopaque {
     return handle;
 }
 
-/// Tear down the interpreter. On the real wasm target the FixedBufferAllocator-backed heap is
-/// never freed -- the module either keeps running or the page unloads it -- so this only
-/// releases owning references that would otherwise report as leaked, matching the freestanding
-/// precedent in capi.zig.
+/// Tear down the interpreter. On the real wasm target the ctx/handle allocations themselves are
+/// never explicitly freed -- the module either keeps running or the page unloads it -- so this
+/// only releases owning references that would otherwise report as leaked, matching the
+/// freestanding precedent in capi.zig.
 ///
 /// The host-test path actually frees: each `onez_init` call there got its own heap-allocated GPA
 /// (`acquireRootAllocator`), so `.deinit()` here gives that one test case's leak diagnostics
@@ -335,9 +331,8 @@ export fn onez_wasm_eval(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int 
 // Staging buffer for onez_wasm_eval's code/len args.
 //
 // JS has no pointer of its own to write source bytes into, so it queries this once and reuses it.
-//
-// Static rather than alloc/free: this allocator is a FixedBufferAllocator, whose `free` only
-// reclaims the most recent allocation, so a freed scratch buffer would silently leak.
+// Static rather than alloc/free, so JS can cache the pointer for the module's whole lifetime
+// instead of re-querying it before every eval call.
 const eval_input_capacity: usize = 65536;
 var eval_input_buf: [eval_input_capacity]u8 = undefined;
 

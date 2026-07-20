@@ -1,5 +1,4 @@
 const std = @import("std");
-const build_options = @import("build_options");
 
 // Build-only root for the `wasm-clock-check` step (build.zig), which cross-compiles this file as
 // a static library for wasm32-freestanding to prove the interpreter no-libc porting work
@@ -36,14 +35,8 @@ export fn onez_wasm_compile_probe() void {
     mux.deinit();
 }
 
-// Fixed-size static heap for the probe Context, mirroring capi_freestanding.zig's own
-// FixedBufferAllocator setup: no mmap/OS allocator is available on this target.
-const probe_heap_size: usize = @as(usize, build_options.freestanding_heap_mib) << 20;
-var probe_heap_buf: [probe_heap_size]u8 align(16) = undefined;
-var probe_fba = std.heap.FixedBufferAllocator.init(&probe_heap_buf);
-
 export fn onez_wasm_context_probe() void {
-    var ctx = Context.init(probe_fba.allocator());
+    var ctx = Context.init(std.heap.wasm_allocator);
     defer ctx.deinit();
     ctx.loadPrelude(null) catch {};
 }
