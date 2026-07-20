@@ -58,6 +58,18 @@ pub const ONEZ_EVAL_ERROR: c_int = 2;
 /// (a browser console, a DOM node, ...) and returns the number of bytes it accepted.
 pub const WriterFn = *const fn (writer_ctx: ?*anyopaque, data: [*]const u8, len: usize) callconv(.c) usize;
 
+/// Host-provided output sink, resolved by the browser's `WebAssembly.instantiate()` import object.
+extern "env" fn onez_host_write_output(data: [*]const u8, len: usize) void;
+
+/// Trampoline satisfying `WriterFn` by forwarding to the host import. Guarded on `is_freestanding`
+/// since this file also compiles natively for `capi-test`, where no "env" host exists to resolve
+/// the extern against at link time; the comptime-known guard means the native build never emits
+/// a reference to it.
+fn hostOutputWrite(_: ?*anyopaque, data: [*]const u8, len: usize) callconv(.c) usize {
+    if (is_freestanding) onez_host_write_output(data, len);
+    return len;
+}
+
 const output_parameter_name = "output-stream";
 
 fn outputUnsupportedRead(_: *Stream, _: []u8, _: *Context) anyerror!usize {
@@ -248,6 +260,12 @@ export fn onez_wasm_init_output(ptr: ?*anyopaque, writer_ctx: ?*anyopaque, write
     return ONEZ_OK;
 }
 
+/// Convenience wrapper for the browser host: binds the static `onez_host_write_output` import as
+/// the output writer, so JS never has to construct a wasm-callable function pointer of its own.
+export fn onez_wasm_use_host_output(ptr: ?*anyopaque) c_int {
+    return onez_wasm_init_output(ptr, null, hostOutputWrite);
+}
+
 /// Parse and, if complete, execute one chunk of host-fed source. The host owns accumulation: on
 /// ONEZ_EVAL_NEEDS_MORE_INPUT it grows its buffer and calls again with the whole thing; on
 /// ONEZ_EVAL_COMPLETE or ONEZ_EVAL_ERROR it starts a fresh buffer for the next statement. A fresh
@@ -284,6 +302,23 @@ export fn onez_wasm_eval(ptr: ?*anyopaque, code: [*]const u8, len: usize) c_int 
         },
         .complete => ONEZ_EVAL_COMPLETE,
     };
+}
+
+// Staging buffer for onez_wasm_eval's code/len args.
+//
+// JS has no pointer of its own to write source bytes into, so it queries this once and reuses it.
+//
+// Static rather than alloc/free: this allocator is a FixedBufferAllocator, whose `free` only
+// reclaims the most recent allocation, so a freed scratch buffer would silently leak.
+const eval_input_capacity: usize = 65536;
+var eval_input_buf: [eval_input_capacity]u8 = undefined;
+
+export fn onez_wasm_input_ptr() [*]u8 {
+    return &eval_input_buf;
+}
+
+export fn onez_wasm_input_capacity() usize {
+    return eval_input_capacity;
 }
 
 export fn onez_push_int(ptr: ?*anyopaque, value: i64) c_int {
@@ -684,6 +719,37 @@ test "output injection routes print through the host writer" {
     try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
 
     try std.testing.expectEqualStrings("hi", Sink.buf[0..Sink.len]);
+}
+
+test "onez_wasm_use_host_output wires the host import trampoline" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    // Only proves the wiring compiles and runs; real host-import delivery needs the actual wasm
+    // target, where JS supplies "env".onez_host_write_output.
+    try std.testing.expectEqual(ONEZ_OK, onez_wasm_use_host_output(handle_ptr));
+
+    const src = "\"hi\" print";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+}
+
+test "input buffer pointer and capacity round-trip through eval" {
+    const ptr = onez_wasm_input_ptr();
+    const capacity = onez_wasm_input_capacity();
+    try std.testing.expectEqual(@as(usize, eval_input_capacity), capacity);
+
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const src = "1 2 +";
+    @memcpy(ptr[0..src.len], src);
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, ptr, src.len));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 3), out);
 }
 
 test "registered host word is invoked via dictionary lookup" {

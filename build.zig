@@ -494,6 +494,8 @@ pub fn build(b: *std.Build) void {
     // link and symbol-verify in the default test path.
     const baremetal_step = addBaremetalRiscv64VirtTest(b, exe, optimize, options, embedded_stdlib_path);
     aot_test_step.dependOn(baremetal_step);
+
+    _ = addWasmBuild(b, optimize, options);
 }
 
 const BuildTarget = struct {
@@ -733,6 +735,29 @@ fn addBaremetalRiscv64VirtTest(
     test_step.dependOn(&install_dispatch.step);
 
     return test_step;
+}
+
+// Resolves its own wasm32-freestanding target and always embeds the real stdlib, so `zig build
+// wasm` works standalone with no top-level flags.
+fn addWasmBuild(b: *std.Build, optimize: std.builtin.OptimizeMode, options: *std.Build.Step.Options) *std.Build.Step {
+    const wasm_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding });
+    const wasm_embedded_stdlib_path = generateEmbeddedStdlib(b, true);
+    const wasm_module = createCommonModule(b, wasm_target, optimize, options, b.path("src/capi_wasm.zig"), wasm_embedded_stdlib_path);
+
+    const wasm_exe = b.addExecutable(.{
+        .name = "1z",
+        .root_module = wasm_module,
+    });
+    wasm_exe.entry = .disabled;
+    wasm_exe.rdynamic = true;
+
+    const install_wasm = b.addInstallArtifact(wasm_exe, .{
+        .dest_dir = .{ .override = .{ .custom = "wasm" } },
+    });
+
+    const wasm_step = b.step("wasm", "Build the wasm32-freestanding browser REPL module");
+    wasm_step.dependOn(&install_wasm.step);
+    return wasm_step;
 }
 
 const baremetal_verify_script =

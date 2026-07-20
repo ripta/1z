@@ -1226,6 +1226,17 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .vector = new_vec });
         },
         .string => |s1| {
+            // Fast path: seq2 is already byte-compatible, so memcpy directly instead of
+            // expanding it into one boxed Value per byte via sequenceToValues below.
+            if (seq2 == .string or seq2 == .byte_array) {
+                const bytes2: []const u8 = if (seq2 == .string) seq2.string else seq2.byte_array.slice();
+                const result = alloc.alloc(u8, s1.len + bytes2.len) catch return error.OutOfMemory;
+                @memcpy(result[0..s1.len], s1);
+                @memcpy(result[s1.len..], bytes2);
+                try ctx.stack.push(.{ .string = result });
+                return;
+            }
+
             // For strings, convert seq2 elements to strings and concatenate
             // Accept both strings (codepoints) and integers 0-255 (single bytes)
             const items2 = try sequenceToValues(seq2, alloc);
@@ -1265,6 +1276,19 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .string = result });
         },
         .byte_array => |b1| {
+            // Fast path: seq2 is already byte-compatible, so memcpy directly instead of
+            // expanding it into one boxed Value per byte via sequenceToValues below.
+            if (seq2 == .string or seq2 == .byte_array) {
+                const bytes2: []const u8 = if (seq2 == .string) seq2.string else seq2.byte_array.slice();
+                const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
+                const bytes1 = b1.slice();
+                result_ba.ensureTotalCapacity(alloc, bytes1.len + bytes2.len) catch return error.OutOfMemory;
+                result_ba.appendSliceAssumeCapacity(bytes1);
+                result_ba.appendSliceAssumeCapacity(bytes2);
+                try ctx.stack.push(.{ .byte_array = result_ba });
+                return;
+            }
+
             // For byte arrays, accept integers 0-255 and strings (as UTF-8 bytes)
             const items2 = try sequenceToValues(seq2, alloc);
 
@@ -1288,9 +1312,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             const result_ba = ByteArray.create(alloc) catch return error.OutOfMemory;
             const bytes1 = b1.slice();
             result_ba.ensureTotalCapacity(alloc, bytes1.len + extra_len) catch return error.OutOfMemory;
-            for (bytes1) |byte| {
-                result_ba.appendAssumeCapacity(byte);
-            }
+            result_ba.appendSliceAssumeCapacity(bytes1);
             for (items2) |item| {
                 switch (item) {
                     .fixnum => |i| {

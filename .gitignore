@@ -4,3 +4,4 @@
 /docs/reference
 /zig-out
 *.aot
+*.wasm

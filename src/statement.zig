@@ -142,10 +142,25 @@ pub const StatementProcessor = struct {
 
     /// Freestanding-only sibling of handleCoroutineReturn: parses the accumulated buffer
     /// directly instead of resuming a suspended coroutine, producing the same three-way Result.
+    ///
+    /// Restores the stack to its pre-attempt depth on needs-more-input: a still-incomplete
+    /// parse-time word (e.g., `method{ ... } [`) can push before hitting incompleteness, and the
+    /// next feedLine call reparses from scratch, so an abandoned attempt's pushes must not persist.
+    /// Only rolls back when the attempt netted a growth: a parse-time word with full stack access
+    /// (e.g. `bind-until`) can also pop pre-existing values, and shrinking to a depth larger than
+    /// what's actually left would grow the stack's length past its populated slots.
     fn tryParseDirect(self: *StatementProcessor, allocator: Allocator, ctx: ?*Context) Result {
+        const stack_depth_before: ?usize = if (ctx) |c| c.stack.depth() else null;
         var tokenizer = Tokenizer.init(self.stmt_buf[0..self.stmt_len]);
         const instrs = parser.parseTopLevel(allocator, &tokenizer, ctx) catch |err| {
             if (parser.isIncompleteError(err)) {
+                if (ctx) |c| if (stack_depth_before) |before| {
+                    const after = c.stack.depth();
+                    if (after > before) {
+                        c.stack.releaseRange(before, after);
+                        c.stack.items.shrinkRetainingCapacity(before);
+                    }
+                };
                 return .needs_more_input;
             }
             return .{ .parse_error = err };

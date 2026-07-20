@@ -155,12 +155,12 @@ fn tryResolveLiteral(ctx: *Context, alloc: std.mem.Allocator, tokenizer: *tokeni
     }
 
     if (std.mem.eql(u8, token, "{")) {
-        const arr = parser.parseArray(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
+        const arr = try parser.parseArray(alloc, tokenizer, ctx, tok.line);
         return .{ .array = arr };
     }
 
     if (std.mem.eql(u8, token, "[")) {
-        const quot = parser.parseQuotation(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
+        const quot = try parser.parseQuotation(alloc, tokenizer, ctx, tok.line);
         return .{ .quotation = quot };
     }
 
@@ -183,7 +183,7 @@ pub fn nativeParseUntil(ctx: *Context) anyerror!void {
 
     const tokenizer = ctx.parse_tokenizer.?;
 
-    const quot = parser.parseQuotationUntil(ctx.quotationAllocator(), tokenizer, ctx, delimiter, 0) catch return error.OutOfMemory;
+    const quot = try parser.parseQuotationUntil(ctx.quotationAllocator(), tokenizer, ctx, delimiter, 0);
 
     try ctx.stack.push(.{ .quotation = quot });
 }
@@ -201,7 +201,7 @@ fn nativeBindUntil(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer.?;
     const alloc = ctx.quotationAllocator();
 
-    const quot = parser.parseQuotationUntil(alloc, tokenizer, ctx, delimiter, 0) catch return error.OutOfMemory;
+    const quot = try parser.parseQuotationUntil(alloc, tokenizer, ctx, delimiter, 0);
 
     // The body runs with full data-stack access, so permissive contents
     // (`choose`, `if`, arithmetic) work. Each value it leaves is one positional
@@ -333,13 +333,13 @@ pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
         }
 
         if (std.mem.eql(u8, token, "{")) {
-            const arr = parser.parseArray(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
+            const arr = try parser.parseArray(alloc, tokenizer, ctx, tok.line);
             try ctx.stack.push(.{ .array = arr });
             return;
         }
 
         if (std.mem.eql(u8, token, "[")) {
-            const quot = parser.parseQuotation(alloc, tokenizer, ctx, tok.line) catch return error.OutOfMemory;
+            const quot = try parser.parseQuotation(alloc, tokenizer, ctx, tok.line);
             try ctx.stack.push(.{ .quotation = quot });
             return;
         }

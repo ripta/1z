@@ -315,7 +315,10 @@ connection-request-count: parameter{ [ f ] } ;
 ] ;
 
 \\ Write a complete HTTP response to a stream.
-\\ Builds the full response as a single string and writes it in one call.
+\\ Builds the full response as a single string and writes it in one call, looping via
+\\ `stream-write(exact)` so a body larger than one socket write is still sent in full.
+\\ `stream-write(exact)` swallows a write error into a short count rather than throwing, so a
+\\ short write here forces the connection closed instead of letting the loop reuse a dead stream.
 \\ The emitted Connection header reflects the loop's disposition cell: a handler
 \\ forces close via `disable-keep-alive` or a response `Connection: close` header.
 \\ Outside the server the cell is unbound, so the default is close.
@@ -330,7 +333,10 @@ send-response: ( stream response -- ) [
   over headers>> format-response-headers #append
   "\r\n" #append
   swap body>> #append
-  stream-write drop
+  \ #len on a string counts UTF-8 codepoints; the response can carry an arbitrary-bytes body
+  \ (e.g. a compiled binary), so convert to a byte-array first to get the true wire length.
+  >bytes dup #len [ stream-write(exact) ] dip
+  < [ disable-keep-alive ] when
 ] ;
 
 \\ Construct an HTTP response with a single Content-Type header.
