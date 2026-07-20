@@ -1,0 +1,4 @@
+\ An unresolved type name in a stack-effect annotation must raise a diagnostic
+\ at definition time rather than silently dropping the annotation.
+apply-bogus: ( x quot: ( n: nosuchtype -- m ) -- y ) [ call ] ;
+7 [ 1 + ] apply-bogus inspect print-line

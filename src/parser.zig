@@ -845,15 +845,23 @@ fn resolveAtomElement(ctx: ?*Context, token: []const u8) ?value_mod.ConstraintCo
 /// binds tighter than `|`, so a conjunction is the inner term of the
 /// disjunction-of-conjunctions normal form. A single atom returns its element
 /// directly; multiple atoms intern an intersection combinator. Returns null
-/// only when the head atom does not resolve (the caller decides whether that is
-/// a silent drop or an error).
+/// when the head token was never attempted: `ctx` is null (stack-effect value
+/// literals and parser unit tests resolve no types) or the token is not a
+/// syntactic annotation candidate. A head token that was attempted and failed
+/// to resolve raises `InvalidConstraint` instead of silently dropping the
+/// annotation.
 fn parseConjunction(
     allocator: Allocator,
     tokenizer: *Tokenizer,
     ctx: ?*Context,
     head_token: []const u8,
 ) ParseError!?value_mod.ConstraintCombinator.Element {
-    const head = resolveAtomElement(ctx, head_token) orelse return null;
+    const head = resolveAtomElement(ctx, head_token) orelse {
+        if (ctx != null and isTypeAnnotationCandidate(head_token)) {
+            return invalidConstraint(ctx, allocator, "'{s}' is not a known type or constraint", .{head_token});
+        }
+        return null;
+    };
     const c = ctx orelse return head;
 
     var atoms = std.ArrayListUnmanaged(value_mod.ConstraintCombinator.Element){};
@@ -898,8 +906,9 @@ fn elementToAnnotation(element: value_mod.ConstraintCombinator.Element) Resolved
 /// `TypeValue`), an intersection (`comparable & stringable`), and a mixed union
 /// (`fixnum | comparable`). `&` binds tighter than `|`; both are greedy
 /// continuation markers. Leading `&` / `|` and adjacent doubles are errors. A
-/// head that does not resolve returns null, leaving the parameter unannotated,
-/// matching the prior behavior for unknown annotation tokens.
+/// head that was never attempted (no `ctx`, or not a syntactic annotation
+/// candidate) returns null, leaving the parameter unannotated. A head that was
+/// attempted and failed to resolve raises `InvalidConstraint`.
 fn parseConstraintAnnotation(
     allocator: Allocator,
     tokenizer: *Tokenizer,

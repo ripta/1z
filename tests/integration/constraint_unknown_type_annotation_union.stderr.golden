@@ -1,0 +1,1 @@
+tests/integration/constraint_unknown_type_annotation_union.1z:3: error 'invalid-constraint' 'nosuchtype' is not a known type or constraint

@@ -1,0 +1,4 @@
+\ A typo in the head of a type union must raise the same diagnostic as a bare
+\ unresolved annotation, not silently drop the whole union.
+apply-union-bogus: ( x quot: ( n: nosuchtype | fixnum -- m ) -- y ) [ call ] ;
+7 [ 1 + ] apply-union-bogus inspect print-line
