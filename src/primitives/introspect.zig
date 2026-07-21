@@ -10,6 +10,7 @@ const WordProvenance = dictionary_mod.WordProvenance;
 const call_graph_mod = @import("../call_graph.zig");
 const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
+const Instruction = value_mod.Instruction;
 const HashTable = value_mod.HashTable;
 const TypeDescriptor = value_mod.TypeDescriptor;
 const Module = value_mod.Module;
@@ -131,18 +132,21 @@ fn buildConstraintRecord(alloc: Allocator, backing: ConstraintBacking, name_over
 /// `protocol_descriptor` or a `constraint_combinator`. The word name becomes the
 /// top-level record's name.
 fn buildConstraintInfo(alloc: Allocator, name: []const u8, word: WordDefinition) Allocator.Error!Value {
-    const instrs = switch (word.action) {
-        .compound => |body| body,
+    const lit: Value = switch (word.action) {
+        .literal => |v| v,
+        .compound => |body| blk: {
+            if (body.len != 1) return .{ .boolean = false };
+            break :blk switch (body[0].op) {
+                .push_literal => |v| v,
+                else => return .{ .boolean = false },
+            };
+        },
         .native, .host_callback => return .{ .boolean = false },
     };
-    if (instrs.len != 1) return .{ .boolean = false };
 
-    return switch (instrs[0].op) {
-        .push_literal => |lit| switch (lit) {
-            .protocol_descriptor => |d| try buildConstraintRecord(alloc, .{ .protocol = d }, name),
-            .constraint_combinator => |cc| try buildConstraintRecord(alloc, .{ .combinator = cc }, name),
-            else => .{ .boolean = false },
-        },
+    return switch (lit) {
+        .protocol_descriptor => |d| try buildConstraintRecord(alloc, .{ .protocol = d }, name),
+        .constraint_combinator => |cc| try buildConstraintRecord(alloc, .{ .combinator = cc }, name),
         else => .{ .boolean = false },
     };
 }
@@ -179,12 +183,21 @@ pub fn buildWordInfo(alloc: Allocator, ctx: *const Context, name: []const u8, wo
     }
 
     const is_native: bool = switch (word.action) {
-        .compound => false,
+        .compound, .literal => false,
         .native, .host_callback => true,
     };
 
+    // A .literal word has no instruction body; wrap its value in the same
+    // single-instruction shape a one-element .compound body would have
+    // produced before this variant existed, so >word-info's observable
+    // output for any given word is unchanged by this internal detail.
     const body_val: Value = switch (word.action) {
         .compound => |instrs| .{ .quotation = .{ .instructions = instrs } },
+        .literal => |v| blk: {
+            const instrs = try alloc.alloc(Instruction, 1);
+            instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
+            break :blk .{ .quotation = .{ .instructions = instrs } };
+        },
         .native, .host_callback => .{ .boolean = false },
     };
 
@@ -290,7 +303,7 @@ fn moduleWordToWordDef(name: []const u8, mw: ModuleWord) WordDefinition {
     };
 }
 
-fn wordDefToModuleWord(def: WordDefinition) ModuleWord {
+fn wordDefToModuleWord(alloc: Allocator, def: WordDefinition) Allocator.Error!ModuleWord {
     return .{
         .stack_effect = def.stack_effect,
         .markers = def.markers,
@@ -305,6 +318,15 @@ fn wordDefToModuleWord(def: WordDefinition) ModuleWord {
             .compound => |instrs| .{ .compound = instrs },
             .native => |f| .{ .native = f },
             .host_callback => |host| .{ .host_callback = host },
+            // ModuleWord has no .literal counterpart: module-level word
+            // storage is populated once at load time, not re-created per
+            // call, so this one-time synthesis does not reopen the leak
+            // this variant exists to close.
+            .literal => |v| blk: {
+                const instrs = try alloc.alloc(Instruction, 1);
+                instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
+                break :blk .{ .compound = instrs };
+            },
         },
     };
 }
@@ -351,7 +373,7 @@ fn isLintSemanticWord(name: []const u8, word: WordDefinition) bool {
     if (word.provenance != null) return false;
     if (std.mem.startsWith(u8, name, "(")) return false;
     return switch (word.action) {
-        .compound => true,
+        .compound, .literal => true,
         .native, .host_callback => false,
     };
 }
@@ -545,7 +567,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
         while (iter.next()) |entry| {
             const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
             if (!gop.found_existing) {
-                try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+                try module.words.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, entry.value_ptr.*));
             }
         }
     }
@@ -555,7 +577,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
         while (iter.next()) |entry| {
             const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
             if (!gop.found_existing) {
-                try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(dictionary_mod.loadSlot(entry.value_ptr.*).*));
+                try module.words.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, dictionary_mod.loadSlot(entry.value_ptr.*).*));
             }
         }
     }
@@ -570,7 +592,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
             while (iter.next()) |entry| {
                 const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
                 if (!gop.found_existing) {
-                    try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+                    try module.words.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, entry.value_ptr.*));
                 }
             }
         }
@@ -580,7 +602,7 @@ fn nativeCurrentScope(ctx: *Context) anyerror!void {
             while (iter.next()) |entry| {
                 const gop = try seen.getOrPut(alloc, entry.key_ptr.*);
                 if (!gop.found_existing) {
-                    try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(dictionary_mod.loadSlot(entry.value_ptr.*).*));
+                    try module.words.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, dictionary_mod.loadSlot(entry.value_ptr.*).*));
                 }
             }
         }
@@ -620,14 +642,14 @@ fn nativeLocalScope(ctx: *Context) anyerror!void {
         var dep_iter = frame.iterator();
         while (dep_iter.next()) |entry| {
             if (entry.value_ptr.*.imported) {
-                try module.deps.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+                try module.deps.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, entry.value_ptr.*));
             }
         }
     }
 
     var iter = ctx.local_frames.items[ctx.local_frames.items.len - 1].iterator();
     while (iter.next()) |entry| {
-        try module.words.put(alloc, entry.key_ptr.*, wordDefToModuleWord(entry.value_ptr.*));
+        try module.words.put(alloc, entry.key_ptr.*, try wordDefToModuleWord(alloc, entry.value_ptr.*));
     }
 
     try ctx.stack.push(.{ .module = module });

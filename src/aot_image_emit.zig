@@ -946,6 +946,12 @@ fn internTopLevelFrameLiterals(
                 effect_table,
                 body,
             ),
+            .literal => |v| try internValueTypeLiterals(
+                struct_plans,
+                struct_index,
+                effect_table,
+                v,
+            ),
             .native, .host_callback => {},
         }
     }

@@ -151,7 +151,7 @@ fn computeExecFlags(def: WordDefinition) dict_mod.ExecFlags {
     }
     flags.empty_compound_body = switch (def.action) {
         .compound => |b| b.len == 0,
-        .native, .host_callback => false,
+        .native, .host_callback, .literal => false,
     };
     flags.skip_type_validation = flags.is_generic and flags.empty_compound_body;
     if (def.stack_effect) |eff| {
@@ -2236,7 +2236,10 @@ pub const Context = struct {
                 self.unregisterQuotationContainerLiterals(instrs);
                 try self.dictionary.registerCompoundBody(instrs);
             },
-            .native, .host_callback => {},
+            // A .literal value is non-refcounted by construction, since
+            // that is the eligibility rule, so it can never carry a
+            // container literal needing release tracking.
+            .native, .host_callback, .literal => {},
         }
     }
 
@@ -2264,7 +2267,9 @@ pub const Context = struct {
 
         const instrs = switch (def.action) {
             .compound => |i| i,
-            .native, .host_callback => return,
+            // No JIT/hybrid integration for literal words yet; they have
+            // no instruction body to compile.
+            .native, .host_callback, .literal => return,
         };
 
         const effect = def.stack_effect orelse return;
@@ -2338,7 +2343,7 @@ pub const Context = struct {
     fn tryAssignWordId(self: *Context, name: []const u8, def: WordDefinition) void {
         switch (def.action) {
             .compound => {},
-            .native, .host_callback => return,
+            .native, .host_callback, .literal => return,
         }
 
         if (def.stack_effect == null) return;
@@ -3100,6 +3105,11 @@ pub const Context = struct {
                 }
                 return null;
             },
+            .literal => |val| switch (val) {
+                .type_val => |tv| return tv,
+                .tagged => |t| return t.tag.type_val,
+                else => return null,
+            },
             .native, .host_callback => return null,
         }
     }
@@ -3166,6 +3176,18 @@ pub const Context = struct {
                                 else => {},
                             }
                         },
+                        .literal => |val| switch (val) {
+                            .type_val => |tv| if (tv.descriptor) |tv_desc| {
+                                if (tv_desc == desc) return tv.name;
+                            },
+                            .tagged => |t| {
+                                const tv = t.tag.type_val orelse continue;
+                                if (tv.descriptor) |tv_desc| {
+                                    if (tv_desc == desc) return tv.name;
+                                }
+                            },
+                            else => {},
+                        },
                         .native, .host_callback => {},
                     }
                 }
@@ -3189,6 +3211,18 @@ pub const Context = struct {
                             },
                             else => {},
                         }
+                    },
+                    .literal => |val| switch (val) {
+                        .type_val => |tv| if (tv.descriptor) |tv_desc| {
+                            if (tv_desc == desc) return tv.name;
+                        },
+                        .tagged => |t| {
+                            const tv = t.tag.type_val orelse continue;
+                            if (tv.descriptor) |tv_desc| {
+                                if (tv_desc == desc) return tv.name;
+                            }
+                        },
+                        else => {},
                     },
                     .native, .host_callback => {},
                 }
@@ -3956,10 +3990,15 @@ pub const Context = struct {
     /// whose single instruction pushes a module value. Does not execute any
     /// code, so a binding that computes its module is not resolvable here.
     pub fn moduleLiteralFromWordDef(def: WordDefinition) ?*value_mod.Module {
-        const instrs = switch (def.action) {
-            .compound => |i| i,
+        switch (def.action) {
+            .literal => |val| return switch (val) {
+                .module => |m| m,
+                else => null,
+            },
             .native, .host_callback => return null,
-        };
+            .compound => {},
+        }
+        const instrs = def.action.compound;
         if (instrs.len != 1) return null;
         return switch (instrs[0].op) {
             .push_literal => |val| switch (val) {
@@ -3998,6 +4037,7 @@ pub const Context = struct {
                     if (rc != 0) return error.HostCallbackFailed;
                 },
                 .compound => |instrs| try self.executeInstructions(instrs, null),
+                .literal => |v| try self.stack.push(v),
             }
         } else {
             return ExecutionError.UnknownWord;
@@ -5493,6 +5533,18 @@ pub const Context = struct {
                         return self.wordErrorCleanup(name, err);
                     }
                 },
+                .literal => |v| {
+                    // No tail-call setup: a literal push has nothing further
+                    // to call into, so it finishes like a native word does.
+                    self.tail_call_instructions = null;
+                    self.current_pic_entry = if (pic_table) |pt| pt.get(idx) else null;
+                    defer self.current_pic_entry = null;
+                    if (self.stack.push(v)) |_| {
+                        try self.wordSuccessCleanup(name, word.stack_effect);
+                    } else |err| {
+                        return self.wordErrorCleanup(name, err);
+                    }
+                },
             }
         } else {
             if (self.stack_limit != 0) {
@@ -5541,6 +5593,10 @@ pub const Context = struct {
                             if (rc != 0) break :host_result error.HostCallbackFailed;
                             break :host_result;
                         },
+                        // A literal has no body that could reference
+                        // module-private bare words, so there is nothing
+                        // to push a module-deps frame for.
+                        .literal => |v| break :blk self.stack.push(v),
                     }
                 } else {
                     break :blk switch (word.action) {
@@ -5551,6 +5607,7 @@ pub const Context = struct {
                             break :host_result;
                         },
                         .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic),
+                        .literal => |v| self.stack.push(v),
                     };
                 }
             };
@@ -5790,7 +5847,8 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
             }
             return result;
         },
-        .host_callback => return null,
+        // No JIT resolver support for literal words yet.
+        .host_callback, .literal => return null,
     }
 
     const effect = callee.stack_effect orelse return null;

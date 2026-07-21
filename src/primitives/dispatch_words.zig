@@ -219,7 +219,10 @@ fn resolveWordForDispatch(ctx: *Context, name: []const u8) ?ResolvedWord {
             .action = switch (wd.action) {
                 .native => .native,
                 .host_callback => .host_callback,
-                .compound => .compound,
+                // A literal is a user-defined binding, not a native
+                // function, so it is subject to the same generic-marker
+                // requirement as a compound word.
+                .compound, .literal => .compound,
             },
         };
     }

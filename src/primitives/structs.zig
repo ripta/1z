@@ -667,11 +667,16 @@ fn defineFieldSetter(ctx: *Context, name: []const u8, struct_type: *const Struct
 
 pub fn getStructTypeFromMaker(ctx: *const Context, maker_name: []const u8) ?*const StructType {
     const word = ctx.lookupWord(maker_name) orelse return null;
-    const instrs = switch (word.action) {
-        .compound => |c| c,
+    switch (word.action) {
+        .literal => |v| return switch (v) {
+            .struct_type => |st| st,
+            else => null,
+        },
         .native, .host_callback => return null,
-    };
+        .compound => {},
+    }
 
+    const instrs = word.action.compound;
     if (instrs.len == 0) return null;
 
     return switch (instrs[0].op) {

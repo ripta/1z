@@ -422,7 +422,7 @@ pub const InferenceEngine = struct {
             var iter = frame.iterator();
             while (iter.next()) |entry| {
                 const word_def = entry.value_ptr.*;
-                if (word_def.action != .compound) continue;
+                if (word_def.action != .compound and word_def.action != .literal) continue;
                 if (checked_source) |src| {
                     if (word_def.source_file) |sf| {
                         if (!std.mem.eql(u8, sf, src)) continue;
@@ -534,7 +534,19 @@ pub const InferenceEngine = struct {
         }
 
         const word_def = self.lookupWord(name) orelse return .unknown;
-        switch (word_def.action) {
+
+        // A .literal value has no instruction body of its own; synthesize
+        // the equivalent single push_literal instruction so inference,
+        // caching, and diagnostics below run exactly as they did before
+        // this variant existed for what was always a one-instruction
+        // compound body.
+        const instructions: []const Instruction = switch (word_def.action) {
+            .compound => |i| i,
+            .literal => |v| blk: {
+                const synthesized = try self.allocator.alloc(Instruction, 1);
+                synthesized[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
+                break :blk synthesized;
+            },
             .native, .host_callback => {
                 const result = if (word_def.stack_effect) |eff|
                     computeDeclaredDelta(eff) orelse .unknown
@@ -543,147 +555,146 @@ pub const InferenceEngine = struct {
                 try self.cache.put(self.allocator, name, result);
                 return result;
             },
-            .compound => |instructions| {
-                if (self.never_returns_mode != .off and self.isInCheckedSource(word_def.source_file)) {
-                    try self.checkNeverReturnsConsistency(name, &word_def);
-                }
+        };
 
-                if (word_def.stack_effect) |eff| {
-                    if (stack_effect_mod.hasAnyRowVariable(eff)) {
-                        try self.cache.put(self.allocator, name, .unknown);
-                        return .unknown;
+        if (self.never_returns_mode != .off and self.isInCheckedSource(word_def.source_file)) {
+            try self.checkNeverReturnsConsistency(name, &word_def);
+        }
+
+        if (word_def.stack_effect) |eff| {
+            if (stack_effect_mod.hasAnyRowVariable(eff)) {
+                try self.cache.put(self.allocator, name, .unknown);
+                return .unknown;
+            }
+            if (isGeneric(&word_def) and instructions.len == 0) {
+                if (!self.type_cache.contains(name)) {
+                    const out_types = try self.allocator.alloc(StackEntry, eff.outputs.len);
+                    for (eff.outputs, 0..) |param, i| {
+                        out_types[i] = if (param.type_annotation) |ann| switch (ann) {
+                            .type => |tv| StackEntry{ .typed = .{ .tv = tv } },
+                            .protocol => |desc| StackEntry{ .protocol_bounded = desc },
+                            .combination => .other,
+                        } else .other;
                     }
-                    if (isGeneric(&word_def) and instructions.len == 0) {
-                        if (!self.type_cache.contains(name)) {
-                            const out_types = try self.allocator.alloc(StackEntry, eff.outputs.len);
-                            for (eff.outputs, 0..) |param, i| {
-                                out_types[i] = if (param.type_annotation) |ann| switch (ann) {
-                                    .type => |tv| StackEntry{ .typed = .{ .tv = tv } },
-                                    .protocol => |desc| StackEntry{ .protocol_bounded = desc },
-                                    .combination => .other,
-                                } else .other;
-                            }
-                            try self.type_cache.put(self.allocator, name, out_types);
+                    try self.type_cache.put(self.allocator, name, out_types);
+                }
+                const result = computeDeclaredDelta(eff) orelse .unknown;
+                try self.cache.put(self.allocator, name, result);
+                return result;
+            }
+        }
+
+        try self.in_progress.put(self.allocator, name, {});
+        const declared_inputs: ?usize = if (word_def.stack_effect) |eff| blk: {
+            if (stack_effect_mod.hasAnyRowVariable(eff)) break :blk null;
+            break :blk eff.concreteInputCount();
+        } else null;
+        const caller_info = CallerInfo{
+            .word_name = name,
+            .source_file = word_def.source_file,
+            .source_line = word_def.source_line,
+            .declared_input_count = declared_inputs,
+        };
+        var body_out_stack: std.ArrayListUnmanaged(StackEntry) = .{};
+        defer body_out_stack.deinit(self.allocator);
+        const inferred = try self.inferInstructions(instructions, caller_info, &body_out_stack);
+        _ = self.in_progress.fetchRemove(name);
+
+        if (inferred == .known and body_out_stack.items.len > 0) {
+            const cached_types = try self.allocator.alloc(StackEntry, body_out_stack.items.len);
+            @memcpy(cached_types, body_out_stack.items);
+            if (self.type_cache.get(name)) |existing| {
+                if (existing) |old| self.allocator.free(old);
+            }
+            try self.type_cache.put(self.allocator, name, cached_types);
+        }
+
+        const generic_uses_declared_delta = isGeneric(&word_def) and instructions.len == 0 and word_def.stack_effect != null;
+        const inferred_for_delta = if (generic_uses_declared_delta)
+            computeDeclaredDelta(word_def.stack_effect.?) orelse inferred
+        else
+            inferred;
+
+        if (isGeneric(&word_def)) {
+            try self.validateDispatchEntries(name, inferred_for_delta, &word_def, caller_info);
+            if (inferred == .known) {
+                if (self.conversionTarget(name, &word_def)) |target| {
+                    try self.checkConversionOutput(name, &word_def, target, &body_out_stack, null);
+                }
+            }
+        }
+
+        if (word_def.stack_effect) |eff| {
+            if (computeDeclaredDelta(eff)) |declared| {
+                switch (inferred_for_delta) {
+                    .known => |inferred_delta| {
+                        if (declared.known != inferred_delta) {
+                            try self.emitDiagnostic(.{
+                                .word_name = name,
+                                .source_file = word_def.source_file,
+                                .source_line = word_def.source_line,
+                                .severity = .err,
+                                .message = try std.fmt.allocPrint(
+                                    self.allocator,
+                                    "declared stack effect delta is {d}, but inferred delta is {d}",
+                                    .{ declared.known, inferred_delta },
+                                ),
+                            });
                         }
-                        const result = computeDeclaredDelta(eff) orelse .unknown;
-                        try self.cache.put(self.allocator, name, result);
-                        return result;
-                    }
-                }
-
-                try self.in_progress.put(self.allocator, name, {});
-                const declared_inputs: ?usize = if (word_def.stack_effect) |eff| blk: {
-                    if (stack_effect_mod.hasAnyRowVariable(eff)) break :blk null;
-                    break :blk eff.concreteInputCount();
-                } else null;
-                const caller_info = CallerInfo{
-                    .word_name = name,
-                    .source_file = word_def.source_file,
-                    .source_line = word_def.source_line,
-                    .declared_input_count = declared_inputs,
-                };
-                var body_out_stack: std.ArrayListUnmanaged(StackEntry) = .{};
-                defer body_out_stack.deinit(self.allocator);
-                const inferred = try self.inferInstructions(instructions, caller_info, &body_out_stack);
-                _ = self.in_progress.fetchRemove(name);
-
-                if (inferred == .known and body_out_stack.items.len > 0) {
-                    const cached_types = try self.allocator.alloc(StackEntry, body_out_stack.items.len);
-                    @memcpy(cached_types, body_out_stack.items);
-                    if (self.type_cache.get(name)) |existing| {
-                        if (existing) |old| self.allocator.free(old);
-                    }
-                    try self.type_cache.put(self.allocator, name, cached_types);
-                }
-
-                const generic_uses_declared_delta = isGeneric(&word_def) and instructions.len == 0 and word_def.stack_effect != null;
-                const inferred_for_delta = if (generic_uses_declared_delta)
-                    computeDeclaredDelta(word_def.stack_effect.?) orelse inferred
-                else
-                    inferred;
-
-                if (isGeneric(&word_def)) {
-                    try self.validateDispatchEntries(name, inferred_for_delta, &word_def, caller_info);
-                    if (inferred == .known) {
-                        if (self.conversionTarget(name, &word_def)) |target| {
-                            try self.checkConversionOutput(name, &word_def, target, &body_out_stack, null);
-                        }
-                    }
-                }
-
-                if (word_def.stack_effect) |eff| {
-                    if (computeDeclaredDelta(eff)) |declared| {
-                        switch (inferred_for_delta) {
-                            .known => |inferred_delta| {
-                                if (declared.known != inferred_delta) {
+                    },
+                    .unknown => {
+                        if (self.last_unknown_callee) |callee_name| {
+                            if (self.isInCheckedSource(word_def.source_file) and word_def.source_module == null) {
+                                if (self.last_unknown_is_polymorphic) {
+                                    if (word_def.provenance == null) {
+                                        try self.emitDiagnostic(.{
+                                            .word_name = name,
+                                            .source_file = word_def.source_file,
+                                            .source_line = word_def.source_line,
+                                            .severity = .note,
+                                            .message = try std.fmt.allocPrint(
+                                                self.allocator,
+                                                "callee {s} is polymorphic; effect trusted from declaration",
+                                                .{callee_name},
+                                            ),
+                                        });
+                                    }
+                                } else {
                                     try self.emitDiagnostic(.{
                                         .word_name = name,
                                         .source_file = word_def.source_file,
                                         .source_line = word_def.source_line,
-                                        .severity = .err,
+                                        .severity = .warning,
                                         .message = try std.fmt.allocPrint(
                                             self.allocator,
-                                            "declared stack effect delta is {d}, but inferred delta is {d}",
-                                            .{ declared.known, inferred_delta },
+                                            "cannot verify {s}: callee {s} has unknown effect",
+                                            .{ name, callee_name },
                                         ),
                                     });
                                 }
-                            },
-                            .unknown => {
-                                if (self.last_unknown_callee) |callee_name| {
-                                    if (self.isInCheckedSource(word_def.source_file) and word_def.source_module == null) {
-                                        if (self.last_unknown_is_polymorphic) {
-                                            if (word_def.provenance == null) {
-                                                try self.emitDiagnostic(.{
-                                                    .word_name = name,
-                                                    .source_file = word_def.source_file,
-                                                    .source_line = word_def.source_line,
-                                                    .severity = .note,
-                                                    .message = try std.fmt.allocPrint(
-                                                        self.allocator,
-                                                        "callee {s} is polymorphic; effect trusted from declaration",
-                                                        .{callee_name},
-                                                    ),
-                                                });
-                                            }
-                                        } else {
-                                            try self.emitDiagnostic(.{
-                                                .word_name = name,
-                                                .source_file = word_def.source_file,
-                                                .source_line = word_def.source_line,
-                                                .severity = .warning,
-                                                .message = try std.fmt.allocPrint(
-                                                    self.allocator,
-                                                    "cannot verify {s}: callee {s} has unknown effect",
-                                                    .{ name, callee_name },
-                                                ),
-                                            });
-                                        }
-                                    }
-                                }
-                                try self.cache.put(self.allocator, name, declared);
-                                return declared;
-                            },
+                            }
                         }
-                    }
-                } else if (!self.suppress_undeclared and self.isInCheckedSource(word_def.source_file)) {
-                    try self.emitDiagnostic(.{
-                        .word_name = name,
-                        .source_file = word_def.source_file,
-                        .source_line = word_def.source_line,
-                        .severity = .warning,
-                        .message = try std.fmt.allocPrint(
-                            self.allocator,
-                            "word has no declared stack effect",
-                            .{},
-                        ),
-                    });
+                        try self.cache.put(self.allocator, name, declared);
+                        return declared;
+                    },
                 }
-
-                try self.cache.put(self.allocator, name, inferred);
-                return inferred;
-            },
+            }
+        } else if (!self.suppress_undeclared and self.isInCheckedSource(word_def.source_file)) {
+            try self.emitDiagnostic(.{
+                .word_name = name,
+                .source_file = word_def.source_file,
+                .source_line = word_def.source_line,
+                .severity = .warning,
+                .message = try std.fmt.allocPrint(
+                    self.allocator,
+                    "word has no declared stack effect",
+                    .{},
+                ),
+            });
         }
+
+        try self.cache.put(self.allocator, name, inferred);
+        return inferred;
     }
 
     fn resolveValueType(self: *const InferenceEngine, val: Value) ?*const TypeValue {

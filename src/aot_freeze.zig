@@ -399,6 +399,10 @@ pub fn freezeModuleGraphOpts(
                     try discovered.names.append(temp_allocator, name);
                     try discovered.defs.append(temp_allocator, word);
                 },
+                .literal => |v| {
+                    try discovered.names.append(temp_allocator, name);
+                    try discovered.defs.append(temp_allocator, try literalWordAsCompound(temp_allocator, word, v));
+                },
                 .native, .host_callback => {
                     try discovered.native_names.append(temp_allocator, name);
                     try discovered.native_defs.append(temp_allocator, word);
@@ -797,7 +801,11 @@ fn discoverReachableWords(
                 const def = result.defs.items[scanned_def_count];
                 const body = switch (def.action) {
                     .compound => |c| c,
-                    .native, .host_callback => continue,
+                    // Every discovery site normalizes a .literal word into
+                    // .compound before storing it here (see
+                    // literalWordAsCompound), so this arm is unreachable in
+                    // practice; kept only for switch exhaustiveness.
+                    .native, .host_callback, .literal => continue,
                 };
                 if (strict_interpreter_free) try collectDispatchContainerQuotationsPromoting(ctx, body, result.names.items[scanned_def_count], &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
                 try collectBranchTableQuotationsPromoting(ctx, body, result.names.items[scanned_def_count], &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
@@ -826,7 +834,11 @@ fn discoverReachableWords(
     for (result.defs.items) |def| {
         const body = switch (def.action) {
             .compound => |c| c,
-            .native, .host_callback => continue,
+            // Every discovery site normalizes a .literal word into
+            // .compound before storing it in result.defs (see
+            // literalWordAsCompound), so this arm is unreachable in
+            // practice; kept only for switch exhaustiveness.
+            .native, .host_callback, .literal => continue,
         };
         try collectCompositeQuotations(body, &result.quotation_bodies, &quotation_seen, &result.composite_body_ptrs, temp_allocator);
     }
@@ -860,7 +872,11 @@ fn discoverReachableWords(
         for (result.names.items, result.defs.items) |name, def| {
             const body = switch (def.action) {
                 .compound => |c| c,
-                .native, .host_callback => continue,
+                // Every discovery site normalizes a .literal word into
+                // .compound before storing it in result.defs (see
+                // literalWordAsCompound), so this arm is unreachable in
+                // practice; kept only for switch exhaustiveness.
+                .native, .host_callback, .literal => continue,
             };
             try detectInterpretedReach(ctx, body, name, def.source_file, prelude_words, &discovered_names, &detect_quotation_seen, &callee_seen, &result.interpreted_reach, temp_allocator);
         }
@@ -960,18 +976,29 @@ fn drainWorklist(
 
         // Record native words for the resolver, but don't BFS into them, since
         // they have no instructions to discover more words
-        const instrs = switch (word.action) {
-            .compound => |c| c,
+        switch (word.action) {
             .native, .host_callback => {
                 try result.native_names.append(allocator, name);
                 try result.native_defs.append(allocator, word);
                 emitFreezeWordTrace(ctx, name, "native");
                 continue;
             },
-        };
+            .compound, .literal => {},
+        }
+
+        // Normalize a .literal word into the one-instruction .compound
+        // shape that a plain-value binding produced before this variant
+        // existed, so the rest of discovery (and everything downstream of
+        // it) keeps seeing only the .compound/.native shapes it already
+        // supports.
+        const store_word = if (word.action == .literal)
+            try literalWordAsCompound(allocator, word, word.action.literal)
+        else
+            word;
+        const instrs = store_word.action.compound;
 
         try result.names.append(allocator, name);
-        try result.defs.append(allocator, word);
+        try result.defs.append(allocator, store_word);
         emitFreezeWordTrace(ctx, name, "compound");
 
         // Discover callees
@@ -980,7 +1007,7 @@ fn drainWorklist(
         // Walk every method body registered for this word's dispatch_id so
         // reached generics' methods enter the compilation manifest. For
         // non-generics this is a noop.
-        try walkDispatchMethodBodies(ctx, word, name, worklist, seen, &result.quotation_bodies, quotation_seen, &result.method_body_ptrs, &result.pending_call_targets, diagnostics, artifact_class, allocator, result_allocator);
+        try walkDispatchMethodBodies(ctx, store_word, name, worklist, seen, &result.quotation_bodies, quotation_seen, &result.method_body_ptrs, &result.pending_call_targets, diagnostics, artifact_class, allocator, result_allocator);
     }
 }
 
@@ -1008,7 +1035,10 @@ fn classifyCallee(ctx: *const Context, name: []const u8) PendingResolution {
         }
         return switch (word.action) {
             .native, .host_callback => .{ .native_name = name },
-            .compound => .{ .compound_name = name },
+            // Downstream resolution re-looks-up the word by name and
+            // normalizes .literal to .compound the same way discovery
+            // does, so classifying it as compound_name here is correct.
+            .compound, .literal => .{ .compound_name = name },
         };
     }
     if (ctx.resolveQualifiedModuleWord(name)) |mod_word| {
@@ -1766,7 +1796,7 @@ fn isInterpreterDependentNative(ctx: *const Context, name: []const u8) bool {
     if (ctx.lookupWord(name)) |word| {
         switch (word.action) {
             .native, .host_callback => return hasInterpreterDependentMarker(word),
-            .compound => return false,
+            .compound, .literal => return false,
         }
     }
     if (ctx.resolveQualifiedModuleWord(name)) |mod_word| {
@@ -1779,6 +1809,21 @@ fn isInterpreterDependentNative(ctx: *const Context, name: []const u8) bool {
         }
     }
     return false;
+}
+
+/// Present a `.literal`-actioned word as a one-instruction `.compound` word,
+/// exactly matching what a plain-value `name: swap ;` binding would have
+/// produced before the `.literal` variant existed. AOT discovery and codegen
+/// have no first-class `.literal` support yet, so every discovery site
+/// normalizes through this helper before storing a word into the discovered
+/// set, keeping AOT build output unchanged regardless of which
+/// `WordDefinition.action` variant a word's binding happens to use.
+fn literalWordAsCompound(allocator: Allocator, word: WordDefinition, value: Value) Allocator.Error!WordDefinition {
+    const instrs = try allocator.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .push_literal = value }, .line = 0 };
+    var compound_word = word;
+    compound_word.action = .{ .compound = instrs };
+    return compound_word;
 }
 
 /// Convert a ModuleWord to a WordDefinition, using the given qualified
@@ -1834,6 +1879,11 @@ fn discoverCalleeWord(ctx: *const Context, call_name: []const u8, discovered: *D
             if (word.stack_effect == null) return;
             try discovered.names.append(allocator, call_name);
             try discovered.defs.append(allocator, word);
+        },
+        .literal => |v| {
+            if (word.stack_effect == null) return;
+            try discovered.names.append(allocator, call_name);
+            try discovered.defs.append(allocator, try literalWordAsCompound(allocator, word, v));
         },
     }
 }

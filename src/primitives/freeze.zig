@@ -413,6 +413,7 @@ fn invokeWrap(ctx: *Context, raw: Value, comptime kind: []const u8, elem: []cons
     switch (wrap_word.action) {
         .native, .host_callback => try wrap_word.invoke(ctx),
         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+        .literal => |v| try ctx.stack.push(v),
     }
     return try ctx.stack.pop();
 }

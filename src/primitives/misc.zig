@@ -6,6 +6,7 @@ const value_mod = @import("../value.zig");
 const Value = value_mod.Value;
 const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
+const Instruction = value_mod.Instruction;
 const StatementProcessor = @import("../statement.zig").StatementProcessor;
 
 const markers_mod = @import("markers.zig");
@@ -93,6 +94,11 @@ fn nativeToModule(ctx: *Context) anyerror!void {
                         .compound => |instrs| .{ .compound = instrs },
                         .native => |func| .{ .native = func },
                         .host_callback => |host| .{ .host_callback = host },
+                        .literal => |v| blk: {
+                            const instrs = try alloc.alloc(Instruction, 1);
+                            instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
+                            break :blk .{ .compound = instrs };
+                        },
                     },
                 });
             }
@@ -475,6 +481,11 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
                 .host_callback => |host| .{ .host_callback = host },
+                .literal => |v| blk: {
+                    const instrs = try alloc.alloc(Instruction, 1);
+                    instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
+                    break :blk .{ .compound = instrs };
+                },
             },
         };
         if (word_def.imported) {
@@ -871,7 +882,8 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .dispatch_id = callee.dispatch_id,
             };
         },
-        .host_callback => return null,
+        // No JIT resolver support for literal words yet.
+        .host_callback, .literal => return null,
     }
 
     const effect = callee.stack_effect orelse return null;
@@ -909,7 +921,7 @@ fn nativeCompile(ctx: *Context) anyerror!void {
 
     switch (word.action) {
         .compound => {},
-        .native, .host_callback => {
+        .native, .host_callback, .literal => {
             ctx.pending_error_message = "compile!: cannot compile native word";
             return error.TypeMismatch;
         },
@@ -983,7 +995,7 @@ fn detectMutualGroup(ctx: *Context, sym: []const u8, call_graph_ns: anytype) ?[]
         const word_def = ctx.lookupWord(name) orelse continue;
         const instrs = switch (word_def.action) {
             .compound => |i| i,
-            .native, .host_callback => {
+            .native, .host_callback, .literal => {
                 graph.put(ctx.allocator, name, .{ .callees = &.{}, .has_opaque = false }) catch return null;
                 continue;
             },
@@ -1071,7 +1083,7 @@ fn isSccEligibleViaLookup(
         // Must be compilable
         const instrs = switch (word_def.action) {
             .compound => |i| i,
-            .native, .host_callback => return false,
+            .native, .host_callback, .literal => return false,
         };
         _ = instrs;
 
@@ -1098,7 +1110,7 @@ fn isSccEligibleViaLookup(
         // Every inter-member edge must be a tail call
         const word_instrs = switch (word_def.action) {
             .compound => |i| i,
-            .native, .host_callback => return false,
+            .native, .host_callback, .literal => return false,
         };
         for (graph_entry.callees) |callee| {
             if (member_set.contains(callee)) {
@@ -1115,7 +1127,7 @@ fn compileSingleWord(ctx: *Context, sym: []const u8, mutual_group: ?[]const []co
 
     const instrs = switch (word.action) {
         .compound => |i| i,
-        .native, .host_callback => return error.TypeMismatch,
+        .native, .host_callback, .literal => return error.TypeMismatch,
     };
 
     const effect = word.stack_effect orelse return error.TypeMismatch;

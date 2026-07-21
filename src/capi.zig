@@ -1802,6 +1802,7 @@ export fn onez_breakpoint_delete(ptr: ?*anyopaque, id: u32) c_int {
 
 const ONEZ_LOCAL_COMPOUND: c_int = 0;
 const ONEZ_LOCAL_NATIVE: c_int = 1;
+const ONEZ_LOCAL_LITERAL: c_int = 2;
 
 /// Return the name of the word currently being executed.
 export fn onez_debug_current_word(ptr: ?*anyopaque) ?[*:0]const u8 {
@@ -1888,6 +1889,7 @@ fn getLocalEntry(handle: *OnezHandle, index: usize) ?struct { name: []const u8, 
             const kind: c_int = switch (entry.value_ptr.*.action) {
                 .native, .host_callback => ONEZ_LOCAL_NATIVE,
                 .compound => ONEZ_LOCAL_COMPOUND,
+                .literal => ONEZ_LOCAL_LITERAL,
             };
             return .{ .name = entry.key_ptr.*, .kind = kind };
         }

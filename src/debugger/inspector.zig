@@ -56,6 +56,11 @@ pub const Inspector = struct {
                 .native, .host_callback => {
                     try writer.writeAll("  <native>\n");
                 },
+                .literal => |val| {
+                    try writer.writeAll("  literal: ");
+                    try val.write(writer);
+                    try writer.writeAll("\n");
+                },
                 .compound => |instrs| {
                     try writer.print("  {d} instruction(s):\n", .{instrs.len});
                     for (instrs, 0..) |instr, idx| {
@@ -103,6 +108,11 @@ pub const Inspector = struct {
                 switch (entry.value_ptr.*.action) {
                     .native, .host_callback => try writer.writeAll("<native>"),
                     .compound => |instrs| try writer.print("<compound: {d} instructions>", .{instrs.len}),
+                    .literal => |val| {
+                        try writer.writeAll("<literal: ");
+                        try val.write(writer);
+                        try writer.writeAll(">");
+                    },
                 }
                 try writer.writeAll("\n");
             }
@@ -164,6 +174,11 @@ pub const Inspector = struct {
                 },
                 .compound => |instrs| {
                     try writer.print("  type: compound ({d} instructions)\n", .{instrs.len});
+                },
+                .literal => |val| {
+                    try writer.writeAll("  type: literal = ");
+                    try val.write(writer);
+                    try writer.writeAll("\n");
                 },
             }
         } else {
@@ -229,6 +244,7 @@ pub const Inspector = struct {
         const dict_count = ctx.dictionary.entries.count();
         var native_count: usize = 0;
         var compound_count: usize = 0;
+        var literal_count: usize = 0;
         var parse_time_count: usize = 0;
         var imported_count: usize = 0;
         var iter = ctx.dictionary.entries.iterator();
@@ -237,6 +253,7 @@ pub const Inspector = struct {
             switch (word.action) {
                 .native, .host_callback => native_count += 1,
                 .compound => compound_count += 1,
+                .literal => literal_count += 1,
             }
             if (word.parse_time) parse_time_count += 1;
             if (word.imported) imported_count += 1;
@@ -245,6 +262,7 @@ pub const Inspector = struct {
         try writer.print("  Words:           {d}\n", .{dict_count});
         try writer.print("  Native:          {d}\n", .{native_count});
         try writer.print("  Compound:        {d}\n", .{compound_count});
+        try writer.print("  Literal:         {d}\n", .{literal_count});
         try writer.print("  Parse-time:      {d}\n", .{parse_time_count});
         try writer.print("  Imported:        {d}\n", .{imported_count});
 

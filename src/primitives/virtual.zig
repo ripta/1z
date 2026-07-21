@@ -908,6 +908,7 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
     switch (nth_mut_word.action) {
         .native, .host_callback => try nth_mut_word.invoke(ctx),
         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+        .literal => |v| try ctx.stack.push(v),
     }
 
     // Rewrap: pop raw vec, wrap as tagged, push
@@ -957,6 +958,7 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
     switch (at_set_word.action) {
         .native, .host_callback => try at_set_word.invoke(ctx),
         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+        .literal => |v| try ctx.stack.push(v),
     }
 
     // Rewrap: pop raw mmap, wrap as tagged, push
@@ -988,6 +990,7 @@ fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
     switch (at_remove_word.action) {
         .native, .host_callback => try at_remove_word.invoke(ctx),
         .compound => |instrs| try ctx.executeQuotation(.{ .instructions = instrs }),
+        .literal => |v| try ctx.stack.push(v),
     }
 
     // Rewrap: pop raw mmap, wrap as tagged, push

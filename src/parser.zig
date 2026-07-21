@@ -303,6 +303,7 @@ fn executeParseTimeWord(
     switch (word.action) {
         .native, .host_callback => word.invoke(c) catch |err| return handleParseTimeError(c, err),
         .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
+        .literal => |v| c.stack.push(v) catch |err| return handleParseTimeError(c, err),
     }
 
     // 5. Capture all values above the pre-depth stack as `push_literal` instructions
@@ -770,6 +771,7 @@ fn resolveTypeAnnotation(ctx: ?*Context, token: []const u8) ?ResolvedAnnotation 
             switch (word.action) {
                 .native, .host_callback => word.invoke(c) catch return null,
                 .compound => |instrs| c.executeQuotation(.{ .instructions = instrs }) catch return null,
+                .literal => |v| c.stack.push(v) catch return null,
             }
 
             const post_depth = c.stack.depth();
@@ -1182,6 +1184,7 @@ fn executeParseTimeWordForArray(
     switch (word.action) {
         .native, .host_callback => word.invoke(c) catch |err| return handleParseTimeError(c, err),
         .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
+        .literal => |v| c.stack.push(v) catch |err| return handleParseTimeError(c, err),
     }
 
     // Execute deferred emissions, e.g., `emit-call` from `V{`, `B{`, `M{`, so
@@ -1196,6 +1199,7 @@ fn executeParseTimeWordForArray(
                     switch (deferred_word.action) {
                         .native, .host_callback => deferred_word.invoke(c) catch |err| return handleParseTimeError(c, err),
                         .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
+                        .literal => |v| c.stack.push(v) catch |err| return handleParseTimeError(c, err),
                     }
                 }
             },
@@ -1906,7 +1910,7 @@ test "struct field annotations accept anonymous unions" {
             try std.testing.expect(field_types[0].?.type == field_types[1].?.type);
             try std.testing.expectEqualStrings("bignum|fixnum", field_types[0].?.type.name);
         },
-        .native, .host_callback => try std.testing.expect(false),
+        .native, .host_callback, .literal => try std.testing.expect(false),
     }
 }
 

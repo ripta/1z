@@ -12,6 +12,8 @@ const dictionary_mod = @import("../dictionary.zig");
 const WordProvenance = dictionary_mod.WordProvenance;
 const WordDefinition = dictionary_mod.WordDefinition;
 
+const container_backing = @import("../container_backing.zig");
+
 const markers_mod = @import("markers.zig");
 
 const hooks = @import("hooks.zig");
@@ -369,13 +371,14 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
             marker.name = name_copy;
 
             // User-defined markers are automatically parse-time so they work
-            // correctly with parse-time constructs like struct{}.
-            const push_instr = try alloc.alloc(Instruction, 1);
-            push_instr[0] = .{ .op = .{ .push_literal = top_val }, .line = 0 };
+            // correctly with parse-time constructs like struct{}. A marker
+            // value is never container-backed, so this always resolves to
+            // .literal, but goes through the shared helper for consistency
+            // with the plain-value branch below.
             try ctx.defineWord(name_copy, WordDefinition{
                 .name = name_copy,
                 .parse_time = true,
-                .action = .{ .compound = push_instr },
+                .action = try WordDefinition.literalOrCompoundAction(alloc, top_val),
             });
             fireWordDefinedHook(ctx, alloc, name_copy);
         },
@@ -509,13 +512,14 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 const name_copy = try alloc.dupe(u8, name);
 
-                const instructions = switch (top_val) {
-                    .quotation => |quot| quot.instructions,
-                    else => blk: {
-                        const push_instr = try alloc.alloc(Instruction, 1);
-                        push_instr[0] = .{ .op = .{ .push_literal = top_val }, .line = 0 };
-                        break :blk push_instr;
-                    },
+                // Only a quotation body can contain a self-call: the
+                // non-quotation branch always synthesizes a single
+                // push_literal instruction (or, for an eligible value, no
+                // instructions at all), so containsNonTailSelfCall below is
+                // only ever meaningful for the .quotation case.
+                const action: WordDefinition.Action = switch (top_val) {
+                    .quotation => |quot| .{ .compound = quot.instructions },
+                    else => try WordDefinition.literalOrCompoundAction(alloc, top_val),
                 };
 
                 var markers_slice = try alloc.dupe(*Marker, collected_markers.items);
@@ -555,7 +559,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     }
                 }
 
-                if (!ctx.allow_all_recursion and containsNonTailSelfCall(ctx, instructions, name_copy)) {
+                if (action == .compound and !ctx.allow_all_recursion and containsNonTailSelfCall(ctx, action.compound, name_copy)) {
                     const has_stack_recursive = for (collected_markers.items) |mk| {
                         if (markers_mod.isStackRecursiveMarker(mk)) break true;
                     } else false;
@@ -579,7 +583,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     .stack_effect = stack_effect_val,
                     .markers = markers_slice,
                     .doc = doc_val,
-                    .action = .{ .compound = instructions },
+                    .action = action,
                 });
                 fireWordDefinedHook(ctx, alloc, name_copy);
             }
@@ -648,12 +652,11 @@ test "semicolon defines named union type as parse-time word" {
     try std.testing.expect(has_typed);
 
     switch (word.action) {
-        .compound => |instrs| {
-            try std.testing.expectEqual(@as(usize, 1), instrs.len);
-            try std.testing.expect(instrs[0].op.push_literal == .type_val);
-            try std.testing.expect(instrs[0].op.push_literal.type_val == union_tv);
+        .literal => |v| {
+            try std.testing.expect(v == .type_val);
+            try std.testing.expect(v.type_val == union_tv);
         },
-        .native, .host_callback => try std.testing.expect(false),
+        .compound, .native, .host_callback => try std.testing.expect(false),
     }
 }
 
@@ -704,4 +707,91 @@ test "fireWordDefinedHook still builds and fires WordInfo when word-defined-hook
     try std.testing.expect(info == .array);
     try std.testing.expect(info.array.items[0] == .string);
     try std.testing.expectEqualStrings("foo", info.array.items[0].string);
+}
+
+test "semicolon binds a non-refcounted plain value as .literal, with no instruction allocation" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .symbol = "x" });
+    try ctx.stack.push(.{ .fixnum = 5 });
+    try nativeSemicolon(&ctx);
+
+    const word = ctx.lookupWord("x") orelse return error.TestExpectedWord;
+    switch (word.action) {
+        .literal => |v| {
+            try std.testing.expect(v == .fixnum);
+            try std.testing.expectEqual(@as(i64, 5), v.fixnum);
+        },
+        .compound, .native, .host_callback => try std.testing.expect(false),
+    }
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "x" }, .line = 0 }};
+    try ctx.executeQuotation(.{ .instructions = &body });
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .fixnum);
+    try std.testing.expectEqual(@as(i64, 5), result.fixnum);
+}
+
+test "semicolon keeps a container-backed plain value on the .compound push_literal path" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    const elements = try alloc.alloc(Value, 1);
+    elements[0] = .{ .fixnum = 7 };
+    const arr = try value_mod.Array.fromOwnedSlice(alloc, elements);
+
+    try ctx.stack.push(.{ .symbol = "xs" });
+    try ctx.stack.push(.{ .array = arr });
+    try nativeSemicolon(&ctx);
+
+    const word = ctx.lookupWord("xs") orelse return error.TestExpectedWord;
+    switch (word.action) {
+        .compound => |instrs| {
+            try std.testing.expectEqual(@as(usize, 1), instrs.len);
+            try std.testing.expect(instrs[0].op.push_literal == .array);
+        },
+        .literal, .native, .host_callback => try std.testing.expect(false),
+    }
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "xs" }, .line = 0 }};
+    try ctx.executeQuotation(.{ .instructions = &body });
+
+    const result = try ctx.stack.pop();
+    defer container_backing.releaseValue(result);
+    try std.testing.expect(result == .array);
+    try std.testing.expectEqual(@as(usize, 1), result.array.items.len);
+    try std.testing.expectEqual(@as(i64, 7), result.array.items[0].fixnum);
+}
+
+test "semicolon marker-definition branch binds the tagged marker as .literal" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var marker: Marker = .{ .name = "" };
+
+    try ctx.stack.push(.{ .symbol = "my-marker" });
+    try ctx.stack.push(.{ .marker = &marker });
+    try nativeSemicolon(&ctx);
+
+    try std.testing.expectEqualStrings("my-marker", marker.name);
+
+    const word = ctx.lookupWord("my-marker") orelse return error.TestExpectedWord;
+    try std.testing.expect(word.parse_time);
+    switch (word.action) {
+        .literal => |v| {
+            try std.testing.expect(v == .marker);
+            try std.testing.expectEqual(&marker, v.marker);
+        },
+        .compound, .native, .host_callback => try std.testing.expect(false),
+    }
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "my-marker" }, .line = 0 }};
+    try ctx.executeQuotation(.{ .instructions = &body });
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .marker);
+    try std.testing.expectEqual(&marker, result.marker);
 }

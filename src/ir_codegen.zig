@@ -523,7 +523,7 @@ fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
 
     return switch (word.action) {
         .compound => |instrs| instrs.len == 0,
-        .native, .host_callback => false,
+        .native, .host_callback, .literal => false,
     };
 }
 
@@ -12435,18 +12435,22 @@ fn lookupAnyModuleWord(ctx: *Context, word_name: []const u8) ?ModuleWordHit {
         if (module_path.len == 0 or suffix.len == 0) return null;
 
         const module_word = ctx.lookupWord(module_path) orelse return null;
-        const instrs = switch (module_word.action) {
-            .compound => |compound| compound,
-            .native, .host_callback => return null,
-        };
-        if (instrs.len == 0) return null;
-
-        const module = switch (instrs[0].op) {
-            .push_literal => |val| switch (val) {
+        const module = switch (module_word.action) {
+            .literal => |val| switch (val) {
                 .module => |m| m,
                 else => return null,
             },
-            else => return null,
+            .native, .host_callback => return null,
+            .compound => |compound| blk: {
+                if (compound.len == 0) return null;
+                break :blk switch (compound[0].op) {
+                    .push_literal => |val| switch (val) {
+                        .module => |m| m,
+                        else => return null,
+                    },
+                    else => return null,
+                };
+            },
         };
 
         if (module.words.get(suffix)) |mw| return .{ .word = mw, .module = module };
@@ -12577,7 +12581,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
                 if (rc != 0) break :blk @as(anyerror!void, error.HostCallbackFailed);
                 break :blk @as(anyerror!void, {});
             },
-            .compound => {
+            .compound, .literal => {
                 const stderr_file: std.fs.File = .stderr();
                 stderr_file.writeAll("Fatal: jitNativeWordCall invoked for non-native word '") catch {};
                 stderr_file.writeAll(word_name) catch {};
@@ -12698,6 +12702,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                     if (rc != 0) break :host_result error.HostCallbackFailed;
                     break :host_result;
                 },
+                .literal => |v| break :blk ctx.stack.push(v),
             }
         } else {
             break :blk switch (word.action) {
@@ -12708,6 +12713,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                     break :host_result;
                 },
                 .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot),
+                .literal => |v| ctx.stack.push(v),
             };
         }
     } else if (module_hit) |hit| blk: {
