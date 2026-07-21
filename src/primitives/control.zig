@@ -588,6 +588,7 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 }
 
 fn fireWordDefinedHook(ctx: *Context, alloc: std.mem.Allocator, name: []const u8) void {
+    if (!hooks.hasScopedHooks(ctx, "word-defined-hooks")) return;
     if (ctx.lookupWord(name)) |word_def| {
         const info = introspect.buildWordInfo(alloc, ctx, name, word_def) catch return;
         hooks.fireScopedHooks(ctx, "word-defined-hooks", &.{info});
@@ -654,4 +655,53 @@ test "semicolon defines named union type as parse-time word" {
         },
         .native, .host_callback => try std.testing.expect(false),
     }
+}
+
+test "fireWordDefinedHook skips buildWordInfo when no word-defined-hooks are registered" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .symbol = "foo" });
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try nativeSemicolon(&ctx);
+
+    const before_end = ctx.arena.state.end_index;
+    const before_node = ctx.arena.state.buffer_list.first;
+
+    fireWordDefinedHook(&ctx, ctx.quotationAllocator(), "foo");
+
+    try std.testing.expectEqual(before_end, ctx.arena.state.end_index);
+    try std.testing.expectEqual(before_node, ctx.arena.state.buffer_list.first);
+}
+
+test "fireWordDefinedHook still builds and fires WordInfo when word-defined-hooks are registered" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .symbol = "foo" });
+    try ctx.stack.push(.{ .fixnum = 42 });
+    try nativeSemicolon(&ctx);
+
+    const alloc = ctx.quotationAllocator();
+    const hook_items = try alloc.alloc(Value, 1);
+    hook_items[0] = .{ .quotation = .{ .instructions = &.{} } };
+    const hook_arr = try value_mod.Array.fromOwnedSlice(alloc, hook_items);
+    try ctx.setParameterInTopFrame("word-defined-hooks", .{ .array = hook_arr });
+
+    const before_end = ctx.arena.state.end_index;
+    const before_node = ctx.arena.state.buffer_list.first;
+
+    fireWordDefinedHook(&ctx, alloc, "foo");
+
+    // buildWordInfo ran: something was allocated.
+    try std.testing.expect(ctx.arena.state.end_index != before_end or
+        ctx.arena.state.buffer_list.first != before_node);
+
+    // fireScopedHooks pushes the hook's args before executing its quotation; an
+    // empty-instruction quotation consumes nothing, so the raw word-info array
+    // is left on the stack for inspection.
+    const info = try ctx.stack.pop();
+    try std.testing.expect(info == .array);
+    try std.testing.expect(info.array.items[0] == .string);
+    try std.testing.expectEqualStrings("foo", info.array.items[0].string);
 }

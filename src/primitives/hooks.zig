@@ -138,19 +138,26 @@ fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
     try ctx.setParameterInTopFrame(param.name, .{ .array = arr });
 }
 
+/// Whether any quotations are currently registered for the given scoped-hook parameter (e.g.
+/// "word-defined-hooks"). Lets a caller skip building an argument value (like a WordInfo record)
+/// when nothing would consume it.
+pub fn hasScopedHooks(ctx: *Context, param_name: []const u8) bool {
+    if (ctx.firing_scoped_hooks) return false;
+    const hook_array = ctx.getParameterBinding(param_name) orelse return false;
+    return switch (hook_array) {
+        .array => |arr| arr.items.len > 0,
+        else => false,
+    };
+}
+
 /// Fire all scoped hooks stored in a dynamic parameter.
 ///
 /// Reëntrant calls are suppressed to prevent infinite recursion, e.g., a word-defined hook that
 /// itself defines words.
 pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Value) void {
-    if (ctx.firing_scoped_hooks) return;
+    if (!hasScopedHooks(ctx, param_name)) return;
 
-    const hook_array = ctx.getParameterBinding(param_name) orelse return;
-    const items = switch (hook_array) {
-        .array => |arr| arr.items,
-        else => return,
-    };
-    if (items.len == 0) return;
+    const items = ctx.getParameterBinding(param_name).?.array.items;
 
     ctx.firing_scoped_hooks = true;
     defer ctx.firing_scoped_hooks = false;
@@ -263,4 +270,30 @@ test "empty registry" {
 
     fireHooks(&ctx, "nonexistent-event", &.{});
     try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+}
+
+test "hasScopedHooks reports false with no binding" {
+    var ctx = context_mod.Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try std.testing.expect(!hasScopedHooks(&ctx, "word-defined-hooks"));
+}
+
+test "hasScopedHooks reports false with an empty array binding" {
+    var ctx = context_mod.Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    const alloc = ctx.quotationAllocator();
+    const empty_arr = try value_mod.Array.fromOwnedSlice(alloc, &.{});
+    try ctx.setParameterInTopFrame("word-defined-hooks", .{ .array = empty_arr });
+    try std.testing.expect(!hasScopedHooks(&ctx, "word-defined-hooks"));
+}
+
+test "hasScopedHooks reports true with a non-empty array binding" {
+    var ctx = context_mod.Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    const alloc = ctx.quotationAllocator();
+    const items = try alloc.alloc(Value, 1);
+    items[0] = .{ .quotation = .{ .instructions = &.{} } };
+    const arr = try value_mod.Array.fromOwnedSlice(alloc, items);
+    try ctx.setParameterInTopFrame("word-defined-hooks", .{ .array = arr });
+    try std.testing.expect(hasScopedHooks(&ctx, "word-defined-hooks"));
 }
