@@ -3,12 +3,8 @@
 // exercises the same onez_wasm_eval/present-frame/framebuffer plumbing repl.js and demo.js use,
 // without a DOM or a canvas.
 //
-// Run via `make wasm-game-verify` (builds the wasm artifact first). Not part of `make test`:
-// the "run-frame executes repeatedly without exhausting memory" case currently fails against
-// the real wasm build, not from memory exhaustion, but from a generic-accessor dispatch
-// collision: demo-game.1z's demo-state and lib/game/loop.1z's loop-state collide on a shared
-// `tick` field name. The other cases pass and guard against regressions in the parts that
-// already work.
+// Run via `make wasm-game-verify` (builds the wasm artifact first). Not part of `make test`,
+// since it needs the wasm build step rather than any remaining known failure.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -96,24 +92,54 @@ test('demo-game.1z evaluates and registers init/update/draw via start-game', asy
   const onez = await instantiate()
   const gameSource = readFileSync(gameSourcePath, 'utf8')
   const status = onez.evalSource(gameSource)
-  assert.equal(status, ONEZ_EVAL_COMPLETE, () => 'demo-game.1z failed to evaluate: ' + onez.lastError())
+  assert.equal(status, ONEZ_EVAL_COMPLETE, 'demo-game.1z failed to evaluate: ' + onez.lastError())
 })
 
-test('run-frame executes repeatedly without exhausting the wasm heap', async (t) => {
+test('key-down? reflects keyboard bytes written the way JS would write them', async () => {
   const onez = await instantiate()
   const gameSource = readFileSync(gameSourcePath, 'utf8')
-  assert.equal(onez.evalSource(gameSource), ONEZ_EVAL_COMPLETE, () => 'setup failed: ' + onez.lastError())
+  assert.equal(onez.evalSource(gameSource), ONEZ_EVAL_COMPLETE, 'setup failed: ' + onez.lastError())
+
+  const keyboardPtr = onez.exports.onez_wasm_keyboard_ptr()
+  const keyboardLen = onez.exports.onez_wasm_keyboard_len()
+  assert.equal(keyboardLen, 48, 'keyboard buffer length does not match the settled 48-key vocabulary')
+
+  // Index 0 is arrow-up in lib/game/input.1z's key-index table (see examples/wasm-game/demo.js's
+  // KEY_INDEX for the JS side of this same private contract).
+  const ARROW_UP_INDEX = 0
+  const keyboard = new Uint8Array(onez.memory.buffer, keyboardPtr, keyboardLen)
+
+  // Asserts via throw/if on core prelude words rather than the testing module's assert=: `use
+  // "testing"` does not currently load on this target, and demo-game.1z's own use "game" already
+  // imported these words into the shared top-level scope this eval call resumes, so no use is
+  // needed here at all.
+  const expectDown = (source) => {
+    const status = onez.evalSource(source + ' not [ f "expected key-down? true" EInvalidArgument make-error throw ] when')
+    assert.equal(status, ONEZ_EVAL_COMPLETE, 'expected true: ' + source + ': ' + onez.lastError())
+  }
+  const expectUp = (source) => {
+    const status = onez.evalSource(source + ' [ f "expected key-down? false" EInvalidArgument make-error throw ] when')
+    assert.equal(status, ONEZ_EVAL_COMPLETE, 'expected false: ' + source + ': ' + onez.lastError())
+  }
+
+  expectUp('arrow-up: key-down?')
+
+  keyboard[ARROW_UP_INDEX] = 1
+  expectDown('arrow-up: key-down?')
+
+  keyboard[ARROW_UP_INDEX] = 0
+  expectUp('arrow-up: key-down?')
+})
+
+test('run-frame executes repeatedly without exhausting the wasm heap', async () => {
+  const onez = await instantiate()
+  const gameSource = readFileSync(gameSourcePath, 'utf8')
+  assert.equal(onez.evalSource(gameSource), ONEZ_EVAL_COMPLETE, 'setup failed: ' + onez.lastError())
 
   const frameCount = 5
   for (let frame = 0; frame < frameCount; frame++) {
     const status = onez.evalSource('run-frame')
-    if (status === ONEZ_EVAL_ERROR) {
-      t.diagnostic(
-        'run-frame failed on frame ' + frame + ': ' + onez.lastError() +
-        ' -- known generic-accessor dispatch collision on the tick field name'
-      )
-    }
-    assert.equal(status, ONEZ_EVAL_COMPLETE, () => 'run-frame failed on frame ' + frame + ': ' + onez.lastError())
+    assert.equal(status, ONEZ_EVAL_COMPLETE, 'run-frame failed on frame ' + frame + ': ' + onez.lastError())
   }
 
   assert.ok(

@@ -123,6 +123,11 @@ const OnezHandle = struct {
     /// reused on every `(wasm-framebuffer)` call so repeated calls don't leak one small wrapper
     /// allocation per call into the arena.
     framebuffer_ba: ?*value_mod.ByteArray = null,
+
+    /// Borrowed byte-array view over `keyboard_buf`, constructed once at `onez_init` and
+    /// reused on every `(wasm-keyboard)` call so repeated calls don't leak one small wrapper
+    /// allocation per call into the arena.
+    keyboard_ba: ?*value_mod.ByteArray = null,
 };
 
 // wasm32-freestanding has no OS heap, but it does have `std.heap.wasm_allocator`: a real
@@ -213,6 +218,19 @@ export fn onez_init() ?*anyopaque {
         return null;
     };
     capi_core.defineHostWord(ctx, "(wasm-framebuffer)", framebuffer_bytes_effect, framebufferBytesCallback, handle, null) catch {
+        onez_deinit(handle);
+        return null;
+    };
+
+    handle.keyboard_ba = value_mod.makeBorrowedByteArray(ctx.quotationAllocator(), &keyboard_buf) catch {
+        onez_deinit(handle);
+        return null;
+    };
+    const keyboard_bytes_effect = helpers.makeSimpleEffect(ctx.quotationAllocator(), "-- byte-array") catch {
+        onez_deinit(handle);
+        return null;
+    };
+    capi_core.defineHostWord(ctx, "(wasm-keyboard)", keyboard_bytes_effect, keyboardBytesCallback, handle, null) catch {
         onez_deinit(handle);
         return null;
     };
@@ -397,6 +415,41 @@ fn framebufferBytesCallback(handle_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c
     const ba = handle.framebuffer_ba orelse return 1;
     handle.ctx.stack.push(.{ .byte_array = ba }) catch {
         setLastError(handle, "allocation failure pushing framebuffer byte-array", .{});
+        return 1;
+    };
+    return 0;
+}
+
+// =============================================================================
+// Keyboard input
+// =============================================================================
+
+// One byte per tracked key: 0 is up, nonzero is down. JS's keydown/keyup listeners write
+// directly into this buffer at a fixed-offset index, so there is no host call in either
+// direction -- 1z reads it as a local memory read, the same as the framebuffer. The key-name-
+// to-index mapping is not known here; it is a private contract between lib/game/input.1z and
+// the JS host harness (see lib/game/input.1z's key-index table).
+const keyboard_key_count: usize = 48;
+var keyboard_buf: [keyboard_key_count]u8 = [_]u8{0} ** keyboard_key_count;
+
+export fn onez_wasm_keyboard_ptr() [*]u8 {
+    return &keyboard_buf;
+}
+
+export fn onez_wasm_keyboard_len() usize {
+    return keyboard_key_count;
+}
+
+/// The host callback body for `(wasm-keyboard)`.
+///
+/// Pushes the cached borrowed byte-array view over `keyboard_buf`. `Stack.push` retains on
+/// every call. Repeated calls correctly share one underlying buffer instead of allocating a
+/// new wrapper each time.
+fn keyboardBytesCallback(handle_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
+    const handle = castHandle(handle_ptr) orelse return 1;
+    const ba = handle.keyboard_ba orelse return 1;
+    handle.ctx.stack.push(.{ .byte_array = ba }) catch {
+        setLastError(handle, "allocation failure pushing keyboard byte-array", .{});
         return 1;
     };
     return 0;
@@ -888,6 +941,40 @@ test "(wasm-framebuffer) returns the same shared buffer across calls" {
     var out: i64 = 0;
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
     try std.testing.expectEqual(@as(i64, 7), out);
+}
+
+test "keyboard pointer and length are exposed" {
+    const ptr = onez_wasm_keyboard_ptr();
+    const len = onez_wasm_keyboard_len();
+    try std.testing.expectEqual(@as(usize, 48), len);
+    try std.testing.expect(ptr[0..len].len == len);
+}
+
+test "(wasm-keyboard) exposes a mutable byte-array view over keyboard_buf" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const ptr = onez_wasm_keyboard_ptr();
+    @memset(ptr[0..onez_wasm_keyboard_len()], 0);
+
+    const src = "(wasm-keyboard) 3 1 1 #poke!";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+
+    try std.testing.expectEqual(@as(u8, 1), ptr[3]);
+}
+
+test "(wasm-keyboard) returns the same shared buffer across calls" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const src = "(wasm-keyboard) 5 1 1 #poke! drop (wasm-keyboard) 5 1 #peek";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 1), out);
 }
 
 test "registered host word is invoked via dictionary lookup" {

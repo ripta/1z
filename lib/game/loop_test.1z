@@ -4,6 +4,11 @@
 \ stubs it as a no-op before loading game/loop, so run-frame's call to it resolves on the
 \ hosted interpreter too -- the same shape draw_test.1z already uses for current-framebuffer.
 \
+\ run-frame also calls advance-keyboard-frame (game/input.1z), which touches current-keyboard;
+\ every test that drives run-frame swaps in a scratch buffer via with-parameter, the same shape
+\ draw_test.1z uses for current-framebuffer, since (wasm-keyboard) only exists under the wasm
+\ C-API root.
+\
 \ fake-clock/advance-clock require a task-scope, so every test that drives run-frame wraps
 \ its body in one, matching tests/integration/fake_clock.1z. Each test defines its own
 \ init/update/draw stub quotations inline (some repetition across tests) rather than sharing
@@ -13,97 +18,141 @@
 
 use "testing" ;
 use "time" ;
+use "bytes" ;
 
 present-frame: ( -- ) [ ] ;
 use "game/loop" ;
 
 private{
-  counter: mutable struct{ init-n update-n last-tick draw-n } ;
-  (counter): ( -- counter ) [ 0 0 0 0 make-counter ] ;
+  counter: mutable struct{ init-n update-n last-tick draw-n pressed-n } ;
+  (counter): ( -- counter ) [ 0 0 0 0 0 make-counter ] ;
+  (scratch-keyboard): ( -- byte-array ) [ 48 bytes-alloc ] ;
 }
 
 test-init-runs-once-before-first-frame: ( -- ) [
+  (scratch-keyboard) current-keyboard
   [
-    fake-clock
-    c: (counter) ;
-    [ c dup init-n>> 1 + >>init-n drop ]
-    [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
-    [ c dup draw-n>> 1 + >>draw-n drop ]
-    start-game
-    c init-n>> 1 "init fires exactly once, synchronously" assert=
-    c update-n>> 0 "update has not fired before the first run-frame" assert=
-  ] task-scope
+    [
+      fake-clock
+      c: (counter) ;
+      [ c dup init-n>> 1 + >>init-n drop ]
+      [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
+      [ c dup draw-n>> 1 + >>draw-n drop ]
+      start-game
+      c init-n>> 1 "init fires exactly once, synchronously" assert=
+      c update-n>> 0 "update has not fired before the first run-frame" assert=
+    ] task-scope
+  ] with-parameter
 ] ;
 
 test-one-interval-fires-one-update-and-one-draw: ( -- ) [
+  (scratch-keyboard) current-keyboard
   [
-    fake-clock
-    c: (counter) ;
-    [ c dup init-n>> 1 + >>init-n drop ]
-    [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
-    [ c dup draw-n>> 1 + >>draw-n drop ]
-    start-game
+    [
+      fake-clock
+      c: (counter) ;
+      [ c dup init-n>> 1 + >>init-n drop ]
+      [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
+      [ c dup draw-n>> 1 + >>draw-n drop ]
+      start-game
 
-    update-interval-nanos nanoseconds advance-clock
-    run-frame
-    c update-n>> 1 "one interval fires exactly one update" assert=
-    c last-tick>> 1 "the update receives tick 1" assert=
-    c draw-n>> 1 "draw fires once" assert=
-  ] task-scope
+      update-interval-nanos nanoseconds advance-clock
+      run-frame
+      c update-n>> 1 "one interval fires exactly one update" assert=
+      c last-tick>> 1 "the update receives tick 1" assert=
+      c draw-n>> 1 "draw fires once" assert=
+    ] task-scope
+  ] with-parameter
 ] ;
 
 test-sub-interval-advance-fires-no-update: ( -- ) [
+  (scratch-keyboard) current-keyboard
   [
-    fake-clock
-    c: (counter) ;
-    [ c dup init-n>> 1 + >>init-n drop ]
-    [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
-    [ c dup draw-n>> 1 + >>draw-n drop ]
-    start-game
+    [
+      fake-clock
+      c: (counter) ;
+      [ c dup init-n>> 1 + >>init-n drop ]
+      [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
+      [ c dup draw-n>> 1 + >>draw-n drop ]
+      start-game
 
-    update-interval-nanos 2 div nanoseconds advance-clock
-    run-frame
-    c update-n>> 0 "less than one interval fires no update" assert=
-    c draw-n>> 1 "draw still fires every run-frame call" assert=
-  ] task-scope
+      update-interval-nanos 2 div nanoseconds advance-clock
+      run-frame
+      c update-n>> 0 "less than one interval fires no update" assert=
+      c draw-n>> 1 "draw still fires every run-frame call" assert=
+    ] task-scope
+  ] with-parameter
 ] ;
 
 test-catchup-caps-and-drops-remainder: ( -- ) [
+  (scratch-keyboard) current-keyboard
   [
-    fake-clock
-    c: (counter) ;
-    [ c dup init-n>> 1 + >>init-n drop ]
-    [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
-    [ c dup draw-n>> 1 + >>draw-n drop ]
-    start-game
+    [
+      fake-clock
+      c: (counter) ;
+      [ c dup init-n>> 1 + >>init-n drop ]
+      [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
+      [ c dup draw-n>> 1 + >>draw-n drop ]
+      start-game
 
-    update-interval-nanos 100 * nanoseconds advance-clock
-    run-frame
-    c update-n>> max-catchup-steps "catch-up runs at most max-catchup-steps updates" assert=
-    c draw-n>> 1 "draw still fires exactly once regardless of catch-up count" assert=
+      update-interval-nanos 100 * nanoseconds advance-clock
+      run-frame
+      c update-n>> max-catchup-steps "catch-up runs at most max-catchup-steps updates" assert=
+      c draw-n>> 1 "draw still fires exactly once regardless of catch-up count" assert=
 
-    run-frame
-    c update-n>> max-catchup-steps "dropped remainder triggers no further catch-up" assert=
-    c draw-n>> 2 "draw fires again on the next call" assert=
-  ] task-scope
+      run-frame
+      c update-n>> max-catchup-steps "dropped remainder triggers no further catch-up" assert=
+      c draw-n>> 2 "draw fires again on the next call" assert=
+    ] task-scope
+  ] with-parameter
 ] ;
 
 test-many-repeated-frames-stay-correct: ( -- ) [
+  (scratch-keyboard) current-keyboard
   [
-    fake-clock
-    c: (counter) ;
-    [ c dup init-n>> 1 + >>init-n drop ]
-    [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
-    [ c dup draw-n>> 1 + >>draw-n drop ]
-    start-game
+    [
+      fake-clock
+      c: (counter) ;
+      [ c dup init-n>> 1 + >>init-n drop ]
+      [ c dup update-n>> 1 + >>update-n drop c swap >>last-tick drop ]
+      [ c dup draw-n>> 1 + >>draw-n drop ]
+      start-game
 
-    2000 [
-      update-interval-nanos nanoseconds advance-clock
+      2000 [
+        update-interval-nanos nanoseconds advance-clock
+        run-frame
+      ] times
+
+      c update-n>> 2000 "2000 one-interval frames fire exactly 2000 updates" assert=
+      c last-tick>> 2000 "the tick counter lands on 2000" assert=
+      c draw-n>> 2000 "draw fires exactly once per frame across 2000 frames" assert=
+    ] task-scope
+  ] with-parameter
+] ;
+
+\\ Regression coverage for advance-keyboard-frame's placement inside the catch-up loop
+\\ (game/input.1z): a key held through a multi-tick catch-up burst must read as
+\\ key-pressed? on only the first of those ticks, not on every one of them.
+test-catchup-burst-fires-key-pressed-only-once: ( -- ) [
+  (scratch-keyboard) current-keyboard
+  [
+    [
+      fake-clock
+      c: (counter) ;
+      [ c dup init-n>> 1 + >>init-n drop ]
+      [
+        c dup update-n>> 1 + >>update-n drop
+        arrow-up: key-pressed? [ c dup pressed-n>> 1 + >>pressed-n drop ] when
+      ]
+      [ c dup draw-n>> 1 + >>draw-n drop ]
+      start-game
+
+      current-keyboard get 0 1 1 #poke! drop
+
+      update-interval-nanos 100 * nanoseconds advance-clock
       run-frame
-    ] times
-
-    c update-n>> 2000 "2000 one-interval frames fire exactly 2000 updates" assert=
-    c last-tick>> 2000 "the tick counter lands on 2000" assert=
-    c draw-n>> 2000 "draw fires exactly once per frame across 2000 frames" assert=
-  ] task-scope
+      c update-n>> max-catchup-steps "the burst still runs max-catchup-steps updates" assert=
+      c pressed-n>> 1 "key-pressed? fires on exactly one tick of the whole burst" assert=
+    ] task-scope
+  ] with-parameter
 ] ;

@@ -1,0 +1,81 @@
+\ Unit tests for lib/game/input.1z.
+
+use "testing" ;
+use "game/input" ;
+
+private{
+  (scratch-keyboard): ( -- byte-array ) [ 48 bytes-alloc ] ;
+}
+
+test-key-down-false-when-clear: ( -- ) [
+  (scratch-keyboard) current-keyboard
+  [
+    arrow-up: key-down? f "key-down? is false when the byte is clear" assert=
+  ] with-parameter
+] ;
+
+test-key-down-true-when-set: ( -- ) [
+  (scratch-keyboard) current-keyboard
+  [
+    current-keyboard get 0 1 1 #poke! drop
+    arrow-up: key-down? t "key-down? is true when the byte is set" assert=
+  ] with-parameter
+] ;
+
+test-key-down-unknown-key-throws: ( -- ) [
+  (scratch-keyboard) current-keyboard
+  [
+    [ not-a-tracked-key: key-down? ] "key-down? throws for an unrecognized key" assert-error
+  ] with-parameter
+] ;
+
+test-key-pressed-true-on-rising-edge-then-false-once-held: ( -- ) [
+  (scratch-keyboard) current-keyboard
+  [
+    current-keyboard get 0 1 1 #poke! drop
+    arrow-up: key-pressed? t "key-pressed? is true the first frame the key reads down" assert=
+
+    advance-keyboard-frame
+
+    arrow-up: key-pressed? f "key-pressed? is false once held past a frame" assert=
+    arrow-up: key-down? t "key-down? stays true while held" assert=
+  ] with-parameter
+] ;
+
+test-key-released-true-on-falling-edge-then-false-once-up: ( -- ) [
+  (scratch-keyboard) current-keyboard
+  [
+    current-keyboard get 0 1 1 #poke! drop
+    advance-keyboard-frame
+
+    current-keyboard get 0 0 1 #poke! drop
+    arrow-up: key-released? t "key-released? is true the first frame the key reads up" assert=
+
+    advance-keyboard-frame
+
+    arrow-up: key-released? f "key-released? is false once released past a frame" assert=
+    arrow-up: key-down? f "key-down? stays false while up" assert=
+  ] with-parameter
+] ;
+
+test-advance-keyboard-frame-only-touches-the-checked-key: ( -- ) [
+  (scratch-keyboard) current-keyboard
+  [
+    current-keyboard get 0 1 1 #poke! drop
+    advance-keyboard-frame
+
+    arrow-down: key-down? f "an untouched key stays false" assert=
+    arrow-down: key-pressed? f "an untouched key never reads as pressed" assert=
+  ] with-parameter
+] ;
+
+\\ Regression coverage matching game/draw.1z's test-repeated-calls-do-not-leak: advance-keyboard-
+\\ frame's per-key quotation is zero name: swap ; locals since it runs 48 times every real frame
+\\ (60Hz). 2000 calls mirrors game/loop_test.1z's own run-frame regression call count.
+test-advance-keyboard-frame-repeated-calls-do-not-leak: ( -- ) [
+  (scratch-keyboard) current-keyboard
+  [
+    2000 [ advance-keyboard-frame ] times
+    t "2000 advance-keyboard-frame calls stayed in budget" assert-true
+  ] with-parameter
+] ;

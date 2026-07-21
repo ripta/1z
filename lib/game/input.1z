@@ -1,0 +1,89 @@
+\ lib/game/input.1z - Keyboard input for the browser game platform
+\
+\ Held-key state crosses the host boundary as a shared-memory byte array: the browser's
+\ keydown/keyup listeners write directly into wasm linear memory at a fixed key index, so
+\ key-down? is a pure local byte-array read with no host call. key-pressed?/key-released? are
+\ pure 1z-level words that diff current-keyboard against a snapshot of the previous tick's,
+\ advanced once per update tick by advance-keyboard-frame -- not a second host mechanism, the
+\ same "host provides one primitive, 1z composes everything above it" shape game/draw.1z's
+\ framebuffer already uses.
+\
+\ Keys are named as kebab-cased KeyboardEvent.code values -- the physical/positional key, not
+\ the layout-dependent character -- matching every browser game framework's convention.
+
+use "bytes" ;
+use "ranges" ;
+use "sequences" ;
+
+\\ The byte array JS writes into: one byte per tracked key, 0 = up, nonzero = down. Defaults to
+\\ the real wasm keyboard buffer; tests (and any non-wasm caller) rebind it to a scratch buffer
+\\ via with-parameter, since (wasm-keyboard) only exists under the wasm C-API root.
+current-keyboard: parameter{ [ (wasm-keyboard) ] } ;
+
+private{
+  \\ Maps each tracked key's name to its byte offset in current-keyboard and
+  \\ keyboard-previous. The index assignment is a private contract with the JS host harness
+  \\ (examples/wasm-game/demo.js's KEY_INDEX table) and with capi_wasm.zig's
+  \\ keyboard_key_count -- all three must agree on the same 48 entries.
+  key-index: H{
+    arrow-up:   0 arrow-down: 1 arrow-left: 2 arrow-right: 3
+    key-a:      4 key-b: 5 key-c: 6 key-d: 7 key-e: 8 key-f: 9 key-g: 10 key-h: 11 key-i: 12
+    key-j:      13 key-k: 14 key-l: 15 key-m: 16 key-n: 17 key-o: 18 key-p: 19 key-q: 20 key-r: 21
+    key-s:      22 key-t: 23 key-u: 24 key-v: 25 key-w: 26 key-x: 27 key-y: 28 key-z: 29
+    digit-0:    30 digit-1: 31 digit-2: 32 digit-3: 33 digit-4: 34 digit-5: 35 digit-6: 36
+    digit-7:    37 digit-8: 38 digit-9: 39
+    space:      40 enter: 41 escape: 42 tab: 43
+    shift-left: 44 shift-right: 45 control-left: 46 control-right: 47
+  } ;
+
+  key-count: ( -- n ) const [ key-index @keys #len ] ;
+
+  \\ Previous frame's keyboard snapshot, for edge detection. A bracket-less top-level local:
+  \\ its initializer runs once, when this module loads, and every later reference resolves to
+  \\ the same mutable byte array, mirroring game/loop's game-loop instance.
+  keyboard-previous: key-count bytes-alloc ;
+}
+
+\\ True if key is currently held down. A pure local byte-array read; no host call. Throws if
+\\ key is not one of the tracked names.
+key-down?: ( key: symbol -- bool ) [
+  key-index swap @get
+  current-keyboard get swap #peek8
+  0 = not
+] ;
+
+\\ True the first update tick key reads as down after being up -- a rising edge. Diffs
+\\ current-keyboard against keyboard-previous, the snapshot advance-keyboard-frame refreshes
+\\ once per tick, so a held key reads pressed on only one tick even during a multi-tick
+\\ catch-up burst.
+key-pressed?: ( key: symbol -- bool ) [
+  key-index swap @get
+  dup current-keyboard get swap #peek8 0 = not
+  swap keyboard-previous swap #peek8 0 =
+  and
+] ;
+
+\\ True the first update tick key reads as up after being down -- a falling edge. See
+\\ key-pressed?.
+key-released?: ( key: symbol -- bool ) [
+  key-index swap @get
+  dup current-keyboard get swap #peek8 0 =
+  swap keyboard-previous swap #peek8 0 = not
+  and
+] ;
+
+\\ Copies current-keyboard into keyboard-previous. Called once per update tick by game/loop's
+\\ run-frame, right after that tick's update call, so a held key's key-pressed?/key-released?
+\\ result changes on the very next tick rather than staying true for an entire multi-tick
+\\ catch-up burst; not meant to be called directly by game code.
+\\
+\\ Zero name: swap ; locals in the per-key quotation: called key-count times per update tick,
+\\ and update ticks run at up to 60Hz (higher still during a catch-up burst), so a named
+\\ local here leaks memory in proportion to call count -- see the workaround note on
+\\ (set-pixel!) in game/draw.1z.
+advance-keyboard-frame: ( -- ) [
+  current-keyboard get
+  [ over #peek8 keyboard-previous -rot> #poke8! drop ] curry
+  key-count iota >iterator
+  swap #each
+] ;

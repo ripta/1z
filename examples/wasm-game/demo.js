@@ -38,6 +38,39 @@ window.addEventListener('resize', resizeCanvas)
 let framebufferPtr = 0
 const framebufferLen = canvasWidth * canvasHeight * 4
 
+// Maps KeyboardEvent.code to the same 0-47 byte offsets lib/game/input.1z's private key-index
+// hash uses. The two tables are a private contract kept in sync by inspection; there is no
+// shared source of truth, since capi_wasm.zig's keyboard buffer carries no key semantics of
+// its own (see lib/game/input.1z's header comment).
+const KEY_INDEX = {
+  ArrowUp: 0, ArrowDown: 1, ArrowLeft: 2, ArrowRight: 3,
+  KeyA: 4, KeyB: 5, KeyC: 6, KeyD: 7, KeyE: 8, KeyF: 9, KeyG: 10, KeyH: 11, KeyI: 12,
+  KeyJ: 13, KeyK: 14, KeyL: 15, KeyM: 16, KeyN: 17, KeyO: 18, KeyP: 19, KeyQ: 20, KeyR: 21,
+  KeyS: 22, KeyT: 23, KeyU: 24, KeyV: 25, KeyW: 26, KeyX: 27, KeyY: 28, KeyZ: 29,
+  Digit0: 30, Digit1: 31, Digit2: 32, Digit3: 33, Digit4: 34, Digit5: 35, Digit6: 36,
+  Digit7: 37, Digit8: 38, Digit9: 39,
+  Space: 40, Enter: 41, Escape: 42, Tab: 43,
+  ShiftLeft: 44, ShiftRight: 45, ControlLeft: 46, ControlRight: 47,
+}
+
+let keyboardPtr = 0
+let keyboardLen = 0
+
+function setKeyState(code, down) {
+  if (memory === null) return false
+  const index = KEY_INDEX[code]
+  if (index === undefined) return false
+  new Uint8Array(memory.buffer, keyboardPtr, keyboardLen)[index] = down ? 1 : 0
+  return true
+}
+
+window.addEventListener('keydown', (event) => {
+  if (setKeyState(event.code, true)) event.preventDefault()
+})
+window.addEventListener('keyup', (event) => {
+  if (setKeyState(event.code, false)) event.preventDefault()
+})
+
 const imports = {
   env: {
     onez_host_monotonic_now_ns: () => BigInt(Math.round(performance.now() * 1e6)),
@@ -70,6 +103,8 @@ async function main() {
   exports.onez_wasm_use_host_output(handle)
 
   framebufferPtr = exports.onez_wasm_framebuffer_ptr()
+  keyboardPtr = exports.onez_wasm_keyboard_ptr()
+  keyboardLen = exports.onez_wasm_keyboard_len()
 
   const inputPtr = exports.onez_wasm_input_ptr()
   const inputCapacity = exports.onez_wasm_input_capacity()

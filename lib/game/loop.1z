@@ -7,6 +7,7 @@
 \ present-frame.
 
 use "time" ;
+use "game/input" ;
 
 private{
   loop-state: mutable struct{ init update draw tick accumulator last-frame } ;
@@ -48,6 +49,13 @@ start-game: ( init: quotation update: quotation draw: quotation -- ) [
 \\ fixed-timestep update ticks (capped at max-catchup-steps; excess accumulated time is
 \\ dropped, not carried forward), then draw, then present-frame.
 \\
+\\ Each update tick advances the keyboard's previous-frame snapshot right after it runs
+\\ (game/input.1z's advance-keyboard-frame), so key-pressed?/key-released? fire at most
+\\ once per tick even during a multi-tick catch-up burst -- not once per real frame,
+\\ which would let a single keypress re-fire on every catch-up tick in that frame. A
+\\ frame with zero ticks simply does not advance; the snapshot stays valid until the
+\\ next tick that does run.
+\\
 \\ Zero name: swap ; locals: run-frame is called 60 times a second for as long as a game
 \\ is open, and a word with named locals leaks memory in proportion to call count. Every
 \\ intermediate value stays on the data stack, threaded through dup/swap/dip/keep.
@@ -68,6 +76,7 @@ run-frame: ( -- ) [
   [
     game-loop dup tick>> 1 + dup [ >>tick drop ] dip
     game-loop update>> call
+    advance-keyboard-frame
   ] times
 
   game-loop draw>> call
