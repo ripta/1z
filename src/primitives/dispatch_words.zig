@@ -17,12 +17,9 @@ pub const primitives = [_]Primitive{
     .{ .name = "define-method", .stack_effect = "name: descriptor markers --", .doc = "Register a method in the dispatch table.", .func = nativeDefineMethod },
 };
 
-/// define-method ( name: descriptor markers -- ) - Register a method in the dispatch table
+/// define-method ( name: descriptor markers -- )
 ///
-/// Called by `;` when it recognizes a method descriptor.
-/// Validates the word exists and has appropriate markers, then registers.
-///
-/// The descriptor is a mutable-map with:
+/// Called by `;` when it recognizes a method descriptor. The descriptor is a mutable-map with:
 /// - types: array of 1-2 type specifiers (TypeValues, the `any` marker, or string fallback)
 /// - body: quotation to execute when dispatched
 fn nativeDefineMethod(ctx: *Context) anyerror!void {

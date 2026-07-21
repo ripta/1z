@@ -28,7 +28,7 @@ pub const primitives = [_]Primitive{
 /// import object. Backed by `Date.now()`, which is natively millisecond-precision.
 extern "env" fn onez_host_realtime_now_ms() i64;
 
-/// clock-realtime ( -- sec nsec ) - Current wall-clock time (UTC) since Unix epoch
+/// clock-realtime ( -- sec nsec )
 fn nativeClockRealtime(ctx: *Context) anyerror!void {
     if (is_wasm) {
         const ms = onez_host_realtime_now_ms();
@@ -49,7 +49,7 @@ fn nativeClockRealtime(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = ts.nsec });
 }
 
-/// clock-monotonic ( -- sec nsec ) - Monotonic clock for measuring durations
+/// clock-monotonic ( -- sec nsec )
 fn nativeClockMonotonic(ctx: *Context) anyerror!void {
     if (ctx.scheduler) |sched| {
         switch (sched.clock) {
@@ -112,9 +112,8 @@ var tz_mutex = std.Thread.Mutex{};
 
 /// tz-decompose ( sec tz-name -- year month-num day hour min sec wday yday gmtoff tz-abbrev )
 ///
-/// Decompose epoch seconds in a named timezone via libc localtime_r.
-/// If tz-name is empty, uses the system's local timezone.
-/// Pushes 10 raw values for consumption by 1z-level struct/hash builders.
+/// If tz-name is empty, uses the system's local timezone. Pushes 10 raw values for
+/// consumption by 1z-level struct/hash builders.
 fn nativeTzDecompose(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "tz-decompose");
 

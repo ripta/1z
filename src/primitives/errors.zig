@@ -110,8 +110,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "with-isolation", .stack_effect = "quot --", .doc = "Execute quotation with isolated type registry, dispatch tables, and protocol obligations. Only stack effects survive.", .func = nativeWithIsolation },
 };
 
-/// recover ( try-quot recover-quot -- ) - Execute try quotation; if error,
-/// execute recover quotation with error on stack
+/// recover ( try-quot recover-quot -- )
 pub fn nativeRecover(ctx: *Context) anyerror!void {
     // Note: Parameter effects are validated statically by validateParameterEffects
     // before this function is called, so we just pop the quotations here.
@@ -186,8 +185,7 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
     };
 }
 
-/// cleanup ( body-quot cleanup-quot -- ) - Execute body, always run cleanup,
-/// then re-throw any error from body
+/// cleanup ( body-quot cleanup-quot -- )
 pub fn nativeCleanup(ctx: *Context) anyerror!void {
     const cleanup_quot = try popQuotation(ctx);
     const body_quot = try popQuotation(ctx);
@@ -213,7 +211,7 @@ pub fn nativeCleanup(ctx: *Context) anyerror!void {
     try body_result;
 }
 
-/// rethrow ( error -- ) - Re-raise an error value as an actual error
+/// rethrow ( error -- )
 pub fn nativeRethrow(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -241,7 +239,8 @@ pub fn nativeRethrow(ctx: *Context) anyerror!void {
     }
 }
 
-/// make-error ( data message type -- error ) - Construct an error object.
+/// make-error ( data message type -- error )
+///
 /// data: any value or f (arbitrary associated data)
 /// message: string or f (human-readable message)
 /// type: string or symbol (error type name)
@@ -302,9 +301,10 @@ fn nativeMakeError(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .error_value = error_ptr });
 }
 
-/// throw ( error -- ) - Raise an error object as an actual error.
-/// Only accepts error values. The error object is stashed on the context
-/// and recovered by `recover` with its original type, message, and data intact.
+/// throw ( error -- )
+///
+/// The error object is stashed on the context and recovered by `recover` with its original
+/// type, message, and data intact.
 fn nativeThrow(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -406,8 +406,7 @@ fn checkIsolationBoundary(ctx: *Context, effect: *const StackEffect, isolation_f
     }
 }
 
-/// with-isolation ( quot -- ) - Execute quotation with isolated type registry,
-/// dispatch tables, and protocol obligations. Only stack effects survive.
+/// with-isolation ( quot -- )
 fn nativeWithIsolation(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
 

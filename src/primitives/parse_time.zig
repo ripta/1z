@@ -116,9 +116,8 @@ fn parseTokensUntilCore(ctx: *Context, delimiter: []const u8, mode: ParseMode) !
     return .{ .array = try value_mod.Array.fromOwnedSlice(alloc, result) };
 }
 
-/// Resolve a token string as a scalar literal value. Returns null if the token
-/// is not a recognized scalar form. Checks in order: fixnum, bignum, float,
-/// quoted string (with escape processing), trailing-colon symbol.
+/// Resolve a token string as a scalar literal value. Returns null if the token is not a
+/// recognized scalar form.
 fn resolveScalarLiteral(alloc: std.mem.Allocator, arena_alloc: std.mem.Allocator, token: []const u8) std.mem.Allocator.Error!?Value {
     if (tokenizer_mod.parseInteger(token)) |n| {
         return .{ .fixnum = n };
@@ -167,7 +166,7 @@ fn tryResolveLiteral(ctx: *Context, alloc: std.mem.Allocator, tokenizer: *tokeni
     return error.NotALiteral;
 }
 
-/// ( ( -- stack-effect ) - Parse a stack effect declaration from the tokenizer.
+/// ( ( -- stack-effect )
 fn nativeOpenParen(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer.?;
     const alloc = ctx.quotationAllocator();
@@ -176,8 +175,7 @@ fn nativeOpenParen(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .stack_effect = effect });
 }
 
-/// parse-until ( delimiter -- quotation ) - Read tokens until delimiter, return as quotation
-/// This is a parse-time primitive that reads from the active tokenizer.
+/// parse-until ( delimiter -- quotation )
 pub fn nativeParseUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
 
@@ -188,14 +186,12 @@ pub fn nativeParseUntil(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .quotation = quot });
 }
 
-/// bind-until ( delimiter -- placeholder ) - Read a `bind{ ... }` body up to the
-/// delimiter, execute it at parse time, and package the resulting stack values
-/// into a placeholder array headed by `bind_placeholder_marker`.
+/// bind-until ( delimiter -- placeholder )
 ///
-/// The base type this binds is not on the stack: it was already drained into the
-/// enclosing definition's `parse-values-until` collection array before `bind{`
-/// ran. So the placeholder carries only the body's parameters; the field/variant
-/// parser combines it with the adjacent base.
+/// The base type is not on the stack: it was already drained into the enclosing
+/// definition's `parse-values-until` collection array before `bind{` ran. The
+/// placeholder carries only the body's parameters; the field/variant parser
+/// combines it with the adjacent base.
 fn nativeBindUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
     const tokenizer = ctx.parse_tokenizer.?;
@@ -223,32 +219,31 @@ fn nativeBindUntil(ctx: *Context) anyerror!void {
     try helpers.pushAdoptedArray(ctx, alloc, placeholder);
 }
 
-/// parse-tokens-until ( delimiter -- array ) - Read tokens until delimiter, return as string array
-/// This is a parse-time primitive that reads raw tokens from the active tokenizer.
-/// Unlike parse-until, this does not parse the tokens as instructions - it returns
-/// them as literal strings, useful for syntax like `method{ type1 type2 }`.
+/// parse-tokens-until ( delimiter -- array )
+///
+/// Unlike parse-until, this does not parse tokens as instructions -- it returns them as literal
+/// strings, useful for syntax like `method{ type1 type2 }`.
 pub fn nativeParseTokensUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
     const result = try parseTokensUntilCore(ctx, delimiter, .raw);
     try ctx.stack.pushMoved(result);
 }
 
-/// parse-values-until ( delimiter -- array ) - Read tokens until delimiter, executing parse-time words
+/// parse-values-until ( delimiter -- array )
 pub fn nativeParseValuesUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
     const result = try parseTokensUntilCore(ctx, delimiter, .evaluate_parse_time);
     try ctx.stack.pushMoved(result);
 }
 
-/// parse-types-until ( delimiter -- array ) - Read tokens until delimiter, executing parse-time words.
-/// Unknown tokens are errors.
+/// parse-types-until ( delimiter -- array )
 fn nativeParseTypesUntil(ctx: *Context) anyerror!void {
     const delimiter = try popString(ctx);
     const result = try parseTokensUntilCore(ctx, delimiter, .evaluate_parse_time_strict);
     try ctx.stack.pushMoved(result);
 }
 
-/// parse-token ( -- string ) - Read one raw token from the tokenizer
+/// parse-token ( -- string )
 fn nativeParseToken(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer.?;
     const alloc = ctx.quotationAllocator();
@@ -261,7 +256,7 @@ fn nativeParseToken(ctx: *Context) anyerror!void {
     return error.UnterminatedTokenScan;
 }
 
-/// peek-token ( -- string ) - Return the next token without consuming it
+/// peek-token ( -- string )
 fn nativePeekToken(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer.?;
     const alloc = ctx.quotationAllocator();
@@ -289,7 +284,7 @@ fn nativeResolveLiteral(ctx: *Context) anyerror!void {
     }
 }
 
-/// emit-call ( symbol -- ) - Request a call_word emission after parse-time word completes.
+/// emit-call ( symbol -- )
 fn nativeEmitCall(ctx: *Context) anyerror!void {
     const name = switch (try ctx.stack.pop()) {
         .symbol => |s| s,
@@ -309,16 +304,13 @@ fn nativeEmitCall(ctx: *Context) anyerror!void {
     try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .call = name });
 }
 
-/// emit-body ( quotation -- ) - Splice the quotation's body inline after the
-/// parse-time word completes.
+/// emit-body ( quotation -- )
 fn nativeEmitBody(ctx: *Context) anyerror!void {
     const quot = try helpers.popQuotation(ctx);
     try ctx.parse_time_deferred_emissions.append(ctx.allocator, .{ .body = quot.instructions });
 }
 
-/// parse-literal ( -- value ) - Read the next literal from the tokenizer.
-///
-/// Three layers: scalar literals, structure openers, parse-time word execution.
+/// parse-literal ( -- value )
 pub fn nativeParseLiteral(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer.?;
     const alloc = ctx.quotationAllocator();

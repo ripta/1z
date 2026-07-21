@@ -50,7 +50,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "struct-instance-to-hash", .func = structInstanceToHashHelper, .stack_effect = "instance vtype-ptr -- hash" },
 };
 
-/// define-struct ( name: descriptor markers -- ) - Define a struct type and its accessor words
+/// define-struct ( name: descriptor markers -- )
 ///
 /// Generates: make-NAME, >NAME, NAME?, and FIELD>> for each field
 fn nativeDefineStruct(ctx: *Context) anyerror!void {
@@ -458,14 +458,12 @@ fn defineConstructor(ctx: *Context, name: []const u8, struct_type: *const Struct
 }
 
 /// Resolve the shared dispatch_id for a `struct{`-generated field getter or setter name, so every
-/// struct anywhere in the program with a field of this name dispatches through one table,
-/// regardless of which mutually-invisible scope's `struct{` happens to define the accessor word
-/// first. `local_dispatch_id` is the id the word was just (re)defined under in the current scope;
-/// the first `struct{` to see this name seeds the registry with it, and every later one reuses
-/// that same id instead of its own.
+/// struct anywhere in the program with a field of this name dispatches through one table, regardless
+/// of which mutually-invisible scope's `struct{` defines the accessor word first. The first `struct{`
+/// to see a name seeds the registry with its `local_dispatch_id`; every later one reuses that id.
 ///
-/// Not used by the `>NAME` hash converter: see the comment at its own dispatch registration for
-/// why that one must stay scope-local.
+/// Not used by the `>NAME` hash converter: see the comment at its own dispatch registration for why
+/// that one must stay scope-local.
 fn sharedAccessorDispatchId(ctx: *Context, name: []const u8, local_dispatch_id: u32) !u32 {
     if (ctx.generic_accessor_dispatch_ids.get(name)) |shared_id| return shared_id;
     try ctx.generic_accessor_dispatch_ids.put(ctx.allocator, name, local_dispatch_id);

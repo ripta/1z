@@ -39,15 +39,15 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "descriptor-ffi-layout-raw", .func = nativeDescriptorFfiLayoutRaw, .stack_effect = "descriptor -- fixnum" },
 };
 
-/// define-builtin-type ( name: descriptor markers -- ) - Define a built-in type word from a
-/// descriptor map. Invoked through the descriptor-driven `;` protocol: the descriptor's
-/// `define:` quotation calls this native after `;` has pushed name, descriptor, and the
-/// collected markers array.
+/// define-builtin-type ( name: descriptor markers -- )
 ///
-/// If a TypeValue for this name was pre-created by Context.initBuiltinTypeValues(),
-/// the existing object is augmented with the descriptor (preserving pointer identity).
-/// Otherwise a new TypeValue is allocated and registered. The resulting word is defined
-/// as a parse-time, const, typed compound that pushes the TypeValue literal.
+/// Invoked through the descriptor-driven `;` protocol: the descriptor's `define:` quotation
+/// calls this native after `;` has pushed name, descriptor, and the collected markers array.
+///
+/// If a TypeValue for this name was pre-created by Context.initBuiltinTypeValues(), the existing
+/// object is augmented with the descriptor, preserving pointer identity. Otherwise a new TypeValue
+/// is allocated and registered. The resulting word is defined as a parse-time, const, typed
+/// compound that pushes the TypeValue literal.
 fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -136,12 +136,10 @@ fn nativeDefineBuiltinType(ctx: *Context) anyerror!void {
     });
 }
 
-/// Merge the user-supplied mutable-map descriptor into a typed
-/// TypeDescriptor. Only the universal boolean keys are recognised;
-/// the legacy `type` key was the kind discriminator and is no longer
-/// stored as a string. Unknown keys are silently ignored (mirroring
-/// the previous put-everything behavior, since no reader consumed
-/// keys beyond the bools).
+/// Only the universal boolean keys are recognized; the legacy `type` key was the kind
+/// discriminator and is no longer stored as a string. Unknown keys are silently ignored,
+/// mirroring the previous put-everything behavior, since no reader consumed keys beyond the
+/// bools.
 fn applyDescriptorMerge(desc: *value_mod.TypeDescriptor, source: *const value_mod.MutableMap) void {
     var iter = source.map.iterator();
     while (iter.next()) |entry| {
@@ -218,9 +216,10 @@ fn nativeTypeHasProperty(ctx: *Context) anyerror!void {
     }
 }
 
-/// native.type-name ( type -- string ) - Extract the name string from a type
-/// value or a protocol descriptor. Accepting both keeps stack-effect display
-/// uniform across concrete-type and protocol-bound annotations.
+/// native.type-name ( type -- string )
+///
+/// Accepting both a type value and a protocol descriptor keeps stack-effect display uniform
+/// across concrete-type and protocol-bound annotations.
 fn nativeTypeName(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -259,8 +258,7 @@ fn nativeTypeMembers(ctx: *Context) anyerror!void {
     }
 }
 
-/// Pop a `type_descriptor` value from the stack, reporting a TypeMismatch on
-/// any other variant. Used by the twelve descriptor accessors below.
+/// Used by the twelve descriptor accessors below.
 fn popDescriptor(ctx: *Context) anyerror!*const value_mod.TypeDescriptor {
     const val = try ctx.stack.pop();
     return switch (val) {
@@ -272,7 +270,6 @@ fn popDescriptor(ctx: *Context) anyerror!*const value_mod.TypeDescriptor {
     };
 }
 
-/// Set the pending error message for a kind-mismatch on a descriptor accessor.
 fn setKindMismatch(ctx: *Context, expected: []const u8, desc: *const value_mod.TypeDescriptor) void {
     helpers.setErrorContext(
         ctx,

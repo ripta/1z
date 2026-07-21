@@ -63,8 +63,8 @@ fn nativeSetSignalHandler(ctx: *Context) anyerror!void {
 
 /// ( signal -- )
 ///
-/// For SIGINT, keep our special handler so that the default "interrupted" behavior is preserved.
-/// For other signals, restore the OS default.
+/// SIGINT keeps the runtime's own handler so the "interrupted" behavior is preserved; every
+/// other signal is restored to its OS default.
 fn nativeClearSignalHandler(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "clear-signal-handler");
     const signum = try helpers.popFixnum(ctx);

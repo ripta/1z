@@ -118,16 +118,10 @@ fn hostedEnv(ctx: *Context) HostedEnv {
 
 /// define-protocol ( name: descriptor markers -- )
 ///
-/// Called by `;` when it recognizes a protocol descriptor.
-///
-/// Allocates a `ProtocolDescriptor` that owns the protocol's name and methods list, then emits a
-/// parse-time const word whose body pushes the descriptor pointer onto the stack. Runtime
-/// validation is performed by separate verbs (`assert-satisfies`); the protocol word itself is
-/// just a handle factory.
-///
-/// The parse-time descriptor is a mutable-map with:
-///
-/// - `methods:` flat array of symbols interleaved with optional stack-effects
+/// Called by `;` when it recognizes a protocol descriptor. The protocol word itself is just a
+/// handle factory; runtime validation happens in `assert-satisfies`. The parse-time descriptor is
+/// a mutable-map whose `methods:` field is a flat array of symbols interleaved with optional
+/// stack-effects.
 fn nativeDefineProtocol(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -194,15 +188,9 @@ fn nativeDefineProtocol(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( type-name descriptor -- )
 ///
-/// Reads `methods` and `name` off the descriptor. The methods slice is a flat sequence of symbols
-/// interleaved with optional stack-effects.
-///
-/// For each symbol:
-///
-/// - If followed by a `stack-effect:` typed method validation using the effect's input type annotations.
-/// - The `self` sentinel is substituted with the implementing type.
-/// - The `any` sentinel triggers enumeration of dispatch entries.
-/// - Otherwise, bare `method` (backward compat) checking unary or same-type binary dispatch.
+/// Backs both `assert-satisfies` and the `protocol-check` registry entry. Dispatches a popped
+/// constraint (protocol descriptor or combinator) to an immediate check, or defers it as a
+/// protocol obligation while a module is still loading.
 fn protocolCheckHelper(ctx: *Context) anyerror!void {
     const desc_val = try ctx.stack.pop();
     const type_name = switch (try ctx.stack.pop()) {
@@ -260,11 +248,8 @@ fn nativeSatisfies(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .boolean = result });
 }
 
-/// Full satisfies-check for a popped constraint value against a named type,
-/// covering both a bare `ProtocolDescriptor` and a `ConstraintCombinator`.
-/// Cross-type methods are checked immediately; never raises `protocol-error`.
-/// A non-constraint value or unknown type name is a programming error and
-/// propagates as `TypeMismatch`.
+/// Full satisfies-check for a popped constraint value (`ProtocolDescriptor` or
+/// `ConstraintCombinator`) against a named type.
 fn constraintSatisfied(ctx: *Context, type_name: []const u8, desc_val: Value) !bool {
     switch (desc_val) {
         .protocol_descriptor => |descriptor| return checkProtocolObligation(ctx, type_name, descriptor),
@@ -282,10 +267,7 @@ fn constraintSatisfied(ctx: *Context, type_name: []const u8, desc_val: Value) !b
     }
 }
 
-/// Predicate-shaped variant of `validateProtocolObligation`. Returns true if the
-/// type satisfies the protocol, false otherwise; never raises `protocol-error`.
-/// Other failures (e.g. `TypeMismatch` from a malformed descriptor) still
-/// propagate, since those are programming errors rather than protocol mismatches.
+/// Predicate-shaped variant of `validateProtocolObligation` for a named type.
 pub fn checkProtocolObligation(
     ctx: *Context,
     type_name: []const u8,
@@ -315,8 +297,7 @@ pub fn satisfiesByDescriptor(
 }
 
 /// Check whether a resolved type satisfies a constraint element: a concrete
-/// type, a protocol bound, or a combinator. Never raises `protocol-error`;
-/// programming errors (e.g. a malformed descriptor) propagate.
+/// type, a protocol bound, or a combinator.
 pub fn typeSatisfiesConstraint(
     ctx: *Context,
     type_tv: *const value_mod.TypeValue,

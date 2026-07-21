@@ -132,16 +132,8 @@ fn nativeCreateBufferedChannel(ctx: *Context) anyerror!void {
 
 /// send ( val ch -- )
 ///
-/// If the channel is unbuffered, blocks until a receiver is waiting, then hands off the value directly to that receiver.
-/// If the channel is buffered and has space, pushes the value onto the buffer and returns immediately.
-/// If the channel is buffered and full, blocks until a receiver takes something from the buffer, then pushes the value onto the buffer and returns.
-///
-/// In all cases, if the channel is closed, throws ChannelClosed. If the current task is cancelled while blocked, throws a "task-cancelled" error.
-///
-/// Values that cross the task boundary are deep-copied, or shared by refcount bump when provably
-/// immutable and self-contained: either way the receiver observes a value independent of the
-/// sender's. When sender and receiver are pinned to different workers, the receiver wakes via its
-/// home worker's external queue.
+/// Direct handoff to a waiting receiver, else a buffer push if there's room, else blocks until a
+/// receiver frees a slot.
 fn nativeSend(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "send cannot be called during module loading";
@@ -267,18 +259,6 @@ fn nativeSend(ctx: *Context) anyerror!void {
 }
 
 /// receive ( ch -- val )
-///
-/// If there are waiting senders, takes a value directly from the first one and wakes that sender.
-/// If the buffer is non-empty, pops a value from the buffer and returns it; if there are waiting senders, moves the first sender's value into the buffer and wakes that sender.
-/// If the channel is closed and there are no waiting senders or buffered values, throws ChannelClosed.
-/// Otherwise, blocks until a sender is waiting or a value is buffered, then behaves as above when it wakes up.
-///
-/// In all cases, if the current task is cancelled while blocked, throws a "task-cancelled" error.
-///
-/// Values that cross the task boundary are deep-copied, or shared by refcount bump when provably
-/// immutable and self-contained: either way the receiver observes a value independent of the
-/// sender's. Waking a sender or receiver pinned to a different worker routes through the target's
-/// home worker external queue.
 fn nativeReceive(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "receive cannot be called during module loading";
@@ -396,13 +376,6 @@ fn nativeReceive(ctx: *Context) anyerror!void {
 }
 
 /// try-receive ( ch -- val/f flag )
-///
-/// Non-blocking receive attempt. If a value is immediately available from a
-/// waiting sender or the buffer, pushes the value and t. Otherwise pushes f f.
-///
-/// The received value is deep-copied at the task boundary. When the
-/// waiting sender that supplied the value is pinned to another worker, the
-/// sender wakes via its home worker's external queue.
 fn nativeTryReceive(ctx: *Context) anyerror!void {
     const ch = try helpers.popChannel(ctx);
 
@@ -464,10 +437,7 @@ fn nativeTryReceive(ctx: *Context) anyerror!void {
 
 /// close-channel ( ch -- )
 ///
-/// Mark the channel as closed. Double-close is a no-op.
-/// Wakes all blocked senders and receivers so they can observe the closed
-/// state. Tasks pinned to other workers are woken via their home worker's
-/// external queue.
+/// Double-close is a no-op.
 fn nativeCloseChannel(ctx: *Context) anyerror!void {
     const ch = try helpers.popChannel(ctx);
 
@@ -521,19 +491,9 @@ fn nativeCloseChannel(ctx: *Context) anyerror!void {
 
 /// select ( array -- val ch )
 ///
-/// Wait on multiple channels. Scans each channel for an immediately available
-/// value (waiting senders or buffered data). If one is found, returns
-/// immediately with the value and the channel it came from.
-///
-/// If no channel has data ready, registers the current task as a receiver on
-/// all channels with a shared SelectContext, then suspends. When any channel
-/// delivers a value (via send) or is closed, the task wakes and returns the
-/// result. Stale receiver entries are cleaned from the other channels.
-///
-/// Registered channels may have senders and receivers pinned to any worker;
-/// when delivery happens on another worker, the selecting task wakes via
-/// its home worker's external queue. The delivered value is deep-copied at
-/// the task boundary.
+/// Falls back to registering the current task as a receiver on every channel via a shared
+/// `SelectContext`, then suspends; stale receiver entries on the other channels are cleaned up
+/// once one delivers or all are closed.
 fn nativeSelect(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "select cannot be called during module loading";
@@ -710,7 +670,6 @@ fn unlockChannelsOrdered(ctx: *Context, channels: []*Channel) void {
 }
 
 /// Remove all receiver entries for a specific task from a channel's waiting list.
-///
 fn removeReceiverEntries(ch: *Channel, task: *Task) void {
     var i: usize = 0;
     while (i < ch.waiting_receivers.items.len) {

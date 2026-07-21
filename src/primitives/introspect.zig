@@ -87,15 +87,13 @@ fn constraintKindSymbol(kind: ConstraintCombinator.Kind) []const u8 {
     };
 }
 
-/// Build the raw 5-field constraint-info record `{name kind methods elements id}`
-/// from a constraint backing. The prelude wraps this into the `constraint-info`
-/// struct. `name_override` supplies the top-level name for a combinator, which
-/// carries no stored name; pass `null` for nested elements and bare-value entry
-/// points so anonymous combinators report `f`.
+/// Build the raw 5-field constraint-info record `{name kind methods elements id}` from a
+/// constraint backing; the prelude wraps this into the `constraint-info` struct. A combinator
+/// carries no stored name, so `name_override` supplies the top-level name; pass `null` for nested
+/// elements and bare-value entry points, which then report `f`.
 ///
-/// A combinator's element list is heterogeneous: a `type` element is the raw
-/// type value (first-class, full fidelity), while `protocol` and `combinator`
-/// elements recurse into nested records (their raw values are opaque pointers).
+/// A combinator's element list is heterogeneous: a `type` element is the raw type value, while
+/// `protocol` and `combinator` elements recurse into nested records.
 fn buildConstraintRecord(alloc: Allocator, backing: ConstraintBacking, name_override: ?[]const u8) Allocator.Error!Value {
     const fields = try alloc.alloc(Value, 5);
     switch (backing) {
@@ -714,10 +712,7 @@ fn nativeToWord(ctx: *Context) anyerror!void {
 
 /// >constraint-info ( constraint -- array ) - Convert a constraint value into the same
 /// raw constraint-info record `{name kind methods elements id}` that `>word-info`'s
-/// `protocol` field carries. Accepts both protocol-descriptor and combinator backings;
-/// a bare value carries no name, so combinators report `f`.
-///
-/// The prelude wraps the result into the `constraint-info` struct.
+/// `protocol` field carries. Accepts both protocol-descriptor and combinator backings.
 fn nativeConstraintToInfo(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const val = try ctx.stack.pop();

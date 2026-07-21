@@ -19,7 +19,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "interpolate", .stack_effect = "source template -- string", .doc = "Apply template to source value.", .func = nativeInterpolate },
 };
 
-/// template ( string -- template ) - Parse format string into template value
+/// template ( string -- template )
 fn nativeTemplate(ctx: *Context) anyerror!void {
     const input = try helpers.popString(ctx);
     const alloc = ctx.quotationAllocator();
@@ -28,7 +28,7 @@ fn nativeTemplate(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .template = segments });
 }
 
-/// interpolate ( source template -- string ) - Apply template to source value
+/// interpolate ( source template -- string )
 fn nativeInterpolate(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 

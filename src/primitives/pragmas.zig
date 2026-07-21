@@ -21,11 +21,10 @@ pub const primitives = [_]Primitive{
 };
 
 pub const registry_entries = [_]RegistryEntry{
-    // ( name -- value t | f ) Raw pragma lookup for the prelude pragma-get?/pragma-get wrappers.
     .{ .name = "pragma-get-raw", .func = nativePragmaGetRaw, .stack_effect = "name -- value t | f" },
 };
 
-/// register-pragma ( name validator -- ) - Register a pragma key
+/// register-pragma ( name validator -- )
 fn nativeRegisterPragma(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const validator_val = try ctx.stack.pop();
@@ -50,9 +49,7 @@ fn nativeRegisterPragma(ctx: *Context) anyerror!void {
     try ctx.pragma_registry.put(ctx.allocator, duped_name, registration);
 }
 
-/// pragma{ ... } - Parse-time word for setting pragma values.
-/// Uses parse-until to get a quotation, executes it, then processes
-/// the resulting stack values as symbol-value pairs.
+/// pragma{ ( -- )
 fn nativePragmaBlock(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -114,9 +111,7 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
     }
 }
 
-/// pragma-def{ ... } - Parse-time batch registration of pragma keys.
-/// Bare string names register boolean pragmas; symbol names followed by a
-/// quotation register validated pragmas.
+/// pragma-def{ ( -- )
 fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -163,7 +158,7 @@ fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
     }
 }
 
-/// pragma? ( name -- ? ) - Query whether the named pragma is set and truthy.
+/// pragma? ( name -- ? )
 fn nativePragmaQuery(ctx: *Context) anyerror!void {
     const name = try popString(ctx);
     const value = ctx.getPragma(name);
@@ -177,7 +172,9 @@ fn nativePragmaQuery(ctx: *Context) anyerror!void {
     }
 }
 
-/// pragma-get-raw ( name -- value t | f ) - Raw pragma lookup for the prelude wrapper.
+/// pragma-get-raw ( name -- value t | f )
+///
+/// Raw lookup backing the prelude's pragma-get?/pragma-get wrappers.
 fn nativePragmaGetRaw(ctx: *Context) anyerror!void {
     const name = try popString(ctx);
     const value = ctx.getPragma(name);
@@ -189,9 +186,7 @@ fn nativePragmaGetRaw(ctx: *Context) anyerror!void {
     }
 }
 
-/// Run a quotation or native validator, then handle the result.
-/// The value to validate must already be on the stack.
-/// On success, sets the pragma. On failure, throws a pragma error.
+/// The value to validate must already be on the stack before calling.
 fn runValidator(ctx: *Context, alloc: std.mem.Allocator, reg: PragmaRegistration, pragma_name: []const u8) anyerror!void {
     if (reg.native_validator) |native_fn| {
         try native_fn(ctx);
@@ -213,7 +208,6 @@ fn runValidator(ctx: *Context, alloc: std.mem.Allocator, reg: PragmaRegistration
     }
 }
 
-/// Return true if the registration has any validator (quotation or native).
 fn hasValidator(reg: PragmaRegistration) bool {
     return reg.validator != null or reg.native_validator != null;
 }

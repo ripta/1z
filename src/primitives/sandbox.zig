@@ -11,7 +11,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "with-sandbox", .func = nativeWithSandbox, .stack_effect = "sandbox-spec quot --", .doc = "Execute quotation with the given sandbox restricting capability access. Nesting intersects (can only restrict, never widen)." },
 };
 
-/// ( sandbox-spec quot -- ) Execute quotation with sandbox enforcement.
+/// with-sandbox ( sandbox-spec quot -- )
 fn nativeWithSandbox(ctx: *Context) anyerror!void {
     const quot = try helpers.popQuotation(ctx);
     const spec_val = ctx.stack.pop() catch return error.StackUnderflow;
@@ -35,7 +35,9 @@ fn nativeWithSandbox(ctx: *Context) anyerror!void {
     try ctx.executeQuotationWithFrame(quot);
 }
 
-/// sandbox{ cap1 cap2 ... } parses capability names until `}` and produces a SandboxSpec.
+/// sandbox{ ( -- sandbox-spec )
+///
+/// Syntax: `sandbox{ cap1 cap2 ... }`.
 fn nativeSandboxParse(ctx: *Context) anyerror!void {
     const tokenizer = ctx.parse_tokenizer orelse return error.NoTokenizerAvailable;
     const alloc = ctx.quotationAllocator();

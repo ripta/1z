@@ -22,12 +22,10 @@ const markers_mod = @import("markers.zig");
 const helpers = @import("helpers.zig");
 const trace_mod = @import("../trace.zig");
 
-/// Execute a dispatch entry body, handling quotation, native_fn, and
-/// host_callback variants. When the entry carries a defining module, the
-/// module's deps frame is pushed around the quotation body so a method body
-/// resolves its module's private helpers the same way a regular module word
-/// does. Native and host-callback bodies carry no defining module and run as
-/// opaque functions.
+/// When the entry carries a defining module, the module's deps frame is pushed around the
+/// quotation body so a method body resolves its module's private helpers the same way a regular
+/// module word does. Native and host-callback bodies carry no defining module and run as opaque
+/// functions.
 pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !void {
     switch (entry.body) {
         .quotation => |q| {
@@ -47,12 +45,10 @@ pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
     }
 }
 
-/// Run a dispatch-entry quotation body. An interpreter-registered method
-/// carries no compiled code pointer and runs its instructions on the current
-/// frame, exactly as it always has. An AOT-replayed method body carries a
-/// compiled `code_ptr` and an empty instruction slice; it runs through the
-/// compiled-call path. Gating on `code_ptr` keeps the interpreter dispatch
-/// path free of the extra local frame `executeQuotationWithFrame` pushes.
+/// An interpreter-registered method carries no compiled code pointer and runs its instructions on
+/// the current frame. An AOT-replayed method carries a compiled `code_ptr` with an empty
+/// instruction slice and runs through the compiled-call path. Gating on `code_ptr` keeps the
+/// interpreter path free of the extra local frame `executeQuotationWithFrame` pushes.
 fn runDispatchQuotation(ctx: *Context, q: value_mod.Quotation) !void {
     if (q.code_ptr != null) {
         try ctx.executeQuotationWithFrame(q);
@@ -61,15 +57,12 @@ fn runDispatchQuotation(ctx: *Context, q: value_mod.Quotation) !void {
     }
 }
 
-/// Auto-unwrap the top stack operand from a tagged value to its inner value.
 fn autoUnwrapTopOperand(ctx: *Context) !void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     try ctx.stack.push(val.tagged.inner.*);
 }
 
-/// Auto-unwrap binary operands on the stack. The top of stack is b (peek),
-/// the next is a (peekN(1)). Pop both, push back unwrapped versions in order.
 fn autoUnwrapBinaryOperands(ctx: *Context, unwrap_a: bool, unwrap_b: bool) !void {
     const b = try ctx.stack.pop();
     const a = try ctx.stack.pop();
@@ -153,17 +146,13 @@ fn lookupUnaryWithFallback(ctx: *Context, dispatch_id: u32, a: Value) ?AutoUnwra
 
 /// Try to dispatch a binary operation via the dispatch table.
 ///
-/// Peeks at the top two stack values and looks up a registered method.
-/// If found, executes the method body; operands remain on stack for the
-/// body to consume. Returns true if dispatched, false if not.
+/// Peeks at the top two stack values and looks up a registered method, executing the body with
+/// operands left on the stack for it to consume. Returns true if dispatched.
 ///
-/// Each native that supports dispatch must call this function explicitly.
-/// Only type-switching natives that branch on operand types (arithmetic,
-/// comparison, inspect, sequence ops, etc.) should opt in.
-///
-/// Type-agnostic natives (dup, drop, swap, etc.) must not dispatch.
-///
-/// See also notes in the implementation of `nativeDefineMethod`.
+/// Opt-in only: each native that supports dispatch must call this explicitly. Only type-switching
+/// natives that branch on operand types (arithmetic, comparison, inspect, sequence ops, etc.)
+/// should opt in; type-agnostic natives (dup, drop, swap, etc.) must not dispatch. See also notes
+/// in the implementation of `nativeDefineMethod`.
 pub fn tryDispatchBinary(ctx: *Context, word_name: []const u8) !bool {
     const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
     return tryDispatchBinaryById(ctx, dispatch_id);
@@ -220,12 +209,10 @@ fn tryDispatchBinaryById(ctx: *Context, dispatch_id: u32) !bool {
 
 /// Try to dispatch a unary operation via the dispatch table.
 ///
-/// Peeks at the top stack value and looks up a registered method. If found,
-/// executes the method body; operand remains on stack. Returns true if
-/// dispatched, false if not.
+/// Peeks at the top stack value and looks up a registered method, executing the body with the
+/// operand left on the stack. Returns true if dispatched.
 ///
-/// Same opt-in rules as tryDispatchBinary: each native that supports
-/// dispatch must call this explicitly.
+/// Same opt-in rules as tryDispatchBinary.
 pub fn tryDispatchUnary(ctx: *Context, word_name: []const u8) !bool {
     const dispatch_id = ctx.resolveDispatchId(word_name) orelse return false;
     return tryDispatchUnaryById(ctx, dispatch_id);
@@ -319,13 +306,8 @@ pub fn tryDispatchContainerAtDepth(ctx: *Context, word_name: []const u8, depth: 
     return false;
 }
 
-/// Try to derive a comparison result from a `cmp` dispatch method.
-///
-/// When a user type has a `cmp` method but no direct `=`/`<`/`>` method,
-/// this function dispatches `cmp`, pops the result, and converts it to a
-/// boolean based on the requested comparison. Accepts both a raw fixnum
-/// (negative/zero/positive) and an ordering enum variant (ordering:lt,
-/// ordering:eq, ordering:gt).
+/// Derive a comparison result from a `cmp` dispatch method, for a type that defines `cmp` but not
+/// a direct `=`/`<`/`>` method. Accepts a raw fixnum or an `ordering:*` enum variant.
 ///
 /// XXX(ripta): This reaches into 1z runtime to look up ordering:* enum variants.
 pub fn tryDispatchBinaryViaCmp(ctx: *Context, comptime op: enum { eq, lt, gt }) !bool {

@@ -25,7 +25,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "freeze!", .stack_effect = "val -- frozen", .doc = "Like freeze, but consumes the original. A sole-owner vector backing is converted in place; aliased values are copied.", .func = nativeFreezeBang, .markers = &.{@constCast(&markers_mod.generic_marker)} },
 };
 
-/// freeze ( val -- frozen ) - Deep-convert to immutable counterparts (copy semantics)
+/// freeze ( val -- frozen )
 fn nativeFreeze(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "freeze")) return;
 
@@ -39,7 +39,7 @@ fn nativeFreeze(ctx: *Context) anyerror!void {
     };
 }
 
-/// freeze! ( val -- frozen ) - Deep-convert to immutable counterparts, consuming the input
+/// freeze! ( val -- frozen )
 fn nativeFreezeBang(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "freeze!")) return;
 
@@ -330,8 +330,7 @@ fn buildFrozenSet(ctx: *Context, keys: []const Value) anyerror!*value_mod.Set {
 /// Copy a struct instance with recursively frozen fields.
 ///
 /// The copy keeps freeze's copy semantics: later mutation through the original never shows in the
-/// frozen value. The shell itself stays setter-mutable. The share-safety scan classifies
-/// struct-bearing containers not-shareable, so that mutability never crosses a task boundary.
+/// frozen value. The shell itself stays setter-mutable, which the share-safety scan accounts for.
 fn freezeStruct(ctx: *Context, si: *const value_mod.StructInstance) anyerror!Value {
     const alloc = ctx.quotationAllocator();
     const new_fields = try alloc.alloc(Value, si.fields.len);

@@ -40,7 +40,8 @@ pub fn extractKeyString(ctx: *Context, val: Value) ![]const u8 {
     };
 }
 
-/// make-hash ( quotation -- hash ) - Create a hash table from key: value pairs
+/// make-hash ( quotation -- hash )
+///
 /// The quotation should contain alternating symbol or string keys and values.
 /// Example: [ name: "Alice" age: 30 ] make-hash
 pub fn nativeMakeHash(ctx: *Context) anyerror!void {
@@ -114,7 +115,8 @@ pub fn nativeMakeHash(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
-/// make-vector ( quotation -- vector ) - Create a vector from values in quotation
+/// make-vector ( quotation -- vector )
+///
 /// Example: [ 1 2 3 ] make-vector
 pub fn nativeMakeVector(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
@@ -123,11 +125,7 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
     const vec = Vector.create(ctx.allocator) catch return error.OutOfMemory;
     errdefer container_backing.releaseValue(.{ .vector = vec });
 
-    // Execute each instruction and collect values. push_literal values
-    // are borrowed from the instruction stream, so a vec slot becomes a
-    // new owner and must retain. call_word values were popped from the
-    // stack into a transient C-local, so the slot inherits ownership
-    // without an additional retain.
+    // Execute each instruction and collect values.
     for (instrs) |instr| {
         const val = switch (instr.op) {
             .push_literal => |v| blk: {
@@ -148,9 +146,9 @@ pub fn nativeMakeVector(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .vector = vec });
 }
 
-/// make-byte-array ( quotation -- byte-array ) - Create a byte array from values in quotation
+/// make-byte-array ( quotation -- byte-array )
+///
 /// Example: [ 0xFF 0x00 0x42 ] make-byte-array
-/// Values must be integers in range 0-255
 pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const instrs = quot.instructions;
@@ -168,12 +166,10 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
         const val = switch (instr.op) {
             .push_literal => |v| v,
             .call_word, .call_word_direct => blk: {
-                // Execute the word to get the value
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
                 break :blk ctx.stack.pop() catch return error.OutOfMemory;
             },
         };
-        // Value must be a fixnum in byte range
         switch (val) {
             .fixnum => |int| {
                 if (int < 0 or int > 255) return error.FixnumOverflow;
@@ -190,7 +186,8 @@ pub fn nativeMakeByteArray(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .byte_array = ba });
 }
 
-/// make-set ( quotation -- set ) - Create a set from unique values in quotation
+/// make-set ( quotation -- set )
+///
 /// Example: [ 1 2 3 2 1 ] make-set creates S{ 1 2 3 } (duplicates removed)
 pub fn nativeMakeSet(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
@@ -200,10 +197,7 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
     errdefer container_backing.releaseValue(.{ .set = set });
     const set_alloc = set.header.allocator;
 
-    // Execute each instruction and collect unique values. push_literal values
-    // are borrowed from the instruction stream, so a set slot becomes a new
-    // owner and must retain. call_word values were popped from the stack into
-    // a transient C-local, so the slot inherits ownership without a retain.
+    // Execute each instruction and collect unique values.
     for (instrs) |instr| {
         const val = switch (instr.op) {
             .push_literal => |v| blk: {
@@ -211,7 +205,6 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
                 break :blk v;
             },
             .call_word, .call_word_direct => blk: {
-                // Execute the word to get the value
                 try ctx.executeQuotation(.{ .instructions = @as(*const [1]Instruction, &instr) });
                 break :blk ctx.stack.pop() catch return error.OutOfMemory;
             },
@@ -231,7 +224,8 @@ pub fn nativeMakeSet(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .set = set });
 }
 
-/// make-mutable-map ( quotation -- mmap ) - Create a mutable map from key: value pairs
+/// make-mutable-map ( quotation -- mmap )
+///
 /// Example: [ name: "Alice" age: 30 ] make-mutable-map
 pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
@@ -268,16 +262,9 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
             return error.InvalidHashSyntax;
         }
 
-        // Get the value - could be a literal, a call_word, or a literal
-        // followed by call_words that transform it (e.g., V{ } producing
-        // push_literal [1 2 3] + call_word make-vector).
         const val_start = i;
         i += 1;
         while (i < instrs.len and instrs[i].op.isCall()) : (i += 1) {}
-        // push_literal values are borrowed from the instruction stream, so a
-        // map slot becomes a new owner and must retain. call_word values were
-        // popped from the stack into a transient C-local, so the slot inherits
-        // ownership without an additional retain.
         const stored_val = if (i - val_start == 1 and instrs[val_start].op == .push_literal) blk: {
             const v = instrs[val_start].op.push_literal;
             container_backing.retainValue(v);
@@ -304,7 +291,7 @@ pub fn nativeMakeMutableMap(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .mutable_map = mmap });
 }
 
-/// @set! ( mmap key value -- mmap ) - Set value in mutable map, mutate in place
+/// @set! ( mmap key value -- mmap )
 pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
     // dispatch: mmap is at position 2 (below key and value)
     if (ctx.stack.depth() >= 3) {
@@ -384,7 +371,7 @@ pub fn nativeAtSetMut(ctx: *Context) anyerror!void {
     }
 }
 
-/// @remove! ( mmap key -- mmap ) - Remove key from mutable map, mutate in place
+/// @remove! ( mmap key -- mmap )
 pub fn nativeAtRemoveMut(ctx: *Context) anyerror!void {
     // dispatch: mmap is at position 1 (below key)
     if (ctx.stack.depth() >= 2) {

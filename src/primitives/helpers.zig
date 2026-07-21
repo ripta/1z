@@ -294,9 +294,8 @@ pub fn valueTypeName(val: Value) []const u8 {
     };
 }
 
-/// Format a value briefly for error messages.
-/// Returns a short representation suitable for inclusion in error text.
-/// Strings and symbols are truncated to max_len characters.
+/// Format a value briefly for error messages, truncating strings and symbols to max_len
+/// characters.
 pub fn formatValueBrief(allocator: Allocator, val: Value, max_len: usize) ![]const u8 {
     return switch (val) {
         .fixnum => |i| std.fmt.allocPrint(allocator, "{d}", .{i}),
@@ -447,7 +446,6 @@ pub fn popFixnum(ctx: *Context) !i64 {
 }
 
 /// Pop a boolean value.
-/// Only the explicit false value is false. All other values are true.
 pub fn popBoolean(ctx: *Context) !bool {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);

@@ -23,18 +23,18 @@ pub const primitives = [_]Primitive{
     .{ .name = "apply-n", .stack_effect = "x1..xn quot: ( x -- ..results ) n -- ..results", .doc = "Apply quotation to each of the top n stack values separately, left to right.", .func = nativeApplyN },
 };
 
-/// dup ( a -- a a ) - Duplicate top of stack
+/// dup ( a -- a a )
 pub fn nativeDup(ctx: *Context) anyerror!void {
     const val = try ctx.stack.peek();
     try ctx.stack.push(val);
 }
 
-/// drop ( a -- ) - Remove top of stack
+/// drop ( a -- )
 pub fn nativeDrop(ctx: *Context) anyerror!void {
     try ctx.stack.popAndRelease();
 }
 
-/// swap ( a b -- b a ) - Swap top two items
+/// swap ( a b -- b a )
 pub fn nativeSwap(ctx: *Context) anyerror!void {
     const len = ctx.stack.items.items.len;
     if (len < 2) return error.StackUnderflow;
@@ -43,7 +43,7 @@ pub fn nativeSwap(ctx: *Context) anyerror!void {
     ctx.stack.items.items[len - 2] = top;
 }
 
-/// over ( x y -- x y x ) - Copy second item to top
+/// over ( x y -- x y x )
 pub fn nativeOver(ctx: *Context) anyerror!void {
     const len = ctx.stack.items.items.len;
     if (len < 2) return error.StackUnderflow;
@@ -54,7 +54,7 @@ pub fn nativeOver(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(x);
 }
 
-/// dip ( x quot -- x ) - Execute quotation with x temporarily removed
+/// dip ( x quot -- x )
 pub fn nativeDip(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const x = try ctx.stack.pop();
@@ -66,17 +66,14 @@ pub fn nativeDip(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(x);
 }
 
-/// wipe ( ... -- ) - Clear the entire stack
+/// wipe ( ... -- )
 pub fn nativeWipe(ctx: *Context) anyerror!void {
     ctx.stack.clear();
 }
 
-/// pick-n ( n -- val ) - Copy the item at stack depth n (0-indexed from top, before n itself)
+/// pick-n ( n -- val )
 ///
-/// There are equivalencies to other stack operations:
-/// - dup: 0 pick-n
-/// - over: 1 pick-n
-/// - pick: 2 pick-n
+/// Equivalencies: 0 pick-n is dup, 1 pick-n is over, 2 pick-n is pick.
 pub fn nativePickN(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;
@@ -89,7 +86,7 @@ pub fn nativePickN(ctx: *Context) anyerror!void {
     try ctx.stack.push(val);
 }
 
-/// <rot-n ( n -- ) - Pull item at depth n to top, shifting items above it down.
+/// <rot-n ( n -- )
 ///
 /// Equivalencies: 0 is no-op, 1 is swap, 2 is <rot-.
 pub fn nativeRotUp(ctx: *Context) anyerror!void {
@@ -108,7 +105,7 @@ pub fn nativeRotUp(ctx: *Context) anyerror!void {
     ctx.stack.items.items[len - 1] = val;
 }
 
-/// rot-n> ( n -- ) - Push top item to depth n, shifting items above it up.
+/// rot-n> ( n -- )
 ///
 /// Equivalencies: 0 is no-op, 1 is swap, 2 is -rot>.
 pub fn nativeRotDown(ctx: *Context) anyerror!void {
@@ -127,7 +124,7 @@ pub fn nativeRotDown(ctx: *Context) anyerror!void {
     ctx.stack.items.items[start] = val;
 }
 
-/// array-n ( ...elems n -- array ) - Pop n elements and pack into an array.
+/// array-n ( ...elems n -- array )
 fn nativeArrayN(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;
@@ -150,7 +147,7 @@ fn nativeArrayN(ctx: *Context) anyerror!void {
     try helpers.pushAdoptedArray(ctx, alloc, arr);
 }
 
-/// drop-n ( x1...xn n -- ) - Drop n items from the stack in O(1).
+/// drop-n ( x1...xn n -- )
 fn nativeDropN(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;
@@ -164,7 +161,7 @@ fn nativeDropN(ctx: *Context) anyerror!void {
     ctx.stack.items.shrinkRetainingCapacity(len - count);
 }
 
-/// nip-n ( ...x1..xn y n -- y ) - Drop n items beneath the top value.
+/// nip-n ( ...x1..xn y n -- y )
 pub fn nativeNipN(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;
@@ -185,7 +182,7 @@ pub fn nativeNipN(ctx: *Context) anyerror!void {
     ctx.stack.items.shrinkRetainingCapacity(new_len);
 }
 
-/// apply-n ( x1...xn quot n -- ) - Apply quotation to each of the top n stack values.
+/// apply-n ( x1...xn quot n -- )
 fn nativeApplyN(ctx: *Context) anyerror!void {
     const n = try helpers.popFixnum(ctx);
     if (n < 0) return error.StackUnderflow;

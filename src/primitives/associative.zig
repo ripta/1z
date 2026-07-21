@@ -73,10 +73,9 @@ pub fn registerNativeDispatch(dispatch: *DispatchTable, ctx: *Context) !void {
     try dispatch.registerNative(values_did, err_tv, unary, nativeAtValuesError);
 }
 
-/// Helper to get error object field value. Returns an owning reference:
-/// the `data` field is retained on the way out and the stack-trace frames
-/// are freshly constructed, so callers hand the result to a slot with
-/// `pushMoved` instead of `push`.
+/// Returns an owning reference: the `data` field is retained on the way out and the stack-trace
+/// frames are freshly constructed, so callers hand the result to a slot with `pushMoved` instead
+/// of `push`.
 fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8) !Value {
     if (std.mem.eql(u8, field_name, "error-type")) {
         return Value{ .symbol = err.error_type };
@@ -126,10 +125,6 @@ fn getErrorField(ctx: *Context, err: *const ErrorObject, field_name: []const u8)
 }
 
 /// @get ( assoc key -- value ) - Get value by key/field
-///
-/// Dispatches on the container type. The builtin arms cover hash, mutable-map, error, and module; a user
-/// type plugs in with `@get: method{ your-type }`. A tagged container carrying a base type unwraps to its
-/// base-type arm, matching the prior `unwrapBaseType` behavior.
 pub fn nativeAtGet(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, "@get", 1, true)) return;
 
@@ -209,9 +204,6 @@ fn nativeAtGetModule(ctx: *Context) anyerror!void {
 }
 
 /// @has? ( assoc key -- ? ) - Check if key/field exists
-///
-/// Dispatches on the container type over hash, mutable-map, error, and module, extensible with
-/// `@has?: method{ your-type }`.
 pub fn nativeAtHas(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, "@has?", 1, true)) return;
 
@@ -270,8 +262,7 @@ fn nativeAtHasModule(ctx: *Context) anyerror!void {
 
 /// @set ( assoc key value -- assoc' ) - Set value, returns new hash
 ///
-/// Hash-only. Dispatches on the container type without base-type unwrapping, so a tagged value is rejected
-/// rather than reaching the hash arm, preserving the prior semantics. The error arm rejects explicitly.
+/// Hash-only; the error arm rejects explicitly.
 pub fn nativeAtSet(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchContainerAtDepth(ctx, "@set", 2, false)) return;
 
@@ -367,9 +358,6 @@ fn nativeAtSetErrorReject(ctx: *Context) anyerror!void {
 }
 
 /// @keys ( assoc -- array ) - Get all keys
-///
-/// Dispatches on the container type over hash, mutable-map, error, and module, extensible with
-/// `@keys: method{ your-type }`.
 pub fn nativeAtKeys(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "@keys")) return;
 
@@ -441,8 +429,7 @@ fn nativeAtKeysModule(ctx: *Context) anyerror!void {
 
 /// @values ( assoc -- array ) - Get all values
 ///
-/// Dispatches on the container type over hash, mutable-map, and error. There is no module arm, matching the
-/// prior behavior; extensible with `@values: method{ your-type }`.
+/// No module arm, unlike @get/@has?/@keys.
 pub fn nativeAtValues(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "@values")) return;
 

@@ -632,7 +632,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "#poke!", .stack_effect = "byte-array offset value width -- byte-array", .doc = "Write value as width bytes (1/2/4/8) at offset in byte-array.", .func = nativePoke, .markers = &.{@constCast(&markers_mod.generic_marker)} },
 };
 
-/// #len ( seq -- n ) - Get length of sequence
+/// #len ( seq -- n )
 pub fn nativeLen(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "#len")) return;
     const val = try ctx.stack.pop();
@@ -640,7 +640,7 @@ pub fn nativeLen(ctx: *Context) anyerror!void {
     return error.TypeMismatch;
 }
 
-/// #nth ( seq n -- elem ) - Get element at index
+/// #nth ( seq n -- elem )
 pub fn nativeNth(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "#nth")) return;
     const b = try ctx.stack.pop();
@@ -650,7 +650,7 @@ pub fn nativeNth(ctx: *Context) anyerror!void {
     return error.TypeMismatch;
 }
 
-/// #nth! ( seq n value -- seq ) - Set element at index in mutable sequence
+/// #nth! ( seq n value -- seq )
 fn nativeNthMut(ctx: *Context) anyerror!void {
     // dispatch: seq is at position 2, below n and value
     if (ctx.stack.depth() >= 3) {
@@ -763,7 +763,7 @@ fn nativeNthMut(ctx: *Context) anyerror!void {
     }
 }
 
-/// #first ( seq -- elem ) - Get first element
+/// #first ( seq -- elem )
 pub fn nativeFirst(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "#first")) return;
     const val = try ctx.stack.pop();
@@ -776,7 +776,7 @@ pub fn nativeFirst(ctx: *Context) anyerror!void {
     return error.TypeMismatch;
 }
 
-/// #last ( seq -- elem ) - Get last element
+/// #last ( seq -- elem )
 pub fn nativeLast(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "#last")) return;
     const val = try ctx.stack.pop();
@@ -789,7 +789,7 @@ pub fn nativeLast(ctx: *Context) anyerror!void {
     return error.TypeMismatch;
 }
 
-/// #each ( seq quot -- ) - Execute quotation for each element of sequence
+/// #each ( seq quot -- )
 pub fn nativeEach(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const raw_seq = try ctx.stack.pop();
@@ -820,7 +820,7 @@ pub fn nativeEach(ctx: *Context) anyerror!void {
     }
 }
 
-/// #each-index ( seq quot -- ) - Execute quotation for each element with zero-based index
+/// #each-index ( seq quot -- )
 pub fn nativeEachIndex(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const raw_seq = try ctx.stack.pop();
@@ -852,7 +852,7 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
     }
 }
 
-/// #map ( seq quot -- iterator ) - Lazily transform each element of sequence
+/// #map ( seq quot -- iterator )
 ///
 /// Always returns a lazy iterator, regardless of input type. Use #collect
 /// to materialize the result into an array.
@@ -878,10 +878,7 @@ pub fn nativeMap(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .iterator = iter });
 }
 
-/// #filter ( seq quot -- iterator ) - Lazily keep elements where quotation returns true
-///
-/// Always returns a lazy iterator, regardless of input type. Use #collect
-/// to materialize the result into an array.
+/// #filter ( seq quot -- iterator )
 pub fn nativeFilter(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
@@ -904,7 +901,7 @@ pub fn nativeFilter(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .iterator = iter });
 }
 
-/// #reduce ( seq init quot -- result ) - Fold sequence with accumulator
+/// #reduce ( seq init quot -- result )
 pub fn nativeReduce(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     var acc = try ctx.stack.pop(); // initial accumulator
@@ -953,7 +950,7 @@ pub fn nativeReduce(ctx: *Context) anyerror!void {
     container_backing.releaseValue(acc);
 }
 
-/// #reduce-index ( seq init quot -- result ) - Fold sequence with accumulator and zero-based index
+/// #reduce-index ( seq init quot -- result )
 pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     var acc = try ctx.stack.pop();
@@ -1002,7 +999,7 @@ pub fn nativeReduceIndex(ctx: *Context) anyerror!void {
     container_backing.releaseValue(acc);
 }
 
-/// #slice ( seq start end -- subseq ) - Extract subsequence [start, end)
+/// #slice ( seq start end -- subseq )
 pub fn nativeSlice(ctx: *Context) anyerror!void {
     const end_val = try popFixnum(ctx);
     const start_val = try popFixnum(ctx);
@@ -1079,7 +1076,7 @@ pub fn nativeSlice(ctx: *Context) anyerror!void {
     }
 }
 
-/// #byte-slice ( str start-byte end-byte -- str ) - Zero-copy byte-range sub-slice of a string
+/// #byte-slice ( str start-byte end-byte -- str )
 fn nativeByteSlice(ctx: *Context) anyerror!void {
     const end_val = try popFixnum(ctx);
     const start_val = try popFixnum(ctx);
@@ -1130,7 +1127,7 @@ fn nativeByteSlice(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .string = s[start..end] });
 }
 
-/// #byte-len ( str -- n ) - Length of a string in bytes
+/// #byte-len ( str -- n )
 fn nativeByteLen(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
@@ -1146,7 +1143,7 @@ fn nativeByteLen(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = @intCast(s.len) });
 }
 
-/// #byte-decode ( str byte-offset -- char next-byte-offset ) - Decode the codepoint at a byte offset
+/// #byte-decode ( str byte-offset -- char next-byte-offset )
 fn nativeByteDecode(ctx: *Context) anyerror!void {
     const offset_val = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
@@ -1190,9 +1187,9 @@ fn nativeByteDecode(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = @intCast(next) });
 }
 
-/// #append ( seq1 seq2 -- seq ) - Concatenate seq2 to seq1, returns new sequence of type seq1
+/// #append ( seq1 seq2 -- seq )
 ///
-/// seq1 determines the result type. seq2 elements are converted/iterated into seq1's type.
+/// seq2's elements are converted or iterated into seq1's type as needed.
 pub fn nativeAppend(ctx: *Context) anyerror!void {
     const seq2 = try ctx.stack.pop();
     defer container_backing.releaseValue(seq2);
@@ -1335,7 +1332,7 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
     }
 }
 
-/// #append! ( vec seq -- vec ) - Mutably append sequence elements to vector
+/// #append! ( vec seq -- vec )
 pub fn nativeAppendMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 1, below seq
     if (ctx.stack.depth() >= 2) {
@@ -1398,9 +1395,7 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
     };
 }
 
-/// #prepend ( seq1 seq2 -- seq ) - Prepend seq2's elements to seq1, returns new sequence of type seq1
-///
-/// Result contains seq2's elements followed by seq1's elements, with type of seq1.
+/// #prepend ( seq1 seq2 -- seq )
 pub fn nativePrepend(ctx: *Context) anyerror!void {
     const seq2 = try ctx.stack.pop();
     defer container_backing.releaseValue(seq2);
@@ -1526,7 +1521,7 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
     }
 }
 
-/// #push ( seq elem -- seq' ) - Add element to end of sequence, returns new sequence of type seq
+/// #push ( seq elem -- seq' )
 fn nativePush(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
@@ -1603,7 +1598,7 @@ fn nativePush(ctx: *Context) anyerror!void {
     }
 }
 
-/// #pop ( seq -- seq' elem ) - Remove last element, return both sequence and element
+/// #pop ( seq -- seq' elem )
 fn nativePop(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
@@ -1671,7 +1666,7 @@ fn nativePop(ctx: *Context) anyerror!void {
     }
 }
 
-/// #unshift ( seq elem -- seq' ) - Add element to start of sequence, returns new sequence of type seq
+/// #unshift ( seq elem -- seq' )
 fn nativeUnshift(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
     const seq = try ctx.stack.pop();
@@ -1746,7 +1741,7 @@ fn nativeUnshift(ctx: *Context) anyerror!void {
     }
 }
 
-/// #shift ( seq -- seq' elem ) - Remove first element, return both truncated sequence and element
+/// #shift ( seq -- seq' elem )
 fn nativeShift(ctx: *Context) anyerror!void {
     const seq = try ctx.stack.pop();
     defer container_backing.releaseValue(seq);
@@ -1814,7 +1809,7 @@ fn nativeShift(ctx: *Context) anyerror!void {
     }
 }
 
-/// #push! ( vec elem -- vec ) - Mutate vec to add element to end
+/// #push! ( vec elem -- vec )
 fn nativePushMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 1, below elem
     if (ctx.stack.depth() >= 2) {
@@ -1863,7 +1858,7 @@ fn nativePushMut(ctx: *Context) anyerror!void {
     };
 }
 
-/// #pop! ( vec -- vec elem ) - Mutate vec to remove last element from vector
+/// #pop! ( vec -- vec elem )
 fn nativePopMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 0
     if (ctx.stack.depth() >= 1) {
@@ -1914,7 +1909,7 @@ fn nativePopMut(ctx: *Context) anyerror!void {
     };
 }
 
-/// #unshift! ( vec elem -- vec ) - Mutate vec to add element to start of vector
+/// #unshift! ( vec elem -- vec )
 fn nativeUnshiftMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 1, below elem
     if (ctx.stack.depth() >= 2) {
@@ -1963,7 +1958,7 @@ fn nativeUnshiftMut(ctx: *Context) anyerror!void {
     };
 }
 
-/// #shift! ( vec -- vec elem ) - Mutate vec to remove first element
+/// #shift! ( vec -- vec elem )
 fn nativeShiftMut(ctx: *Context) anyerror!void {
     // dispatch: vec is at position 0
     if (ctx.stack.depth() >= 1) {
@@ -2014,12 +2009,11 @@ fn nativeShiftMut(ctx: *Context) anyerror!void {
     };
 }
 
-/// #in? ( seq elem -- ? ) - Does seq contain element? (substring for strings)
+/// #in? ( seq elem -- ? )
 ///
-/// Generic word. The string, byte-array, and set arms are native dispatch entries registered in
-/// registerNativeDispatch; array and vector are 1z method{} entries. The iterator scan below is the
-/// fallback for a built-in container whose dispatch arm is absent, such as a custom prelude missing
-/// the array and vector method entries. A value that is not a scannable sequence errors here.
+/// Generic word: the string, byte-array, and set arms are native dispatch entries; array and
+/// vector are 1z `method{` entries. The iterator scan below is the fallback when a dispatch arm is
+/// absent, such as a custom prelude missing the array/vector methods.
 pub fn nativeIn(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "#in?")) return;
 
@@ -2091,13 +2085,11 @@ fn nativeInSet(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .boolean = found });
 }
 
-/// #index-of ( seq elem -- n/f ) - Index of element, or f if not found
+/// #index-of ( seq elem -- n/f )
 ///
-/// Generic word. The string and byte-array arms are native dispatch entries registered in
-/// registerNativeDispatch; array and vector are 1z method{} entries. The counted iterator scan below
-/// is the fallback for a built-in container whose dispatch arm is absent, such as a custom prelude
-/// missing the array and vector method entries. Sets are unordered, so they are rejected here rather
-/// than scanned. A value that is not a scannable sequence errors here.
+/// Generic word: the string and byte-array arms are native dispatch entries; array and vector are
+/// 1z `method{` entries. The counted iterator scan below is the fallback when a dispatch arm is
+/// absent. Sets are unordered, so they are rejected here rather than scanned.
 pub fn nativeIndexOf(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "#index-of")) return;
 
@@ -2173,7 +2165,7 @@ fn nativeIndexOfByteArray(ctx: *Context) anyerror!void {
     }
 }
 
-/// #index-of-from ( str needle start -- n/f ) - Find index of substring starting from codepoint position
+/// #index-of-from ( str needle start -- n/f )
 fn nativeIndexOfFrom(ctx: *Context) anyerror!void {
     const start_val = try ctx.stack.pop();
     const elem = try ctx.stack.pop();
@@ -2242,7 +2234,7 @@ fn nativeIndexOfFrom(ctx: *Context) anyerror!void {
     }
 }
 
-/// #byte-index-of-from ( str needle start-byte -- byte-n/f ) - Find byte offset of substring from a byte offset
+/// #byte-index-of-from ( str needle start-byte -- byte-n/f )
 fn nativeByteIndexOfFrom(ctx: *Context) anyerror!void {
     const start_val = try ctx.stack.pop();
     const elem = try ctx.stack.pop();
@@ -2303,7 +2295,7 @@ fn nativeByteIndexOfFrom(ctx: *Context) anyerror!void {
     }
 }
 
-/// #take ( seq n -- seq' ) - First n elements
+/// #take ( seq n -- seq' )
 pub fn nativeTake(ctx: *Context) anyerror!void {
     const n_val = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
@@ -2373,7 +2365,7 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
     }
 }
 
-/// #drop ( seq n -- seq' ) - All but first n elements
+/// #drop ( seq n -- seq' )
 pub fn nativeDrop(ctx: *Context) anyerror!void {
     const n_val = try popFixnum(ctx);
     const seq = try ctx.stack.pop();
@@ -2458,7 +2450,9 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "reduce-index", .func = nativeReduceIndex },
 };
 
-/// bytes-alloc ( n -- byte-array ) - Create a fresh zero-filled byte array of size n.
+/// bytes-alloc ( n -- byte-array )
+///
+/// The allocated bytes are zero-filled.
 fn nativeBytesAlloc(ctx: *Context) anyerror!void {
     const n_val = try popFixnum(ctx);
     if (n_val < 0) {
@@ -2477,7 +2471,7 @@ fn nativeBytesAlloc(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .byte_array = ba });
 }
 
-/// #shrink! ( seq n -- seq ) - Truncate a mutable sequence to n elements.
+/// #shrink! ( seq n -- seq )
 ///
 /// Polymorphic on byte-array and vector.
 fn nativeShrinkMut(ctx: *Context) anyerror!void {
@@ -2548,7 +2542,7 @@ fn nativeShrinkMut(ctx: *Context) anyerror!void {
     }
 }
 
-/// #grow! ( seq n fill -- seq ) - Extend a mutable sequence to n elements, filling new slots.
+/// #grow! ( seq n fill -- seq )
 ///
 /// Polymorphic on byte-array and vector.
 fn nativeGrowMut(ctx: *Context) anyerror!void {
@@ -2671,14 +2665,16 @@ fn nativeGrowMut(ctx: *Context) anyerror!void {
     }
 }
 
-/// >array ( vector -- array ) - Snapshot vector items into an immutable array
+/// >array ( vector -- array )
 fn nativeToArrayVector(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
     try helpers.pushCopiedArray(ctx, ctx.allocator, val.vector.list.items);
 }
 
-/// >array ( byte-array -- array ) - Convert each byte to a fixnum element
+/// >array ( byte-array -- array )
+///
+/// Each byte becomes a fixnum element.
 fn nativeToArrayByteArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -2686,7 +2682,9 @@ fn nativeToArrayByteArray(ctx: *Context) anyerror!void {
     try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
 }
 
-/// >array ( set -- array ) - Convert set to array in insertion order
+/// >array ( set -- array )
+///
+/// Preserves insertion order.
 fn nativeToArraySet(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -2697,12 +2695,12 @@ fn nativeToArraySet(ctx: *Context) anyerror!void {
     try helpers.pushAdoptedArray(ctx, ctx.allocator, items);
 }
 
-/// >array ( array -- array ) - Identity, no allocation
+/// >array ( array -- array )
 fn nativeToArrayArray(_: *Context) anyerror!void {
     // Pop and push back, an identity (value is already on the stack)
 }
 
-/// >array ( container -- array ) - Convert vector, byte-array, set, or array to an immutable array
+/// >array ( container -- array )
 fn nativeToArray(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">array")) return;
     const val = try ctx.stack.pop();
@@ -2768,7 +2766,7 @@ fn clonePackedToOwned(ctx: *Context, val: Value) !void {
     };
 }
 
-/// >byte-array ( value -- value ) - Ensure byte-array backing storage is owned
+/// >byte-array ( value -- value )
 fn nativeToByteArray(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -2801,7 +2799,7 @@ fn nativeToByteArray(ctx: *Context) anyerror!void {
     }
 }
 
-/// >hash ( mutable-map -- hash ) - Snapshot mutable-map into an immutable hash
+/// >hash ( mutable-map -- hash )
 fn nativeToHashMutableMap(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -2825,10 +2823,12 @@ fn nativeToHashMutableMap(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .hash = new_hash });
 }
 
-/// >hash ( hash -- hash ) - Identity, no allocation
+/// >hash ( hash -- hash )
+///
+/// Identity; no allocation.
 fn nativeToHashHash(_: *Context) anyerror!void {}
 
-/// >hash ( container -- hash ) - Convert mutable-map or hash to an immutable hash
+/// >hash ( container -- hash )
 fn nativeToHash(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">hash")) return;
     const val = try ctx.stack.pop();
@@ -2851,7 +2851,7 @@ fn validateWidth(ctx: *Context, width: i64) !u3 {
     };
 }
 
-/// #peek ( byte-array offset width -- fixnum ) - Read width bytes at offset
+/// #peek ( byte-array offset width -- fixnum )
 fn nativePeekByteArray(ctx: *Context) anyerror!void {
     const width_val = try popFixnum(ctx);
     const offset_val = try popFixnum(ctx);
@@ -2903,7 +2903,7 @@ fn nativePeekByteArray(ctx: *Context) anyerror!void {
     }
 }
 
-/// #poke! ( byte-array offset value width -- byte-array ) - Write value at offset
+/// #poke! ( byte-array offset value width -- byte-array )
 fn nativePokeByteArray(ctx: *Context) anyerror!void {
     const width_val = try popFixnum(ctx);
     const value = try ctx.stack.pop();
@@ -3005,7 +3005,9 @@ fn nativePokeByteArray(ctx: *Context) anyerror!void {
     };
 }
 
-/// #peek ( byte-array offset width -- fixnum ) - Entry point with dispatch
+/// #peek ( byte-array offset width -- fixnum )
+///
+/// Dispatch entry point; falls back to `nativePeekByteArray` when no dispatch arm is registered.
 fn nativePeek(ctx: *Context) anyerror!void {
     // dispatch: byte-array is at stack depth 2 (below offset and width)
     if (ctx.stack.depth() >= 3) {
@@ -3044,7 +3046,9 @@ fn nativePeek(ctx: *Context) anyerror!void {
     return error.TypeMismatch;
 }
 
-/// #poke! ( byte-array offset value width -- byte-array ) - Entry point with dispatch
+/// #poke! ( byte-array offset value width -- byte-array )
+///
+/// Dispatch entry point; falls back to `nativePokeByteArray` when no dispatch arm is registered.
 fn nativePoke(ctx: *Context) anyerror!void {
     // dispatch: byte-array is at stack depth 3 (below offset, value, and width)
     if (ctx.stack.depth() >= 4) {

@@ -128,10 +128,9 @@ fn enumFromSymbolHelper(ctx: *Context) anyerror!void {
 
 /// define-enum ( name: descriptor markers -- )
 ///
-/// For each variant string in the descriptor's `variants` array, creates a
-/// virtual type wrapping a symbol, defines a constant constructor and a
-/// per-variant predicate. Also defines an aggregate predicate that matches
-/// any variant of the enum.
+/// Unit variants become a virtual type wrapping a symbol; data-carrying variants wrap a
+/// struct. Defines per-variant constructors and predicates, plus one aggregate predicate
+/// matching any variant of the enum.
 fn nativeDefineEnum(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const unary = ctx.getDispatchUnarySentinel();
@@ -474,9 +473,6 @@ fn nativeDefineEnum(ctx: *Context) anyerror!void {
 }
 
 /// Trampoline helper ( value enum-type-val -- bool )
-///
-/// Checks whether the value is a tagged virtual type whose parent_type matches
-/// the given enum TypeValue pointer.
 fn enumAggregatePredicateHelper(ctx: *Context) anyerror!void {
     const tv_val = try ctx.stack.pop();
     const enum_tv_ptr = switch (tv_val) {
@@ -497,9 +493,6 @@ fn enumAggregatePredicateHelper(ctx: *Context) anyerror!void {
 }
 
 /// enum-of ( val -- str | f )
-///
-/// Returns the parent enum name as a string if the value is an enum variant,
-/// or f if the value is not an enum variant.
 fn nativeEnumOf(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -515,8 +508,6 @@ fn nativeEnumOf(ctx: *Context) anyerror!void {
 }
 
 /// enum-variants ( symbol -- array )
-///
-/// Returns an array of variant name symbols for the named enum.
 fn nativeEnumVariants(ctx: *Context) anyerror!void {
     const name_val = try ctx.stack.pop();
     const enum_name = switch (name_val) {
@@ -547,10 +538,8 @@ fn nativeEnumVariants(ctx: *Context) anyerror!void {
 
 /// match ( val branches -- ... )
 ///
-/// Exhaustive dispatch on enum variants. The branches array alternates between
-/// variant name symbols and quotation bodies. Every variant of the enum must
-/// appear exactly once. For data-carrying variants, the unwrapped payload fields
-/// are pushed onto the stack before the body executes.
+/// Every variant must appear in `branches` exactly once, unless a `_` default branch covers
+/// the rest.
 fn nativeMatch(ctx: *Context) anyerror!void {
     const branches_val = try ctx.stack.pop();
     // The matched branch body executes before the deferred release runs; its
@@ -726,10 +715,8 @@ fn lookupVariantEnum(ctx: *const Context, variant_name: []const u8) ?EnumInfo {
 
 /// validate-match-block ( array -- array )
 ///
-/// Validates the alternating symbol/quotation array from parse-values-until
-/// against the enum registry. Discovers the enum from the first variant,
-/// checks all variants belong to the same enum, checks for duplicates,
-/// and checks exhaustiveness.
+/// Validates the alternating symbol/quotation array collected by parse-values-until against
+/// the enum registry.
 fn nativeValidateMatchBlock(ctx: *Context) anyerror!void {
     const arr_val = try ctx.stack.pop();
     // On success the popped reference transfers back to the stack; on any

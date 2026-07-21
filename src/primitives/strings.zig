@@ -106,8 +106,7 @@ pub const primitives = [_]Primitive{
     .{ .name = ">string-base", .stack_effect = "n base -- str", .doc = "Convert fixnum or bignum to string in the given base (2-36). Uses lowercase letters for digits above 9.", .func = nativeToStringBase },
 };
 
-/// inspect ( value -- string ) - Convert any value to its debug string representation,
-/// including quotes for strings
+/// inspect ( value -- string )
 fn nativeInspect(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "inspect")) return;
 
@@ -119,8 +118,7 @@ fn nativeInspect(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
 }
 
-/// >string ( value -- string ) - Convert value to string, strings pass through unquoted,
-/// in contrast to inspect
+/// >string ( value -- string )
 fn nativeAsString(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">string")) return;
 
@@ -132,7 +130,7 @@ fn nativeAsString(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .string = try buffer.toOwnedSlice(alloc) });
 }
 
-/// >symbol ( string -- symbol ) - Convert string to symbol
+/// >symbol ( string -- symbol )
 fn nativeToSymbol(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">symbol")) return;
 
@@ -154,13 +152,9 @@ fn nativeToSymbol(ctx: *Context) anyerror!void {
     }
 }
 
-/// >quotation ( name -- quotation ) - Convert a string or symbol name to a quotation that calls that word
+/// >quotation ( name -- quotation )
 ///
-/// This does not check if the word exists, so it can be used to construct quotations
-/// that call words that haven't been defined yet.
-///
-/// The resulting quotation will contain a single _instruction_: `call_word` with the given name.
-/// The quotation itself can be executed using `call`.
+/// The resulting quotation can be executed with `call`.
 fn nativeToQuotation(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -180,7 +174,7 @@ fn nativeToQuotation(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .quotation = .{ .instructions = instrs } });
 }
 
-/// >bytes ( string -- byte-array ) - Convert string to byte array (UTF-8 encoded bytes)
+/// >bytes ( string -- byte-array )
 fn nativeToBytes(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -200,7 +194,7 @@ fn nativeToBytes(ctx: *Context) anyerror!void {
     }
 }
 
-/// bytes> ( byte-array -- string ) - Convert byte array to string (interprets as UTF-8)
+/// bytes> ( byte-array -- string )
 fn nativeBytesToString(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -217,7 +211,7 @@ fn nativeBytesToString(ctx: *Context) anyerror!void {
     }
 }
 
-/// uppercase ( str -- str ) - Convert ASCII letters to uppercase, non-ASCII bytes pass through
+/// uppercase ( str -- str )
 fn nativeUppercase(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -236,7 +230,7 @@ fn nativeUppercase(ctx: *Context) anyerror!void {
     }
 }
 
-/// lowercase ( str -- str ) - Convert ASCII letters to lowercase, non-ASCII bytes pass through
+/// lowercase ( str -- str )
 fn nativeLowercase(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -255,7 +249,7 @@ fn nativeLowercase(ctx: *Context) anyerror!void {
     }
 }
 
-/// >string-base ( n base -- str ) - Convert fixnum or bignum to string in the given base (2-36)
+/// >string-base ( n base -- str )
 fn nativeToStringBase(ctx: *Context) anyerror!void {
     const base_val = try helpers.popFixnum(ctx);
     if (base_val < 2 or base_val > 36) {

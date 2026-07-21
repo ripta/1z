@@ -16,7 +16,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "@difference", .stack_effect = "set1 set2 -- set'", .doc = "Return elements in set1 but not in set2.", .func = nativeAtDifference },
 };
 
-/// @in? ( set value -- ? ) - Check if value is in the set
+/// @in? ( set value -- ? )
 pub fn nativeAtIn(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -45,7 +45,7 @@ fn copyRetainedMembers(dest: *Set, source: *const Set) error{OutOfMemory}!void {
     }
 }
 
-/// @adjoin ( set value -- set' ) - Add value to set, returning new set (immutable)
+/// @adjoin ( set value -- set' )
 pub fn nativeAtAdjoin(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     const set_val = try ctx.stack.pop();
@@ -90,7 +90,7 @@ pub fn nativeAtAdjoin(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .set = new_set });
 }
 
-/// @remove ( set value -- set' ) - Remove value from set, returning new set (immutable)
+/// @remove ( set value -- set' )
 pub fn nativeAtRemove(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -121,7 +121,7 @@ pub fn nativeAtRemove(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .set = new_set });
 }
 
-/// @union ( set1 set2 -- set' ) - Return union of two sets
+/// @union ( set1 set2 -- set' )
 pub fn nativeAtUnion(ctx: *Context) anyerror!void {
     const set2_val = try ctx.stack.pop();
     defer container_backing.releaseValue(set2_val);
@@ -159,7 +159,7 @@ pub fn nativeAtUnion(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .set = new_set });
 }
 
-/// @intersection ( set1 set2 -- set' ) - Return intersection of two sets
+/// @intersection ( set1 set2 -- set' )
 pub fn nativeAtIntersection(ctx: *Context) anyerror!void {
     const set2_val = try ctx.stack.pop();
     defer container_backing.releaseValue(set2_val);
@@ -198,7 +198,7 @@ pub fn nativeAtIntersection(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .set = new_set });
 }
 
-/// @difference ( set1 set2 -- set' ) - Return elements in set1 but not in set2
+/// @difference ( set1 set2 -- set' )
 pub fn nativeAtDifference(ctx: *Context) anyerror!void {
     const set2_val = try ctx.stack.pop();
     defer container_backing.releaseValue(set2_val);

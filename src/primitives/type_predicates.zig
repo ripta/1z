@@ -20,12 +20,11 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "borrowed?", .func = nativeBorrowed, .stack_effect = "val -- ?" },
 };
 
-/// type-of ( val -- type ) - Return the type of a value as a first-class type value.
+/// type-of ( val -- type )
 ///
-/// Delegates to `dispatchTypeValue` which handles all value variants:
-/// tagged (VirtualType.type_val), struct instances (StructType.type_val),
-/// resources (lazy TypeValue creation), and builtins (discriminant-indexed
-/// array lookup).
+/// Delegates to `dispatchTypeValue`, which handles every value variant: tagged
+/// (`VirtualType.type_val`), struct instances (`StructType.type_val`), resources
+/// (lazy `TypeValue` creation), and builtins (discriminant-indexed array lookup).
 fn nativeTypeOf(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     defer container_backing.releaseValue(val);
@@ -33,11 +32,9 @@ fn nativeTypeOf(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .type_val = tv });
 }
 
-/// instance-of? ( val type -- ? ) - Check whether a value is an instance of the given type.
+/// instance-of? ( val type -- ? )
 ///
-/// Compare the value's TypeValue pointer against the given type using pointer identity.
-/// For tagged values with a `parent_type`, e.g., enum variants, also check whether the
-/// parent enum type matches.
+/// Compares the value's TypeValue pointer against the given type using pointer identity.
 fn nativeInstanceOf(ctx: *Context) anyerror!void {
     const tv = try helpers.popAs(.type_val, ctx);
     const val = try ctx.stack.pop();

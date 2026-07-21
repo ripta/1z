@@ -100,7 +100,7 @@ fn mergeCapturedScopes(alloc: std.mem.Allocator, a: *const CapturedScope, b: *co
     return scope;
 }
 
-/// curry ( x quot -- quot' ) - Partially apply a value to a quotation
+/// curry ( x quot -- quot' )
 /// Example: 5 [ + ] curry creates [ 5 + ]
 ///
 /// When the base quotation is already compiled, the result is a closure that
@@ -168,7 +168,7 @@ fn prependCapture(alloc: std.mem.Allocator, segs: []const Segment, x: Value) ![]
     return new_segs;
 }
 
-/// compose ( quot1 quot2 -- quot' ) - Concatenate two quotations
+/// compose ( quot1 quot2 -- quot' )
 /// Example: [ 2 * ] [ 3 + ] compose creates [ 2 * 3 + ]
 ///
 /// When both bases are compiled, the result is a closure whose segments are the
@@ -309,8 +309,9 @@ fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
     return hash;
 }
 
-/// (benchmark-n) ( n quot -- hash ) - Run quot n times in one timing window and
-/// return the raw timing hash. The building block for the 1z benchmark words.
+/// (benchmark-n) ( n quot -- hash )
+///
+/// The building block for the 1z benchmark words.
 pub fn nativeBenchmarkNRaw(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const n_raw = try popFixnum(ctx);

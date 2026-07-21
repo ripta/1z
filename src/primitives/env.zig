@@ -16,7 +16,7 @@ pub const primitives = [_]Primitive{
     .{ .name = "target-arch", .stack_effect = "-- symbol", .doc = "Resolve at parse time to the build target's architecture as a symbol (x86_64, aarch64).", .func = nativeTargetArch, .parse_time = true },
 };
 
-/// environ ( -- hash ) - Return a fresh hash of current environment variables
+/// environ ( -- hash )
 fn nativeEnviron(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "environ");
     const alloc = ctx.quotationAllocator();
@@ -39,7 +39,7 @@ fn nativeEnviron(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .hash = hash });
 }
 
-/// sys-info ( -- hash ) - Return a hash of system/platform information
+/// sys-info ( -- hash )
 fn nativeSysInfo(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -105,7 +105,7 @@ fn throwUnsupportedTarget(ctx: *Context, word: []const u8, axis: []const u8, tag
     return error.UserThrown;
 }
 
-/// target-os ( -- symbol ) - Resolve at parse time to the build target's OS symbol
+/// target-os ( -- symbol )
 fn nativeTargetOs(ctx: *Context) anyerror!void {
     const os_name: []const u8 = switch (ctx.target_os) {
         .macos => "macos",
@@ -115,7 +115,7 @@ fn nativeTargetOs(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .symbol = os_name });
 }
 
-/// target-arch ( -- symbol ) - Resolve at parse time to the build target's architecture symbol
+/// target-arch ( -- symbol )
 fn nativeTargetArch(ctx: *Context) anyerror!void {
     const arch_name: []const u8 = switch (ctx.target_arch) {
         .x86_64 => "x86_64",

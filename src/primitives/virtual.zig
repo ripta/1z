@@ -49,7 +49,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "typed-freeze-dispatch", .func = typedFreezeDispatch, .stack_effect = "typed-vec tv -- typed-array" },
 };
 
-/// define-virtual ( name: descriptor markers -- ) - Define a virtual type and its accessor words
+/// define-virtual ( name: descriptor markers -- )
 ///
 /// Generates: >NAME (wrap), NAME> (unwrap), NAME? (predicate)
 ///
@@ -306,8 +306,6 @@ fn nativeDefineVirtual(ctx: *Context) anyerror!void {
 }
 
 /// Trampoline helper ( value tv -- tagged )
-///
-/// Given a value, wraps it as a tagged virtual type instance.
 fn virtualWrapHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -336,8 +334,6 @@ fn virtualWrapHelper(ctx: *Context) anyerror!void {
 }
 
 /// Trampoline helper ( tagged tv -- value )
-///
-/// Given a tagged virtual type instance, unwraps and validates its type.
 fn virtualUnwrapHelper(ctx: *Context) anyerror!void {
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
@@ -365,8 +361,6 @@ fn virtualUnwrapHelper(ctx: *Context) anyerror!void {
 }
 
 /// Trampoline helper ( value tv -- ? )
-///
-/// Given a value, checks if it is a tagged instance of the given virtual type.
 fn virtualTypePredicateHelper(ctx: *Context) anyerror!void {
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
@@ -525,8 +519,6 @@ fn virtualStructUnwrapHelper(ctx: *Context) anyerror!void {
 }
 
 /// Trampoline helper ( tagged tv -- hash )
-///
-/// Validates the tag, unwraps to struct instance, converts fields to a hash.
 fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
     const tv = try helpers.popTypeVal(ctx);
     const vt = tv.virtual_type.?;
@@ -576,11 +568,6 @@ fn virtualStructToHashHelper(ctx: *Context) anyerror!void {
 }
 
 /// Trampoline helper ( hash tv -- tagged )
-///
-/// Takes a hash and a TypeValue for a virtual type, validates that the hash
-/// has every field required by the anonymous struct (and no extras), reads
-/// field values from the hash in field order, and constructs a tagged struct
-/// instance.
 fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -881,10 +868,6 @@ fn typedValidateSeqElements(ctx: *Context) anyerror!void {
 }
 
 /// Native dispatch helper for #nth! on typed vectors.
-/// Stack: typed-vec n elem tv -- typed-vec
-///
-/// Validates and promotes elem, unwraps the typed vector, delegates to
-/// the raw #nth!, then rewraps.
 fn typedNthMutDispatch(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -935,7 +918,6 @@ fn typedNthMutDispatch(ctx: *Context) anyerror!void {
 }
 
 /// Native dispatch helper for @set! on typed mutable maps.
-/// Validates+promotes the value, unwraps the typed mmap, delegates to base @set!, rewraps.
 fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -985,7 +967,6 @@ fn typedAtSetMutDispatch(ctx: *Context) anyerror!void {
 }
 
 /// Native dispatch helper for @remove! on typed mutable maps.
-/// Unwraps the typed mmap, delegates to base @remove!, rewraps.
 fn typedAtRemoveMutDispatch(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -1363,12 +1344,10 @@ pub fn defineParameterizedWrap(ctx: *Context, name: []const u8, vtype: *const Vi
 // `struct_field_spec.parse` can share the same base-parameter resolution.
 
 /// Bind a base type's type parameters from a `type-params:` hash, producing the
-/// positional `type_params` tuple. The hash maps parameter names to concrete
-/// TypeValues and may cover any subset of the base's still-unbound parameters
-/// (partial binding). Bound slots on the base are carried through unchanged;
-/// unbound slots not named in the hash stay unbound. Unknown keys, keys naming
-/// an already-bound parameter (monotonic narrowing), and non-TypeValue values
-/// are parse-time errors.
+/// positional `type_params` tuple. The hash may cover any subset of the base's
+/// still-unbound parameters (partial binding); bound slots are carried through
+/// unchanged. Unknown keys, already-bound parameter names (monotonic narrowing),
+/// and non-TypeValue values are parse-time errors.
 fn bindTypeParams(
     ctx: *Context,
     base_tv: *const value_mod.TypeValue,
@@ -1424,14 +1403,14 @@ fn bindTypeParams(
     return params;
 }
 
-/// define-parameterized-type ( name: descriptor markers -- ) - Define a parameterized
-/// virtual type from a descriptor carrying `inner-type`, `element-type`, and `define`
-/// fields. Invoked through the descriptor-driven `;` protocol after `;` has pushed
-/// name, descriptor, and the collected markers array.
+/// define-parameterized-type ( name: descriptor markers -- )
+///
+/// Invoked through the descriptor-driven `;` protocol after `;` has pushed name,
+/// descriptor, and the collected markers array.
 ///
 /// The `>name` word validates that all elements of the inner value match the element
-/// type. The `make-name` word skips element validation. The resulting type word is a
-/// parse-time, const, typed compound that pushes the `TypeValue` literal.
+/// type; `make-name` skips element validation. The resulting type word is a parse-time,
+/// const, typed compound that pushes the `TypeValue` literal.
 fn nativeDefineParameterizedType(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 

@@ -133,7 +133,7 @@ fn fileWrite(stream: *Stream, bytes: []const u8, ctx: *Context) anyerror!usize {
     }
 }
 
-/// Close the base fd. Guards stdin/stdout/stderr from actual close.
+/// Close the base fd.
 fn fileClose(stream: *Stream) void {
     restoreBlocking(stream);
 
@@ -145,7 +145,7 @@ fn fileClose(stream: *Stream) void {
     file.close();
 }
 
-/// Flush the base fd. No-op for standard streams, sockets, and pipes.
+/// Flush the base fd.
 ///
 /// NOTE(ripta): The standard streams and fd-based streams, e.g., sockets and pipes,
 ///              are unbuffered at the zig file level, so sync is a no-op or unsupported.
@@ -222,8 +222,7 @@ fn memClose(stream: *Stream) void {
 
 fn memFlush(_: *Stream) anyerror!void {}
 
-/// <string-stream> ( n -- stream ) - Create a write-only in-memory stream
-/// with initial capacity n.
+/// <string-stream> ( n -- stream )
 pub fn nativeStringStream(ctx: *Context) anyerror!void {
     const n = try popFixnum(ctx);
     if (n < 0) {
@@ -265,11 +264,11 @@ fn requireMemStream(ctx: *Context, stream: *Stream) !void {
     }
 }
 
-/// string-stream>bytes! ( stream -- bytes ) - Drain an in-memory stream into a
-/// byte-array and close it. Zero-copy: the buffer's growable list is moved into
-/// the refcounted byte-array, so the geometric capacity slack rides along and
-/// is freed through the byte-array's header allocator. A later write throws
-/// ClosedStream.
+/// string-stream>bytes! ( stream -- bytes )
+///
+/// Zero-copy: the buffer's growable list moves into the refcounted byte-array, so geometric
+/// capacity slack rides along and frees through the byte-array's header allocator. A later write
+/// throws ClosedStream.
 pub fn nativeStringStreamToBytes(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -291,10 +290,10 @@ pub fn nativeStringStreamToBytes(ctx: *Context) anyerror!void {
     try ctx.stack.pushMoved(.{ .byte_array = ba });
 }
 
-/// string-stream>string! ( stream -- str ) - Drain an in-memory stream into a
-/// string and close it. The live bytes are copied into the quotation arena
-/// because 1z strings are never freed individually, and the GPA buffer is
-/// released. A later write throws ClosedStream.
+/// string-stream>string! ( stream -- str )
+///
+/// The live bytes are copied into the quotation arena because 1z strings are never freed
+/// individually; the GPA buffer is released. A later write throws ClosedStream.
 pub fn nativeStringStreamToString(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -423,9 +422,7 @@ fn closeFdGuarded(fd: std.posix.fd_t) void {
     file.close();
 }
 
-/// <duplex-stream> ( read-fd write-fd -- stream ) - Construct a stream whose
-/// reads go to read-fd and writes go to write-fd. Both fds must be
-/// non-negative.
+/// <duplex-stream> ( read-fd write-fd -- stream )
 pub fn nativeDuplexStream(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "<duplex-stream>");
 
@@ -479,7 +476,7 @@ fn createStdInMemoryStream(ctx: *Context, mode: StreamMode, name: []const u8) !S
     };
 }
 
-/// stdin ( -- stream ) - Push standard input stream
+/// stdin ( -- stream )
 pub fn nativeStdin(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
@@ -491,7 +488,7 @@ pub fn nativeStdin(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .stream = stream });
 }
 
-/// stdout ( -- stream ) - Push standard output stream
+/// stdout ( -- stream )
 pub fn nativeStdout(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
@@ -503,7 +500,7 @@ pub fn nativeStdout(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .stream = stream });
 }
 
-/// stderr ( -- stream ) - Push standard error stream
+/// stderr ( -- stream )
 pub fn nativeStderr(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const stream = alloc.create(Stream) catch return error.OutOfMemory;
@@ -519,8 +516,7 @@ pub fn nativeStderr(ctx: *Context) anyerror!void {
 // Stream open/close
 // =============================================================================
 
-/// stream-open ( path mode -- stream ) - Open a file stream
-/// Mode symbols: read: write: append: read-write:
+/// stream-open ( path mode -- stream )
 pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "stream-open");
 
@@ -584,7 +580,7 @@ pub fn nativeStreamOpen(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .stream = stream });
 }
 
-/// stream-close ( stream -- ) - Close a stream
+/// stream-close ( stream -- )
 pub fn nativeStreamClose(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -597,7 +593,7 @@ pub fn nativeStreamClose(ctx: *Context) anyerror!void {
 // Stream writing primitives
 // =============================================================================
 
-/// stream-write ( stream bytes -- n ) - Write bytes to stream, return count written
+/// stream-write ( stream bytes -- n )
 pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
     const bytes_val = try ctx.stack.pop();
     defer container_backing.releaseValue(bytes_val);
@@ -621,7 +617,7 @@ pub fn nativeStreamWrite(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = @intCast(written) });
 }
 
-/// stream-flush ( stream -- ) - Flush stream buffer
+/// stream-flush ( stream -- )
 pub fn nativeStreamFlush(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -633,7 +629,7 @@ pub fn nativeStreamFlush(ctx: *Context) anyerror!void {
 // Stream reading primitives
 // =============================================================================
 
-/// stream-read ( stream n -- bytes ) - Read up to n bytes from stream
+/// stream-read ( stream n -- bytes )
 pub fn nativeStreamRead(ctx: *Context) anyerror!void {
     const n = try popFixnum(ctx);
     const stream = try popStream(ctx);
@@ -660,7 +656,7 @@ pub fn nativeStreamRead(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .byte_array = ba });
 }
 
-/// stream-read-line ( stream -- str/f ) - Read line (no newline), f at EOF
+/// stream-read-line ( stream -- str/f )
 pub fn nativeStreamReadLine(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -717,7 +713,7 @@ pub fn nativeStreamReadLine(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .string = result });
 }
 
-/// stream-read-all ( stream -- bytes ) - Read all remaining content
+/// stream-read-all ( stream -- bytes )
 pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -760,7 +756,7 @@ pub fn nativeStreamReadAll(ctx: *Context) anyerror!void {
 // Stream positioning primitives
 // =============================================================================
 
-/// stream-tell ( stream -- pos ) - Get current stream position
+/// stream-tell ( stream -- pos )
 pub fn nativeStreamTell(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "stream-tell");
 
@@ -776,7 +772,7 @@ pub fn nativeStreamTell(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = @intCast(pos) });
 }
 
-/// stream-seek ( stream pos -- ) - Seek to absolute position
+/// stream-seek ( stream pos -- )
 pub fn nativeStreamSeek(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "stream-seek");
 
@@ -795,7 +791,7 @@ pub fn nativeStreamSeek(ctx: *Context) anyerror!void {
     };
 }
 
-/// stream-seek-end ( stream offset -- ) - Seek relative to end of stream
+/// stream-seek-end ( stream offset -- )
 pub fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "stream-seek-end");
 
@@ -814,7 +810,7 @@ pub fn nativeStreamSeekEnd(ctx: *Context) anyerror!void {
 // Buffering control primitives
 // =============================================================================
 
-/// buffering-mode ( stream -- symbol ) - Get stream buffering mode
+/// buffering-mode ( stream -- symbol )
 pub fn nativeBufferingMode(ctx: *Context) anyerror!void {
     const stream = try popStream(ctx);
     try ensureStreamOpen(stream);
@@ -822,7 +818,7 @@ pub fn nativeBufferingMode(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .symbol = stream.buffering.toSymbol() });
 }
 
-/// set-buffering-mode ( stream symbol -- ) - Set stream buffering mode
+/// set-buffering-mode ( stream symbol -- )
 pub fn nativeSetBufferingMode(ctx: *Context) anyerror!void {
     const mode_sym = try popSymbol(ctx);
     const stream = try popStream(ctx);
@@ -844,7 +840,7 @@ pub fn nativeSetBufferingMode(ctx: *Context) anyerror!void {
 // Unix interop primitives
 // =============================================================================
 
-/// stream>fd ( stream -- int ) - Get file descriptor from stream (Unix only)
+/// stream>fd ( stream -- int )
 pub fn nativeStreamToFd(ctx: *Context) anyerror!void {
     if (native_os == .windows) {
         return error.UnsupportedOperation;
@@ -857,14 +853,11 @@ pub fn nativeStreamToFd(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .fixnum = fd });
 }
 
-/// fd>stream ( fd -- stream ) - Create stream from file descriptor (Unix only)
+/// fd>stream ( fd -- stream )
 ///
-/// Always opens in read-write mode, since we don't have access to the original
-/// mode and Unix fds are generally more flexible than zig's File.
-///
-/// If the fd is invalid or negative, returns an error.
-///
-/// The resulting stream won't have a meaningful name, so it's just "fd". 😬
+/// Always opens in read-write mode: there's no access to the original mode, and Unix fds are
+/// generally more flexible than zig's File. The resulting stream won't have a meaningful name, so
+/// it's just "fd". 😬
 pub fn nativeFdToStream(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "fd>stream");
     if (native_os == .windows) {
@@ -883,7 +876,7 @@ pub fn nativeFdToStream(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .stream = stream });
 }
 
-/// <pipe> ( -- rd wr ) - Create a Unix pipe, returning read-end and write-end streams
+/// <pipe> ( -- rd wr )
 fn nativePipe(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "<pipe>");
     if (native_os == .windows) {
@@ -907,7 +900,7 @@ fn nativePipe(ctx: *Context) anyerror!void {
 // Character conversion primitives
 // =============================================================================
 
-/// >char ( codepoint -- str ) - Convert Unicode codepoint to single-character string
+/// >char ( codepoint -- str )
 pub fn nativeChr(ctx: *Context) anyerror!void {
     const codepoint_val = try popFixnum(ctx);
     if (codepoint_val < 0 or codepoint_val > 0x10FFFF) {
@@ -936,7 +929,7 @@ pub fn nativeChr(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .string = str });
 }
 
-/// >codepoint ( str -- int ) - Convert single-character string to Unicode codepoint
+/// >codepoint ( str -- int )
 pub fn nativeToCodepoint(ctx: *Context) anyerror!void {
     const str = try popString(ctx);
     var iter = std.unicode.Utf8Iterator{ .bytes = str, .i = 0 };

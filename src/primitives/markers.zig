@@ -279,8 +279,9 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "native?", .func = nativeIsNative, .stack_effect = "module name -- ?" },
 };
 
-/// marker ( -- marker ) - Create an anonymous marker value
-/// The marker gets its name when defined with ;
+/// marker ( -- marker )
+///
+/// The marker gets its name when defined with `;`.
 pub fn nativeMarker(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const marker = try alloc.create(Marker);
@@ -288,111 +289,107 @@ pub fn nativeMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = marker });
 }
 
-/// parse-time ( -- marker ) - Push the well-known parse-time marker
-/// This marker indicates that a word should be executed at parse time.
+/// parse-time ( -- marker )
 pub fn nativeParseTimeMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&parse_time_marker) });
 }
 
-/// parse-time-only ( -- marker ) - Push the well-known parse-time-only marker
+/// parse-time-only ( -- marker )
 pub fn nativeParseTimeOnlyMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&parse_time_only_marker) });
 }
 
-/// mutable ( -- marker ) - Push the well-known mutable marker
-/// This marker indicates that a struct should generate setters in addition to getters.
+/// mutable ( -- marker )
 pub fn nativeMutableMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&mutable_marker) });
 }
 
-/// generic ( -- marker ) - Push the well-known generic marker
-/// This marker indicates that a word supports method dispatch.
+/// generic ( -- marker )
 pub fn nativeGenericMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&generic_marker) });
 }
 
-/// const ( -- marker ) - Push the well-known const marker
-/// This marker indicates that a word cannot be redefined.
+/// const ( -- marker )
 pub fn nativeConstMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&const_marker) });
 }
 
-/// branch-combinator ( -- marker ) - Push the well-known branch-combinator marker
+/// branch-combinator ( -- marker )
 pub fn nativeBranchCombinatorMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&branch_combinator_marker) });
 }
 
-/// loop-combinator ( -- marker ) - Push the well-known loop-combinator marker
+/// loop-combinator ( -- marker )
 pub fn nativeLoopCombinatorMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&loop_combinator_marker) });
 }
 
-/// partial-dispatch ( -- marker ) - Push the well-known partial-dispatch marker
+/// partial-dispatch ( -- marker )
 pub fn nativePartialDispatchMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&partial_dispatch_marker) });
 }
 
-/// shadow-ok ( -- marker ) - Push the well-known shadow-ok marker
+/// shadow-ok ( -- marker )
 pub fn nativeShadowOkMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&shadow_ok_marker) });
 }
 
-/// typed ( -- marker ) - Push the well-known typed marker
+/// typed ( -- marker )
 pub fn nativeTypedMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&typed_marker) });
 }
 
-/// stack-recursive ( -- marker ) - Push the well-known stack-recursive marker
+/// stack-recursive ( -- marker )
 pub fn nativeStackRecursiveMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&stack_recursive_marker) });
 }
 
-/// no-compile ( -- marker ) - Push the well-known no-compile marker
+/// no-compile ( -- marker )
 pub fn nativeNoCompileMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&no_compile_marker) });
 }
 
-/// deprecated ( -- marker ) - Push the well-known deprecated marker
+/// deprecated ( -- marker )
 pub fn nativeDeprecatedMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&deprecated_marker) });
 }
 
-/// never-returns ( -- marker ) - Push the well-known never-returns marker
+/// never-returns ( -- marker )
 pub fn nativeNeverReturnsMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&never_returns_marker) });
 }
 
-/// interpreter-dependent ( -- marker ) - Push the well-known interpreter-dependent marker
+/// interpreter-dependent ( -- marker )
 pub fn nativeInterpreterDependentMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&interpreter_dependent_marker) });
 }
 
-/// dynamic-eval ( -- marker ) - Push the well-known dynamic-eval marker
+/// dynamic-eval ( -- marker )
 pub fn nativeDynamicEvalMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&dynamic_eval_marker) });
 }
 
-/// dynamic-load ( -- marker ) - Push the well-known dynamic-load marker
+/// dynamic-load ( -- marker )
 pub fn nativeDynamicLoadMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&dynamic_load_marker) });
 }
 
-/// dynamic-compile ( -- marker ) - Push the well-known dynamic-compile marker
+/// dynamic-compile ( -- marker )
 pub fn nativeDynamicCompileMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&dynamic_compile_marker) });
 }
 
-/// dynamic-quotation-construction ( -- marker ) - Push the well-known dynamic-quotation-construction marker
+/// dynamic-quotation-construction ( -- marker )
 pub fn nativeDynamicQuotationConstructionMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&dynamic_quotation_construction_marker) });
 }
 
-/// any ( -- marker ) - Push the well-known any marker
+/// any ( -- marker )
 pub fn nativeAnyMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&any_marker) });
 }
 
-/// self ( -- marker ) - Push the well-known self marker for protocol type annotations
+/// self ( -- marker )
 pub fn nativeSelfMarker(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .marker = @constCast(&self_marker) });
 }
@@ -533,10 +530,7 @@ pub fn lookupWellKnownMarker(name: []const u8) ?*Marker {
     return null;
 }
 
-/// word-markers ( module name -- markers ) - Get the markers attached to a word in a module
-///
-/// Returns an array of marker values. Returns empty array if word has no markers.
-/// Raises WordNotFound if the word doesn't exist.
+/// word-markers ( module name -- markers )
 fn nativeWordMarkers(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
@@ -587,11 +581,7 @@ fn nativeWordMarkers(ctx: *Context) anyerror!void {
     try helpers.pushAdoptedArray(ctx, alloc, result);
 }
 
-/// native? ( module name -- ? ) - Check if a word in a module is a native primitive
-///
-/// Returns true if the word exists and is a native implementation, false if
-/// it exists but is a compound (user-defined) word.
-/// Raises WordNotFound if the word doesn't exist.
+/// native? ( module name -- ? )
 fn nativeIsNative(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 

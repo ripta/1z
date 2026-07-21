@@ -117,28 +117,10 @@ fn allocateTaskWithEntry(
 
 /// task-scope ( quot -- )
 ///
-/// Two code paths depending on whether a scheduler is already running.
-///
-/// 1. Top-level: called from the main context where `ctx.scheduler` is null.
-/// Builds the worker pool, wraps the quotation in a scope task, runs the
-/// scheduling loop to completion across all workers, then propagates any
-/// child error.
-///
-/// 2. Nested: called from within a running task where `ctx.scheduler` is
-/// non-null. Creates a TaskScope on the current task's native stack frame,
-/// spawns a scope task, suspends the current task until the scope drains,
-/// then propagates any child error.
-///
-/// In both cases the scope waits for every child to reach a terminal
-/// status regardless of which worker each child ran on. Cross-worker child
-/// completion is signalled via the `active_children` atomic counter; the
-/// worker that drives the counter to zero wakes the scope's owner task via
-/// its home worker's external queue.
-///
-/// When this returns, which happens either normally or by re-throwing a child's error, every
-/// task spawned within the scope has reached a terminal status, which means each child's
-/// registered cleanup handler has already run to completion. The guarantee covers tasks
-/// spawned within the scope, not arbitrary task handles referenced inside it.
+/// Top-level (`ctx.scheduler == null`) builds the worker pool and runs the scheduling loop to
+/// completion; nested creates a `TaskScope` on the current task's frame and suspends until it
+/// drains. Either way, cross-worker completion signals through the `active_children` counter,
+/// which wakes the scope's owner via its home worker's external queue.
 fn nativeTaskScope(ctx: *Context) anyerror!void {
     // Pop without stamping this context: the scope body runs in the scope task, so its carried
     // scope is stamped into that child, not the caller. Stamping the caller would leak one copy per
@@ -265,15 +247,8 @@ fn nativeTaskScope(ctx: *Context) anyerror!void {
 
 /// spawn ( quot -- task )
 ///
-/// Must be called within a `task-scope`. Picks the worker with the fewest
-/// active tasks, allocates the new task on its scheduler, adds it to the
-/// caller's scope, and dispatches it via local or cross-thread enqueue.
-/// The spawned task is pinned to its assigned worker for its entire
-/// lifetime; it does not migrate between workers.
-///
-/// The returned handle is valid only within the task-scope that spawned it.
-/// After that scope exits the handle must not be used, because the runtime
-/// may have destroyed the task.
+/// Allocates on the least-loaded worker's scheduler and dispatches via local or cross-thread
+/// enqueue.
 fn nativeSpawn(ctx: *Context) anyerror!void {
     // The task-level coroutine (minicoro) has a freestanding stub that never actually resumes
     // (see task.zig): a spawned task body would silently never run. Fail loudly instead of
@@ -299,8 +274,7 @@ fn nativeSpawn(ctx: *Context) anyerror!void {
 
 /// spawn-named ( quot name -- task )
 ///
-/// Like `spawn`, but assigns a string name to the task. The name is stored
-/// on the Task struct and displayed in task value representations.
+/// Like `spawn`; stores `name` on the Task struct for display in task value representations.
 fn nativeSpawnNamed(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn-named");
 
@@ -325,14 +299,8 @@ fn nativeSpawnNamed(ctx: *Context) anyerror!void {
 
 /// spawn-detached ( quot -- )
 ///
-/// Must be called within a `task-scope`. Spawns a fire-and-forget task that
-/// is tracked in the scope's separate detached list rather than its
-/// children, so its failure is isolated from siblings. The task is reaped at
-/// its own completion instead of at scope exit, so a long-running scope that
-/// fires off many detached tasks stays bounded in memory. The scope still
-/// waits for all in-flight detached tasks to finish before it returns. No
-/// task handle is pushed: a detached task may be freed the moment it
-/// completes, so there is nothing safe to hand back.
+/// Tracked in the scope's detached list rather than its children, so failure is isolated from
+/// siblings and reaping happens at the task's own completion instead of at scope exit.
 fn nativeSpawnDetached(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "spawn-detached");
 
@@ -417,9 +385,6 @@ fn spawnDetachedOnPool(ctx: *Context, scheduler: *Scheduler, scope: *TaskScope, 
 }
 
 /// task-self ( -- task )
-///
-/// Push the current task handle onto the stack. Must be called from within
-/// a running task inside a `task-scope`.
 fn nativeTaskSelf(ctx: *Context) anyerror!void {
     const scheduler = ctx.scheduler orelse {
         ctx.pending_error_message = "task-self must be called within a task-scope";
@@ -435,8 +400,6 @@ fn nativeTaskSelf(ctx: *Context) anyerror!void {
 }
 
 /// yield ( -- )
-///
-/// Voluntarily yields the current task, allowing other tasks to run.
 fn nativeYield(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "yield cannot be called during module loading";
@@ -454,9 +417,6 @@ fn nativeYield(ctx: *Context) anyerror!void {
 }
 
 /// sleep ( duration -- )
-///
-/// Suspend the current task for the given duration. Must be called within a
-/// `task-scope`. Rejects negative values.
 fn nativeSleep(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "sleep cannot be called during module loading";
@@ -481,15 +441,6 @@ fn nativeSleep(ctx: *Context) anyerror!void {
 }
 
 /// with-timeout ( quot duration -- value )
-///
-/// Run a quotation with a timeout. Creates an isolated nested scope with two
-/// tasks: the main task running the user's quotation and a timer task that
-/// sleeps for the given duration then triggers a timeout failure. Both tasks
-/// are homed on the current worker, so the scope's completed children are reaped
-/// inline on that worker when this returns.
-///
-/// If the main task completes first, its result is pushed and the timer is cancelled.
-/// If the timer fires first, the main task is cancelled and a `timeout` error is thrown.
 fn nativeWithTimeout(ctx: *Context) anyerror!void {
     const dur = try helpers.popDuration(ctx);
     // Pop without stamping this context: the body runs in the main child task, so its carried scope
@@ -622,9 +573,6 @@ fn timerTaskEntryPoint(co: task_mod.CoroPtr) callconv(.c) void {
 }
 
 /// cancel-task ( task -- )
-///
-/// Cancel a task. Sets the cancelled flag so the scheduler will skip or
-/// abort it on the next scheduling pass. Must be called within a `task-scope`.
 fn nativeCancelTask(ctx: *Context) anyerror!void {
     const task = try helpers.popTask(ctx);
 
@@ -637,11 +585,6 @@ fn nativeCancelTask(ctx: *Context) anyerror!void {
 }
 
 /// await ( task -- value )
-///
-/// Wait for a task to complete and push its result. If the task has no result,
-/// pushes `f`. If the task failed, re-throws its error. If the task is still
-/// running, suspends the caller until the task finishes. The handle must belong
-/// to an open task-scope; it is no longer valid after its scope exits.
 fn nativeAwait(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "await cannot be called during module loading";
@@ -675,21 +618,9 @@ fn nativeAwait(ctx: *Context) anyerror!void {
 
 /// await-terminal ( task -- )
 ///
-/// Wait for a task to reach a terminal status (completed, failed, or
-/// cancelled) without pushing the task's result. On a completed task it
-/// returns normally; on a failed task it re-throws the task's error, matching
-/// `await`; on a cancelled task it returns normally and does not throw
-/// `task-cancelled:`. The target may live on a different worker, in which case
-/// the caller blocks until the target reaches terminal status on whichever
-/// worker ran it.
-///
-/// This is the building block for cancel-and-wait, where the caller cancels a
-/// task and then waits for the task's registered cleanup handler to finish:
+/// The building block for cancel-and-wait:
 ///
 ///     dup cancel-task await-terminal
-///
-/// The handle must belong to an open task-scope; it is no longer valid after
-/// its scope exits.
 fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "await-terminal cannot be called during module loading";
@@ -737,10 +668,8 @@ fn nativeAwaitTerminal(ctx: *Context) anyerror!void {
 
 /// await-all ( array -- array )
 ///
-/// Wait for all tasks in the array to complete and return an array of results
-/// in the same order. If any task failed or was cancelled, re-throw the first
-/// error, in array order, after all tasks have finished. Each handle must belong
-/// to an open task-scope; handles are no longer valid after their scope exits.
+/// Results preserve array order. If multiple tasks failed or were cancelled, the first error in
+/// array order is thrown only after every task has reached a terminal status.
 fn nativeAwaitAll(ctx: *Context) anyerror!void {
     if (ctx.in_module_load) {
         ctx.pending_error_message = "await-all cannot be called during module loading";
@@ -1200,9 +1129,7 @@ fn deepCopyErrorObject(err: *const ErrorObject, box_alloc: Allocator, inner_allo
 
 /// cancelled? ( -- bool )
 ///
-/// Push `t` if the current task has a pending cancellation, `f` otherwise.
-/// Returns `f` outside a task-scope. Useful for compute-bound loops that
-/// need to poll for cancellation.
+/// Returns `f` outside a task-scope. Useful for compute-bound loops polling for cancellation.
 fn nativeCancelledQuery(ctx: *Context) anyerror!void {
     const cancelled = if (ctx.scheduler) |sched|
         if (sched.current_task) |task| task.getCancellationPhase() != .none else false

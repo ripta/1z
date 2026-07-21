@@ -140,9 +140,8 @@ fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
 
 /// Fire all scoped hooks stored in a dynamic parameter.
 ///
-/// Pushes args onto the stack before each hook. Iterates in LIFO (reverse) order.
-/// On error, logs to stderr and continues with remaining hooks.
-/// Reëntrant calls are suppressed to prevent infinite recursion, e.g., a word-defined hook that itself defines words.
+/// Reëntrant calls are suppressed to prevent infinite recursion, e.g., a word-defined hook that
+/// itself defines words.
 pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Value) void {
     if (ctx.firing_scoped_hooks) return;
 

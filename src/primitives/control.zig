@@ -160,7 +160,6 @@ pub fn nativeRedefinitionArityMismatchValidator(ctx: *Context) anyerror!void {
 }
 
 /// Native validator for the callsite-arity-mismatch pragma.
-/// Accepts "error", "warning", or "off".
 pub fn nativeCallsiteArityMismatchValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -181,7 +180,6 @@ pub fn nativeCallsiteArityMismatchValidator(ctx: *Context) anyerror!void {
 }
 
 /// Native validator for the type-check pragma.
-/// Accepts "error", "warning", or "off".
 pub fn nativeTypeCheckValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -202,7 +200,6 @@ pub fn nativeTypeCheckValidator(ctx: *Context) anyerror!void {
 }
 
 /// Native validator for the never-returns-consistency pragma.
-/// Accepts "error", "warning", or "off".
 pub fn nativeNeverReturnsConsistencyValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -223,7 +220,6 @@ pub fn nativeNeverReturnsConsistencyValidator(ctx: *Context) anyerror!void {
 }
 
 /// Native validator for the missing-default-arm pragma.
-/// Accepts "error", "warning", or "off".
 pub fn nativeMissingDefaultArmValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -243,10 +239,9 @@ pub fn nativeMissingDefaultArmValidator(ctx: *Context) anyerror!void {
     }
 }
 
-/// Native validator for the require-doc pragma. Maps level names to the
-/// bitmask consumed by enforceRequireDoc. Follows the same protocol as
-/// quotation validators: push validated_value t on success, or error_msg f
-/// on failure.
+/// Native validator for the require-doc pragma. Maps level names to the bitmask
+/// consumed by enforceRequireDoc. Follows the same push-value/t or push-error/f
+/// protocol as the other pragma validators.
 pub fn nativeRequireDocValidator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
     switch (val) {
@@ -281,9 +276,7 @@ pub fn nativeRequireDocValidator(ctx: *Context) anyerror!void {
     }
 }
 
-/// Check the require-doc pragma and throw missing-doc-comment if a
-/// doc-comment is required but absent. The pragma value is an integer
-/// bitmask set by the native validator.
+/// The pragma value is an integer bitmask set by the native validator.
 fn enforceRequireDoc(ctx: *Context, name: []const u8, has_doc: bool, is_parse_time: bool, is_type_descriptor: bool, is_marker: bool) anyerror!void {
     if (has_doc) return;
 
@@ -320,13 +313,15 @@ pub const primitives = [_]Primitive{
     .{ .name = "if", .stack_effect = "..a ? true-quot: ( ..a -- ..b ) false-quot: ( ..a -- ..b ) -- ..b", .doc = "Conditional execution.", .func = nativeIf, .markers = &.{@constCast(&markers_mod.branch_combinator_marker)} },
 };
 
-/// call ( quot -- ) - Execute a quotation with a new local frame for scoping
+/// call ( quot -- )
+///
+/// Runs in a new local frame, so locals defined inside stay scoped to the call.
 pub fn nativeCall(ctx: *Context) anyerror!void {
     const instrs = try popQuotation(ctx);
     try ctx.executeQuotationWithFrame(instrs);
 }
 
-/// ; ( name: quot -- ) or ( name: value -- ) or ( name: marker -- ) - Define a new word
+/// ; ( name: quot -- ) or ( name: value -- ) or ( name: marker -- )
 ///
 /// Polymorphic definition, depending on TOS type, with optional metadata:
 ///
@@ -607,7 +602,7 @@ pub fn nativeFalse(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .boolean = false });
 }
 
-/// if ( ? true-quot false-quot -- ) - Conditional execution
+/// if ( ? true-quot false-quot -- )
 ///
 /// Uses executeQuotationInline so tail calls in branches propagate to the
 /// enclosing word's TCO loop (e.g., times -> if -> [... times] tail-calls).

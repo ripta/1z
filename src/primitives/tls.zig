@@ -230,10 +230,8 @@ fn nativeTlsConfigNoVerify(ctx: *Context) anyerror!void {
 
 /// tls-config-add-ca-pem ( resource pem-data -- resource )
 ///
-/// Adds CA certificates from in-memory PEM data to a TLS config resource.
-/// The PEM data is parsed for BEGIN/END CERTIFICATE markers, base64-decoded,
-/// and each certificate is added to the config's CA bundle. If the bundle is
-/// null (no-verify config), it is initialized to empty before adding.
+/// pem-data may contain multiple concatenated PEM certificates. Works on a no-verify
+/// config, initializing its (null) bundle first.
 fn nativeTlsConfigAddCaPem(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "tls-config-add-ca-pem");
     const pem_val = try ctx.stack.pop();
@@ -286,10 +284,8 @@ fn nativeTlsConfigAddCaPem(ctx: *Context) anyerror!void {
 
 /// tls-upgrade ( stream config hostname -- stream )
 ///
-/// Upgrades a stream to TLS using the provided configuration and hostname for
-/// verification. The stream must not already be a TLS wrapper. The resulting
-/// stream delegates I/O through the TLS vtable and chains to the original
-/// stream via the `inner` pointer.
+/// The stream must not already be a TLS wrapper. The resulting stream delegates I/O
+/// through the TLS vtable and chains to the original stream via the `inner` pointer.
 fn nativeTlsUpgrade(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "tls-upgrade");
     const hostname = try helpers.popString(ctx);

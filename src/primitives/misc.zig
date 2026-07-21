@@ -127,10 +127,9 @@ fn nativeToModule(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .module = module });
 }
 
-/// Check for if input refers to a file path (starts with './', '../', '/',
-/// or ends with '.1z'), or if it is a bare name to search for in load paths.
-/// Names containing '/' without a path prefix are treated as search-mode
-/// names, enabling hierarchical module resolution (e.g., "net/tcp").
+/// True for a file path (`./`, `../`, `/` prefix, or a `.1z` suffix); otherwise the name is
+/// treated as search-mode, including one containing `/` (e.g. "net/tcp"), which is what enables
+/// hierarchical module resolution.
 fn isPathMode(filename: []const u8) bool {
     return std.mem.startsWith(u8, filename, "./") or
         std.mem.startsWith(u8, filename, "../") or
@@ -138,8 +137,7 @@ fn isPathMode(filename: []const u8) bool {
         std.mem.endsWith(u8, filename, ".1z");
 }
 
-/// Try to resolve a file in a given directory. Returns the absolute path if the file
-/// exists, or null otherwise.
+/// Resolve a file in a directory to its absolute path, or null if it doesn't exist.
 fn resolveInDir(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) ?[]const u8 {
     const joined = std.fs.path.join(alloc, &.{ dir, name }) catch return null;
     defer alloc.free(joined);
@@ -150,11 +148,8 @@ fn resolveInDir(alloc: std.mem.Allocator, dir: []const u8, name: []const u8) ?[]
     return canonical;
 }
 
-/// Resolve a load path according to path mode vs search mode rules.
-///
-/// Returns the resolved absolute path, or null if not found.
-/// Auto-append .1z, search configured paths only.
-/// Use path mode ("./foo.1z") for relative imports.
+/// Resolve a load path according to path mode vs search mode rules. Returns the resolved
+/// absolute path, or null if not found.
 pub fn resolveLoadPath(ctx: *Context, filename: []const u8, alloc: std.mem.Allocator) ?[]const u8 {
     if (comptime is_freestanding) {
         // No filesystem on this target: path-mode names (./foo.1z, absolute paths) can never
@@ -206,7 +201,7 @@ pub fn resolveLoadPath(ctx: *Context, filename: []const u8, alloc: std.mem.Alloc
     return null;
 }
 
-/// resolve-load-path ( filename -- resolved ) - Resolve a filename to its canonical path
+/// resolve-load-path ( filename -- resolved )
 fn nativeResolveLoadPath(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const filename = try popString(ctx);
@@ -318,7 +313,7 @@ fn flushProcessor(
 /// The cache is keyed by the resolved path: either the canonical filesystem path, or the virtual
 /// `<stdlib>/...` path -- and is only written on first load. Existing entries are left untouched.
 ///
-/// This word pushse the constructed module onto the stack on success.
+/// This word pushes the constructed module onto the stack on success.
 pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []const u8, alloc: std.mem.Allocator, resolved_module: ResolvedModule) anyerror!void {
     const resolved = resolved_module.resolvedPath();
 
@@ -701,21 +696,16 @@ fn nativeExport(ctx: *Context) anyerror!void {
     entry.imported = false;
 }
 
-/// borrow-deps ( source-module target -- ) - Import a module's private `deps` words, the
-/// low-level piece the `borrow` word and the test runner share. `import` exposes only
-/// `module.words`; this exposes `module.deps`.
+/// borrow-deps ( source-module target -- )
 ///
-/// A `f` target imports all of `source`'s deps into the live import frame, so they route into the
-/// borrowing module's own `deps` at finalization, exactly like a word `use`d during load. An array
-/// target imports only the named subset into the live frame, validating each name against
-/// `source.deps` first. A module target augments an already-finalized module in place and rebuilds
-/// its `deps_template`, the path the runner takes once the borrowing module is loaded.
+/// Imports a module's private `deps` words -- the low-level piece `borrow` and the test runner
+/// share, since `import` exposes only `module.words`. A `f` target imports all of `source`'s deps
+/// into the live frame; an array target imports a validated named subset; a module target mutates
+/// an already-finalized module in place and rebuilds its `deps_template`.
 ///
-/// The module-target arm is the first in-place mutator of a finalized, templated module. It follows
-/// the deps-template escape documented on `buildModuleDepsTemplate`. A cached module's deps map and
-/// template are owned by the primary worker's arena, so this arm is restricted to the primary
-/// worker; there `quotationAllocator` is that same arena, and the `put` grows the map while the
-/// rebuild overwrites the template without freeing anything.
+/// The module-target arm is the only in-place mutator of a finalized, templated module, following
+/// the deps-template escape documented on `buildModuleDepsTemplate`. It is restricted to the
+/// primary worker because a cached module's deps map and template are owned by that worker's arena.
 fn nativeBorrowDeps(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const target_val = try ctx.stack.pop();
@@ -792,7 +782,7 @@ fn nativeBorrowDeps(ctx: *Context) anyerror!void {
     }
 }
 
-/// command-line-args ( -- args ) - Push program arguments as an array of strings
+/// command-line-args ( -- args )
 fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const args = ctx.program_args;
@@ -805,7 +795,7 @@ fn nativeCommandLineArgs(ctx: *Context) anyerror!void {
     try helpers.pushAdoptedArray(ctx, alloc, arr);
 }
 
-/// sys-exit ( code -- ) - Exit the process with the given exit code
+/// sys-exit ( code -- )
 fn nativeSysExit(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "sys-exit");
 
@@ -814,14 +804,14 @@ fn nativeSysExit(ctx: *Context) anyerror!void {
     std.process.exit(@intCast(code));
 }
 
-/// add-load-path ( path -- ) - Add a directory to the load path search list
+/// add-load-path ( path -- )
 fn nativeAddLoadPath(ctx: *Context) anyerror!void {
     const path = try popString(ctx);
     const duped = ctx.quotationAllocator().dupe(u8, path) catch return error.OutOfMemory;
     ctx.load_paths.append(ctx.allocator, duped) catch return error.OutOfMemory;
 }
 
-/// 1array ( elem -- array ) - Wrap element in single-element array
+/// 1array ( elem -- array )
 fn native1Array(ctx: *Context) anyerror!void {
     const elem = try ctx.stack.pop();
     const alloc = ctx.quotationAllocator();
@@ -907,7 +897,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
     };
 }
 
-/// compile! ( sym -- ) - JIT-compile a word for integer arithmetic
+/// compile! ( sym -- )
 fn nativeCompile(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "compile!");
 
@@ -1227,11 +1217,9 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
     }
 }
 
-/// load-file ( cache filename -- module ) - Load a file unconditionally into the given cache
+/// load-file ( cache filename -- module )
 ///
-/// Restricted to the primary worker. When invoked from any task whose home
-/// worker is a background worker, throws `non-primary-worker` rather than
-/// racing on module parsing.
+/// Restricted to the primary worker to avoid racing on module parsing.
 fn nativeLoadFile(ctx: *Context) anyerror!void {
     if (ctx.scheduler) |sched| {
         if (sched.isBackgroundWorker()) {
@@ -1304,18 +1292,7 @@ fn findCachedResolvedPath(cache: *value_mod.MutableMap, filename: []const u8) ?[
     return null;
 }
 
-/// reload-file ( cache filename -- module ) - Reload a file, pinned to its original source kind
-///
-/// Like `load-file`, but reuses the resolved path of an already-cached
-/// module instead of re-running the resolver chain. The cached key carries
-/// the source-kind discriminator (filesystem realpath vs `<stdlib>/...`
-/// virtual path), so a module first loaded from the embedded bundle
-/// reloads from the bundle even after a filesystem stdlib becomes
-/// available later in the session. When no cached entry exists, falls
-/// back to the same fresh resolve `load-file` performs.
-///
-/// Restricted to the primary worker; throws `non-primary-worker` when
-/// invoked from any other worker task.
+/// reload-file ( cache filename -- module )
 fn nativeReloadFile(ctx: *Context) anyerror!void {
     if (ctx.scheduler) |sched| {
         if (sched.isBackgroundWorker()) {
@@ -1370,11 +1347,11 @@ fn nativeReloadFile(ctx: *Context) anyerror!void {
     return nativeLoadImpl(ctx, cache, filename, alloc, resolved_module);
 }
 
-/// load-check-file ( cache filename -- module ) - Load a file in check mode (definitions only)
+/// load-check-file ( cache filename -- module )
 ///
-/// Resolves the filename relative to the current working directory (not
-/// current_source_dir). This is appropriate for linting, where paths come
-/// from the command line rather than from `use` statements.
+/// Loads in check mode (definitions only). Resolves the filename against the current working
+/// directory rather than `current_source_dir`, since linting paths come from the command line,
+/// not from `use` statements.
 fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "load-check-file");
 
@@ -1416,12 +1393,12 @@ fn nativeLoadCheckFile(ctx: *Context) anyerror!void {
     return nativeLoadImpl(ctx, cache, filename, alloc, .{ .file = .{ .path = resolved } });
 }
 
-/// module-cache-value ( -- cache ) - Push the current module cache M{}
+/// module-cache-value ( -- cache )
 fn nativeModuleCacheValue(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .mutable_map = ctx.module_cache_value });
 }
 
-/// eval-string ( string -- ) - Execute a string as 1z code in the caller's scope
+/// eval-string ( string -- )
 fn nativeEvalString(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const code = try popString(ctx);

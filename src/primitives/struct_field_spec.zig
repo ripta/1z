@@ -111,20 +111,16 @@ pub fn parse(
     };
 }
 
-/// Combine a base type with a `bind{ ... }` placeholder into a single
-/// parameterized type for a field slot. The placeholder array is
-/// `{ &bind_placeholder_marker params... }`; each param is a `.symbol` (a
-/// type-parameter reference, minted or reused through the shared per-definition
-/// map so `a: T:` and `b: base bind{ T: }` share `T`) or a `.type_val` (a
-/// concrete or parse-time-computed type). The param count must equal the base's
-/// unbound-parameter count; a mismatch is a parse-time error naming the base.
-/// Routes through the same `getOrCreateParameterizedTypeDescriptor` interning
-/// core as the descriptor binding surface.
+/// Combine a base type with a `bind{ ... }` placeholder into a single parameterized type for a
+/// field slot. The placeholder array is `{ &bind_placeholder_marker params... }`; each param is
+/// a `.symbol` (a type-parameter reference, minted or reused through the shared per-definition map
+/// so `a: T:` and `b: base bind{ T: }` share `T`) or a `.type_val` (a concrete type). The param
+/// count must equal the base's unbound-parameter count. Routes through the same
+/// `getOrCreateParameterizedTypeDescriptor` interning core as the descriptor binding surface.
 ///
-/// Shared with the enum definition path (`enums.zig`), where a variant base
-/// `result-value bind{ T: }` binds the same way a struct field slot does. The
-/// caller owns the per-definition `type_params` map + `next_param_pos`, so an
-/// enum's map is shared across all its variants (enum-level parameter sharing).
+/// Shared with the enum definition path (`enums.zig`), where a variant base `result-value bind{
+/// T: }` binds the same way a struct field slot does; the caller owns the per-definition
+/// `type_params` map and `next_param_pos`, so an enum's map is shared across all its variants.
 pub fn combineBindPlaceholder(
     allocator: Allocator,
     ctx: *Context,
