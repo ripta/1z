@@ -13,6 +13,7 @@ const WordProvenance = dictionary_mod.WordProvenance;
 const WordDefinition = dictionary_mod.WordDefinition;
 
 const container_backing = @import("../container_backing.zig");
+const MemoryLimitAllocator = @import("../memory_limit.zig").MemoryLimitAllocator;
 
 const markers_mod = @import("markers.zig");
 
@@ -794,4 +795,225 @@ test "semicolon marker-definition branch binds the tagged marker as .literal" {
     const result = try ctx.stack.pop();
     try std.testing.expect(result == .marker);
     try std.testing.expectEqual(&marker, result.marker);
+}
+
+test "word with a scalar-valued named local does not blow up arena memory across many repeated calls" {
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    var ctx = Context.init(mem_limit.allocator());
+    defer ctx.deinit();
+
+    const call_body = [_]Instruction{.{ .op = .{ .call_word = "a" }, .line = 0 }};
+
+    var i: usize = 0;
+    while (i < 57_344) : (i += 1) {
+        try ctx.stack.push(.{ .symbol = "a" });
+        try ctx.stack.push(.{ .fixnum = @as(i64, @intCast(i)) });
+        try nativeSemicolon(&ctx);
+        try ctx.executeQuotation(.{ .instructions = &call_body });
+        _ = try ctx.stack.pop();
+    }
+    const mid_bytes = mem_limit.currentBytes();
+
+    while (i < 114_688) : (i += 1) {
+        try ctx.stack.push(.{ .symbol = "a" });
+        try ctx.stack.push(.{ .fixnum = @as(i64, @intCast(i)) });
+        try nativeSemicolon(&ctx);
+        try ctx.executeQuotation(.{ .instructions = &call_body });
+        _ = try ctx.stack.pop();
+    }
+    const end_bytes = mem_limit.currentBytes();
+
+    // A word that redefines a fixnum-valued named local on every call used to allocate a fresh
+    // push_literal Instruction from the arena on top of the dictionary's own per-redefinition
+    // WordDefinition box; both accumulated for the life of the Context, so tens of thousands of
+    // calls at a nonzero local count could exhaust a real memory cap.
+    //
+    // The literal-eligible path drops the Instruction allocation entirely, leaving only the
+    // dictionary's own fixed per-redefinition cost, so the second batch should cost only a small,
+    // roughly constant amount -- nowhere near a cap a real workload would hit.
+    const second_batch_growth = end_bytes - mid_bytes;
+    try std.testing.expect(second_batch_growth < 32 * 1024 * 1024);
+}
+
+test "word with a container-bound named local documents the accepted residual leak across repeated calls" {
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    var ctx = Context.init(mem_limit.allocator());
+    defer ctx.deinit();
+
+    const arr_alloc = ctx.quotationAllocator();
+    const elements = try arr_alloc.alloc(Value, 1);
+    elements[0] = .{ .fixnum = 1 };
+    const arr = try value_mod.Array.fromOwnedSlice(arr_alloc, elements);
+
+    const call_body = [_]Instruction{.{ .op = .{ .call_word = "b" }, .line = 0 }};
+
+    // Deliberately smaller than the scalar-local test's 114,688-call scale: this path keeps
+    // allocating for real on every call (see below), so the full scale runs an order of magnitude
+    // slower here and would push this single test close to the per-test-case timeout. 8,192 calls
+    // per batch is still large enough to show a clear, stable per-call rate.
+    var i: usize = 0;
+    while (i < 8_192) : (i += 1) {
+        try ctx.stack.push(.{ .symbol = "b" });
+        try ctx.stack.push(.{ .array = arr });
+        try nativeSemicolon(&ctx);
+        try ctx.executeQuotation(.{ .instructions = &call_body });
+        const result = try ctx.stack.pop();
+        container_backing.releaseValue(result);
+    }
+    const first_batch_bytes = mem_limit.currentBytes();
+
+    while (i < 16_384) : (i += 1) {
+        try ctx.stack.push(.{ .symbol = "b" });
+        try ctx.stack.push(.{ .array = arr });
+        try nativeSemicolon(&ctx);
+        try ctx.executeQuotation(.{ .instructions = &call_body });
+        const result = try ctx.stack.pop();
+        container_backing.releaseValue(result);
+    }
+    const second_batch_bytes = mem_limit.currentBytes() - first_batch_bytes;
+
+    // An array is excluded from the literal-eligible path (container_backing.valueCarriesBacking
+    // is true for it), so this word keeps taking the older push_instr path: every redefinition
+    // still allocates a fresh Instruction and retains a reference to `arr` that is never released
+    // until Context teardown. This is a documented, accepted residual leak, not a bug this test is
+    // meant to catch -- both batches are expected to grow by a real, comparable amount.
+    //
+    // What the second assertion actually guards is the leak *rate*: the second batch should cost a
+    // similar amount to the first, not dramatically more. A future change that makes this leak
+    // materially worse would blow through the multiplicative band below, which is the signal that
+    // a real fix for the container-bound case is overdue.
+    try std.testing.expect(first_batch_bytes > 0);
+    try std.testing.expect(second_batch_bytes > 0);
+    try std.testing.expect(second_batch_bytes < first_batch_bytes * 3);
+}
+
+fn defineAndCallLiteral(ctx: *Context, name: []const u8, v: Value) !Value {
+    try ctx.stack.push(.{ .symbol = name });
+    try ctx.stack.push(v);
+    try nativeSemicolon(ctx);
+
+    const word = ctx.lookupWord(name) orelse return error.TestExpectedWord;
+    switch (word.action) {
+        .literal => {},
+        .compound, .native, .host_callback => return error.TestUnexpectedActionKind,
+    }
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = name }, .line = 0 }};
+    try ctx.executeQuotation(.{ .instructions = &body });
+    return try ctx.stack.pop();
+}
+
+fn defineAndCallForcedCompound(ctx: *Context, name: []const u8, v: Value) !Value {
+    const alloc = ctx.quotationAllocator();
+    const instrs = try alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .push_literal = v }, .line = 0 };
+    try ctx.defineWord(name, WordDefinition{ .name = name, .action = .{ .compound = instrs } });
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = name }, .line = 0 }};
+    try ctx.executeQuotation(.{ .instructions = &body });
+    return try ctx.stack.pop();
+}
+
+test "spot-check: representative unverified pointer types round-trip identically as .literal and as forced .compound" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    // bignum
+    {
+        var big = try value_mod.BigIntManaged.initSet(std.testing.allocator, 42);
+        defer big.deinit();
+        const v: Value = .{ .bignum = &big };
+
+        const literal_result = try defineAndCallLiteral(&ctx, "spot-bignum-lit", v);
+        try std.testing.expect(literal_result == .bignum);
+        try std.testing.expectEqual(&big, literal_result.bignum);
+
+        const compound_result = try defineAndCallForcedCompound(&ctx, "spot-bignum-cmp", v);
+        try std.testing.expect(compound_result == .bignum);
+        try std.testing.expectEqual(&big, compound_result.bignum);
+    }
+
+    // parameter
+    {
+        var param: value_mod.Parameter = .{ .name = "p", .default_quotation = .{ .instructions = &.{} } };
+        const v: Value = .{ .parameter = &param };
+
+        const literal_result = try defineAndCallLiteral(&ctx, "spot-param-lit", v);
+        try std.testing.expect(literal_result == .parameter);
+        try std.testing.expectEqual(&param, literal_result.parameter);
+
+        const compound_result = try defineAndCallForcedCompound(&ctx, "spot-param-cmp", v);
+        try std.testing.expect(compound_result == .parameter);
+        try std.testing.expectEqual(&param, compound_result.parameter);
+    }
+
+    // resource
+    {
+        var resource: value_mod.Resource = .{ .type_name = "r" };
+        const v: Value = .{ .resource = &resource };
+
+        const literal_result = try defineAndCallLiteral(&ctx, "spot-resource-lit", v);
+        try std.testing.expect(literal_result == .resource);
+        try std.testing.expectEqual(&resource, literal_result.resource);
+
+        const compound_result = try defineAndCallForcedCompound(&ctx, "spot-resource-cmp", v);
+        try std.testing.expect(compound_result == .resource);
+        try std.testing.expectEqual(&resource, compound_result.resource);
+    }
+
+    // struct_type
+    {
+        var struct_type: value_mod.StructType = .{ .name = "s", .fields = &.{} };
+        const v: Value = .{ .struct_type = &struct_type };
+
+        const literal_result = try defineAndCallLiteral(&ctx, "spot-structtype-lit", v);
+        try std.testing.expect(literal_result == .struct_type);
+        try std.testing.expectEqual(&struct_type, literal_result.struct_type);
+
+        const compound_result = try defineAndCallForcedCompound(&ctx, "spot-structtype-cmp", v);
+        try std.testing.expect(compound_result == .struct_type);
+        try std.testing.expectEqual(&struct_type, compound_result.struct_type);
+    }
+
+    // closure
+    {
+        var closure: value_mod.Closure = .{ .instructions = &.{}, .segments = &.{} };
+        const v: Value = .{ .closure = &closure };
+
+        const literal_result = try defineAndCallLiteral(&ctx, "spot-closure-lit", v);
+        try std.testing.expect(literal_result == .closure);
+        try std.testing.expectEqual(&closure, literal_result.closure);
+
+        const compound_result = try defineAndCallForcedCompound(&ctx, "spot-closure-cmp", v);
+        try std.testing.expect(compound_result == .closure);
+        try std.testing.expectEqual(&closure, compound_result.closure);
+    }
+
+    // module
+    {
+        var module: value_mod.Module = .{ .name = "m", .words = .{} };
+        const v: Value = .{ .module = &module };
+
+        const literal_result = try defineAndCallLiteral(&ctx, "spot-module-lit", v);
+        try std.testing.expect(literal_result == .module);
+        try std.testing.expectEqual(&module, literal_result.module);
+
+        const compound_result = try defineAndCallForcedCompound(&ctx, "spot-module-cmp", v);
+        try std.testing.expect(compound_result == .module);
+        try std.testing.expectEqual(&module, compound_result.module);
+    }
+
+    // type_val
+    {
+        const type_val = ctx.lookupBuiltinTypeValue("fixnum") orelse return error.TestExpectedTypeValue;
+        const v: Value = .{ .type_val = type_val };
+
+        const literal_result = try defineAndCallLiteral(&ctx, "spot-typeval-lit", v);
+        try std.testing.expect(literal_result == .type_val);
+        try std.testing.expectEqual(type_val, literal_result.type_val);
+
+        const compound_result = try defineAndCallForcedCompound(&ctx, "spot-typeval-cmp", v);
+        try std.testing.expect(compound_result == .type_val);
+        try std.testing.expectEqual(type_val, compound_result.type_val);
+    }
 }
