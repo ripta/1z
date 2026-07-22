@@ -430,6 +430,11 @@ pub fn freezeModuleGraphOpts(
         }
 
         for (discovered.defs.items) |def| {
+            // Every entry ever appended to discovered.defs is normalized to
+            // .compound first (the compile_all_prelude block above and
+            // drainWorklist/discoverCalleeWord below all route a .literal
+            // word through literalWordAsCompound before appending), so the
+            // `else` arm is unreachable in practice, not a silent skip.
             const compound_instrs = switch (def.action) {
                 .compound => |c| c,
                 else => continue,

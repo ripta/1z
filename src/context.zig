@@ -5830,7 +5830,10 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
     const callee = ctx.lookupWord(name) orelse return null;
 
     switch (callee.action) {
-        .compound => {},
+        // A literal has no instruction body, but ResolvedWord never carries
+        // one -- only stack-effect/marker-derived metadata -- so it resolves
+        // exactly like a compound word from this point on.
+        .compound, .literal => {},
         .native => |func| {
             const effect = callee.stack_effect orelse return null;
             var result = ir_codegen.ResolvedWord{
@@ -5847,8 +5850,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
             }
             return result;
         },
-        // No JIT resolver support for literal words yet.
-        .host_callback, .literal => return null,
+        .host_callback => return null,
     }
 
     const effect = callee.stack_effect orelse return null;

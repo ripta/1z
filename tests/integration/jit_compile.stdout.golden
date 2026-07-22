@@ -469,3 +469,12 @@ Stack: [ [ { 1 } [ ] jit-each-match ] ]
 Stack: [ [ { 1 } [ ] jit-each-match ] [ { 1 } [ ] jit-each-match ] ]
 PASS: jit #each error matches interpreter
 Stack: [ ]
+=== compile! word calling a stack-effect-declared literal constant ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ 43 ]
+Stack: [ 43 ]
+Stack: [ 43 43 ]
+PASS: use-magic interpreted vs compiled match
+Stack: [ ]

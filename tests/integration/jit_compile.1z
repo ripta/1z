@@ -451,3 +451,12 @@ jit-each-match: ( arr quot -- ) [ #each ] ;
 jit-each-match: compile!
 [ { 1 } [ ] jit-each-match ]
 "jit #each error matches interpreter" assert=
+
+"compile! word calling a stack-effect-declared literal constant" test-section
+
+MAGIC-NUM: ( -- n: fixnum ) 42 ;
+use-magic: ( -- n ) [ MAGIC-NUM 1 + ] ;
+use-magic
+use-magic: compile!
+use-magic
+"use-magic interpreted vs compiled match" assert=
