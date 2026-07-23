@@ -1,0 +1,34 @@
+\ A task spawned from inside one loop iteration, still blocked while later iterations of the same
+\ loop run, must read its own captured local when it finally resumes -- not a value from a scope
+\ the loop has since superseded, and not freed memory.
+\
+\ Every one of the five spawned tasks blocks on the same gate channel before touching its captured
+\ `i`, so by the time any of them reads it, the loop has already finished and superseded the
+\ shared instruction body's captured-scope map entry five times over.
+
+use "ranges" ;
+use "sequences" ;
+use "testing" ;
+
+[
+  gate: <channel> ;
+  out: 5 <buffered-channel> ;
+
+  5 iota >iterator [
+    i: swap ;
+    [ gate receive drop i out send ] spawn drop
+  ] #each
+
+  5 [ t gate send ] times
+
+  received: V{ } ;
+  5 [ received out receive #push! drop ] times
+
+  "task spawned inside a loop iteration reads its own captured value" test-section
+  received >array [ < ] #sort
+  { 0 1 2 3 4 }
+  "every spawned task resolves the i it was spawned with, not a value from a superseded scope"
+  assert=
+] task-scope
+
+"resolved" print-line

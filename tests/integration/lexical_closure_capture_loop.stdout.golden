@@ -1,0 +1,20 @@
+=== doubly-nested #each resolves each outer iteration's own captured local ===
+Stack: [ ]
+PASS: the inner #each's captured oy reflects the current outer iteration, not the first
+Stack: [ ]
+=== single-level [ ... ] when resolves the current loop iteration's own captured local ===
+Stack: [ ]
+PASS: the when-branch's captured di reflects the current iteration, not the first
+Stack: [ ]
+=== non-tail same-task recursion resolves each call's own captured local ===
+Stack: [ ]
+PASS: the non-tail branch's captured n reflects that call's own n, not the outermost call's
+Stack: [ ]
+=== tail same-task recursion resolves each call's own captured local ===
+Stack: [ ]
+PASS: the tail-recursive branch's captured n reflects each loop iteration's own n, not the first
+Stack: [ ]
+=== curry builds a fresh, independently-resolvable closure on each loop iteration ===
+Stack: [ ]
+PASS: each curried closure resolves the i it was built with, not the last iteration's i
+Stack: [ ]

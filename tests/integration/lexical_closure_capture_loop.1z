@@ -1,0 +1,88 @@
+\ Regression tests for a quotation literal nested inside a loop or recursive call resolving the
+\ *current* iteration or call's captured local, not a frozen snapshot from the first one.
+\
+\ Each scenario below reads a captured local from inside a further-nested `[ ... ]` -- another
+\ `#each`, a `when`/`if` branch, or a `curry`-built closure -- while the enclosing loop or
+\ recursion keeps running. A stale-first-capture bug would make every one of these silently
+\ produce a wrong value rather than error, so each test asserts the full observed sequence rather
+\ than just checking that no error was thrown.
+
+use "ranges" ;
+use "sequences" ;
+use "testing" ;
+
+"doubly-nested #each resolves each outer iteration's own captured local" test-section
+[
+  log: V{ } ;
+  5 iota >iterator [
+    oy: swap ;
+    3 iota >iterator [
+      ox: swap ;
+      log oy #push! drop
+    ] #each
+  ] #each
+  log >array
+  { 0 0 0 1 1 1 2 2 2 3 3 3 4 4 4 }
+  "the inner #each's captured oy reflects the current outer iteration, not the first"
+  assert=
+] call
+
+"single-level [ ... ] when resolves the current loop iteration's own captured local" test-section
+[
+  log: V{ } ;
+  5 iota >iterator [
+    di: swap ;
+    t [ log di #push! drop ] when
+  ] #each
+  log >array
+  { 0 1 2 3 4 }
+  "the when-branch's captured di reflects the current iteration, not the first"
+  assert=
+] call
+
+"non-tail same-task recursion resolves each call's own captured local" test-section
+[
+  fact-capture: stack-recursive [
+    n: swap ;
+    n 1 <=
+    [ 1 ]
+    [ n n 1 - fact-capture * ]
+    if
+  ] ;
+  5 fact-capture 120
+  "the non-tail branch's captured n reflects that call's own n, not the outermost call's"
+  assert=
+] call
+
+"tail same-task recursion resolves each call's own captured local" test-section
+[
+  log: V{ } ;
+  countdown: [
+    n: swap ;
+    n 0 >
+    [ log n #push! drop n 1 - countdown ]
+    [ ]
+    if
+  ] ;
+  5 countdown
+  log >array
+  { 5 4 3 2 1 }
+  "the tail-recursive branch's captured n reflects each loop iteration's own n, not the first"
+  assert=
+] call
+
+"curry builds a fresh, independently-resolvable closure on each loop iteration" test-section
+[
+  closures: V{ } ;
+  5 iota >iterator [
+    i: swap ;
+    closures 10 [ i + ] curry #push! drop
+  ] #each
+
+  \ Every closure is invoked only now, after the loop has finished and superseded the shared
+  \ instruction body's captured-scope map entry five times over.
+  closures >array [ call ] #map #collect
+  { 10 11 12 13 14 }
+  "each curried closure resolves the i it was built with, not the last iteration's i"
+  assert=
+] call

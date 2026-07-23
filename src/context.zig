@@ -8166,6 +8166,45 @@ test "captureQuotationScope: a retained scope survives a supersede, frees only a
     first.release();
 }
 
+test "captureQuotationScope + promoteToClosure: repeated capture-and-immediate-use across many iterations grows memory at a steady rate" {
+    var mem_limit = MemoryLimitAllocator.init(std.testing.allocator, 0);
+    var ctx = Context.init(mem_limit.allocator());
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("local", .{ .name = "local", .action = .{ .compound = &.{} } });
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const quot: Quotation = .{ .instructions = &body };
+
+    // The binding stays fixed across the loop so this test isolates the closure-capture mechanism
+    // from the cost of redefining the local itself, which is covered by its own tests elsewhere.
+    var i: usize = 0;
+    while (i < 57_344) : (i += 1) {
+        const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+        _ = try ctx.promoteToClosure(quot, scope);
+    }
+    const first_batch_bytes = mem_limit.currentBytes();
+
+    while (i < 114_688) : (i += 1) {
+        const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+        _ = try ctx.promoteToClosure(quot, scope);
+    }
+    const second_batch_bytes = mem_limit.currentBytes() - first_batch_bytes;
+
+    // `captureQuotationScope`'s own map entry is refcounted and freed on supersede (proven
+    // bounded by the tests above); the growth here comes from `promoteToClosure`, which builds a
+    // real `Closure` plus an independently-owned `CapturedScope` copy on the context's arena for
+    // every capturing push -- a deliberate, documented tradeoff, not a bug this test catches. What
+    // matters is that the per-call rate stays steady rather than accelerating, the same signal a
+    // container-bound named local's own accepted allocation cost is measured by elsewhere.
+    try std.testing.expect(first_batch_bytes > 0);
+    try std.testing.expect(second_batch_bytes > 0);
+    try std.testing.expect(second_batch_bytes < first_batch_bytes * 3);
+}
+
 test "dupeCapturedScope: deep-copies into an independent scope resolving the same binding" {
     var ctx = Context.init(std.testing.allocator);
     defer ctx.deinit();

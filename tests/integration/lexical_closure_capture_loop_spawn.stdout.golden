@@ -1,0 +1,5 @@
+=== task spawned inside a loop iteration reads its own captured value ===
+PASS: every spawned task resolves the i it was spawned with, not a value from a superseded scope
+Stack: [ ]
+resolved
+Stack: [ ]
