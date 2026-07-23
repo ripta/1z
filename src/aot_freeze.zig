@@ -2425,6 +2425,7 @@ fn buildAotDescs(
                 .never_returns = hasNeverReturnsMarker(def),
                 .source_file = def.source_file,
                 .source_line = def.source_line,
+                .dispatch_id = def.dispatch_id,
             });
             continue;
         };
@@ -2449,6 +2450,7 @@ fn buildAotDescs(
             .never_returns = hasNeverReturnsMarker(def),
             .source_file = def.source_file,
             .source_line = def.source_line,
+            .dispatch_id = def.dispatch_id,
         });
     }
 

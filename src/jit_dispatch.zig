@@ -4,6 +4,24 @@ const JitBuffer = @import("ffi/ir.zig").JitBuffer;
 const pic_mod = @import("pic.zig");
 const PicTable = pic_mod.PicTable;
 const PolymorphicCache = pic_mod.PolymorphicCache;
+const dictionary_mod = @import("dictionary.zig");
+const StackEffect = @import("stack_effect.zig").StackEffect;
+
+/// Cached per-word data letting `jitNativeWordCall` dispatch a hosted-AOT
+/// native word with zero dictionary lookups. Populated exactly once, at
+/// process startup, by `capi.registerNativeLeaf` resolving the word's
+/// dictionary slot; thereafter `jitNativeWordCall` reads it as a pure
+/// word_id-indexed pointer dereference.
+pub const NativeLeafData = struct {
+    fn_ptr: dictionary_mod.NativeFn,
+    /// Mirrors `WordDefinition.dispatch_id`; passed to `tryDispatchGenericById`.
+    dispatch_id: u32,
+    /// Pointer into the dictionary's heap-boxed `WordDefinition`, reached
+    /// via its `WordSlot`. Valid for the process's lifetime, even across
+    /// redefinition (a displaced definition box is retired, not freed).
+    stack_effect: ?*const StackEffect,
+    source_file: ?[]const u8,
+};
 
 pub const JitEntry = struct {
     code_ptr: ?*const anyopaque,
@@ -25,6 +43,9 @@ pub const JitEntry = struct {
     /// call for a generic word. Caches dispatch table lookups so repeated
     /// calls avoid the full lookup.
     dispatch_pic: ?*PolymorphicCache = null,
+    /// Present only when this word_id is a hosted-AOT native primitive.
+    /// See `NativeLeafData`.
+    native: ?*NativeLeafData = null,
 };
 
 pub const JitDispatchTable = struct {
@@ -49,6 +70,9 @@ pub const JitDispatchTable = struct {
             }
             if (entry.dispatch_pic) |dp| {
                 self.allocator.destroy(dp);
+            }
+            if (entry.native) |n| {
+                self.allocator.destroy(n);
             }
         }
         self.entries.deinit(self.allocator);

@@ -1,0 +1,22 @@
+\ Regression for the jitNativeWordCall leaf-call fix. This is a smaller
+\ version of the bug's own repro
+\ (spec/bugs/20260620-aot-fibonacci-native-fallbacks.md): `.` reaches
+\ `inspect`, and `+` inside `[ swap over + ] dip` are both generic natives
+\ that route through `jitNativeWordCall` under AOT. Both must still produce
+\ correct results now that the function reads its dispatch id, stack
+\ effect, and function pointer from a leaf cache populated once at process
+\ startup, instead of doing a per-call dictionary lookup.
+
+fib-step: ( a b n -- result ) [
+  dup 0 = [ drop drop ] [
+    1 - [ swap over + ] dip fib-step
+  ] if
+] ;
+
+fib: ( n -- n ) [
+  dup 2 < [ ] [
+    0 1 <rot- fib-step
+  ] if
+] ;
+
+10 fib .

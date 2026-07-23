@@ -28,6 +28,7 @@ const hooks = @import("primitives/hooks.zig");
 const dictionary_mod = @import("dictionary.zig");
 const HostCallback = dictionary_mod.HostCallback;
 const HostCallbackFn = dictionary_mod.HostCallbackFn;
+const jit_dispatch_mod = @import("jit_dispatch.zig");
 
 const helpers = @import("primitives/helpers.zig");
 const bail_stats_mod = @import("bail_stats.zig");
@@ -2044,9 +2045,84 @@ export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*con
         }
         if (table[i]) |code_ptr| {
             ctx.jit_dispatch.setCodePtr(@intCast(i), code_ptr);
+        } else if (names[i]) |name_ptr| {
+            registerNativeLeaf(ctx, @intCast(i), std.mem.span(name_ptr));
         }
     }
     return ONEZ_OK;
+}
+
+/// Resolve `name`'s dictionary slot once, at startup, caching leaf-dispatch
+/// data on `word_id`'s `JitEntry` so `jitNativeWordCall` can dispatch the
+/// common case -- a generic-marked global-dictionary primitive (see
+/// `aot_wrappers.registryWrapperSymbol`'s codegen-time fork) -- without a
+/// per-call `ctx.lookupWord`. A no-op when `name` doesn't resolve in
+/// `ctx.dictionary` to a `.native` action: that covers both an uncompiled
+/// compound word_id (handled by the pre-existing `jitInterpretedCall`
+/// fallback) and a dot-qualified module-private native such as
+/// `native.virtual-struct-wrap`, which lives only in a module's own word
+/// map and which `jitNativeWordCall` still resolves via its
+/// `ctx.lookupWord`/`lookupAnyModuleWord` slow path.
+fn registerNativeLeaf(ctx: *Context, word_id: u32, name: []const u8) void {
+    const slot = ctx.dictionary.getSlot(name) orelse return;
+    const def = dictionary_mod.loadSlot(slot);
+    if (def.action != .native) return;
+    const leaf = ctx.allocator.create(jit_dispatch_mod.NativeLeafData) catch return;
+    leaf.* = .{
+        .fn_ptr = def.action.native,
+        .dispatch_id = def.dispatch_id,
+        .stack_effect = if (def.stack_effect != null) &def.stack_effect.? else null,
+        .source_file = def.source_file,
+    };
+    if (ctx.jit_dispatch.getMut(word_id)) |entry| {
+        if (entry.native) |old| ctx.allocator.destroy(old);
+        entry.native = leaf;
+    } else {
+        ctx.allocator.destroy(leaf);
+    }
+}
+
+test "registerNativeLeaf: populates JitEntry.native from the dictionary for a generic native" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const handle = castHandle(handle_ptr).?;
+    const ctx = handle.ctx;
+
+    var names: [1]?[*:0]const u8 = .{"+"};
+    var table: [1]?*const anyopaque = .{null};
+    try std.testing.expectEqual(ONEZ_OK, onez_runtime_register_compiled(handle_ptr, &table, &names, 1));
+
+    const entry = ctx.jit_dispatch.get(0).?;
+    const leaf = entry.native orelse return error.TestExpectedLeafData;
+
+    const def = ctx.dictionary.get("+").?;
+    try std.testing.expectEqual(def.action.native, leaf.fn_ptr);
+    try std.testing.expectEqual(def.dispatch_id, leaf.dispatch_id);
+    try std.testing.expect(leaf.stack_effect != null);
+    try std.testing.expectEqual(def.source_file, leaf.source_file);
+}
+
+test "registerNativeLeaf: no-op for a compound (non-native) word" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const handle = castHandle(handle_ptr).?;
+    const ctx = handle.ctx;
+
+    try ctx.dictionary.put("a-compound-word-for-testing", .{
+        .name = "a-compound-word-for-testing",
+        .action = .{ .compound = &.{} },
+    });
+
+    var names: [1]?[*:0]const u8 = .{"a-compound-word-for-testing"};
+    var table: [1]?*const anyopaque = .{null};
+    try std.testing.expectEqual(ONEZ_OK, onez_runtime_register_compiled(handle_ptr, &table, &names, 1));
+
+    const entry = ctx.jit_dispatch.get(0).?;
+    try std.testing.expectEqual(null, entry.native);
 }
 
 export fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, size: u32) i32 {

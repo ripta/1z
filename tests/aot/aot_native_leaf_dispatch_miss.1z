@@ -1,0 +1,9 @@
+\ Regression for the jitNativeWordCall leaf-call fix: `+` has no registered
+\ dispatch entry for string operands, so a compiled call reaches the cached
+\ native function pointer directly (the fallthrough path, distinct from the
+\ fib test's dispatch-table hits) and must still surface the native's own
+\ type-mismatch error correctly.
+
+add: ( a b -- c ) [ + ] ;
+
+"x" "y" add .

@@ -12506,12 +12506,26 @@ fn invokeModuleWord(ctx: *Context, hit: ModuleWordHit) !void {
     }
 }
 
-/// Compiled-code entry point for native words. Resolves the native
-/// function via `lookupWord` and invokes it directly. Generic-marker
-/// natives still re-dispatch through `tryDispatchGenericWithPic` so
-/// polymorphic operands resolve correctly. The C ABI mirrors
-/// `jitInterpretedCall` so callers can swap one for the other in
-/// generated code.
+/// Compiled-code entry point for native words in hosted AOT builds.
+///
+/// The common case -- a generic-marked global-dictionary primitive, which
+/// is every word this function is routed to under the codegen-time fork in
+/// `emitNativeWordCall` (`aot_wrappers.registryWrapperSymbol` returns a
+/// direct-wrapper symbol for every non-generic native, so only generics
+/// ever fall through here) -- is a true leaf call: `entry.native`'s
+/// dispatch id, stack effect, function pointer, and source file were
+/// resolved once at process startup (`onez_runtime_register_compiled` ->
+/// `capi.registerNativeLeaf`) and are read here purely by word_id index, so
+/// generic dispatch is attempted unconditionally with no dictionary lookup.
+///
+/// A second, rarer case reaches this function too: a module-private or
+/// dot-qualified native (e.g. `native.virtual-struct-wrap`), which
+/// `registerNativeLeaf` cannot resolve because it is never entered into
+/// `ctx.dictionary`. That case falls back to the original
+/// `ctx.lookupWord` / `lookupAnyModuleWord` resolution.
+///
+/// The C ABI mirrors `jitInterpretedCall` so callers can swap one for the
+/// other in generated code.
 export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
@@ -12524,11 +12538,63 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
         return 1;
     };
     const word_name = entry.word_name;
+
     if (bail_stats_mod.enabled) {
         bail_stats_mod.global.recordInterpretedCall(word_id, word_name);
     }
 
     ctx.pushCallFrame(word_name, ctx.current_source, @intCast(line_raw), 0);
+
+    if (entry.native) |leaf| {
+        if (leaf.stack_effect) |effect| {
+            ctx.validateParameterEffects(effect) catch |err| {
+                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                return 2;
+            };
+            ctx.validateTypeAnnotations(effect) catch |err| {
+                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                return 2;
+            };
+        }
+
+        const dispatch_pic: ?*pic_mod.PolymorphicCache = blk2: {
+            const em = ctx.jit_dispatch.getMut(word_id) orelse break :blk2 null;
+            if (em.dispatch_pic) |p| break :blk2 p;
+            const p = ctx.allocator.create(pic_mod.PolymorphicCache) catch break :blk2 null;
+            p.* = .{};
+            em.dispatch_pic = p;
+            break :blk2 p;
+        };
+        const dispatched = dispatch_helpers.tryDispatchGenericById(ctx, leaf.dispatch_id, dispatch_pic) catch |err| {
+            ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+            return 2;
+        };
+        if (dispatched) {
+            ctx.wordSuccessCleanup(word_name, null) catch |err| {
+                ctx.jit_pending_error = err;
+                return 2;
+            };
+            return 0;
+        }
+
+        if (leaf.source_file) |sf| ctx.current_source = sf;
+        const result = leaf.fn_ptr(ctx);
+
+        if (result) |_| {
+            ctx.consumePropagatedTailCall(word_name) catch |err| {
+                ctx.jit_pending_error = err;
+                return 2;
+            };
+            ctx.wordSuccessCleanup(word_name, if (leaf.stack_effect) |se| se.* else null) catch |err| {
+                ctx.jit_pending_error = err;
+                return 2;
+            };
+            return 0;
+        } else |err| {
+            ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+            return 2;
+        }
+    }
 
     const looked_up_word = ctx.lookupWord(word_name);
     const module_hit = if (looked_up_word == null) lookupAnyModuleWord(ctx, word_name) else null;
@@ -12847,6 +12913,81 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
 // =============================================================================
 
 const testing = std.testing;
+
+/// Heap-allocates a `NativeLeafData` for `word_id` and stores it on the
+/// entry, mirroring `capi.registerNativeLeaf`'s own allocation so
+/// `JitDispatchTable.deinit`'s cleanup (which unconditionally destroys a
+/// non-null `entry.native`) has something real to free.
+fn registerTestNativeLeaf(ctx: *Context, word_id: u32, def: *WordDefinition) !void {
+    const leaf = try ctx.allocator.create(jit_dispatch_mod.NativeLeafData);
+    leaf.* = .{
+        .fn_ptr = def.action.native,
+        .dispatch_id = def.dispatch_id,
+        .stack_effect = if (def.stack_effect != null) &def.stack_effect.? else null,
+        .source_file = def.source_file,
+    };
+    ctx.jit_dispatch.getMut(word_id).?.native = leaf;
+}
+
+test "jitNativeWordCall: dispatch hit runs the registered override, not the native's default body" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const def = ctx.dictionary.getPtr("+").?;
+    const word_id = try ctx.jit_dispatch.assignId("+");
+    try registerTestNativeLeaf(&ctx, word_id, def);
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    try ctx.registerDispatch(.{
+        .dispatch_id = def.dispatch_id,
+        .type_a = fixnum_tv.descriptor.?,
+        .type_b = fixnum_tv.descriptor.?,
+    }, .{ .body = .{ .native_fn = struct {
+        fn f(fn_ctx: *Context) anyerror!void {
+            _ = try fn_ctx.stack.pop();
+            _ = try fn_ctx.stack.pop();
+            try fn_ctx.stack.push(.{ .fixnum = 999 });
+        }
+    }.f } }, true);
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .fixnum = 2 });
+
+    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 1);
+    try testing.expectEqual(@as(i32, 0), rc);
+
+    const result = try ctx.stack.pop();
+    try testing.expectEqual(@as(i64, 999), result.fixnum);
+}
+
+test "jitNativeWordCall: dispatch miss falls through to the cached native function pointer" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const def = ctx.dictionary.getPtr("+").?;
+    const word_id = try ctx.jit_dispatch.assignId("+");
+    try registerTestNativeLeaf(&ctx, word_id, def);
+
+    // "+" has no registered dispatch entry for string operands, so this
+    // reaches the cached native function pointer directly and surfaces its
+    // own type-mismatch error, proving the fallthrough path runs with no
+    // dictionary lookup.
+    try ctx.stack.push(.{ .string = "a" });
+    try ctx.stack.push(.{ .string = "b" });
+
+    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 1);
+    try testing.expectEqual(@as(i32, 2), rc);
+    try testing.expectEqual(error.TypeMismatch, ctx.jit_pending_error.?);
+}
+
+test "jitNativeWordCall: unrecognized word_id with no cached native leaf returns 1" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const word_id = try ctx.jit_dispatch.assignId("some-compound-word");
+    const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 1);
+    try testing.expectEqual(@as(i32, 1), rc);
+}
 
 /// Build a flush plan for `stack[0...sp]`, simulate it over an integer slot array where each slot
 /// starts holding its own index as a marker, then assert every output slot ends up holding the

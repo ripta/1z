@@ -1,0 +1,10 @@
+\ Regression for the jitNativeWordCall leaf-call fix: a dot-qualified,
+\ module-private native (`native.virtual-struct-wrap`, called from the
+\ compiled body of a `virtual{ }` type's `>NAME` wrap constructor) is never
+\ entered into the global dictionary, so it cannot be resolved through the
+\ leaf cache populated at process startup. jitNativeWordCall must still
+\ reach it correctly through its slow-path dictionary/module-scan fallback.
+
+weight: virtual{ fixnum } ;
+
+7 >weight unmake-weight .
