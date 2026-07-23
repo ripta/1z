@@ -74,12 +74,9 @@ fn nativeDefineMethod(ctx: *Context) anyerror!void {
     }
 
     const body_val = desc_map.map.get("body") orelse return error.MissingField;
-    const body = switch (body_val) {
-        .quotation => |q| q,
-        else => {
-            helpers.setTypeMismatchError(ctx, "quotation", body_val);
-            return error.TypeMismatch;
-        },
+    const body = (try helpers.asQuotationStamped(ctx, body_val)) orelse {
+        helpers.setTypeMismatchError(ctx, "quotation", body_val);
+        return error.TypeMismatch;
     };
 
     const name_val = try ctx.stack.pop();

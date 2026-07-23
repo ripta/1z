@@ -1828,12 +1828,9 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
     defer container_backing.releaseValue(sig_val);
     const quot_val = try ctx.stack.pop();
 
-    const quotation = switch (quot_val) {
-        .quotation => |q| q,
-        else => {
-            helpers.setTypeMismatchError(ctx, "quotation", quot_val);
-            return error.TypeMismatch;
-        },
+    const quotation = (try helpers.asQuotationStamped(ctx, quot_val)) orelse {
+        helpers.setTypeMismatchError(ctx, "quotation", quot_val);
+        return error.TypeMismatch;
     };
 
     const si = switch (sig_val) {

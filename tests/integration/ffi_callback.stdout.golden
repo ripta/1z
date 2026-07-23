@@ -45,3 +45,5 @@ Stack: [ <resource:dylib> [ <resource:ffi-callback> <resource:ffi-fn> ffi-call ]
 Stack: [ <resource:dylib> [ <resource:ffi-callback> <resource:ffi-fn> ffi-call ] [ [ 1 2 ] dip call ] [ error-type: @get test-error: = "callback error propagates" assert-true ] ]
 PASS: callback error propagates
 Stack: [ ]
+PASS: toy_apply2 with a callback capturing an outer local = 107
+Stack: [ ]

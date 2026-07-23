@@ -1,0 +1,79 @@
+\ Regression tests for promoting a capturing quotation-literal push to a `.closure` carrying its
+\ `CapturedScope` directly, instead of leaving the scope only in the interpreter's side map.
+\
+\ This does not yet fix the loop-nested staleness bug itself (that needs a refcounted capture map,
+\ landing in a later milestone); it only changes what gets pushed onto the stack. These tests check
+\ that the change is otherwise invisible to 1z code (`quotation?`, `type-of`, `instance-of?`,
+\ `inspect`, and equality all behave the same whether or not a literal was silently promoted), and
+\ that every primitive consuming a quotation literal directly (starting with `;` itself) still
+\ accepts a promoted closure the same way it already accepted a plain quotation.
+
+use "testing" ;
+
+"promotion transparency" test-section
+[
+  cap-x: 5 ;
+
+  [ cap-x ] quotation? t "a promoted closure still passes quotation?" assert=
+  [ cap-x ] quotation instance-of? t "a promoted closure is instance-of? quotation" assert=
+  [ cap-x ] type-of [ 1 ] type-of = t "a promoted closure has the same type-of as a plain quotation" assert=
+  [ cap-x ] inspect "[ cap-x ]" "a promoted closure inspects like a quotation" assert=
+
+  [ cap-x ] [ cap-x ] = t "two promoted closures over identical bodies compare equal" assert=
+] call
+
+"critical: local word definition capturing an outer local remains callable" test-section
+[
+  local-x: 9 ;
+  helper: [ local-x ] ;
+  helper 9 "a word body that captures an outer local still executes, not pushes a constant" assert=
+] call
+
+"register-scoped-hook accepts a captured closure" test-section
+[
+  hook-marker: 77 ;
+  hook-log: V{ } ;
+  on:word-defined [ drop hook-log hook-marker #push! drop ] add-hook
+  probed-word: [ 1 ] ;
+  hook-log #len 0 > "a captured hook body fires instead of being silently skipped" assert-true
+  hook-log #first hook-marker "the fired hook body resolves its captured outer local" assert=
+] call
+
+"quotation>effect and quotation>opcodes accept a captured closure" test-section
+[
+  effect-x: 1 ;
+  [ effect-x ] native.quotation>effect f "quotation>effect accepts a captured closure" assert=
+  [ effect-x ] native.quotation>opcodes #len 1 "quotation>opcodes accepts a captured closure" assert=
+] call
+
+"define-method accepts a method body that captures an outer local" test-section
+[
+  method-tag:         "captured" ;
+  describe-capturing: ( value -- string ) generic [ drop "default" ] ;
+  describe-capturing: method{ fixnum } [ drop method-tag ] ;
+  42 describe-capturing "captured" "a captured method body dispatches correctly" assert=
+] call
+
+"register-pragma accepts a validator that captures an outer local" test-section
+[
+  \ pragma{ is parse-time and validates against the registry before any runtime code in this same
+  \ file has executed, so it cannot observe a registration made here at runtime; this only checks
+  \ that register-pragma itself accepts a captured validator instead of throwing a type mismatch.
+  allowed-value: 5 ;
+  "capturing-pragma" [ allowed-value = [ t ] [ drop "wrong value" f ] if ] register-pragma
+  t "register-pragma accepts a captured validator without a type mismatch" assert-true
+] call
+
+"define-parameter accepts a default quotation that captures an outer local" test-section
+[
+  default-value: 13 ;
+  cap-param: parameter{ [ default-value ] } ;
+  cap-param get 13 "a captured parameter default resolves its outer local" assert=
+] call
+
+">module accepts a hash entry that captures an outer local" test-section
+[
+  mod-value: 21 ;
+  "cap-mod" H{ get-value: [ mod-value ] } >module import
+  get-value 21 "a module word built from a captured closure runs its body" assert=
+] call

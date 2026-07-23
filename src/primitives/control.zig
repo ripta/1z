@@ -38,7 +38,7 @@ fn isDefinitionDescriptor(val: Value) bool {
 
     if (define_val_opt) |define_val| {
         return switch (define_val) {
-            .quotation => true,
+            .quotation, .closure => true,
             else => false,
         };
     }
@@ -444,12 +444,9 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                 try helpers.pushAdoptedArray(ctx, alloc, markers_array);
 
                 const define_val = desc_map.get("define") orelse return error.MissingField;
-                const define_quot = switch (define_val) {
-                    .quotation => |q| q,
-                    else => {
-                        helpers.setTypeMismatchError(ctx, "quotation for definition descriptor 'define' field", define_val);
-                        return error.TypeMismatch;
-                    },
+                const define_quot = (try helpers.asQuotationStamped(ctx, define_val)) orelse {
+                    helpers.setTypeMismatchError(ctx, "quotation for definition descriptor 'define' field", define_val);
+                    return error.TypeMismatch;
                 };
                 try ctx.executeQuotation(define_quot);
             } else {
@@ -469,11 +466,15 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
                     top_val == .protocol_descriptor or
                     (top_val == .type_val and top_val.type_val.member_types != null);
 
-                // Extract stack effect from the quotation's .effect field if present
-                if (top_val == .quotation) {
-                    if (top_val.quotation.effect) |eff| {
-                        stack_effect_val = eff.*;
-                    }
+                // Extract stack effect from the quotation's (or promoted closure's) .effect
+                // field if present
+                const top_effect: ?*const StackEffect = switch (top_val) {
+                    .quotation => |q| q.effect,
+                    .closure => |c| c.effect,
+                    else => null,
+                };
+                if (top_effect) |eff| {
+                    stack_effect_val = eff.*;
                 }
 
                 while (true) {
@@ -513,13 +514,18 @@ pub fn nativeSemicolon(ctx: *Context) anyerror!void {
 
                 const name_copy = try alloc.dupe(u8, name);
 
-                // Only a quotation body can contain a self-call: the
-                // non-quotation branch always synthesizes a single
-                // push_literal instruction (or, for an eligible value, no
-                // instructions at all), so containsNonTailSelfCall below is
-                // only ever meaningful for the .quotation case.
+                // Only a quotation or closure body can contain a self-call: the non-quotation
+                // branch always synthesizes a single push_literal instruction (or, for an
+                // eligible value, no instructions at all), so containsNonTailSelfCall below is
+                // only ever meaningful for the .quotation/.closure case.
                 const action: WordDefinition.Action = switch (top_val) {
                     .quotation => |quot| .{ .compound = quot.instructions },
+                    // A closure is a quotation literal promoted at push time because it closed over
+                    // an outer local (see `Context.captureQuotationScope`). Without this arm it would
+                    // fall to `literalOrCompoundAction` below, which treats a closure as a
+                    // non-refcounted scalar and stores it as a `.literal` -- turning the defined word
+                    // into one that pushes the closure as a constant instead of calling it.
+                    .closure => |c| .{ .compound = c.instructions },
                     else => try WordDefinition.literalOrCompoundAction(alloc, top_val),
                 };
 
@@ -975,18 +981,32 @@ test "spot-check: representative unverified pointer types round-trip identically
         try std.testing.expectEqual(&struct_type, compound_result.struct_type);
     }
 
-    // closure
+    // closure -- the one exception in this list. `;` treats a `.closure` the same as a
+    // `.quotation`: the defined word becomes a compound word running the closure's own
+    // instructions, not a `.literal` constant pushing the closure value itself. A closure
+    // presents as a quotation everywhere else in the language (dispatch, equality, inspect), so it
+    // does not round-trip through the literal path the other pointer types above do; calling it
+    // runs its body instead of yielding the closure value back.
     {
-        var closure: value_mod.Closure = .{ .instructions = &.{}, .segments = &.{} };
+        const closure_instrs = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 99 } }, .line = 0 }};
+        var closure: value_mod.Closure = .{ .instructions = closure_instrs, .segments = &.{} };
         const v: Value = .{ .closure = &closure };
 
-        const literal_result = try defineAndCallLiteral(&ctx, "spot-closure-lit", v);
-        try std.testing.expect(literal_result == .closure);
-        try std.testing.expectEqual(&closure, literal_result.closure);
+        try ctx.stack.push(.{ .symbol = "spot-closure-compound" });
+        try ctx.stack.push(v);
+        try nativeSemicolon(&ctx);
 
-        const compound_result = try defineAndCallForcedCompound(&ctx, "spot-closure-cmp", v);
-        try std.testing.expect(compound_result == .closure);
-        try std.testing.expectEqual(&closure, compound_result.closure);
+        const word = ctx.lookupWord("spot-closure-compound") orelse return error.TestExpectedWord;
+        switch (word.action) {
+            .compound => |instrs| try std.testing.expectEqual(closure_instrs, instrs),
+            .literal, .native, .host_callback => return error.TestUnexpectedActionKind,
+        }
+
+        const body = [_]Instruction{.{ .op = .{ .call_word = "spot-closure-compound" }, .line = 0 }};
+        try ctx.executeQuotation(.{ .instructions = &body });
+        const result = try ctx.stack.pop();
+        try std.testing.expect(result == .fixnum);
+        try std.testing.expectEqual(@as(i64, 99), result.fixnum);
     }
 
     // module

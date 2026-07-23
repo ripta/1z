@@ -70,12 +70,9 @@ pub fn nativeDefineParameter(ctx: *Context) anyerror!void {
         helpers.setErrorContext(ctx, "define-parameter descriptor missing 'default' field", .{});
         return error.MissingField;
     };
-    const default_quot = switch (default_val) {
-        .quotation => |q| q,
-        else => {
-            helpers.setTypeMismatchError(ctx, "quotation", default_val);
-            return error.TypeMismatch;
-        },
+    const default_quot = (try helpers.asQuotationStamped(ctx, default_val)) orelse {
+        helpers.setTypeMismatchError(ctx, "quotation", default_val);
+        return error.TypeMismatch;
     };
 
     const doc_val: ?[]const u8 = if (desc_map.map.get("doc")) |v| switch (v) {

@@ -1,0 +1,38 @@
+=== promotion transparency ===
+Stack: [ ]
+PASS: a promoted closure still passes quotation?
+PASS: a promoted closure is instance-of? quotation
+PASS: a promoted closure has the same type-of as a plain quotation
+PASS: a promoted closure inspects like a quotation
+PASS: two promoted closures over identical bodies compare equal
+Stack: [ ]
+=== critical: local word definition capturing an outer local remains callable ===
+Stack: [ ]
+PASS: a word body that captures an outer local still executes, not pushes a constant
+Stack: [ ]
+=== register-scoped-hook accepts a captured closure ===
+Stack: [ ]
+PASS: a captured hook body fires instead of being silently skipped
+PASS: the fired hook body resolves its captured outer local
+Stack: [ ]
+=== quotation>effect and quotation>opcodes accept a captured closure ===
+Stack: [ ]
+PASS: quotation>effect accepts a captured closure
+PASS: quotation>opcodes accepts a captured closure
+Stack: [ ]
+=== define-method accepts a method body that captures an outer local ===
+Stack: [ ]
+PASS: a captured method body dispatches correctly
+Stack: [ ]
+=== register-pragma accepts a validator that captures an outer local ===
+Stack: [ ]
+PASS: register-pragma accepts a captured validator without a type mismatch
+Stack: [ ]
+=== define-parameter accepts a default quotation that captures an outer local ===
+Stack: [ ]
+PASS: a captured parameter default resolves its outer local
+Stack: [ ]
+=== >module accepts a hash entry that captures an outer local ===
+Stack: [ ]
+PASS: a module word built from a captured closure runs its body
+Stack: [ ]

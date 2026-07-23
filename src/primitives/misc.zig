@@ -108,14 +108,11 @@ fn nativeToModule(ctx: *Context) anyerror!void {
     var iter = entries.iterator();
     while (iter.next()) |entry| {
         const val = entry.value_ptr.*;
-        const quot = switch (val) {
-            .quotation => |q| q,
-            else => {
-                const type_name = helpers.valueTypeName(val);
-                const msg = std.fmt.allocPrint(alloc, ">module: value for key '{s}' must be a quotation, got {s}", .{ entry.key_ptr.*, type_name }) catch ">module: value must be a quotation";
-                ctx.pending_error_message = msg;
-                return error.TypeMismatch;
-            },
+        const quot = (try helpers.asQuotationStamped(ctx, val)) orelse {
+            const type_name = helpers.valueTypeName(val);
+            const msg = std.fmt.allocPrint(alloc, ">module: value for key '{s}' must be a quotation, got {s}", .{ entry.key_ptr.*, type_name }) catch ">module: value must be a quotation";
+            ctx.pending_error_message = msg;
+            return error.TypeMismatch;
         };
         // The module outlives `ht_val`; dupe the key into the module's
         // allocator so freeing the source M{} (or its arena, for the

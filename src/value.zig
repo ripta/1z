@@ -1308,14 +1308,16 @@ pub const Closure = struct {
     segments: []const Segment,
 
     /// The lexical scope captured where this closure was created, carried by
-    /// `curry`/`compose` off the base quotation. It rides the value across every
-    /// spawn boundary, so a curried closure resolves its bare words at its
-    /// creation site no matter which task later runs it. Null when the base
-    /// closed over no lexical binding.
+    /// `curry`/`compose` off the base quotation, or built directly by
+    /// `Context.promoteToClosure` when a plain quotation literal is promoted on
+    /// push. It rides the value across every spawn boundary, so a curried
+    /// closure resolves its bare words at its creation site no matter which
+    /// task later runs it. Null when the base closed over no lexical binding.
     ///
-    /// Borrowed, not owned: it points at the scope the base already holds (a
-    /// side-map entry or another closure's scope), which outlives this closure,
-    /// so `curry` shares the pointer rather than copying per call. See
+    /// Independently owned: it is always a deep copy on this closure's own
+    /// quotation arena (`Context.dupeCapturedScope`), never a shared pointer
+    /// into a context's refcounted capture map, which is free to supersede and
+    /// free its own entries as the same body is pushed again elsewhere. See
     /// `context.CapturedScope`.
     captured_scope: ?*const context_mod.CapturedScope = null,
 
@@ -1376,6 +1378,16 @@ fn writeFormatSpec(writer: anytype, spec: FormatSpec) !void {
         if (need_comma) try writer.writeByte(',');
         try writer.writeAll("align=left");
     }
+}
+
+/// View a `.quotation` or `.closure` value as a plain `Quotation`, for equality comparisons that
+/// treat the two tags as the same callable shape. Asserts on any other tag.
+fn callableView(v: Value) Quotation {
+    return switch (v) {
+        .quotation => |q| q,
+        .closure => |c| c.asQuotation(),
+        else => unreachable,
+    };
 }
 
 /// Value represents any value that can be stored on the stack.
@@ -1606,6 +1618,16 @@ pub const Value = union(enum) {
     }
 
     pub fn eql(self: Value, other: Value) bool {
+        // A closure is a quotation literal promoted at push time when it closed over an outer
+        // local (see `Context.captureQuotationScope`); it presents as a quotation everywhere else
+        // (predicates, inspect), so equality compares both sides structurally as quotations
+        // regardless of which side was promoted.
+        const self_is_callable = self == .quotation or self == .closure;
+        const other_is_callable = other == .quotation or other == .closure;
+        if (self_is_callable and other_is_callable) {
+            return callableView(self).eql(callableView(other));
+        }
+
         const Tag = std.meta.Tag(Value);
         if (@as(Tag, self) != @as(Tag, other)) {
             return false;
@@ -1627,8 +1649,8 @@ pub const Value = union(enum) {
                 }
                 return true;
             },
-            .quotation => |a| a.eql(other.quotation),
-            .closure => |a| a.asQuotation().eql(other.closure.asQuotation()),
+            // Handled by the callable check above.
+            .quotation, .closure => unreachable,
             // TODO(ripta): This is currently tightly-coupled to the internal
             // representation of HashTable, despite H{ } being a non-native
             // implementation in the prelude.
@@ -1749,8 +1771,11 @@ pub const Value = union(enum) {
         const Hasher = std.hash.Wyhash;
         var hasher = Hasher.init(0);
 
-        // Hash the tag first to distinguish types
-        const tag = @intFromEnum(self);
+        // Hash the tag first to distinguish types. A closure hashes under the quotation tag since
+        // it presents as a quotation everywhere else (predicates, inspect, equality).
+        const Tag = std.meta.Tag(Value);
+        const tag_for_hash: Tag = if (self == .closure) .quotation else @as(Tag, self);
+        const tag = @intFromEnum(tag_for_hash);
         hasher.update(std.mem.asBytes(&tag));
 
         switch (self) {
@@ -2378,6 +2403,33 @@ test "quotation equality" {
 
     try std.testing.expect(a.eql(b));
     try std.testing.expect(!a.eql(c));
+}
+
+test "quotation and closure with identical content compare and hash equal, both orderings" {
+    const instrs1 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+    const instrs2 = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+    const other_instrs = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+    };
+
+    var closure = Closure{ .instructions = instrs1, .segments = &.{} };
+
+    const quot = Value{ .quotation = .{ .instructions = instrs2 } };
+    const clos = Value{ .closure = &closure };
+    const other_quot = Value{ .quotation = .{ .instructions = other_instrs } };
+
+    try std.testing.expect(quot.eql(clos));
+    try std.testing.expect(clos.eql(quot));
+    try std.testing.expectEqual(quot.hashValue(), clos.hashValue());
+
+    try std.testing.expect(!quot.eql(other_quot));
+    try std.testing.expect(!clos.eql(other_quot));
 }
 
 test "cross-type inequality" {

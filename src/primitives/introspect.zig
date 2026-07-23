@@ -1145,14 +1145,7 @@ fn collectFrameWords(
 /// quotation>effect ( quot -- effect-or-false ) - Extract the stack effect from a quotation.
 fn nativeQuotationToEffect(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
-    const val = try ctx.stack.pop();
-    const quot = switch (val) {
-        .quotation => |q| q,
-        else => {
-            helpers.setTypeMismatchError(ctx, "quotation", val);
-            return error.TypeMismatch;
-        },
-    };
+    const quot = try helpers.popQuotation(ctx);
 
     if (quot.effect) |effect| {
         try ctx.stack.push(try buildStackEffectValue(alloc, effect));
@@ -1178,14 +1171,7 @@ fn nativeParseStackEffect(ctx: *Context) anyerror!void {
 /// quotation>opcodes ( quotation -- array ) - Return instruction pairs as raw [symbol, value] arrays.
 fn nativeQuotationToOpcodes(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
-    const val = try ctx.stack.pop();
-    const quot = switch (val) {
-        .quotation => |q| q,
-        else => {
-            helpers.setTypeMismatchError(ctx, "quotation", val);
-            return error.TypeMismatch;
-        },
-    };
+    const quot = try helpers.popQuotation(ctx);
 
     const result = try alloc.alloc(Value, quot.instructions.len);
     for (quot.instructions, 0..) |instr, i| {

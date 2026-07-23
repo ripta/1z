@@ -869,8 +869,8 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
                 new_segments[i] = .{ .captures = new_caps, .base_code_ptr = seg.base_code_ptr };
             }
             // Copy the carried scope self-contained onto `alloc` so it rides the deep copy across a
-            // channel or task-result boundary. The source is only borrowed, so it cannot be shared
-            // into a copy that may outlive it on another worker.
+            // channel or task-result boundary. The source lives on the original closure's own
+            // quotation arena, which does not cross the worker boundary with this deep copy.
             const new_scope: ?*const CapturedScope = if (c.captured_scope) |cs|
                 try Context.dupeCapturedScope(alloc, cs)
             else

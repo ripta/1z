@@ -38,7 +38,7 @@ fn nativeRegisterPragma(ctx: *Context) anyerror!void {
             }
             break :blk .{ .validator = null };
         },
-        .quotation => |q| .{ .validator = q },
+        .quotation, .closure => .{ .validator = (try helpers.asQuotationStamped(ctx, validator_val)).? },
         else => {
             helpers.setTypeMismatchError(ctx, "quotation or f", validator_val);
             return error.TypeMismatch;
@@ -56,10 +56,7 @@ fn nativePragmaBlock(ctx: *Context) anyerror!void {
     try ctx.stack.push(.{ .string = "}" });
     try parse_time_mod.nativeParseUntil(ctx);
     const quot_val = try ctx.stack.pop();
-    const quot = switch (quot_val) {
-        .quotation => |q| q,
-        else => return error.TypeMismatch,
-    };
+    const quot = (try helpers.asQuotationStamped(ctx, quot_val)) orelse return error.TypeMismatch;
 
     const depth_before = ctx.stack.depth();
     try ctx.executeQuotation(quot);
@@ -141,7 +138,8 @@ fn nativePragmaDefBlock(ctx: *Context) anyerror!void {
                 i += 1;
                 const next = items[i];
                 switch (next) {
-                    .quotation => |q| {
+                    .quotation, .closure => {
+                        const q = (try helpers.asQuotationStamped(ctx, next)).?;
                         const duped_name = try alloc.dupe(u8, name);
                         try ctx.pragma_registry.put(ctx.allocator, duped_name, .{ .validator = q });
                     },

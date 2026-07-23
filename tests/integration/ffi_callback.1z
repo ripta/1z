@@ -82,3 +82,18 @@ swap [ ffi-call ] curry curry
 [ [ 1 2 ] dip call ]
 [ error-type: @get test-error: = "callback error propagates" assert-true ]
 recover
+
+\\ --- Callback body capturing an outer local ---
+\\ The callback body closes over a local bound before it, exercising the fix that lets
+\\ ffi-callback accept a promoted closure the same way it already accepted a plain quotation.
+\\ Opens its own dylib handle rather than relying on whatever the prior section left behind.
+
+[
+  capture-add: 100 ;
+  toy-lib-path lib-open
+  dup "toy_apply2" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol
+  [ + capture-add + ] ffi{ i32 i32 -> i32 } ffi-callback
+  3 4 2 pick-n 4 pick-n ffi-call
+  107 "toy_apply2 with a callback capturing an outer local = 107" assert=
+  resource-close drop resource-close
+] call

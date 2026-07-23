@@ -607,12 +607,9 @@ fn nativeMatch(ctx: *Context) anyerror!void {
                 return error.TypeMismatch;
             },
         };
-        const body = switch (branches[i + 1]) {
-            .quotation => |q| q,
-            else => {
-                helpers.setErrorContext(ctx, "match branch body must be a quotation", .{});
-                return error.TypeMismatch;
-            },
+        const body = (try helpers.asQuotationStamped(ctx, branches[i + 1])) orelse {
+            helpers.setErrorContext(ctx, "match branch body must be a quotation", .{});
+            return error.TypeMismatch;
         };
 
         if (is_default) {

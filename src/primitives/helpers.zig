@@ -455,6 +455,27 @@ pub fn popBoolean(ctx: *Context) !bool {
     };
 }
 
+/// View a quotation-or-closure value as an executable `Quotation`, stamping a closure's carried
+/// scope into `ctx` first so its body resolves bare words at its creation site wherever `ctx`
+/// later executes it. Returns null for a non-callable value.
+///
+/// Used by any site that extracts a callable from something other than a direct stack pop (an
+/// array element, a descriptor map field, a hash entry), where `popQuotation`'s own stack-pop
+/// isn't applicable.
+pub fn asQuotationStamped(ctx: *Context, val: Value) !?Quotation {
+    return switch (val) {
+        .quotation => |q| q,
+        .closure => |c| blk: {
+            // Stamp the closure's carried scope into this context so its body resolves its bare
+            // words at its creation site. This runs the closure in the current task, so the stamp
+            // belongs here; `spawn` hands the closure to a child task instead and stamps there.
+            if (c.captured_scope) |scope| try ctx.stampCapturedScopeForExecution(c.instructions, scope);
+            break :blk c.asQuotation();
+        },
+        else => null,
+    };
+}
+
 /// Pop a callable quotation. A closure (the compiled form of a curry/compose
 /// result) is accepted too, viewed as its plain instruction body so every
 /// quotation consumer (`call`, `dip`, `keep`, `bi`, ...) runs it by
@@ -462,21 +483,11 @@ pub fn popBoolean(ctx: *Context) !bool {
 /// runtime-selected `call`.
 pub fn popQuotation(ctx: *Context) !Quotation {
     const val = try ctx.stack.pop();
-    switch (val) {
-        .quotation => |q| return q,
-        .closure => |c| {
-            // Stamp the closure's carried scope into this context so its body resolves its bare
-            // words at its creation site. This runs the closure in the current task, so the stamp
-            // belongs here; `spawn` hands the closure to a child task instead and stamps there.
-            if (c.captured_scope) |scope| try ctx.stampCapturedScopeForExecution(c.instructions, scope);
-            return c.asQuotation();
-        },
-        else => {
-            setTypeMismatchError(ctx, "quotation", val);
-            container_backing.releaseValue(val);
-            return error.TypeMismatch;
-        },
-    }
+    return try asQuotationStamped(ctx, val) orelse {
+        setTypeMismatchError(ctx, "quotation", val);
+        container_backing.releaseValue(val);
+        return error.TypeMismatch;
+    };
 }
 
 /// A callable body paired with the lexical scope it carries. See `popCallableWithScope`.

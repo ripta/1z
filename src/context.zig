@@ -135,8 +135,56 @@ pub const FrameKind = enum { lexical, module_deps };
 ///
 /// Module-scope resolution still flows through the existing `quotation_defining_module` stamp, so
 /// no module pointer is captured here.
+///
+/// Two lifetimes share this type. A map-owned ("tier-1") scope lives in a `Context`'s
+/// `quotation_captured_scope`, heap-allocated on that context's durable allocator, and is
+/// refcounted: `captureQuotationScope` supersedes it with a fresh capture on every push of the
+/// same body, freeing the old one once every in-flight reader has released it (an
+/// `executeInstructions` call holding it for the call's duration, or a descendant task reached
+/// through `findCapturedScopeForBody`'s ancestor walk).
+///
+/// A closure-owned ("tier-2") scope is an independent deep copy allocated on a closure's own
+/// quotation arena; it is never retained or released, since it rides the arena's teardown exactly
+/// like the `Closure` struct that owns it. `promoteToClosure`, `curry`/`compose`
+/// (`functional.zig`), and `findCapturedScopeForBody`'s cross-task ancestor walk all build one of
+/// these via `dupeCapturedScope` whenever they hand a scope to something that can meaningfully
+/// outlive the map's current entry for the body it came from -- see `promoteToClosure`'s doc
+/// comment for why copying here is load-bearing, not merely defensive.
+///
+/// `retain`/`release` mirror `container_backing.ContainerHeader`'s pattern, minus the mutex --
+/// `lexical_frames` is immutable after construction, so no lock is needed for reads.
 pub const CapturedScope = struct {
     lexical_frames: []LocalFrame,
+    refcount: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
+    allocator: Allocator,
+
+    /// Increment the refcount. Cheap, monotonic; safe to call from any thread that already
+    /// holds a live reference.
+    pub fn retain(self: *CapturedScope) void {
+        _ = self.refcount.fetchAdd(1, .monotonic);
+    }
+
+    /// Decrement the refcount. On the last drop, free `lexical_frames` and this scope itself
+    /// using the allocator it was built with.
+    ///
+    /// `.acq_rel` ordering on the decrement gives release semantics to any preceding writes the
+    /// dropping thread made, and acquire semantics on the returned previous value so the freeing
+    /// thread observes every other holder's prior reads as complete.
+    pub fn release(self: *CapturedScope) void {
+        const prev = self.refcount.fetchSub(1, .acq_rel);
+        std.debug.assert(prev != 0);
+        if (prev == 1) {
+            for (self.lexical_frames) |*f| f.deinit(self.allocator);
+            self.allocator.free(self.lexical_frames);
+            self.allocator.destroy(self);
+        }
+    }
+
+    /// Snapshot the current refcount. For diagnostics and tests only; the value is racy in the
+    /// presence of other holders.
+    pub fn refcountValue(self: *const CapturedScope) u32 {
+        return self.refcount.load(.monotonic);
+    }
 };
 
 /// Compute the constant-per-word `ExecFlags` from a definition's markers and
@@ -1649,8 +1697,42 @@ pub const Context = struct {
         return idx < self.local_frame_kinds.items.len and self.local_frame_kinds.items[idx] == .lexical;
     }
 
+    /// True when `instructions`' own top-level `call_word` names -- not recursing into a nested
+    /// quotation literal's body, which decides independently when its own `push_literal` later runs
+    /// -- match a binding in any currently-live transient lexical frame at or above `floor`.
+    ///
+    /// Sound, not a heuristic. `preResolveCallTarget` (used by the parser to emit `call_word_direct`)
+    /// only ever pre-resolves a name it can prove is absent from every current local frame, so a
+    /// name that could possibly resolve to a lexical local always stays a plain `call_word`
+    /// instruction; `executeInstructions`'s captured-scope lookup likewise only ever consults it on
+    /// the `call_word` path, never `call_word_direct`. A quotation with no `call_word` name matching
+    /// a live frame therefore cannot resolve any bare word against a captured scope, so skipping
+    /// capture for it cannot reintroduce staleness -- it only skips work that would have produced an
+    /// unused scope.
+    fn quotationReferencesLiveFrame(self: *const Context, instructions: []const Instruction, floor: usize) bool {
+        var i = floor;
+        while (i < self.local_frames.items.len) : (i += 1) {
+            if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] != .lexical) continue;
+            const frame = &self.local_frames.items[i];
+            if (frame.count() == 0) continue;
+            for (instructions) |instr| {
+                switch (instr.op) {
+                    .call_word => |name| if (frame.contains(name)) return true,
+                    else => {},
+                }
+            }
+        }
+        return false;
+    }
+
     /// Capture the lexical scope visible at a quotation's creation, keyed off the quotation body's
-    /// instruction-slice pointer. Capture is done once per body.
+    /// instruction-slice pointer. A fresh scope is built on every call, so a quotation literal
+    /// re-executed inside a loop closes over the *current* iteration's locals, not a frozen first
+    /// snapshot.
+    ///
+    /// Returns the scope associated with this execution, or null when there is nothing to close
+    /// over. The caller (`executeInstructions`'s `push_literal` handling) uses a non-null return to
+    /// promote the pushed value to a `.closure` carrying this scope directly.
     ///
     /// Bare words inside the quotation resolve to their definition-site bindings rather than to
     /// same-named words that merely happen to be live on the frame stack where the quotation later
@@ -1661,21 +1743,24 @@ pub const Context = struct {
     /// live, there is nothing to close over. This is the common case, so it returns without
     /// touching the side map and resolution stays on the existing fast path.
     ///
-    /// A captured scope is read by any in-flight execution of this body, so it must never be freed
-    /// and rebuilt under a live reader. A single stable capture avoids that use-after-free and
-    /// bounds memory to the number of distinct closure literals.
+    /// A fresh capture supersedes the map's previous entry for this body under `captured_scope_mu`,
+    /// then releases the superseded scope. Release only frees it once every in-flight reader --
+    /// an `executeInstructions` call still holding it, or a descendant task reached through
+    /// `findCapturedScopeForBody`'s ancestor walk -- has released its own hold, so a live reader
+    /// never sees a freed scope even though the map itself moved on.
     ///
-    /// The consequence is that one body reused in two scopes that bind the same name differently
-    /// resolves both to the first scope's binding. Per-call distinct captures need the per-quotation
-    /// scope that `curry` / `compose` carry.
-    fn captureQuotationScope(self: *Context, instructions: []const Instruction) !void {
-        if (instructions.len == 0) return;
-        if (self.nonempty_transient_lexical_frames == 0) return;
+    /// `nonempty_transient_lexical_frames` only answers "is anything live anywhere in this task,"
+    /// not "does this specific quotation reference any of it," so it alone is not enough to skip
+    /// the expensive case: once any word is defined anywhere in a long-running task's frame stack,
+    /// every quotation literal pushed anywhere in that task afterward would otherwise pay full
+    /// capture, whether or not it references that binding. `quotationReferencesLiveFrame` narrows
+    /// this further.
+    fn captureQuotationScope(self: *Context, instructions: []const Instruction) !?*const CapturedScope {
+        if (instructions.len == 0) return null;
+        if (self.nonempty_transient_lexical_frames == 0) return null;
         const floor = if (self.import_frame_index) |idx| idx + 1 else 0;
-        if (self.local_frames.items.len <= floor) return;
-
-        const key = @intFromPtr(instructions.ptr);
-        if (self.quotation_captured_scope.contains(key)) return;
+        if (self.local_frames.items.len <= floor) return null;
+        if (!self.quotationReferencesLiveFrame(instructions, floor)) return null;
 
         var frames: std.ArrayListUnmanaged(LocalFrame) = .{};
         errdefer {
@@ -1697,22 +1782,80 @@ pub const Context = struct {
 
         if (frames.items.len == 0) {
             frames.deinit(self.allocator);
-            return;
+            return null;
+        }
+
+        const lexical_frames = try frames.toOwnedSlice(self.allocator);
+        errdefer {
+            for (lexical_frames) |*f| f.deinit(self.allocator);
+            self.allocator.free(lexical_frames);
         }
 
         const scope = try self.allocator.create(CapturedScope);
         errdefer self.allocator.destroy(scope);
         scope.* = .{
-            .lexical_frames = try frames.toOwnedSlice(self.allocator),
+            .lexical_frames = lexical_frames,
+            .allocator = self.allocator,
         };
 
         // A descendant task may read this map through `findCapturedScopeForBody`'s parent walk, so
-        // the insert is taken under this context's map mutex to exclude a concurrent read during a
-        // rehash. Only self ever writes self's map, so the check-then-put stays consistent without
-        // holding the mutex across the frame build above.
+        // the swap is taken under this context's map mutex to exclude a concurrent read during a
+        // rehash. Only self ever writes self's map, so this stays consistent without holding the
+        // mutex across the frame build above. The superseded scope is released after unlocking,
+        // since a free should not run while the mutex is held. The mutex is also released on the
+        // `getOrPut` error path (e.g. an OOM rehash), so a failed capture can't leave a live
+        // descendant-task read permanently blocked on this context's mutex.
+        const key = @intFromPtr(instructions.ptr);
         self.captured_scope_mu.lock();
-        defer self.captured_scope_mu.unlock();
-        try self.quotation_captured_scope.put(self.allocator, key, scope);
+        errdefer self.captured_scope_mu.unlock();
+        const gop = try self.quotation_captured_scope.getOrPut(self.allocator, key);
+        const superseded: ?*CapturedScope = if (gop.found_existing) gop.value_ptr.* else null;
+        gop.value_ptr.* = scope;
+        self.captured_scope_mu.unlock();
+        if (superseded) |old| old.release();
+        return scope;
+    }
+
+    /// Build a `.closure` wrapping `quot`'s existing instructions/effect plus a copy of `scope`,
+    /// for a capturing quotation-literal push.
+    ///
+    /// The scope is deep-copied onto the closure's own quotation arena rather than shared with the
+    /// map's entry: the map's copy is refcounted and can be superseded (and eventually freed) by a
+    /// later push of the same body, but a closure holding it directly has no such lifecycle hook, so
+    /// it needs its own independently-owned copy that rides the closure's own arena teardown. This
+    /// is load-bearing, not defensive: `curry`, `compose`, and `spawn` can all hand a closure to a
+    /// task that keeps running after the pushing context has moved on and superseded the entry this
+    /// closure was built from (e.g. a `spawn-detached` per-connection handler in a server's
+    /// tail-recursive accept loop, which is exactly the shape that crashed with a shared pointer
+    /// here during this fix's own development, `tests/integration/server_max_concurrent_connections.1z`).
+    ///
+    /// This is affordable only because `captureQuotationScope` no longer captures indiscriminately:
+    /// `quotationReferencesLiveFrame` (see its doc comment) means a quotation that references no
+    /// local at all is never captured or promoted in the first place, regardless of what else is
+    /// live elsewhere in the task's frame stack. Without that gate, a naive whole-context capture
+    /// trigger combined with a per-embed copy was confirmed to blow an existing integration test's
+    /// memory budget (`tests/integration/serve_loop_bounded.1z`) under idiomatic 1z networking code
+    /// (`lib/net/server.1z`, `lib/net/tcp.1z`), which curries almost every quotation immediately
+    /// after pushing it.
+    ///
+    /// A non-null `quot.code_ptr` becomes a one-entry compiled segment so a compiled fast path is
+    /// not silently dropped by the promotion; otherwise the closure is uncompiled.
+    fn promoteToClosure(self: *Context, quot: Quotation, scope: *const CapturedScope) !*value_mod.Closure {
+        const alloc = self.quotationAllocator();
+        const segments: []const value_mod.Segment = if (quot.code_ptr) |cp| blk: {
+            const segs = try alloc.alloc(value_mod.Segment, 1);
+            segs[0] = .{ .captures = &.{}, .base_code_ptr = cp };
+            break :blk segs;
+        } else &.{};
+
+        const closure = try alloc.create(value_mod.Closure);
+        closure.* = .{
+            .instructions = quot.instructions,
+            .effect = quot.effect,
+            .segments = segments,
+            .captured_scope = try dupeCapturedScope(alloc, scope),
+        };
+        return closure;
     }
 
     /// Resolve `name` against a captured lexical scope's transient frames, most-recently-pushed
@@ -1729,25 +1872,26 @@ pub const Context = struct {
         return null;
     }
 
-    fn freeCapturedScope(self: *Context, scope: *CapturedScope) void {
-        for (scope.lexical_frames) |*f| f.deinit(self.allocator);
-        self.allocator.free(scope.lexical_frames);
-        self.allocator.destroy(scope);
-    }
-
+    /// Release every scope still in the map at context teardown.
+    ///
+    /// Structured concurrency (`task-scope` waiting for every child to reach terminal status
+    /// before returning) guarantees no descendant task still holds a retained reference to any of
+    /// this context's scopes by the time its own teardown runs, so each entry's refcount is
+    /// exactly 1 here and `release()` frees it.
     fn deinitCapturedScopes(self: *Context) void {
         var it = self.quotation_captured_scope.valueIterator();
-        while (it.next()) |scope_ptr| self.freeCapturedScope(scope_ptr.*);
+        while (it.next()) |scope_ptr| scope_ptr.*.release();
         self.quotation_captured_scope.deinit(self.allocator);
     }
 
     /// Deep-copy a captured scope with `alloc`. Each `LocalFrame` is cloned entry-by-entry, the
     /// same shallow copy `captureQuotationScope` uses because `WordDefinition` owns no allocation.
     ///
-    /// The allocator is a parameter so `curry`/`compose` can allocate the closure-carried copy on
-    /// the quotation arena, and the execution stamp can allocate the map-owned copy on the durable
-    /// allocator. A copy allocated with the durable allocator is freed by `freeCapturedScope`; a
-    /// copy on the arena rides its context's teardown.
+    /// The allocator is a parameter so `promoteToClosure`, `curry`/`compose`, and
+    /// `findCapturedScopeForBody` can allocate the closure-carried copy on the quotation arena, and
+    /// the execution stamp can allocate the map-owned copy on the durable allocator. A copy
+    /// allocated with the durable allocator is released with `CapturedScope.release`; a copy on the
+    /// arena rides its context's teardown and is never retained or released.
     pub fn dupeCapturedScope(alloc: Allocator, src: *const CapturedScope) !*CapturedScope {
         const frames = try alloc.alloc(LocalFrame, src.lexical_frames.len);
         var built: usize = 0;
@@ -1766,24 +1910,28 @@ pub const Context = struct {
         }
 
         const scope = try alloc.create(CapturedScope);
-        scope.* = .{ .lexical_frames = frames };
+        scope.* = .{ .lexical_frames = frames, .allocator = alloc };
         return scope;
     }
 
-    /// Find the captured scope for a body pointer: this context's map first, then the durable
-    /// scope of each ancestor context under the shared read lock, mirroring `lookupWordLocked`'s
-    /// parent walk.
+    /// Find the captured scope for a body pointer and return an independently owned copy: this
+    /// context's map first, then the durable scope of each ancestor context under the shared read
+    /// lock, mirroring `lookupWordLocked`'s parent walk.
     ///
-    /// `curry`/`compose` running in a descendant task use this to source a scope that 370.1
-    /// captured in an ancestor task where the source quotation literal was created. Self is
-    /// task-private and read lock-free; ancestors may be mutated by their own tasks, so their
-    /// reads are guarded. The returned scope is stable because an ancestor outlives its
-    /// descendants and captured scopes are never freed before context teardown.
-    pub fn findCapturedScopeForBody(self: *Context, body_ptr: usize) ?*const CapturedScope {
-        // Self's map has one writer, this task, so the self read needs no lock. Each ancestor read
-        // is taken under that ancestor's own map mutex to exclude its owner task's concurrent
-        // insert. One mutex is held at a time, always up the parent chain, so there is no cycle.
-        if (self.quotation_captured_scope.get(body_ptr)) |s| return s;
+    /// `curry`/`compose` running in a descendant task use this to source a scope that an ancestor
+    /// task captured where the source quotation literal was created. The result is always a fresh
+    /// `dupeCapturedScope` copy on `alloc`, never a shared pointer into either map: the ancestor's
+    /// entry is a refcounted, supersedable map entry (`captureQuotationScope`), so embedding it
+    /// directly into a closure that may outlive the current call would risk a later use-after-free
+    /// once the ancestor supersedes and frees it -- see `promoteToClosure`'s doc comment for why
+    /// this is load-bearing, not merely defensive.
+    ///
+    /// The self read needs no lock (single-writer-self, synchronous within one task, so nothing can
+    /// supersede the entry mid-call). The ancestor read retains the found scope while still holding
+    /// that ancestor's map mutex, so a concurrent supersede on the ancestor's side cannot free it
+    /// between the read and the retain; the retain is released right after the copy completes.
+    pub fn findCapturedScopeForBody(self: *Context, alloc: Allocator, body_ptr: usize) !?*CapturedScope {
+        if (self.quotation_captured_scope.get(body_ptr)) |s| return try dupeCapturedScope(alloc, s);
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
@@ -1792,8 +1940,12 @@ pub const Context = struct {
             const mu: *std.Thread.Mutex = @constCast(&ctx.captured_scope_mu);
             mu.lock();
             const found = ctx.quotation_captured_scope.get(body_ptr);
+            if (found) |s| s.retain();
             mu.unlock();
-            if (found) |s| return s;
+            if (found) |s| {
+                defer s.release();
+                return try dupeCapturedScope(alloc, s);
+            }
             ancestor = ctx.parent_context;
         }
         return null;
@@ -1803,14 +1955,16 @@ pub const Context = struct {
     ///
     /// Called at the execution choke point (`popQuotation`) so a curried/composed closure that
     /// carries its own scope resolves through the existing `executeInstructions` lookup, in
-    /// whatever task later runs it. The copy is map-owned (freed by `deinitCapturedScopes`), so a
-    /// closure and the executing context never share one scope allocation. The `contains` guard
-    /// makes it once-per-body-per-context, so a loop that re-calls the same closure does not grow
-    /// the map. A loop that curries a fresh closure each iteration and runs it in place still grows,
-    /// the same way the fresh instruction arrays it builds grow, both freed at context teardown.
+    /// whatever task later runs it. The copy is map-owned (released by `deinitCapturedScopes`, or
+    /// superseded and released by a later `captureQuotationScope` for the same body), so a closure
+    /// and the executing context never share one scope allocation. The `contains` guard makes it
+    /// once-per-body-per-context, so a loop that re-calls the same closure does not grow the map.
     ///
     /// The insert is taken under this context's map mutex to exclude a descendant's parent-walk
-    /// read. For a leaf task no descendant reads its map, so the mutex is uncontended.
+    /// read. For a leaf task no descendant reads its map, so the mutex is uncontended. `scope` is
+    /// always either an independently-owned closure copy or a map entry read and consumed
+    /// synchronously within the same native call (e.g. `spawn`), so no retain of `scope` itself is
+    /// needed here -- it cannot be superseded out from under this call.
     pub fn stampCapturedScopeForExecution(self: *Context, instructions: []const Instruction, scope: *const CapturedScope) !void {
         if (instructions.len == 0) return;
 
@@ -1818,7 +1972,7 @@ pub const Context = struct {
         if (self.quotation_captured_scope.contains(key)) return;
 
         const dup = try dupeCapturedScope(self.allocator, scope);
-        errdefer self.freeCapturedScope(dup);
+        errdefer dup.release();
 
         self.captured_scope_mu.lock();
         defer self.captured_scope_mu.unlock();
@@ -5639,10 +5793,17 @@ pub const Context = struct {
         // scope binds resolves to that binding, ahead of a same-named word merely live on the
         // frame stack this body runs against. The count guard keeps resolution on the fast path
         // for programs that never close over a local binding.
-        const captured_scope: ?*const CapturedScope = if (self.quotation_captured_scope.count() > 0)
+        //
+        // Retained for the full duration of this call and released via `defer`, so a nested or
+        // recursive `executeInstructions` call made from within this one (e.g. through `if`/`when`)
+        // is free to supersede the map's entry for this same body without freeing the scope this
+        // outer frame still holds.
+        const captured_scope: ?*CapturedScope = if (self.quotation_captured_scope.count() > 0)
             self.quotation_captured_scope.get(@intFromPtr(instructions.ptr))
         else
             null;
+        if (captured_scope) |cs| cs.retain();
+        defer if (captured_scope) |cs| cs.release();
 
         for (instructions, 0..) |instr, idx| {
             // The stepwise debugger is wired up only from capi.zig (C debugger API) and main.zig
@@ -5666,10 +5827,17 @@ pub const Context = struct {
 
             switch (instr.op) {
                 .push_literal => |val| {
-                    try self.stack.push(val);
-                    // Capture the lexical scope at the moment a quotation literal is created.
+                    // Capture the lexical scope at the moment a quotation literal is created. A
+                    // non-null scope promotes the pushed value to a `.closure` carrying it
+                    // directly; a non-capturing push (the common case) is pushed unchanged.
                     if (val == .quotation) {
-                        try self.captureQuotationScope(val.quotation.instructions);
+                        if (try self.captureQuotationScope(val.quotation.instructions)) |scope| {
+                            try self.stack.push(.{ .closure = try self.promoteToClosure(val.quotation, scope) });
+                        } else {
+                            try self.stack.push(val);
+                        }
+                    } else {
+                        try self.stack.push(val);
                     }
                     if (self.benchmark) |b| {
                         b.recordPushLiteral();
@@ -7837,9 +8005,7 @@ test "captureQuotationScope: snapshots a lexical local, skips a module-deps fram
     ctx.nonempty_transient_lexical_frames = 1;
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "shadow" }, .line = 0 }};
-    try ctx.captureQuotationScope(&body);
-
-    const scope = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedCapture;
+    const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
     // Only the lexical frame is snapshotted; the module-deps frame is skipped.
     try std.testing.expectEqual(@as(usize, 1), scope.lexical_frames.len);
     const resolved = Context.lookupInCapturedScope(scope, "shadow") orelse return error.TestExpectedResolution;
@@ -7893,8 +8059,7 @@ test "captureQuotationScope: empty combinator frames leave the counter zero and 
     try std.testing.expectEqual(@as(usize, 0), ctx.nonempty_transient_lexical_frames);
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "x" }, .line = 0 }};
-    try ctx.captureQuotationScope(&body);
-    try std.testing.expect(ctx.quotation_captured_scope.get(@intFromPtr(&body)) == null);
+    try std.testing.expect(try ctx.captureQuotationScope(&body) == null);
 }
 
 test "captureQuotationScope: a live local still captures through the gate" {
@@ -7909,11 +8074,82 @@ test "captureQuotationScope: a live local still captures through the gate" {
     try std.testing.expectEqual(@as(usize, 1), ctx.nonempty_transient_lexical_frames);
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
-    try ctx.captureQuotationScope(&body);
-
-    const scope = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedCapture;
+    const scope = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
     const resolved = Context.lookupInCapturedScope(scope, "local") orelse return error.TestExpectedResolution;
     try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
+}
+
+test "captureQuotationScope: a second call for the same body supersedes with a fresh scope" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("local", .{ .name = "local", .source_file = "local-site", .action = .{ .compound = &.{} } });
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const first = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    const first_addr = @intFromPtr(first);
+    const second = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+
+    // A fresh push builds a new scope rather than reusing the cached one. Compare addresses only:
+    // `first` is superseded and released by this second call, so it must not be dereferenced.
+    try std.testing.expect(first_addr != @intFromPtr(second));
+    const resolved = Context.lookupInCapturedScope(second, "local") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
+}
+
+test "captureQuotationScope: superseding an unretained scope frees it immediately" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("local", .{ .name = "local", .action = .{ .compound = &.{} } });
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    const first = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+    try std.testing.expectEqual(@as(u32, 1), first.refcountValue());
+
+    // Nothing retained `first` beyond the map's own hold, so superseding it here frees it
+    // immediately. Verified by `std.testing.allocator`'s leak detection at `ctx.deinit`, not by
+    // dereferencing `first`, which is dangling after this call.
+    _ = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+}
+
+test "captureQuotationScope: a retained scope survives a supersede, frees only after release" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.pushLocalFrame();
+    try ctx.defineWord("local", .{ .name = "local", .action = .{ .compound = &.{} } });
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "local" }, .line = 0 }};
+    // `@constCast` mirrors the existing lock-in-const idiom in this file: `captureQuotationScope`
+    // returns `*const` for ordinary callers, but a test simulating a reader's retain/release needs
+    // the mutable methods.
+    const first: *CapturedScope = @constCast((try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture);
+
+    // Simulate an in-flight `executeInstructions` reader retaining the scope for the duration of
+    // its call.
+    first.retain();
+    try std.testing.expectEqual(@as(u32, 2), first.refcountValue());
+
+    _ = (try ctx.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+
+    // Superseding dropped the map's own hold, but the simulated reader's retain keeps `first` alive
+    // and readable.
+    try std.testing.expectEqual(@as(u32, 1), first.refcountValue());
+    const resolved = Context.lookupInCapturedScope(first, "local") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("local", resolved.name);
+
+    // Releasing the simulated reader's hold frees it.
+    first.release();
 }
 
 test "dupeCapturedScope: deep-copies into an independent scope resolving the same binding" {
@@ -7924,14 +8160,14 @@ test "dupeCapturedScope: deep-copies into an independent scope resolving the sam
     try frame.put(ctx.allocator, "w", .{ .name = "w", .source_file = "src", .action = .{ .compound = &.{} } });
     const frames = try ctx.allocator.alloc(LocalFrame, 1);
     frames[0] = frame;
-    var src: CapturedScope = .{ .lexical_frames = frames };
+    var src: CapturedScope = .{ .lexical_frames = frames, .allocator = ctx.allocator };
     defer {
         for (src.lexical_frames) |*f| f.deinit(ctx.allocator);
         ctx.allocator.free(src.lexical_frames);
     }
 
     const dup = try Context.dupeCapturedScope(ctx.allocator, &src);
-    defer ctx.freeCapturedScope(dup);
+    defer dup.release();
 
     try std.testing.expectEqual(@as(usize, 1), dup.lexical_frames.len);
     try std.testing.expect(dup.lexical_frames.ptr != src.lexical_frames.ptr);
@@ -7947,7 +8183,7 @@ test "stampCapturedScopeForExecution: stamps a map-owned copy once, idempotent" 
     try frame.put(ctx.allocator, "w", .{ .name = "w", .source_file = "src", .action = .{ .compound = &.{} } });
     const frames = try ctx.allocator.alloc(LocalFrame, 1);
     frames[0] = frame;
-    var scope: CapturedScope = .{ .lexical_frames = frames };
+    var scope: CapturedScope = .{ .lexical_frames = frames, .allocator = ctx.allocator };
     defer {
         for (scope.lexical_frames) |*f| f.deinit(ctx.allocator);
         ctx.allocator.free(scope.lexical_frames);
@@ -7975,7 +8211,7 @@ test "findCapturedScopeForBody: finds in self, then parent-walks to an ancestor"
     const frames = try parent.allocator.alloc(LocalFrame, 1);
     frames[0] = frame;
     const scope = try parent.allocator.create(CapturedScope);
-    scope.* = .{ .lexical_frames = frames };
+    scope.* = .{ .lexical_frames = frames, .allocator = parent.allocator };
     const body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
     try parent.quotation_captured_scope.put(parent.allocator, @intFromPtr(&body), scope);
 
@@ -7984,14 +8220,51 @@ test "findCapturedScopeForBody: finds in self, then parent-walks to an ancestor"
     child.parent_context = &parent;
     defer child.parent_context = null;
 
-    // Child misses in its own map and walks to the ancestor.
-    const found = child.findCapturedScopeForBody(@intFromPtr(&body)) orelse return error.TestExpectedFind;
+    // Child misses in its own map and walks to the ancestor. The result is an independently owned
+    // copy on the allocator passed in, not the ancestor's own map entry, so it is released here
+    // rather than at either context's teardown.
+    const found = (try child.findCapturedScopeForBody(std.testing.allocator, @intFromPtr(&body))) orelse
+        return error.TestExpectedFind;
+    defer found.release();
+    try std.testing.expect(found != scope);
     const resolved = Context.lookupInCapturedScope(found, "w") orelse return error.TestExpectedResolution;
     try std.testing.expectEqualStrings("anc", resolved.source_file.?);
 
     // A body in no map returns null.
     const other = [_]Instruction{.{ .op = .{ .call_word = "x" }, .line = 0 }};
-    try std.testing.expect(child.findCapturedScopeForBody(@intFromPtr(&other)) == null);
+    try std.testing.expect(try child.findCapturedScopeForBody(std.testing.allocator, @intFromPtr(&other)) == null);
+}
+
+test "findCapturedScopeForBody: the returned copy survives the ancestor's entry being superseded" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 0;
+    try parent.pushLocalFrame();
+    try parent.defineWord("w", .{ .name = "w", .action = .{ .compound = &.{} } });
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
+    _ = (try parent.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+
+    var child = Context.init(std.testing.allocator);
+    defer child.deinit();
+    child.parent_context = &parent;
+    defer child.parent_context = null;
+
+    const found = (try child.findCapturedScopeForBody(std.testing.allocator, @intFromPtr(&body))) orelse
+        return error.TestExpectedFind;
+    defer found.release();
+
+    // Superseding the ancestor's own entry for the same body -- which frees the ancestor's original
+    // scope, since nothing else retained it -- does not disturb the child's independent copy. This
+    // is the exact class of bug (a scope read across a supersede without a protecting copy) that
+    // crashed real server code during this fix's own development; see `promoteToClosure`'s doc
+    // comment.
+    _ = (try parent.captureQuotationScope(&body)) orelse return error.TestExpectedCapture;
+
+    const resolved = Context.lookupInCapturedScope(found, "w") orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("w", resolved.name);
 }
 
 test "deinit releases runtime-created values stored into image container slots" {

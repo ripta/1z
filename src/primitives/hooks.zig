@@ -105,7 +105,7 @@ fn nativeRegisterScopedHook(ctx: *Context) anyerror!void {
 
     const quot_val = ctx.stack.pop() catch return error.StackUnderflow;
     switch (quot_val) {
-        .quotation => {},
+        .quotation, .closure => {},
         else => {
             ctx.pending_error_message = "register-scoped-hook expects a quotation as first argument";
             return error.TypeMismatch;
@@ -165,10 +165,7 @@ pub fn fireScopedHooks(ctx: *Context, param_name: []const u8, args: []const Valu
     var i = items.len;
     while (i > 0) {
         i -= 1;
-        const quot = switch (items[i]) {
-            .quotation => |q| q,
-            else => continue,
-        };
+        const quot = (helpers.asQuotationStamped(ctx, items[i]) catch continue) orelse continue;
 
         for (args) |arg| {
             ctx.stack.push(arg) catch continue;
