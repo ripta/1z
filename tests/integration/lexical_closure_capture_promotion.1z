@@ -1,8 +1,8 @@
 \ Regression tests for promoting a capturing quotation-literal push to a `.closure` carrying its
 \ `CapturedScope` directly, instead of leaving the scope only in the interpreter's side map.
 \
-\ This does not yet fix the loop-nested staleness bug itself (that needs a refcounted capture map,
-\ landing in a later milestone); it only changes what gets pushed onto the stack. These tests check
+\ This does not by itself fix the loop-nested staleness bug (that needs a refcounted capture map);
+\ it only changes what gets pushed onto the stack. These tests check
 \ that the change is otherwise invisible to 1z code (`quotation?`, `type-of`, `instance-of?`,
 \ `inspect`, and equality all behave the same whether or not a literal was silently promoted), and
 \ that every primitive consuming a quotation literal directly (starting with `;` itself) still
