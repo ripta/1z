@@ -103,8 +103,15 @@ fn mergeCapturedScopes(alloc: std.mem.Allocator, a: *const CapturedScope, b: *co
         }
     }
 
+    // Concatenate both bases' ambient-deps snapshots. A module reachable from either source stays
+    // reachable from the composed closure; duplicates are harmless to membership resolution.
+    const deps = try alloc.alloc(*const value_mod.Module, a.deps_modules.len + b.deps_modules.len);
+    errdefer alloc.free(deps);
+    @memcpy(deps[0..a.deps_modules.len], a.deps_modules);
+    @memcpy(deps[a.deps_modules.len..], b.deps_modules);
+
     const scope = try alloc.create(CapturedScope);
-    scope.* = .{ .lexical_frames = frames, .allocator = alloc };
+    scope.* = .{ .lexical_frames = frames, .deps_modules = deps, .allocator = alloc };
     return scope;
 }
 

@@ -133,8 +133,15 @@ pub const FrameKind = enum { lexical, module_deps };
 ///
 /// `lexical_frames` is an owned snapshot of the genuine lexical frames live at creation.
 ///
-/// Module-scope resolution still flows through the existing `quotation_defining_module` stamp, so
-/// no module pointer is captured here.
+/// `deps_modules` is an owned snapshot of the modules whose `.module_deps` frame was live at
+/// creation. Bare-word resolution will consult it to admit a frame the quotation legitimately closed
+/// over while rejecting a foreign one. A quotation created with no such frame live records no entry
+/// at all; resolution treats that absence as an empty ambient-deps set and leans on the
+/// `quotation_defining_module` stamp to tell a module-less quotation apart from a word body. The
+/// consulting side is not wired yet.
+///
+/// Module-scope resolution for a quotation's own defining module still flows through the existing
+/// `quotation_defining_module` stamp; `deps_modules` covers only frames ambient at creation.
 ///
 /// Two lifetimes share this type. A map-owned ("tier-1") scope lives in a `Context`'s
 /// `quotation_captured_scope`, heap-allocated on that context's durable allocator, and is
@@ -155,6 +162,7 @@ pub const FrameKind = enum { lexical, module_deps };
 /// `lexical_frames` is immutable after construction, so no lock is needed for reads.
 pub const CapturedScope = struct {
     lexical_frames: []LocalFrame,
+    deps_modules: []const *const value_mod.Module = &.{},
     refcount: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
     allocator: Allocator,
 
@@ -176,6 +184,7 @@ pub const CapturedScope = struct {
         if (prev == 1) {
             for (self.lexical_frames) |*f| f.deinit(self.allocator);
             self.allocator.free(self.lexical_frames);
+            self.allocator.free(self.deps_modules);
             self.allocator.destroy(self);
         }
     }
@@ -443,6 +452,19 @@ pub const Context = struct {
     /// frame maintains both arrays together; the debug-only `assertFrameKindsParity` checks the
     /// lengths stay equal.
     local_frame_kinds: std.ArrayListUnmanaged(FrameKind) = .{},
+    /// The module each `.module_deps` frame was pushed for, kept index-parallel with `local_frames`
+    /// and `local_frame_kinds`. A `.lexical` frame stores `null`. `captureQuotationScope` reads this
+    /// to snapshot which modules had a live deps frame at a quotation's creation, so bare-word
+    /// resolution can later reject a foreign module's frame that merely happens to be live where the
+    /// quotation runs. Module pointers are process-lifetime stable, so a cloned entry stays valid
+    /// across a spawn boundary.
+    local_frame_modules: std.ArrayListUnmanaged(?*const value_mod.Module) = .{},
+    /// Count of live `.module_deps` frames on the stack. A fast-path gate for
+    /// `captureQuotationScope`: when zero, a pushed quotation has no ambient deps frame to snapshot,
+    /// so a quotation that also closes over no lexical binding needs no capture at all and the push
+    /// stays on the pre-capture fast path. Maintained at the module-deps push, pop, and spawn-clone
+    /// sites, index-free of the frame arrays since only the count matters.
+    live_module_deps_frames: usize = 0,
     /// Count of live transient lexical frames (above `import_frame_index`, kind `.lexical`) that
     /// currently hold at least one definition. A fast-path gate for `captureQuotationScope`: when
     /// zero, no quotation push has anything to close over, so the capture scan is skipped.
@@ -687,6 +709,13 @@ pub const Context = struct {
     /// program that never closes over a local binding never touches it and resolution stays on
     /// the fast path.
     quotation_captured_scope: std.AutoHashMapUnmanaged(usize, *CapturedScope) = .{},
+    /// True once any scope carrying at least one non-empty lexical frame has entered
+    /// `quotation_captured_scope`. `executeInstructions` gates its per-call captured-scope lookup on
+    /// this rather than the raw map count, so the deps-only entries `captureQuotationScope` now
+    /// records for module-less quotations do not force a lookup on the lexical resolution hot path.
+    /// Monotonic: an entry may later be superseded, but keeping the flag set only costs an occasional
+    /// extra lookup, never a wrong resolution.
+    lexical_capture_recorded: bool = false,
     /// Guards `quotation_captured_scope` against the one cross-task access it has: a descendant
     /// task reading this context's map through `findCapturedScopeForBody`'s parent walk while this
     /// context's own task inserts into it. It is per-context, so a task inserting into its own map
@@ -1192,6 +1221,14 @@ pub const Context = struct {
                 .lexical;
             try ctx.local_frame_kinds.append(allocator, kind);
 
+            const frame_module: ?*const value_mod.Module = if (src_idx < parent.local_frame_modules.items.len)
+                parent.local_frame_modules.items[src_idx]
+            else
+                null;
+            try ctx.local_frame_modules.append(allocator, frame_module);
+
+            if (kind == .module_deps) ctx.live_module_deps_frames += 1;
+
             const new_idx = ctx.local_frames.items.len - 1;
             if (ctx.isTransientLexicalFrame(new_idx) and ctx.local_frames.items[new_idx].count() > 0) {
                 ctx.nonempty_transient_lexical_frames += 1;
@@ -1373,6 +1410,7 @@ pub const Context = struct {
         }
         self.local_frames.deinit(self.allocator);
         self.local_frame_kinds.deinit(self.allocator);
+        self.local_frame_modules.deinit(self.allocator);
         self.deinitCapturedScopes();
         self.call_stack.deinit(self.allocator);
         self.error_details.deinit(self.allocator);
@@ -1658,6 +1696,8 @@ pub const Context = struct {
         try self.local_frames.append(self.allocator, LocalFrame{});
         errdefer self.local_frames.items.len -= 1;
         try self.local_frame_kinds.append(self.allocator, .lexical);
+        errdefer self.local_frame_kinds.items.len -= 1;
+        try self.local_frame_modules.append(self.allocator, null);
         self.assertFrameKindsParity();
     }
 
@@ -1673,10 +1713,19 @@ pub const Context = struct {
                 // hand-builds a non-empty frame without going through `defineWordLocked`.
                 self.nonempty_transient_lexical_frames -= 1;
             }
+            if (last_idx < self.local_frame_kinds.items.len and
+                self.local_frame_kinds.items[last_idx] == .module_deps and
+                self.live_module_deps_frames > 0)
+            {
+                self.live_module_deps_frames -= 1;
+            }
             self.local_frames.items[last_idx].deinit(self.allocator);
             self.local_frames.items.len -= 1;
             if (self.local_frame_kinds.items.len > 0) {
                 self.local_frame_kinds.items.len -= 1;
+            }
+            if (self.local_frame_modules.items.len > 0) {
+                self.local_frame_modules.items.len -= 1;
             }
             self.assertFrameKindsParity();
         }
@@ -1687,6 +1736,7 @@ pub const Context = struct {
     /// A desync means a push or pop touched one without the other.
     fn assertFrameKindsParity(self: *const Context) void {
         std.debug.assert(self.local_frame_kinds.items.len == self.local_frames.items.len);
+        std.debug.assert(self.local_frame_modules.items.len == self.local_frames.items.len);
     }
 
     /// True when frame `idx` is a transient lexical frame: strictly above the durable import frame
@@ -1739,9 +1789,18 @@ pub const Context = struct {
     /// executes.
     ///
     /// Only the transient lexical frames above the durable import frame are snapshotted; the
-    /// durable scope and the module are reached the normal way. When no transient lexical frame is
-    /// live, there is nothing to close over. This is the common case, so it returns without
-    /// touching the side map and resolution stays on the existing fast path.
+    /// durable scope and the module are reached the normal way. A module whose `.module_deps` frame
+    /// is live at creation is recorded in `deps_modules` so resolution can later admit a
+    /// legitimately closed-over deps frame while rejecting a foreign one. A push with no such frame
+    /// live and nothing to close over records nothing and stays on the pre-capture fast path.
+    ///
+    /// The return value drives promotion only: a non-null return means the pushed quotation carries
+    /// live lexical bindings and is promoted to a `.closure`; a null return means either nothing was
+    /// recorded or only a deps-and-empty-lexical entry was recorded, and the raw quotation is pushed
+    /// unchanged. Recording a `deps_modules` entry is therefore decoupled from promotion: a
+    /// module-less quotation still gets its (possibly empty) `deps_modules` recorded in the side map
+    /// without being turned into a closure, so the per-push closure cost stays scoped to quotations
+    /// that actually close over a lexical local.
     ///
     /// A fresh capture supersedes the map's previous entry for this body under `captured_scope_mu`,
     /// then releases the superseded scope. Release only frees it once every in-flight reader --
@@ -1751,38 +1810,92 @@ pub const Context = struct {
     ///
     /// `nonempty_transient_lexical_frames` only answers "is anything live anywhere in this task,"
     /// not "does this specific quotation reference any of it," so it alone is not enough to skip
-    /// the expensive case: once any word is defined anywhere in a long-running task's frame stack,
-    /// every quotation literal pushed anywhere in that task afterward would otherwise pay full
+    /// the expensive lexical case: once any word is defined anywhere in a long-running task's frame
+    /// stack, every quotation literal pushed anywhere in that task afterward would otherwise pay full
     /// capture, whether or not it references that binding. `quotationReferencesLiveFrame` narrows
-    /// this further.
+    /// this further. It only gates the *lexical* snapshot; the deps snapshot is gated instead by
+    /// `live_module_deps_frames`, so a push with no ambient deps frame and no captured local records
+    /// nothing.
+    ///
+    /// An unchanged deps-and-empty-lexical entry is left in place rather than superseded, so a body
+    /// re-pushed in a loop with a stable ambient-deps set pays a lookup and a compare, not a fresh
+    /// allocation.
     fn captureQuotationScope(self: *Context, instructions: []const Instruction) !?*const CapturedScope {
         if (instructions.len == 0) return null;
-        if (self.nonempty_transient_lexical_frames == 0) return null;
         const floor = if (self.import_frame_index) |idx| idx + 1 else 0;
-        if (self.local_frames.items.len <= floor) return null;
-        if (!self.quotationReferencesLiveFrame(instructions, floor)) return null;
 
+        // Lexical snapshot: gated by the fast-path counter and the per-body reference check, exactly
+        // as before. `frames` stays empty when no live lexical binding is closed over.
         var frames: std.ArrayListUnmanaged(LocalFrame) = .{};
         errdefer {
             for (frames.items) |*f| f.deinit(self.allocator);
             frames.deinit(self.allocator);
         }
 
-        var i = floor;
-        while (i < self.local_frames.items.len) : (i += 1) {
-            if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] != .lexical) continue;
-            const src = &self.local_frames.items[i];
-            if (src.count() == 0) continue;
-            var clone: LocalFrame = .{};
-            errdefer clone.deinit(self.allocator);
-            var it = src.iterator();
-            while (it.next()) |e| try clone.put(self.allocator, e.key_ptr.*, e.value_ptr.*);
-            try frames.append(self.allocator, clone);
+        if (self.nonempty_transient_lexical_frames != 0 and
+            self.local_frames.items.len > floor and
+            self.quotationReferencesLiveFrame(instructions, floor))
+        {
+            var i = floor;
+            while (i < self.local_frames.items.len) : (i += 1) {
+                if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] != .lexical) continue;
+                const src = &self.local_frames.items[i];
+                if (src.count() == 0) continue;
+                var clone: LocalFrame = .{};
+                errdefer clone.deinit(self.allocator);
+                var it = src.iterator();
+                while (it.next()) |e| try clone.put(self.allocator, e.key_ptr.*, e.value_ptr.*);
+                try frames.append(self.allocator, clone);
+            }
         }
 
-        if (frames.items.len == 0) {
+        const has_lexical = frames.items.len > 0;
+
+        // Fast path: with no live `.module_deps` frame and nothing closed over lexically, the pushed
+        // quotation's ambient-deps set is empty and it captures no local, so there is nothing to
+        // record. Return without touching the side map, exactly as the pre-capture path did. A
+        // quotation that later runs where no `.module_deps` frame it did not capture is live is
+        // unaffected; the one that could be shadowed is a quotation created while such a frame was
+        // live, which takes the recording path below.
+        if (!has_lexical and self.live_module_deps_frames == 0) {
             frames.deinit(self.allocator);
             return null;
+        }
+
+        const key = @intFromPtr(instructions.ptr);
+
+        // Equality-skip: a deps-and-empty-lexical push whose recorded entry already carries the same
+        // ambient deps needs no new scope. The live frames are compared against the entry in place,
+        // so the stable re-push case (a library word pushing the same quotation each iteration)
+        // allocates nothing. Lexical-bearing pushes always supersede, matching the per-execution
+        // freshness a loop-nested closure relies on.
+        //
+        // This read is unlocked: only this task writes its own map, and it is not writing anywhere
+        // else while running here synchronously, so the only possible concurrent access is a
+        // descendant's `findCapturedScopeForBody` read. Two reads never conflict, and a supersede on
+        // this key can only come from this same task, which is right here.
+        if (!has_lexical) {
+            if (self.quotation_captured_scope.get(key)) |old| {
+                if (old.lexical_frames.len == 0 and self.liveDepsMatch(floor, old.deps_modules)) {
+                    frames.deinit(self.allocator);
+                    return null;
+                }
+            }
+        }
+
+        // Deps snapshot: which modules have a live `.module_deps` frame above the floor. Built only
+        // now that a fresh entry is definitely being recorded, so the equality-skip above pays no
+        // allocation. Empty when no such frame is live (a lexical-only capture).
+        var deps_list: std.ArrayListUnmanaged(*const value_mod.Module) = .{};
+        errdefer deps_list.deinit(self.allocator);
+        if (self.live_module_deps_frames > 0) {
+            var j = floor;
+            while (j < self.local_frames.items.len) : (j += 1) {
+                if (j >= self.local_frame_kinds.items.len or self.local_frame_kinds.items[j] != .module_deps) continue;
+                if (j < self.local_frame_modules.items.len) {
+                    if (self.local_frame_modules.items[j]) |m| try deps_list.append(self.allocator, m);
+                }
+            }
         }
 
         const lexical_frames = try frames.toOwnedSlice(self.allocator);
@@ -1791,10 +1904,14 @@ pub const Context = struct {
             self.allocator.free(lexical_frames);
         }
 
+        const deps_modules = try deps_list.toOwnedSlice(self.allocator);
+        errdefer self.allocator.free(deps_modules);
+
         const scope = try self.allocator.create(CapturedScope);
         errdefer self.allocator.destroy(scope);
         scope.* = .{
             .lexical_frames = lexical_frames,
+            .deps_modules = deps_modules,
             .allocator = self.allocator,
         };
 
@@ -1805,15 +1922,32 @@ pub const Context = struct {
         // since a free should not run while the mutex is held. The mutex is also released on the
         // `getOrPut` error path (e.g. an OOM rehash), so a failed capture can't leave a live
         // descendant-task read permanently blocked on this context's mutex.
-        const key = @intFromPtr(instructions.ptr);
         self.captured_scope_mu.lock();
         errdefer self.captured_scope_mu.unlock();
         const gop = try self.quotation_captured_scope.getOrPut(self.allocator, key);
         const superseded: ?*CapturedScope = if (gop.found_existing) gop.value_ptr.* else null;
         gop.value_ptr.* = scope;
+        if (has_lexical) self.lexical_capture_recorded = true;
         self.captured_scope_mu.unlock();
         if (superseded) |old| old.release();
-        return scope;
+        return if (has_lexical) scope else null;
+    }
+
+    /// True when the live `.module_deps` frames above `floor` list exactly `expected`, in order. Used
+    /// by the equality-skip to compare against a recorded entry without allocating a snapshot: the
+    /// scan mirrors the recording scan, so a body re-pushed against an unchanged frame stack matches.
+    fn liveDepsMatch(self: *const Context, floor: usize, expected: []const *const value_mod.Module) bool {
+        var idx: usize = 0;
+        var j = floor;
+        while (j < self.local_frames.items.len) : (j += 1) {
+            if (j >= self.local_frame_kinds.items.len or self.local_frame_kinds.items[j] != .module_deps) continue;
+            const m = if (j < self.local_frame_modules.items.len) self.local_frame_modules.items[j] else null;
+            if (m) |mod| {
+                if (idx >= expected.len or expected[idx] != mod) return false;
+                idx += 1;
+            }
+        }
+        return idx == expected.len;
     }
 
     /// Build a `.closure` wrapping `quot`'s existing instructions/effect plus a copy of `scope`,
@@ -1909,8 +2043,11 @@ pub const Context = struct {
             built = i + 1;
         }
 
+        const deps = try alloc.dupe(*const value_mod.Module, src.deps_modules);
+        errdefer alloc.free(deps);
+
         const scope = try alloc.create(CapturedScope);
-        scope.* = .{ .lexical_frames = frames, .allocator = alloc };
+        scope.* = .{ .lexical_frames = frames, .deps_modules = deps, .allocator = alloc };
         return scope;
     }
 
@@ -1931,7 +2068,12 @@ pub const Context = struct {
     /// that ancestor's map mutex, so a concurrent supersede on the ancestor's side cannot free it
     /// between the read and the retain; the retain is released right after the copy completes.
     pub fn findCapturedScopeForBody(self: *Context, alloc: Allocator, body_ptr: usize) !?*CapturedScope {
-        if (self.quotation_captured_scope.get(body_ptr)) |s| return try dupeCapturedScope(alloc, s);
+        // A deps-only entry (empty lexical frames) carries nothing `curry`/`compose` consume, so it is
+        // invisible here: a caller sourcing a lexical scope must fall through exactly as it would if no
+        // entry had been recorded, or it would spuriously wrap the result in a closure.
+        if (self.quotation_captured_scope.get(body_ptr)) |s| {
+            if (s.lexical_frames.len > 0) return try dupeCapturedScope(alloc, s);
+        }
 
         var ancestor = self.parent_context;
         while (ancestor) |ctx| {
@@ -1940,11 +2082,12 @@ pub const Context = struct {
             const mu: *std.Thread.Mutex = @constCast(&ctx.captured_scope_mu);
             mu.lock();
             const found = ctx.quotation_captured_scope.get(body_ptr);
-            if (found) |s| s.retain();
+            const carryable = if (found) |s| s.lexical_frames.len > 0 else false;
+            if (carryable) found.?.retain();
             mu.unlock();
-            if (found) |s| {
-                defer s.release();
-                return try dupeCapturedScope(alloc, s);
+            if (carryable) {
+                defer found.?.release();
+                return try dupeCapturedScope(alloc, found.?);
             }
             ancestor = ctx.parent_context;
         }
@@ -1989,6 +2132,7 @@ pub const Context = struct {
         const gop = try self.quotation_captured_scope.getOrPut(self.allocator, key);
         const superseded: ?*CapturedScope = if (gop.found_existing) gop.value_ptr.* else null;
         gop.value_ptr.* = dup;
+        if (dup.lexical_frames.len > 0) self.lexical_capture_recorded = true;
         self.captured_scope_mu.unlock();
         if (superseded) |old| old.release();
     }
@@ -2146,6 +2290,10 @@ pub const Context = struct {
 
         try self.local_frame_kinds.append(self.allocator, .module_deps);
         errdefer self.local_frame_kinds.items.len -= 1;
+        try self.local_frame_modules.append(self.allocator, module);
+        errdefer self.local_frame_modules.items.len -= 1;
+        self.live_module_deps_frames += 1;
+        errdefer self.live_module_deps_frames -= 1;
         self.assertFrameKindsParity();
 
         const frame_idx = self.local_frames.items.len - 1;
@@ -5805,14 +5953,16 @@ pub const Context = struct {
 
         // The lexical scope captured where this body was created, if any. A bare word that this
         // scope binds resolves to that binding, ahead of a same-named word merely live on the
-        // frame stack this body runs against. The count guard keeps resolution on the fast path
-        // for programs that never close over a local binding.
+        // frame stack this body runs against. The flag keeps resolution on the fast path for
+        // programs that never close over a local binding: it is set only when a scope carrying a
+        // non-empty lexical frame enters the map, so the deps-only entries `captureQuotationScope`
+        // records for module-less quotations do not force a lookup here.
         //
         // Retained for the full duration of this call and released via `defer`, so a nested or
         // recursive `executeInstructions` call made from within this one (e.g. through `if`/`when`)
         // is free to supersede the map's entry for this same body without freeing the scope this
         // outer frame still holds.
-        const captured_scope: ?*CapturedScope = if (self.quotation_captured_scope.count() > 0)
+        const captured_scope: ?*CapturedScope = if (self.lexical_capture_recorded)
             self.quotation_captured_scope.get(@intFromPtr(instructions.ptr))
         else
             null;
@@ -7901,14 +8051,29 @@ test "frame-kind tag: pushLocalFrame is lexical, pushModuleDepsFrame is module_d
 
     try std.testing.expectEqual(@as(usize, 3), ctx.local_frames.items.len);
     try std.testing.expectEqual(@as(usize, 3), ctx.local_frame_kinds.items.len);
+    try std.testing.expectEqual(@as(usize, 3), ctx.local_frame_modules.items.len);
     try std.testing.expectEqual(FrameKind.lexical, ctx.local_frame_kinds.items[0]);
     try std.testing.expectEqual(FrameKind.module_deps, ctx.local_frame_kinds.items[1]);
     try std.testing.expectEqual(FrameKind.lexical, ctx.local_frame_kinds.items[2]);
 
-    // Popping keeps the two arrays index-parallel.
+    // Only the module-deps frame records a module; lexical frames record null.
+    try std.testing.expect(ctx.local_frame_modules.items[0] == null);
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &module), ctx.local_frame_modules.items[1]);
+    try std.testing.expect(ctx.local_frame_modules.items[2] == null);
+
+    // The single module-deps frame is counted; the two lexical frames are not.
+    try std.testing.expectEqual(@as(usize, 1), ctx.live_module_deps_frames);
+
+    // Popping keeps all three arrays index-parallel.
     ctx.popLocalFrame();
     try std.testing.expectEqual(@as(usize, 2), ctx.local_frames.items.len);
     try std.testing.expectEqual(@as(usize, 2), ctx.local_frame_kinds.items.len);
+    try std.testing.expectEqual(@as(usize, 2), ctx.local_frame_modules.items.len);
+
+    // Popping the top lexical frame leaves the module-deps count untouched.
+    try std.testing.expectEqual(@as(usize, 1), ctx.live_module_deps_frames);
+    ctx.popLocalFrame();
+    try std.testing.expectEqual(@as(usize, 0), ctx.live_module_deps_frames);
 }
 
 test "cloneWordFrameCapacityMatched: copies every entry and stays a mutable map" {
@@ -8024,6 +8189,80 @@ test "captureQuotationScope: snapshots a lexical local, skips a module-deps fram
     try std.testing.expectEqual(@as(usize, 1), scope.lexical_frames.len);
     const resolved = Context.lookupInCapturedScope(scope, "shadow") orelse return error.TestExpectedResolution;
     try std.testing.expectEqualStrings("local-site", resolved.source_file.?);
+
+    // The ambient module-deps frame is recorded in deps_modules, alongside the lexical snapshot.
+    try std.testing.expectEqual(@as(usize, 1), scope.deps_modules.len);
+    try std.testing.expectEqual(@as(*const value_mod.Module, &module), scope.deps_modules[0]);
+}
+
+test "captureQuotationScope: records ambient module-deps modules without promoting a module-less quotation" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    try module.words.put(std.testing.allocator, "foo", .{ .action = .{ .native = noop } });
+    defer module.words.deinit(std.testing.allocator);
+    try ctx.pushModuleDepsFrame(&module);
+
+    // A body with no live lexical binding to close over: the deps set is still recorded, but the
+    // quotation is not promoted, so the return is null and the lexical fast path stays disarmed.
+    const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
+    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
+    try std.testing.expect(!ctx.lexical_capture_recorded);
+
+    const entry = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(usize, 0), entry.lexical_frames.len);
+    try std.testing.expectEqual(@as(usize, 1), entry.deps_modules.len);
+    try std.testing.expectEqual(@as(*const value_mod.Module, &module), entry.deps_modules[0]);
+}
+
+test "captureQuotationScope: equality-skip leaves an unchanged deps-only entry in place" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    try module.words.put(std.testing.allocator, "foo", .{ .action = .{ .native = noop } });
+    defer module.words.deinit(std.testing.allocator);
+    try ctx.pushModuleDepsFrame(&module);
+
+    const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
+    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
+    const first = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+
+    // Re-pushing the same body against the same ambient deps must not supersede the entry: the
+    // stored pointer is identical, so no fresh scope was allocated.
+    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
+    const second = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(first, second);
+}
+
+test "captureQuotationScope: no live module-deps frame and no local records nothing" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    // Neither a live `.module_deps` frame nor a captured local: the push must stay on the fast path,
+    // recording no side-map entry, so the common hot-loop case pays no per-push map cost.
+    try std.testing.expectEqual(@as(usize, 0), ctx.live_module_deps_frames);
+    const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
+    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
+    try std.testing.expectEqual(@as(usize, 0), ctx.quotation_captured_scope.count());
 }
 
 test "nonempty_transient_lexical_frames: define, remove, and pop stay balanced" {
