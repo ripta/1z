@@ -1,0 +1,47 @@
+\ A word or quotation parameter declared fixnum/float is narrowed to an
+\ unboxed scalar at codegen entry, so arithmetic and comparison on it take the
+\ concrete path instead of the polymorphic fallback. These assertions check the
+\ narrowing is semantics-preserving under every execution mode (interpreter,
+\ eager, JIT); the AOT stats test proves the fallback is actually eliminated.
+\ The declared type is also enforced at compiled entry, matching the
+\ interpreter, so a mismatched argument raises rather than reading a mistyped
+\ payload.
+
+use "testing" ;
+
+add2: ( a: fixnum b: fixnum -- r ) [ + ] ;
+sub2: ( a: fixnum b: fixnum -- r ) [ - ] ;
+lt2:  ( a: fixnum b: fixnum -- r ) [ < ] ;
+eq2:  ( a: fixnum b: fixnum -- r ) [ = ] ;
+fadd: ( a: float b: float -- r )   [ + ] ;
+
+\ Self-tail-recursive: the `+` lives in the inlined false branch, so the
+\ narrowing must survive the branch and re-read the parameters each iteration
+\ as the back-edge rewrites their slots.
+sum-to: ( acc: fixnum n: fixnum -- r ) [
+  dup 0 = [ drop ] [ swap over + swap 1 - sum-to ] if
+] ;
+
+"narrowed arithmetic and comparison are semantics-preserving" test-section
+3 4 add2 7 "fixnum add narrows" assert=
+10 4 sub2 6 "fixnum sub narrows" assert=
+3 4 lt2 "fixnum less-than narrows" assert-true
+3 4 eq2 "fixnum equal narrows (unequal)" assert-false
+1.5 2.5 fadd 4.0 "float add narrows" assert=
+
+"narrowed parameters survive a self-tail-call loop" test-section
+0 100 sum-to 5050 "sum 0..100 across a narrowed loop" assert=
+0 0 sum-to 0 "zero-iteration base case" assert=
+
+"declared parameter type is enforced" test-section
+[ "x" 4 add2 ] "mismatched fixnum argument raises" assert-error
+[ 3 "y" fadd ] "mismatched float argument raises" assert-error
+
+\ A self-tail-call loop rewrites its parameter slots on the back-edge, bypassing
+\ the entry-time validation. A recursive call that passes a wrong type must
+\ still raise -- compiled bodies re-check the narrowed parameter each iteration,
+\ matching the interpreter, rather than unboxing a mistyped payload and looping.
+bad-recur: ( n: fixnum -- r ) [ dup 0 = [ ] [ drop "x" bad-recur ] if ] ;
+
+"self-recursive annotation violation is caught each iteration" test-section
+[ 3 bad-recur ] "recursive call with a wrong type raises rather than looping" assert-error

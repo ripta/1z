@@ -1,0 +1,19 @@
+\ A word parameter declared fixnum/float is narrowed to an unboxed scalar at
+\ codegen entry, so arithmetic and comparison on it compile to the concrete
+\ path with no polymorphic fallback. Without the annotation these operate on
+\ opaque parameters and each emits a per-op-native (arithmetic) or native
+\ (comparison) fallback; with it, the stats below carry no such site. The only
+\ remaining fallbacks are the `.` -> inspect prints, which narrowing does not
+\ touch.
+
+add2: ( a: fixnum b: fixnum -- r ) [ + ] ;
+sub2: ( a: fixnum b: fixnum -- r ) [ - ] ;
+mul2: ( a: fixnum b: fixnum -- r ) [ * ] ;
+lt2:  ( a: fixnum b: fixnum -- r ) [ < ] ;
+fadd: ( a: float b: float -- r )   [ + ] ;
+
+3 4 add2 .
+10 4 sub2 .
+5 6 mul2 .
+3 4 lt2 .
+1.5 2.5 fadd .

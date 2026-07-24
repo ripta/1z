@@ -2753,6 +2753,107 @@ fn requireF64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
     };
 }
 
+const NarrowNumeric = enum { fixnum, float };
+
+/// Classify a parameter's type annotation as a builtin scalar that narrows to
+/// an unboxed IR value.
+///
+/// Only the builtin `fixnum` and `float` types qualify. They are recognized by
+/// interned pointer identity through the interpreter context, so a user type
+/// that merely shares the name is not mistaken for the builtin.
+///
+/// Returns null when there is no interpreter context, which leaves the
+/// parameter opaque. The real compile paths always supply one; a null context
+/// reaches here only from the test-only `emitWordC` entry point.
+fn narrowableAnnotation(state: *CompileState, ann: stack_effect_mod.TypeAnnotation) ?NarrowNumeric {
+    const tv = switch (ann) {
+        .type => |t| t,
+        .protocol, .combination => return null,
+    };
+    const ictx = state.interp_ctx orelse return null;
+    if (ictx.lookupBuiltinTypeValue("fixnum")) |fx| {
+        if (@intFromPtr(tv) == @intFromPtr(fx)) return .fixnum;
+    }
+    if (ictx.lookupBuiltinTypeValue("float")) |fl| {
+        if (@intFromPtr(tv) == @intFromPtr(fl)) return .float;
+    }
+    return null;
+}
+
+/// True when the `type-check` pragma relaxes annotation checking to `off` or
+/// `warning`. In either mode the interpreter lets a mistyped argument through,
+/// so the declared type is not guaranteed at runtime and narrowing (which
+/// trusts it) would be unsound. Mirrors the pragma read in
+/// `Context.validateTypeAnnotationsScoped`.
+fn typeCheckRelaxed(ctx: *const Context) bool {
+    const pv = ctx.getPragma("type-check") orelse return false;
+    if (pv != .string) return false;
+    return std.mem.eql(u8, pv.string, "off") or std.mem.eql(u8, pv.string, "warning");
+}
+
+/// Seed narrowed `.i64_ref`/`.f64_ref` entries for parameters that declare a
+/// builtin `fixnum`/`float` type annotation, replacing the opaque
+/// `.raw_at_slot` entry the prologue installed.
+///
+/// A narrowed operand is consumed with no tag check, so the parameter's type
+/// must be guaranteed. That guarantee comes from a tag-check-or-error at entry
+/// in AOT mode and in any self-tail-call loop, and from the interpreter's or
+/// JIT dispatch's own entry-time validation otherwise (see `enforce` below).
+///
+/// Callers invoke this after the LOOP_BEGIN / row-loop setup, so for a
+/// self-tail-call word the checks and unbox LOADs land inside the loop region
+/// and re-run each iteration as the back-edge rewrites the parameter slots.
+fn seedAnnotatedParams(state: *CompileState, stack: []StackEntry, input_count: usize) void {
+    // Row-aware self-loops rebase the abstract stack around a pinned row, so
+    // parameters no longer sit at slots `0..input_count`. Leave them opaque.
+    if (state.row_aware_loop) return;
+
+    const effect = state.stack_effect orelse return;
+    const ictx = state.interp_ctx orelse return;
+
+    if (typeCheckRelaxed(ictx)) return;
+
+    // AOT calls a compiled body directly with no annotation check in front of
+    // it, so an AOT body enforces its own declared types. A self-tail-call loop
+    // needs the same enforcement in every mode: the interpreter re-validates on
+    // each recursive call, but the compiled back-edge rewrites the parameter
+    // slots and jumps to the loop header, so nothing re-checks iterations past
+    // the first. A non-looping word is validated once at entry by interpreter
+    // and JIT dispatch, and its parameters are not rewritten, so its compiled
+    // body relies on that and skips the redundant check.
+    const enforce = state.aot_mode or state.loop_begin_ref != c.IR_UNUSED;
+
+    // The enforcement path needs the hard-error callback to reject a mistyped
+    // argument; without it, narrowing would be unsound, so leave params opaque.
+    if (enforce and state.type_mismatch_error_fn == c.IR_UNUSED) return;
+
+    // A row variable among the inputs makes the input-index -> slot mapping
+    // ambiguous (the row stands for a variable slot count), so narrow nothing.
+    for (effect.inputs) |param| {
+        if (param.is_row_variable) return;
+    }
+
+    for (effect.inputs, 0..) |param, i| {
+        if (i >= input_count) break;
+        if (stack[i] != .raw_at_slot or stack[i].raw_at_slot != i) continue;
+
+        const ann = param.type_annotation orelse continue;
+        const kind = narrowableAnnotation(state, ann) orelse continue;
+
+        const slot_addr = liveSlotAddr(state, i);
+        switch (kind) {
+            .fixnum => {
+                if (enforce) emitTagCheckOrError(state, slot_addr, state.fixnum_tag_const, state.type_mismatch_error_fn);
+                stack[i] = .{ .i64_ref = emitUnboxI64(state.ctx, slot_addr, state.payload_offset_const) };
+            },
+            .float => {
+                if (enforce) emitTagCheckOrError(state, slot_addr, state.float_tag_const, state.type_mismatch_error_fn);
+                stack[i] = .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) };
+            },
+        }
+    }
+}
+
 const ResolvedPair = union(enum) {
     i64_pair: struct { a: c.ir_ref, b: c.ir_ref },
     f64_pair: struct { a: c.ir_ref, b: c.ir_ref },
@@ -7965,6 +8066,8 @@ fn compileWordPass(
         state.trampoline_status = c.ir_const_i32(&ctx, 3);
     }
 
+    seedAnnotatedParams(&state, stack, input_count);
+
     try compileInstructions(&state, instructions, stack, &sp);
 
     if (state.exit_kind == .loop_diverged) {
@@ -8681,6 +8784,8 @@ fn emitWordCAotPass(
             return err;
         };
     } else {
+        seedAnnotatedParams(&state, stack_buf, input_count);
+
         compileInstructions(&state, instructions, stack_buf, &sp) catch |err| {
             if (err == IrCodegenError.NotCompilable) {
                 if (nc_reason_out) |ro| ro.* = state.not_compilable_reason;

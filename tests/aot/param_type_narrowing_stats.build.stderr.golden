@@ -1,0 +1,13 @@
+Prelude compilation: 6/6 words compiled (100.0%)
+Quotation bodies compiled: 0
+Inline PIC sites: 1/3 generic call sites preseeded
+AOT interpreter fallbacks: 2 total
+  native: 2
+  sites:
+    native: . -> inspect (line 708)
+    native: . -> inspect (line 708)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=2/2 jitCallQuotation=0/0 (matches build-time inventory)
+artifact: interpreter
+interpreter: linked (auto: compiled code calls interpreter)
+jitInterpretedCall: not linked
+runtime-image: words=0 stack-effects=1 typevalue-slots=63 blob-present=false

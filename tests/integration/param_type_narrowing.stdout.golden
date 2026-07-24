@@ -1,0 +1,35 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== narrowed arithmetic and comparison are semantics-preserving ===
+Stack: [ ]
+PASS: fixnum add narrows
+Stack: [ ]
+PASS: fixnum sub narrows
+Stack: [ ]
+PASS: fixnum less-than narrows
+Stack: [ ]
+PASS: fixnum equal narrows (unequal)
+Stack: [ ]
+PASS: float add narrows
+Stack: [ ]
+=== narrowed parameters survive a self-tail-call loop ===
+Stack: [ ]
+PASS: sum 0..100 across a narrowed loop
+Stack: [ ]
+PASS: zero-iteration base case
+Stack: [ ]
+=== declared parameter type is enforced ===
+Stack: [ ]
+PASS: mismatched fixnum argument raises
+Stack: [ ]
+PASS: mismatched float argument raises
+Stack: [ ]
+Stack: [ ]
+=== self-recursive annotation violation is caught each iteration ===
+Stack: [ ]
+PASS: recursive call with a wrong type raises rather than looping
+Stack: [ ]
