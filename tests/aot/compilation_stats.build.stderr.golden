@@ -1,6 +1,6 @@
 Prelude compilation: 5/5 words compiled (100.0%)
 Quotation bodies compiled: 0
-Inline PIC sites: 0/1 generic call sites preseeded
+Inline PIC sites: 0/2 generic call sites preseeded
 artifact: interpreter-free-aot
 interpreter: not linked (auto: all reachable code compiled)
 jitInterpretedCall: not linked

@@ -1,6 +1,5 @@
 \ Regression for the jitNativeWordCall leaf-call fix. This is a smaller
-\ version of the bug's own repro
-\ (spec/bugs/20260620-aot-fibonacci-native-fallbacks.md): `.` reaches
+\ version of the Fibonacci native-fallback repro: `.` reaches
 \ `inspect`, and `+` inside `[ swap over + ] dip` are both generic natives
 \ that route through `jitNativeWordCall` under AOT. Both must still produce
 \ correct results now that the function reads its dispatch id, stack

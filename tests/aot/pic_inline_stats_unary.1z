@@ -1,0 +1,11 @@
+\ Verify the unary inline PIC fast path fires for `inspect`.
+\ `.` is `[ inspect print-line ]`; `inspect` is a unary generic native
+\ (value -- string). Before the unary sibling of emitInlinePicCheck existed,
+\ its call site always routed through the plain native fallback. Running `.`
+\ on fixnums seeds the interpreter PIC with the fixnum type, so the frozen
+\ snapshot drives an inline unary check for fixnum.
+
+double: ( n -- n ) [ 2 * ] ;
+
+21 double .
+50 double .

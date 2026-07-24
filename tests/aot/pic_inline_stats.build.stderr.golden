@@ -1,13 +1,14 @@
 Prelude compilation: 6/6 words compiled (100.0%)
 Quotation bodies compiled: 0
-Inline PIC sites: 1/2 generic call sites preseeded
-AOT interpreter fallbacks: 3 total
-  native: 3
+Inline PIC sites: 2/4 generic call sites preseeded
+AOT interpreter fallbacks: 4 total
+  native: 4
   sites:
+    native: . -> inspect (line 708)
     native: . -> inspect (line 708)
     native: nth-elem -> #nth (line 5)
     native: nth-elem -> #nth (line 5)
-  static-check: jitInterpretedCall=0/0 jitNativeWordCall=3/3 jitCallQuotation=0/0 (matches build-time inventory)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=4/4 jitCallQuotation=0/0 (matches build-time inventory)
 artifact: interpreter
 interpreter: linked (auto: compiled code calls interpreter)
 jitInterpretedCall: not linked

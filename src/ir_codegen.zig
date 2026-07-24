@@ -1880,6 +1880,8 @@ const CompileState = struct {
     pic_dispatch_fn: c.ir_ref = c.IR_UNUSED,
     pic_native_call_fn: c.ir_ref = c.IR_UNUSED,
     pic_match_fn: c.ir_ref = c.IR_UNUSED,
+    pic_dispatch_unary_fn: c.ir_ref = c.IR_UNUSED,
+    pic_match_unary_fn: c.ir_ref = c.IR_UNUSED,
     pic_stats: ?*PicStats = null,
     /// Counts AOT-mode emissions of CALLs through interpreted_call_fn or
     /// call_quotation_fn. The substring scan that decides interpreter-free
@@ -6199,11 +6201,15 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         // Try inline PIC (from interpreter profiling) or
         // dispatch-table-driven inline checks (from frozen
         // dispatch table) before falling back to generic
-        // native call. Both include the slow-path fallback
-        // internally, so when either succeeds no separate
-        // call is needed.
+        // native call. The binary variants apply to two-operand
+        // words; the unary variants gate on `effective_in == 1`
+        // and cover strictly-unary generics like `inspect`. Each
+        // includes the slow-path fallback internally, so when any
+        // one succeeds no separate call is needed.
         if (!emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, line) and
-            !emitInlineDispatchTableCheck(state, ctx_val, name, resolved, effective_in, line))
+            !emitInlineDispatchTableCheck(state, ctx_val, name, resolved, effective_in, line) and
+            !emitInlinePicCheckUnary(state, idx, ctx_val, name, resolved, effective_in, line) and
+            !emitInlineDispatchTableCheckUnary(state, ctx_val, name, resolved, effective_in, line))
         {
             emitNativeWordCall(state, ctx_val, name, resolved, line);
         }
@@ -8451,6 +8457,14 @@ fn emitWordCAotPass(
         c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicTopTagsMatch"), proto_3arg)
     else
         c.IR_UNUSED;
+    const pic_dispatch_unary_fn = if (scan_flags.needs_native_call or interp_ctx_param != null)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicDispatchUnary"), proto_3arg)
+    else
+        c.IR_UNUSED;
+    const pic_match_unary_fn = if (scan_flags.needs_native_call or interp_ctx_param != null)
+        c.ir_const_func(&ctx, c.ir_str(&ctx, "jitPicTopTagMatch"), proto_2arg)
+    else
+        c.IR_UNUSED;
 
     // jitRefreshStack is emitted unconditionally: any callback in the body
     // may reallocate ctx.stack, so emitCallbackPostCheck refreshes regardless
@@ -8584,6 +8598,8 @@ fn emitWordCAotPass(
         .native_word_call_fn = native_word_call_fn,
         .pic_dispatch_fn = pic_dispatch_fn,
         .pic_match_fn = pic_match_fn,
+        .pic_dispatch_unary_fn = pic_dispatch_unary_fn,
+        .pic_match_unary_fn = pic_match_unary_fn,
         .refresh_stack_fn = refresh_stack_fn,
         .retain_slot_fn = retain_slot_fn,
         .release_slot_fn = release_slot_fn,
@@ -9904,6 +9920,8 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitNativeCall(uintptr_t ctx, uintptr_t fn_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitPicTopTagsMatch(uintptr_t ctx, uintptr_t tag_a, uintptr_t tag_b);\n");
     try out.appendSlice(allocator, "extern int32_t jitPicDispatch(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a, uintptr_t tag_b);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPicTopTagMatch(uintptr_t ctx, uintptr_t tag_a);\n");
+    try out.appendSlice(allocator, "extern int32_t jitPicDispatchUnary(uintptr_t ctx, uintptr_t word_id, uintptr_t tag_a);\n");
     try out.appendSlice(allocator, "extern int32_t jitNativeWordCall(uintptr_t ctx, uintptr_t word_id, uintptr_t line);\n");
     try out.appendSlice(allocator, aot_wrappers.registry_wrapper_externs);
     try out.appendSlice(allocator, "extern int32_t jitRefreshStack(uintptr_t jit_ctx);\n");
@@ -11039,6 +11057,10 @@ const InlinePicEntry = struct {
 /// Emit inline type-check-and-branch IR for a set of qualified PIC entries.
 /// Shared between PIC-sourced and dispatch-table-sourced inline checks.
 /// Returns true if at least one entry was emitted.
+///
+/// When `unary` is true the emitted checks compare only the single
+/// top-of-stack operand's tag and dispatch through the unary runtime helpers;
+/// `InlinePicEntry.tag_b` is ignored.
 fn emitInlinePicEntries(
     state: *CompileState,
     ctx_val: c.ir_ref,
@@ -11047,6 +11069,7 @@ fn emitInlinePicEntries(
     line: usize,
     qualified: []const InlinePicEntry,
     generation: u32,
+    unary: bool,
 ) bool {
     if (qualified.len == 0) return false;
 
@@ -11086,7 +11109,10 @@ fn emitInlinePicEntries(
 
     // In AOT mode, use the pre-allocated named extern reference.
     // In JIT mode, bake the function pointer address directly.
-    const pic_match_fn = if (state.pic_match_fn != c.IR_UNUSED)
+    const pic_match_fn = if (unary) blk: {
+        if (state.pic_match_unary_fn != c.IR_UNUSED) break :blk state.pic_match_unary_fn;
+        break :blk c.ir_const_addr(ictx, @intFromPtr(&jitPicTopTagMatch));
+    } else if (state.pic_match_fn != c.IR_UNUSED)
         state.pic_match_fn
     else
         c.ir_const_addr(ictx, @intFromPtr(&jitPicTopTagsMatch));
@@ -11104,8 +11130,10 @@ fn emitInlinePicEntries(
 
     for (qualified) |entry| {
         const tag_a_const = c.ir_const_addr(ictx, @intFromEnum(entry.tag_a));
-        const tag_b_const = c.ir_const_addr(ictx, @intFromEnum(entry.tag_b));
-        const match_status = c._ir_CALL_3(ictx, c.IR_I32, pic_match_fn, ctx_val, tag_a_const, tag_b_const);
+        const match_status = if (unary)
+            c._ir_CALL_2(ictx, c.IR_I32, pic_match_fn, ctx_val, tag_a_const)
+        else
+            c._ir_CALL_3(ictx, c.IR_I32, pic_match_fn, ctx_val, tag_a_const, c.ir_const_addr(ictx, @intFromEnum(entry.tag_b)));
         const matched = c.ir_fold2(ictx, c.IR_OPT(c.IR_NE, c.IR_BOOL), match_status, state.ok_status);
         const if_match = c._ir_IF(ictx, matched);
 
@@ -11114,11 +11142,13 @@ fn emitInlinePicEntries(
         {
             if (state.aot_mode) {
                 // AOT: can't bake function pointers; dispatch via
-                // jitPicDispatch with the pre-verified type tags.
+                // jitPicDispatch(Unary) with the pre-verified type tags.
                 const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
                 const tag_a_int = c.ir_const_addr(ictx, @intFromEnum(entry.tag_a));
-                const tag_b_int = c.ir_const_addr(ictx, @intFromEnum(entry.tag_b));
-                const call_result = c._ir_CALL_4(ictx, c.IR_I32, state.pic_dispatch_fn, ctx_val, word_id_const, tag_a_int, tag_b_int);
+                const call_result = if (unary)
+                    c._ir_CALL_3(ictx, c.IR_I32, state.pic_dispatch_unary_fn, ctx_val, word_id_const, tag_a_int)
+                else
+                    c._ir_CALL_4(ictx, c.IR_I32, state.pic_dispatch_fn, ctx_val, word_id_const, tag_a_int, c.ir_const_addr(ictx, @intFromEnum(entry.tag_b)));
                 emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
             } else {
                 const fn_ptr_const = c.ir_const_addr(ictx, entry.native_fn_ptr);
@@ -11221,7 +11251,7 @@ fn emitInlinePicCheck(
         qualified_count += 1;
     }
 
-    return emitInlinePicEntries(state, ctx_val, name, resolved, line, qualified[0..qualified_count], cache.generation);
+    return emitInlinePicEntries(state, ctx_val, name, resolved, line, qualified[0..qualified_count], cache.generation, false);
 }
 
 /// Try to emit inline dispatch-table-driven type checks at a generic call
@@ -11281,7 +11311,104 @@ fn emitInlineDispatchTableCheck(
         qualified_count += 1;
     }
 
-    return emitInlinePicEntries(state, ctx_val, name, resolved, line, qualified[0..qualified_count], interp_ctx.dispatch.generation);
+    return emitInlinePicEntries(state, ctx_val, name, resolved, line, qualified[0..qualified_count], interp_ctx.dispatch.generation, false);
+}
+
+/// Unary sibling of `emitInlinePicCheck` for a strictly-unary generic native
+/// such as `inspect`. Gates on `effective_in == 1` so a binary word's PIC
+/// entries can never be misread as unary. Reverse-maps only `type_a`; a unary
+/// entry's `type_b` is the unary sentinel, which never reverse-maps to a
+/// builtin tag.
+fn emitInlinePicCheckUnary(
+    state: *CompileState,
+    idx: usize,
+    ctx_val: c.ir_ref,
+    name: []const u8,
+    resolved: ResolvedWord,
+    effective_in: u8,
+    line: usize,
+) bool {
+    const pic_table = state.pic_table orelse return false;
+    const interp_ctx = state.interp_ctx orelse return false;
+    if (idx >= pic_table.entries.len) return false;
+    if (resolved.never_returns) return false;
+    if (effective_in != 1) return false;
+
+    const cache = pic_table.entries[idx];
+    if (cache.megamorphic or cache.count == 0) return false;
+
+    if (state.pic_stats) |ps| ps.sites_attempted += 1;
+
+    var qualified: [pic_mod.max_pic_entries]InlinePicEntry = undefined;
+    var qualified_count: usize = 0;
+
+    for (cache.entries[0..cache.count]) |entry| {
+        if (entry.unwrap_a or entry.unwrap_b) continue;
+        const body_fn = switch (entry.entry.body) {
+            .native_fn => |f| @intFromPtr(f),
+            .quotation, .host_callback => continue,
+        };
+        const tag_a = reverseMapDescriptorToTag(interp_ctx, entry.type_a) orelse continue;
+        qualified[qualified_count] = .{
+            .tag_a = tag_a,
+            .tag_b = tag_a,
+            .native_fn_ptr = body_fn,
+        };
+        qualified_count += 1;
+    }
+
+    return emitInlinePicEntries(state, ctx_val, name, resolved, line, qualified[0..qualified_count], cache.generation, true);
+}
+
+/// Unary sibling of `emitInlineDispatchTableCheck`. Collects the word's
+/// unary-sentinel dispatch entries (`type_b == unary_desc`) from the frozen
+/// dispatch table, so `inspect`/`>string`-shaped words get an inline fast path
+/// even without PIC observation data.
+fn emitInlineDispatchTableCheckUnary(
+    state: *CompileState,
+    ctx_val: c.ir_ref,
+    name: []const u8,
+    resolved: ResolvedWord,
+    effective_in: u8,
+    line: usize,
+) bool {
+    const interp_ctx = state.interp_ctx orelse return false;
+    if (resolved.never_returns) return false;
+    if (effective_in != 1) return false;
+
+    const dispatch_id = interp_ctx.resolveDispatchId(name) orelse return false;
+
+    const any_desc = if (interp_ctx.getDispatchAnySentinel().descriptor) |d| d else return false;
+    const unary_desc = if (interp_ctx.getDispatchUnarySentinel().descriptor) |d| d else return false;
+
+    if (state.pic_stats) |ps| ps.sites_attempted += 1;
+
+    var qualified: [pic_mod.max_pic_entries]InlinePicEntry = undefined;
+    var qualified_count: usize = 0;
+
+    var iter = interp_ctx.dispatch.entries.iterator();
+    while (iter.next()) |entry| {
+        if (qualified_count >= pic_mod.max_pic_entries) break;
+        if (entry.key_ptr.dispatch_id != dispatch_id) continue;
+
+        // Keep only unary-sentinel entries; skip wildcard operands.
+        if (entry.key_ptr.type_b != unary_desc) continue;
+        if (entry.key_ptr.type_a == any_desc) continue;
+
+        const body_fn = switch (entry.value_ptr.body) {
+            .native_fn => |f| @intFromPtr(f),
+            .quotation, .host_callback => continue,
+        };
+        const tag_a = reverseMapDescriptorToTag(interp_ctx, entry.key_ptr.type_a) orelse continue;
+        qualified[qualified_count] = .{
+            .tag_a = tag_a,
+            .tag_b = tag_a,
+            .native_fn_ptr = body_fn,
+        };
+        qualified_count += 1;
+    }
+
+    return emitInlinePicEntries(state, ctx_val, name, resolved, line, qualified[0..qualified_count], interp_ctx.dispatch.generation, true);
 }
 
 /// Emit a native word call. In JIT mode, calls through jitNativeCall with
@@ -11852,6 +11979,52 @@ export fn jitPicDispatch(ctx_raw: usize, word_id_raw: usize, tag_a_raw: usize, t
     }
 }
 
+/// Unary sibling of jitPicDispatch. The generated C code already verified the
+/// single top-of-stack operand's tag; this resolves the unary dispatch entry
+/// directly, skipping the interpreter loop and PIC cache management.
+export fn jitPicDispatchUnary(ctx_raw: usize, word_id_raw: usize, tag_a_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const tag_a: u8 = @intCast(tag_a_raw);
+
+    const desc_a = blk: {
+        if (tag_a < ctx.builtin_type_array.len) {
+            if (ctx.builtin_type_array[tag_a]) |tv| {
+                if (tv.descriptor) |d| break :blk d;
+            }
+        }
+        return 1;
+    };
+
+    const word_id: u32 = @intCast(word_id_raw);
+    const entry = ctx.jit_dispatch.get(word_id) orelse blk: {
+        var parent = ctx.parent_context;
+        while (parent) |p| : (parent = p.parent_context) {
+            if (p.jit_dispatch.get(word_id)) |e| break :blk e;
+        }
+        return 1;
+    };
+    const word_name = entry.word_name;
+    const dispatch_id = ctx.resolveDispatchId(word_name) orelse return 1;
+
+    const dispatch_entry = ctx.lookupUnaryDispatch(dispatch_id, desc_a) orelse return 1;
+
+    switch (dispatch_entry.body) {
+        .native_fn => |f| {
+            f(ctx) catch |err| {
+                ctx.jit_pending_error = err;
+                return 2;
+            };
+            if (ctx.trace.trace_pic) {
+                var tw = trace_mod.TraceWriter.init();
+                trace_mod.tracePicHit(&tw, word_name);
+            }
+            return 0;
+        },
+        .quotation, .host_callback => return 1,
+    }
+}
+
 /// Lightweight PIC-hit native call for JIT mode. Same as jitNativeCall but
 /// emits a PIC hit trace event when --trace-pic is enabled. The word name
 /// is passed as a pointer+length pair baked into the compiled code.
@@ -11882,6 +12055,17 @@ export fn jitPicTopTagsMatch(ctx_raw: usize, tag_a_raw: usize, tag_b_raw: usize)
     const actual_a = @intFromEnum(std.meta.activeTag(items[items.len - 2]));
     const actual_b = @intFromEnum(std.meta.activeTag(items[items.len - 1]));
     return if (actual_a == tag_a_raw and actual_b == tag_b_raw) 1 else 0;
+}
+
+/// Unary sibling of jitPicTopTagsMatch: checks only the single top-of-stack
+/// operand's tag.
+export fn jitPicTopTagMatch(ctx_raw: usize, tag_a_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0) return 0;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    const items = ctx.stack.items.items;
+    if (items.len < 1) return 0;
+    const actual_a = @intFromEnum(std.meta.activeTag(items[items.len - 1]));
+    return if (actual_a == tag_a_raw) 1 else 0;
 }
 
 export fn jitNativeCall(ctx_raw: usize, fn_ptr_raw: usize) callconv(.c) i32 {

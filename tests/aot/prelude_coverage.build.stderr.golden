@@ -3,9 +3,9 @@ Prelude compilation: 455/456 words compiled (99.8%)
       NC.13: word body underflows the abstract stack (row-variable effects)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
-Inline PIC sites: 38/142 generic call sites preseeded
-AOT interpreter fallbacks: 373 total
-  native: 352
+Inline PIC sites: 88/265 generic call sites preseeded
+AOT interpreter fallbacks: 422 total
+  native: 401
   per-op-native: 3
   compound-uncompiled: 1
   quotation: 17
@@ -24,10 +24,10 @@ AOT interpreter fallbacks: 373 total
     native: >option:some -> native.virtual-struct-wrap (line 0)
     native: descriptor-variant? -> native.struct-type-predicate (line 0)
     native: . -> inspect (line 708)
+    native: . -> inspect (line 708)
     native: #ends-with? -> #len (line 1279)
-    native: #ends-with? -> #len (line 1279)
-    ... 357 more
-  static-check: jitInterpretedCall=1/1 jitNativeWordCall=355/355 jitCallQuotation=17/17 (matches build-time inventory)
+    ... 406 more
+  static-check: jitInterpretedCall=1/1 jitNativeWordCall=404/404 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
