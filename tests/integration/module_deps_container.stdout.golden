@@ -1,0 +1,5 @@
+=== container-embedded quotation resolution ===
+Stack: [ ]
+Stack: [ "LIB-TAG" ]
+PASS: container-embedded quotation resolves its module-private word from a neutral context
+Stack: [ ]

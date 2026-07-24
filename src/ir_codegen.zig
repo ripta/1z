@@ -13049,7 +13049,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                 .compound => |instrs| {
                     ctx.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
                     defer ctx.popModuleDepsFrameTraced(mod);
-                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot);
+                    break :blk ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, mod);
                 },
                 .native => |func| break :blk func(ctx),
                 .host_callback => |host| break :blk host_result: {
@@ -13067,7 +13067,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                     if (rc != 0) break :host_result error.HostCallbackFailed;
                     break :host_result;
                 },
-                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot),
+                .compound => |instrs| ctx.executeQuotationWithPic(.{ .instructions = instrs }, entry.pic_snapshot, null),
                 .literal => |v| ctx.stack.push(v),
             };
         }

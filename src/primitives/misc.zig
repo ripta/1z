@@ -487,10 +487,27 @@ pub fn nativeLoadImpl(ctx: *Context, cache: *value_mod.MutableMap, filename: []c
         };
         if (word_def.imported) {
             try module.deps.put(alloc, entry.key_ptr.*, mod_word);
+
+            // A module's own private helpers (defined via `private{ }`) are imported as
+            // `<local-scope>` words. Stamp their bodies with this module so their nested
+            // branch/loop quotations inherit its defining module and the `.module_deps` visibility
+            // filter admits its frame -- where the helper's siblings and imports live. Genuine
+            // cross-module imports carry a real origin module and keep their own stamp; do not
+            // re-stamp them here.
+            if (word_def.source_module) |sm| {
+                if (@import("../context.zig").isSyntheticScopeModule(sm)) {
+                    switch (word_def.action) {
+                        .compound => |instrs| try ctx.stampQuotationBodies(instrs, module),
+                        .literal => |v| try ctx.stampValueQuotations(v, module),
+                        else => {},
+                    }
+                }
+            }
         } else {
             try module.words.put(alloc, entry.key_ptr.*, mod_word);
             switch (word_def.action) {
                 .compound => |instrs| try ctx.stampQuotationBodies(instrs, module),
+                .literal => |v| try ctx.stampValueQuotations(v, module),
                 else => {},
             }
             if (ctx.trace.trace_modules.define) {

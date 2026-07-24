@@ -125,6 +125,42 @@ pub const DepsFrameTemplate = struct {
 /// quotation creation.
 pub const FrameKind = enum { lexical, module_deps };
 
+/// What `.module_deps` frames the executing body may resolve bare words against, so a stored
+/// quotation `call`ed while an unrelated library's frame is live does not resolve against it.
+///
+/// A `.module_deps` frame for module M is visible iff M is the body's own defining module or M was
+/// ambient (a live deps frame) when the body was created. A body with neither reference sees no
+/// deps frame and falls through to the durable import frame.
+pub const ModuleDepsVisibility = struct {
+    deps_modules: []const *const value_mod.Module,
+    defining_module: ?*const value_mod.Module,
+
+    fn admits(self: ModuleDepsVisibility, module: *const value_mod.Module) bool {
+        if (self.defining_module) |dm| {
+            if (dm == module) return true;
+        }
+        for (self.deps_modules) |m| {
+            if (m == module) return true;
+        }
+        return false;
+    }
+};
+
+/// A synthetic scope module is an ephemeral scope snapshot, not a loaded module: `<local-scope>`
+/// (`private{ }` / `local-scope`) and `<scope>` (`current-scope`). By convention these are the only
+/// module names prefixed with `<`; a loaded module's name is a file path and never is.
+///
+/// A body defined in one is exempt from the `.module_deps` visibility filter. It is a helper
+/// lexically nested in a real module, and its scope module deliberately captures only imports and
+/// sibling privates, not the enclosing module's own public words -- those resolve against the
+/// enclosing frame, which the filter would otherwise reject. A private helper is never a stored
+/// foreign quotation, so resolving it unfiltered, as before this filter existed, cannot reopen the
+/// shadowing bug.
+pub fn isSyntheticScopeModule(module: ?*const value_mod.Module) bool {
+    const m = module orelse return false;
+    return m.name.len > 0 and m.name[0] == '<';
+}
+
 /// The lexical scope captured at a quotation's creation site, keyed off the quotation body's
 /// instruction-slice pointer.
 ///
@@ -134,11 +170,11 @@ pub const FrameKind = enum { lexical, module_deps };
 /// `lexical_frames` is an owned snapshot of the genuine lexical frames live at creation.
 ///
 /// `deps_modules` is an owned snapshot of the modules whose `.module_deps` frame was live at
-/// creation. Bare-word resolution will consult it to admit a frame the quotation legitimately closed
-/// over while rejecting a foreign one. A quotation created with no such frame live records no entry
-/// at all; resolution treats that absence as an empty ambient-deps set and leans on the
-/// `quotation_defining_module` stamp to tell a module-less quotation apart from a word body. The
-/// consulting side is not wired yet.
+/// creation. Bare-word resolution consults it (via `ModuleDepsVisibility`) to admit a frame the
+/// quotation legitimately closed over while rejecting a foreign one. A quotation created with no such
+/// frame live records no entry at all; resolution treats that absence as an empty ambient-deps set
+/// and leans on the `quotation_defining_module` stamp to tell a module-less quotation apart from a
+/// word body.
 ///
 /// Module-scope resolution for a quotation's own defining module still flows through the existing
 /// `quotation_defining_module` stamp; `deps_modules` covers only frames ambient at creation.
@@ -1933,6 +1969,24 @@ pub const Context = struct {
         return if (has_lexical) scope else null;
     }
 
+    /// Append the modules whose `.module_deps` frame is currently live above the import floor.
+    ///
+    /// `curry`/`compose` use this to recover a base body's ambient deps when the base was pushed by
+    /// compiled code: a compiled push never runs `captureQuotationScope`, so the base records no
+    /// deps. `curry` runs where the base was pushed, so the live frames are the ones the curried
+    /// body needs. Mirrors the deps scan in `captureQuotationScope`.
+    pub fn appendLiveDepsModules(self: *const Context, list: *std.ArrayListUnmanaged(*const value_mod.Module), alloc: Allocator) !void {
+        if (self.live_module_deps_frames == 0) return;
+        const floor = if (self.import_frame_index) |idx| idx + 1 else 0;
+        var j = floor;
+        while (j < self.local_frames.items.len) : (j += 1) {
+            if (j >= self.local_frame_kinds.items.len or self.local_frame_kinds.items[j] != .module_deps) continue;
+            if (j < self.local_frame_modules.items.len) {
+                if (self.local_frame_modules.items[j]) |m| try list.append(alloc, m);
+            }
+        }
+    }
+
     /// True when the live `.module_deps` frames above `floor` list exactly `expected`, in order. Used
     /// by the equality-skip to compare against a recorded entry without allocating a snapshot: the
     /// scan mirrors the recording scan, so a body re-pushed against an unchanged frame stack matches.
@@ -2143,17 +2197,56 @@ pub const Context = struct {
     /// body can be re-resolved against the defining module's deps even after the
     /// frame stack has moved on. Empty slices share a sentinel pointer and have
     /// no words to resolve, so they are skipped.
-    pub fn stampQuotationBodies(self: *Context, instructions: []const Instruction, module: *const value_mod.Module) !void {
+    pub fn stampQuotationBodies(self: *Context, instructions: []const Instruction, module: *const value_mod.Module) error{OutOfMemory}!void {
         if (instructions.len == 0) return;
-        try self.quotation_defining_module.put(self.allocator, @intFromPtr(instructions.ptr), module);
+
+        // The first module to stamp a body is its original defining module. A body's instruction
+        // slice is shared when a module reexports another's word, so a reexporting module later
+        // reprocesses the same pointers. Keep the original stamp: the body's private helpers live in
+        // the module it was written in, not the one reexporting it. A found key means this body and
+        // everything nested under it were already stamped, so stop here.
+        const gop = try self.quotation_defining_module.getOrPut(self.allocator, @intFromPtr(instructions.ptr));
+        if (gop.found_existing) return;
+        gop.value_ptr.* = module;
+
         for (instructions) |instr| {
             switch (instr.op) {
-                .push_literal => |val| switch (val) {
-                    .quotation => |q| try self.stampQuotationBodies(q.instructions, module),
-                    else => {},
-                },
+                .push_literal => |val| try self.stampValueQuotations(val, module),
                 else => {},
             }
+        }
+    }
+
+    /// Stamp every quotation reachable through a pushed literal value, descending into container
+    /// literals as well as a bare `.quotation`.
+    ///
+    /// A collection parse-time word (`H{`, `V{`, `{`, `S{`, `M{`) emits its whole literal as one
+    /// `push_literal`, so a quotation embedded in it (`H{ prefix: [ (expr-prefix) ] }`) never reaches
+    /// `stampQuotationBodies` on its own. Without a stamp such a quotation has no defining module, so
+    /// the `.module_deps` visibility filter cannot admit its own module's frame and mis-resolves a
+    /// bare word that also exists in the global dictionary.
+    ///
+    /// At module finalization the value is the as-parsed literal, immutable and acyclic, so the
+    /// recursion terminates.
+    pub fn stampValueQuotations(self: *Context, val: Value, module: *const value_mod.Module) error{OutOfMemory}!void {
+        switch (val) {
+            .quotation => |q| try self.stampQuotationBodies(q.instructions, module),
+            .closure => |c| try self.stampQuotationBodies(c.instructions, module),
+            .parameter => |p| try self.stampQuotationBodies(p.default_quotation.instructions, module),
+            .array => |a| for (a.items) |item| try self.stampValueQuotations(item, module),
+            .vector => |v| for (v.list.items) |item| try self.stampValueQuotations(item, module),
+            .set => |s| for (s.map.keys()) |item| try self.stampValueQuotations(item, module),
+            .hash => |h| {
+                var it = h.map.valueIterator();
+                while (it.next()) |vp| try self.stampValueQuotations(vp.*, module);
+            },
+            .mutable_map => |m| {
+                var it = m.map.valueIterator();
+                while (it.next()) |vp| try self.stampValueQuotations(vp.*, module);
+            },
+            .struct_instance => |si| for (si.fields) |f| try self.stampValueQuotations(f, module),
+            .tagged => |t| try self.stampValueQuotations(t.inner.*, module),
+            else => {},
         }
     }
 
@@ -2459,7 +2552,7 @@ pub const Context = struct {
     }
 
     fn defineWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
-        if (self.lookupWordLocked(name)) |existing| {
+        if (self.lookupWordLocked(name, null)) |existing| {
             for (existing.markers) |mk| {
                 if (markers_mod.isConstMarker(mk)) {
                     self.pending_error_message = std.fmt.allocPrint(
@@ -2791,7 +2884,7 @@ pub const Context = struct {
     pub fn lookupWord(self: *const Context, name: []const u8) ?WordDefinition {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        return self.lookupWordLocked(name);
+        return self.lookupWordLocked(name, null);
     }
 
     /// Like `lookupWord`, but falls through to the AOT runtime-image module cache when the
@@ -2807,9 +2900,17 @@ pub const Context = struct {
     /// Definition- and parse-time callers must stick to `lookupWord` so they never see
     /// sibling modules' words.
     pub fn lookupWordForExecution(self: *const Context, name: []const u8) ?WordDefinition {
+        return self.lookupWordForExecutionFiltered(name, null);
+    }
+
+    /// Like `lookupWordForExecution`, but `vis` filters the executing body's view of transient
+    /// `.module_deps` frames (see `ModuleDepsVisibility`). The runtime-image fallback is left
+    /// unfiltered: it resolves a module's public `words`, not the transient frame stack, so it
+    /// carries no shadowing hazard.
+    pub fn lookupWordForExecutionFiltered(self: *const Context, name: []const u8, vis: ?ModuleDepsVisibility) ?WordDefinition {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
-        if (self.lookupWordLocked(name)) |def| return def;
+        if (self.lookupWordLocked(name, vis)) |def| return def;
         if (!self.runtime_image_loaded) return null;
         if (self.lookupModuleCacheWordLocked(name)) |def| return def;
         return self.lookupAotCompiledWordLocked(name);
@@ -2843,10 +2944,22 @@ pub const Context = struct {
         return null;
     }
 
-    fn lookupWordLocked(self: *const Context, name: []const u8) ?WordDefinition {
+    /// `vis`, when non-null, filters this context's own transient frames: a `.module_deps` frame the
+    /// executing body may not see is skipped, so a stored quotation does not resolve against a
+    /// foreign library's frame that merely happens to be live. Only the self walk is filtered; the
+    /// ancestor walk visits durable frames below the import floor, which are never `.module_deps`.
+    fn lookupWordLocked(self: *const Context, name: []const u8, vis: ?ModuleDepsVisibility) ?WordDefinition {
         var i = self.local_frames.items.len;
         while (i > 0) {
             i -= 1;
+            if (vis) |v| {
+                if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] == .module_deps) {
+                    const m = if (i < self.local_frame_modules.items.len) self.local_frame_modules.items[i] else null;
+                    if (m) |module| {
+                        if (!v.admits(module)) continue;
+                    }
+                }
+            }
             if (self.local_frames.items[i].get(name)) |def| {
                 return def;
             }
@@ -3406,7 +3519,7 @@ pub const Context = struct {
         // Fall back to dictionary: type words push a single .type_val literal,
         // and enum variant constructors push a single .tagged literal whose
         // VirtualType carries a .type_val.
-        const word = self.lookupWordLocked(name) orelse return null;
+        const word = self.lookupWordLocked(name, null) orelse return null;
         switch (word.action) {
             .compound => |instrs| {
                 if (instrs.len == 1) {
@@ -4352,7 +4465,7 @@ pub const Context = struct {
                     const rc = host.callback(host.handle, host.user_data);
                     if (rc != 0) return error.HostCallbackFailed;
                 },
-                .compound => |instrs| try self.executeInstructions(instrs, null),
+                .compound => |instrs| try self.executeInstructions(instrs, null, null),
                 .literal => |v| try self.stack.push(v),
             }
         } else {
@@ -4421,7 +4534,7 @@ pub const Context = struct {
                     //              must have that tail call resolved here, while this module-deps frame
                     //              is still live, instead of leaking a pending tail call past the
                     //              deps-frame teardown.
-                    try self.executeQuotationWithPic(.{ .instructions = instrs }, null);
+                    try self.executeQuotationWithPic(.{ .instructions = instrs }, null, module);
                 },
                 .native => |func| try func(self),
                 .host_callback => |host| {
@@ -5416,17 +5529,24 @@ pub const Context = struct {
     /// Contains the TCO loop: when executeInstructions signals a tail call,
     /// this function pops the dangling call frame and loops with new instructions.
     pub fn executeQuotation(self: *Context, quotation: Quotation) anyerror!void {
-        return self.executeQuotationWithPic(quotation, null);
+        return self.executeQuotationWithPic(quotation, null, null);
     }
 
     /// Execute a quotation with an optional PIC table for inline caching.
-    pub fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable) anyerror!void {
+    ///
+    /// `initial_module` names the defining module of a module-word body, threaded into the
+    /// `.module_deps` visibility filter so the body may resolve against its own module's frame even
+    /// where the pointer-keyed stamp is absent (e.g. a spawned child whose stamp map is empty). It is
+    /// distinct from `current_module`, which tracks frame *ownership*: a body-module hint never pushes
+    /// a frame.
+    pub fn executeQuotationWithPic(self: *Context, quotation: Quotation, pic_table: ?*PicTable, initial_module: ?*const value_mod.Module) anyerror!void {
         const saved_source = self.current_source;
         defer self.current_source = saved_source;
 
         var current_instructions = quotation.instructions;
         var current_pic = pic_table;
         var current_module: ?*const value_mod.Module = null;
+        var body_module: ?*const value_mod.Module = initial_module;
         var owns_frame = false;
 
         while (true) {
@@ -5445,7 +5565,7 @@ pub const Context = struct {
                 owns_frame = true;
             }
 
-            const exec_result = self.executeInstructions(current_instructions, current_pic);
+            const exec_result = self.executeInstructions(current_instructions, current_pic, body_module);
             exec_result catch |err| {
                 if (owns_frame) {
                     if (self.trace.trace_modules.deps) {
@@ -5474,6 +5594,10 @@ pub const Context = struct {
 
                 const new_module = self.tail_call_module;
                 self.tail_call_module = null;
+
+                // The tail-called word's body resolves as its own module (or as a module-less local
+                // when null), regardless of frame ownership below.
+                body_module = new_module;
 
                 if (new_module) |new_mod| {
                     if (owns_frame and current_module.? != new_mod) {
@@ -5564,7 +5688,7 @@ pub const Context = struct {
         defer self.popLocalFrame();
 
         const depth_before = self.stack.depth();
-        try self.executeInstructions(quotation.instructions, null);
+        try self.executeInstructions(quotation.instructions, null, null);
 
         // If tail call is pending, skip the stack-effect validation and propagate upward
         if (self.tail_call_instructions != null) {
@@ -5901,7 +6025,7 @@ pub const Context = struct {
                         .compound => |instrs| {
                             self.pushModuleDepsFrame(mod) catch |e| break :blk @as(anyerror!void, e);
                             defer self.popModuleDepsFrameTraced(mod);
-                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic);
+                            break :blk self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, mod);
                         },
                         .native => |func| break :blk func(self),
                         .host_callback => |host| break :blk host_result: {
@@ -5922,7 +6046,7 @@ pub const Context = struct {
                             if (rc != 0) break :host_result error.HostCallbackFailed;
                             break :host_result;
                         },
-                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic),
+                        .compound => |instrs| self.executeQuotationWithPic(.{ .instructions = instrs }, callee_pic, null),
                         .literal => |v| self.stack.push(v),
                     };
                 }
@@ -5945,29 +6069,66 @@ pub const Context = struct {
     ///
     /// Supports tail call optimization: i.e., when the last instruction is a
     /// compound `call_word`, sets `tail_call_instructions` instead of recursing.
-    fn executeInstructions(self: *Context, instructions: []const Instruction, pic_table: ?*PicTable) anyerror!void {
-        // Holds the defining module's deps frame after a lazy re-resolution of a
-        // `use`-imported word inside this body; popped on every exit from the body.
-        var lazy_deps_module: ?*const value_mod.Module = null;
-        defer if (lazy_deps_module) |mod| self.popModuleDepsFrameTraced(mod);
+    fn executeInstructions(self: *Context, instructions: []const Instruction, pic_table: ?*PicTable, body_module: ?*const value_mod.Module) anyerror!void {
+        // Holds this body's creation-site module deps frames after a lazy re-resolution of a
+        // `use`-imported word: its captured ambient-deps modules plus its defining-module stamp.
+        // These are the frames the body could reach at creation but that may not be live where it
+        // runs, so a word available only through one of them still resolves. Pushed at most once and
+        // held for the rest of the body; popped in reverse on every exit.
+        var lazy_pushed: std.ArrayListUnmanaged(*const value_mod.Module) = .{};
+        var lazy_tried = false;
+        defer {
+            var li = lazy_pushed.items.len;
+            while (li > 0) {
+                li -= 1;
+                self.popModuleDepsFrameTraced(lazy_pushed.items[li]);
+            }
+            lazy_pushed.deinit(self.allocator);
+        }
 
         // The lexical scope captured where this body was created, if any. A bare word that this
         // scope binds resolves to that binding, ahead of a same-named word merely live on the
-        // frame stack this body runs against. The flag keeps resolution on the fast path for
-        // programs that never close over a local binding: it is set only when a scope carrying a
-        // non-empty lexical frame enters the map, so the deps-only entries `captureQuotationScope`
-        // records for module-less quotations do not force a lookup here.
+        // frame stack this body runs against. The fetch is on the fast path for programs that never
+        // close over a local binding: `lexical_capture_recorded` gates the lexical case, and a live
+        // `.module_deps` frame gates the deps case (a deps-only entry, which does not set the flag,
+        // still feeds the visibility filter below).
         //
         // Retained for the full duration of this call and released via `defer`, so a nested or
         // recursive `executeInstructions` call made from within this one (e.g. through `if`/`when`)
         // is free to supersede the map's entry for this same body without freeing the scope this
         // outer frame still holds.
-        const captured_scope: ?*CapturedScope = if (self.lexical_capture_recorded)
+        const need_scope = self.lexical_capture_recorded or self.live_module_deps_frames > 0;
+        const captured_scope: ?*CapturedScope = if (need_scope)
             self.quotation_captured_scope.get(@intFromPtr(instructions.ptr))
         else
             null;
         if (captured_scope) |cs| cs.retain();
         defer if (captured_scope) |cs| cs.release();
+
+        // When a `.module_deps` frame is live, this body resolves bare words only against the frames
+        // it may legitimately see: its own defining module and the ambient-deps set captured at its
+        // creation. The defining module comes from `body_module` for a module-word body (threaded
+        // from `executeResolvedWord`, so it is available even in a spawned child whose stamp map is
+        // empty), falling back to the pointer-keyed `quotation_defining_module` stamp for a stored
+        // quotation resolved in its own context. A quotation spawned onto a child, where neither is
+        // present, rides its captured `deps_modules`, which `curry`/`compose` propagate and `spawn`
+        // copies into the child. All are fixed for the body's lifetime; the filter is applied to
+        // whatever frames are live at each call site. Null when no deps frame is live, keeping the
+        // common path free of the filter.
+        //
+        // A synthetic scope body is exempt (`deps_vis` stays null); see `isSyntheticScopeModule`.
+        //
+        // Computed only when a deps frame is actually live: the `quotation_defining_module` lookup
+        // is a map probe on the hot path, and with no deps frame there is nothing to filter, so a
+        // program that never crosses a module boundary in its inner loop pays none of it.
+        const deps_vis: ?ModuleDepsVisibility = if (self.live_module_deps_frames > 0) blk: {
+            const defining = body_module orelse self.quotation_defining_module.get(@intFromPtr(instructions.ptr));
+            if (isSyntheticScopeModule(defining)) break :blk null;
+            break :blk ModuleDepsVisibility{
+                .deps_modules = if (captured_scope) |cs| cs.deps_modules else &.{},
+                .defining_module = defining,
+            };
+        } else null;
 
         for (instructions, 0..) |instr, idx| {
             // The stepwise debugger is wired up only from capi.zig (C debugger API) and main.zig
@@ -6030,7 +6191,7 @@ pub const Context = struct {
                         }
                     }
 
-                    if (self.lookupWordForExecution(name)) |word| {
+                    if (self.lookupWordForExecutionFiltered(name, deps_vis)) |word| {
                         switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
                             .proceed => {},
                             .tail_call_set => return,
@@ -6046,17 +6207,45 @@ pub const Context = struct {
                             b.updatePeakStackDepth(self.stack.depth());
                         }
                     } else lazy_resolve: {
-                        // The executing body may belong to a module whose deps
-                        // frame is no longer active (e.g. a quotation called
-                        // after a cross-module tail call popped it). Push its
-                        // deps frame once and re-resolve the failed word in
-                        // place; hold the frame for the rest of the body.
-                        // One-shot per body.
-                        if (lazy_deps_module == null) {
-                            if (self.quotation_defining_module.get(@intFromPtr(instructions.ptr))) |mod| {
+                        // The executing body may reference a word available only through one of its
+                        // creation-site module frames, none of which are live here (e.g. a body
+                        // called after a cross-module tail call popped its frame). Push those frames
+                        // once -- the captured ambient-deps modules and the defining-module stamp --
+                        // and re-resolve under a visibility that admits exactly them; hold them for
+                        // the rest of the body. One-shot per body.
+                        if (!lazy_tried) {
+                            lazy_tried = true;
+
+                            // The captured ambient-deps modules, fetched directly here so this rare
+                            // path works even when no deps frame was live at body entry (`deps_vis`
+                            // null).
+                            const lazy_deps: []const *const value_mod.Module = if (deps_vis) |v|
+                                v.deps_modules
+                            else if (self.quotation_captured_scope.get(@intFromPtr(instructions.ptr))) |cs|
+                                cs.deps_modules
+                            else
+                                &.{};
+                            const stamp_module = self.quotation_defining_module.get(@intFromPtr(instructions.ptr));
+
+                            // Reserve up front so a `pushModuleDepsFrame` success is always paired
+                            // with a tracking append that cannot then OOM, leaving no untracked live
+                            // frame with a skewed counter.
+                            try lazy_pushed.ensureTotalCapacity(self.allocator, lazy_deps.len + 1);
+                            for (lazy_deps) |mod| {
                                 try self.pushModuleDepsFrame(mod);
-                                lazy_deps_module = mod;
-                                if (self.lookupWordForExecution(name)) |word| {
+                                lazy_pushed.appendAssumeCapacity(mod);
+                            }
+                            if (stamp_module) |mod| {
+                                try self.pushModuleDepsFrame(mod);
+                                lazy_pushed.appendAssumeCapacity(mod);
+                            }
+
+                            if (lazy_pushed.items.len > 0) {
+                                const lazy_vis: ModuleDepsVisibility = .{
+                                    .deps_modules = lazy_deps,
+                                    .defining_module = body_module orelse stamp_module,
+                                };
+                                if (self.lookupWordForExecutionFiltered(name, lazy_vis)) |word| {
                                     switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
                                         .proceed => {},
                                         .tail_call_set => return,
@@ -7362,8 +7551,8 @@ test "lookupWordLocked: descendant reads ancestor stable scope, not transient fr
     child.parent_context = &parent;
     defer child.parent_context = null;
 
-    try std.testing.expect(child.lookupWordLocked("stable-word") != null);
-    try std.testing.expect(child.lookupWordLocked("transient-word") == null);
+    try std.testing.expect(child.lookupWordLocked("stable-word", null) != null);
+    try std.testing.expect(child.lookupWordLocked("transient-word", null) == null);
 }
 
 test "lookupWordStackEffectPtrLocked: descendant skips ancestor transient frames" {
@@ -8263,6 +8452,47 @@ test "captureQuotationScope: no live module-deps frame and no local records noth
     const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
     try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
     try std.testing.expectEqual(@as(usize, 0), ctx.quotation_captured_scope.count());
+}
+
+test "lookupWordLocked: visibility filter admits or skips a module-deps frame by module" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    // The durable import frame holds one binding of `shadowed`; a foreign module's deps frame,
+    // pushed on top, holds a different binding of the same name.
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.local_frames.items[0].put(ctx.allocator, "shadowed", .{
+        .name = "shadowed",
+        .source_file = "durable",
+        .action = .{ .native = noop },
+    });
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    try module.words.put(std.testing.allocator, "shadowed", .{ .action = .{ .native = noop } });
+    defer module.words.deinit(std.testing.allocator);
+    try ctx.pushModuleDepsFrame(&module);
+
+    // Unfiltered: the topmost (module-deps) frame's binding wins.
+    const unfiltered = ctx.lookupWordLocked("shadowed", null) orelse return error.TestExpectedResolution;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &module), unfiltered.source_module);
+
+    // Admitted by defining-module match: the module frame is still visible.
+    const by_defining = ctx.lookupWordLocked("shadowed", .{ .deps_modules = &.{}, .defining_module = &module }) orelse return error.TestExpectedResolution;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &module), by_defining.source_module);
+
+    // Admitted by deps-set membership: likewise visible.
+    const deps = [_]*const value_mod.Module{&module};
+    const by_deps = ctx.lookupWordLocked("shadowed", .{ .deps_modules = &deps, .defining_module = null }) orelse return error.TestExpectedResolution;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &module), by_deps.source_module);
+
+    // Neither: the module frame is skipped, so resolution falls through to the durable binding.
+    const rejected = ctx.lookupWordLocked("shadowed", .{ .deps_modules = &.{}, .defining_module = null }) orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("durable", rejected.source_file.?);
 }
 
 test "nonempty_transient_lexical_frames: define, remove, and pop stay balanced" {

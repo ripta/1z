@@ -1,0 +1,9 @@
+=== curried closure module resolution ===
+Stack: [ ]
+Stack: [ "LIB-SECRET" ]
+PASS: curried closure resolves its module-private word from a neutral context
+Stack: [ ]
+PASS: curried closure resolves its module-private word from a spawned task
+Stack: [ ]
+resolved
+Stack: [ ]

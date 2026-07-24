@@ -1,0 +1,6 @@
+Stack: [ ]
+=== module-deps frame shadowing ===
+Stack: [ ]
+Stack: [ "MAIN-PROBE" ]
+PASS: a stored quotation resolves its own probe, not the library's
+Stack: [ ]

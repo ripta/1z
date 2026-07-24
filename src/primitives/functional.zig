@@ -115,6 +115,43 @@ fn mergeCapturedScopes(alloc: std.mem.Allocator, a: *const CapturedScope, b: *co
     return scope;
 }
 
+/// Carry the base bodies' ambient-deps snapshot onto the freshly allocated `new_instrs`, so a
+/// module-private word called inside a curried/composed body still resolves against its own
+/// module's deps frame under the `.module_deps` visibility filter -- even after the closure is
+/// spawned onto a child task, since the captured scope is what `spawn` copies into the child.
+///
+/// Only called when `baseCapturedScope` carried nothing: a base with a genuine lexical scope
+/// already carries its own `deps_modules` on that scope, and `findCapturedScopeForBody` deliberately
+/// drops a *deps-only* (empty-lexical) entry so the closure it hands back never triggers the
+/// promotion that would bypass `.quotation`-only param validation. This records the dropped deps as
+/// a deps-only scope for the new body directly, keeping it a plain quotation.
+///
+/// The base-scope probe reads this context's own map only, with no ancestor walk. `curry` runs
+/// where the base was pushed, so its deps are in this context's map; the `appendLiveDepsModules`
+/// fallback below covers a base pushed by compiled code. The one uncovered shape -- a base created
+/// in a parent under a live deps frame, passed to a child, and curried in the child where that
+/// frame is not live -- falls back to the child's live frames and can under-propagate the parent's
+/// captured deps. This narrowing matches `findCapturedScopeForBody` dropping deps-only ancestor
+/// entries; its worst case is a fail-loud `UnknownWord` for that pattern, never a wrong resolution.
+fn propagateDeps(ctx: *Context, new_instrs: []const Instruction, bases: []const []const Instruction) !void {
+    var deps: std.ArrayListUnmanaged(*const value_mod.Module) = .{};
+    defer deps.deinit(ctx.allocator);
+    for (bases) |base| {
+        if (ctx.quotation_captured_scope.get(@intFromPtr(base.ptr))) |s| {
+            for (s.deps_modules) |m| try deps.append(ctx.allocator, m);
+        }
+    }
+
+    // A base pushed by compiled code never ran `captureQuotationScope`, so it recorded no deps. Fall
+    // back to the frames live at curry time: curry runs where the base was pushed, so those are the
+    // module frames the curried body will resolve against.
+    if (deps.items.len == 0) try ctx.appendLiveDepsModules(&deps, ctx.allocator);
+    if (deps.items.len == 0) return;
+
+    var scope: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = deps.items, .allocator = ctx.allocator };
+    try ctx.stampCapturedScopeForExecution(new_instrs, &scope);
+}
+
 /// curry ( x quot -- quot' )
 /// Example: 5 [ + ] curry creates [ 5 + ]
 ///
@@ -151,6 +188,8 @@ pub fn nativeCurry(ctx: *Context) anyerror!void {
     // Carry the base's captured lexical scope onto the new body so a curried closure resolves its
     // bare words at its creation site wherever it later runs.
     const carried: ?*const CapturedScope = try baseCapturedScope(ctx, alloc, quot_val);
+
+    if (carried == null) try propagateDeps(ctx, new_instrs, &.{base_instrs});
 
     // Curried quotation has no effect - effect validation happens at parameter attachment time
     if (try segmentsOf(alloc, quot_val)) |base_segments| {
@@ -223,6 +262,8 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
         try mergeCapturedScopes(alloc, sa.?, sb.?)
     else
         (sa orelse sb);
+
+    if (carried == null) try propagateDeps(ctx, new_instrs, &.{ instrs1, instrs2 });
 
     // Composed quotation has no effect - effect validation happens at parameter attachment time
     const s1 = try segmentsOf(alloc, quot1_val);

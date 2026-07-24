@@ -1,0 +1,12 @@
+\ Companion module for module_deps_curry.1z.
+\
+\ Returns a curried closure over this module's private `secret`. `curry` allocates a fresh
+\ instruction array, discarding the pointer-keyed defining-module stamp, so its body must carry
+\ this module's deps for `secret` to resolve where the closure later runs -- including in a task
+\ where this module's own frame is not live.
+
+private{
+  secret: ( -- s ) [ "LIB-SECRET" ] ;
+}
+
+make-secret-caller: ( -- quot ) [ 0 [ drop secret ] curry ] ;

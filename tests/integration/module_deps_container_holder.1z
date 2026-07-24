@@ -1,0 +1,12 @@
+\ Companion module for module_deps_container.1z.
+\
+\ `handlers` builds a dispatch table whose value is a quotation calling this module's private
+\ `tag`. The quotation lives inside an `H{ }` literal emitted as one `push_literal`, so it never
+\ reaches per-quotation stamping on its own -- container stamping must descend into the literal for
+\ its bare `tag` to resolve where the extracted quotation later runs.
+
+private{
+  tag: ( -- s ) [ "LIB-TAG" ] ;
+}
+
+handlers: ( -- hash ) [ H{ probe: [ tag ] } ] ;

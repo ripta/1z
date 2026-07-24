@@ -1,0 +1,24 @@
+\ Regression test: a curried closure resolves its own module-private word when invoked from a
+\ context where that module's deps frame is not live.
+\
+\ `curry` allocates a fresh instruction array with no defining-module stamp, so without deps
+\ propagation the closure's bare `secret` would fail to resolve once the library's own frame is
+\ gone. Exercised two ways: invoked directly at this file's top level, and built and invoked
+\ entirely inside a fresh spawned child task -- the captured deps must cross the spawn boundary.
+
+use "testing" ;
+use { make-secret-caller: } "./module_deps_curry_holder.1z" ;
+
+"curried closure module resolution" test-section
+
+make-secret-caller call
+"LIB-SECRET" "curried closure resolves its module-private word from a neutral context" assert=
+
+[
+  out: 1 <buffered-channel> ;
+  [ make-secret-caller call out send ] spawn drop
+  out receive
+  "LIB-SECRET" "curried closure resolves its module-private word from a spawned task" assert=
+] task-scope
+
+"resolved" print-line

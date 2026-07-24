@@ -32,9 +32,9 @@ pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
             if (entry.source_module) |mod| {
                 try ctx.pushModuleDepsFrame(mod);
                 defer ctx.popModuleDepsFrameTraced(mod);
-                try runDispatchQuotation(ctx, q);
+                try runDispatchQuotation(ctx, q, mod);
             } else {
-                try runDispatchQuotation(ctx, q);
+                try runDispatchQuotation(ctx, q, null);
             }
         },
         .native_fn => |func| try func(ctx),
@@ -49,11 +49,15 @@ pub fn executeDispatchBody(ctx: *Context, entry: dispatch_mod.DispatchEntry) !vo
 /// the current frame. An AOT-replayed method carries a compiled `code_ptr` with an empty
 /// instruction slice and runs through the compiled-call path. Gating on `code_ptr` keeps the
 /// interpreter path free of the extra local frame `executeQuotationWithFrame` pushes.
-fn runDispatchQuotation(ctx: *Context, q: value_mod.Quotation) !void {
+///
+/// `body_module` is the method's defining module, threaded so the body resolves its module's own
+/// words under the `.module_deps` visibility filter -- the frame `executeDispatchBody` just pushed
+/// is admitted only when the body reports that module as its defining one.
+fn runDispatchQuotation(ctx: *Context, q: value_mod.Quotation, body_module: ?*const value_mod.Module) !void {
     if (q.code_ptr != null) {
         try ctx.executeQuotationWithFrame(q);
     } else {
-        try ctx.executeQuotation(.{ .instructions = q.instructions });
+        try ctx.executeQuotationWithPic(.{ .instructions = q.instructions }, null, body_module);
     }
 }
 

@@ -1,0 +1,20 @@
+\ Regression test: a `.module_deps` frame must not shadow the durable frame's binding for a
+\ module-less quotation `call`ed while that frame is live.
+\
+\ The general (non-accessor) form of the shadowing bug. The companion module has a public `probe`
+\ ("LIB-PROBE") and stores then `call`s a caller-supplied quotation from inside `run-stored`, whose
+\ own deps frame carries that `probe`. This file defines its own top-level `probe` ("MAIN-PROBE")
+\ and hands `run-stored` a quotation that references a bare `probe`. Before the fix, resolution
+\ found the library's `probe` (topmost live frame) and returned "LIB-PROBE"; the quotation must
+\ resolve its own binding instead. Selective import keeps the library's `probe` out of this file's
+\ own scope, so the collision is purely the live deps frame against the durable frame.
+
+use "testing" ;
+use { make-holder: run-stored: } "./module_deps_shadow_holder.1z" ;
+
+probe: ( -- s ) [ "MAIN-PROBE" ] ;
+
+"module-deps frame shadowing" test-section
+
+[ probe ] make-holder run-stored
+"MAIN-PROBE" "a stored quotation resolves its own probe, not the library's" assert=
