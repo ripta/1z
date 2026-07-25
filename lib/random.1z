@@ -1,0 +1,58 @@
+\ lib/random.1z - Pseudo-random number generation
+\
+\ SplitMix64 expressed entirely with existing fixnum words: +% and *% wrap on i64
+\ overflow, ushift-right is a logical 64-bit shift, and bitxor is two's complement, so
+\ the algorithm needs no native support. shift-left is deliberately avoided, since it
+\ promotes to bignum on overflow.
+\
+\ Not cryptographic: every draw is fully predictable from the seed. Do not use this
+\ module for security purposes.
+
+use "time" ;
+
+\\ A pseudo-random generator. state is the 64-bit SplitMix64 state; random-next advances
+\\ it in place.
+random: mutable struct{ state } ;
+
+\\ Make a generator from a seed. Any fixnum seed is valid, including 0: SplitMix64 adds
+\\ its gamma before mixing, so a zero seed does not degenerate.
+<random>: ( seed: fixnum -- random ) [ make-random ] ;
+
+\\ Advance the generator and return a full-range fixnum draw.
+\\
+\\ One SplitMix64 step: the state advances by the golden gamma, and the returned value
+\\ is the advanced state put through the three mixing rounds. The constants are the
+\\ algorithm's 64-bit values written as their two's-complement i64 forms:
+\\ 0x9E3779B97F4A7C15, 0xBF58476D1CE4E5B9, 0x94D049BB133111EB.
+random-next: ( gen: random -- n ) [
+  dup state>> -7046029254386353131 +%
+  tuck >>state drop
+  dup 30 ushift-right bitxor -4658895280553007687 *%
+  dup 27 ushift-right bitxor -7723592293110705685 *%
+  dup 31 ushift-right bitxor
+] ;
+
+private{
+  \\ The ambient default generator, seeded from the clock once at module load. A
+  \\ bracket-less top-level local, so every unbound current-random get resolves to this
+  \\ same instance rather than building a fresh time-seeded generator per draw.
+  (default-random): monotonic-nanos <random> ;
+}
+
+\\ The ambient generator random-fixnum and random-below draw from. Defaults to one
+\\ time-seeded instance shared by all unbound reads; rebind with with-random for
+\\ deterministic draws.
+current-random: parameter{ [ (default-random) ] } ;
+
+\\ Draw a full-range fixnum from the ambient generator.
+random-fixnum: ( -- n ) [ current-random get random-next ] ;
+
+\\ Draw a uniform value in [0, n) from the ambient generator. Maps a 63-bit non-negative
+\\ draw modulo n; the bias is on the order of n / 2^63 and is accepted.
+random-below: ( n: fixnum -- k ) [
+  dup 1 < [ f "random-below requires a positive bound" EInvalidArgument make-error throw ] when
+  random-fixnum 1 ushift-right swap %
+] ;
+
+\\ Run quot with gen bound as the ambient generator.
+with-random: ( gen: random quot: quotation -- ) [ [ current-random ] dip with-parameter ] ;

@@ -1,0 +1,93 @@
+\ Unit tests for lib/random.1z.
+\
+\ The known-answer values are SplitMix64 reference outputs computed independently (a BigInt
+\ implementation of the published algorithm), written as two's-complement i64 values.
+
+use "testing" ;
+use "random" ;
+
+test-known-answer-seed-0: ( -- ) [
+  r: 0 <random> ;
+
+  r random-next -2152535657050944081 "seed 0 draw 1" assert=
+  r random-next 7960286522194355700 "seed 0 draw 2" assert=
+  r random-next 487617019471545679 "seed 0 draw 3" assert=
+  r random-next -537132696929009172 "seed 0 draw 4" assert=
+] ;
+
+test-known-answer-seed-42: ( -- ) [
+  r: 42 <random> ;
+
+  r random-next -4767286540954276203 "seed 42 draw 1" assert=
+  r random-next 2949826092126892291 "seed 42 draw 2" assert=
+  r random-next 5139283748462763858 "seed 42 draw 3" assert=
+  r random-next 6349198060258255764 "seed 42 draw 4" assert=
+] ;
+
+test-same-seed-same-sequence: ( -- ) [
+  a: 123456789 <random> ;
+  b: 123456789 <random> ;
+
+  a random-next b random-next "draw 1 matches across same-seed generators" assert=
+  a random-next b random-next "draw 2 matches across same-seed generators" assert=
+  a random-next b random-next "draw 3 matches across same-seed generators" assert=
+] ;
+
+test-different-seeds-differ: ( -- ) [
+  0 <random> random-next 42 <random> random-next = not
+  "different seeds produce different first draws" assert-true
+] ;
+
+test-constructor-rejects-non-fixnum: ( -- ) [
+  [ "seed" <random> ] type-error: "<random>'s seed annotation rejects a string" assert-error-type
+] ;
+
+test-random-below-known-sequence: ( -- ) [
+  42 <random> [
+    400 random-below 106 "seed 42 bounded draw 1" assert=
+    400 random-below 145 "seed 42 bounded draw 2" assert=
+    400 random-below 329 "seed 42 bounded draw 3" assert=
+    400 random-below 282 "seed 42 bounded draw 4" assert=
+    400 random-below 25 "seed 42 bounded draw 5" assert=
+    400 random-below 131 "seed 42 bounded draw 6" assert=
+  ] with-random
+] ;
+
+test-random-below-stays-in-range: ( -- ) [
+  987 <random> [
+    100 [
+      7 random-below
+      dup 0 >= swap 7 < and "bounded draw falls in [0, 7)" assert-true
+    ] times
+  ] with-random
+] ;
+
+test-random-below-hits-both-halves: ( -- ) [
+  42 <random> [
+    0 20 [ 2 random-below + ] times
+    dup 0 > "some two-way draws land on 1" assert-true
+    20 < "some two-way draws land on 0" assert-true
+  ] with-random
+] ;
+
+test-random-below-rejects-non-positive-bound: ( -- ) [
+  [ 0 random-below ] invalid-argument: "random-below rejects a zero bound" assert-error-type
+  [ -5 random-below ] invalid-argument: "random-below rejects a negative bound" assert-error-type
+] ;
+
+test-with-random-binds-ambient-generator: ( -- ) [
+  0 <random> [ random-fixnum ] with-random
+  -2152535657050944081 "random-fixnum draws from the bound generator" assert=
+] ;
+
+test-random-fixnum-advances-state: ( -- ) [
+  0 <random> [ random-fixnum drop random-fixnum ] with-random
+  7960286522194355700 "a second ambient draw advances the same generator" assert=
+] ;
+
+test-nested-with-random-restores-outer: ( -- ) [
+  0 <random> [
+    42 <random> [ random-fixnum drop ] with-random
+    random-fixnum -2152535657050944081 "the inner binding leaves the outer generator untouched" assert=
+  ] with-random
+] ;
