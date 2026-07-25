@@ -33,6 +33,7 @@ const trace_mod = @import("trace.zig");
 const call_graph = @import("call_graph.zig");
 const effect_inference = @import("effect_inference.zig");
 const aot_freeze = @import("aot_freeze.zig");
+const aot_type_inference = @import("aot_type_inference.zig");
 const markers_mod = @import("primitives/markers.zig");
 const aot_image = @import("aot_image.zig");
 const aot_image_emit = @import("aot_image_emit.zig");
@@ -2216,6 +2217,29 @@ fn inferFreezeArtifactClass(
     return .interpreter_free_aot;
 }
 
+/// Report every parameter type the freeze-time inference proved, on the `freeze` trace axis.
+///
+/// A quotation has no name of its own, so it reports under its emitted C symbol.
+fn traceInferredParamTypes(freeze_result: *const aot_freeze.FreezeResult, ctx: *const Context) void {
+    if (!ctx.trace.trace_aot.freeze) return;
+
+    var tw = trace_mod.TraceWriter.init();
+    for (freeze_result.words) |w| {
+        if (!trace_mod.matchesPattern(w.name, ctx.trace.trace_aot_word_pattern)) continue;
+        for (w.inferred_param_types, 0..) |t, i| {
+            if (t == .unknown) continue;
+            trace_mod.traceAotFreezeParam(&tw, w.name, i, @tagName(t));
+        }
+    }
+    for (freeze_result.quotations) |q| {
+        if (!trace_mod.matchesPattern(q.c_name, ctx.trace.trace_aot_word_pattern)) continue;
+        for (q.inferred_param_types, 0..) |t, i| {
+            if (t == .unknown) continue;
+            trace_mod.traceAotFreezeParam(&tw, q.c_name, i, @tagName(t));
+        }
+    }
+}
+
 fn unresolvedReasonLabel(reason: aot_freeze.UnresolvedReason) []const u8 {
     return switch (reason) {
         .not_in_dictionary => "absent from the freeze-time dictionary",
@@ -3001,6 +3025,17 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
     const touched_features = computeTouchedDynamicFeatures(&freeze_result, ctx, allocator) catch null;
     defer if (touched_features) |tf| allocator.free(tf);
+
+    // Call-site parameter type inference needs a closed world: every call site must be visible at
+    // freeze time. Only the interpreter-free artifact class gives that, since the other classes let
+    // `eval-string` or a runtime `load` introduce one later. An allocation failure here costs the
+    // narrowing, not the build.
+    if (inferFreezeArtifactClass(interpreter_fallback, emit_runtime_image_flag) == .interpreter_free_aot) {
+        aot_type_inference.inferParamTypes(&freeze_result, .{
+            .arithmetic_result_types = interpreter_fallback == .false and lock_interpreter_setting,
+        }, allocator) catch {};
+        traceInferredParamTypes(&freeze_result, ctx);
+    }
 
     const aot_metadata: ir_codegen.AotMetadata = .{
         .interpreter_fallback_mode = interpreter_fallback,
@@ -4545,6 +4580,7 @@ test {
     _ = @import("lsp/mod.zig");
     _ = @import("simd.zig");
     _ = @import("aot_freeze.zig");
+    _ = @import("aot_type_inference.zig");
     _ = @import("aot_image.zig");
     _ = @import("aot_image_emit.zig");
     _ = @import("aot_image_loader.zig");

@@ -585,6 +585,12 @@ pub fn writeAotFreezeQuotationLine(w: anytype, caller: []const u8, ptr_key: usiz
     try w.print("AOT freeze quot @0x{x} (in {s})\n", .{ ptr_key, caller });
 }
 
+/// Format a `freeze` line naming a parameter type proved from the program's call sites. `index` is
+/// the parameter's position among the declared inputs.
+pub fn writeAotFreezeParamLine(w: anytype, name: []const u8, index: usize, type_name: []const u8) !void {
+    try w.print("AOT freeze param {s} #{d} -> {s}\n", .{ name, index, type_name });
+}
+
 /// Format a `codegen` trial-compile line. `kind` is `"word"` or `"quot"`. A null
 /// `code` is a success; otherwise `code` / `message` name the rejection reason.
 pub fn writeAotCodegenLine(
@@ -635,6 +641,14 @@ pub fn traceAotFreezeQuotation(trace_writer: *TraceWriter, caller: []const u8, p
     var buf: [4096]u8 = undefined;
     var fbs = std.io.fixedBufferStream(&buf);
     writeAotFreezeQuotationLine(fbs.writer(), caller, ptr_key) catch return;
+    trace_writer.writeAll(fbs.getWritten());
+}
+
+/// Emit a `freeze` inferred-parameter line for `--trace-aot=freeze`.
+pub fn traceAotFreezeParam(trace_writer: *TraceWriter, name: []const u8, index: usize, type_name: []const u8) void {
+    var buf: [4096]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buf);
+    writeAotFreezeParamLine(fbs.writer(), name, index, type_name) catch return;
     trace_writer.writeAll(fbs.getWritten());
 }
 

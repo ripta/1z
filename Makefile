@@ -151,7 +151,7 @@ aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
 	chmod +x $(_aot_tmp) && \
 	timeout $(AOT_TIMEOUT) $(_aot_tmp)
 
-aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check ## Run AOT build integration tests
+aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check ## Run AOT build integration tests
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directives at word and quotation function entries
@@ -237,6 +237,41 @@ aot-trace-word-filter-check: build ## Verify --trace-aot-word=PAT scopes the tra
 		grep -E '^AOT instr skip-me ' $(_stderr) | head -5 || true; exit 1; \
 	fi; \
 	echo "PASS: --trace-aot-word=PAT scopes both a per-word axis and the instr firehose to the matching word"
+
+aot-param-inference-check: build ## Verify freeze-time call-site inference proves parameter types, and gates arithmetic on the lock
+	$(eval _bin := $(call mktemp_or_die,/tmp/1z-param-inference-XXXXXX))
+	$(eval _stderr := $(call mktemp_or_die,/tmp/1z-param-inference-stderr-XXXXXX))
+	@trap 'rm -f $(_bin) $(_stderr)' EXIT; \
+	: 'TraceWriter re-creates a File.Writer per line, so a seekable stderr overwrites at offset 0; pipe stderr through cat to keep it non-seekable and preserve every line.'; \
+	./$(ZIG_PREFIX)/bin/1z build tests/aot/param_type_inference.1z -o $(_bin) --interpreter-fallback=false --lock-interpreter-setting --trace-aot=freeze 2>&1 1>/dev/null | cat > $(_stderr) || true; \
+	for want in 'fib #0 -> fixnum' 'fib-step #0 -> fixnum' 'fib-step #1 -> fixnum' 'fib-step #2 -> fixnum'; do \
+		if ! grep -qF "AOT freeze param $$want" $(_stderr); then \
+			echo "FAIL: locked build did not prove '$$want'"; \
+			grep -E '^AOT freeze param ' $(_stderr) || true; exit 1; \
+		fi; \
+	done; \
+	: 'The dip-invoked [ swap over + ] body is narrowed through its combinator call site, under its emitted C symbol.'; \
+	if ! grep -qE '^AOT freeze param onez_q_[0-9]+ #0 -> fixnum' $(_stderr); then \
+		echo "FAIL: locked build did not prove the dip-invoked quotation's parameters"; \
+		grep -E '^AOT freeze param ' $(_stderr) || true; exit 1; \
+	fi; \
+	: 'Without the lock, fixnum arithmetic can promote to bignum, so only the literal-fed parameter is provable.'; \
+	./$(ZIG_PREFIX)/bin/1z build tests/aot/param_type_inference.1z -o $(_bin) --trace-aot=freeze 2>&1 1>/dev/null | cat > $(_stderr) || true; \
+	if ! grep -qF 'AOT freeze param fib #0 -> fixnum' $(_stderr); then \
+		echo "FAIL: unlocked build dropped the literal-fed parameter, which needs no arithmetic rule"; \
+		grep -E '^AOT freeze param ' $(_stderr) || true; exit 1; \
+	fi; \
+	if grep -qE '^AOT freeze param fib-step ' $(_stderr); then \
+		echo "FAIL: unlocked build typed a parameter that only holds when fixnum arithmetic cannot promote"; \
+		grep -E '^AOT freeze param fib-step ' $(_stderr) || true; exit 1; \
+	fi; \
+	: 'A parameter default body is in neither the word list nor the quotation list, so the call inside it is the one the census is most likely to miss.'; \
+	./$(ZIG_PREFIX)/bin/1z build tests/aot/param_type_inference_parameter_default.1z -o $(_bin) --trace-aot=freeze 2>&1 1>/dev/null | cat > $(_stderr) || true; \
+	if grep -qE '^AOT freeze param scale-it ' $(_stderr); then \
+		echo "FAIL: the call site inside a parameter default was missed, so a contradicted type was proved"; \
+		grep -E '^AOT freeze param scale-it ' $(_stderr) || true; exit 1; \
+	fi; \
+	echo "PASS: call-site inference proves word and quotation parameter types, with arithmetic gated on the lock"
 
 aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides so linker symbols show verbatim 1z names
 	$(eval _bin := $(call mktemp_or_die,/tmp/1z-asm-name-XXXXXX))

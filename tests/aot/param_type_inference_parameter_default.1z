@@ -1,0 +1,20 @@
+\ A `parameter{ }` default body is in neither the freezer's word list nor its
+\ quotation list: freeze seeds its callees into the worklist without recording
+\ the body itself. The call inside it still has to count against the callee.
+\
+\ `scale-it` is called twice with different types -- a fixnum here, a float
+\ inside the default -- so nothing about its parameter is provable. Missing the
+\ default's call site would prove `fixnum` from the visible site alone, and a
+\ later milestone would then unbox the float payload as an integer.
+\
+\ Build-only. Evaluating the default at runtime reports `unknown-word` in a
+\ default AOT build, a separate pre-existing gap in what a parameter default's
+\ callee gets serialized into. `make aot-param-inference-check` asserts what
+\ this file is here for, which is that the freeze proves nothing about
+\ `scale-it`.
+
+scale-it: ( x -- y ) [ 2 * ] ;
+thing: parameter{ [ 1.5 scale-it ] } ;
+
+5 scale-it .
+thing get .

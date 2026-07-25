@@ -527,6 +527,17 @@ fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
     };
 }
 
+/// A parameter type proved by the freeze-time call-site inference pass.
+///
+/// `unknown` means the pass proved nothing and the parameter stays opaque, which is how every
+/// parameter behaves without the pass. The concrete arms name only the types codegen can seed as
+/// unboxed scalars, so a proof the prologue could not act on is never recorded.
+pub const InferredParamType = enum {
+    unknown,
+    fixnum,
+    float,
+};
+
 /// Description of a word to be compiled for AOT C emission.
 pub const AotWordDesc = struct {
     name: []const u8,
@@ -560,6 +571,14 @@ pub const AotWordDesc = struct {
     /// Full stack effect declaration for this word. Used by the compiler
     /// to track stack shapes through quotation calls.
     stack_effect: ?StackEffect = null,
+    /// Types the freeze-time call-site inference pass proved for this word's parameters. Sized and
+    /// indexed by `input_count`, so it covers the concrete inputs only; the pass proves nothing for
+    /// a word whose effect carries a row variable. Empty when the pass did not run or proved
+    /// nothing.
+    ///
+    /// A concrete entry asserts that every call site in the program passes that type, so codegen
+    /// may narrow the parameter with no runtime check.
+    inferred_param_types: []const InferredParamType = &.{},
     /// When true, the word never returns to its caller (has the
     /// never-returns marker). The compiler emits terminal control flow
     /// instead of continuing in the current block after the call.

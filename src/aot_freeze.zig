@@ -66,6 +66,10 @@ pub const AotQuotationDesc = struct {
     /// callees undiscovered by design, so they compile opportunistically: an uncompiled one runs
     /// interpreted at its dispatch site instead of failing the build.
     from_composite: bool = false,
+    /// Types the freeze-time call-site inference pass proved for this quotation's parameters,
+    /// positional against `inferred_effect.input_count`. Empty when the pass did not run or proved
+    /// nothing.
+    inferred_param_types: []const ir_codegen.InferredParamType = &.{},
 };
 
 pub const FreezeResult = struct {
@@ -86,6 +90,10 @@ pub const FreezeResult = struct {
     /// those callees. Codegen rejects an interpreter-linked metadata-only build when any are
     /// present, since the interpreted call would run the word's empty rehydrated body.
     interpreted_reach: []const ir_codegen.InterpretedReachViolation = &.{},
+    /// Backing store for every `inferred_param_types` slice on this result's word and quotation
+    /// descriptors. One slab rather than a slice per descriptor, so the table costs a single
+    /// allocation and a single free no matter how many parameters were proved.
+    inferred_param_storage: []ir_codegen.InferredParamType = &.{},
 
     /// The descriptor carrying `id`, or null when no word has it.
     ///
@@ -118,6 +126,7 @@ pub const FreezeResult = struct {
         }
         allocator.free(self.call_targets);
         allocator.free(self.interpreted_reach);
+        allocator.free(self.inferred_param_storage);
     }
 };
 
