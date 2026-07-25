@@ -235,6 +235,28 @@ export fn onez_init() ?*anyopaque {
         return null;
     };
 
+    // Every effect below is a bare list of parameter names. `makeSimpleEffect` reads a trailing
+    // colon as the start of a quotation annotation, not a type annotation, so writing
+    // `channels: fixnum` would parse as two separate parameters and inflate the arity. The
+    // callbacks type-check their own inputs instead.
+    const load_sample_effect = helpers.makeSimpleEffect(ctx.quotationAllocator(), "bytes channels rate -- handle") catch {
+        onez_deinit(handle);
+        return null;
+    };
+    capi_core.defineHostWord(ctx, "(wasm-load-sample)", load_sample_effect, loadSampleCallback, handle, null) catch {
+        onez_deinit(handle);
+        return null;
+    };
+
+    const play_sample_effect = helpers.makeSimpleEffect(ctx.quotationAllocator(), "handle --") catch {
+        onez_deinit(handle);
+        return null;
+    };
+    capi_core.defineHostWord(ctx, "(wasm-play-sample)", play_sample_effect, playSampleCallback, handle, null) catch {
+        onez_deinit(handle);
+        return null;
+    };
+
     return handle;
 }
 
@@ -452,6 +474,110 @@ fn keyboardBytesCallback(handle_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) c
         setLastError(handle, "allocation failure pushing keyboard byte-array", .{});
         return 1;
     };
+    return 0;
+}
+
+// =============================================================================
+// Audio
+// =============================================================================
+
+/// Host-provided sample load.
+///
+/// `data`/`len` address interleaved 32-bit float PCM in wasm linear memory, which the host reads
+/// synchronously and copies into an audio buffer of its own. Nothing in the path waits on a host
+/// completion, so no task ever parks on a wake the wasm tier cannot deliver.
+///
+/// Returns a nonnegative opaque handle, or a negative value if the host rejected the sample.
+extern "env" fn onez_host_load_sample(data: [*]const u8, len: usize, channels: u32, rate: u32) i32;
+
+/// Host-provided one-shot trigger for a previously loaded sample.
+///
+/// A handle the host does not recognize is the host's to ignore.
+extern "env" fn onez_host_play_sample(handle: i32) void;
+
+/// The host callback body for `(wasm-load-sample)`.
+///
+/// The three inputs are peeked and type-checked before anything is consumed, so a rejected call
+/// leaves the stack exactly as it found it. The byte array's bytes are handed to the host while
+/// the stack still owns them; only once the host has copied them do the inputs get released.
+///
+/// Guarded on `is_freestanding`, since this file also compiles natively for `capi-test`, where no
+/// env host exists to resolve the extern against at link time. The native path reports handle 0.
+fn loadSampleCallback(handle_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
+    const handle = castHandle(handle_ptr) orelse return 1;
+    const stack = &handle.ctx.stack;
+
+    if (stack.depth() < 3) {
+        setLastError(handle, "(wasm-load-sample) requires three inputs", .{});
+        return 1;
+    }
+    const rate_val = stack.peekN(0) catch return 1;
+    const channels_val = stack.peekN(1) catch return 1;
+    const bytes_val = stack.peekN(2) catch return 1;
+
+    if (bytes_val != .byte_array) {
+        setLastError(handle, "(wasm-load-sample) requires a byte-array of PCM data, got {s}", .{@tagName(bytes_val)});
+        return 1;
+    }
+    const channels = loadSampleCount(handle, channels_val, "channels") orelse return 1;
+    const rate = loadSampleCount(handle, rate_val, "rate") orelse return 1;
+
+    const bytes = bytes_val.byte_array.items;
+    var id: i32 = 0;
+    if (is_freestanding) id = onez_host_load_sample(bytes.ptr, bytes.len, channels, rate);
+    if (id < 0) {
+        setLastError(handle, "the host rejected the sample", .{});
+        return 1;
+    }
+
+    for (0..3) |_| {
+        stack.popAndRelease() catch return 1;
+    }
+    stack.push(.{ .fixnum = id }) catch {
+        setLastError(handle, "allocation failure pushing the sample handle", .{});
+        return 1;
+    };
+    return 0;
+}
+
+/// Read one of `(wasm-load-sample)`'s two counts, which has to survive the trip through a `u32`
+/// host parameter. Returns null after recording why, so the caller can bail on the spot.
+fn loadSampleCount(handle: *OnezHandle, val: Value, name: []const u8) ?u32 {
+    if (val != .fixnum) {
+        setLastError(handle, "(wasm-load-sample) requires a fixnum {s}, got {s}", .{ name, @tagName(val) });
+        return null;
+    }
+    if (val.fixnum <= 0 or val.fixnum > std.math.maxInt(u32)) {
+        setLastError(handle, "(wasm-load-sample) requires a positive {s} that fits 32 bits", .{name});
+        return null;
+    }
+    return @intCast(val.fixnum);
+}
+
+/// The host callback body for `(wasm-play-sample)`.
+///
+/// Guarded on `is_freestanding`, since this file also compiles natively for `capi-test`, where no
+/// env host exists to resolve the extern against at link time.
+fn playSampleCallback(handle_ptr: ?*anyopaque, _: ?*anyopaque) callconv(.c) c_int {
+    const handle = castHandle(handle_ptr) orelse return 1;
+    const stack = &handle.ctx.stack;
+
+    const val = stack.peek() catch {
+        setLastError(handle, "(wasm-play-sample) requires a sample handle", .{});
+        return 1;
+    };
+    if (val != .fixnum) {
+        setLastError(handle, "(wasm-play-sample) requires a fixnum handle, got {s}", .{@tagName(val)});
+        return 1;
+    }
+    if (val.fixnum < std.math.minInt(i32) or val.fixnum > std.math.maxInt(i32)) {
+        setLastError(handle, "(wasm-play-sample) requires a handle that fits 32 bits", .{});
+        return 1;
+    }
+    const id: i32 = @intCast(val.fixnum);
+
+    stack.popAndRelease() catch return 1;
+    if (is_freestanding) onez_host_play_sample(id);
     return 0;
 }
 
@@ -975,6 +1101,63 @@ test "(wasm-keyboard) returns the same shared buffer across calls" {
     var out: i64 = 0;
     try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
     try std.testing.expectEqual(@as(i64, 1), out);
+}
+
+test "(wasm-load-sample) consumes its three inputs and pushes a handle" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    // One 32-bit float frame, 1.0f little-endian. Only proves the arity and the wiring; the
+    // native path never reaches a host, so the handle is always 0. Real loading needs the actual
+    // wasm target, where JS supplies "env".onez_host_load_sample.
+    const src = "B{ 0x00 0x00 0x80 0x3f } 1 8000 (wasm-load-sample)";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+
+    var out: i64 = 0;
+    try std.testing.expectEqual(ONEZ_OK, onez_pop_int(handle_ptr, &out));
+    try std.testing.expectEqual(@as(i64, 0), out);
+    try std.testing.expectEqual(@as(usize, 0), onez_stack_depth(handle_ptr));
+}
+
+test "(wasm-load-sample) rejects a non-byte-array first input without consuming the stack" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const src = "1 1 8000 (wasm-load-sample)";
+    try std.testing.expectEqual(ONEZ_EVAL_ERROR, onez_wasm_eval(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 3), onez_stack_depth(handle_ptr));
+}
+
+test "(wasm-load-sample) rejects a non-positive channel count" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const src = "B{ 0x00 0x00 0x80 0x3f } 0 8000 (wasm-load-sample)";
+    try std.testing.expectEqual(ONEZ_EVAL_ERROR, onez_wasm_eval(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 3), onez_stack_depth(handle_ptr));
+}
+
+test "(wasm-play-sample) consumes a fixnum handle" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const src = "0 (wasm-play-sample)";
+    try std.testing.expectEqual(ONEZ_EVAL_COMPLETE, onez_wasm_eval(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 0), onez_stack_depth(handle_ptr));
+}
+
+test "(wasm-play-sample) rejects a non-fixnum handle without consuming the stack" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const src = "\"not-a-handle\" (wasm-play-sample)";
+    try std.testing.expectEqual(ONEZ_EVAL_ERROR, onez_wasm_eval(handle_ptr, src, src.len));
+    try std.testing.expectEqual(@as(usize, 1), onez_stack_depth(handle_ptr));
 }
 
 test "registered host word is invoked via dictionary lookup" {

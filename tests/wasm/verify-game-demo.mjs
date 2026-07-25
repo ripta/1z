@@ -33,6 +33,8 @@ async function instantiate() {
   const bytes = readFileSync(wasmPath)
   let memory = null
   let presentCount = 0
+  const loadedSamples = []
+  const playedSamples = []
 
   const imports = {
     env: {
@@ -41,6 +43,20 @@ async function instantiate() {
       onez_host_write_output: () => {},
       onez_host_present: () => {
         presentCount++
+      },
+      // Node has no Web Audio, so these record what crossed the boundary instead of playing
+      // anything. The PCM bytes are snapshotted here rather than at the assertion, since the 1z
+      // byte array they came from may already be freed by then.
+      onez_host_load_sample: (ptr, len, channels, rate) => {
+        loadedSamples.push({
+          channels,
+          rate,
+          bytes: Array.from(new Uint8Array(memory.buffer, ptr, len)),
+        })
+        return loadedSamples.length - 1
+      },
+      onez_host_play_sample: (handle) => {
+        playedSamples.push(handle)
       },
     },
   }
@@ -74,6 +90,12 @@ async function instantiate() {
     },
     get presentCount() {
       return presentCount
+    },
+    get loadedSamples() {
+      return loadedSamples
+    },
+    get playedSamples() {
+      return playedSamples
     },
     evalSource,
     lastError,
@@ -129,6 +151,24 @@ test('key-down? reflects keyboard bytes written the way JS would write them', as
 
   keyboard[ARROW_UP_INDEX] = 0
   expectUp('arrow-up: key-down?')
+})
+
+test('audio host words carry PCM bytes out and a sample handle back', async () => {
+  const onez = await instantiate()
+
+  // Two mono frames of 32-bit float PCM, 1.0 then -1.0, little-endian. The host words are
+  // registered by onez_init in the global dictionary, so no game source has to load first.
+  const pcm = [0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x80, 0xbf]
+  const literal = 'B{ ' + pcm.map((byte) => '0x' + byte.toString(16).padStart(2, '0')).join(' ') + ' }'
+  const status = onez.evalSource(literal + ' 1 8000 (wasm-load-sample) (wasm-play-sample)')
+  assert.equal(status, ONEZ_EVAL_COMPLETE, 'load and play failed: ' + onez.lastError())
+
+  assert.equal(onez.loadedSamples.length, 1, 'expected exactly one load call')
+  assert.deepEqual(onez.loadedSamples[0].bytes, pcm, 'the host saw different PCM bytes than 1z pushed')
+  assert.equal(onez.loadedSamples[0].channels, 1)
+  assert.equal(onez.loadedSamples[0].rate, 8000)
+
+  assert.deepEqual(onez.playedSamples, [0], 'the play call should carry back the handle the load call returned')
 })
 
 test('run-frame executes repeatedly without exhausting the wasm heap', async () => {

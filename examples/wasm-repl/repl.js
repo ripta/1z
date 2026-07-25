@@ -32,7 +32,13 @@ const imports = {
     onez_host_write_output: (ptr, len) => {
       appendOutput(new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len)))
     },
+    // The REPL page has no canvas and no audio graph, but it loads the same 1z.wasm the game
+    // demo does, so every import the module declares still has to resolve or instantiation
+    // fails outright.
     onez_host_present: () => {},
+    // A failed load is the honest answer: this host has nowhere to keep a sample.
+    onez_host_load_sample: () => -1,
+    onez_host_play_sample: () => {},
   },
 }
 
