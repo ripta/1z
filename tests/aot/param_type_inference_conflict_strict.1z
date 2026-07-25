@@ -1,0 +1,21 @@
+\ A parameter whose call sites disagree stays opaque, so its arithmetic keeps the
+\ polymorphic path and the locked build is rejected. This is the negative control
+\ for `param_type_inference_fib_strict.1z`.
+\
+\ `twice` is called once with a fixnum and once with a float, so agree-only
+\ narrowing proves nothing about `x`. `dup +` then compiles with both operands
+\ opaque, which emits one per-operation native fallback for the cold arm shared
+\ by non-numeric operands and fixnum overflow, and any fallback rejects a locked
+\ build.
+\
+\ `param_type_inference_narrowing.1z` covers the same word without the lock,
+\ where the pass cannot type a fixnum arithmetic result at all. Under the lock it
+\ can, so this is the one configuration where a missing conflict check would have
+\ narrowed `x` to whichever call site was seen last.
+\
+\ Build-only: the golden is the rejection report.
+
+twice: ( x -- y ) [ dup + ] ;
+
+5 twice drop
+2.5 twice drop

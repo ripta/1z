@@ -10489,15 +10489,33 @@ pub fn emitProgramC(
     else
         "int onez_interpreter_linked = 1;\n\n");
 
+    // Keeps a rodata literal that nothing references. On Mach-O `used` maps to
+    // .no_dead_strip and -dead_strip honors it. On ELF `used` only stops the
+    // compiler from eliding the symbol; --gc-sections still discards the
+    // section, and `retain` (SHF_GNU_RETAIN) is what survives it. Without the
+    // retain, `1z inspect` reports a Linux binary as not a 1z AOT binary.
+    try out.appendSlice(allocator,
+        \\#if defined(__has_attribute)
+        \\#  if __has_attribute(retain)
+        \\#    define ONEZ_KEEP __attribute__((used, retain))
+        \\#  else
+        \\#    define ONEZ_KEEP __attribute__((used))
+        \\#  endif
+        \\#else
+        \\#  define ONEZ_KEEP __attribute__((used))
+        \\#endif
+        \\
+        \\
+    );
+
     // Embedded ASCII marker that `1z inspect` byte-scans for. Lives in rodata
-    // so it survives `strip`, and is force-kept by `__attribute__((used))` so
-    // -dead_strip / --gc-sections do not GC it. The value byte ('0' or '1')
-    // mirrors onez_interpreter_linked; the surrounding sentinel keeps the
-    // search needle unambiguous.
+    // so it survives `strip`. The value byte ('0' or '1') mirrors
+    // onez_interpreter_linked; the surrounding sentinel keeps the search needle
+    // unambiguous.
     try out.appendSlice(allocator, if (interpreter_free)
-        "__attribute__((used)) static const char onez_inspect_v1[] = \"<<1Z_INSPECT_V1:interpreter_linked=0>>\";\n\n"
+        "ONEZ_KEEP static const char onez_inspect_v1[] = \"<<1Z_INSPECT_V1:interpreter_linked=0>>\";\n\n"
     else
-        "__attribute__((used)) static const char onez_inspect_v1[] = \"<<1Z_INSPECT_V1:interpreter_linked=1>>\";\n\n");
+        "ONEZ_KEEP static const char onez_inspect_v1[] = \"<<1Z_INSPECT_V1:interpreter_linked=1>>\";\n\n");
 
     // Core metadata block. Lives in rodata next to the inspect sentinel;
     // the `<<1Z_AOT_META_V1` ... `>>` delimiters give an external
@@ -10834,11 +10852,10 @@ pub fn emitProgramC(
     return out.toOwnedSlice(allocator);
 }
 
-/// Render the core metadata block as a single
-/// `__attribute__((used)) static const char` rodata literal. The byte
-/// shape is fixed across builds so an external inspector can scan for
-/// `<<1Z_AOT_META_V1` and parse the trailing newline-delimited
-/// key=value lines until `>>`.
+/// Render the core metadata block as a single `ONEZ_KEEP static const char`
+/// rodata literal. The byte shape is fixed across builds so an external
+/// inspector can scan for `<<1Z_AOT_META_V1` and parse the trailing
+/// newline-delimited key=value lines until `>>`.
 fn emitAotMetadata(
     allocator: Allocator,
     out: *std.ArrayListUnmanaged(u8),
@@ -10857,7 +10874,7 @@ fn emitAotMetadata(
     const yes_no_runtime_image: []const u8 = if (meta.runtime_image_present) "yes" else "no";
     const yes_no_metadata_image: []const u8 = if (meta.metadata_image_present) "yes" else "no";
 
-    try out.appendSlice(allocator, "__attribute__((used)) static const char onez_aot_meta_v1[] =\n");
+    try out.appendSlice(allocator, "ONEZ_KEEP static const char onez_aot_meta_v1[] =\n");
     try out.appendSlice(allocator, "    \"<<1Z_AOT_META_V1\\n\"\n");
     try out.appendSlice(allocator, "    \"schema-version=3\\n\"\n");
     try out.appendSlice(allocator, "    \"artifact-class=");

@@ -1,0 +1,29 @@
+\ The Fibonacci repro from the parameter-inference bug, built as locked
+\ interpreter-free AOT with no type annotation anywhere in the file.
+\
+\ Under the lock any interpreter fallback of any category rejects the build, so a
+\ successful build is itself the proof that the `+` inside `[ swap over + ] dip`
+\ compiles concretely. It only does so because the freeze-time pass proves
+\ `fib-step`'s three parameters and the dip-invoked quotation's from the call
+\ sites, then codegen unboxes them at entry.
+\
+\ Printing is omitted. A `.` would reach the generic `inspect`, whose dispatch
+\ site keeps two cold interpreter-callback branches the lock rejects, so the
+\ repro cannot print the number it computes until that gap closes. Correctness is
+\ observed through the exit status instead: a wrong answer divides by zero, and a
+\ clean exit is the pass. The computed values are checked separately by
+\ `param_type_inference.1z`, which builds without the lock and can print.
+
+fib-step: ( a b n -- result ) [
+  dup 0 = [ drop drop ] [
+    1 - [ swap over + ] dip fib-step
+  ] if
+] ;
+
+fib: ( n -- n ) [
+  dup 2 < [ ] [
+    0 1 <rot- fib-step
+  ] if
+] ;
+
+30 fib 832040 = [ ] [ 1 0 / drop ] if

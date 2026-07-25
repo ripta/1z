@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-run aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 export DEVELOPER_DIR := /Library/Developer/CommandLineTools
 SHELL := /bin/bash
@@ -68,7 +68,9 @@ fmt: build ## Format zig and 1z source files
 	timeout $(TARGET_TIMEOUT) zig fmt src/ build.zig
 	timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z fmt $$(find . \( -path './.zig-cache' -o -path './$(ZIG_PREFIX)' \) -prune -o -name '*.1z' -print)
 
-test: branch-info leak-goldens-check test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
+# `aot-checks` runs here rather than inside the two thread-mode targets: it
+# asserts build-time compiler behavior, which has no thread-mode axis.
+test: branch-info leak-goldens-check aot-checks test-threads-1 test-threads-auto capi-test ## Run all tests under both --threads=1 and --threads=auto
 
 leak-goldens-check: ## Fail if any test golden has baked-in GPA leak text
 	@if grep -rl 'error(gpa)' tests/ --include='*.golden'; then \
@@ -151,7 +153,21 @@ aot-run: build ## AOT-compile and run a 1z file (FILE= ARGS= AOT_TIMEOUT=10)
 	chmod +x $(_aot_tmp) && \
 	timeout $(AOT_TIMEOUT) $(_aot_tmp)
 
-aot-test: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check ## Run AOT build integration tests
+# Compiler-behavior assertions over AOT build output, kept separate from the
+# golden suite so `test` can depend on them directly. They inspect emitted C,
+# linker symbols, and trace output, none of which a golden can capture.
+aot-checks: aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check ## Run the AOT compiler-behavior checks
+
+aot-checks-linux: ## Run aot-checks inside the project's Debian Docker image
+	docker build --build-arg BASE_IMAGE=gcr.io/$(GCP_PROJECT_ID)/zag:v0.15.2.1 --tag 1z-build:local .
+	docker run --rm \
+	    --volume $(CURDIR):/workspace \
+	    --workdir /workspace \
+	    --user 0:0 \
+	    1z-build:local \
+	    bash -c 'make build && make aot-checks'
+
+aot-test: aot-checks ## Run AOT build integration tests
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 
 aot-line-directives-check: build ## Verify AOT-emitted C carries `#line` directives at word and quotation function entries
@@ -332,13 +348,14 @@ aot-asm-name-check: build ## Verify AOT-emitted C carries `asm("...")` overrides
 		echo "FAIL: nm did not report 'print-line' as a linker symbol (prelude)"; \
 		nm $(_bin) | grep -E ' T (parse-json|>foo|print-line)' || true; exit 1; \
 	fi; \
-	if ! nm $(_bin) | grep -qE ' T pick-quot/quot@17:3$$'; then \
+	: 'ELF reserves @ for symbol versioning and strips the @line:col suffix, collapsing sibling quotations onto one name. Mach-O keeps it. See docs/guides/aot-symbols.md.'; \
+	if ! nm $(_bin) | grep -qE ' T pick-quot/quot(@17:3)?$$'; then \
 		echo "FAIL: nm did not report 'pick-quot/quot@17:3' as a linker symbol"; \
-		nm $(_bin) | grep -E ' T (pick-quot|flip)/quot@' || true; exit 1; \
+		nm $(_bin) | grep -E ' T (pick-quot|flip)/quot' || true; exit 1; \
 	fi; \
-	if ! nm $(_bin) | grep -qE ' T flip/quot@25:38$$'; then \
+	if ! nm $(_bin) | grep -qE ' T flip/quot(@25:38)?$$'; then \
 		echo "FAIL: nm did not report 'flip/quot@25:38' as a linker symbol"; \
-		nm $(_bin) | grep -E ' T (pick-quot|flip)/quot@' || true; exit 1; \
+		nm $(_bin) | grep -E ' T (pick-quot|flip)/quot' || true; exit 1; \
 	fi; \
 	if ! nm $(_bin) | grep -qE ' T person/serial>>$$'; then \
 		echo "FAIL: nm did not report 'person/serial>>' as a linker symbol (struct field accessor)"; \
@@ -477,14 +494,16 @@ aot-interpreter-strip-check: build ## Verify linker GC strips the prelude loader
 	@trap 'rm -f $(_free_bin) $(_linked_bin)' EXIT; \
 	./$(ZIG_PREFIX)/bin/1z build --interpreter-fallback=false --lock-interpreter-setting -o $(_free_bin) tests/aot/interpreter_free_lock_explicit.1z && \
 	./$(ZIG_PREFIX)/bin/1z build --interpreter-fallback=true -o $(_linked_bin) tests/aot/interpreter_free_lock_explicit.1z && \
-	if nm $(_free_bin) | grep -q '_onez_load_prelude'; then \
-		echo "FAIL: interpreter-free binary still contains _onez_load_prelude (linker GC did not strip)"; exit 1; \
+	: 'Mach-O prefixes exported symbols with an underscore and ELF does not, so match both.'; \
+	if nm $(_free_bin) | grep -qE '(^| )_?onez_load_prelude$$'; then \
+		echo "FAIL: interpreter-free binary still contains onez_load_prelude (linker GC did not strip)"; exit 1; \
 	fi; \
-	if ! nm $(_linked_bin) | grep -q '_onez_load_prelude'; then \
-		echo "FAIL: interpreter-linked binary missing _onez_load_prelude (build is broken or codegen mis-routed)"; exit 1; \
+	if ! nm $(_linked_bin) | grep -qE '(^| )_?onez_load_prelude$$'; then \
+		echo "FAIL: interpreter-linked binary missing onez_load_prelude (build is broken or codegen mis-routed)"; exit 1; \
 	fi; \
-	free_size=$$(stat -f %z $(_free_bin) 2>/dev/null || stat -c %s $(_free_bin)); \
-	linked_size=$$(stat -f %z $(_linked_bin) 2>/dev/null || stat -c %s $(_linked_bin)); \
+	: 'GNU stat -f reports filesystem status and exits 0, so ask for the GNU size format first and fall back to the BSD one.'; \
+	free_size=$$(stat -c %s $(_free_bin) 2>/dev/null || stat -f %z $(_free_bin)); \
+	linked_size=$$(stat -c %s $(_linked_bin) 2>/dev/null || stat -f %z $(_linked_bin)); \
 	echo "PASS: _onez_load_prelude absent from interpreter-free, present in interpreter-linked"; \
 	echo "      interpreter-free size:   $$free_size bytes"; \
 	echo "      interpreter-linked size: $$linked_size bytes"; \
@@ -572,6 +591,12 @@ benchmark-word-resolution: build ## Run word-resolution benchmark across interpr
 
 benchmark-interpreter-suite: release ## Record the interpreter-dispatch representative-suite baseline
 	@scripts/benchmark-interpreter-suite.sh ./$(ZIG_PREFIX)/bin/1z 7
+
+benchmark-param-inference: release ## Record the AOT freeze-time parameter-narrowing A/B on the Fibonacci repro
+	@scripts/benchmark-param-inference.sh ./$(ZIG_PREFIX)/bin/1z \
+		tests/benchmark/param_inference_fib.1z tests/benchmark/param_inference_fib_startup.1z \
+		$(ZIG_PREFIX) 7 > tests/benchmark/param_inference_fib.sample
+	@cat tests/benchmark/param_inference_fib.sample
 
 benchmark-protocol-dispatch: build ## Build and run the protocol-bounded dispatch benchmark under runtime-image AOT
 	./$(ZIG_PREFIX)/bin/1z build --emit-runtime-image tests/benchmark/protocol_dispatch_aot.1z -o tests/benchmark/protocol_dispatch_aot.aot

@@ -1,0 +1,16 @@
+AOT parameter-narrowing A/B
+binary=./zig-out/bin/1z   work=tests/benchmark/param_inference_fib.1z   startup=tests/benchmark/param_inference_fib_startup.1z   reps=7
+
+measurement              build               median_ms         min_ms         max_ms
+------------------------ -------------- -------------- -------------- --------------
+whole program            narrowed              230.283        228.649        231.543
+whole program            baseline              248.716        246.047        249.919
+startup only             narrowed                4.569          4.410          5.087
+startup only             baseline               11.891         10.848         14.384
+
+loop only (whole program minus startup)
+  narrowed     225.714 ms
+  baseline     236.825 ms
+  narrowed is 0.95x the baseline loop
+
+startup gap the narrowing does not earn: 7.322 ms (the baseline links the interpreter)

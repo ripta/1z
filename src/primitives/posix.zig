@@ -22,24 +22,28 @@ fn nativePosixConst(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "posix-const");
     const name = try helpers.popString(ctx);
 
-    // POSIX_FADV_* exist only on Linux. On macOS std.posix.POSIX_FADV aliases
-    // the Solaris definition, which is comptime-guarded against use on the
-    // wrong OS, so referencing it there is a hard compile error. native_os is
-    // comptime-known, so this branch is pruned from analysis on non-Linux
-    // targets and never references std.posix.POSIX_FADV.
+    // POSIX_FADV_* exist only on Linux, and the constants come from
+    // std.os.linux rather than std.posix. `std.posix.POSIX_FADV` is
+    // `system.POSIX_FADV`, and for a libc target that is `std.c.POSIX_FADV`,
+    // which aliases the Solaris definition unconditionally. Solaris guards
+    // itself with a comptime OS assert, so std.posix's spelling is a hard
+    // compile error on every OS including Linux.
+    //
+    // native_os is comptime-known, so this branch is pruned from analysis on
+    // non-Linux targets, where std.os.linux does not apply.
     if (native_os == .linux) {
         const fadv: ?i64 = if (std.mem.eql(u8, name, "POSIX_FADV_NORMAL"))
-            std.posix.POSIX_FADV.NORMAL
+            std.os.linux.POSIX_FADV.NORMAL
         else if (std.mem.eql(u8, name, "POSIX_FADV_RANDOM"))
-            std.posix.POSIX_FADV.RANDOM
+            std.os.linux.POSIX_FADV.RANDOM
         else if (std.mem.eql(u8, name, "POSIX_FADV_SEQUENTIAL"))
-            std.posix.POSIX_FADV.SEQUENTIAL
+            std.os.linux.POSIX_FADV.SEQUENTIAL
         else if (std.mem.eql(u8, name, "POSIX_FADV_WILLNEED"))
-            std.posix.POSIX_FADV.WILLNEED
+            std.os.linux.POSIX_FADV.WILLNEED
         else if (std.mem.eql(u8, name, "POSIX_FADV_DONTNEED"))
-            std.posix.POSIX_FADV.DONTNEED
+            std.os.linux.POSIX_FADV.DONTNEED
         else if (std.mem.eql(u8, name, "POSIX_FADV_NOREUSE"))
-            std.posix.POSIX_FADV.NOREUSE
+            std.os.linux.POSIX_FADV.NOREUSE
         else
             null;
         if (fadv) |v| {
@@ -281,11 +285,11 @@ test "posix-const resolves posix_fadvise advice on Linux" {
     try testing.expectEqual(@as(i64, 2), try constOf("POSIX_FADV_SEQUENTIAL"));
     try testing.expectEqual(@as(i64, 3), try constOf("POSIX_FADV_WILLNEED"));
     try testing.expectEqual(
-        @as(i64, @intCast(std.posix.POSIX_FADV.DONTNEED)),
+        @as(i64, @intCast(std.os.linux.POSIX_FADV.DONTNEED)),
         try constOf("POSIX_FADV_DONTNEED"),
     );
     try testing.expectEqual(
-        @as(i64, @intCast(std.posix.POSIX_FADV.NOREUSE)),
+        @as(i64, @intCast(std.os.linux.POSIX_FADV.NOREUSE)),
         try constOf("POSIX_FADV_NOREUSE"),
     );
 }
