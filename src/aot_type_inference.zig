@@ -481,7 +481,19 @@ const Inference = struct {
         if (!desc.is_native and desc.instructions.len > 0 and depth < max_descent_depth and !self.isDescending(desc_idx)) {
             try self.descending.append(self.allocator, desc_idx);
             defer _ = self.descending.pop();
+
+            const before: isize = @intCast(frame.sp);
             try self.walk(desc.instructions, frame, depth + 1, .silent);
+
+            // A descent stands in for the call only when the body it walked moved the stack the
+            // way the callee's declared arity says it does.
+            //
+            // A generated struct constructor is one shape where it does not. Its body ends in a
+            // polymorphic native, which the freeze records with zero declared arity, so the walk
+            // consumes none of the field values the real word consumes. Every later operand in
+            // this frame is off by that much.
+            const expected = before - desc.input_count + desc.output_count;
+            if (@as(isize, @intCast(frame.sp)) != expected) self.abandon(frame);
             return;
         }
 
@@ -1149,6 +1161,37 @@ test "stepping into a compound callee resolves a shuffle word defined in 1z" {
         &.{ .float, .fixnum },
         result.quotations[0].inferred_param_types,
     );
+}
+
+test "a descent whose net effect contradicts the callee's arity is discarded" {
+    const allocator = testing.allocator;
+
+    // A word whose body calls a polymorphic native, which the freeze records with zero declared
+    // arity. The body therefore consumes nothing while the word declares one input, and the two
+    // literals it pushed stay behind for a later call in the caller's body to read as its own
+    // operands. This is the shape a generated struct constructor has.
+    const wrap_body = [_]Instruction{
+        at(.{ .push_literal = .{ .fixnum = 0 } }),
+        at(.{ .push_literal = .{ .fixnum = 0 } }),
+        at(.{ .call_word = "ctor" }),
+    };
+    const entry_body = [_]Instruction{
+        at(.{ .push_literal = .{ .float = 1.5 } }),
+        at(.{ .call_word = "wrap" }),
+        at(.{ .call_word = "take2" }),
+    };
+
+    var result = try fixture(allocator, &.{
+        .{ .name = "__entry__", .body = &entry_body },
+        .{ .name = "wrap", .body = &wrap_body, .input_count = 1, .output_count = 1 },
+        .{ .name = "ctor", .is_native = true },
+        .{ .name = "take2", .body = &[_]Instruction{at(.{ .call_word = "drop" })}, .input_count = 2 },
+    }, &.{}, &.{});
+    defer result.deinit(allocator);
+
+    try inferParamTypes(&result, .{}, allocator);
+
+    try testing.expectEqual(@as(usize, 0), wordParams(&result, "take2").len);
 }
 
 test "if merges its arms, and disagreeing arms leave the result opaque" {

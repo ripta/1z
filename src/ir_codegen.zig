@@ -2015,6 +2015,12 @@ const CompileState = struct {
     /// Stack effect of the word being compiled. Used to resolve quotation
     /// parameter effects through calls.
     stack_effect: ?*const StackEffect = null,
+    /// Parameter types the freeze-time call-site inference proved for this body,
+    /// positional against its inputs.
+    ///
+    /// Empty outside AOT: proving a type from call sites needs a closed world, and
+    /// only an AOT freeze has one.
+    inferred_param_types: []const InferredParamType = &.{},
     /// Mapping from input slot indices to concrete quotation effects.
     /// Populated when stack_effect is available and quotation parameters
     /// have fixed (non-row-variable) arities.
@@ -2810,23 +2816,31 @@ fn typeCheckRelaxed(ctx: *const Context) bool {
     return std.mem.eql(u8, pv.string, "off") or std.mem.eql(u8, pv.string, "warning");
 }
 
-/// Seed narrowed `.i64_ref`/`.f64_ref` entries for parameters that declare a
-/// builtin `fixnum`/`float` type annotation, replacing the opaque
-/// `.raw_at_slot` entry the prologue installed.
+/// Seed narrowed `.i64_ref`/`.f64_ref` entries for every parameter whose type is known at
+/// compile time, replacing the opaque `.raw_at_slot` entries the prologue installed.
+///
+/// Callers invoke this after the LOOP_BEGIN / row-loop setup, so for a self-tail-call word the
+/// checks and unbox LOADs land inside the loop region and re-run each iteration as the back-edge
+/// rewrites the parameter slots.
+///
+/// This is the only entry point to either seeder; both trust the guard below.
+fn seedNarrowedParams(state: *CompileState, stack: []StackEntry, input_count: usize) void {
+    // Row-aware self-loops rebase the abstract stack around a pinned row, so
+    // parameters no longer sit at slots `0..input_count`. Leave them opaque.
+    if (state.row_aware_loop) return;
+
+    seedAnnotatedParams(state, stack, input_count);
+    seedInferredParams(state, stack, input_count);
+}
+
+/// Seed narrowed entries for parameters that declare a builtin `fixnum`/`float`
+/// type annotation.
 ///
 /// A narrowed operand is consumed with no tag check, so the parameter's type
 /// must be guaranteed. That guarantee comes from a tag-check-or-error at entry
 /// in AOT mode and in any self-tail-call loop, and from the interpreter's or
 /// JIT dispatch's own entry-time validation otherwise (see `enforce` below).
-///
-/// Callers invoke this after the LOOP_BEGIN / row-loop setup, so for a
-/// self-tail-call word the checks and unbox LOADs land inside the loop region
-/// and re-run each iteration as the back-edge rewrites the parameter slots.
 fn seedAnnotatedParams(state: *CompileState, stack: []StackEntry, input_count: usize) void {
-    // Row-aware self-loops rebase the abstract stack around a pinned row, so
-    // parameters no longer sit at slots `0..input_count`. Leave them opaque.
-    if (state.row_aware_loop) return;
-
     const effect = state.stack_effect orelse return;
     const ictx = state.interp_ctx orelse return;
 
@@ -2867,6 +2881,65 @@ fn seedAnnotatedParams(state: *CompileState, stack: []StackEntry, input_count: u
             },
             .float => {
                 if (enforce) emitTagCheckOrError(state, slot_addr, state.float_tag_const, state.type_mismatch_error_fn);
+                stack[i] = .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) };
+            },
+        }
+    }
+}
+
+/// Seed narrowed entries for parameters the freeze-time call-site inference proved.
+///
+/// No tag check guards these. A concrete table entry asserts that every call site in
+/// the program passes that type, which is a stronger guarantee than a declaration: an
+/// annotation states an intent the AOT direct-call path never verifies, while the proof
+/// is over the call sites themselves.
+///
+/// For the same reason the `type-check` pragma does not apply here. It governs whether a
+/// declared annotation can be trusted at runtime, and this path reads no declaration.
+///
+/// This is the only narrowing a quotation body gets: a quotation is compiled with no
+/// `StackEffect`, so it has no annotations to read.
+fn seedInferredParams(state: *CompileState, stack: []StackEntry, input_count: usize) void {
+    if (state.inferred_param_types.len == 0) return;
+
+    // All or nothing. Narrowing only some inputs leaves an operand pair with one narrowed and
+    // one opaque side, which skips the polymorphic path and takes the concrete one, whose tag
+    // check on the opaque side bails when the tag disagrees. An AOT bail aborts rather than
+    // resuming interpreted, so `add2: ( a b -- r ) [ + ] ;` fed `1 2` and `1 2.5` would die on
+    // the second call. That abort is a standing AOT gap, reachable today through a literal
+    // operand and through a declared annotation; this keeps inference from widening it.
+    for (state.inferred_param_types) |kind| {
+        if (kind == .unknown) return;
+    }
+
+    // A row variable among the inputs makes the input-index -> slot mapping ambiguous.
+    //
+    // The inference pass already declines to prove anything for such a word, so this is codegen
+    // refusing to depend on that rather than a live case.
+    if (state.stack_effect) |effect| {
+        for (effect.inputs) |param| {
+            if (param.is_row_variable) return;
+        }
+    }
+
+    for (state.inferred_param_types, 0..) |kind, i| {
+        if (i >= input_count) break;
+        if (stack[i] != .raw_at_slot or stack[i].raw_at_slot != i) continue;
+
+        // A declaration takes precedence over a proof, narrowable or not:
+        // `seedAnnotatedParams` owns every parameter that carries one.
+        if (state.stack_effect) |effect| {
+            if (i < effect.inputs.len and effect.inputs[i].type_annotation != null) continue;
+        }
+
+        switch (kind) {
+            .unknown => {},
+            .fixnum => {
+                const slot_addr = liveSlotAddr(state, i);
+                stack[i] = .{ .i64_ref = emitUnboxI64(state.ctx, slot_addr, state.payload_offset_const) };
+            },
+            .float => {
+                const slot_addr = liveSlotAddr(state, i);
                 stack[i] = .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) };
             },
         }
@@ -8085,7 +8158,7 @@ fn compileWordPass(
         state.trampoline_status = c.ir_const_i32(&ctx, 3);
     }
 
-    seedAnnotatedParams(&state, stack, input_count);
+    seedNarrowedParams(&state, stack, input_count);
 
     try compileInstructions(&state, instructions, stack, &sp);
 
@@ -8353,6 +8426,7 @@ pub fn emitWordCAot(
     array_literals: ?*std.ArrayListUnmanaged(AotArrayLiteral),
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
+    inferred_param_types: []const InferredParamType,
     reason_out: ?*?NotCompilableReason,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
     pic_table: ?*pic_mod.PicTable,
@@ -8366,7 +8440,7 @@ pub fn emitWordCAot(
     interpreter_free: bool,
     freestanding: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -8386,6 +8460,7 @@ fn emitWordCAotWithCName(
     array_literals: ?*std.ArrayListUnmanaged(AotArrayLiteral),
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
+    inferred_param_types: []const InferredParamType,
     reason_out: ?*?NotCompilableReason,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
     pic_table: ?*pic_mod.PicTable,
@@ -8400,13 +8475,13 @@ fn emitWordCAotWithCName(
     freestanding: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, false) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, false) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, discovered.row_aware_self_loop) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, discovered.row_aware_self_loop) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -8446,6 +8521,7 @@ fn emitWordCAotPass(
     array_literals: ?*std.ArrayListUnmanaged(AotArrayLiteral),
     allocator: Allocator,
     stack_effect: ?*const StackEffect,
+    inferred_param_types: []const InferredParamType,
     known_peak: ?u32,
     nc_reason_out: ?*?NotCompilableReason,
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
@@ -8761,6 +8837,7 @@ fn emitWordCAotPass(
         .aot_emit_slot_table_literals = emit_slot_table_literals,
         .peak_sp = @intCast(input_count),
         .stack_effect = stack_effect,
+        .inferred_param_types = inferred_param_types,
         .source_file = source_file,
         .quotation_slots = buildQuotationSlotMap(stack_effect) orelse {
             if (nc_reason_out) |ro| ro.* = .quotation_slot_overflow;
@@ -8803,7 +8880,7 @@ fn emitWordCAotPass(
             return err;
         };
     } else {
-        seedAnnotatedParams(&state, stack_buf, input_count);
+        seedNarrowedParams(&state, stack_buf, input_count);
 
         compileInstructions(&state, instructions, stack_buf, &sp) catch |err| {
             if (err == IrCodegenError.NotCompilable) {
@@ -9436,6 +9513,7 @@ pub fn emitProgramC(
                     null,
                     allocator,
                     if (w.stack_effect != null) &w.stack_effect.? else null,
+                    w.inferred_param_types,
                     null,
                     &reason,
                     null,
@@ -9502,6 +9580,7 @@ pub fn emitProgramC(
             null,
             allocator,
             if (w.stack_effect != null) &w.stack_effect.? else null,
+            w.inferred_param_types,
             &reason,
             null,
             w.pic_snapshot,
@@ -9553,7 +9632,9 @@ pub fn emitProgramC(
             var ic: u8 = 0;
             while (ic <= max_discovered_quotation_arity) : (ic += 1) {
                 var dreason: ?NotCompilableReason = null;
-                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, null, null, null, allocator, null, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, false) catch {
+                // No inferred types: the freeze-time pass sizes a quotation's table by its
+                // `inferred_effect`, and this branch runs precisely when it has none.
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, false) catch {
                     emitAotEffectTrace(interp_ctx, q.c_name, ic, null, dreason);
                     continue;
                 };
@@ -9581,6 +9662,7 @@ pub fn emitProgramC(
             null,
             allocator,
             null,
+            q.inferred_param_types,
             &qreason,
             null,
             null,
@@ -9652,6 +9734,7 @@ pub fn emitProgramC(
             &array_literals,
             allocator,
             if (w.stack_effect != null) &w.stack_effect.? else null,
+            w.inferred_param_types,
             null,
             &quotation_id_map,
             w.pic_snapshot,
@@ -9697,6 +9780,7 @@ pub fn emitProgramC(
             &array_literals,
             allocator,
             null,
+            q.inferred_param_types,
             null,
             &quotation_id_map,
             null,
@@ -15705,7 +15789,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const dup_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 1 },
     };
-    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false);
+    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false);
     if (dup_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 2), dup_res.discovered_output);
 
@@ -15713,7 +15797,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const drop_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
     };
-    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false);
+    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false);
     if (drop_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 0), drop_res.discovered_output);
 }
@@ -16015,6 +16099,7 @@ test "emitWordCAot emits named callback for safepoint" {
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -16060,6 +16145,7 @@ test "emitWordCAot basic arithmetic" {
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -16102,6 +16188,7 @@ test "emitWordCAot quotation call emits code_ptr dispatch" {
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -16162,6 +16249,7 @@ test "emitWordCAot interpreter-free quotation call traps instead of interpreter 
         null,
         testing.allocator,
         &effect,
+        &.{},
         null,
         null,
         null,
@@ -16218,6 +16306,7 @@ test "emitWordCAot freestanding routes non-generic natives through jitNativeWord
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -16249,6 +16338,7 @@ test "emitWordCAot freestanding routes non-generic natives through jitNativeWord
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -17821,6 +17911,7 @@ test "row underflow: a word reaching below its declared inputs compiles in AOT m
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -17875,6 +17966,7 @@ test "epilogue reifies an escaping quotation output instead of bailing" {
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -17932,6 +18024,7 @@ test "branch merge reifies an escaping quotation arm instead of bailing" {
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -17982,6 +18075,7 @@ test "loop carry reifies an escaping quotation before the loop header" {
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -18047,6 +18141,7 @@ test "self-tail-call carry reifies an escaping quotation argument" {
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -18106,6 +18201,7 @@ test "swap over a row compiles in AOT mode with the row pinned at slot 0" {
         null,
         testing.allocator,
         null,
+        &.{},
         null,
         null,
         null,
@@ -18122,6 +18218,87 @@ test "swap over a row compiles in AOT mode with the row pinned at slot 0" {
     defer testing.allocator.free(source);
     // The word body compiled to a C function rather than being rejected.
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_swap_over_row") != null);
+}
+
+/// Compile `( a b -- r ) [ + ]` in AOT mode and report how many interpreter
+/// fallbacks it emitted.
+///
+/// Only a pair of narrowed operands reaches the concrete path, which records nothing. Any other
+/// pair takes the polymorphic cold arm, so a zero count means both parameters were narrowed.
+fn arithFallbackCount(
+    stack_effect: ?*const StackEffect,
+    inferred: []const InferredParamType,
+) !u32 {
+    const instrs = makeInstructions(.{"+"});
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    var count: u32 = 0;
+    const source = try emitWordCAot(
+        &instrs,
+        2,
+        1,
+        "add-two",
+        arith_test_resolver,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        stack_effect,
+        inferred,
+        null,
+        null,
+        null,
+        null,
+        null,
+        &count,
+        null,
+        null,
+        false,
+        null,
+        false,
+        false,
+    );
+    testing.allocator.free(source);
+    return count;
+}
+
+test "an inferred parameter type narrows an unannotated parameter" {
+    try testing.expect(try arithFallbackCount(null, &.{}) > 0);
+    try testing.expectEqual(@as(u32, 0), try arithFallbackCount(null, &.{ .fixnum, .fixnum }));
+    try testing.expectEqual(@as(u32, 0), try arithFallbackCount(null, &.{ .float, .float }));
+
+    // A slot the pass could not prove is left exactly as opaque as it is today.
+    try testing.expect(try arithFallbackCount(null, &.{ .unknown, .unknown }) > 0);
+
+    // A partly-proved word narrows nothing, so the pair stays on the polymorphic path rather
+    // than taking the concrete one, whose tag check on the opaque side bails.
+    try testing.expect(try arithFallbackCount(null, &.{ .fixnum, .unknown }) > 0);
+    try testing.expect(try arithFallbackCount(null, &.{ .unknown, .float }) > 0);
+}
+
+test "a declared annotation takes precedence over an inferred type" {
+    // The annotation is a user type rather than a builtin, and there is no
+    // interpreter context to intern one against, so the annotated path narrows
+    // nothing. The inferred path must still leave both parameters alone: a
+    // declaration owns its parameter whether or not codegen can act on it.
+    const custom = value_mod.TypeValue{ .name = "custom", .descriptor = null };
+    const annotated = StackEffect{
+        .inputs = &.{
+            .{ .name = "a", .type_annotation = .{ .type = &custom } },
+            .{ .name = "b", .type_annotation = .{ .type = &custom } },
+        },
+        .outputs = &.{.{ .name = "r" }},
+    };
+    const bare = StackEffect{
+        .inputs = &.{ .{ .name = "a" }, .{ .name = "b" } },
+        .outputs = &.{.{ .name = "r" }},
+    };
+
+    try testing.expect(try arithFallbackCount(&annotated, &.{ .fixnum, .fixnum }) > 0);
+    try testing.expectEqual(@as(u32, 0), try arithFallbackCount(&bare, &.{ .fixnum, .fixnum }));
 }
 
 // --- rewriteIndexedStackOp tests ---

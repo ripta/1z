@@ -1,0 +1,25 @@
+\ Freeze-time call-site inference narrows parameters the user did not annotate.
+\
+\ No word here declares a parameter type. Every call site passes a literal, so the
+\ freeze-time pass proves each parameter and codegen unboxes it at entry. The
+\ arithmetic then compiles concretely and the comparison takes the inline path.
+\
+\ Build-only: the golden is the --compilation-stats report. Without the inference
+\ table this program records six fallbacks; with it only the two `.` -> inspect
+\ sites the prelude always emits survive.
+
+diff: ( a b -- r ) [ - ] ;
+below?: ( a b -- r ) [ < ] ;
+
+\ Self-tail-recursive: the back-edge rewrites the parameter slots each iteration,
+\ so a fallback-free `+` here is what pins that the narrowing is re-read inside the
+\ loop region rather than only at first entry. Float, because a fixnum sum is
+\ provable only under the lock -- fixnum arithmetic can promote to bignum, so the
+\ pass refuses to type its result unless the build rejects the promoting path.
+fsum-to: ( acc n -- r ) [
+  dup 0.0 = [ drop ] [ swap over + swap 1.0 - fsum-to ] if
+] ;
+
+10 4 diff .
+3 4 below? .
+0.0 100.0 fsum-to .

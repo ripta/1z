@@ -4,8 +4,8 @@
 \
 \ `scale-it` is called twice with different types -- a fixnum here, a float
 \ inside the default -- so nothing about its parameter is provable. Missing the
-\ default's call site would prove `fixnum` from the visible site alone, and a
-\ later milestone would then unbox the float payload as an integer.
+\ default's call site would prove `fixnum` from the visible site alone, and
+\ codegen would then unbox the float payload as an integer.
 \
 \ Build-only. Evaluating the default at runtime reports `unknown-word` in a
 \ default AOT build, a separate pre-existing gap in what a parameter default's

@@ -1,0 +1,44 @@
+\ Codegen narrows a parameter from the freeze-time call-site proof, with no type
+\ annotation written anywhere in this file. Running the AOT binary checks the
+\ narrowing is semantics-preserving; the sibling stats test proves it removes the
+\ interpreter fallbacks.
+\
+\ Results are printed rather than asserted through `testing`. The inference pass
+\ walks the top-level body with an abstract stack, and the first call it cannot
+\ model abandons that stack, leaving every later call site unobserved. A
+\ `test-section` call is one of those, so an assertion-based file would suppress
+\ the narrowing it is trying to check.
+
+scale: ( x -- y ) [ 2 * ] ;
+fhalve: ( x -- y ) [ 0.5 * ] ;
+
+\ Self-tail-recursive: the arithmetic lives in the inlined false branch, so the
+\ narrowing must survive the branch and re-read the parameters each iteration as
+\ the back-edge rewrites their slots. Float, because a fixnum sum is provable only
+\ under the lock -- fixnum arithmetic can promote to bignum, so the pass refuses to
+\ type its result unless the build rejects the promoting path.
+fsum-to: ( acc n -- r ) [
+  dup 0.0 = [ drop ] [ swap over + swap 1.0 - fsum-to ] if
+] ;
+
+\ Call sites disagree on this parameter's type, so the proof fails and it stays
+\ opaque. Both shapes must still work.
+twice: ( x -- y ) [ dup + ] ;
+
+\ Only `a` is proved here, so codegen narrows neither parameter: a pair with one
+\ narrowed and one opaque side would take the concrete path, whose tag check bails
+\ on the opaque side, and an AOT bail aborts rather than resuming interpreted. Both
+\ shapes must keep working, for `+` and for `<`.
+add2: ( a b -- r ) [ + ] ;
+below2?: ( a b -- r ) [ < ] ;
+
+7 scale .
+3.0 fhalve .
+0.0 100.0 fsum-to .
+0.0 0.0 fsum-to .
+5 twice .
+2.5 twice .
+1 2 add2 .
+1 2.5 add2 .
+1 2 below2? .
+1 0.5 below2? .
