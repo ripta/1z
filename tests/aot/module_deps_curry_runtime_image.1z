@@ -1,0 +1,10 @@
+\ Regression: a curried closure resolves its own module-private word when invoked from a context
+\ where that module's deps frame is not live -- checked inside a runtime-image AOT binary.
+\
+\ `make-secret-caller` currys `[ drop secret ]` over `0` inside the library, capturing the library's
+\ live deps frame; `curry`'s fresh instruction array carries the captured deps so a bare `secret`
+\ resolves here at this file's top level, where the library's own frame is gone. Must print
+\ "LIB-SECRET".
+use { make-secret-caller: } "./support/mod_deps_curry_holder.1z" ;
+
+make-secret-caller call print-line

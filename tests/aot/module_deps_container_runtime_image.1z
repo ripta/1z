@@ -1,0 +1,11 @@
+\ Regression: a quotation embedded in a container literal resolves its own module-private word when
+\ the extracted quotation is `call`ed from a context where that module's frame is not live --
+\ checked inside a runtime-image AOT binary.
+\
+\ The library's `handlers` returns an `H{ }` table whose value is `[ tag ]`, where `tag` is
+\ module-private. This file extracts that quotation and calls it at its own top level. The embedded
+\ quotation must carry the library's defining module for its bare `tag` to resolve. Must print
+\ "LIB-TAG".
+use { handlers: } "./support/mod_deps_container_holder.1z" ;
+
+handlers probe: @get call print-line

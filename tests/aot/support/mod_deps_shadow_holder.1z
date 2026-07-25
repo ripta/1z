@@ -1,0 +1,16 @@
+\ Companion module for the module-deps-shadow AOT tests.
+\
+\ The non-accessor handler/callback shadowing pattern: this module has its own public `probe`, and
+\ stores then `call`s a caller-supplied quotation from inside a word whose deps frame (carrying this
+\ module's `probe`) is live. A bare `probe` in the stored quotation must still resolve to the
+\ caller's own binding, not this module's -- verified here inside an AOT binary.
+
+probe: ( -- s ) [ "LIB-PROBE" ] ;
+
+private{
+  holder-state: mutable struct{ payload } ;
+}
+
+make-holder: ( q -- holder ) [ make-holder-state ] ;
+
+run-stored: ( holder -- result ) [ payload>> call ] ;

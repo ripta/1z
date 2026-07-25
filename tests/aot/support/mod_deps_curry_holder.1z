@@ -1,0 +1,12 @@
+\ Companion module for the module-deps-curry AOT test.
+\
+\ Returns a curried closure over this module's private `secret`. `curry` allocates a fresh
+\ instruction array, discarding the pointer-keyed defining-module stamp, so its body must carry this
+\ module's deps for `secret` to resolve where the closure later runs -- here, from a neutral context
+\ inside an AOT binary.
+
+private{
+  secret: ( -- s ) [ "LIB-SECRET" ] ;
+}
+
+make-secret-caller: ( -- quot ) [ 0 [ drop secret ] curry ] ;

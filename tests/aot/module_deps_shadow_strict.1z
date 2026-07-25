@@ -1,0 +1,11 @@
+\ Regression: the general (non-accessor) module-deps shadowing case, built interpreter-free.
+\
+\ Same shape as module_deps_shadow_runtime_image, under --interpreter-fallback=false. Complements the
+\ accessor-only aot_module_field_collision with a general-word case: a module-less `[ probe ]` stored
+\ and `call`ed from a library word whose deps frame carries a same-named `probe` ("LIB-PROBE") must
+\ still print this file's own "MAIN-PROBE".
+use { make-holder: run-stored: } "./support/mod_deps_shadow_holder.1z" ;
+
+probe: ( -- s ) [ "MAIN-PROBE" ] ;
+
+[ probe ] make-holder run-stored print-line

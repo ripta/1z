@@ -1,0 +1,14 @@
+\ Regression: a `.module_deps` frame must not shadow the durable frame's binding for a module-less
+\ quotation `call`ed while that frame is live -- checked inside a runtime-image AOT binary.
+\
+\ `run-stored` is a module word whose deps frame (carrying the library's `probe`, "LIB-PROBE") is
+\ live while it `call`s the stored quotation. This file's own top-level `probe` returns "MAIN-PROBE".
+\ The stored `[ probe ]` is module-less, so resolution runs the interpreter through jitInterpretedCall
+\ under the library's live deps frame; the visibility filter must reject that foreign frame and reach
+\ the durable frame's `probe`. Selective import keeps the library's `probe` out of this file's scope,
+\ so the collision is purely the live deps frame against the durable frame.
+use { make-holder: run-stored: } "./support/mod_deps_shadow_holder.1z" ;
+
+probe: ( -- s ) [ "MAIN-PROBE" ] ;
+
+[ probe ] make-holder run-stored print-line

@@ -2887,6 +2887,17 @@ pub const Context = struct {
         return self.lookupWordLocked(name, null);
     }
 
+    /// Like `lookupWord`, but `vis` filters which transient `.module_deps` frames the lookup may
+    /// see (see `ModuleDepsVisibility`). AOT freeze-time discovery uses this so a body's bare words
+    /// resolve only against its own module's frame, not a sibling module's frame that discovery
+    /// happens to have pushed. Unlike `lookupWordForExecution`, it does not consult the runtime-image
+    /// module cache; freeze runs before any image is loaded.
+    pub fn lookupWordFiltered(self: *const Context, name: []const u8, vis: ?ModuleDepsVisibility) ?WordDefinition {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return self.lookupWordLocked(name, vis);
+    }
+
     /// Like `lookupWord`, but falls through to the AOT runtime-image module cache when the
     /// in-context lookup misses and an image is loaded. Use this at interpreter call sites
     /// that have to resolve module-private names living only inside a loaded runtime image,

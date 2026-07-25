@@ -1,7 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const Context = @import("context.zig").Context;
+const context_mod = @import("context.zig");
+const Context = context_mod.Context;
+const ModuleDepsVisibility = context_mod.ModuleDepsVisibility;
 
 const value_mod = @import("value.zig");
 const Instruction = value_mod.Instruction;
@@ -20,6 +22,8 @@ const WordDefinition = dictionary_mod.WordDefinition;
 
 const markers_mod = @import("primitives/markers.zig");
 const ArtifactClass = markers_mod.ArtifactClass;
+
+const embedded_stdlib = @import("embedded_stdlib.zig");
 
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const pic_mod = @import("pic.zig");
@@ -763,7 +767,7 @@ fn discoverReachableWords(
     }
 
     // Seed worklist from entry instructions
-    try collectCallWords(ctx, entry_instrs, "__entry__", &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
+    try collectCallWords(ctx, entry_instrs, "__entry__", freezeModuleDepsVis(null), &worklist, &seen, &result.quotation_bodies, &quotation_seen, &result.pending_call_targets, &quotation_path, diagnostics, artifact_class, temp_allocator, result_allocator);
 
     // promote callees of composite-nested quotations in the entry instructions before draining,
     // so a runtime-selected dispatch, e.g., `H{ ... match: [ ... ] }`, has its branch quot
@@ -946,7 +950,23 @@ fn drainWorklist(
         }
         defer if (scope_module) |m| ctx.popModuleDepsFrameTraced(m);
 
-        const word = ctx.lookupWord(name) orelse {
+        // Fetch this word's own body under the identity's module scope, so a module-less identity
+        // (e.g. a top-level word whose name a sibling module also defines) resolves to its own
+        // durable definition rather than a foreign module's frame that discovery has pushed. A cached
+        // module admits its own frame; a genuinely module-less identity rejects every module frame.
+        //
+        // A synthetic or uncached identity (a `<local-scope>` private helper, whose scope module is
+        // never cached, so `scope_module` is null while `decoded.module` is not) stays unfiltered: its
+        // body physically lives in some module's frame, not in one keyed to its own name. That third
+        // case is why this is not simply `freezeModuleDepsVis(scope_module)`.
+        const own_vis: ?ModuleDepsVisibility = if (scope_module) |m|
+            freezeModuleDepsVis(m)
+        else if (decoded.module == null)
+            freezeModuleDepsVis(null)
+        else
+            null;
+
+        const word = ctx.lookupWordFiltered(name, own_vis) orelse {
             // Try module-qualified resolution (e.g., "native.struct-field-get").
             // Generated words from struct{, virtual{, and enum{ call native
             // operations via qualified names that lookupWord cannot resolve
@@ -968,7 +988,7 @@ fn drainWorklist(
                         const qualified_def = wordDefFromModuleWord(name, mod_word);
                         try result.defs.append(allocator, qualified_def);
                         emitFreezeWordTrace(ctx, name, "compound");
-                        try collectCallWords(ctx, compound_instrs, name, worklist, seen, &result.quotation_bodies, quotation_seen, &result.pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, result_allocator);
+                        try collectCallWords(ctx, compound_instrs, name, null, worklist, seen, &result.quotation_bodies, quotation_seen, &result.pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, result_allocator);
                         try walkDispatchMethodBodies(ctx, qualified_def, name, worklist, seen, &result.quotation_bodies, quotation_seen, &result.method_body_ptrs, &result.pending_call_targets, diagnostics, artifact_class, allocator, result_allocator);
                     },
                 }
@@ -1006,8 +1026,11 @@ fn drainWorklist(
         try result.defs.append(allocator, store_word);
         emitFreezeWordTrace(ctx, name, "compound");
 
-        // Discover callees
-        try collectCallWords(ctx, instrs, name, worklist, seen, &result.quotation_bodies, quotation_seen, &result.pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, result_allocator);
+        // Discover callees. A module word's body resolves against its own module's frame, pushed on
+        // top for this drain, so the ordinary unfiltered walk already sees the right words; the filter
+        // is only needed for the entry body and the module-less own-body fetch above, where a foreign
+        // module's frame could shadow the durable scope.
+        try collectCallWords(ctx, instrs, name, null, worklist, seen, &result.quotation_bodies, quotation_seen, &result.pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, result_allocator);
 
         // Walk every method body registered for this word's dispatch_id so
         // reached generics' methods enter the compilation manifest. For
@@ -1033,8 +1056,8 @@ fn freePendingCallTargetPaths(pending: *std.ArrayListUnmanaged(PendingCallTarget
 /// performing any side-effecting work. Used at every call site to record
 /// the call_targets entry; the result is finalized to a `ResolvedCallee`
 /// after buildAotDescs assigns word ids.
-fn classifyCallee(ctx: *const Context, name: []const u8) PendingResolution {
-    if (ctx.lookupWord(name)) |word| {
+fn classifyCallee(ctx: *const Context, name: []const u8, vis: ?ModuleDepsVisibility) PendingResolution {
+    if (ctx.lookupWordFiltered(name, vis)) |word| {
         if (word.parse_time_only) {
             return .{ .unresolved = .skipped_parse_time_only };
         }
@@ -1055,45 +1078,110 @@ fn classifyCallee(ctx: *const Context, name: []const u8) PendingResolution {
     return .{ .unresolved = .not_in_dictionary };
 }
 
-/// Seed the worklist with every word a reified quotation calls, without recording per-call-site
-/// `pending_call_targets`.
+/// True for a callee defined in an ephemeral private scope -- a `private{ }` helper or a
+/// `local-scope`/`current-scope` snapshot.
 ///
-/// A `parameter{ [ ... ] }` default is a quotation the interpreter runs on an unbound `get`. It is
-/// serialized into the runtime image as bytecode, but the words it calls are not part of any
-/// compiled instruction stream, so the main BFS never reaches them. Such a callee then has its
-/// interpretable body dropped as empty at freeze while no compiled function is emitted for it, so
-/// calling it from the interpreted default is a silent no-op that leaks the caller's inputs.
-///
-/// Seeding the callees compiles them, so `get` runs them through `executeCompiled`. Unlike
-/// `collectCallWords`, no call-site record is appended: the call site lives inside the default, not
-/// in the defining word's compiled body, so a `pending_call_target` keyed on the defining word
-/// would name an instruction that body does not contain. `drainWorklist` walks each seeded word's
-/// own body with the correct caller, so its transitive callees and call sites are discovered normally.
-fn seedInterpretedQuotationCallees(instrs: []const Instruction, worklist: *std.ArrayListUnmanaged([]const u8), seen: *std.StringHashMapUnmanaged(void), allocator: Allocator) Allocator.Error!void {
-    for (instrs) |instr| {
-        switch (instr.op) {
-            .call_word => |name| {
-                const gop = try seen.getOrPut(allocator, name);
-                if (!gop.found_existing) try worklist.append(allocator, name);
-            },
-            .push_literal => |val| switch (val) {
-                .quotation => |q| try seedInterpretedQuotationCallees(q.instructions, worklist, seen, allocator),
-                .parameter => |p| try seedInterpretedQuotationCallees(p.default_quotation.instructions, worklist, seen, allocator),
-                else => {},
-            },
-            else => {},
-        }
+/// Narrower than `isSyntheticScopeModule`, which matches any `<`-prefixed name: an embedded-stdlib
+/// module is cached under `<stdlib>/...` (`embedded_stdlib.virtual_prefix`) and is available at
+/// runtime, so it must not count as a private helper needing composite-literal seeding.
+fn isPrivateHelperCallee(callee: WordDefinition) bool {
+    const m = callee.source_module orelse return false;
+    if (!context_mod.isSyntheticScopeModule(m)) return false;
+    return !std.mem.startsWith(u8, m.name, embedded_stdlib.virtual_prefix);
+}
+
+/// Recurse through a composite literal Value to reach every buried `.quotation` and seed its callees
+/// onto the worklist, resolved under `vis` (the containing word's module scope). Mirrors
+/// `collectQuotationsInValue`'s traversal, but seeds callees rather than collecting bodies, since the
+/// bodies are already collected by `collectCompositeQuotations`. See `seedQuotationBodyCallees` for
+/// `private_only`.
+fn seedCompositeQuotationCallees(ctx: *const Context, val: Value, vis: ?ModuleDepsVisibility, private_only: bool, worklist: *std.ArrayListUnmanaged([]const u8), seen: *std.StringHashMapUnmanaged(void), allocator: Allocator) Allocator.Error!void {
+    switch (val) {
+        .quotation => |q| try seedQuotationBodyCallees(ctx, q.instructions, vis, private_only, worklist, seen, allocator),
+        .array => |arr| for (arr.items) |elem| try seedCompositeQuotationCallees(ctx, elem, vis, private_only, worklist, seen, allocator),
+        .hash => |h| {
+            var it = h.map.iterator();
+            while (it.next()) |entry| try seedCompositeQuotationCallees(ctx, entry.value_ptr.*, vis, private_only, worklist, seen, allocator);
+        },
+        .vector => |v| for (v.list.items) |elem| try seedCompositeQuotationCallees(ctx, elem, vis, private_only, worklist, seen, allocator),
+        .mutable_map => |m| {
+            var it = m.map.iterator();
+            while (it.next()) |entry| try seedCompositeQuotationCallees(ctx, entry.value_ptr.*, vis, private_only, worklist, seen, allocator);
+        },
+        .struct_instance => |si| for (si.fields) |field| try seedCompositeQuotationCallees(ctx, field, vis, private_only, worklist, seen, allocator),
+        else => {},
     }
+}
+
+/// Seed the worklist with a buried quotation body's callees, resolved under `vis` and keyed by the
+/// resolved identity (module + name) exactly as `collectCallWords` keys a direct call. Identity-keying
+/// keeps a module-private callee draining under its own module rather than being dropped as
+/// module-less. Recurses into nested quotations, parameter defaults, and further composite literals.
+/// No per-call-site record: the call site lives in the buried quotation, not in the containing word's
+/// compiled body.
+///
+/// `private_only` seeds only a callee defined in an ephemeral private scope (a `private{ }` helper,
+/// per `isPrivateHelperCallee`). A composite dispatch table (an `H{ }` of quotations) buries many
+/// quotations calling ordinary prelude combinators, which the runtime already provides; seeding those
+/// only bloats the compile and fallback set. Only a private helper truly needs seeding, since nothing
+/// else would pull it into the image. A parameter default passes `false` to seed every callee,
+/// keeping its long-standing "compile the default's callees or they drop to an empty body at runtime"
+/// behavior.
+fn seedQuotationBodyCallees(ctx: *const Context, instrs: []const Instruction, vis: ?ModuleDepsVisibility, private_only: bool, worklist: *std.ArrayListUnmanaged([]const u8), seen: *std.StringHashMapUnmanaged(void), allocator: Allocator) Allocator.Error!void {
+    for (instrs) |instr| switch (instr.op) {
+        .call_word, .call_word_direct => {
+            const name = instr.op.callTargetName().?;
+            const callee = ctx.lookupWordFiltered(name, vis) orelse continue;
+            if (private_only and !isPrivateHelperCallee(callee)) continue;
+
+            const callee_module: ?[]const u8 = if (callee.source_module) |m| m.name else null;
+            const identity = try encodeWordIdentity(allocator, callee_module, name);
+            const seen_key = if (callee.provenance != null) identity else name;
+            const gop = try seen.getOrPut(allocator, seen_key);
+            if (!gop.found_existing) try worklist.append(allocator, identity);
+        },
+        .push_literal => |v| switch (v) {
+            .quotation => |q| try seedQuotationBodyCallees(ctx, q.instructions, vis, private_only, worklist, seen, allocator),
+            .parameter => |p| try seedQuotationBodyCallees(ctx, p.default_quotation.instructions, vis, private_only, worklist, seen, allocator),
+            .array, .hash, .vector, .mutable_map, .struct_instance => try seedCompositeQuotationCallees(ctx, v, vis, private_only, worklist, seen, allocator),
+            else => {},
+        },
+    };
+}
+
+/// Build the module-deps visibility a freeze-time body resolves its bare words under, mirroring the
+/// interpreter's `ModuleDepsVisibility` discipline. Discovery pushes a `.module_deps` frame for
+/// every cached module, so without this a foreign module's public word shadows the body's own.
+///
+/// - No module (the `__entry__` body): a filter that admits nothing, so every `.module_deps` frame
+///   is skipped and resolution falls to the entry's own durable frames and the dictionary. This is
+///   freeze-specific: the interpreter treats a null filter as unfiltered, but at freeze every module
+///   frame is live, so the entry must reject them explicitly.
+/// - A synthetic scope module (`<local-scope>` / `<scope>`): unfiltered, matching the interpreter's
+///   own exemption, so a private-helper body resolves its siblings and imports normally.
+/// - A real module M: admit only M's own frame. `populateModuleDepsFrame` puts M's imports and its
+///   own words into that one frame, so this gives M full access while rejecting foreign modules.
+fn freezeModuleDepsVis(scope_module: ?*const value_mod.Module) ?ModuleDepsVisibility {
+    if (scope_module) |m| {
+        if (context_mod.isSyntheticScopeModule(m)) return null;
+        return .{ .defining_module = m, .deps_modules = &.{} };
+    }
+    return .{ .defining_module = null, .deps_modules = &.{} };
 }
 
 /// Extract call_word names from instructions and add unseen ones to the worklist.
 /// Also collects reachable quotation bodies, dwduped by pointer identity.
 /// Per-call-site records are appended to `pending_call_targets` for later
 /// remap to caller word ids.
+///
+/// `vis` is the module-deps visibility the body's bare words resolve under (see `freezeModuleDepsVis`)
+/// so a sibling module's word does not shadow the body's own. Null resolves unfiltered, the original
+/// behavior, retained by the promoting walks and by unit tests that push no module frames.
 fn collectCallWords(
     ctx: *const Context,
     instrs: []const Instruction,
     caller_name: []const u8,
+    vis: ?ModuleDepsVisibility,
     worklist: *std.ArrayListUnmanaged([]const u8),
     seen: *std.StringHashMapUnmanaged(void),
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
@@ -1121,7 +1209,7 @@ fn collectCallWords(
                     // though the marker fired. See the generator-resolution
                     // contract on `GeneratedKind` for the forward-looking
                     // case where a first-use generator would surface here.
-                    switch (classifyCallee(ctx, name)) {
+                    switch (classifyCallee(ctx, name, vis)) {
                         .unresolved => |reason| {
                             diagnostics.unresolved_callee_hint = .{
                                 .caller_name = caller_name,
@@ -1140,7 +1228,7 @@ fn collectCallWords(
                     };
                     return error.DisallowedNativeInterpreterDependency;
                 }
-                const callee = ctx.lookupWord(name);
+                const callee = ctx.lookupWordFiltered(name, vis);
                 const callee_module: ?[]const u8 = if (callee) |w|
                     (if (w.source_module) |m| m.name else null)
                 else
@@ -1165,7 +1253,7 @@ fn collectCallWords(
                     .caller_name = caller_name,
                     .instruction_index = @intCast(idx),
                     .quotation_path = path_copy,
-                    .pending = classifyCallee(ctx, name),
+                    .pending = classifyCallee(ctx, name, vis),
                 });
             },
             .push_literal => |val| {
@@ -1189,14 +1277,25 @@ fn collectCallWords(
                             emitFreezeQuotationTrace(ctx, caller_name, ptr_key);
                         }
                         try quotation_path.append(allocator, @intCast(idx));
-                        const recurse_err = collectCallWords(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
+                        const recurse_err = collectCallWords(ctx, q.instructions, caller_name, vis, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator);
                         _ = quotation_path.pop();
                         try recurse_err;
                     },
                     // A parameter's default quotation runs under the interpreter on an unbound
-                    // `get`. Seed its callees so they compile and are runnable, without recording
+                    // `get`. Seed all its callees so they compile and are runnable, without recording
                     // callsite records against this word's compiled body, which never contains them.
-                    .parameter => |p| try seedInterpretedQuotationCallees(p.default_quotation.instructions, worklist, seen, allocator),
+                    .parameter => |p| try seedQuotationBodyCallees(ctx, p.default_quotation.instructions, vis, false, worklist, seen, allocator),
+                    // A quotation buried in a composite literal (an `H{ }` dispatch table, an array of
+                    // quotations, ...) runs under the interpreter when the value is later extracted and
+                    // called. `collectCompositeQuotations` collects its body, but leaves its callees
+                    // undiscovered, so a module-private word it calls is never serialized.
+                    //
+                    // Seed only the private-helper callees (`private_only`): a dispatch table's
+                    // quotations otherwise call ordinary prelude combinators the runtime already
+                    // provides. Skipped for strict interpreter-free builds, whose must-compile
+                    // invariant handles buried quotations through the keyed promoting passes instead.
+                    .array, .hash, .vector, .mutable_map, .struct_instance => if (artifact_class != .interpreter_free_aot)
+                        try seedCompositeQuotationCallees(ctx, val, vis, true, worklist, seen, allocator),
                     else => {},
                 }
             },
@@ -1391,7 +1490,7 @@ fn promoteQuotationCallees(
     if (!qgop.found_existing) {
         try quotation_bodies.append(allocator, q.instructions);
         try composite_body_ptrs.put(allocator, ptr_key, {});
-        collectCallWords(ctx, q.instructions, caller_name, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator) catch |err| switch (err) {
+        collectCallWords(ctx, q.instructions, caller_name, null, worklist, seen, quotation_bodies, quotation_seen, pending_call_targets, quotation_path, diagnostics, artifact_class, allocator, path_allocator) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.DisallowedDynamicFeature, error.DisallowedNativeInterpreterDependency => {},
         };
@@ -1678,7 +1777,7 @@ fn detectBuriedCallees(
             .call_word, .call_word_direct => {
                 const name = instr.op.callTargetName().?;
                 if (prelude_words.contains(name)) continue;
-                switch (classifyCallee(ctx, name)) {
+                switch (classifyCallee(ctx, name, null)) {
                     .compound_name => {
                         if (discovered_names.contains(name)) continue;
                         const gop = try callee_seen.getOrPut(allocator, name);
@@ -1779,6 +1878,7 @@ fn walkDispatchMethodBodies(
             ctx,
             q_instrs,
             polymorphic_name,
+            null,
             worklist,
             seen,
             quotation_bodies,
@@ -2599,6 +2699,26 @@ fn buildAotDescs(
 
 const testing = std.testing;
 
+test "freezeModuleDepsVis: entry rejects module frames, synthetic is unfiltered, real module admits itself" {
+    // Entry body (no module): a non-null filter with no admitted module, so every `.module_deps`
+    // frame is skipped and resolution falls to the durable scope.
+    const entry_vis = freezeModuleDepsVis(null);
+    try testing.expect(entry_vis != null);
+    try testing.expect(entry_vis.?.defining_module == null);
+    try testing.expectEqual(@as(usize, 0), entry_vis.?.deps_modules.len);
+
+    // A real module admits only its own frame.
+    var real = value_mod.Module{ .name = "path/to/mod.1z", .words = .{} };
+    const mod_vis = freezeModuleDepsVis(&real);
+    try testing.expect(mod_vis != null);
+    try testing.expect(mod_vis.?.defining_module == &real);
+    try testing.expectEqual(@as(usize, 0), mod_vis.?.deps_modules.len);
+
+    // A synthetic scope module (`<local-scope>`) is unfiltered, matching the interpreter's exemption.
+    var synth = value_mod.Module{ .name = "<local-scope>", .words = .{} };
+    try testing.expect(freezeModuleDepsVis(&synth) == null);
+}
+
 test "collectCallWords extracts call_word names from instructions" {
     const allocator = testing.allocator;
     var ctx = Context.init(allocator);
@@ -2624,7 +2744,7 @@ test "collectCallWords extracts call_word names from instructions" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 2), worklist.items.len);
     try testing.expect(seen.contains("double"));
@@ -2839,6 +2959,7 @@ test "collectCallWords rejects disallowed dynamic features with caller" {
         &ctx,
         instrs,
         "__entry__",
+        null,
         &worklist,
         &seen,
         &quotation_bodies,
@@ -2882,7 +3003,7 @@ test "collectCallWords in runtime-image mode permits eval-string, load, and >quo
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .runtime_image_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .runtime_image_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 5), worklist.items.len);
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
@@ -2915,6 +3036,7 @@ test "collectCallWords in runtime-image mode still rejects compile!" {
         &ctx,
         instrs,
         "do-compile",
+        null,
         &worklist,
         &seen,
         &quotation_bodies,
@@ -3004,6 +3126,7 @@ fn expectInterpreterFreeRejection(feature: []const u8, caller: []const u8, marke
         &ctx,
         instrs,
         caller,
+        null,
         &worklist,
         &seen,
         &quotation_bodies,
@@ -3059,6 +3182,7 @@ fn expectInterpreterClassPermits(feature: []const u8, marker: *const value_mod.M
         &ctx,
         instrs,
         "caller",
+        null,
         &worklist,
         &seen,
         &quotation_bodies,
@@ -3102,7 +3226,7 @@ test "collectCallWords discovers quotation bodies" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
     try testing.expectEqual(inner_body.ptr, quotation_bodies.items[0].ptr);
@@ -3139,7 +3263,7 @@ test "collectCallWords discovers nested quotations" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     // Both middle and innermost quotations discovered
     try testing.expectEqual(@as(usize, 2), quotation_bodies.items.len);
@@ -3175,7 +3299,7 @@ test "collectCallWords deduplicates quotations by pointer" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     // Only recorded once despite appearing twice
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
@@ -3400,6 +3524,7 @@ test "collectCallWords rejects marked native in interpreter-free mode" {
         &ctx,
         instrs,
         "caller",
+        null,
         &worklist,
         &seen,
         &quotation_bodies,
@@ -3446,7 +3571,7 @@ test "collectCallWords permits marked native in runtime-image mode" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .runtime_image_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .runtime_image_aot, allocator, allocator);
 
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
@@ -3485,7 +3610,7 @@ test "collectCallWords ignores marker on compound words" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
     try testing.expectEqual(@as(usize, 1), worklist.items.len);
@@ -3524,6 +3649,7 @@ test "dynamic-feature check fires before interpreter-dependent check on a doubly
         &ctx,
         instrs,
         "caller",
+        null,
         &worklist,
         &seen,
         &quotation_bodies,
@@ -3581,7 +3707,7 @@ test "collectCallWords does not flag a compound that shadows eval-string and lac
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "user-entry", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "user-entry", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
@@ -3625,6 +3751,7 @@ test "collectCallWords flags a user-defined native carrying dynamic-eval" {
         &ctx,
         instrs,
         "caller",
+        null,
         &worklist,
         &seen,
         &quotation_bodies,
@@ -3679,7 +3806,7 @@ test "collectCallWords does not flag an eval-string whose marker has been stripp
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expect(diagnostics.fatal_dynamic_feature == null);
     try testing.expect(diagnostics.fatal_native_interpreter_dependency == null);
@@ -3724,7 +3851,7 @@ test "collectCallWords records a top-level call with empty quotation_path" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "__entry__", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "__entry__", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 2), pending_call_targets.items.len);
     try testing.expectEqualStrings("__entry__", pending_call_targets.items[0].caller_name);
@@ -3764,7 +3891,7 @@ test "collectCallWords records calls inside nested quotations with quotation_pat
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, outer_instrs, "outer", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, outer_instrs, "outer", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 1), pending_call_targets.items.len);
     const entry = pending_call_targets.items[0];
@@ -4389,7 +4516,7 @@ test "collectCallWords classifies an unresolved name with .not_in_dictionary" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 1), pending_call_targets.items.len);
     try testing.expectEqual(UnresolvedReason.not_in_dictionary, pending_call_targets.items[0].pending.unresolved);
@@ -4424,7 +4551,7 @@ test "collectCallWords classifies a parse-time-only callee as skipped" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     try testing.expectEqual(@as(usize, 1), pending_call_targets.items.len);
     try testing.expectEqual(UnresolvedReason.skipped_parse_time_only, pending_call_targets.items[0].pending.unresolved);
@@ -4456,7 +4583,7 @@ test "collectCallWords does not deduplicate call-site records" {
     defer quotation_path.deinit(allocator);
     var diagnostics: FreezeDiagnostics = .{};
 
-    try collectCallWords(&ctx, instrs, "caller", &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
+    try collectCallWords(&ctx, instrs, "caller", null, &worklist, &seen, &quotation_bodies, &quotation_seen, &pending_call_targets, &quotation_path, &diagnostics, .interpreter_free_aot, allocator, allocator);
 
     // BFS dedup is independent of per-call-site recording: two call_word
     // instructions to the same callee produce two pending entries.
@@ -4925,6 +5052,7 @@ test "DisallowedDynamicFeature surfaces unresolved-callee hint for parse-time-on
         &ctx,
         instrs,
         "caller",
+        null,
         &worklist,
         &seen,
         &quotation_bodies,
@@ -5141,6 +5269,7 @@ test "DisallowedDynamicFeature leaves unresolved-callee hint null for resolved n
         &ctx,
         instrs,
         "caller",
+        null,
         &worklist,
         &seen,
         &quotation_bodies,
