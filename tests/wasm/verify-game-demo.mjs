@@ -171,6 +171,56 @@ test('audio host words carry PCM bytes out and a sample handle back', async () =
   assert.deepEqual(onez.playedSamples, [0], 'the play call should carry back the handle the load call returned')
 })
 
+test('the demo game synthesizes a beep at init and plays it once per space press', async () => {
+  const onez = await instantiate()
+  const gameSource = readFileSync(gameSourcePath, 'utf8')
+  assert.equal(onez.evalSource(gameSource), ONEZ_EVAL_COMPLETE, 'setup failed: ' + onez.lastError())
+
+  assert.equal(onez.loadedSamples.length, 1, 'demo-init should load exactly one sample')
+  assert.equal(onez.loadedSamples[0].channels, 1, 'the beep is mono')
+  assert.equal(onez.loadedSamples[0].rate, 8000, 'the beep is 8000 Hz')
+  assert.equal(onez.loadedSamples[0].bytes.length, 1200 * 4, 'the beep is 1200 frames of 32-bit float PCM')
+
+  const pcm = new Float32Array(new Uint8Array(onez.loadedSamples[0].bytes).buffer)
+  assert.equal(pcm[0], 0, 'the sine starts at zero phase')
+  assert.notEqual(pcm[3], 0, 'the beep is not silence')
+
+  const keyboardPtr = onez.exports.onez_wasm_keyboard_ptr()
+  const keyboardLen = onez.exports.onez_wasm_keyboard_len()
+
+  // Index 40 is space in lib/game/input.1z's key-index table, the same private contract the
+  // key-down? test documents above.
+  //
+  // The view is rebuilt on every write, as demo.js does: a memory.grow during the interpreted
+  // draw frames detaches any cached view, so a poke through a stale one silently goes nowhere.
+  const SPACE_INDEX = 40
+  const setSpace = (down) => {
+    new Uint8Array(onez.memory.buffer, keyboardPtr, keyboardLen)[SPACE_INDEX] = down ? 1 : 0
+  }
+
+  // run-frame only runs update ticks as real time accrues on its fixed 60 Hz timestep, so each
+  // frame that must tick waits out at least one full interval first.
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const tickFrame = async () => {
+    await sleep(20)
+    const status = onez.evalSource('run-frame')
+    assert.equal(status, ONEZ_EVAL_COMPLETE, 'run-frame failed: ' + onez.lastError())
+  }
+
+  setSpace(true)
+  await tickFrame()
+  assert.deepEqual(onez.playedSamples, [0], 'a space press plays the beep once, with the loaded handle')
+
+  await tickFrame()
+  assert.deepEqual(onez.playedSamples, [0], 'a held space key does not re-trigger')
+
+  setSpace(false)
+  await tickFrame()
+  setSpace(true)
+  await tickFrame()
+  assert.deepEqual(onez.playedSamples, [0, 0], 'a second press replays the sample')
+})
+
 test('run-frame executes repeatedly without exhausting the wasm heap', async () => {
   const onez = await instantiate()
   const gameSource = readFileSync(gameSourcePath, 'utf8')

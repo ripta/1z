@@ -68,3 +68,28 @@ test-sample-rejects-a-non-byte-array: ( -- ) [
   [ 42 1 8000 <sample> ]
   type-error: "<sample>'s byte-array annotation rejects a fixnum" assert-error-type
 ] ;
+
+test-play-sample-hands-the-raw-handle-to-the-player: ( -- ) [
+  [ drop drop drop 7 ] (sample-loader)
+  [
+    (eight-pcm-bytes) 1 8000 <sample>
+    [ 7 "play-sample unwraps the sample before crossing the seam" assert= ] (sample-player)
+    [ play-sample ] with-parameter
+  ] with-parameter
+] ;
+
+test-play-sample-allows-unbounded-overlapping-plays: ( -- ) [
+  plays: V{ } ;
+  [ drop drop drop 7 ] (sample-loader)
+  [
+    (eight-pcm-bytes) 1 8000 <sample>
+    [ plays swap #push! drop ] (sample-player)
+    [ dup play-sample play-sample ] with-parameter
+  ] with-parameter
+  plays #len 2 "each play-sample call reaches the player independently" assert=
+] ;
+
+test-play-sample-rejects-a-non-sample: ( -- ) [
+  [ 5 play-sample ]
+  type-mismatch: "play-sample's unwrap rejects a bare fixnum" assert-error-type
+] ;

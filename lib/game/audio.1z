@@ -20,6 +20,10 @@ private{
   \\ the real wasm primitive; tests (and any non-wasm caller) rebind it via with-parameter,
   \\ since (wasm-load-sample) only exists under the wasm C-API root.
   (sample-loader): parameter{ [ [ (wasm-load-sample) ] ] } ;
+
+  \\ The host's trigger call, held as a quotation ( handle -- ), for the same reason as
+  \\ (sample-loader): (wasm-play-sample) only exists under the wasm C-API root.
+  (sample-player): parameter{ [ [ (wasm-play-sample) ] ] } ;
 }
 
 \\ Load interleaved 32-bit float PCM into the host and wrap the handle it returns.
@@ -43,3 +47,11 @@ private{
   sb sc sr (sample-loader) get call
   >sample
 ] ;
+
+\\ Trigger a one-shot play of a sample. There is no volume parameter, and each call is an
+\\ independent play: overlapping plays of the same sample layer with no voice cap.
+\\
+\\ The browser gates audio output on a first user gesture, which the host arms transparently.
+\\ A play before that gesture is not an error; it simply produces sound once the output is
+\\ armed.
+play-sample: ( sample -- ) [ unmake-sample (sample-player) get call ] ;
