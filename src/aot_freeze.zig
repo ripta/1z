@@ -87,6 +87,20 @@ pub const FreezeResult = struct {
     /// present, since the interpreted call would run the word's empty rehydrated body.
     interpreted_reach: []const ir_codegen.InterpretedReachViolation = &.{},
 
+    /// The descriptor carrying `id`, or null when no word has it.
+    ///
+    /// `buildAotDescs` assigns ids from one monotonic counter and appends adjacent to every
+    /// increment, so `words[i].word_id == i` holds and the direct slot answers in constant time.
+    /// That is an incidental property of the assignment loop rather than a declared invariant, so a
+    /// mismatch falls back to a scan instead of tripping an assertion.
+    pub fn wordById(self: *const FreezeResult, id: u32) ?*const AotWordDesc {
+        if (id < self.words.len and self.words[id].word_id == id) return &self.words[id];
+        for (self.words) |*w| {
+            if (w.word_id == id) return w;
+        }
+        return null;
+    }
+
     pub fn deinit(self: *FreezeResult, allocator: Allocator) void {
         allocator.free(self.entry_instrs);
         for (self.words) |w| {
@@ -194,23 +208,35 @@ pub const ResolvedCallee = union(enum) {
     unresolved: UnresolvedReason,
 };
 
+/// The callee's assigned word id, or null when the callee never got one. `buildAotDescs` draws
+/// native and compound ids from one monotonic counter, so the two variants share a single id space
+/// and need no discrimination here.
+fn calleeWordId(resolved: ResolvedCallee) ?u32 {
+    return switch (resolved) {
+        .native, .compound => |id| id,
+        .generated, .unresolved => null,
+    };
+}
+
 /// One reachable call_word instruction, identified by its containing word
 /// and the path within that word's instruction tree.
 ///
-/// `instruction_index` indexes into the containing word's top-level
-/// instruction body. `quotation_path` walks into nested quotation literals
-/// to reach the call site; an empty path means the call is at the top
-/// level of the containing word's body. For example, a call at index 2 of
-/// the quotation at index 5 of the caller's body has
-/// `instruction_index = 5` and `quotation_path = .{ 2 }`.
+/// `quotation_path` holds the index of each nested quotation literal to descend, outermost first,
+/// and `instruction_index` is the call's own index within the body that path arrives at. An empty
+/// path means the call sits at the top level of the containing word's body, and `instruction_index`
+/// indexes that body directly. For example, a call at index 2 of the quotation literal at index 5 of
+/// the caller's body has `quotation_path = .{ 5 }` and `instruction_index = 2`.
 ///
-/// For calls discovered by walking a `method{` dispatch entry on a
-/// generic, `caller_word_id` is the polymorphic word's id,
-/// `instruction_index` is 0, and `quotation_path` begins with
-/// `DISPATCH_PATH_SENTINEL`. The sentinel value (`maxInt(u32)`) is never a
-/// real quotation-literal index, so this encoding cannot collide with any
-/// real quotation literal path, whether or not the polymorphic word's body
-/// is empty.
+/// For calls discovered by walking a `method{` dispatch entry on a generic, `caller_word_id` is the
+/// polymorphic word's id and `quotation_path` begins with `DISPATCH_PATH_SENTINEL`. The sentinel
+/// value (`maxInt(u32)`) is never a real quotation-literal index, so this encoding cannot collide
+/// with any real quotation literal path, whether or not the polymorphic word's body is empty.
+///
+/// A dispatch-walked row's `instruction_index` is relative to the method body, not to the
+/// polymorphic word's own body. Every registered method of one generic is walked under the same
+/// `[DISPATCH_PATH_SENTINEL]` prefix, so two rows from two different method bodies are
+/// indistinguishable. A consumer that reads the caller's instruction stream must reject these rows;
+/// `locateCallSite` does.
 pub const CallTargetEntry = struct {
     caller_word_id: u32,
     instruction_index: u32,
@@ -224,6 +250,73 @@ pub const CallTargetEntry = struct {
 /// consumers can rely on it to distinguish dispatch-walked rows from
 /// direct quotation-literal rows.
 pub const DISPATCH_PATH_SENTINEL: u32 = std.math.maxInt(u32);
+
+/// A reverse index over `FreezeResult.call_targets`: given a callee's word id, the call sites that
+/// reach it. `call_targets` is caller-ordered and callee-ward only, so answering "who calls this
+/// word?" otherwise costs a full scan per query.
+///
+/// Both `.native` and `.compound` callees are indexed, since `buildAotDescs` draws their ids from
+/// one counter. `.generated` and `.unresolved` rows carry no callee id and are absent.
+///
+/// The index is an under-approximation of the calls a word actually receives. A consumer that
+/// concludes something from "every recorded call site agrees" must independently establish that no
+/// unrecorded call site exists:
+///
+/// - A call inside a quotation literal is attributed to the enclosing word, not to the quotation.
+///   Quotations are never callees at all, since `call` and `curry` are natives, so the index says
+///   nothing about what a quotation's own parameters receive.
+/// - `--compile-all-prelude` words and composite-buried quotation bodies are compiled without their
+///   callees being walked, so they record no outgoing rows.
+/// - A row whose caller was dropped for having no stack effect is discarded during the remap in
+///   `buildAotDescs`.
+/// - The remap resolves both ends of a row through a name-keyed map, so two same-named words from
+///   different modules collapse onto whichever was inserted last. Every row naming that name is
+///   filed under that one id.
+///
+/// A row's `instruction_index` does not always address the caller's own body. Use `locateCallSite`
+/// rather than indexing into the caller's instructions directly, and expect it to reject some rows
+/// that name a real call. It rejects every dispatch-walked row, including one whose method body
+/// `devirtualizeSingleMethod` went on to bind as the generic's own compiled body, where the row
+/// does address the caller's instructions.
+///
+/// A dispatch-only generic is emitted with `is_native` set, so a `.native` row does not imply the
+/// callee is a primitive.
+pub const CallerIndex = struct {
+    /// Borrowed from the `FreezeResult` this index was built over, which must outlive it. The index
+    /// owns no rows and no `quotation_path` slices.
+    call_targets: []const CallTargetEntry,
+    /// Row indices into `call_targets`, grouped by callee word id. Within a group, rows keep their
+    /// original `call_targets` order.
+    rows: []const u32,
+    /// Group boundaries, `max_word_id + 2` long. The group for word id `i` is
+    /// `rows[offsets[i]..offsets[i + 1]]`.
+    offsets: []const u32,
+
+    /// Row indices of every recorded call to `callee_word_id`, in `call_targets` order. Empty for an
+    /// id that is never called, and for an id past the end of the word table.
+    pub fn callSites(self: *const CallerIndex, callee_word_id: u32) []const u32 {
+        const bucket: usize = callee_word_id;
+        if (bucket + 1 >= self.offsets.len) return &.{};
+        return self.rows[self.offsets[bucket]..self.offsets[bucket + 1]];
+    }
+
+    pub fn entryAt(self: *const CallerIndex, row: u32) CallTargetEntry {
+        return self.call_targets[row];
+    }
+
+    pub fn deinit(self: *CallerIndex, allocator: Allocator) void {
+        allocator.free(self.rows);
+        allocator.free(self.offsets);
+        self.* = undefined;
+    }
+};
+
+/// A call-site row resolved to the instruction stream that actually contains it, along with the
+/// index of the call within that stream.
+pub const LocatedCall = struct {
+    body: []const Instruction,
+    index: u32,
+};
 
 pub const FreezeFeatureUse = struct {
     caller_name: []const u8,
@@ -2020,6 +2113,111 @@ fn bannedDynamicFeatureForCall(ctx: *const Context, name: []const u8, class: Art
     return null;
 }
 
+/// The callee id a row should be filed under, or null when the row carries no id or names one
+/// outside the word table.
+///
+/// Both passes of the counting sort route through this, so they cannot disagree about which rows are
+/// indexed. An out-of-range id is unreachable, since every id is assigned from `word_map` during the
+/// remap, but it would silently corrupt the offsets array rather than fail.
+fn indexableCallee(freeze_result: *const FreezeResult, entry: CallTargetEntry) ?u32 {
+    const callee = calleeWordId(entry.resolved) orelse return null;
+    std.debug.assert(callee <= freeze_result.max_word_id);
+    if (callee > freeze_result.max_word_id) return null;
+    return callee;
+}
+
+/// Invert `freeze_result.call_targets` into a `CallerIndex`.
+///
+/// A stable counting sort over the rows: one pass to size each callee's group, a prefix sum, then
+/// one pass to place the row indices. Linear, and allocation free per callee. Stability is what a
+/// consumer iterating callee ids ascending relies on for a total order over call sites; whether that
+/// order is itself the same from build to build depends on discovery, not on this function.
+///
+/// Built on demand rather than attached to the `FreezeResult`, so a build that never consults it
+/// pays nothing.
+pub fn buildCallerIndex(
+    freeze_result: *const FreezeResult,
+    allocator: Allocator,
+) Allocator.Error!CallerIndex {
+    const bucket_count: usize = @as(usize, freeze_result.max_word_id) + 1;
+
+    const offsets = try allocator.alloc(u32, bucket_count + 1);
+    errdefer allocator.free(offsets);
+    @memset(offsets, 0);
+
+    var indexed: usize = 0;
+    for (freeze_result.call_targets) |entry| {
+        const callee: usize = indexableCallee(freeze_result, entry) orelse continue;
+        offsets[callee + 1] += 1;
+        indexed += 1;
+    }
+
+    var bucket: usize = 0;
+    while (bucket < bucket_count) : (bucket += 1) {
+        offsets[bucket + 1] += offsets[bucket];
+    }
+
+    const rows = try allocator.alloc(u32, indexed);
+    errdefer allocator.free(rows);
+
+    // Group write cursors, seeded from each group's start offset. Separate from `offsets`, which
+    // must survive the placement pass intact.
+    const cursor = try allocator.alloc(u32, bucket_count);
+    defer allocator.free(cursor);
+    @memcpy(cursor, offsets[0..bucket_count]);
+
+    for (freeze_result.call_targets, 0..) |entry, row| {
+        const callee: usize = indexableCallee(freeze_result, entry) orelse continue;
+        rows[cursor[callee]] = @intCast(row);
+        cursor[callee] += 1;
+    }
+
+    return .{
+        .call_targets = freeze_result.call_targets,
+        .rows = rows,
+        .offsets = offsets,
+    };
+}
+
+/// Resolve a call-site row to the instruction stream that contains it, or null when the row does not
+/// address a matching call in the caller's own compiled body.
+///
+/// Several row shapes carry an `instruction_index` relative to some other body. A dispatch-walked row
+/// indexes into a method body. A row from one of the promoting walks indexes into a composite-buried
+/// quotation body, under the enclosing word's id and a path that addresses that buried body rather
+/// than the caller's. Neither is distinguishable from a genuine top-level row by inspection, so the
+/// final check is against the instruction itself: the call it names must be a call to the expected
+/// callee. A name match is decisive because the remap resolves a callee through the same name the
+/// descriptor stores.
+///
+/// The check accepts only real call sites, but it does not map every row to its own site. A promoted
+/// row can land on a different, genuine call to the same callee in the caller's body and be accepted,
+/// which trades one recorded site for another rather than inventing one.
+pub fn locateCallSite(freeze_result: *const FreezeResult, entry: CallTargetEntry) ?LocatedCall {
+    const callee_id = calleeWordId(entry.resolved) orelse return null;
+    const callee = freeze_result.wordById(callee_id) orelse return null;
+    const caller = freeze_result.wordById(entry.caller_word_id) orelse return null;
+
+    var body = caller.instructions;
+    for (entry.quotation_path) |step| {
+        if (step == DISPATCH_PATH_SENTINEL) return null;
+        if (step >= body.len) return null;
+        switch (body[step].op) {
+            .push_literal => |val| switch (val) {
+                .quotation => |q| body = q.instructions,
+                else => return null,
+            },
+            else => return null,
+        }
+    }
+
+    if (entry.instruction_index >= body.len) return null;
+    const name = body[entry.instruction_index].op.callTargetName() orelse return null;
+    if (!std.mem.eql(u8, name, callee.name)) return null;
+
+    return .{ .body = body, .index = entry.instruction_index };
+}
+
 /// Walk `freeze_result.call_targets` to find every compound word that
 /// transitively calls any native carrying `target_marker`. Returns one
 /// `ReachChain` per reached compound, sorted by chain length (shortest first)
@@ -2084,27 +2282,12 @@ pub fn computeReachabilityForMarker(
 
     if (direct_callers.count() == 0) return &.{};
 
-    // Reverse compound call graph: compound_id → list of compound word ids that call it.
-    var reverse_graph = std.AutoHashMapUnmanaged(u32, std.ArrayListUnmanaged(u32)){};
-    defer {
-        var it = reverse_graph.iterator();
-        while (it.next()) |rev_entry| rev_entry.value_ptr.deinit(allocator);
-        reverse_graph.deinit(allocator);
-    }
-    for (freeze_result.call_targets) |entry| {
-        switch (entry.resolved) {
-            .compound => |cid| {
-                const gop = try reverse_graph.getOrPut(allocator, cid);
-                if (!gop.found_existing) gop.value_ptr.* = .{};
-                try gop.value_ptr.append(allocator, entry.caller_word_id);
-            },
-            else => {},
-        }
-    }
+    var caller_index = try buildCallerIndex(freeze_result, allocator);
+    defer caller_index.deinit(allocator);
 
-    // BFS from direct callers through the reverse graph. Track parent pointers
-    // so chains can be reconstructed. parent_map[id] = (parent_id, native_name).
-    // A direct caller has parent = null; native_name is the native it calls.
+    // BFS from direct callers backwards through the caller index. Track parent pointers so chains
+    // can be reconstructed. parent_map[id] = (parent_id, native_name). A direct caller has
+    // parent = null; native_name is the native it calls.
     const ParentEntry = struct {
         parent: ?u32,
         native_name: ?[]const u8,
@@ -2125,12 +2308,16 @@ pub fn computeReachabilityForMarker(
     var qi: usize = 0;
     while (qi < bfs_queue.items.len) : (qi += 1) {
         const current_id = bfs_queue.items[qi];
-        if (reverse_graph.get(current_id)) |callers| {
-            for (callers.items) |caller_id| {
-                if (parent_map.contains(caller_id)) continue;
-                try parent_map.put(allocator, caller_id, .{ .parent = current_id, .native_name = null });
-                try bfs_queue.append(allocator, caller_id);
-            }
+        for (caller_index.callSites(current_id)) |row| {
+            const entry = caller_index.entryAt(row);
+            // Compound callees only. A dispatch-only generic is frozen with `is_native` set, so its
+            // incoming calls are `.native` rows and the walk stops there rather than naming the
+            // words that call it.
+            if (entry.resolved != .compound) continue;
+            const caller_id = entry.caller_word_id;
+            if (parent_map.contains(caller_id)) continue;
+            try parent_map.put(allocator, caller_id, .{ .parent = current_id, .native_name = null });
+            try bfs_queue.append(allocator, caller_id);
         }
     }
 
@@ -4806,6 +4993,497 @@ test "buildAotDescs throughput ceiling on synthetic graph" {
 
     try testing.expectEqual(word_count * calls_per_word, result.call_targets.len);
     try testing.expect(elapsed_ns < ceiling_ns);
+}
+
+// ── Caller Index Tests ─────────────────────────────────────────────────
+
+const FixtureWord = struct {
+    name: []const u8,
+    body: []const Instruction = &.{},
+};
+
+/// Assemble a `FreezeResult` from a literal word list and call-site list, so a caller-index test
+/// states the graph it needs instead of repeating the `buildAotDescs` setup.
+///
+/// `entry_instrs`, every body, and every name are borrowed rather than copied: the returned result
+/// aliases them, so they must outlive it.
+fn callerIndexFixture(
+    allocator: Allocator,
+    entry_instrs: []const Instruction,
+    compounds: []const FixtureWord,
+    natives: []const []const u8,
+    pending: []const PendingCallTarget,
+) Allocator.Error!FreezeResult {
+    const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.names.deinit(allocator);
+    defer discovered.defs.deinit(allocator);
+    defer discovered.native_names.deinit(allocator);
+    defer discovered.native_defs.deinit(allocator);
+
+    for (compounds) |w| {
+        try discovered.names.append(allocator, w.name);
+        try discovered.defs.append(allocator, .{
+            .name = w.name,
+            .action = .{ .compound = w.body },
+            .stack_effect = effect,
+        });
+    }
+    for (natives) |n| {
+        try discovered.native_names.append(allocator, n);
+        try discovered.native_defs.append(allocator, .{
+            .name = n,
+            .action = .{ .native = callTargetsNoopNative },
+            .stack_effect = effect,
+        });
+    }
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    return buildAotDescs(entry_instrs, "", &discovered, pending, &prelude_words, null, allocator);
+}
+
+fn fixtureWordId(result: *const FreezeResult, name: []const u8) u32 {
+    for (result.words) |w| {
+        if (std.mem.eql(u8, w.name, name)) return w.word_id;
+    }
+    unreachable;
+}
+
+test "buildAotDescs assigns dense word ids even when a word is skipped" {
+    // `wordById` trusts `words[id]` only when that slot's own id matches, and falls back to a scan
+    // otherwise, so a gap would cost time rather than correctness. Pin density anyway: it is what
+    // keeps that fast path hitting and keeps the index's offsets array free of dead buckets.
+    const allocator = testing.allocator;
+
+    var discovered = DiscoveredWords{
+        .names = .{},
+        .defs = .{},
+        .native_names = .{},
+        .native_defs = .{},
+        .quotation_bodies = .{},
+    };
+    defer discovered.names.deinit(allocator);
+    defer discovered.defs.deinit(allocator);
+    defer discovered.native_names.deinit(allocator);
+    defer discovered.native_defs.deinit(allocator);
+
+    const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+    try discovered.names.append(allocator, "kept-a");
+    try discovered.defs.append(allocator, .{ .name = "kept-a", .action = .{ .compound = &.{} }, .stack_effect = effect });
+    // No stack effect: dropped before an id is taken.
+    try discovered.names.append(allocator, "dropped");
+    try discovered.defs.append(allocator, .{ .name = "dropped", .action = .{ .compound = &.{} } });
+    try discovered.names.append(allocator, "kept-b");
+    try discovered.defs.append(allocator, .{ .name = "kept-b", .action = .{ .compound = &.{} }, .stack_effect = effect });
+    try discovered.native_names.append(allocator, "nat");
+    try discovered.native_defs.append(allocator, .{ .name = "nat", .action = .{ .native = callTargetsNoopNative }, .stack_effect = effect });
+
+    var prelude_words = std.StringHashMapUnmanaged(void){};
+    var result = try buildAotDescs(&.{}, "", &discovered, &.{}, &prelude_words, null, allocator);
+    defer result.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), result.skipped_words.len);
+    try testing.expectEqual(@as(usize, 4), result.words.len);
+    try testing.expectEqual(@as(usize, result.max_word_id) + 1, result.words.len);
+    for (result.words, 0..) |w, i| {
+        try testing.expectEqual(@as(u32, @intCast(i)), w.word_id);
+        try testing.expectEqual(&result.words[i], result.wordById(w.word_id).?);
+    }
+    try testing.expectEqual(@as(?*const AotWordDesc, null), result.wordById(result.max_word_id + 1));
+}
+
+test "wordById falls back to a scan when ids are not slot-aligned" {
+    // `buildAotDescs` cannot produce this today, so the fallback needs a hand-built result to reach
+    // it at all. It exists because the density it would otherwise depend on is incidental.
+    var words = [_]AotWordDesc{
+        .{ .name = "second", .instructions = &.{}, .input_count = 0, .output_count = 0, .word_id = 1 },
+        .{ .name = "first", .instructions = &.{}, .input_count = 0, .output_count = 0, .word_id = 0 },
+    };
+    const result = FreezeResult{
+        .words = &words,
+        .quotations = &.{},
+        .entry_word_id = 0,
+        .max_word_id = 1,
+        .max_quotation_id = 0,
+        .skipped_words = &.{},
+        .entry_instrs = &.{},
+    };
+
+    try testing.expectEqualStrings("first", result.wordById(0).?.name);
+    try testing.expectEqualStrings("second", result.wordById(1).?.name);
+    try testing.expectEqual(@as(?*const AotWordDesc, null), result.wordById(2));
+}
+
+test "buildCallerIndex groups call sites by callee word id" {
+    const allocator = testing.allocator;
+
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "__entry__", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = "foo" } },
+        .{ .caller_name = "foo", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .native_name = "bar" } },
+        .{ .caller_name = "baz", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = "foo" } },
+    };
+
+    var result = try callerIndexFixture(
+        allocator,
+        &.{},
+        &.{ .{ .name = "foo" }, .{ .name = "baz" } },
+        &.{"bar"},
+        &pending,
+    );
+    defer result.deinit(allocator);
+
+    var index = try buildCallerIndex(&result, allocator);
+    defer index.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, result.max_word_id) + 2, index.offsets.len);
+
+    const foo_id = fixtureWordId(&result, "foo");
+    const foo_sites = index.callSites(foo_id);
+    try testing.expectEqual(@as(usize, 2), foo_sites.len);
+    try testing.expectEqual(result.entry_word_id, index.entryAt(foo_sites[0]).caller_word_id);
+    try testing.expectEqual(fixtureWordId(&result, "baz"), index.entryAt(foo_sites[1]).caller_word_id);
+
+    try testing.expectEqual(@as(usize, 1), index.callSites(fixtureWordId(&result, "bar")).len);
+    try testing.expectEqual(@as(usize, 0), index.callSites(result.entry_word_id).len);
+    // Past the end of the word table rather than merely uncalled.
+    try testing.expectEqual(@as(usize, 0), index.callSites(result.max_word_id + 1).len);
+}
+
+test "buildCallerIndex preserves call_targets order within a callee bucket" {
+    // The inference pass iterates a callee's sites to a fixpoint, so it needs a total order over
+    // them. The counting sort is stable, so each bucket stays in `call_targets` order.
+    const allocator = testing.allocator;
+
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "c0", .instruction_index = 7, .quotation_path = &.{}, .pending = .{ .compound_name = "target" } },
+        .{ .caller_name = "c1", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = "other" } },
+        .{ .caller_name = "c1", .instruction_index = 8, .quotation_path = &.{}, .pending = .{ .compound_name = "target" } },
+        .{ .caller_name = "c2", .instruction_index = 9, .quotation_path = &.{}, .pending = .{ .compound_name = "target" } },
+    };
+
+    var result = try callerIndexFixture(
+        allocator,
+        &.{},
+        &.{ .{ .name = "target" }, .{ .name = "other" }, .{ .name = "c0" }, .{ .name = "c1" }, .{ .name = "c2" } },
+        &.{},
+        &pending,
+    );
+    defer result.deinit(allocator);
+
+    var index = try buildCallerIndex(&result, allocator);
+    defer index.deinit(allocator);
+
+    const sites = index.callSites(fixtureWordId(&result, "target"));
+    try testing.expectEqual(@as(usize, 3), sites.len);
+    try testing.expectEqual(@as(u32, 0), sites[0]);
+    try testing.expectEqual(@as(u32, 2), sites[1]);
+    try testing.expectEqual(@as(u32, 3), sites[2]);
+    try testing.expectEqual(@as(u32, 7), index.entryAt(sites[0]).instruction_index);
+    try testing.expectEqual(@as(u32, 8), index.entryAt(sites[1]).instruction_index);
+    try testing.expectEqual(@as(u32, 9), index.entryAt(sites[2]).instruction_index);
+}
+
+test "buildCallerIndex borrows quotation_path rather than copying" {
+    // The FreezeResult frees every path on deinit, so an index that owned a copy would leak it and
+    // one that freed a shared path would double-free. Pointer identity is the direct check; the
+    // deinit ordering leaves testing.allocator to catch either mistake.
+    const allocator = testing.allocator;
+
+    const path_data = [_]u32{ 3, 1 };
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "__entry__", .instruction_index = 5, .quotation_path = &path_data, .pending = .{ .compound_name = "foo" } },
+    };
+
+    var result = try callerIndexFixture(allocator, &.{}, &.{.{ .name = "foo" }}, &.{}, &pending);
+    defer result.deinit(allocator);
+
+    var index = try buildCallerIndex(&result, allocator);
+    const sites = index.callSites(fixtureWordId(&result, "foo"));
+    try testing.expectEqual(@as(usize, 1), sites.len);
+    try testing.expectEqual(
+        @intFromPtr(result.call_targets[0].quotation_path.ptr),
+        @intFromPtr(index.entryAt(sites[0]).quotation_path.ptr),
+    );
+    index.deinit(allocator);
+}
+
+test "buildCallerIndex skips unresolved rows" {
+    const allocator = testing.allocator;
+
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "__entry__", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .unresolved = .not_in_dictionary } },
+        .{ .caller_name = "__entry__", .instruction_index = 1, .quotation_path = &.{}, .pending = .{ .compound_name = "foo" } },
+        .{ .caller_name = "__entry__", .instruction_index = 2, .quotation_path = &.{}, .pending = .{ .unresolved = .skipped_parse_time_only } },
+    };
+
+    var result = try callerIndexFixture(allocator, &.{}, &.{.{ .name = "foo" }}, &.{}, &pending);
+    defer result.deinit(allocator);
+
+    var index = try buildCallerIndex(&result, allocator);
+    defer index.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 3), result.call_targets.len);
+    try testing.expectEqual(@as(usize, 1), index.rows.len);
+    try testing.expectEqual(@as(u32, 1), index.rows[0]);
+    try testing.expectEqual(@as(usize, 1), index.callSites(fixtureWordId(&result, "foo")).len);
+}
+
+test "buildCallerIndex indexes native and compound callees in one id space" {
+    const allocator = testing.allocator;
+
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "__entry__", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = "comp" } },
+        .{ .caller_name = "__entry__", .instruction_index = 1, .quotation_path = &.{}, .pending = .{ .native_name = "nat" } },
+    };
+
+    var result = try callerIndexFixture(allocator, &.{}, &.{.{ .name = "comp" }}, &.{"nat"}, &pending);
+    defer result.deinit(allocator);
+
+    var index = try buildCallerIndex(&result, allocator);
+    defer index.deinit(allocator);
+
+    const comp_id = fixtureWordId(&result, "comp");
+    const nat_id = fixtureWordId(&result, "nat");
+    try testing.expect(comp_id != nat_id);
+
+    const comp_sites = index.callSites(comp_id);
+    const nat_sites = index.callSites(nat_id);
+    try testing.expectEqual(@as(usize, 1), comp_sites.len);
+    try testing.expectEqual(@as(usize, 1), nat_sites.len);
+    try testing.expectEqual(comp_id, index.entryAt(comp_sites[0]).resolved.compound);
+    try testing.expectEqual(nat_id, index.entryAt(nat_sites[0]).resolved.native);
+}
+
+test "buildCallerIndex on an empty call graph yields empty buckets" {
+    const allocator = testing.allocator;
+
+    var result = try callerIndexFixture(allocator, &.{}, &.{}, &.{}, &.{});
+    defer result.deinit(allocator);
+
+    var index = try buildCallerIndex(&result, allocator);
+    defer index.deinit(allocator);
+
+    // Only the entry word exists, so there is one bucket plus the terminator.
+    try testing.expectEqual(@as(usize, 2), index.offsets.len);
+    try testing.expectEqual(@as(usize, 0), index.rows.len);
+    try testing.expectEqual(@as(usize, 0), index.callSites(result.entry_word_id).len);
+}
+
+test "locateCallSite resolves a top-level call, a nested one, and rejects unaddressable rows" {
+    const allocator = testing.allocator;
+
+    const inner_body = [_]Instruction{
+        .{ .op = .{ .call_word = "foo" }, .line = 1 },
+    };
+    const nested_body = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner_body } } }, .line = 1 },
+        .{ .op = .{ .call_word = "foo" }, .line = 1 },
+    };
+    const caller_body = [_]Instruction{
+        .{ .op = .{ .call_word = "foo" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &nested_body } } }, .line = 1 },
+        .{ .op = .{ .call_word = "other" }, .line = 1 },
+    };
+
+    const sentinel_path = [_]u32{DISPATCH_PATH_SENTINEL};
+    const nested_path = [_]u32{1};
+    const deep_path = [_]u32{ 1, 0 };
+    const non_quotation_path = [_]u32{0};
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "caller", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = "foo" } },
+        .{ .caller_name = "caller", .instruction_index = 1, .quotation_path = &nested_path, .pending = .{ .compound_name = "foo" } },
+        .{ .caller_name = "caller", .instruction_index = 0, .quotation_path = &deep_path, .pending = .{ .compound_name = "foo" } },
+        // A dispatch-walked row: the index belongs to a method body.
+        .{ .caller_name = "caller", .instruction_index = 0, .quotation_path = &sentinel_path, .pending = .{ .compound_name = "foo" } },
+        // A promoted row: the index belongs to a buried body, and here lands on a call to a
+        // different word.
+        .{ .caller_name = "caller", .instruction_index = 2, .quotation_path = &.{}, .pending = .{ .compound_name = "foo" } },
+        // Past the end of the caller's body.
+        .{ .caller_name = "caller", .instruction_index = 9, .quotation_path = &.{}, .pending = .{ .compound_name = "foo" } },
+        // A path step naming an instruction that is not a quotation literal.
+        .{ .caller_name = "caller", .instruction_index = 0, .quotation_path = &non_quotation_path, .pending = .{ .compound_name = "foo" } },
+        // No callee id to resolve a name against.
+        .{ .caller_name = "caller", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .unresolved = .not_in_dictionary } },
+    };
+
+    var result = try callerIndexFixture(
+        allocator,
+        &.{},
+        &.{ .{ .name = "caller", .body = &caller_body }, .{ .name = "foo" }, .{ .name = "other" } },
+        &.{},
+        &pending,
+    );
+    defer result.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 8), result.call_targets.len);
+
+    const top = locateCallSite(&result, result.call_targets[0]).?;
+    try testing.expectEqual(@intFromPtr(&caller_body[0]), @intFromPtr(top.body.ptr));
+    try testing.expectEqual(@as(u32, 0), top.index);
+
+    const nested = locateCallSite(&result, result.call_targets[1]).?;
+    try testing.expectEqual(@intFromPtr(&nested_body[0]), @intFromPtr(nested.body.ptr));
+    try testing.expectEqual(@as(u32, 1), nested.index);
+
+    const deep = locateCallSite(&result, result.call_targets[2]).?;
+    try testing.expectEqual(@intFromPtr(&inner_body[0]), @intFromPtr(deep.body.ptr));
+    try testing.expectEqual(@as(u32, 0), deep.index);
+
+    for (result.call_targets[3..]) |entry| {
+        try testing.expectEqual(@as(?LocatedCall, null), locateCallSite(&result, entry));
+    }
+}
+
+test "buildCallerIndex throughput ceiling on synthetic graph" {
+    // Ceiling, not a baseline diff. The index is built on demand, so this work sits outside the
+    // buildAotDescs ceiling and needs its own guard.
+    const allocator = testing.allocator;
+    const word_count: usize = 200;
+    const calls_per_word: usize = 20;
+    const ceiling_ns: u64 = 100 * std.time.ns_per_ms;
+
+    var name_buf = std.ArrayListUnmanaged([]u8){};
+    defer {
+        for (name_buf.items) |n| allocator.free(n);
+        name_buf.deinit(allocator);
+    }
+    var i: usize = 0;
+    while (i < word_count) : (i += 1) {
+        try name_buf.append(allocator, try std.fmt.allocPrint(allocator, "w{d}", .{i}));
+    }
+
+    var words = std.ArrayListUnmanaged(FixtureWord){};
+    defer words.deinit(allocator);
+    var pending = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending.deinit(allocator);
+    i = 0;
+    while (i < word_count) : (i += 1) {
+        try words.append(allocator, .{ .name = name_buf.items[i] });
+        var j: usize = 0;
+        while (j < calls_per_word) : (j += 1) {
+            try pending.append(allocator, .{
+                .caller_name = name_buf.items[i],
+                .instruction_index = @intCast(j),
+                .quotation_path = &.{},
+                .pending = .{ .compound_name = name_buf.items[(i + j + 1) % word_count] },
+            });
+        }
+    }
+
+    var result = try callerIndexFixture(allocator, &.{}, words.items, &.{}, pending.items);
+    defer result.deinit(allocator);
+
+    var timer = try std.time.Timer.start();
+    var index = try buildCallerIndex(&result, allocator);
+    const elapsed_ns = timer.read();
+    defer index.deinit(allocator);
+
+    try testing.expectEqual(word_count * calls_per_word, index.rows.len);
+    try testing.expectEqual(@as(usize, calls_per_word), index.callSites(fixtureWordId(&result, "w0")).len);
+    try testing.expect(elapsed_ns < ceiling_ns);
+}
+
+test "computeReachabilityForMarker reports a direct and a transitive chain" {
+    // Characterization coverage for the only consumer of the caller index. Until this test the
+    // function was exercised only by the `--reach` CLI goldens, which cannot isolate the graph walk
+    // from the freeze it runs on.
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Marker lookup goes through the dictionary, not the frozen descriptor, so the native has to
+    // carry the marker there.
+    try ctx.dictionary.put("dyn-native", .{
+        .name = "dyn-native",
+        .action = .{ .native = callTargetsNoopNative },
+        .markers = &.{@constCast(&markers_mod.dynamic_eval_marker)},
+    });
+
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "direct", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .native_name = "dyn-native" } },
+        .{ .caller_name = "outer", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = "direct" } },
+        // An unrelated edge, to confirm only marker-reaching words are reported.
+        .{ .caller_name = "bystander", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .compound_name = "outer" } },
+    };
+
+    var result = try callerIndexFixture(
+        allocator,
+        &.{},
+        &.{ .{ .name = "direct" }, .{ .name = "outer" }, .{ .name = "bystander" } },
+        &.{"dyn-native"},
+        &pending,
+    );
+    defer result.deinit(allocator);
+
+    const chains = try computeReachabilityForMarker(&result, &ctx, &markers_mod.dynamic_eval_marker, allocator);
+    defer {
+        for (chains) |c| c.deinit(allocator);
+        allocator.free(chains);
+    }
+
+    // Sorted by chain length, then by the outermost name.
+    try testing.expectEqual(@as(usize, 3), chains.len);
+    for (chains) |c| try testing.expectEqualStrings("dyn-native", c.native_name);
+
+    try testing.expectEqual(@as(usize, 1), chains[0].compound_chain.len);
+    try testing.expectEqualStrings("direct", chains[0].compound_chain[0]);
+
+    try testing.expectEqual(@as(usize, 2), chains[1].compound_chain.len);
+    try testing.expectEqualStrings("outer", chains[1].compound_chain[0]);
+    try testing.expectEqualStrings("direct", chains[1].compound_chain[1]);
+
+    try testing.expectEqual(@as(usize, 3), chains[2].compound_chain.len);
+    try testing.expectEqualStrings("bystander", chains[2].compound_chain[0]);
+    try testing.expectEqualStrings("outer", chains[2].compound_chain[1]);
+    try testing.expectEqualStrings("direct", chains[2].compound_chain[2]);
+}
+
+test "computeReachabilityForMarker stops the walk at a native-classified caller" {
+    // The caller index offers every resolved edge, but the walk consumes only `.compound` ones, as
+    // the reverse graph it replaced did structurally. A dispatch-only generic is frozen with
+    // `is_native` set while still recording calls of its own, so it is a caller reached through a
+    // `.native` row. Dropping the filter would walk past it and report its callers, changing the
+    // `--reach` output.
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    try ctx.dictionary.put("dyn-native", .{
+        .name = "dyn-native",
+        .action = .{ .native = callTargetsNoopNative },
+        .markers = &.{@constCast(&markers_mod.dynamic_eval_marker)},
+    });
+
+    const pending = [_]PendingCallTarget{
+        .{ .caller_name = "generic", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .native_name = "dyn-native" } },
+        .{ .caller_name = "outer", .instruction_index = 0, .quotation_path = &.{}, .pending = .{ .native_name = "generic" } },
+    };
+
+    var result = try callerIndexFixture(
+        allocator,
+        &.{},
+        &.{.{ .name = "outer" }},
+        &.{ "dyn-native", "generic" },
+        &pending,
+    );
+    defer result.deinit(allocator);
+
+    const chains = try computeReachabilityForMarker(&result, &ctx, &markers_mod.dynamic_eval_marker, allocator);
+    defer {
+        for (chains) |c| c.deinit(allocator);
+        allocator.free(chains);
+    }
+
+    try testing.expectEqual(@as(usize, 1), chains.len);
+    try testing.expectEqual(@as(usize, 1), chains[0].compound_chain.len);
+    try testing.expectEqualStrings("generic", chains[0].compound_chain[0]);
 }
 
 // ── Generator-Resolution Contract Tests ────────────────────────────────
