@@ -1,0 +1,70 @@
+\ Unit tests for lib/game/audio.1z.
+\
+\ A bound (sample-loader) stands in for the host load call, which only exists under the wasm
+\ C-API root. 1z test borrows lib/game/audio.1z's private words into this file, so the
+\ parameter is reachable here by name.
+
+use "testing" ;
+use "game/audio" ;
+
+private{
+  \\ Eight bytes of 32-bit float PCM, least-significant byte first: two mono frames of 1.0 and
+  \\ -1.0, or equivalently one stereo frame.
+  (eight-pcm-bytes): ( -- byte-array ) [ B{ 0x00 0x00 0x80 0x3f 0x00 0x00 0x80 0xbf } ] ;
+}
+
+test-sample-hands-its-inputs-to-the-loader-and-wraps-the-handle: ( -- ) [
+  [
+    8000 "<sample> hands the rate to the loader" assert=
+    1 "<sample> hands the channel count to the loader" assert=
+    #len 8 "<sample> hands the PCM bytes to the loader" assert=
+    7
+  ]
+  (sample-loader)
+  [
+    (eight-pcm-bytes) 1 8000 <sample>
+    unmake-sample 7 "<sample> wraps the handle the loader returned" assert=
+  ] with-parameter
+] ;
+
+test-sample-accepts-multiple-channels: ( -- ) [
+  [ drop drop drop 3 ] (sample-loader)
+  [
+    (eight-pcm-bytes) 2 8000 <sample>
+    unmake-sample 3 "<sample> accepts eight bytes as one stereo frame" assert=
+  ] with-parameter
+] ;
+
+\ The rejections below bind no loader at all. A call that got past validation would raise
+\ unknown-word instead, so each one also pins that validation runs before the host call.
+
+test-sample-rejects-a-non-positive-channel-count: ( -- ) [
+  [ (eight-pcm-bytes) 0 8000 <sample> ]
+  invalid-argument: "<sample> rejects zero channels" assert-error-type
+  [ (eight-pcm-bytes) -1 8000 <sample> ]
+  invalid-argument: "<sample> rejects a negative channel count" assert-error-type
+] ;
+
+test-sample-rejects-a-non-positive-rate: ( -- ) [
+  [ (eight-pcm-bytes) 1 0 <sample> ]
+  invalid-argument: "<sample> rejects a zero rate" assert-error-type
+  [ (eight-pcm-bytes) 1 -8000 <sample> ]
+  invalid-argument: "<sample> rejects a negative rate" assert-error-type
+] ;
+
+test-sample-rejects-empty-pcm: ( -- ) [
+  [ B{ } 1 8000 <sample> ]
+  invalid-argument: "<sample> rejects an empty byte array" assert-error-type
+] ;
+
+test-sample-rejects-a-partial-frame: ( -- ) [
+  [ B{ 0x00 0x00 0x80 0x3f 0x00 0x00 } 1 8000 <sample> ]
+  invalid-argument: "<sample> rejects six bytes of mono PCM" assert-error-type
+  [ (eight-pcm-bytes) 3 8000 <sample> ]
+  invalid-argument: "<sample> rejects eight bytes at three channels" assert-error-type
+] ;
+
+test-sample-rejects-a-non-byte-array: ( -- ) [
+  [ 42 1 8000 <sample> ]
+  type-error: "<sample>'s byte-array annotation rejects a fixnum" assert-error-type
+] ;

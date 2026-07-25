@@ -3,3 +3,4 @@
 "game/draw" load reexport
 "game/loop" load reexport
 "game/input" load reexport
+"game/audio" load reexport

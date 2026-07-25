@@ -1,0 +1,45 @@
+\ lib/game/audio.1z - Sample loading for the browser game platform
+\
+\ The host owns the audio output. It provides two primitives: load a block of PCM into an
+\ audio buffer of its own, and trigger a buffer it has already loaded. 1z never sees that
+\ buffer, only the opaque handle the load call hands back, which the sample type wraps.
+\
+\ PCM crosses the boundary as 32-bit floats, interleaved by frame, least-significant byte
+\ first. That is the host's own audio-buffer element type, so it copies frames across with no
+\ numeric conversion. 1z produces the layout with #poke32! and float32>bits (lib/math.1z), or
+\ through >packed:f32 (lib/math/packed.1z).
+
+\\ An opaque handle to PCM the host has loaded and can play.
+sample: virtual{ fixnum } ;
+
+private{
+  \\ One 32-bit float per PCM value. A frame is one value per channel.
+  bytes-per-pcm-value: 4 ;
+
+  \\ The host's load call, held as a quotation ( bytes channels rate -- handle ). Defaults to
+  \\ the real wasm primitive; tests (and any non-wasm caller) rebind it via with-parameter,
+  \\ since (wasm-load-sample) only exists under the wasm C-API root.
+  (sample-loader): parameter{ [ [ (wasm-load-sample) ] ] } ;
+}
+
+\\ Load interleaved 32-bit float PCM into the host and wrap the handle it returns.
+\\
+\\ The byte length must cover whole frames: a positive exact multiple of channels * 4.
+\\
+\\ rate is the sample rate in hertz, checked here only for positivity. The range a rate has to
+\\ fall in belongs to the host, so a rate it refuses surfaces as an error from the load call
+\\ rather than from this word.
+<sample>: ( bytes: byte-array channels: fixnum rate: fixnum -- sample ) [
+  sr: swap ;
+  sc: swap ;
+  sb: swap ;
+
+  sc 1 < [ f "<sample> requires at least one channel" EInvalidArgument make-error throw ] when
+  sr 1 < [ f "<sample> requires a positive sample rate" EInvalidArgument make-error throw ] when
+  sb #len 0 = [ f "<sample> requires at least one frame of PCM" EInvalidArgument make-error throw ] when
+  sb #len sc bytes-per-pcm-value * % 0 = not
+  [ f "<sample> requires a PCM byte length that is a whole multiple of channels * 4" EInvalidArgument make-error throw ] when
+
+  sb sc sr (sample-loader) get call
+  >sample
+] ;
