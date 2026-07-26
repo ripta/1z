@@ -1,0 +1,40 @@
+Stack: [ ]
+=== setter-stored vector stays alive across the binding ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: the stored vector reads back through the binding
+Stack: [ ]
+PASS: a consuming read works once
+Stack: [ ]
+PASS: a consuming read works twice
+Stack: [ ]
+PASS: a consuming read works three times
+Stack: [ ]
+=== replacing a container field releases the old value cleanly ===
+Stack: [ ]
+Stack: [ ]
+PASS: the replacement vector is readable
+Stack: [ ]
+Stack: [ ]
+PASS: a scalar can replace a container
+Stack: [ ]
+=== other refcounted container kinds behave the same ===
+Stack: [ ]
+Stack: [ ]
+PASS: a byte array survives setter storage
+Stack: [ ]
+Stack: [ ]
+PASS: a mutable map survives setter storage
+Stack: [ ]
+=== in-place mutation of a setter-stored vector is visible through the binding ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: pushes through one copy show in another
+Stack: [ ]
+PASS: the shifted element is the first pushed
+Stack: [ ]
+PASS: the shift is visible through the binding
+Stack: [ ]

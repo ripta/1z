@@ -417,9 +417,9 @@ pub const MutableMapSlotTable = [*]?*value_mod.MutableMap;
 
 /// Slot table for `.struct_instance` pointers.
 ///
-/// Each entry is allocated by the loader via `arena.create(StructInstance)` with its field vector
-/// sized from the owning StructType; the fields are populated from the matching description row's
-/// bytecode. The compiled-code helper retains the field values before pushing so the cache's
+/// Each entry is allocated by the loader via `createStructInstance` with its field vector sized
+/// from the owning StructType; the fields are populated from the matching description row's
+/// bytecode. The compiled-code helper retains the instance header before pushing so the cache's
 /// strong reference is preserved.
 pub const StructInstanceSlotTable = [*]?*value_mod.StructInstance;
 

@@ -10,6 +10,7 @@ const StructInstance = value_mod.StructInstance;
 const VirtualType = value_mod.VirtualType;
 const Primitive = @import("types.zig").Primitive;
 const RegistryEntry = @import("types.zig").RegistryEntry;
+const container_backing = @import("../container_backing.zig");
 const helpers = @import("helpers.zig");
 
 const popFixnum = helpers.popFixnum;
@@ -47,8 +48,12 @@ const AddrInfo = struct {
 const AddrKind = enum { tcp, udp, unix };
 
 /// Extract addr variant info from a tagged value on the stack.
+///
+/// The popped addr is consumed here: the extracted host/path strings are arena-owned and
+/// survive the release, so the returned AddrInfo stays valid after the instance backing drops.
 fn extractAddr(ctx: *Context) !AddrInfo {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     return extractAddrFromValue(ctx, val);
 }
 
@@ -137,12 +142,17 @@ fn makeInetAddr(ctx: *Context, alloc: std.mem.Allocator, tag: *const VirtualType
         return error.TypeMismatch;
     };
 
-    const fields = try alloc.alloc(Value, 2);
+    // The host string and the tagged shell's inner box stay arena-owned; the instance
+    // backing follows createStructInstance's process-lifetime contract.
+    const fields = try ctx.allocator.alloc(Value, 2);
+    var fields_owned = true;
+    errdefer if (fields_owned) ctx.allocator.free(fields);
     fields[0] = .{ .string = host };
     fields[1] = .{ .fixnum = port };
 
-    const instance = try alloc.create(StructInstance);
-    instance.* = .{ .struct_type = struct_type, .fields = fields };
+    const instance = try value_mod.createStructInstance(ctx.allocator, struct_type, fields);
+    fields_owned = false;
+    errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
     const inner = try alloc.create(Value);
     inner.* = .{ .struct_instance = instance };
@@ -209,11 +219,14 @@ fn nativeResolve(ctx: *Context) anyerror!void {
                 return error.TypeMismatch;
             };
 
-            const fields = try alloc.alloc(Value, 1);
+            const fields = try ctx.allocator.alloc(Value, 1);
+            var fields_owned = true;
+            errdefer if (fields_owned) ctx.allocator.free(fields);
             fields[0] = .{ .string = addr_info.path };
 
-            const instance = try alloc.create(StructInstance);
-            instance.* = .{ .struct_type = struct_type, .fields = fields };
+            const instance = try value_mod.createStructInstance(ctx.allocator, struct_type, fields);
+            fields_owned = false;
+            errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
             const inner = try alloc.create(Value);
             inner.* = .{ .struct_instance = instance };

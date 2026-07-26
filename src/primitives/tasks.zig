@@ -945,15 +945,15 @@ pub fn deepCopyValue(val: Value, alloc: Allocator, longlived: Allocator) DeepCop
         },
 
         .struct_instance => |si| blk: {
-            const new_si = try alloc.create(value_mod.StructInstance);
             const new_fields = try alloc.alloc(Value, si.fields.len);
             for (si.fields, 0..) |field, i| {
                 new_fields[i] = try deepCopyValue(field, alloc, longlived);
             }
-            new_si.* = .{
-                .struct_type = si.struct_type,
-                .fields = new_fields,
-            };
+            // The transfer allocator is safe here despite createStructInstance's
+            // process-lifetime contract, for the same reason the sibling container copies
+            // above use it: every copy's last release runs before the transfer arena is
+            // torn down.
+            const new_si = try value_mod.createStructInstance(alloc, si.struct_type, new_fields);
             break :blk .{ .struct_instance = new_si };
         },
 

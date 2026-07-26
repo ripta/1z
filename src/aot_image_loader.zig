@@ -162,18 +162,6 @@ pub fn loadIntoContext(
     ctx.image_constraintcombinator_slots = slots.constraint_combinators;
     ctx.image_constraintcombinator_slot_count = header.constraintcombinator_slot_count;
 
-    // Decoded-edge counts for the struct-instance slots, incremented by the decoder's arm across
-    // every content pass, including the method-dispatch replay that runs after this function
-    // returns. The context's teardown compensation reads them to balance the field-set releases
-    // that recursion through stored struct-instance references performs. Allocated before any
-    // content decodes so no edge is missed.
-    if (header.struct_instance_slot_count > 0) {
-        const degrees = ctx.quotationAllocator().alloc(u32, header.struct_instance_slot_count) catch
-            return LoaderError.OutOfMemory;
-        @memset(degrees, 0);
-        ctx.image_struct_instance_in_degree = degrees.ptr;
-    }
-
     // Stash the method-dispatch replay table; the actual replay runs in
     // `replayMethodDispatch` after the quotation-function table is
     // registered, which happens after this loader pass.
@@ -260,11 +248,9 @@ fn imageSlotTables(ctx: *Context) instruction_bytecode.SlotResolutionTables {
         // here), so a quotation nested in a container slot value -- the lint
         // registry's `check` quotations -- decodes with its compiled code_ptr.
         .quotation_fns = if (ctx.aot_quotation_fns) |f| f.table[0..f.size] else null,
-        // Ownership side channels: decoded struct-instance edges are counted
-        // for the teardown compensation, and nested quotation streams whose
-        // operands carry container literals register on the context release
-        // list so their operand references drop at teardown.
-        .struct_instance_in_degree = ctx.image_struct_instance_in_degree,
+        // Ownership side channel: nested quotation streams whose operands
+        // carry container literals register on the context release list so
+        // their operand references drop at teardown.
         .decoded_streams = &ctx.container_release_list,
         .decoded_streams_allocator = ctx.allocator,
     };
@@ -805,8 +791,11 @@ fn allocateStructInstanceSlots(
         const fields = arena.alloc(value_mod.Value, st.fields.len) catch return LoaderError.OutOfMemory;
         for (fields) |*f| f.* = .{ .unit = {} };
 
-        const si = arena.create(value_mod.StructInstance) catch return LoaderError.OutOfMemory;
-        si.* = .{ .struct_type = st, .fields = fields };
+        // The fresh header's single reference is donated to the slot table, released by the
+        // context's image-slot teardown walk. The arena allocator is safe here despite
+        // createStructInstance's process-lifetime contract: the donation pins the refcount
+        // above zero until that walk, which runs before the arena is torn down.
+        const si = value_mod.createStructInstance(arena, st, fields) catch return LoaderError.OutOfMemory;
         slot_table[row.slot] = si;
     }
 }

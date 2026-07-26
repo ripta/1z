@@ -332,10 +332,13 @@ fn buildFrozenSet(ctx: *Context, keys: []const Value) anyerror!*value_mod.Set {
 /// The copy keeps freeze's copy semantics: later mutation through the original never shows in the
 /// frozen value. The shell itself stays setter-mutable, which the share-safety scan accounts for.
 fn freezeStruct(ctx: *Context, si: *const value_mod.StructInstance) anyerror!Value {
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
     const new_fields = try alloc.alloc(Value, si.fields.len);
     var done: usize = 0;
-    errdefer container_backing.releaseValues(new_fields[0..done]);
+    errdefer {
+        container_backing.releaseValues(new_fields[0..done]);
+        alloc.free(new_fields);
+    }
 
     for (si.fields) |field| {
         const r = try freezeCopy(ctx, field);
@@ -343,11 +346,7 @@ fn freezeStruct(ctx: *Context, si: *const value_mod.StructInstance) anyerror!Val
         done += 1;
     }
 
-    const new_si = try alloc.create(value_mod.StructInstance);
-    new_si.* = .{
-        .struct_type = si.struct_type,
-        .fields = new_fields,
-    };
+    const new_si = try value_mod.createStructInstance(alloc, si.struct_type, new_fields);
     return .{ .struct_instance = new_si };
 }
 

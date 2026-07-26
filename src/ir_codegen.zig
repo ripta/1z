@@ -12607,10 +12607,9 @@ export fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     return 0;
 }
 
-/// Push the image's struct instance for `slot` onto the stack. A struct
-/// instance has no refcount header of its own; `stack.push` retains its
-/// field backings, balancing the release that occurs when the pushed copy
-/// is dropped.
+/// Push the image's struct instance for `slot` onto the stack. `stack.push`
+/// retains the instance header, balancing the release that occurs when the
+/// pushed copy is dropped.
 export fn jitPushStructInstanceSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);

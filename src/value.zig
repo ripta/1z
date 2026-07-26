@@ -1086,10 +1086,66 @@ pub fn typeKindSymbol(kind: TypeKindData) []const u8 {
 
 /// StructInstance represents an instance of a struct type.
 /// Created by make-NAME or >NAME words.
+///
+/// A runtime-created instance carries a refcounted header, built through
+/// `createStructInstance`, so every copy of the value shares one owner of the field set and
+/// the generated field setter can replace a field in place without unbalancing other live
+/// copies.
+///
+/// A headerless instance is the legacy per-copy-claims form: each copy retains and releases
+/// every field itself. That form is only balanced while the fields never change, so it is
+/// reserved for instances that are never field-mutated, which in practice means test
+/// fixtures and other statically-constructed values.
 pub const StructInstance = struct {
     struct_type: *const StructType, // Reference to the type definition
     fields: []Value, // Field values in order (mutable for setter support)
+    header: ?*@import("container_backing.zig").ContainerHeader = null,
 };
+
+/// Owning allocation behind a headered `StructInstance`: the refcounted header and the
+/// instance it governs, allocated as one block so the header's destroy callback can free
+/// everything it owns.
+pub const StructInstanceBacking = struct {
+    header: @import("container_backing.zig").ContainerHeader,
+    instance: StructInstance,
+
+    fn destroyStructInstance(header: *@import("container_backing.zig").ContainerHeader) void {
+        const cb = @import("container_backing.zig");
+        const self: *StructInstanceBacking = @fieldParentPtr("header", header);
+        for (self.instance.fields) |field| {
+            cb.releaseValue(field);
+        }
+        header.allocator.free(self.instance.fields);
+        header.allocator.destroy(self);
+    }
+};
+
+/// Create a refcounted struct instance. `fields` must be allocated on `allocator`, and
+/// ownership of both the slice and the element references transfers to the instance:
+/// destroy releases each field once and frees the slice.
+///
+/// `allocator` should be the process-lifetime allocator, like every other refcounted
+/// backing: the last release can run from a context whose arena is already gone, so
+/// nothing destroy frees may be arena-owned. A site that passes an arena anyway must
+/// prove its own release ordering pins the refcount until the arena's teardown.
+pub fn createStructInstance(
+    allocator: std.mem.Allocator,
+    struct_type: *const StructType,
+    fields: []Value,
+) error{OutOfMemory}!*StructInstance {
+    const backing = try allocator.create(StructInstanceBacking);
+    backing.* = .{
+        .header = undefined,
+        .instance = .{
+            .struct_type = struct_type,
+            .fields = fields,
+            .header = undefined,
+        },
+    };
+    backing.header.init(allocator, StructInstanceBacking.destroyStructInstance);
+    backing.instance.header = &backing.header;
+    return &backing.instance;
+}
 
 fn structTypeDescriptor(st: *const StructType) ?*const TypeDescriptor {
     const tv = st.type_val orelse return null;

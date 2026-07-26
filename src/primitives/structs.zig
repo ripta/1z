@@ -232,16 +232,21 @@ fn nativeDefineStruct(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( field1 .. fieldN struct-type -- instance )
 fn makeStructInstanceHelper(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
     const st = try helpers.popStructType(ctx);
     const num_fields = st.fields.len;
 
-    const field_values = try alloc.alloc(Value, num_fields);
     // Fields are popped (moved) off the stack into field_values, so each slot
     // owns its value. `lowest` marks the range field_values[lowest..num_fields]
-    // that has been populated; on any error path those owned values are released.
+    // that has been populated; on any error path before the instance takes
+    // ownership, those owned values are released and the slice is freed.
+    const field_values = try alloc.alloc(Value, num_fields);
     var lowest: usize = num_fields;
-    errdefer container_backing.releaseValues(field_values[lowest..num_fields]);
+    var fields_owned = true;
+    errdefer if (fields_owned) {
+        container_backing.releaseValues(field_values[lowest..num_fields]);
+        alloc.free(field_values);
+    };
     var i: usize = num_fields;
     while (i > 0) {
         i -= 1;
@@ -257,11 +262,9 @@ fn makeStructInstanceHelper(ctx: *Context) anyerror!void {
         }
     }
 
-    const instance = try alloc.create(StructInstance);
-    instance.* = .{
-        .struct_type = st,
-        .fields = field_values,
-    };
+    const instance = try value_mod.createStructInstance(alloc, st, field_values);
+    fields_owned = false;
+    errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
     // The popped field values were moved in; the instance now owns them, so
     // push without an additional retain.
@@ -270,7 +273,7 @@ fn makeStructInstanceHelper(ctx: *Context) anyerror!void {
 
 /// Trampoline helper ( hash struct-type -- instance )
 fn hashToStructHelper(ctx: *Context) anyerror!void {
-    const alloc = ctx.quotationAllocator();
+    const alloc = ctx.allocator;
     const st = try helpers.popStructType(ctx);
 
     const hash_val = try ctx.stack.pop();
@@ -285,6 +288,8 @@ fn hashToStructHelper(ctx: *Context) anyerror!void {
     };
 
     const field_values = try alloc.alloc(Value, st.fields.len);
+    var fields_owned = true;
+    errdefer if (fields_owned) alloc.free(field_values);
     for (st.fields, 0..) |field, i| {
         if (hash.map.get(field)) |val| {
             if (st.field_types.len != 0) {
@@ -305,12 +310,11 @@ fn hashToStructHelper(ctx: *Context) anyerror!void {
     // Fields are borrowed from the source hash; retain each so the instance
     // becomes an independent owner before the hash is released above.
     container_backing.retainValues(field_values);
+    errdefer if (fields_owned) container_backing.releaseValues(field_values);
 
-    const instance = try alloc.create(StructInstance);
-    instance.* = .{
-        .struct_type = st,
-        .fields = field_values,
-    };
+    const instance = try value_mod.createStructInstance(alloc, st, field_values);
+    fields_owned = false;
+    errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
     try ctx.stack.pushMoved(.{ .struct_instance = instance });
 }
@@ -380,8 +384,10 @@ fn structFieldSetHelper(ctx: *Context) anyerror!void {
         }
     }
 
-    // Replace the stored field: release the old owning reference, move the new
-    // value in, and return the instance without re-retaining its fields.
+    // Replace the stored field: release the instance's single owning reference to the old
+    // value and move the new value in. The popped instance reference itself returns to the
+    // stack via pushMoved. Sound only for a headered instance, where the instance is the one
+    // owner of its field set; no runtime creation path produces a headerless one.
     container_backing.releaseValue(inst.fields[idx]);
     inst.fields[idx] = new_val;
     ctx.stack.pushMoved(.{ .struct_instance = inst }) catch |err| {

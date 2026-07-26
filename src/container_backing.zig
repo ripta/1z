@@ -198,9 +198,14 @@ pub const ContainerHeader = struct {
 /// refcounted backing and route through `header.retain()`. Their contents are accounted only at
 /// `destroy`, so we don't recurse into them here.
 ///
-/// The headerless composites (i.e., `tagged`, `struct_instance`, `error_value`, `iterator`) own a
-/// reference to each refcounted value they embed, so a stack slot holding one must retain those
-/// embedded values recursively. An `error_value` owns the value carried in its `data` field.
+/// The headerless composites (i.e., `tagged`, `error_value`, `iterator`) own a reference to each
+/// refcounted value they embed, so a stack slot holding one must retain those embedded values
+/// recursively. An `error_value` owns the value carried in its `data` field.
+///
+/// A `struct_instance` is either form. A runtime-created instance carries a header and routes
+/// through it, so the instance is the single owner of its field set and the field setter can
+/// replace a field without unbalancing other copies. A headerless instance uses the recursive
+/// per-copy claims, which is only balanced while the fields never change.
 ///
 /// `byte_array` carries a refcounted backing like `vector` and `mutable_map`; its bytes are not Values,
 /// so there is nothing to recurse into.
@@ -218,7 +223,7 @@ pub fn retainValue(v: Value) void {
         .set => |s| s.header.retain(),
         .array => |arr| arr.header.retain(),
         .tagged => |t| retainValue(t.inner.*),
-        .struct_instance => |si| retainValues(si.fields),
+        .struct_instance => |si| if (si.header) |h| h.retain() else retainValues(si.fields),
         .error_value => |err| if (err.data) |data| retainValue(data.*),
         .iterator => |it| retainIteratorBacking(it),
         else => {},
@@ -242,7 +247,7 @@ pub fn releaseValue(v: Value) void {
         .set => |s| s.header.release(),
         .array => |arr| arr.header.release(),
         .tagged => |t| releaseValue(t.inner.*),
-        .struct_instance => |si| releaseValues(si.fields),
+        .struct_instance => |si| if (si.header) |h| h.release() else releaseValues(si.fields),
         .error_value => |err| if (err.data) |data| releaseValue(data.*),
         .iterator => |it| releaseIteratorBacking(it),
         else => {},
@@ -299,7 +304,7 @@ pub fn valueCarriesBacking(v: Value) bool {
     return switch (v) {
         .vector, .mutable_map, .byte_array, .hash, .set, .array => true,
         .tagged => |t| valueCarriesBacking(t.inner.*),
-        .struct_instance => |si| valuesCarryBacking(si.fields),
+        .struct_instance => |si| si.header != null or valuesCarryBacking(si.fields),
         .error_value => |err| if (err.data) |data| valueCarriesBacking(data.*) else false,
         .iterator => true,
         else => false,
@@ -451,6 +456,7 @@ pub fn valueHoldsRefcountedBacking(val: Value) bool {
         .vector, .mutable_map, .byte_array, .hash, .set, .array => true,
         .tagged => |t| valueHoldsRefcountedBacking(t.inner.*),
         .struct_instance => |si| {
+            if (si.header != null) return true;
             for (si.fields) |field| {
                 if (valueHoldsRefcountedBacking(field)) return true;
             }
@@ -809,7 +815,7 @@ test "retainValue/releaseValue: tagged propagates to inner vector" {
     vec.header.release();
 }
 
-test "retainValue/releaseValue: struct_instance propagates to field vector" {
+test "retainValue/releaseValue: headerless struct_instance propagates to field vector" {
     const vec = try value_mod.Vector.create(testing.allocator);
     var fields = [_]Value{.{ .vector = vec }};
     var st = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
@@ -822,6 +828,51 @@ test "retainValue/releaseValue: struct_instance propagates to field vector" {
     try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 
     vec.header.release();
+}
+
+test "retainValue/releaseValue: headered struct_instance routes through the header, not the fields" {
+    var st = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
+    const vec = try value_mod.Vector.create(testing.allocator);
+    const fields = try testing.allocator.alloc(Value, 1);
+    fields[0] = .{ .vector = vec };
+    const inst = try value_mod.createStructInstance(testing.allocator, &st, fields);
+
+    retainValue(.{ .struct_instance = inst });
+    // The header absorbs the new owner; the field's own refcount is untouched.
+    try testing.expectEqual(@as(u32, 2), inst.header.?.refcountValue());
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    releaseValue(.{ .struct_instance = inst });
+    try testing.expectEqual(@as(u32, 1), inst.header.?.refcountValue());
+
+    // The last release destroys the instance, which releases and frees the
+    // vector; testing.allocator verifies nothing leaks or double-frees.
+    releaseValue(.{ .struct_instance = inst });
+}
+
+test "headered struct_instance: setter-shape field replacement stays balanced across copies" {
+    var st = value_mod.StructType{ .name = "box", .fields = &.{"data"} };
+    const fields = try testing.allocator.alloc(Value, 1);
+    fields[0] = .{ .fixnum = 0 };
+    const inst = try value_mod.createStructInstance(testing.allocator, &st, fields);
+
+    // A second live copy of the instance value, the shape a top-level binding
+    // holds while the setter runs against a stack copy.
+    retainValue(.{ .struct_instance = inst });
+
+    // The generated field setter's replacement sequence: release the old
+    // owning reference, move the new value into the slot.
+    const vec = try value_mod.Vector.create(testing.allocator);
+    releaseValue(inst.fields[0]);
+    inst.fields[0] = .{ .vector = vec };
+
+    // Dropping one copy must not free the vector out from under the other.
+    // Under the headerless per-copy-claims model this released the vector to
+    // zero while the field still pointed at it -- the original crash.
+    releaseValue(.{ .struct_instance = inst });
+    try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
+
+    releaseValue(.{ .struct_instance = inst });
 }
 
 test "retainValue/releaseValue: hash dispatch exercises the header" {

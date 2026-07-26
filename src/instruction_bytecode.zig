@@ -163,15 +163,6 @@ pub const SlotResolutionTables = struct {
     /// `code_ptr` null, matching the pre-attachment behavior.
     quotation_fns: ?[]const ?*const anyopaque = null,
 
-    /// Per-slot count of decoded references to each struct-instance slot.
-    /// A struct instance is a headerless composite: `releaseValue` recurses
-    /// into its fields, so every decoded reference is one future release of
-    /// the field set at teardown. The fields cannot be retained at decode
-    /// time because the mutable-map entry pass runs before the field pass
-    /// fills them, so the arm only counts here and the loader's teardown
-    /// compensation retains the filled fields once per counted reference.
-    struct_instance_in_degree: ?[*]u32 = null,
-
     /// When supplied, every instruction slice materialized for a nested
     /// `.quotation` value whose operands carry a container literal is
     /// appended here. The loader registers these on the context's container
@@ -850,10 +841,11 @@ pub fn deserializeValueAtForImage(
             if (slot >= tables.struct_instance_slot_count) return error.OutOfMemory;
             const table = tables.struct_instance_slots orelse return error.OutOfMemory;
             const si = table[slot] orelse return error.OutOfMemory;
-            // Headerless composite: cannot retain here because the fields may
-            // still be placeholders mid-load. Count the edge; the loader's
-            // teardown compensation balances it against the filled fields.
-            if (tables.struct_instance_in_degree) |degrees| degrees[slot] += 1;
+            // The stored copy owns its edge through the instance header, which
+            // never touches the fields, so retaining here is safe even while
+            // the field pass has not filled them yet. Loader-created slot
+            // instances always carry a header.
+            si.header.?.retain();
             break :blk .{ .struct_instance = si };
         },
         value_tag_vector_slot => blk: {
@@ -1304,8 +1296,13 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
     const alloc = testing.allocator;
 
     var st = StructType{ .name = "rec", .fields = &.{ "a", "b" } };
-    var fields = [_]Value{ .{ .fixnum = 10 }, .{ .fixnum = 20 } };
-    var si = StructInstance{ .struct_type = &st, .fields = &fields };
+    const fields = try alloc.alloc(Value, 2);
+    fields[0] = .{ .fixnum = 10 };
+    fields[1] = .{ .fixnum = 20 };
+    // The decode arm retains the instance header, so the fixture must be a
+    // headered instance, matching what the loader puts in a real slot table.
+    const si = try value_mod.createStructInstance(alloc, &st, fields);
+    defer si.header.?.release();
 
     // Encode side: only the struct_instance index is populated; the other
     // index maps are empty but must be present.
@@ -1325,7 +1322,7 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
     defer sx_idx.deinit(alloc);
     var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
     defer vx_idx.deinit(alloc);
-    try sx_idx.put(alloc, &si, 0);
+    try sx_idx.put(alloc, si, 0);
 
     const enc = SlotEncodingMaps{
         .typevalue_slot_index = &tv_idx,
@@ -1340,10 +1337,10 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(alloc);
-    try serializeValueIntoForImage(&buf, .{ .struct_instance = &si }, alloc, &enc);
+    try serializeValueIntoForImage(&buf, .{ .struct_instance = si }, alloc, &enc);
 
     // Decode side: a slot table whose only entry resolves back to `si`.
-    var si_slots = [_]?*StructInstance{&si};
+    var si_slots = [_]?*StructInstance{si};
     const tables = SlotResolutionTables{
         .typevalue_slots = null,
         .typevalue_slot_count = 0,
@@ -1365,8 +1362,9 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
 
     var offset: usize = 0;
     const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    defer container_backing.releaseValue(decoded);
     try testing.expect(decoded == .struct_instance);
-    try testing.expectEqual(@as(*StructInstance, &si), decoded.struct_instance);
+    try testing.expectEqual(@as(*StructInstance, si), decoded.struct_instance);
     try testing.expectEqual(buf.items.len, offset);
 }
 

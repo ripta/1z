@@ -320,6 +320,7 @@ fn virtualWrapHelper(ctx: *Context) anyerror!void {
         else => helpers.valueTypeName(val),
     };
     if (!std.mem.eql(u8, actual_type, vt.inner_type)) {
+        container_backing.releaseValue(val);
         helpers.setErrorContext(ctx, ">{s} expects {s}, got {s}", .{ vt.name, vt.inner_type, actual_type });
         return error.TypeMismatch;
     }
@@ -463,18 +464,25 @@ fn virtualStructWrapHelper(ctx: *Context) anyerror!void {
     };
     const num_fields = st.fields.len;
 
-    const field_values = try alloc.alloc(Value, num_fields);
+    // Only the tagged shell's inner box stays arena-owned; the instance backing follows
+    // createStructInstance's process-lifetime contract.
+    const field_values = try ctx.allocator.alloc(Value, num_fields);
+    var lowest: usize = num_fields;
+    var fields_owned = true;
+    errdefer if (fields_owned) {
+        container_backing.releaseValues(field_values[lowest..num_fields]);
+        ctx.allocator.free(field_values);
+    };
     var i: usize = num_fields;
     while (i > 0) {
         i -= 1;
         field_values[i] = try ctx.stack.pop();
+        lowest = i;
     }
 
-    const instance = try alloc.create(StructInstance);
-    instance.* = .{
-        .struct_type = st,
-        .fields = field_values,
-    };
+    const instance = try value_mod.createStructInstance(ctx.allocator, st, field_values);
+    fields_owned = false;
+    errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
     const inner = try alloc.create(Value);
     inner.* = .{ .struct_instance = instance };
@@ -595,7 +603,9 @@ fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
         return error.TypeMismatch;
     }
 
-    const field_values = try alloc.alloc(Value, st.fields.len);
+    const field_values = try ctx.allocator.alloc(Value, st.fields.len);
+    var fields_owned = true;
+    errdefer if (fields_owned) ctx.allocator.free(field_values);
     for (st.fields, 0..) |field, i| {
         field_values[i] = hash.map.get(field) orelse {
             helpers.setErrorContext(ctx, ">{s} missing field '{s}'", .{ vt.name, field });
@@ -606,12 +616,11 @@ fn virtualStructHashWrapHelper(ctx: *Context) anyerror!void {
     // Fields are borrowed from the source hash; retain each so the tagged
     // instance becomes an independent owner before the hash is released above.
     container_backing.retainValues(field_values);
+    errdefer if (fields_owned) container_backing.releaseValues(field_values);
 
-    const instance = try alloc.create(StructInstance);
-    instance.* = .{
-        .struct_type = st,
-        .fields = field_values,
-    };
+    const instance = try value_mod.createStructInstance(ctx.allocator, st, field_values);
+    fields_owned = false;
+    errdefer container_backing.releaseValue(.{ .struct_instance = instance });
 
     const inner = try alloc.create(Value);
     inner.* = .{ .struct_instance = instance };
@@ -1028,6 +1037,10 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
 
     var val = try ctx.stack.pop();
 
+    // Popped with ownership; it flows into the tagged inner on success (on either branch
+    // below), so release only on throw.
+    errdefer container_backing.releaseValue(val);
+
     // A parameterized enum base (`result(fixnum,string)`) wraps a tagged variant,
     // not a bare value, so its payload validation substitutes the enum's bound
     // tuple through each variant's own binding. Handle it separately.
@@ -1039,9 +1052,6 @@ fn virtualParameterizedWrapHelper(ctx: *Context) anyerror!void {
             }
         }
     }
-
-    // Popped with ownership; it flows into the tagged inner on success, so release only on throw.
-    errdefer container_backing.releaseValue(val);
 
     const actual_type: []const u8 = switch (val) {
         .struct_instance => |si| si.struct_type.name,

@@ -38,6 +38,7 @@ pub const registry_entries = [_]RegistryEntry{
 
 fn enumVariantToSymbol(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .tagged => |t| {
             if (t.tag.parent_type == null) {
@@ -55,6 +56,7 @@ fn enumVariantToSymbol(ctx: *Context) anyerror!void {
 
 fn enumDataVariantToSymbol(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .tagged => |t| {
             helpers.setErrorContext(ctx, "cannot convert data-carrying enum variant '{s}' to symbol", .{t.tag.name});
@@ -79,6 +81,7 @@ fn stripTrailingColon(name: []const u8) []const u8 {
 
 fn enumFromSymbolHelper(ctx: *Context) anyerror!void {
     const tv_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(tv_val);
     const enum_tv = switch (tv_val) {
         .type_val => |tv| tv,
         else => {
@@ -88,6 +91,7 @@ fn enumFromSymbolHelper(ctx: *Context) anyerror!void {
     };
 
     const symbol_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(symbol_val);
     const variant_name = switch (symbol_val) {
         .symbol => |s| s,
         else => {
@@ -484,6 +488,7 @@ fn enumAggregatePredicateHelper(ctx: *Context) anyerror!void {
     };
 
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     const is_match = switch (val) {
         .tagged => |t| t.tag.parent_type == enum_tv_ptr,
         else => false,
@@ -495,6 +500,7 @@ fn enumAggregatePredicateHelper(ctx: *Context) anyerror!void {
 /// enum-of ( val -- str | f )
 fn nativeEnumOf(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     switch (val) {
         .tagged => |t| {
             if (t.tag.parent_type) |pt| {

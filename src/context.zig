@@ -684,11 +684,6 @@ pub const Context = struct {
     image_vector_slot_count: u32 = 0,
     image_protocoldescriptor_slot_count: u32 = 0,
     image_constraintcombinator_slot_count: u32 = 0,
-    /// Decoded-edge count per struct-instance slot, recorded by the image
-    /// decoder's struct_instance_slot arm and consumed by the teardown
-    /// compensation in `deinit`. Arena-owned; never copied to task contexts,
-    /// since only the root context walks the image slots at teardown.
-    image_struct_instance_in_degree: ?[*]u32 = null,
     /// AOT method-dispatch replay table, stashed by `loadIntoContext` and
     /// consumed by `aot_image_loader.replayMethodDispatch` after the
     /// quotation-function table is registered. Stored opaquely to avoid an
@@ -1501,14 +1496,9 @@ pub const Context = struct {
         // slots first, then captured container literals in word bodies
         // (dictionary) and arena-owned quotations. All releases must
         // happen before the arena that owns the quotation instructions
-        // is torn down.
-        //
-        // The image-slot compensation must precede the release-list walks:
-        // registered image streams hold struct-instance operand edges whose
-        // releases the compensation balances. Task contexts share the slot
-        // tables with their root, so only the root walks them.
+        // is torn down. Task contexts share the image slot tables with
+        // their root, so only the root walks them.
         self.stack.clear();
-        if (self.parent_context == null) self.compensateImageStructInstanceOwnership();
         self.dictionary.walkContainerReleaseList();
         self.walkContainerReleaseList();
         self.container_release_list.deinit(self.allocator);
@@ -1555,39 +1545,18 @@ pub const Context = struct {
         self.container_release_list.clearRetainingCapacity();
     }
 
-    /// Balance the decoded struct-instance edges the image loader counted.
-    ///
-    /// Release recurses through headerless composites, so every stored
-    /// reference to a struct-instance slot releases the instance's field set
-    /// once at teardown. The fields carry one owned reference set from their
-    /// decode, and `releaseImageSlotReferences` drops one more, so each slot
-    /// needs exactly `in_degree` additional retains. Must run before any
-    /// release that can reach a decoded struct-instance edge.
-    fn compensateImageStructInstanceOwnership(self: *Context) void {
-        const degrees = self.image_struct_instance_in_degree orelse return;
-        const table = self.image_struct_instance_slots orelse return;
-        var i: u32 = 0;
-        while (i < self.image_struct_instance_slot_count) : (i += 1) {
-            const si = table[i] orelse continue;
-            var k = degrees[i];
-            while (k > 0) : (k -= 1) {
-                container_backing.retainValues(si.fields);
-            }
-        }
-    }
-
     /// Release the owning references the image loader donated to the slot
     /// tables, before the arena that owns the container structs is torn
-    /// down. Struct-instance field sets and tagged inner values release once
-    /// each; mutable-map and vector slots drop their donated header
-    /// reference, so the destroy that runs on last drop releases the
-    /// elements runtime code stored into them.
+    /// down. Tagged inner values release once each; struct-instance,
+    /// mutable-map, and vector slots drop their donated header reference,
+    /// so the destroy that runs on last drop releases the elements runtime
+    /// code stored into them.
     fn releaseImageSlotReferences(self: *Context) void {
         if (self.image_struct_instance_slots) |table| {
             var i: u32 = 0;
             while (i < self.image_struct_instance_slot_count) : (i += 1) {
                 const si = table[i] orelse continue;
-                container_backing.releaseValues(si.fields);
+                si.header.?.release();
             }
         }
         if (self.image_tagged_slots) |table| {

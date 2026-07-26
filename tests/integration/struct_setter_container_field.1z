@@ -1,0 +1,46 @@
+\ Regression test: storing a refcounted container into a mutable struct field via the
+\ generated >>field setter, while another copy of the instance is live (the top-level
+\ binding), must leave the container readable and its refcount balanced.
+\
+\ Before struct instances carried a refcounted header, this exact sequence freed the
+\ vector while the field still pointed at it: the setter mutated the shared fields slice
+\ after releasing only its own copy's claim, so the binding's later release freed the
+\ new value early. The first read after `>>v drop` crashed on poisoned memory.
+
+use "testing" ;
+
+holder: mutable struct{ tag v } ;
+
+"setter-stored vector stays alive across the binding" test-section
+
+box: 0 f make-holder ;
+
+box V{ 5 7 } >>v drop
+box v>> #len 2 "the stored vector reads back through the binding" assert=
+box v>> 3 #index-of f "a consuming read works once" assert=
+box v>> 5 #index-of 0 "a consuming read works twice" assert=
+box v>> 7 #index-of 1 "a consuming read works three times" assert=
+
+"replacing a container field releases the old value cleanly" test-section
+
+box V{ 1 2 3 } >>v drop
+box v>> #len 3 "the replacement vector is readable" assert=
+box 9 >>v drop
+box v>> 9 "a scalar can replace a container" assert=
+
+"other refcounted container kinds behave the same" test-section
+
+box B{ 0x01 0x02 0x03 } >>v drop
+box v>> #len 3 "a byte array survives setter storage" assert=
+
+box M{ k: 42 } >>v drop
+box v>> k: @get 42 "a mutable map survives setter storage" assert=
+
+"in-place mutation of a setter-stored vector is visible through the binding" test-section
+
+box V{ } >>v drop
+box v>> 10 #push! drop
+box v>> 20 #push! drop
+box v>> #len 2 "pushes through one copy show in another" assert=
+box v>> #shift! swap drop 10 "the shifted element is the first pushed" assert=
+box v>> #len 1 "the shift is visible through the binding" assert=
