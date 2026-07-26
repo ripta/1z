@@ -390,6 +390,8 @@ pub const FreezeError = error{
 /// The entry file is executed through the interpreter to populate the
 /// module cache and define all words. Non-definition top-level statements
 /// are collected as the entry point.
+/// Thin wrapper over `freezeModuleGraphOpts` with default options; it shares
+/// that function's contract, including the pragma frame left pushed on success.
 pub fn freezeModuleGraph(
     ctx: *Context,
     entry_file: []const u8,
@@ -411,6 +413,10 @@ pub const FreezeOptions = struct {
     strict_interpreter_free: bool = false,
 };
 
+/// On success the entry file's pragma frame remains pushed on `ctx`, so
+/// file-level pragmas such as `type-check` govern the codegen passes that
+/// follow. The caller pops it after emission, or lets ctx.deinit reclaim it.
+/// Error paths pop it before returning.
 pub fn freezeModuleGraphOpts(
     ctx: *Context,
     entry_file: []const u8,
@@ -569,9 +575,10 @@ pub fn freezeModuleGraphOpts(
         }
     }
 
-    // Now safe to pop the frames
-    ctx.popPragmaFrame();
+    // The pragma frame outlives freeze on success (see the function doc); error paths from here
+    // still pop it.
     ctx.popLocalFrame();
+    errdefer ctx.popPragmaFrame();
 
     // Phase 3: Build AotWordDesc array
     var result = try buildAotDescs(entry_instrs, entry_file, &discovered, discovered.pending_call_targets.items, &prelude_words, ctx, allocator);
@@ -736,8 +743,7 @@ fn executeAndCollectEntry(
         }
     }
 
-    // Do NOT pop the local frame or pragma frame here. The caller
-    // (freezeModuleGraph) keeps them alive for word discovery, then pops.
+    // Both frames deliberately stay pushed; the caller owns their lifetimes.
 
     return entry_instrs.toOwnedSlice(temp_allocator);
 }
@@ -2825,6 +2831,7 @@ fn buildAotDescs(
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
                     result.callee_effect = eff;
                 }
+                result.output_params = eff.outputs;
             }
             return result;
         }

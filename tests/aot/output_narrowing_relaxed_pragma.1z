@@ -1,0 +1,11 @@
+\ A relaxed type-check pragma disables output narrowing along with its tag
+\ check, so the returned value stays opaque and the following `inspect`
+\ keeps its cold interpreter branch. Under the lock that fallback rejects
+\ the build.
+\
+\ Build-only: the golden is the rejection report.
+pragma{ type-check: "off" }
+
+answer: ( -- result: fixnum ) [ 42 ] ;
+
+answer inspect print-line

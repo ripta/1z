@@ -6365,6 +6365,10 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
     const ctx = state.context;
     const callee = ctx.lookupWord(name) orelse return null;
 
+    // The outputs slice points into dictionary-owned storage, so the by-value effect copy is safe.
+    const output_params: ?[]const stack_effect_mod.StackEffectParam =
+        if (callee.stack_effect) |eff| eff.outputs else null;
+
     switch (callee.action) {
         // A literal has no instruction body, but ResolvedWord never carries
         // one -- only stack-effect/marker-derived metadata -- so it resolves
@@ -6380,6 +6384,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .native_fn_ptr = @intFromPtr(func),
                 .never_returns = hasNeverReturnsMarker(callee.markers),
                 .dispatch_id = callee.dispatch_id,
+                .output_params = output_params,
             };
             if (stack_effect_mod.hasAnyRowVariable(effect)) {
                 result.callee_effect = ctx.lookupWordStackEffectPtr(name);
@@ -6408,6 +6413,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .bounded_constraint = if (bounded) |b| b.constraint else null,
         .bounded_arity = if (bounded) |b| b.arity else .unary,
         .bounded_trace_name = if (bounded) |b| ctx.boundedConstraintTraceName(b.constraint) else null,
+        .output_params = output_params,
     };
     if (stack_effect_mod.hasAnyRowVariable(effect)) {
         result.callee_effect = ctx.lookupWordStackEffectPtr(name);

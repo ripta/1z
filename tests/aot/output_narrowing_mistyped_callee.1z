@@ -1,0 +1,9 @@
+\ The call-site tag check behind output narrowing is what keeps a mistyped
+\ callee sound: outputs are never validated at runtime, so a word whose body
+\ contradicts its declared result type must be caught by the caller before
+\ the narrowed value flows on. `lie` declares a fixnum but returns a string;
+\ the build succeeds and the run dies with a type mismatch at the call site.
+
+lie: ( -- result: fixnum ) [ "not a number" ] ;
+
+lie inspect print-line

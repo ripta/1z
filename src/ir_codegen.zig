@@ -858,6 +858,9 @@ pub const ResolvedWord = struct {
     /// declared concrete effect, or a later branch merge sees diverging
     /// depths. Populated from the row-returning set discovered before Pass 1a.
     returns_row: bool = false,
+    /// The callee's declared output parameters, for call-site output
+    /// narrowing. Read only at compile time; never baked into emitted code.
+    output_params: ?[]const stack_effect_mod.StackEffectParam = null,
 };
 
 /// Callback interface for resolving word names to dispatch table IDs.
@@ -2941,6 +2944,62 @@ fn seedInferredParams(state: *CompileState, stack: []StackEntry, input_count: us
             },
             .float => {
                 const slot_addr = liveSlotAddr(state, i);
+                stack[i] = .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) };
+            },
+        }
+    }
+}
+
+/// Narrow a compiled call's settled outputs from the callee's declared output annotations -- the
+/// output mirror of seedAnnotatedParams.
+///
+/// Outputs are never validated at runtime, so every narrowed slot gets a call-site tag check
+/// before the unbox; trusting a mistyped callee without one would be unsound. Skipped under a
+/// relaxed `type-check` pragma.
+///
+/// Gated to the strict `--interpreter-fallback=false` build class, whose freeze rejects dynamic
+/// definition features, so no runtime redefinition can change a callee's return type out from
+/// under the baked annotation.
+fn narrowAnnotatedOutputs(
+    state: *CompileState,
+    stack: []StackEntry,
+    sp: usize,
+    resolved: ResolvedWord,
+    effective_out: usize,
+) void {
+    if (!state.aot_mode or !state.interpreter_free) return;
+    const outputs = resolved.output_params orelse return;
+    const ictx = state.interp_ctx orelse return;
+
+    if (typeCheckRelaxed(ictx)) return;
+    if (state.type_mismatch_error_fn == c.IR_UNUSED) return;
+
+    // A row-specialized call can settle a count that differs from the declared shape; narrow only
+    // when they agree slot for slot.
+    if (effective_out == 0 or sp < effective_out) return;
+    if (outputs.len != effective_out) return;
+
+    // An output row variable or an alternative-output effect makes the declared shape unreliable.
+    if (stack_effect_mod.paramsHaveAlternativeOutput(outputs)) return;
+    for (outputs) |param| {
+        if (param.is_row_variable) return;
+    }
+
+    for (outputs, 0..) |param, j| {
+        const i = sp - effective_out + j;
+        if (stack[i] != .raw_at_slot or stack[i].raw_at_slot != i) continue;
+
+        const ann = param.type_annotation orelse continue;
+        const kind = narrowableAnnotation(state, ann) orelse continue;
+
+        const slot_addr = liveSlotAddr(state, i);
+        switch (kind) {
+            .fixnum => {
+                emitTagCheckOrError(state, slot_addr, state.fixnum_tag_const, state.type_mismatch_error_fn);
+                stack[i] = .{ .i64_ref = emitUnboxI64(state.ctx, slot_addr, state.payload_offset_const) };
+            },
+            .float => {
+                emitTagCheckOrError(state, slot_addr, state.float_tag_const, state.type_mismatch_error_fn);
                 stack[i] = .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) };
             },
         }
@@ -6415,6 +6474,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
         if (exitFallsThrough(state.exit_kind)) {
             // Adjust abstract stack by specialized effect
             settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+            narrowAnnotatedOutputs(state, stack, sp.*, resolved, effective_out);
         }
     } else if (state.aot_mode and resolved.bounded_constraint != null and state.aot_slot_maps != null) {
         // AOT bounded generic dispatch: emit the slot-indexed
@@ -6443,6 +6503,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
 
         if (exitFallsThrough(state.exit_kind)) {
             settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+            narrowAnnotatedOutputs(state, stack, sp.*, resolved, effective_out);
         }
     } else if (state.aot_mode) {
         // AOT mode: direct call by name or interpreter fallback.
@@ -6484,6 +6545,7 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
                 collapseToFreshRow(state, stack, sp);
             } else {
                 settleRowAwareStack(state, stack, sp, effective_in, effective_out);
+                narrowAnnotatedOutputs(state, stack, sp.*, resolved, effective_out);
             }
         }
     } else if (resolved.bounded_constraint != null) {
@@ -9388,6 +9450,7 @@ pub fn emitProgramC(
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
                     result.callee_effect = eff;
                 }
+                result.output_params = eff.outputs;
             }
             return result;
         }
@@ -11675,9 +11738,11 @@ fn builtinTagDescriptor(interp_ctx: *const Context, tag: std.meta.Tag(Value)) ?*
 /// jitPicDispatch(Unary) performs at runtime, so a freeze-time hit cannot miss at runtime in an
 /// interpreter-free binary, where no new method can be defined.
 ///
-/// Gated to interpreter-free AOT builds: with the interpreter linked, eval can replace a method
-/// at runtime, and only the generation-guarded PIC path handles that. Freestanding is excluded
-/// because its runtime exports no jitPicDispatch(Unary).
+/// Gated to the strict `--interpreter-fallback=false` build class, whose freeze rejects dynamic
+/// definition features, so no runtime method registration can invalidate the guardless site; a
+/// `--interpreter-fallback=true` build keeps the generation-guarded PIC path, which handles
+/// runtime redefinition. Freestanding is excluded because its runtime exports no
+/// jitPicDispatch(Unary).
 ///
 /// Must run before flushToPhysicalStack relabels the entries to raw_at_slot.
 fn monomorphizedDispatchTags(
@@ -18493,6 +18558,160 @@ fn monomorphEmittedSource(
         interpreter_free,
         false,
     );
+}
+
+/// Resolve `compute` as a compiled compound word carrying the output params
+/// under test, and `inspect` as the downstream generic native.
+const OutputNarrowResolverData = struct {
+    outputs: ?[]const stack_effect_mod.StackEffectParam,
+
+    fn resolve(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+        const self: *const @This() = @ptrCast(@alignCast(user_data));
+        if (std.mem.eql(u8, name, "compute")) {
+            return .{ .word_id = 9, .input_count = 0, .output_count = 1, .output_params = self.outputs };
+        }
+        if (std.mem.eql(u8, name, "inspect")) {
+            return .{ .word_id = 7, .input_count = 1, .output_count = 1, .is_native = true };
+        }
+        return null;
+    }
+};
+
+/// Compile `compute inspect` with `compute` resolved as a compiled compound
+/// word whose declared outputs are `outputs`, reporting the emitted C and
+/// the fallback count.
+fn outputNarrowEmittedSource(
+    outputs: ?[]const stack_effect_mod.StackEffectParam,
+    interp_ctx: *const Context,
+    interpreter_free: bool,
+    fallback_count: *u32,
+) ![]u8 {
+    var resolver_data = OutputNarrowResolverData{ .outputs = outputs };
+    const resolver = WordResolver{
+        .resolve = &OutputNarrowResolverData.resolve,
+        .user_data = @ptrCast(&resolver_data),
+        .dispatch_table_ptr = @ptrCast(&arith_test_resolver_dummy),
+    };
+
+    const instrs = makeInstructions(.{ "compute", "inspect" });
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+    try compiled_names.put(testing.allocator, "compute", 0);
+
+    return emitWordCAot(
+        &instrs,
+        0,
+        1,
+        "narrow-test",
+        resolver,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        &.{},
+        null,
+        null,
+        null,
+        interp_ctx,
+        null,
+        fallback_count,
+        null,
+        null,
+        false,
+        null,
+        interpreter_free,
+        false,
+    );
+}
+
+test "a fixnum-annotated output narrows and the downstream generic monomorphizes" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const fixnum_tv = ictx.lookupBuiltinTypeValue("fixnum").?;
+    const outputs = [_]stack_effect_mod.StackEffectParam{
+        .{ .name = "r", .type_annotation = .{ .type = fixnum_tv } },
+    };
+
+    var count: u32 = 0;
+    const source = try outputNarrowEmittedSource(&outputs, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expectEqual(@as(u32, 0), count);
+    try testing.expect(std.mem.indexOf(u8, source, "jitPicDispatchUnary(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") == null);
+}
+
+test "a float-annotated output narrows and the downstream generic monomorphizes" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const float_tv = ictx.lookupBuiltinTypeValue("float").?;
+    const outputs = [_]stack_effect_mod.StackEffectParam{
+        .{ .name = "r", .type_annotation = .{ .type = float_tv } },
+    };
+
+    var count: u32 = 0;
+    const source = try outputNarrowEmittedSource(&outputs, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expectEqual(@as(u32, 0), count);
+    try testing.expect(std.mem.indexOf(u8, source, "jitPicDispatchUnary(") != null);
+}
+
+test "an unannotated output stays opaque and keeps the fallback path" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const outputs = [_]stack_effect_mod.StackEffectParam{.{ .name = "r" }};
+
+    var count: u32 = 0;
+    const source = try outputNarrowEmittedSource(&outputs, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(count > 0);
+    try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") != null);
+}
+
+test "an interpreter-linked AOT build does not narrow outputs" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const fixnum_tv = ictx.lookupBuiltinTypeValue("fixnum").?;
+    const outputs = [_]stack_effect_mod.StackEffectParam{
+        .{ .name = "r", .type_annotation = .{ .type = fixnum_tv } },
+    };
+
+    var count: u32 = 0;
+    const source = try outputNarrowEmittedSource(&outputs, &ictx, false, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(count > 0);
+    try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") != null);
+}
+
+test "a relaxed type-check pragma disables output narrowing" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    // A bare Context has no pragma frame; loadPrelude normally pushes the base one.
+    try ictx.pushPragmaFrame();
+    try ictx.setPragma("type-check", .{ .string = "off" });
+
+    const fixnum_tv = ictx.lookupBuiltinTypeValue("fixnum").?;
+    const outputs = [_]stack_effect_mod.StackEffectParam{
+        .{ .name = "r", .type_annotation = .{ .type = fixnum_tv } },
+    };
+
+    var count: u32 = 0;
+    const source = try outputNarrowEmittedSource(&outputs, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(count > 0);
+    try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") != null);
 }
 
 test "a generic native on a proven operand monomorphizes with no fallback" {

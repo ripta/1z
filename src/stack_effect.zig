@@ -190,10 +190,7 @@ pub const StackEffect = struct {
     /// The `|` is stored as a literal output parameter, so its presence is the signal that the
     /// declared concrete output count does not model the result.
     pub fn hasAlternativeOutput(self: StackEffect) bool {
-        for (self.outputs) |param| {
-            if (std.mem.eql(u8, param.name, "|")) return true;
-        }
-        return false;
+        return paramsHaveAlternativeOutput(self.outputs);
     }
 
     /// True if the outputs declare the bottom output `-- *`: a single output named `*`.
@@ -303,6 +300,15 @@ pub fn hasAnyRowVariable(effect: StackEffect) bool {
     }
     for (effect.outputs) |param| {
         if (param.is_row_variable) return true;
+    }
+    return false;
+}
+
+/// Slice-level form of `StackEffect.hasAlternativeOutput`, for callers holding
+/// only the output params.
+pub fn paramsHaveAlternativeOutput(params: []const StackEffectParam) bool {
+    for (params) |param| {
+        if (std.mem.eql(u8, param.name, "|")) return true;
     }
     return false;
 }

@@ -2940,6 +2940,8 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         return 1;
     };
     defer freeze_result.deinit(allocator);
+    // Freeze leaves the entry file's pragma frame pushed; balance it after emission.
+    defer ctx.popPragmaFrame();
 
     if (dump_image_classification) {
         var manifest = aot_image.buildImageManifest(ctx, allocator) catch |err| {
@@ -3949,6 +3951,8 @@ fn handleInspectReach(
         return 1;
     };
     defer freeze_result.deinit(allocator);
+    // Freeze leaves the entry file's pragma frame pushed; balance it here.
+    defer ctx.popPragmaFrame();
 
     const chains = aot_freeze.computeReachabilityForMarker(
         &freeze_result,
