@@ -4,20 +4,22 @@
 #
 # Usage: scripts/benchmark-fib.sh <1z-binary> <benchmark-file> <aot-binary-path>
 #
-# The script builds an AOT binary, runs the benchmark in interpreted, hybrid,
-# eager, and AOT modes, then prints a timing breakdown table.
+# The script builds a default AOT binary and a locked interpreter-free one,
+# runs the benchmark in interpreted, hybrid, eager, AOT, and locked-AOT modes,
+# then prints a timing breakdown table.
 #
 # For interpreter modes, --benchmark=json provides internal timing (prelude
-# load, user code, JIT compilation). For AOT, external wall-clock timing is
-# used for the build and run steps separately.
+# load, user code, JIT compilation). For the AOT modes, external wall-clock
+# timing is used for the build and run steps separately.
 
 set -euo pipefail
 
 onez="$1"
 benchmark="$2"
 aot_bin="$3"
+aot_locked_bin="$aot_bin-locked"
 
-cleanup() { rm -f "$aot_bin"; }
+cleanup() { rm -f "$aot_bin" "$aot_locked_bin"; }
 trap cleanup EXIT
 
 fmt_ms() {
@@ -35,6 +37,20 @@ aot_build_t0=$(gdate +%s%N)
 "$onez" build "$benchmark" -o "$aot_bin"
 aot_build_t1=$(gdate +%s%N)
 aot_build_ms=$(( (aot_build_t1 - aot_build_t0) / 1000000 ))
+echo ""
+
+# Build the locked interpreter-free AOT binary and time its build step. A
+# rejected locked build means a compiled word emitted a fallback, so fail
+# loudly instead of reporting a partial table.
+echo "Building locked interpreter-free AOT binary..."
+aot_locked_build_t0=$(gdate +%s%N)
+if ! "$onez" build "$benchmark" -o "$aot_locked_bin" \
+    --interpreter-fallback=false --lock-interpreter-setting; then
+    echo "FAIL: the locked interpreter-free build of $benchmark was rejected, so there is no locked binary to time" >&2
+    exit 1
+fi
+aot_locked_build_t1=$(gdate +%s%N)
+aot_locked_build_ms=$(( (aot_locked_build_t1 - aot_locked_build_t0) / 1000000 ))
 echo ""
 
 echo "Running $benchmark in all modes..."
@@ -80,6 +96,17 @@ echo "--- aot ---"
 echo "$aot_output"
 echo ""
 
+aot_locked_t0=$(gdate +%s%N)
+aot_locked_output=$("$aot_locked_bin" 2>/dev/null)
+aot_locked_t1=$(gdate +%s%N)
+aot_locked_run_ms=$(( (aot_locked_t1 - aot_locked_t0) / 1000000 ))
+
+results+=("aot-locked 0 0 $aot_locked_run_ms $aot_locked_run_ms")
+
+echo "--- aot-locked ---"
+echo "$aot_locked_output"
+echo ""
+
 echo "=== Summary ==="
 echo ""
 printf "%-15s %10s %10s %10s %10s\n" "Mode" "Prelude" "JIT" "User" "Total"
@@ -87,12 +114,16 @@ printf "%-15s %10s %10s %10s %10s\n" "---------------" "----------" "----------"
 
 for entry in "${results[@]}"; do
     read -r mode prelude_ms jit_ms user_ms total_ms <<< "$entry"
-    if [ "$mode" = "aot" ]; then
+    case "$mode" in
+    aot|aot-locked)
         printf "%-15s %10s %10s %10s %10s\n" "$mode" "--" "--" "$(fmt_ms "$user_ms")" "$(fmt_ms "$total_ms")"
-    else
+        ;;
+    *)
         printf "%-15s %10s %10s %10s %10s\n" "$mode" "$(fmt_ms "$prelude_ms")" "$(fmt_ms "$jit_ms")" "$(fmt_ms "$user_ms")" "$(fmt_ms "$total_ms")"
-    fi
+        ;;
+    esac
 done
 
 echo ""
 echo "AOT build time: $(fmt_ms "$aot_build_ms")"
+echo "AOT locked build time: $(fmt_ms "$aot_locked_build_ms")"

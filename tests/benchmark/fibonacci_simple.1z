@@ -1,6 +1,10 @@
 \ Simple fibonacci benchmark
 \ No library imports, all words have stack effects.
 \ Used by `make benchmark-fib` to compare execution modes.
+\
+\ fib-iter's declared fixnum result is load-bearing for the aot-locked mode:
+\ the freeze-time inference trusts it to prove `.`'s parameter, without which
+\ the locked interpreter-free build rejects.
 
 fib-iter-step: ( a b n -- result ) [
   dup 0 = [ drop drop ] [
@@ -8,7 +12,7 @@ fib-iter-step: ( a b n -- result ) [
   ] if
 ] ;
 
-fib-iter: ( n -- fib(n) ) [
+fib-iter: ( n -- result: fixnum ) [
   dup 2 < [ ] [
     0 1 <rot- fib-iter-step
   ] if

@@ -1,0 +1,8 @@
+Error: --interpreter-fallback=false --lock-interpreter-setting was set, but at least one compiled word emitted an interpreter fallback call.
+      hint: drop --lock-interpreter-setting, switch to --interpreter-fallback=true, or rewrite the offending words so they compile without fallback.
+AOT interpreter fallbacks: 2 total
+  native: 2
+  sites:
+    native: . -> inspect (line 708)
+    native: . -> inspect (line 708)
+  static-check: jitInterpretedCall=0/0 jitNativeWordCall=2/2 jitCallQuotation=0/0 (matches build-time inventory)

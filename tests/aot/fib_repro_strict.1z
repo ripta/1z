@@ -1,0 +1,30 @@
+\ The Fibonacci native-fallback bug's repro, end to end under the lock: the
+\ string print, the `.` on a computed number, and the timing loop all compile
+\ with no fallback, and the binary runs interpreter-free.
+\
+\ One change from the bug report's program: fib declares a fixnum output.
+\ That annotation is load-bearing -- the freeze-time inference trusts it to
+\ prove `.`'s parameter, which lets `.`'s standalone body monomorphize its
+\ `inspect` and pass the lock. The fully-unannotated form still rejects,
+\ pinned by fib_repro_unannotated_reject.1z.
+
+fib-step: ( a b n -- result ) [
+  dup 0 = [ drop drop ] [
+    1 - [ swap over + ] dip fib-step
+  ] if
+] ;
+
+fib: ( n -- result: fixnum ) [
+  dup 2 < [ ] [
+    0 1 <rot- fib-step
+  ] if
+] ;
+
+repeat-fib: ( n -- ) [
+  dup 0 = [ drop ] [
+    1 - 30 fib drop repeat-fib
+  ] if
+] ;
+
+"fib(30) = " print 30 fib .
+5000 repeat-fib

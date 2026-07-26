@@ -19,10 +19,9 @@
 # difference. Attributing that fixed startup gap to the narrowing would overstate
 # it several times over on a short workload.
 #
-# An AOT binary has no --benchmark=json, and a locked binary cannot print a
-# number because `.` reaches the generic `inspect`, so every run is timed
-# externally with gdate. Each reported figure is the median of `reps` runs, with
-# the min/max spread alongside.
+# An AOT binary has no --benchmark=json, so every run is timed externally with
+# gdate. Each reported figure is the median of `reps` runs, with the min/max
+# spread alongside.
 #
 # Build the 1z binary with `make release` for representative numbers.
 
