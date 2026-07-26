@@ -587,17 +587,25 @@ update-fmt-golden: ## Update formatter test golden files
 
 BENCHMARK_FILES := $(wildcard tests/benchmark/*.1z)
 
-benchmark-fib: build ## Run fibonacci benchmark across all execution modes
-	@scripts/benchmark-fib.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/fibonacci_simple.1z $(ZIG_PREFIX)/benchmark-fib-aot
+benchmark-fib: build ## Run fibonacci benchmark across all execution modes and record the sample
+	@scripts/benchmark-fib.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/fibonacci_simple.1z $(ZIG_PREFIX)/benchmark-fib-aot \
+		> tests/benchmark/fibonacci_simple.sample
+	@cat tests/benchmark/fibonacci_simple.sample
 
-benchmark-quotation: build ## Run quotation sequence benchmark across all execution modes
-	@scripts/benchmark-quotation.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/quotation_seq.1z $(ZIG_PREFIX)/benchmark-quotation-aot
+benchmark-quotation: build ## Run quotation sequence benchmark across all execution modes and record the sample
+	@scripts/benchmark-quotation.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/quotation_seq.1z $(ZIG_PREFIX)/benchmark-quotation-aot \
+		> tests/benchmark/quotation_seq.sample
+	@cat tests/benchmark/quotation_seq.sample
 
-benchmark-scanner: build ## Run scanner vs direct benchmark across interpreter modes
-	@scripts/benchmark-scanner.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/scanner_vs_direct.1z
+benchmark-scanner: build ## Run scanner vs direct benchmark across interpreter modes and record the sample
+	@scripts/benchmark-scanner.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/scanner_vs_direct.1z \
+		> tests/benchmark/scanner_vs_direct.sample
+	@cat tests/benchmark/scanner_vs_direct.sample
 
-benchmark-word-resolution: build ## Run word-resolution benchmark across interpreter modes
-	@scripts/benchmark-word-resolution.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/word_resolution.1z
+benchmark-word-resolution: build ## Run word-resolution benchmark across interpreter modes and record the sample
+	@scripts/benchmark-word-resolution.sh ./$(ZIG_PREFIX)/bin/1z tests/benchmark/word_resolution.1z \
+		> tests/benchmark/word_resolution.sample
+	@cat tests/benchmark/word_resolution.sample
 
 benchmark-interpreter-suite: release ## Record the interpreter-dispatch representative-suite baseline
 	@scripts/benchmark-interpreter-suite.sh ./$(ZIG_PREFIX)/bin/1z 7

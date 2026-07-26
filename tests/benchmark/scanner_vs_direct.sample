@@ -4,86 +4,86 @@ Running tests/benchmark/scanner_vs_direct.1z in all interpreter modes...
 --- split-once? (scanner-based) ---
 Name                        Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs      Bytes
 -------------------------   -----   ----------   ------------   -----------   ----------   ------   --------
-split-once? (small)            94   163.298 ms       1.737 ms           261           11    8,935   18.28 MB
-split-once? (100 fields)      102   181.170 ms       1.776 ms           261           11    9,694   19.78 MB
-split-once? (1000 fields)      98   199.641 ms       2.037 ms           261           11    9,314   19.00 MB
+split-once? (small)           360   192.567 ms     534.908 us           247           15   12,604   51.70 MB
+split-once? (100 fields)      336   182.112 ms     542.000 us           247           15   11,764   48.25 MB
+split-once? (1000 fields)     176   101.378 ms     576.011 us           247           15    6,164   25.27 MB
 
 --- Full split: direct (#index-of-from) vs scanner-based ---
-Name                    Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
----------------------   -----   -----------   ------------   -----------   ----------   ------   ---------
-split (direct, small)     288    175.065 ms     607.864 us            90            8    8,644     9.72 MB
-scanner-split (small)      46    105.382 ms       2.290 ms           331           12    5,616     9.35 MB
-split (direct, 100)        10    171.981 ms      17.198 ms         3,030            8    6,185     6.39 MB
-scanner-split (100)         1    128.895 ms     128.895 ms        20,127           12    6,594    11.52 MB
-split (direct, 1000)        1    294.404 ms     294.404 ms        30,030            8    6,021     1.04 MB
-scanner-split (1000)        1   1461.424 ms    1461.424 ms       201,927           12   65,995   115.72 MB
+Name                    Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
+---------------------   -----   ----------   ------------   -----------   ----------   ------   ---------
+split (direct, small)     943   105.146 ms     111.501 us            91           13    5,661    31.83 MB
+scanner-split (small)     196   119.197 ms     608.147 us           335           16    7,256    31.43 MB
+split (direct, 100)        89   104.493 ms       1.174 ms         2,933           13      982     4.31 MB
+scanner-split (100)         4   162.171 ms      40.542 ms        21,699           16    9,580    40.41 MB
+split (direct, 1000)       18   183.603 ms      10.200 ms        29,033           13      255     2.91 MB
+scanner-split (1000)        1   417.358 ms     417.358 ms       217,899           16   24,001   101.38 MB
 
 --- Multi-char delimiter: direct vs scanner ---
-Name                      Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
------------------------   -----   -----------   ------------   -----------   ----------   ------   ---------
-split (direct, :: 100)       10    180.002 ms      18.000 ms         3,030            8    6,183     1.32 MB
-scanner-split (:: 100)        1    134.100 ms     134.100 ms        20,127           12    6,594    11.52 MB
-split (direct, :: 1000)       1    325.222 ms     325.222 ms        30,030            8    6,024     1.54 MB
-scanner-split (:: 1000)       1   1522.750 ms    1522.750 ms       201,927           12   65,994   115.45 MB
+Name                      Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
+-----------------------   -----   ----------   ------------   -----------   ----------   ------   ---------
+split (direct, :: 100)      166   194.742 ms       1.173 ms         2,933           13    1,829     8.05 MB
+scanner-split (:: 100)        4   156.529 ms      39.132 ms        21,699           16    9,580    40.41 MB
+split (direct, :: 1000)      18   193.540 ms      10.752 ms        29,033           13      255     2.91 MB
+scanner-split (:: 1000)       1   448.285 ms     448.285 ms       217,899           16   24,001   101.38 MB
 
 --- hybrid ---
 --- split-once? (scanner-based) ---
 Name                        Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs      Bytes
 -------------------------   -----   ----------   ------------   -----------   ----------   ------   --------
-split-once? (small)           106   189.056 ms       1.783 ms           261           11   10,075   20.61 MB
-split-once? (100 fields)      106   191.975 ms       1.811 ms           261           11   10,074   20.55 MB
-split-once? (1000 fields)      84   171.680 ms       2.043 ms           261           11    7,984   16.29 MB
+split-once? (small)           360   194.879 ms     541.330 us           247           15   12,604   51.70 MB
+split-once? (100 fields)      346   193.426 ms     559.034 us           247           15   12,114   49.69 MB
+split-once? (1000 fields)     310   182.455 ms     588.564 us           247           15   10,854   44.52 MB
 
 --- Full split: direct (#index-of-from) vs scanner-based ---
-Name                    Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
----------------------   -----   -----------   ------------   -----------   ----------   ------   ---------
-split (direct, small)     304    192.187 ms     632.194 us            90            8    9,126    10.35 MB
-scanner-split (small)      82    164.671 ms       2.008 ms           269           12    8,027    21.34 MB
-split (direct, 100)         8    146.316 ms      18.289 ms         3,026            8    4,947     1.05 MB
-scanner-split (100)         2    185.105 ms      92.552 ms        15,210           12    9,284    22.59 MB
-split (direct, 1000)        1    155.348 ms     155.348 ms         3,027            8      622   490.11 KB
-scanner-split (1000)        1   1095.203 ms    1095.203 ms       151,931           12   45,990   113.16 MB
+Name                    Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
+---------------------   -----   ----------   ------------   -----------   ----------   ------   ---------
+split (direct, small)     935   100.808 ms     107.816 us            91           13    5,613    31.56 MB
+scanner-split (small)     178   101.025 ms     567.556 us           246           16    5,529    28.50 MB
+split (direct, 100)        84   101.251 ms       1.205 ms         2,927           13      927     4.07 MB
+scanner-split (100)         4   134.505 ms      33.626 ms        16,902           16    7,204    40.26 MB
+split (direct, 1000)       18   187.439 ms      10.413 ms        29,027           13      255     2.91 MB
+scanner-split (1000)        1   347.414 ms     347.414 ms       169,902           16   18,007   101.01 MB
 
 --- Multi-char delimiter: direct vs scanner ---
-Name                      Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
------------------------   -----   -----------   ------------   -----------   ----------   ------   ---------
-split (direct, :: 100)        8    152.930 ms      19.116 ms         3,026            8    4,947     1.05 MB
-scanner-split (:: 100)        2    183.747 ms      91.873 ms        15,131           12    9,176    22.58 MB
-split (direct, :: 1000)       1    199.183 ms     199.183 ms         6,027            8    1,223   240.84 KB
-scanner-split (:: 1000)       1   1124.729 ms    1124.729 ms       151,931           12   45,991   113.71 MB
+Name                      Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
+-----------------------   -----   ----------   ------------   -----------   ----------   ------   ---------
+split (direct, :: 100)       86   109.133 ms       1.268 ms         2,927           13      949     4.17 MB
+scanner-split (:: 100)        4   136.250 ms      34.062 ms        16,902           16    7,204    40.26 MB
+split (direct, :: 1000)      18   192.390 ms      10.688 ms        29,027           13      255     2.91 MB
+scanner-split (:: 1000)       1   369.593 ms     369.593 ms       169,902           16   18,007   101.01 MB
 
 --- eager ---
 --- split-once? (scanner-based) ---
 Name                        Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs      Bytes
 -------------------------   -----   ----------   ------------   -----------   ----------   ------   --------
-split-once? (small)           102   182.212 ms       1.786 ms           261           11    9,695   19.83 MB
-split-once? (100 fields)       56   101.636 ms       1.814 ms           261           11    5,324   10.86 MB
-split-once? (1000 fields)      88   181.902 ms       2.067 ms           261           11    8,364   17.06 MB
+split-once? (small)           340   191.508 ms     563.258 us           247           15   12,584   48.90 MB
+split-once? (100 fields)      340   196.231 ms     577.150 us           247           15   12,584   48.90 MB
+split-once? (1000 fields)     312   190.567 ms     610.791 us           247           15   11,548   44.88 MB
 
 --- Full split: direct (#index-of-from) vs scanner-based ---
-Name                    Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
----------------------   -----   -----------   ------------   -----------   ----------   ------   ---------
-split (direct, small)      56    173.823 ms       3.103 ms            31            5    1,012     1.78 MB
-scanner-split (small)      54    100.672 ms       1.864 ms           274           12    5,188    10.80 MB
-split (direct, 100)        38    182.060 ms       4.791 ms            31            5      689     1.49 MB
-scanner-split (100)         1    113.351 ms     113.351 ms        17,718           12    5,784    11.43 MB
-split (direct, 1000)        1    139.054 ms     139.054 ms            31            5       22   505.30 KB
-scanner-split (1000)        1   1308.072 ms    1308.072 ms       177,918           12   57,984   114.53 MB
+Name                    Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
+---------------------   -----   ----------   ------------   -----------   ----------   ------   ---------
+split (direct, small)     939   109.862 ms     116.998 us            91           13    5,637    31.70 MB
+scanner-split (small)     182   110.892 ms     609.296 us           278           16    7,102    29.23 MB
+split (direct, 100)       166   196.771 ms       1.185 ms         2,933           13    1,829     8.05 MB
+scanner-split (100)         4   166.792 ms      41.698 ms        19,290           16   10,372    40.50 MB
+split (direct, 1000)       18   187.842 ms      10.435 ms        29,033           13      255     2.91 MB
+scanner-split (1000)        1   437.261 ms     437.261 ms       193,890           16   25,999   101.61 MB
 
 --- Multi-char delimiter: direct vs scanner ---
-Name                      Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
------------------------   -----   -----------   ------------   -----------   ----------   ------   ---------
-split (direct, :: 100)       36    182.515 ms       5.069 ms            31            5      653     1.90 MB
-scanner-split (:: 100)        1    114.217 ms     114.217 ms        17,718           12    5,784    11.43 MB
-split (direct, :: 1000)       1    166.601 ms     166.601 ms            31            5       23    34.59 KB
-scanner-split (:: 1000)       1   1349.608 ms    1349.608 ms       177,918           12   57,984   114.53 MB
+Name                      Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
+-----------------------   -----   ----------   ------------   -----------   ----------   ------   ---------
+split (direct, :: 100)      148   178.513 ms       1.206 ms         2,933           13    1,631     7.17 MB
+scanner-split (:: 100)        4   169.914 ms      42.478 ms        19,290           16   10,372    40.50 MB
+split (direct, :: 1000)      18   187.826 ms      10.434 ms        29,033           13      255     2.91 MB
+scanner-split (:: 1000)       1   447.241 ms     447.241 ms       193,890           16   25,999   101.61 MB
 
 === Summary ===
 
 Mode               Prelude        JIT       User      Total
 --------------- ---------- ---------- ---------- ----------
-interpreted           26ms        0ms     5.949s     5.975s
-hybrid                13ms        0ms     5.363s     5.377s
-eager                 13ms        0ms     5.138s     5.152s
+interpreted           22ms        0ms     3.488s     3.510s
+hybrid                22ms        0ms     3.250s     3.273s
+eager                 22ms        0ms     3.932s     3.955s
 
 (AOT skipped: benchmark uses library imports not yet supported by AOT compiler)

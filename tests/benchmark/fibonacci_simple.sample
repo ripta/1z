@@ -1,0 +1,43 @@
+Building AOT binary...
+
+Building locked interpreter-free AOT binary...
+
+Running tests/benchmark/fibonacci_simple.1z in all modes...
+
+--- interpreted ---
+fib(10) = 55
+fib(20) = 6765
+fib(30) = 832040
+
+--- hybrid ---
+fib(10) = 55
+fib(20) = 6765
+fib(30) = 832040
+
+--- eager ---
+fib(10) = 55
+fib(20) = 6765
+fib(30) = 832040
+
+--- aot ---
+fib(10) = 55
+fib(20) = 6765
+fib(30) = 832040
+
+--- aot-locked ---
+fib(10) = 55
+fib(20) = 6765
+fib(30) = 832040
+
+=== Summary ===
+
+Mode               Prelude        JIT       User      Total
+--------------- ---------- ---------- ---------- ----------
+interpreted           22ms        0ms      392ms      415ms
+hybrid                22ms        0ms      130ms      153ms
+eager                 22ms        0ms      126ms      149ms
+aot                     --         --      100ms      100ms
+aot-locked              --         --       20ms       20ms
+
+AOT build time: 464ms
+AOT locked build time: 418ms

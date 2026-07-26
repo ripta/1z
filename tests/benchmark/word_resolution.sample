@@ -1,32 +1,32 @@
 Running tests/benchmark/word_resolution.1z in all interpreter modes...
 
 --- interpreted ---
-Name              Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack    Allocs      Bytes
--------------   -------   -----------   ------------   -----------   ----------   -------   --------
-chain-4-deep    100,000   1127.378 ms      11.273 us            18            2        12    5.15 KB
-countdown-200       500   7109.190 ms      14.218 ms         1,809            4   402,002   46.00 MB
-mutual-200          500   7192.740 ms      14.385 ms         1,811            4   402,005   46.00 MB
+Name              Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs     Bytes
+-------------   -------   ----------   ------------   -----------   ----------   ------   -------
+chain-4-deep    100,000   912.823 ms       9.128 us            18            4       12   5.64 KB
+countdown-200       500   352.070 ms     704.140 us         1,809            6        2     840 B
+mutual-200          500   350.964 ms     701.928 us         1,811            6        4   4.27 KB
 
 --- hybrid ---
-Name              Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs       Bytes
--------------   -------   ----------   ------------   -----------   ----------   ------   ---------
-chain-4-deep    100,000   149.049 ms       1.490 us             3            2       20     8.83 KB
-countdown-200       500    15.575 ms      31.150 us             3            4      401    47.15 KB
-mutual-200          500    17.816 ms      35.632 us             6            4      807   101.01 KB
+Name              Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs     Bytes
+-------------   -------   ----------   ------------   -----------   ----------   ------   -------
+chain-4-deep    100,000   127.768 ms       1.277 us             3            4       20   9.76 KB
+countdown-200       500    11.109 ms      22.218 us             3            6        1     288 B
+mutual-200          500     4.151 ms       8.302 us             6            6        6   7.72 KB
 
 --- eager ---
-Name              Iters       Elapsed   Elapsed/iter   Instrs/iter   Peak Stack    Allocs      Bytes
--------------   -------   -----------   ------------   -----------   ----------   -------   --------
-chain-4-deep    100,000    141.502 ms       1.415 us             3            2        20    8.83 KB
-countdown-200       500     10.147 ms      20.294 us             2            1         1      288 B
-mutual-200          500   4342.170 ms       8.684 ms           911            4   202,014   23.14 MB
+Name              Iters      Elapsed   Elapsed/iter   Instrs/iter   Peak Stack   Allocs      Bytes
+-------------   -------   ----------   ------------   -----------   ----------   ------   --------
+chain-4-deep    100,000   120.849 ms       1.208 us             3            3        1      288 B
+countdown-200       500    10.369 ms      20.738 us             2            3        1      288 B
+mutual-200          500   483.511 ms     967.022 us           911            6       17   34.25 KB
 
 === Summary ===
 
 Mode               Prelude        JIT       User      Total
 --------------- ---------- ---------- ---------- ----------
-interpreted           21ms        0ms    15.430s    15.452s
-hybrid                19ms        0ms      183ms      202ms
-eager                 20ms        0ms     4.496s     4.516s
+interpreted           22ms        0ms     1.621s     1.643s
+hybrid                22ms        0ms      148ms      171ms
+eager                 22ms        0ms      622ms      644ms
 
 (AOT skipped: optimization affects interpreter dispatch only.)
