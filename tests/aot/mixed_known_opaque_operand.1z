@@ -1,0 +1,61 @@
+\ Mixed known/opaque numeric operands: an unboxed literal or annotated
+\ parameter meets an opaque value at an arithmetic or comparison site.
+\ These sites must take the polymorphic path in AOT mode; the concrete
+\ path's tag check bails on the other numeric type, and an AOT bail
+\ aborts the program instead of deopting.
+\
+\ Every word is called with both a fixnum and a float argument so the
+\ freeze-time call-site inference keeps the parameter opaque. Correct
+\ output for both argument types proves no bail occurred.
+
+add3: ( x -- y )          [ 3 + ] ;
+radd: ( x -- y )          [ 3 swap + ] ;
+fadd: ( x -- y )          [ 1.5 + ] ;
+sub3: ( x -- y )          [ 3 - ] ;
+rsub: ( x -- y )          [ 10 swap - ] ;
+mul3: ( x -- y )          [ 3 * ] ;
+div2: ( x -- y )          [ 2 / ] ;
+mod2: ( x -- y )          [ 2 % ] ;
+lt3:  ( x -- b )          [ 3 < ] ;
+gt3:  ( x -- b )          [ 3 > ] ;
+eq3:  ( x -- b )          [ 3 = ] ;
+mixf: ( a: float b -- c ) [ + ] ;
+
+7 add3 .
+2.5 add3 .
+
+7 radd .
+2.5 radd .
+
+2 fadd .
+2.25 fadd .
+
+10 sub3 .
+4.5 sub3 .
+
+3 rsub .
+2.5 rsub .
+
+4 mul3 .
+2.5 mul3 .
+
+6 div2 .
+7.0 div2 .
+
+7 mod2 .
+7.5 mod2 .
+
+2 lt3 .
+2.5 lt3 .
+3.5 lt3 .
+
+4 gt3 .
+4.5 gt3 .
+2.5 gt3 .
+
+3 eq3 .
+3.0 eq3 .
+2.5 eq3 .
+
+1.5 2 mixf .
+1.5 2.5 mixf .

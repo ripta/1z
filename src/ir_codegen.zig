@@ -72,6 +72,12 @@ pub const IrCodegenError = error{
     /// call would silently run the empty rehydrated body. Only a full
     /// runtime image (`--emit-runtime-image`) carries such bodies.
     RuntimeImageRequired,
+    /// An arithmetic or comparison op inside a branchless `if`-arm trial
+    /// would emit a native call or physical-stack stores, which the backend
+    /// cannot fold away from a discarded trial. `emitIf` catches this and
+    /// falls through to the boxed branch path, where those emissions are
+    /// safe.
+    BranchlessTrialImpure,
     OutOfMemory,
 };
 
@@ -1965,6 +1971,16 @@ const CompileState = struct {
     /// then route through `jitNativeWordCall` instead of the direct `onez_n_*`
     /// wrapper symbols, which are exported by the hosted runtime only.
     freestanding: bool = false,
+    /// True for `--interpreter-fallback=false --lock-interpreter-setting`
+    /// builds, where any fallback emission of any category is a build error.
+    /// Codegen paths that would trade a speculative tag-check bail for a
+    /// fallback-emitting one must keep the speculative path under the lock.
+    fallbacks_locked: bool = false,
+    /// True while `emitIf` trial-compiles the arms of a candidate branchless
+    /// `IR_COND` select. The trial relies on the backend folding away pure
+    /// discarded code, so any path that would emit a native call or
+    /// physical-stack stores must raise `BranchlessTrialImpure` instead.
+    in_branchless_trial: bool = false,
     /// Set of compiled word names available in AOT mode. Used to decide whether
     /// a compound word call can be a direct function call or must fall through
     /// to `jitInterpretedCall` (permissive AOT only; strict AOT rejects the
@@ -2807,6 +2823,11 @@ fn requireF64(entry: StackEntry, state: *CompileState) IrCodegenError!c.ir_ref {
             return IrCodegenError.NotCompilable;
         },
     };
+}
+
+/// True for an abstract entry holding an unboxed number (`.i64_ref` or `.f64_ref`).
+fn isKnownNumericEntry(entry: StackEntry) bool {
+    return entry == .i64_ref or entry == .f64_ref;
 }
 
 const NarrowNumeric = enum { fixnum, float };
@@ -6112,10 +6133,34 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
                 const f_copy = state.allocator.dupe(StackEntry, stack) catch return IrCodegenError.OutOfMemory;
                 defer state.allocator.free(f_copy);
 
+                // An admitted op can still reach an emission the discarded trial
+                // cannot absorb, e.g. a comparison or arithmetic pair that
+                // delegates to a native. Such a path raises BranchlessTrialImpure;
+                // the trial is abandoned and the boxed path below compiles the
+                // arms inside real branches, where the emission is safe. The
+                // impure op raises before emitting, so the abandoned trial leaves
+                // only foldable pure code behind.
+                state.in_branchless_trial = true;
+                var trial_ok = true;
                 var t_sp = base_sp;
-                try compileInstructions(state, tb, t_copy, &t_sp);
+                compileInstructions(state, tb, t_copy, &t_sp) catch |err| switch (err) {
+                    IrCodegenError.BranchlessTrialImpure => trial_ok = false,
+                    else => {
+                        state.in_branchless_trial = false;
+                        return err;
+                    },
+                };
                 var f_sp = base_sp;
-                try compileInstructions(state, fb, f_copy, &f_sp);
+                if (trial_ok) {
+                    compileInstructions(state, fb, f_copy, &f_sp) catch |err| switch (err) {
+                        IrCodegenError.BranchlessTrialImpure => trial_ok = false,
+                        else => {
+                            state.in_branchless_trial = false;
+                            return err;
+                        },
+                    };
+                }
+                state.in_branchless_trial = false;
 
                 // The admitted op set never moves these, but restore them so a
                 // null-kind fall-through leaves the boxed path's own snapshots
@@ -6126,7 +6171,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
                 state.sp_val = saved_sp_val;
                 state.base_idx = saved_base_idx;
 
-                if (condSelectMergeKind(stack, base_sp, t_copy, t_sp, f_copy, f_sp)) |kind| {
+                if (if (trial_ok) condSelectMergeKind(stack, base_sp, t_copy, t_sp, f_copy, f_sp) else null) |kind| {
                     const top = t_sp - 1;
                     const ir_ty: c_uint = switch (kind) {
                         .i64 => c.IR_I64,
@@ -6357,7 +6402,11 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
 /// and fold a boolean compare with `ir_op`. When both operands are runtime
 /// unknowns, or are non-numeric, fall back to the polymorphic native comparison
 /// rather than optimistically assuming i64 (which would bail for type values,
-/// strings, etc.).
+/// strings, etc.). In AOT mode a mixed pair -- one opaque slot, one unboxed
+/// number -- also delegates, because the AOT bail on a runtime tag mismatch
+/// aborts instead of deopting to the interpreter. Locked and freestanding
+/// builds reject the delegated call's fallback emission, so they keep the
+/// speculative path.
 fn emitComparison(ec: EmitCtx, ir_op: c_uint) IrCodegenError!ControlFlow {
     const state = ec.state;
     const ctx = state.ctx;
@@ -6372,8 +6421,26 @@ fn emitComparison(ec: EmitCtx, ir_op: c_uint) IrCodegenError!ControlFlow {
     // When both operands are runtime unknowns and a resolver is available,
     // delegate to the polymorphic native directly. resolveOperandPair would
     // optimistically assume i64 and emit a fixnum tag check that bails for
-    // non-numeric types (type values, strings, etc.).
-    if (stack[sp.*] == .raw_at_slot and stack[sp.* + 1] == .raw_at_slot and state.resolver != null) {
+    // non-numeric types (type values, strings, etc.). An AOT mixed pair
+    // delegates for the same reason: the tag check on the opaque side would
+    // bail when the value is the other numeric type, and an AOT bail is fatal.
+    const entry_a = stack[sp.*];
+    const entry_b = stack[sp.* + 1];
+    const both_raw = entry_a == .raw_at_slot and entry_b == .raw_at_slot;
+    const mixed_aot = state.aot_mode and !state.fallbacks_locked and !state.freestanding and
+        !both_raw and
+        ((entry_a == .raw_at_slot and isKnownNumericEntry(entry_b)) or
+            (entry_b == .raw_at_slot and isKnownNumericEntry(entry_a))) and
+        blk: {
+            // Delegating needs the resolved native. When it cannot be resolved,
+            // keep the concrete speculative path instead of rejecting the word.
+            const res = state.resolver orelse break :blk false;
+            break :blk res.resolve(name, res.user_data) != null;
+        };
+    if ((both_raw or mixed_aot) and state.resolver != null) {
+        // The delegated native call cannot be folded away from a discarded
+        // branchless trial.
+        if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
         sp.* += 2;
         try emitResolvedNativeCallback(state, name, stack, sp, line);
         return .next;
@@ -6383,6 +6450,7 @@ fn emitComparison(ec: EmitCtx, ir_op: c_uint) IrCodegenError!ControlFlow {
         IrCodegenError.NotCompilable => {
             // Operands are not numeric (e.g., bool_ref vs raw_at_slot).
             // Fall back to the polymorphic native comparison.
+            if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
             sp.* += 2;
             try emitResolvedNativeCallback(state, name, stack, sp, line);
             return .next;
@@ -6411,21 +6479,65 @@ fn emitIntrinsicGt(ec: EmitCtx) IrCodegenError!ControlFlow {
     return emitComparison(ec, c.IR_GT);
 }
 
-/// Shared raw/raw polymorphic fast path for the arithmetic intrinsics that
-/// support both fixnum and float (`+ - * / %`). When both operands are runtime
+/// Shared polymorphic fast path for the arithmetic intrinsics that support
+/// both fixnum and float (`+ - * / %`). When both operands are runtime
 /// unknowns, emit polymorphic code that branches on fixnum vs float at runtime
 /// instead of bailing on a type mismatch; returns true when it consumed the
 /// operands, false when the caller should emit its concrete-type path. The
 /// caller must have already popped the two operands (so they sit at sp and
 /// sp+1).
+///
+/// In AOT mode a mixed pair -- one opaque slot, one unboxed number -- also
+/// takes this path. The concrete path would emit a tag check on the opaque
+/// side that bails when the value is the other numeric type, and an AOT bail
+/// has no interpreter to resume into, so it aborts the program. Under the JIT
+/// the bail deopts to the interpreter, so the speculative unboxed path stays.
+/// Locked and freestanding builds also keep the speculative path: this path's
+/// cold arm emits a per-op native fallback, which those build classes reject.
 fn emitPolyArithFastPath(ec: EmitCtx, op: PolyArithOp) IrCodegenError!bool {
     const state = ec.state;
     const ctx = state.ctx;
     const stack = ec.stack;
     const sp = ec.sp;
-    const entry_a = stack[sp.*];
-    const entry_b = stack[sp.* + 1];
-    if (entry_a != .raw_at_slot or entry_b != .raw_at_slot) return false;
+    var entry_a = stack[sp.*];
+    var entry_b = stack[sp.* + 1];
+    const both_raw = entry_a == .raw_at_slot and entry_b == .raw_at_slot;
+
+    if (both_raw) {
+        // The polymorphic path's stores and cold native call cannot be folded
+        // away from a discarded branchless trial.
+        if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
+    } else {
+        const one_raw = (entry_a == .raw_at_slot) != (entry_b == .raw_at_slot);
+        const known = if (entry_a == .raw_at_slot) entry_b else entry_a;
+        if (!state.aot_mode or state.fallbacks_locked or state.freestanding) return false;
+        if (!one_raw or !isKnownNumericEntry(known)) return false;
+
+        // The cold arm needs the polymorphic native. When it cannot be
+        // resolved, keep the concrete speculative path instead of rejecting
+        // the whole word.
+        const res = state.resolver orelse return false;
+        const op_name: []const u8 = switch (op) {
+            .add => "+",
+            .sub => "-",
+            .mul => "*",
+            .div => "/",
+            .mod => "%",
+        };
+        if (res.resolve(op_name, res.user_data) == null) return false;
+
+        if (state.in_branchless_trial) return IrCodegenError.BranchlessTrialImpure;
+
+        // The polymorphic emitter and its cold native fallback read both operands
+        // from physical memory at dest_slot and dest_slot+1. Flush to identity
+        // layout so the known operand is boxed into place and the opaque one is
+        // settled there by the proven move planner.
+        sp.* += 2;
+        flushToPhysicalStack(state, stack, sp.*);
+        sp.* -= 2;
+        entry_a = stack[sp.*];
+        entry_b = stack[sp.* + 1];
+    }
 
     // Polymorphic arith writes directly to a physical slot. If any entry below the operands
     // aliases `dest_slot`, save dest_slot to a scratch slot first so the write doesn't
@@ -8879,8 +8991,9 @@ pub fn emitWordCAot(
     source_file: ?[]const u8,
     interpreter_free: bool,
     freestanding: bool,
+    fallbacks_locked: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -8913,15 +9026,16 @@ fn emitWordCAotWithCName(
     source_file: ?[]const u8,
     interpreter_free: bool,
     freestanding: bool,
+    fallbacks_locked: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, false) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, discovered.row_aware_self_loop) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, discovered.row_aware_self_loop) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -8975,6 +9089,7 @@ fn emitWordCAotPass(
     source_file: ?[]const u8,
     interpreter_free: bool,
     freestanding: bool,
+    fallbacks_locked: bool,
     row_aware_self_loop: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)!EmitWordCAotPassResult {
     ValueLayout.ensureInit();
@@ -9263,6 +9378,7 @@ fn emitWordCAotPass(
         .aot_mode = true,
         .interpreter_free = interpreter_free,
         .freestanding = freestanding,
+        .fallbacks_locked = fallbacks_locked,
         .aot_compiled_names = aot_compiled_names,
         .aot_proto_1arg = proto_1arg,
         .aot_proto_2arg = proto_2arg,
@@ -9838,6 +9954,10 @@ pub fn emitProgramC(
     // Auto and permissive builds keep the row-region continuation.
     const strict_interpreter_free = interpreter_fallback == .false;
 
+    // Under the lock any fallback emission of any category is a build error, so
+    // codegen must not trade a speculative bail for a fallback-emitting path.
+    const fallbacks_locked = strict_interpreter_free and lock_interpreter_setting;
+
     var resolver_data = AotResolverData{ .map = &word_map, .returns_row_names = &returns_row_names };
     const resolver = WordResolver{
         .resolve = &AotResolverData.resolve,
@@ -9971,6 +10091,7 @@ pub fn emitProgramC(
                     w.source_file,
                     strict_interpreter_free,
                     meta.freestanding,
+                    fallbacks_locked,
                     false,
                 ) catch continue;
                 if (discovered.body) |b| allocator.free(b);
@@ -10037,6 +10158,7 @@ pub fn emitProgramC(
             w.source_file,
             strict_interpreter_free,
             meta.freestanding,
+            fallbacks_locked,
         ) catch |err| {
             const rejected: ?NotCompilableReason = if (reason) |r|
                 r
@@ -10078,7 +10200,7 @@ pub fn emitProgramC(
                 var dreason: ?NotCompilableReason = null;
                 // No inferred types: the freeze-time pass sizes a quotation's table by its
                 // `inferred_effect`, and this branch runs precisely when it has none.
-                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, false) catch {
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, false) catch {
                     emitAotEffectTrace(interp_ctx, q.c_name, ic, null, dreason);
                     continue;
                 };
@@ -10119,6 +10241,7 @@ pub fn emitProgramC(
             q.source_file,
             strict_interpreter_free,
             meta.freestanding,
+            fallbacks_locked,
         ) catch {
             emitAotCodegenTrace(interp_ctx, "quot", q.c_name, qreason orelse .unknown_reason);
             continue;
@@ -10191,6 +10314,7 @@ pub fn emitProgramC(
             w.source_file,
             strict_interpreter_free,
             meta.freestanding,
+            fallbacks_locked,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -10237,6 +10361,7 @@ pub fn emitProgramC(
             q.source_file,
             strict_interpreter_free,
             meta.freestanding,
+            fallbacks_locked,
         ) catch |err| switch (err) {
             error.NotCompilable => continue,
             else => return err,
@@ -16362,7 +16487,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const dup_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 1 },
     };
-    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false);
+    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false);
     if (dup_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 2), dup_res.discovered_output);
 
@@ -16370,7 +16495,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const drop_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
     };
-    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false);
+    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false);
     if (drop_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 0), drop_res.discovered_output);
 }
@@ -16685,6 +16810,7 @@ test "emitWordCAot emits named callback for safepoint" {
         null,
         false,
         false,
+        false,
     ) catch |err| {
         // times requires a quotation on stack which we don't have in this
         // minimal test -- NotCompilable is expected. Skip this test case
@@ -16731,6 +16857,7 @@ test "emitWordCAot basic arithmetic" {
         null,
         false,
         false,
+        false,
     );
     defer testing.allocator.free(source);
 
@@ -16772,6 +16899,7 @@ test "emitWordCAot quotation call emits code_ptr dispatch" {
         null,
         false,
         null,
+        false,
         false,
         false,
     ) catch |err| {
@@ -16835,6 +16963,7 @@ test "emitWordCAot interpreter-free quotation call traps instead of interpreter 
         null,
         true, // interpreter_free
         false,
+        false,
     );
     defer testing.allocator.free(source);
 
@@ -16892,6 +17021,7 @@ test "emitWordCAot freestanding routes non-generic natives through jitNativeWord
         null,
         false,
         false,
+        false,
     );
     defer testing.allocator.free(hosted);
 
@@ -16924,6 +17054,7 @@ test "emitWordCAot freestanding routes non-generic natives through jitNativeWord
         null,
         false,
         true, // freestanding
+        false,
     );
     defer testing.allocator.free(freestanding);
 
@@ -18497,6 +18628,7 @@ test "row underflow: a word reaching below its declared inputs compiles in AOT m
         null,
         false,
         false,
+        false,
     );
     defer testing.allocator.free(source);
     // The word body compiled to a C function rather than being rejected.
@@ -18550,6 +18682,7 @@ test "epilogue reifies an escaping quotation output instead of bailing" {
         null,
         false,
         null,
+        false,
         false,
         false,
     );
@@ -18610,6 +18743,7 @@ test "branch merge reifies an escaping quotation arm instead of bailing" {
         null,
         false,
         false,
+        false,
     );
     defer testing.allocator.free(source);
     try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
@@ -18659,6 +18793,7 @@ test "loop carry reifies an escaping quotation before the loop header" {
         null,
         false,
         null,
+        false,
         false,
         false,
     );
@@ -18727,6 +18862,7 @@ test "self-tail-call carry reifies an escaping quotation argument" {
         null,
         false,
         false,
+        false,
     );
     defer testing.allocator.free(source);
     try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
@@ -18787,6 +18923,7 @@ test "swap over a row compiles in AOT mode with the row pinned at slot 0" {
         null,
         false,
         false,
+        false,
     );
     defer testing.allocator.free(source);
     // The word body compiled to a C function rather than being rejected.
@@ -18831,6 +18968,7 @@ fn arithFallbackCount(
         null,
         false,
         null,
+        false,
         false,
         false,
     );
@@ -18933,6 +19071,7 @@ fn monomorphEmittedSource(
         null,
         interpreter_free,
         false,
+        false,
     );
 }
 
@@ -18999,6 +19138,7 @@ fn outputNarrowEmittedSource(
         false,
         null,
         interpreter_free,
+        false,
         false,
     );
 }
@@ -19183,6 +19323,7 @@ fn dipSpliceEmittedSource(
         null,
         interpreter_free,
         false,
+        false,
     );
 }
 
@@ -19241,6 +19382,7 @@ fn dipDeclineEmittedSource(
         false,
         null,
         interpreter_free,
+        false,
         false,
     );
 }
@@ -19389,6 +19531,7 @@ fn compoundSpliceEmittedSource(
         false,
         null,
         interpreter_free,
+        false,
         false,
     );
 }

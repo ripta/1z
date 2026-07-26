@@ -4,9 +4,9 @@ Prelude compilation: 455/456 words compiled (99.8%)
       hint: blocked until row-variable stack regions can be modeled
 Quotation bodies compiled: 0
 Inline PIC sites: 88/265 generic call sites preseeded
-AOT interpreter fallbacks: 422 total
-  native: 401
-  per-op-native: 3
+AOT interpreter fallbacks: 461 total
+  native: 424
+  per-op-native: 19
   compound-uncompiled: 1
   quotation: 17
   sites:
@@ -26,8 +26,8 @@ AOT interpreter fallbacks: 422 total
     native: . -> inspect (line 708)
     native: . -> inspect (line 708)
     native: #ends-with? -> #len (line 1279)
-    ... 406 more
-  static-check: jitInterpretedCall=1/1 jitNativeWordCall=404/404 jitCallQuotation=17/17 (matches build-time inventory)
+    ... 445 more
+  static-check: jitInterpretedCall=1/1 jitNativeWordCall=443/443 jitCallQuotation=17/17 (matches build-time inventory)
 Warning: '4keep' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'try' parameter 'quot' has row-variable effect; quotation call falls back to interpreter
 Warning: 'bi' parameter 'p' has row-variable effect; quotation call falls back to interpreter
