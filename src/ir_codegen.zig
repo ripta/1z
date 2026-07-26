@@ -228,6 +228,7 @@ pub const PicStats = struct {
     sites_attempted: u32 = 0,
     sites_emitted: u32 = 0,
     monomorphized: u32 = 0,
+    inlined: u32 = 0,
 };
 
 /// Classification of an AOT-mode interpreter-callback emission. Covers both
@@ -533,10 +534,17 @@ fn shouldSkipTypeAnnotationValidation(word: WordDefinition) bool {
 /// `unknown` means the pass proved nothing and the parameter stays opaque, which is how every
 /// parameter behaves without the pass. The concrete arms name only the types codegen can seed as
 /// unboxed scalars, so a proof the prologue could not act on is never recorded.
+///
+/// The `_declared` arms carry provenance: the proof rests at least in part on a callee's declared
+/// output annotation, which is never validated at runtime, so the prologue must enforce these
+/// with a tag check before unboxing. The plain arms remain check-free -- their proof is over the
+/// observed call sites themselves.
 pub const InferredParamType = enum {
     unknown,
     fixnum,
     float,
+    fixnum_declared,
+    float_declared,
 };
 
 /// Description of a word to be compiled for AOT C emission.
@@ -861,6 +869,14 @@ pub const ResolvedWord = struct {
     /// The callee's declared output parameters, for call-site output
     /// narrowing. Read only at compile time; never baked into emitted code.
     output_params: ?[]const stack_effect_mod.StackEffectParam = null,
+    /// The callee's declared input parameters, read at compile time by the
+    /// compound splicer to decline callees with annotated inputs, whose
+    /// call-path runtime validation a splice would skip.
+    input_params: ?[]const stack_effect_mod.StackEffectParam = null,
+    /// The callee's compound instruction body, for the call-site compound
+    /// splicer. Read only at compile time; never baked into emitted code.
+    /// Null for natives and for resolvers with no body at hand.
+    body: ?[]const Instruction = null,
 };
 
 /// Callback interface for resolving word names to dispatch table IDs.
@@ -2031,6 +2047,10 @@ const CompileState = struct {
     quotation_slots: QuotationSlotMap = .{},
     inline_trace_frames: [max_inline_trace_frames]InlineTraceFrame = undefined,
     inline_trace_frame_count: usize = 0,
+    /// Names of the compound words currently being spliced inline on this call path, innermost
+    /// last. Guards the compound splicer against cycles and bounds its nesting depth.
+    splice_names: [max_splice_depth][]const u8 = undefined,
+    splice_depth: usize = 0,
     /// Monotonic counter for allocating unique RowId values.
     next_row_id: RowId = 0,
     /// Source file containing the word or quotation being compiled.
@@ -2134,6 +2154,13 @@ const InlineTraceFrame = struct {
 };
 
 const max_inline_trace_frames = 8;
+
+/// Maximum instruction count for a compound body eligible for call-site splicing. Keeps the
+/// splicer on small forwarder-shaped words like `.`.
+const max_splice_body_len = 8;
+
+/// Maximum nesting depth of compound-body splices on one call path.
+const max_splice_depth = 4;
 
 fn traceFramesEnabled(state: *const CompileState) bool {
     return state.append_word_trace_frame_fn != c.IR_UNUSED or state.append_builtin_trace_frame_fn != c.IR_UNUSED;
@@ -2814,7 +2841,7 @@ fn narrowableAnnotation(state: *CompileState, ann: stack_effect_mod.TypeAnnotati
 /// so the declared type is not guaranteed at runtime and narrowing (which
 /// trusts it) would be unsound. Mirrors the pragma read in
 /// `Context.validateTypeAnnotationsScoped`.
-fn typeCheckRelaxed(ctx: *const Context) bool {
+pub fn typeCheckRelaxed(ctx: *const Context) bool {
     const pv = ctx.getPragma("type-check") orelse return false;
     if (pv != .string) return false;
     return std.mem.eql(u8, pv.string, "off") or std.mem.eql(u8, pv.string, "warning");
@@ -2893,13 +2920,16 @@ fn seedAnnotatedParams(state: *CompileState, stack: []StackEntry, input_count: u
 
 /// Seed narrowed entries for parameters the freeze-time call-site inference proved.
 ///
-/// No tag check guards these. A concrete table entry asserts that every call site in
+/// No tag check guards the plain proofs. A concrete table entry asserts that every call site in
 /// the program passes that type, which is a stronger guarantee than a declaration: an
 /// annotation states an intent the AOT direct-call path never verifies, while the proof
-/// is over the call sites themselves.
+/// is over the call sites themselves. A `_declared` proof rests on a callee's output annotation
+/// instead, so it gets a tag check at entry -- the enforcement that makes a lying annotation trap
+/// rather than flow garbage into unboxed arithmetic.
 ///
-/// For the same reason the `type-check` pragma does not apply here. It governs whether a
-/// declared annotation can be trusted at runtime, and this path reads no declaration.
+/// The `type-check` pragma does not apply here. It governs whether a declared annotation can be
+/// trusted at runtime; under a relaxed pragma the inference never produces `_declared` proofs,
+/// and the plain proofs read no declaration.
 ///
 /// This is the only narrowing a quotation body gets: a quotation is compiled with no
 /// `StackEffect`, so it has no annotations to read.
@@ -2912,8 +2942,12 @@ fn seedInferredParams(state: *CompileState, stack: []StackEntry, input_count: us
     // resuming interpreted, so `add2: ( a b -- r ) [ + ] ;` fed `1 2` and `1 2.5` would die on
     // the second call. That abort is a standing AOT gap, reachable today through a literal
     // operand and through a declared annotation; this keeps inference from widening it.
+    //
+    // A `_declared` proof without the hard-error callback cannot be enforced, so it also leaves
+    // every parameter opaque.
     for (state.inferred_param_types) |kind| {
         if (kind == .unknown) return;
+        if ((kind == .fixnum_declared or kind == .float_declared) and state.type_mismatch_error_fn == c.IR_UNUSED) return;
     }
 
     // A row variable among the inputs makes the input-index -> slot mapping ambiguous.
@@ -2944,6 +2978,16 @@ fn seedInferredParams(state: *CompileState, stack: []StackEntry, input_count: us
             },
             .float => {
                 const slot_addr = liveSlotAddr(state, i);
+                stack[i] = .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) };
+            },
+            .fixnum_declared => {
+                const slot_addr = liveSlotAddr(state, i);
+                emitTagCheckOrError(state, slot_addr, state.fixnum_tag_const, state.type_mismatch_error_fn);
+                stack[i] = .{ .i64_ref = emitUnboxI64(state.ctx, slot_addr, state.payload_offset_const) };
+            },
+            .float_declared => {
+                const slot_addr = liveSlotAddr(state, i);
+                emitTagCheckOrError(state, slot_addr, state.float_tag_const, state.type_mismatch_error_fn);
                 stack[i] = .{ .f64_ref = emitUnboxF64(state.ctx, slot_addr, state.payload_offset_const) };
             },
         }
@@ -3785,6 +3829,11 @@ fn emitReachBelowConcrete(state: *CompileState, stack: []StackEntry, sp: *usize,
         refreshCachedStackPointer(state);
         sp.* = effective_out;
         for (0..effective_out) |i| stack[i] = .{ .raw_at_slot = i };
+
+        // This settle path must narrow declared outputs like the ordinary one: the freeze-time
+        // inference trusts these annotations, so every compiled call site with concrete result
+        // positions has to enforce them.
+        narrowAnnotatedOutputs(state, stack, sp.*, resolved, effective_out);
         return true;
     }
 
@@ -4805,7 +4854,12 @@ fn emitChooseBuiltin(
 ///
 /// `stop` ends compilation of the body, replacing the `break` the row-fallback arms take when no
 /// native could be emitted.
-const ControlFlow = enum { next, stop };
+///
+/// `not_handled` declines the op entirely: the dispatch site falls through to the rest of the
+/// ladder (self-tail-call, mutual recursion, word resolution), exactly as if the name had no
+/// table entry. Used by conditional intrinsics like the `dip` splice, which only applies to a
+/// literal quotation.
+const ControlFlow = enum { next, stop, not_handled };
 
 /// The inputs a per-op intrinsic handler needs at the dispatch boundary.
 /// Everything else is reached through `state`.
@@ -4858,6 +4912,14 @@ const intrinsic_table = std.StaticStringMap(IntrinsicEntry).initComptime(.{
     .{ "over", IntrinsicEntry{ .handler = emitIntrinsicOver, .effect = .{ .custom = inferEffectOver } } },
     .{ "if", IntrinsicEntry{ .handler = emitIntrinsicIf, .effect = .{ .custom = inferEffectIf } } },
     .{ "call", IntrinsicEntry{ .handler = emitIntrinsicCall, .effect = .{ .custom = inferEffectCall } } },
+    // dip/2dip splice a literal quotation inline and otherwise decline to the normal resolution
+    // path, so their caps cover that path's needs: the native call for `dip`, the compound
+    // dispatch for `2dip`, and the JIT param validation both carry.
+    //
+    // `.effect` stays `.none` so effect inference defers to the resolver exactly as before these
+    // entries existed.
+    .{ "dip", IntrinsicEntry{ .handler = emitIntrinsicDip, .caps = .{ .needs_native_call = true, .needs_param_validation = true } } },
+    .{ "2dip", IntrinsicEntry{ .handler = emitIntrinsic2Dip, .caps = .{ .needs_dispatch = true, .needs_native_call = true, .needs_param_validation = true } } },
     .{ "choose", IntrinsicEntry{ .handler = emitIntrinsicChoose, .effect = .{ .fixed = .{ .input_count = 3, .output_count = 1 } } } },
     .{ "=", IntrinsicEntry{ .handler = emitIntrinsicEq, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
     .{ "<", IntrinsicEntry{ .handler = emitIntrinsicLt, .caps = .{ .needs_poly_fallback = true }, .effect = .{ .fixed = .{ .input_count = 2, .output_count = 1 } } } },
@@ -5418,6 +5480,140 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
             state.not_compilable_reason = .quotation_reification;
             return IrCodegenError.NotCompilable;
         },
+    }
+    return .next;
+}
+
+/// Whether any callee in `instructions`, including nested literal quotation bodies, resolves
+/// row-returning. Such a call collapses the abstract stack to a fresh row mid-splice, which the
+/// splice's shape accounting cannot absorb; the call path handles it with today's row machinery.
+/// An unresolvable callee is treated as row-returning, the conservative direction.
+fn bodyCallsRowReturning(instructions: []const Instruction, resolver: ?WordResolver) bool {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val == .quotation and bodyCallsRowReturning(val.quotation.instructions, resolver)) return true;
+            },
+            .call_word, .call_word_direct => {
+                const cname = instr.op.callTargetName() orelse continue;
+                if (intrinsic_table.get(cname) != null) continue;
+                const res = resolver orelse return true;
+                const r = res.resolve(cname, res.user_data) orelse return true;
+                if (r.returns_row) return true;
+            },
+        }
+    }
+    return false;
+}
+
+/// Whether `instructions`, including nested literal quotation bodies, contains
+/// a call to `name`.
+fn bodyCallsName(instructions: []const Instruction, name: []const u8) bool {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val == .quotation and bodyCallsName(val.quotation.instructions, name)) return true;
+            },
+            .call_word, .call_word_direct => {
+                const cname = instr.op.callTargetName() orelse continue;
+                if (std.mem.eql(u8, cname, name)) return true;
+            },
+        }
+    }
+    return false;
+}
+
+// dip: ( ..a x quot: ( ..a -- ..b ) -- ..b x )   run quot with x set aside
+fn emitIntrinsicDip(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return spliceDipRetaining(ec, 1);
+}
+
+// 2dip: ( ..a x y quot: ( ..a -- ..b ) -- ..b x y )   run quot with x y set aside
+fn emitIntrinsic2Dip(ec: EmitCtx) IrCodegenError!ControlFlow {
+    return spliceDipRetaining(ec, 2);
+}
+
+/// Splice a `dip`/`2dip` literal quotation into the caller's instruction stream: set the retained
+/// entries aside, compile the body against the remaining typed abstract stack, then restore them.
+/// The body then sees the caller's proven operand types instead of a fresh opaque stack.
+///
+/// Splicing bypasses normal resolution, which is sound only in the interpreter-free AOT build
+/// class, whose freeze rejects dynamic definition features; other builds decline (`.not_handled`).
+///
+/// A retained entry must be restorable. An SSA ref (`.i64_ref`/`.f64_ref`/`.bool_ref`) and a
+/// compile-time `.quotation_body` survive the splice untouched, but a `.raw_at_slot` value lives
+/// in a physical slot the spliced body may clobber, so those sites decline too.
+///
+/// A declined site takes the native/compound path exactly as before these table entries existed.
+fn spliceDipRetaining(ec: EmitCtx, retain_count: usize) IrCodegenError!ControlFlow {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    if (!state.aot_mode or !state.interpreter_free) return .not_handled;
+    if (sp.* < retain_count + 1) return .not_handled;
+
+    const body = switch (stack[sp.* - 1]) {
+        .quotation_body => |b| b,
+        else => return .not_handled,
+    };
+
+    for (0..retain_count) |i| {
+        switch (stack[sp.* - 2 - i]) {
+            .i64_ref, .f64_ref, .bool_ref, .quotation_body => {},
+            else => return .not_handled,
+        }
+    }
+
+    // A call to the compiling word at the spliced body's last index would emit
+    // the self-tail-call back-edge and skip the restore below.
+    if (state.self_name) |sn| {
+        if (bodyCallsName(body, sn)) return .not_handled;
+    }
+
+    // A body whose inferred effect reaches deeper than the stack below the retained entries
+    // would underflow mid-splice and fail the whole caller; the native path handles it with
+    // today's row fallback instead. An uninferable body declines for the same reason.
+    const inferred = inferQuotationEffect(body, state.resolver) catch return .not_handled;
+    const eff = inferred orelse return .not_handled;
+    if (@as(usize, eff.input_count) > sp.* - retain_count - 1) return .not_handled;
+
+    // A row_region in the body's consumed range has unknown runtime depth, and a row-returning
+    // callee inside the body collapses the stack mid-splice. Both fail spliced ops that the
+    // native path compiles today, so those sites keep it.
+    for (0..eff.input_count) |i| {
+        if (stack[sp.* - retain_count - 2 - i].isRowRegion()) return .not_handled;
+    }
+    if (bodyCallsRowReturning(body, state.resolver)) return .not_handled;
+
+    sp.* -= 1;
+    var retained: [2]StackEntry = undefined;
+    for (0..retain_count) |i| {
+        sp.* -= 1;
+        retained[i] = stack[sp.*];
+    }
+
+    const saved_inline_trace_frame_count = state.inline_trace_frame_count;
+    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+        state.inline_trace_frames[state.inline_trace_frame_count] = .{
+            .kind = .call,
+            .line = ec.line,
+        };
+        state.inline_trace_frame_count += 1;
+    }
+    try compileInstructions(state, body, stack, sp);
+    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
+
+    if (state.pic_stats) |ps| ps.inlined += 1;
+
+    // A diverging body (throw, terminal return) leaves the restore unreachable.
+    if (!exitFallsThrough(state.exit_kind)) return .next;
+
+    var i = retain_count;
+    while (i > 0) {
+        i -= 1;
+        stack[sp.*] = retained[i];
+        sp.* += 1;
     }
     return .next;
 }
@@ -6361,6 +6557,144 @@ fn emitIntrinsicRem(ec: EmitCtx) IrCodegenError!ControlFlow {
     return .next;
 }
 
+/// Whether `instructions`, including nested literal quotation bodies, contains an op the compound
+/// splicer excludes: a nested `;` definition, or a branching/looping/error-handling/iterating
+/// intrinsic.
+///
+/// A branchy body merges its operand types opaque at the join anyway, so splicing it grows the
+/// caller for no type-flow gain -- the splicer targets straight-line forwarders like `.`.
+fn bodyHasExcludedOp(instructions: []const Instruction) bool {
+    for (instructions) |instr| {
+        switch (instr.op) {
+            .push_literal => |val| {
+                if (val == .quotation and bodyHasExcludedOp(val.quotation.instructions)) return true;
+            },
+            .call_word, .call_word_direct => {
+                const cname = instr.op.callTargetName() orelse continue;
+                if (std.mem.eql(u8, cname, ";")) return true;
+                if (std.mem.eql(u8, cname, "if") or std.mem.eql(u8, cname, "choose")) return true;
+                if (intrinsic_table.get(cname)) |entry| {
+                    if (entry.caps.needs_safepoint or entry.caps.needs_error_handling or entry.caps.needs_iterators) return true;
+                }
+            },
+        }
+    }
+    return false;
+}
+
+/// The statically-checkable half of compound-splice eligibility, shared by the emitter and the
+/// pre-scan. Returns the callee body when the resolved word is a plain compound whose body is
+/// small and shaped like a straight-line forwarder: no generic/bounded dispatch, no row-returning
+/// or diverging control flow, no annotated inputs (a splice skips the call path's runtime
+/// validation), and none of the excluded ops.
+fn spliceBodyStatic(resolved: ResolvedWord) ?[]const Instruction {
+    if (resolved.is_native or resolved.is_generic or resolved.bounded_constraint != null) return null;
+    if (resolved.returns_row or resolved.never_returns) return null;
+
+    const body = resolved.body orelse return null;
+    if (body.len == 0 or body.len > max_splice_body_len) return null;
+
+    if (resolved.input_params) |inputs| {
+        for (inputs) |param| {
+            if (param.type_annotation != null) return null;
+        }
+    }
+
+    if (bodyHasExcludedOp(body)) return null;
+    return body;
+}
+
+/// Splice a small compound callee's body into the caller's instruction stream so it compiles
+/// against the caller's typed abstract stack, instead of flushing the operands opaque and calling
+/// the compiled symbol. This is what lets `.`'s inner `inspect` see a proven fixnum and
+/// monomorphize. Returns false when the site keeps the ordinary call emission.
+///
+/// Gated to the interpreter-free AOT build class, whose freeze rejects dynamic definition
+/// features, so no runtime redefinition can invalidate the spliced body. Fires only when a typed
+/// operand is present among the callee's inputs; an all-opaque site gains nothing from a splice
+/// and keeps today's emission.
+///
+/// Cycle safety: the callee must not be the word being compiled, must not already be on the
+/// splice path, and its body must not call the compiling word (a call at the spliced body's last
+/// index would emit the self-tail-call back-edge mid-splice). The callee's standalone compilation
+/// is unaffected -- its symbol still exists for non-spliced callers.
+fn trySpliceCompoundBody(
+    ec: EmitCtx,
+    resolved: ResolvedWord,
+    effective_in: usize,
+    effective_out: usize,
+) IrCodegenError!bool {
+    const state = ec.state;
+    const stack = ec.stack;
+    const sp = ec.sp;
+
+    if (!state.aot_mode or !state.interpreter_free) return false;
+    if (state.splice_depth >= max_splice_depth) return false;
+    if (sp.* < effective_in) return false;
+
+    const body = spliceBodyStatic(resolved) orelse return false;
+
+    if (state.self_name) |sn| {
+        if (std.mem.eql(u8, ec.name, sn)) return false;
+        if (bodyCallsName(body, sn)) return false;
+    }
+    for (state.splice_names[0..state.splice_depth]) |n| {
+        if (std.mem.eql(u8, ec.name, n)) return false;
+    }
+
+    var has_typed = false;
+    for (0..effective_in) |i| {
+        switch (stack[sp.* - 1 - i]) {
+            .i64_ref, .f64_ref, .bool_ref => has_typed = true,
+            // A row_region has unknown runtime depth; the spliced ops would reject it where
+            // the call path compiles today.
+            .row_region => return false,
+            else => {},
+        }
+    }
+    if (!has_typed) return false;
+
+    // The splice compiles the callee's instructions in the caller's frame, so a body whose net
+    // effect cannot be inferred, or disagrees with the declared arity (an underflowing body, a
+    // branch-table consumer), would fail the whole caller instead of falling back at the call
+    // site. Splice only what provably moves the stack the way the declaration says. A
+    // row-returning callee inside the body collapses the stack mid-splice for the same failure.
+    const inferred = inferQuotationEffect(body, state.resolver) catch return false;
+    const eff = inferred orelse return false;
+    if (@as(usize, eff.input_count) != effective_in) return false;
+    if (@as(usize, eff.output_count) != effective_out) return false;
+    if (bodyCallsRowReturning(body, state.resolver)) return false;
+
+    state.splice_names[state.splice_depth] = ec.name;
+    state.splice_depth += 1;
+    defer state.splice_depth -= 1;
+
+    const saved_inline_trace_frame_count = state.inline_trace_frame_count;
+    if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
+        state.inline_trace_frames[state.inline_trace_frame_count] = .{
+            .kind = .call,
+            .line = ec.line,
+        };
+        state.inline_trace_frame_count += 1;
+    }
+    const sp_before = sp.*;
+    try compileInstructions(state, body, stack, sp);
+    if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
+
+    // The spliced body must land exactly where the declared effect says the call would have; a
+    // disagreement would silently corrupt the caller's stack model.
+    //
+    // Outputs the body left opaque still narrow from the callee's declared annotations, exactly
+    // as the call path would.
+    if (exitFallsThrough(state.exit_kind)) {
+        if (sp.* != sp_before - effective_in + effective_out) return IrCodegenError.StackShapeMismatch;
+        narrowAnnotatedOutputs(state, stack, sp.*, resolved, effective_out);
+    }
+
+    if (state.pic_stats) |ps| ps.inlined += 1;
+    return true;
+}
+
 /// Emit a resolved word through the generic native/dispatch path: row-variable
 /// effect specialization, then the is_native / AOT-bounded / AOT-direct /
 /// bounded / compound emission chain. Shared by the terminal `else` of
@@ -6525,6 +6859,8 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             if (try emitDynamicRowFallback(state, stack, sp, name, resolved, line)) return .next;
             return .stop;
         }
+
+        if (try trySpliceCompoundBody(ec, resolved, effective_in, effective_out)) return .next;
 
         try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
@@ -7477,6 +7813,7 @@ fn compileInstructions(
             },
             .call_word, .call_word_direct => {
                 const name = instr.op.callTargetName().?;
+                var intrinsic_handled = false;
                 if (intrinsic_table.get(name)) |entry| {
                     switch (try entry.handler(.{
                         .state = state,
@@ -7490,10 +7827,14 @@ fn compileInstructions(
                         // `next` falls out to the shared per-iteration epilogue
                         // below (the `peak_sp` update and the `exitFallsThrough`
                         // break), the same path the inline arms took.
-                        .next => {},
+                        .next => intrinsic_handled = true,
                         .stop => break,
+                        // The intrinsic declined; resolve the name through the
+                        // rest of the ladder as if it had no table entry.
+                        .not_handled => {},
                     }
-                } else if (
+                }
+                if (intrinsic_handled) {} else if (
                 // oh, yuck
                 state.self_name != null and
                     state.loop_begin_ref != c.IR_UNUSED and
@@ -7680,6 +8021,8 @@ fn compileInstructions(
                     switch (try emitGenericResolvedNativeCall(ec, resolved)) {
                         .next => {},
                         .stop => break,
+                        // Only table handlers decline; the resolved path always emits.
+                        .not_handled => unreachable,
                     }
                 }
             },
@@ -7798,23 +8141,48 @@ const PreScanFlags = struct {
 
 /// Recursively scan instructions and quotation bodies for dispatch calls
 /// and loop ops.
+///
+/// With `splice_scan` set (the AOT pass), the scan also recurses into the body of every compound
+/// callee the splicer could inline. The splice decision itself depends on the abstract stack,
+/// which does not exist at pre-scan time, so this over-approximates: every statically-eligible
+/// body contributes its caps whether or not the site ends up spliced, and extra caps only wire
+/// unused callback refs.
+///
+/// `splice_depth` mirrors the emitter's nesting cap so a body cycle cannot recurse forever.
 fn preScanInstructions(
     instructions: []const Instruction,
     resolver: ?WordResolver,
     flags: *PreScanFlags,
     in_quotation: bool,
+    splice_scan: bool,
+    splice_depth: usize,
 ) IrCodegenError!void {
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| {
                 if (val == .quotation) {
-                    try preScanInstructions(val.quotation.instructions, resolver, flags, true);
+                    try preScanInstructions(val.quotation.instructions, resolver, flags, true, splice_scan, splice_depth);
                 }
             },
             .call_word, .call_word_direct => {
                 const name = instr.op.callTargetName().?;
                 if (intrinsic_table.get(name)) |entry| {
                     flags.applyCaps(entry.caps);
+
+                    // A table entry can decline (`.not_handled`) and resolve as an ordinary
+                    // word, so a table name with a spliceable compound body still needs its
+                    // body's caps walked -- a redefined `2dip` is the live case.
+                    if (splice_scan) {
+                        if (resolver) |res| {
+                            if (res.resolve(name, res.user_data)) |resolved| {
+                                if (splice_depth < max_splice_depth) {
+                                    if (spliceBodyStatic(resolved)) |body| {
+                                        try preScanInstructions(body, resolver, flags, true, splice_scan, splice_depth + 1);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 } else {
                     if (resolver) |res| {
                         if (res.resolve(name, res.user_data)) |resolved| {
@@ -7828,6 +8196,11 @@ fn preScanInstructions(
                             }
                             if (resolved.bounded_constraint != null) {
                                 flags.needs_satisfies_dispatch = true;
+                            }
+                            if (splice_scan and splice_depth < max_splice_depth) {
+                                if (spliceBodyStatic(resolved)) |body| {
+                                    try preScanInstructions(body, resolver, flags, true, splice_scan, splice_depth + 1);
+                                }
                             }
                         } else if (!in_quotation) {
                             return IrCodegenError.NotCompilable;
@@ -7960,7 +8333,7 @@ fn compileWordPass(
     // Pre-scan: check if any call_word needs dispatch table resolution
     // or contains loops (which need safepoints).
     var scan_flags = PreScanFlags{};
-    try preScanInstructions(instructions, resolver, &scan_flags, false);
+    try preScanInstructions(instructions, resolver, &scan_flags, false, false, 0);
 
     var ctx: c.ir_ctx = undefined;
     c.ir_init(&ctx, c.IR_FUNCTION | c.IR_OPT_FOLDING, c.IR_CONSTS_LIMIT_MIN, c.IR_INSNS_LIMIT_MIN);
@@ -8639,9 +9012,10 @@ fn emitWordCAotPass(
     // runtime entry points are implemented.
     const capacity_param = c.IR_UNUSED;
 
-    // Pre-scan to determine which callbacks are needed
+    // Pre-scan to determine which callbacks are needed. The splice scan runs
+    // only for the interpreter-free build class, the only one that splices.
     var scan_flags = PreScanFlags{};
-    preScanInstructions(instructions, resolver, &scan_flags, false) catch {
+    preScanInstructions(instructions, resolver, &scan_flags, false, interpreter_free, 0) catch {
         if (nc_reason_out) |ro| ro.* = .pre_scan_failure;
         return IrCodegenError.NotCompilable;
     };
@@ -9446,11 +9820,13 @@ pub fn emitProgramC(
                 .is_generic = entry.is_generic,
                 .returns_row = self.returns_row_names.contains(name_ptr),
             };
+            if (!entry.is_native) result.body = entry.instructions;
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
                     result.callee_effect = eff;
                 }
                 result.output_params = eff.outputs;
+                result.input_params = eff.inputs;
             }
             return result;
         }
@@ -17928,7 +18304,7 @@ test "isIndexedStackOp: rejects non-indexed ops" {
 fn preScanFlagsFor(comptime op: []const u8) !PreScanFlags {
     const instrs = makeInstructions(.{op});
     var flags = PreScanFlags{};
-    try preScanInstructions(&instrs, null, &flags, false);
+    try preScanInstructions(&instrs, null, &flags, false, false, 0);
     return flags;
 }
 
@@ -18766,6 +19142,375 @@ test "an interpreter-linked AOT build does not monomorphize" {
 
     try testing.expect(count > 0);
     try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") != null);
+}
+
+// --- splice tests ---
+
+/// Compile a body whose ops are all intrinsics (no resolver) and report the
+/// emitted C alongside the fallback count, for asserting the dip splice.
+fn dipSpliceEmittedSource(
+    instrs: []const Instruction,
+    output_count: u8,
+    interpreter_free: bool,
+    fallback_count: *u32,
+) ![]u8 {
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    return emitWordCAot(
+        instrs,
+        0,
+        output_count,
+        "dip-test",
+        null,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        &.{},
+        null,
+        null,
+        null,
+        null,
+        null,
+        fallback_count,
+        null,
+        null,
+        false,
+        null,
+        interpreter_free,
+        false,
+    );
+}
+
+/// Resolve `dip` as a plain native consuming the quotation and the retained
+/// value, and `mk` as a compiled compound producing one opaque value, for the
+/// dip decline paths.
+fn resolveDipDeclineForTest(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+    _ = user_data;
+    if (std.mem.eql(u8, name, "dip")) {
+        return .{ .word_id = 11, .input_count = 2, .output_count = 1, .is_native = true };
+    }
+    if (std.mem.eql(u8, name, "mk")) {
+        return .{ .word_id = 10, .input_count = 0, .output_count = 1 };
+    }
+    return null;
+}
+
+const dip_decline_resolver = WordResolver{
+    .resolve = &resolveDipDeclineForTest,
+    .user_data = @ptrCast(&arith_test_resolver_dummy),
+    .dispatch_table_ptr = @ptrCast(&arith_test_resolver_dummy),
+};
+
+fn dipDeclineEmittedSource(
+    instrs: []const Instruction,
+    output_count: u8,
+    interpreter_free: bool,
+    fallback_count: *u32,
+) ![]u8 {
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+    try compiled_names.put(testing.allocator, "mk", 0);
+
+    return emitWordCAot(
+        instrs,
+        0,
+        output_count,
+        "dip-test",
+        dip_decline_resolver,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        &.{},
+        null,
+        null,
+        null,
+        null,
+        null,
+        fallback_count,
+        null,
+        null,
+        false,
+        null,
+        interpreter_free,
+        false,
+    );
+}
+
+const dip_add_three_body = [_]Instruction{
+    .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+    .{ .op = .{ .call_word = "+" }, .line = 1 },
+};
+
+test "dip over a literal quotation with a typed retained entry splices inline" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_add_three_body } } }, .line = 1 },
+        .{ .op = .{ .call_word = "dip" }, .line = 1 },
+    };
+
+    var count: u32 = 0;
+    const source = try dipSpliceEmittedSource(&instrs, 2, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expectEqual(@as(u32, 0), count);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_n_dip") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") == null);
+}
+
+test "2dip splices with two typed retained entries" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_add_three_body } } }, .line = 1 },
+        .{ .op = .{ .call_word = "2dip" }, .line = 1 },
+    };
+
+    // `2dip` is a prelude compound with no resolver entry here, so only the
+    // splice can compile this body at all.
+    var count: u32 = 0;
+    const source = try dipSpliceEmittedSource(&instrs, 3, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expectEqual(@as(u32, 0), count);
+    try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitInterpretedCall(") == null);
+}
+
+test "an interpreter-linked AOT build does not splice dip" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_add_three_body } } }, .line = 1 },
+        .{ .op = .{ .call_word = "dip" }, .line = 1 },
+    };
+
+    var count: u32 = 0;
+    const source = try dipDeclineEmittedSource(&instrs, 2, false, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_n_dip") != null);
+}
+
+test "dip with an opaque retained entry declines to the native path" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "mk" }, .line = 1 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &dip_add_three_body } } }, .line = 1 },
+        .{ .op = .{ .call_word = "dip" }, .line = 1 },
+    };
+
+    var count: u32 = 0;
+    const source = try dipDeclineEmittedSource(&instrs, 1, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_n_dip") != null);
+}
+
+/// Resolve `wrap` as a compiled compound carrying the body under test, `mk`
+/// as a bodiless compiled compound producing one opaque value, and `inspect`
+/// as the downstream generic native.
+const CompoundSpliceResolverData = struct {
+    wrap_body: ?[]const Instruction,
+    wrap_inputs: ?[]const stack_effect_mod.StackEffectParam = null,
+    wrap_outputs: ?[]const stack_effect_mod.StackEffectParam = null,
+
+    fn resolve(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+        const self: *const @This() = @ptrCast(@alignCast(user_data));
+        if (std.mem.eql(u8, name, "wrap")) {
+            return .{
+                .word_id = 9,
+                .input_count = 1,
+                .output_count = 1,
+                .body = self.wrap_body,
+                .input_params = self.wrap_inputs,
+                .output_params = self.wrap_outputs,
+            };
+        }
+        if (std.mem.eql(u8, name, "mk")) {
+            return .{ .word_id = 10, .input_count = 0, .output_count = 1 };
+        }
+        if (std.mem.eql(u8, name, "inspect")) {
+            return .{ .word_id = 7, .input_count = 1, .output_count = 1, .is_native = true };
+        }
+        return null;
+    }
+};
+
+fn compoundSpliceEmittedSource(
+    instrs: []const Instruction,
+    resolver_data: *CompoundSpliceResolverData,
+    interp_ctx: *const Context,
+    interpreter_free: bool,
+    fallback_count: *u32,
+) ![]u8 {
+    const resolver = WordResolver{
+        .resolve = &CompoundSpliceResolverData.resolve,
+        .user_data = @ptrCast(resolver_data),
+        .dispatch_table_ptr = @ptrCast(&arith_test_resolver_dummy),
+    };
+
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+    try compiled_names.put(testing.allocator, "wrap", 0);
+    try compiled_names.put(testing.allocator, "mk", 1);
+
+    return emitWordCAot(
+        instrs,
+        0,
+        1,
+        "splice-test",
+        resolver,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        &.{},
+        null,
+        null,
+        null,
+        interp_ctx,
+        null,
+        fallback_count,
+        null,
+        null,
+        false,
+        null,
+        interpreter_free,
+        false,
+    );
+}
+
+const wrap_inspect_body = [_]Instruction{
+    .{ .op = .{ .call_word = "inspect" }, .line = 1 },
+};
+
+test "a small compound callee with a typed operand splices and its generic monomorphizes" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    var data = CompoundSpliceResolverData{ .wrap_body = &wrap_inspect_body };
+    const instrs = makeInstructions(.{ @as(i64, 30), "wrap" });
+    var count: u32 = 0;
+    const source = try compoundSpliceEmittedSource(&instrs, &data, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expectEqual(@as(u32, 0), count);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_wrap") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitPicDispatchUnary(") != null);
+}
+
+test "an all-opaque operand keeps the compound call" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    var data = CompoundSpliceResolverData{ .wrap_body = &wrap_inspect_body };
+    const instrs = makeInstructions(.{ "mk", "wrap" });
+    var count: u32 = 0;
+    const source = try compoundSpliceEmittedSource(&instrs, &data, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_wrap") != null);
+}
+
+test "an interpreter-linked AOT build does not splice compounds" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    var data = CompoundSpliceResolverData{ .wrap_body = &wrap_inspect_body };
+    const instrs = makeInstructions(.{ @as(i64, 30), "wrap" });
+    var count: u32 = 0;
+    const source = try compoundSpliceEmittedSource(&instrs, &data, &ictx, false, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_wrap") != null);
+}
+
+test "a branchy body does not splice" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const branchy = [_]Instruction{
+        .{ .op = .{ .call_word = "if" }, .line = 1 },
+    };
+    var data = CompoundSpliceResolverData{ .wrap_body = &branchy };
+    const instrs = makeInstructions(.{ @as(i64, 30), "wrap" });
+    var count: u32 = 0;
+    const source = try compoundSpliceEmittedSource(&instrs, &data, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_wrap") != null);
+}
+
+test "an annotated-input callee keeps the call path" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const custom = value_mod.TypeValue{ .name = "custom", .descriptor = null };
+    const inputs = [_]stack_effect_mod.StackEffectParam{
+        .{ .name = "x", .type_annotation = .{ .type = &custom } },
+    };
+    var data = CompoundSpliceResolverData{ .wrap_body = &wrap_inspect_body, .wrap_inputs = &inputs };
+    const instrs = makeInstructions(.{ @as(i64, 30), "wrap" });
+    var count: u32 = 0;
+    const source = try compoundSpliceEmittedSource(&instrs, &data, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_wrap") != null);
+}
+
+test "a self-calling body splices once and emits the cycle as a call" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const self_call = [_]Instruction{
+        .{ .op = .{ .call_word = "wrap" }, .line = 1 },
+    };
+    var data = CompoundSpliceResolverData{ .wrap_body = &self_call };
+    const instrs = makeInstructions(.{ @as(i64, 30), "wrap" });
+    var count: u32 = 0;
+    const source = try compoundSpliceEmittedSource(&instrs, &data, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expectEqual(@as(u32, 0), count);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_wrap") != null);
+}
+
+test "a spliced callee's opaque output narrows from its declared annotation" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    // wrap's body leaves mk's opaque result; the declared fixnum output
+    // narrows it at the splice site, so the following inspect monomorphizes.
+    const fixnum_tv = ictx.lookupBuiltinTypeValue("fixnum").?;
+    const outputs = [_]stack_effect_mod.StackEffectParam{
+        .{ .name = "r", .type_annotation = .{ .type = fixnum_tv } },
+    };
+    const swap_for_mk = [_]Instruction{
+        .{ .op = .{ .call_word = "drop" }, .line = 1 },
+        .{ .op = .{ .call_word = "mk" }, .line = 1 },
+    };
+    var data = CompoundSpliceResolverData{ .wrap_body = &swap_for_mk, .wrap_outputs = &outputs };
+    const instrs = makeInstructions(.{ @as(i64, 30), "wrap", "inspect" });
+    var count: u32 = 0;
+    const source = try compoundSpliceEmittedSource(&instrs, &data, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expectEqual(@as(u32, 0), count);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_wrap") == null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitPicDispatchUnary(") != null);
 }
 
 // --- rewriteIndexedStackOp tests ---

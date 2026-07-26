@@ -6368,11 +6368,13 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
     // The outputs slice points into dictionary-owned storage, so the by-value effect copy is safe.
     const output_params: ?[]const stack_effect_mod.StackEffectParam =
         if (callee.stack_effect) |eff| eff.outputs else null;
+    const input_params: ?[]const stack_effect_mod.StackEffectParam =
+        if (callee.stack_effect) |eff| eff.inputs else null;
 
     switch (callee.action) {
-        // A literal has no instruction body, but ResolvedWord never carries
-        // one -- only stack-effect/marker-derived metadata -- so it resolves
-        // exactly like a compound word from this point on.
+        // A literal has no instruction body (`ResolvedWord.body` stays null),
+        // so it resolves exactly like a bodiless compound word from this
+        // point on.
         .compound, .literal => {},
         .native => |func| {
             const effect = callee.stack_effect orelse return null;
@@ -6385,6 +6387,7 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
                 .never_returns = hasNeverReturnsMarker(callee.markers),
                 .dispatch_id = callee.dispatch_id,
                 .output_params = output_params,
+                .input_params = input_params,
             };
             if (stack_effect_mod.hasAnyRowVariable(effect)) {
                 result.callee_effect = ctx.lookupWordStackEffectPtr(name);
@@ -6414,6 +6417,8 @@ fn resolveWordForDispatch(name: []const u8, user_data: *anyopaque) ?ir_codegen.R
         .bounded_arity = if (bounded) |b| b.arity else .unary,
         .bounded_trace_name = if (bounded) |b| ctx.boundedConstraintTraceName(b.constraint) else null,
         .output_params = output_params,
+        .input_params = input_params,
+        .body = if (callee.action == .compound) callee.action.compound else null,
     };
     if (stack_effect_mod.hasAnyRowVariable(effect)) {
         result.callee_effect = ctx.lookupWordStackEffectPtr(name);

@@ -1,0 +1,10 @@
+\ The compound splicer must decline when a row_region sits among the callee's
+\ input operands: the unresolved-effect `call` collapses the stack to a row,
+\ so splicing `h`'s `+` would reject it (NC.1) and fail the whole word where
+\ the call path compiles it. A successful strict build is the regression
+\ proof.
+
+h: ( a b -- c ) [ + ] ;
+k: ( q -- ) [ call 5 h drop ] ;
+
+[ 7 ] k

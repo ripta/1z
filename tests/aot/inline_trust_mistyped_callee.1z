@@ -1,0 +1,10 @@
+\ Annotation trust must stay sound against a lying callee. Under the lock the
+\ freeze-time inference trusts `lie`'s declared fixnum output, which proves
+\ `.`'s parameter and lets the locked build succeed. At runtime the declared
+\ result is a string: the call-site tag check behind output narrowing (and,
+\ for inference-proven parameters, the consumer's entry check) traps with a
+\ type mismatch before the value reaches unboxed code.
+
+lie: ( -- result: fixnum ) [ "oops" ] ;
+
+lie .

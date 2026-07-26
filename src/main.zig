@@ -2295,7 +2295,7 @@ fn printPicStats(
     err_writer: anytype,
 ) void {
     const stats = &diagnostics.pic_stats;
-    if (stats.sites_attempted == 0 and stats.sites_emitted == 0 and stats.monomorphized == 0) return;
+    if (stats.sites_attempted == 0 and stats.sites_emitted == 0 and stats.monomorphized == 0 and stats.inlined == 0) return;
     if (stats.sites_attempted != 0 or stats.sites_emitted != 0) {
         err_writer.print("Inline PIC sites: {d}/{d} generic call sites preseeded\n", .{
             stats.sites_emitted,
@@ -2304,6 +2304,9 @@ fn printPicStats(
     }
     if (stats.monomorphized != 0) {
         err_writer.print("Monomorphized dispatch sites: {d}\n", .{stats.monomorphized}) catch {};
+    }
+    if (stats.inlined != 0) {
+        err_writer.print("Inlined call sites: {d}\n", .{stats.inlined}) catch {};
     }
     err_writer.flush() catch {};
 }
@@ -3038,8 +3041,15 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     // `eval-string` or a runtime `load` introduce one later. An allocation failure here costs the
     // narrowing, not the build.
     if (inferFreezeArtifactClass(interpreter_fallback, emit_runtime_image_flag) == .interpreter_free_aot) {
+        // Declared-output trust needs every call site compiled, and only the lock guarantees
+        // that: an unlocked strict build still runs residual quotation fallbacks interpreted. It
+        // also needs the call-site tag checks, which a relaxed type-check pragma disables.
+        const locked_strict = interpreter_fallback == .false and lock_interpreter_setting;
+        const trust_annotations = locked_strict and !ir_codegen.typeCheckRelaxed(ctx);
         aot_type_inference.inferParamTypes(&freeze_result, .{
-            .arithmetic_result_types = interpreter_fallback == .false and lock_interpreter_setting,
+            .arithmetic_result_types = locked_strict,
+            .fixnum_type = if (trust_annotations) ctx.lookupBuiltinTypeValue("fixnum") else null,
+            .float_type = if (trust_annotations) ctx.lookupBuiltinTypeValue("float") else null,
         }, allocator) catch {};
         traceInferredParamTypes(&freeze_result, ctx);
     }

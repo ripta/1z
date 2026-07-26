@@ -1,0 +1,7 @@
+\ dip splicing under the lock: the literal quotation compiles inline against
+\ the caller's typed stack with the retained entry set aside, so the `+` runs
+\ on unboxed operands and no standalone quotation body is reified. The two
+\ `.` calls splice as compound bodies and their `inspect` monomorphizes on the
+\ proven fixnums. Before the splicer this program could not build locked.
+
+1 2 [ 3 + ] dip . .

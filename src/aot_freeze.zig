@@ -2827,11 +2827,13 @@ fn buildAotDescs(
                 .is_native = entry.is_native,
                 .native_fn_ptr = entry.native_fn_ptr,
             };
+            if (!entry.is_native) result.body = entry.instructions;
             if (entry.stack_effect) |*eff| {
                 if (stack_effect_mod.hasAnyRowVariable(eff.*)) {
                     result.callee_effect = eff;
                 }
                 result.output_params = eff.outputs;
+                result.input_params = eff.inputs;
             }
             return result;
         }

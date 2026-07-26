@@ -1,0 +1,14 @@
+\ The dip splice must decline when the body's consumed range holds an opaque
+\ row: the unresolved-effect `call` collapses the stack to a row_region, and
+\ the spliced `+` would reject it (NC.1) where the native dip path compiles
+\ `f` with today's row machinery.
+\
+\ Build-only: the program still cannot build, because the compiled `f` ends
+\ row-returning and the entry cannot materialize a row as its result. The
+\ golden pins that exact rejection -- the entry's NC.13 -- which is only
+\ reachable when `f` itself compiled. A regressed splice fails `f` instead,
+\ and the error becomes the compound-fallback inventory.
+
+f: ( q -- ) [ call 5 [ 1 + ] dip drop drop ] ;
+
+[ 7 ] f

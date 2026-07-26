@@ -1,0 +1,17 @@
+\ The targeted-inliner deliverable: the unmodified `30 fib .` builds under the
+\ lock. `.` is a compound word (`[ inspect print-line ]`), so its call used to
+\ flush the operand opaque and the inner `inspect` kept a cold interpreter
+\ branch. The splicer inlines `.`'s body against the caller's typed stack, the
+\ narrowed fixnum reaches `inspect`, and the site monomorphizes. The `dip`'d
+\ `[ swap over + ]` likewise splices inline instead of compiling standalone
+\ with opaque operands. A successful locked build is itself the proof.
+\
+\ fib's declared fixnum output is load-bearing twice over: it narrows the
+\ entry's call-site result, and the freeze-time inference trusts it to prove
+\ `.`'s parameter, which is what lets `.`'s standalone body monomorphize its
+\ own `inspect` and pass the lock.
+
+fib-step: ( a b n -- result ) [ dup 0 = [ drop drop ] [ 1 - [ swap over + ] dip fib-step ] if ] ;
+fib: ( n -- result: fixnum ) [ dup 2 < [ ] [ 0 1 <rot- fib-step ] if ] ;
+
+30 fib .

@@ -67,16 +67,36 @@ pub const Options = struct {
     /// code is the per-op native fallback. A locked build rejects any build that emits one, so an
     /// execution that would falsify the rule cannot occur in a binary this flag ever ships in.
     arithmetic_result_types: bool = false,
+    /// Interned builtin type values for trusting a callee's declared output annotations. When set,
+    /// a call to a word whose every declared output carries one of these annotations yields those
+    /// types directly instead of descending into the body (which abandons on the first row-variable
+    /// callee, e.g. `dip`, leaving the result unknown).
+    ///
+    /// Output annotations are never validated by the callee, so a trusted result carries the
+    /// `_declared` taint, and codegen enforces every taint-fed proof with a tag check at the
+    /// consuming word's entry. Same-body flows are enforced by the call-site check output
+    /// narrowing emits, which a relaxed `type-check` pragma disables; the caller sets these fields
+    /// null under that pragma and outside locked builds, which disables the trust.
+    fixnum_type: ?*const value_mod.TypeValue = null,
+    float_type: ?*const value_mod.TypeValue = null,
 };
 
 /// One value on the abstract stack.
 ///
 /// `boolean` is tracked for branch and comparison precision even though it is never exported;
 /// codegen seeds only unboxed fixnum and float parameters.
+///
+/// The `_declared` variants carry provenance: the type rests (at least in part) on a callee's
+/// declared output annotation rather than an observed fact. A proof fed such a value must be
+/// enforced with a tag check at the consuming word's entry, since the annotation itself is never
+/// validated at runtime. Taint spreads through joins and arithmetic, and through parameter
+/// seeding, so it survives any number of hops.
 const AbstractValue = union(enum) {
     unknown,
     fixnum,
     float,
+    fixnum_declared,
+    float_declared,
     boolean,
     quotation: []const Instruction,
 
@@ -87,22 +107,40 @@ const AbstractValue = union(enum) {
             else => true,
         };
     }
+
+    fn isFixnumish(v: AbstractValue) bool {
+        return v == .fixnum or v == .fixnum_declared;
+    }
+
+    fn isFloatish(v: AbstractValue) bool {
+        return v == .float or v == .float_declared;
+    }
+
+    fn isDeclared(v: AbstractValue) bool {
+        return v == .fixnum_declared or v == .float_declared;
+    }
 };
 
 /// What the fixpoint has established about one parameter.
 ///
-/// The order is the lattice: seeding moves a slot down it and never back up, and verification only
-/// moves a slot to `conflicted`, so both loops terminate.
+/// The lattice: `unseeded` sits at the top, `conflicted` at the bottom, and within one numeric
+/// family the `_declared` state sits below the plain one (it demands entry-check enforcement, a
+/// strictly stronger requirement). Seeding moves a slot down the lattice via `joinScalar` and
+/// never back up, and verification only moves a slot to `conflicted`, so both loops terminate.
 const ParamState = enum {
     unseeded,
     fixnum,
     float,
+    fixnum_declared,
+    float_declared,
     conflicted,
 
     fn fromAbstract(v: AbstractValue) ?ParamState {
         return switch (v) {
             .fixnum => .fixnum,
             .float => .float,
+            .fixnum_declared => .fixnum_declared,
+            .float_declared => .float_declared,
             .unknown, .boolean, .quotation => null,
         };
     }
@@ -111,8 +149,24 @@ const ParamState = enum {
         return switch (self) {
             .fixnum => .fixnum,
             .float => .float,
+            .fixnum_declared => .fixnum_declared,
+            .float_declared => .float_declared,
             .unseeded, .conflicted => .unknown,
         };
+    }
+
+    /// The join of two seeded scalar states: same-family states merge onto the declared one, and
+    /// cross-family states conflict. Neither operand is `unseeded`/`conflicted`; callers handle
+    /// those directly.
+    fn joinScalar(a: ParamState, b: ParamState) ParamState {
+        if (a == b) return a;
+        const a_fix = a == .fixnum or a == .fixnum_declared;
+        const b_fix = b == .fixnum or b == .fixnum_declared;
+        if (a_fix and b_fix) return .fixnum_declared;
+        const a_flt = a == .float or a == .float_declared;
+        const b_flt = b == .float or b == .float_declared;
+        if (a_flt and b_flt) return .float_declared;
+        return .conflicted;
     }
 };
 
@@ -135,7 +189,7 @@ const RoundObs = struct {
         self.scalar = switch (self.scalar) {
             .unseeded => scalar,
             .conflicted => .conflicted,
-            else => if (self.scalar == scalar) scalar else .conflicted,
+            else => ParamState.joinScalar(self.scalar, scalar),
         };
     }
 };
@@ -407,7 +461,7 @@ const Inference = struct {
         const next: ParamState = switch (current) {
             .unseeded => scalar,
             .conflicted => .conflicted,
-            else => if (current == scalar) current else .conflicted,
+            else => ParamState.joinScalar(current, scalar),
         };
         if (next == current) return;
         self.states[slot] = next;
@@ -478,6 +532,19 @@ const Inference = struct {
 
         if (mode == .record) self.observe(desc_idx, frame, self.paramCount(desc_idx));
 
+        // A fully-annotated callee yields its declared result types directly. This is what lets a
+        // computed result cross a callee whose body cannot be descended into -- `fib`'s body calls
+        // through `dip`, whose row variable abandons the descent frame. The results carry the
+        // declared taint, so any proof they feed gets entry-check enforcement in codegen.
+        if (self.annotatedOutputs(desc)) |outs| {
+            for (0..desc.input_count) |_| _ = self.pop(frame);
+            for (outs) |param| {
+                const tv = param.type_annotation.?.type;
+                self.push(frame, if (tv == self.options.fixnum_type.?) .fixnum_declared else .float_declared);
+            }
+            return;
+        }
+
         if (!desc.is_native and desc.instructions.len > 0 and depth < max_descent_depth and !self.isDescending(desc_idx)) {
             try self.descending.append(self.allocator, desc_idx);
             defer _ = self.descending.pop();
@@ -499,6 +566,32 @@ const Inference = struct {
 
         for (0..desc.input_count) |_| _ = self.pop(frame);
         for (0..desc.output_count) |_| self.push(frame, .unknown);
+    }
+
+    /// The callee's declared outputs, when every one of them carries a builtin fixnum/float
+    /// annotation the pass may trust (see `Options.fixnum_type`). Mirrors the shape checks of
+    /// codegen's output narrowing: a row variable or an alternative-output effect makes the
+    /// declared shape unreliable, and a count disagreement means the effect does not model the
+    /// arity the freeze recorded.
+    fn annotatedOutputs(self: *const Inference, desc: *const AotWordDesc) ?[]const stack_effect_mod.StackEffectParam {
+        const fixnum_tv = self.options.fixnum_type orelse return null;
+        const float_tv = self.options.float_type orelse return null;
+
+        const eff = desc.stack_effect orelse return null;
+        const outs = eff.outputs;
+        if (outs.len == 0 or outs.len != desc.output_count) return null;
+        if (stack_effect_mod.paramsHaveAlternativeOutput(outs)) return null;
+
+        for (outs) |param| {
+            if (param.is_row_variable) return null;
+            const ann = param.type_annotation orelse return null;
+            const tv = switch (ann) {
+                .type => |t| t,
+                .protocol, .combination => return null,
+            };
+            if (tv != fixnum_tv and tv != float_tv) return null;
+        }
+        return outs;
     }
 
     fn isDescending(self: *const Inference, desc_idx: u32) bool {
@@ -582,13 +675,17 @@ const Inference = struct {
     }
 
     fn arithResult(self: *const Inference, kind: ArithKind, a: AbstractValue, b: AbstractValue) AbstractValue {
-        if (a == .float and b == .float) {
+        const tainted = a.isDeclared() or b.isDeclared();
+        if (a.isFloatish() and b.isFloatish()) {
             // Float arithmetic never promotes, so this holds in every build mode. `div` and `rem`
             // are integer-only and have no float form; `%` does accept floats, and reporting it as
             // unknown is imprecision rather than a missing form.
-            return if (kind == .checked) .float else .unknown;
+            if (kind != .checked) return .unknown;
+            return if (tainted) .float_declared else .float;
         }
-        if (a == .fixnum and b == .fixnum and self.options.arithmetic_result_types) return .fixnum;
+        if (a.isFixnumish() and b.isFixnumish() and self.options.arithmetic_result_types) {
+            return if (tainted) .fixnum_declared else .fixnum;
+        }
         return .unknown;
     }
 
@@ -659,6 +756,16 @@ const Inference = struct {
             const b = else_frame.values[i];
             if (a.eql(b)) {
                 frame.values[i] = a;
+                continue;
+            }
+            // Same-family scalars merge onto the declared side, keeping a proof alive when one arm
+            // rests on an annotation.
+            if (a.isFixnumish() and b.isFixnumish()) {
+                frame.values[i] = .fixnum_declared;
+                continue;
+            }
+            if (a.isFloatish() and b.isFloatish()) {
+                frame.values[i] = .float_declared;
                 continue;
             }
             // Only one arm's value reaches the caller, and the merge cannot say which, so a
@@ -797,7 +904,10 @@ const Inference = struct {
     }
 
     /// Demote every parameter some call site this round disagreed with, reporting whether anything
-    /// moved. Disagreement includes a non-scalar observation and a parameter with no observed site.
+    /// moved. Disagreement includes a non-scalar observation and a parameter with no observed
+    /// site. A plain observation against a declared state agrees -- the state already carries the
+    /// stronger enforcement requirement -- so the keep condition is join-compatibility, not
+    /// equality.
     fn applyVerify(self: *Inference) bool {
         var changed = false;
         for (self.states, self.obs) |*state, o| {
@@ -805,7 +915,7 @@ const Inference = struct {
                 .unseeded, .conflicted => continue,
                 else => {},
             }
-            if (o.count > 0 and !o.non_scalar and o.scalar == state.*) continue;
+            if (o.count > 0 and !o.non_scalar and ParamState.joinScalar(state.*, o.scalar) == state.*) continue;
             state.* = .conflicted;
             changed = true;
         }
@@ -882,7 +992,7 @@ const Inference = struct {
     fn hasProof(self: *const Inference, target: usize) bool {
         for (self.offsets[target]..self.offsets[target + 1]) |slot| {
             switch (self.states[slot]) {
-                .fixnum, .float => return true,
+                .fixnum, .float, .fixnum_declared, .float_declared => return true,
                 .unseeded, .conflicted => {},
             }
         }
@@ -908,6 +1018,8 @@ fn abstractForState(state: ParamState) AbstractValue {
     return switch (state) {
         .fixnum => .fixnum,
         .float => .float,
+        .fixnum_declared => .fixnum_declared,
+        .float_declared => .float_declared,
         .unseeded, .conflicted => .unknown,
     };
 }
@@ -935,6 +1047,7 @@ const FixtureWord = struct {
     input_count: u8 = 0,
     output_count: u8 = 0,
     is_native: bool = false,
+    stack_effect: ?stack_effect_mod.StackEffect = null,
 };
 
 const FixtureQuot = struct {
@@ -982,6 +1095,7 @@ fn fixture(
         .output_count = w.output_count,
         .word_id = @intCast(built.items.len),
         .is_native = w.is_native,
+        .stack_effect = w.stack_effect,
     });
     for (modelled_native_names) |native| {
         for (words) |w| {
@@ -1274,6 +1388,46 @@ test "float arithmetic is typed without the lock, fixnum arithmetic only with it
     try inferParamTypes(&locked, .{ .arithmetic_result_types = true }, allocator);
     try testing.expectEqualSlices(InferredParamType, &.{.fixnum}, wordParams(&locked, "count"));
     try testing.expectEqualSlices(InferredParamType, &.{.float}, wordParams(&locked, "take-float"));
+}
+
+test "a fully annotated callee output feeds the caller's proof under trust" {
+    const allocator = testing.allocator;
+
+    const fixnum_tv = value_mod.TypeValue{ .name = "fixnum", .descriptor = null };
+    const float_tv = value_mod.TypeValue{ .name = "float", .descriptor = null };
+
+    // `compute`'s body ends in an unmodelled native, so a descent yields unknown. Only the
+    // declared output annotation can type its result, and only when the options trust it.
+    const compute_effect = stack_effect_mod.StackEffect{
+        .inputs = &.{},
+        .outputs = &.{.{ .name = "r", .type_annotation = .{ .type = &fixnum_tv } }},
+    };
+    const compute_body = [_]Instruction{
+        at(.{ .push_literal = .{ .fixnum = 1 } }),
+        at(.{ .call_word = "opaque-native" }),
+    };
+    const use_body = [_]Instruction{at(.{ .call_word = "drop" })};
+    const entry_body = [_]Instruction{
+        at(.{ .call_word = "compute" }),
+        at(.{ .call_word = "use" }),
+    };
+
+    const words = [_]FixtureWord{
+        .{ .name = "__entry__", .body = &entry_body },
+        .{ .name = "compute", .body = &compute_body, .output_count = 1, .stack_effect = compute_effect },
+        .{ .name = "use", .body = &use_body, .input_count = 1 },
+        .{ .name = "opaque-native", .input_count = 1, .output_count = 1, .is_native = true },
+    };
+
+    var trusted = try fixture(allocator, &words, &.{}, &.{});
+    defer trusted.deinit(allocator);
+    try inferParamTypes(&trusted, .{ .fixnum_type = &fixnum_tv, .float_type = &float_tv }, allocator);
+    try testing.expectEqualSlices(InferredParamType, &.{.fixnum_declared}, wordParams(&trusted, "use"));
+
+    var untrusted = try fixture(allocator, &words, &.{}, &.{});
+    defer untrusted.deinit(allocator);
+    try inferParamTypes(&untrusted, .{}, allocator);
+    try testing.expectEqual(@as(usize, 0), wordParams(&untrusted, "use").len);
 }
 
 test "verification demotes a parameter whose recursive call site cannot be typed" {
