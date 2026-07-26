@@ -1,4 +1,4 @@
-.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test eager-test fmt-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
+.PHONY: all branch-info build release run fmt test test-threads-1 test-threads-auto unit-test capi-test capi-release-run embed-stdlib-test integration-test lib-test snake-test eager-test fmt-test leak-goldens-check lsp-test tree-sitter-test contrib aot-test aot-run aot-checks aot-checks-linux aot-interpreter-strip-check aot-line-directives-check aot-asm-name-check aot-string-literal-direct-check aot-symbol-literal-direct-check aot-trace-instr-check aot-trace-word-filter-check aot-param-inference-check aot-symbol-verify aot-symbol-verify-linux bail-stats ir-check ir-check-upstream ir-vendor lua-vendor font8x8-vendor update-golden update-fmt-golden update-aot-golden update-lsp-golden benchmark benchmark-fib benchmark-quotation benchmark-param-inference benchmark-ffi-gen-filter benchmark-word-resolution benchmark-protocol-dispatch benchmark-lint benchmark-tokenize benchmark-tokenize-alloc benchmark-expr benchmark-fn profiles build-example clean help docs docker-build docker-test freestanding-build wasm-freestanding-build wasm wasm-game-verify wasm-snake-verify baremetal-riscv64-test unit-coverage integration-coverage coverage
 
 export DEVELOPER_DIR := /Library/Developer/CommandLineTools
 SHELL := /bin/bash
@@ -88,6 +88,7 @@ test-threads-1: ## Run all tests with default --threads=1 for integration tests
 	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 	$(MAKE) lib-test
+	$(MAKE) snake-test
 
 test-threads-auto: ## Run all tests with default --threads=auto for integration tests
 	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
@@ -98,6 +99,7 @@ test-threads-auto: ## Run all tests with default --threads=auto for integration 
 	timeout $(TARGET_TIMEOUT) zig build lsp-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) $(TEST_FILTER_ARG)
 	timeout $(TARGET_TIMEOUT) zig build aot-test --prefix $(ZIG_PREFIX) $(ZIG_TEST_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT) -Daot-build-timeout=$(AOT_BUILD_TIMEOUT) $(TEST_FILTER_ARG)
 	$(MAKE) lib-test
+	$(MAKE) snake-test
 
 unit-test: ## Run unit tests
 	timeout $(TARGET_TIMEOUT) zig build test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG) -Dtest-case-timeout=$(TEST_CASE_TIMEOUT)
@@ -133,6 +135,9 @@ integration-test: ## Run integration tests
 
 lib-test: build ## Run *_test.1z unit tests under lib/
 	find lib -name '*_test.1z' -print0 | xargs -0 -P $(TEST_JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z test
+
+snake-test: build ## Run *_test.1z unit tests under examples/wasm-snake/
+	find examples/wasm-snake -name '*_test.1z' -print0 | xargs -0 -P $(TEST_JOBS) -n 1 timeout $(TARGET_TIMEOUT) ./$(ZIG_PREFIX)/bin/1z test
 
 jit-build: ## Build only the 1z-jit binary
 	timeout $(TIMEOUT) zig build jit-build --prefix $(ZIG_PREFIX)
@@ -698,7 +703,7 @@ wasm-freestanding-build: ## Compile-check the wasm capi library for wasm32-frees
 	fi
 	@echo "PASS: lib1z.a built for wasm32-freestanding"
 
-wasm: ## Build the wasm32-freestanding browser module and copy it into examples/wasm-repl/ and examples/wasm-game/
+wasm: ## Build the wasm32-freestanding browser module and copy it into examples/wasm-repl/, examples/wasm-game/, and examples/wasm-snake/
 	zig build wasm --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)
 	@if [ ! -f $(ZIG_PREFIX)/wasm/1z.wasm ]; then \
 		echo "FAIL: 1z.wasm was not produced"; \
@@ -706,10 +711,14 @@ wasm: ## Build the wasm32-freestanding browser module and copy it into examples/
 	fi
 	cp $(ZIG_PREFIX)/wasm/1z.wasm examples/wasm-repl/1z.wasm
 	cp $(ZIG_PREFIX)/wasm/1z.wasm examples/wasm-game/1z.wasm
-	@echo "PASS: 1z.wasm built and copied into examples/wasm-repl/ and examples/wasm-game/"
+	cp $(ZIG_PREFIX)/wasm/1z.wasm examples/wasm-snake/1z.wasm
+	@echo "PASS: 1z.wasm built and copied into examples/wasm-repl/, examples/wasm-game/, and examples/wasm-snake/"
 
 wasm-game-verify: wasm ## Headlessly verify the wasm game demo via Node (not part of make test)
 	node --test tests/wasm/verify-game-demo.mjs
+
+wasm-snake-verify: wasm ## Headlessly verify snake against the wasm build via Node (not part of make test)
+	node --test tests/wasm/verify-snake.mjs
 
 baremetal-riscv64-test: ## Build the riscv64 virt platform and AOT freestanding ELFs, then boot them under QEMU and compare serial output
 	timeout $(TARGET_TIMEOUT) zig build baremetal-riscv64-test --prefix $(ZIG_PREFIX) $(ZIG_JOBS_ARG)

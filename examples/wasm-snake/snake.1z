@@ -1,0 +1,195 @@
+\ examples/wasm-snake/snake.1z - Snake on the browser game platform: a 20x20 board of 8px
+\ cells at the left of the 256x224 canvas, arrows or WASD to steer, food grows the snake,
+\ walls and its own body kill it, and the pace ramps up as it eats. The right-hand 96px
+\ strip is the score/HUD sidebar.
+\
+\ Movement runs on the platform's fixed update tick: each tick banks one tick's worth of
+\ nanoseconds, and the snake moves one cell whenever the bank covers the current per-move
+\ interval, so speed is a real-world duration independent of frame rate.
+
+use "game" ;
+use "random" ;
+use "ranges" ;
+use "sequences" ;
+
+private{
+  board-cols: ( -- n ) const [ 20 ] ;
+  board-rows: ( -- n ) const [ 20 ] ;
+  cell-px:    ( -- n ) const [ 8 ] ;
+  board-px-x: ( -- n ) const [ 0 ] ;
+  board-px-y: ( -- n ) const [ framebuffer-height board-rows cell-px * - 2 div ] ;
+
+  \\ The speed ramp, in nanoseconds per move: start at 150ms, drop 5ms per food eaten,
+  \\ floor at 60ms.
+  start-move-interval: ( -- n ) const [ 150000000 ] ;
+  ramp-per-food:       ( -- n ) const [ 5000000 ] ;
+  floor-move-interval: ( -- n ) const [ 60000000 ] ;
+
+  page-color:     ( -- color ) const [ 8 8 24 255 <color> ] ;
+  board-color:    ( -- color ) const [ 16 16 40 255 <color> ] ;
+  body-color:     ( -- color ) const [ 48 160 64 255 <color> ] ;
+  body-alt-color: ( -- color ) const [ 32 112 48 255 <color> ] ;
+  head-color:     ( -- color ) const [ 96 224 96 255 <color> ] ;
+  food-color:     ( -- color ) const [ 224 64 48 255 <color> ] ;
+
+  \\ Directions are 0=up 1=right 2=down 3=left. body holds packed cells (row * 20 + col)
+  \\ with the head last; food is a packed cell, or f when the board has no free cell.
+  \\ pending is the latest turn request, applied at the next move; dir is the direction
+  \\ actually traveled last move, which is what the neck-reversal filter judges against.
+  snake-state: mutable struct{ alive dir pending body food move-interval move-accum eaten } ;
+  state: t 1 1 [ ] make-vector f start-move-interval 0 0 make-snake-state ;
+
+  (dir-dx): ( d -- dx ) [ { 0 1 0 -1 } swap #nth ] ;
+  (dir-dy): ( d -- dy ) [ { -1 0 1 0 } swap #nth ] ;
+
+  (cell):     ( col row -- cell ) [ board-cols * + ] ;
+  (cell-col): ( cell -- col ) [ board-cols % ] ;
+  (cell-row): ( cell -- row ) [ board-cols div ] ;
+
+  (opposite-dir?): ( a b -- ? ) [ - 4 + 4 % 2 = ] ;
+
+  (head-cell): ( -- cell ) [ state body>> dup #len 1 - #nth ] ;
+
+  \\ Request a turn. A reversal into the neck -- the direction opposite the last actual
+  \\ move -- is dropped, so a held or mistimed opposite key cannot fold the snake onto
+  \\ itself.
+  (turn): ( d -- ) [
+    dup state dir>> (opposite-dir?)
+    [ drop ]
+    [ state swap >>pending drop ]
+    if
+  ] ;
+
+  (read-input): ( -- ) [
+    arrow-up:    key-down? [ 0 (turn) ] when
+    key-w:       key-down? [ 0 (turn) ] when
+    arrow-right: key-down? [ 1 (turn) ] when
+    key-d:       key-down? [ 1 (turn) ] when
+    arrow-down:  key-down? [ 2 (turn) ] when
+    key-s:       key-down? [ 2 (turn) ] when
+    arrow-left:  key-down? [ 3 (turn) ] when
+    key-a:       key-down? [ 3 (turn) ] when
+  ] ;
+
+  (ramp): ( -- ) [
+    state eaten>> ramp-per-food * start-move-interval swap - floor-move-interval max
+    state swap >>move-interval drop
+  ] ;
+
+  (free-cells): ( -- seq ) [
+    board-cols board-rows * iota >iterator
+    [ state body>> swap #index-of not ] #filter
+    #collect
+  ] ;
+
+  \\ Pick a uniform free cell for the next food; a full board leaves food unset.
+  (place-food): ( -- ) [
+    (free-cells)
+    dup #len 0 =
+    [ drop f ]
+    [ dup #len random-below #nth ]
+    if
+    state swap >>food drop
+  ] ;
+
+  (snake-reset): ( -- ) [
+    state
+    t >>alive
+    1 >>dir
+    1 >>pending
+    [ ] make-vector 8 10 (cell) #push! 9 10 (cell) #push! 10 10 (cell) #push! >>body
+    start-move-interval >>move-interval
+    0 >>move-accum
+    0 >>eaten
+    drop
+    (place-food)
+  ] ;
+
+  \\ Move onto a target cell already known to be inside the board. Death never mutates
+  \\ the body, so the board freezes in its pre-collision arrangement.
+  (step-to): ( cell -- ) [
+    target: swap ;
+
+    target state food>> =
+    [
+      \ eating: the tail stays put, so any body cell is fatal
+      state body>> target #index-of
+      [ state f >>alive drop ]
+      [
+        state body>> target #push! drop
+        state dup eaten>> 1 + >>eaten drop
+        (ramp)
+        (place-food)
+      ]
+      if
+    ]
+    [
+      \ not eating: the tail vacates this move, so only a non-tail body cell is fatal
+      state body>> target #index-of
+      dup dup 0 = not and
+      [ drop state f >>alive drop ]
+      [
+        drop
+        state body>> #shift! drop drop
+        state body>> target #push! drop
+      ]
+      if
+    ]
+    if
+  ] ;
+
+  (step): ( -- ) [
+    state pending>> state swap >>dir drop
+
+    nc: (head-cell) (cell-col) state dir>> (dir-dx) + ;
+    nr: (head-cell) (cell-row) state dir>> (dir-dy) + ;
+
+    nc 0 < nc board-cols >= or nr 0 < or nr board-rows >= or
+    [ state f >>alive drop ]
+    [ nc nr (cell) (step-to) ]
+    if
+  ] ;
+
+  \\ Fill one board cell with a color. ( cell color -- )
+  (cell-rect): ( cell color -- ) [
+    swap cell: swap ;
+    cell (cell-col) cell-px * board-px-x +
+    cell (cell-row) cell-px * board-px-y +
+    cell-px cell-px
+    4 pick-n
+    draw-rectangle
+    drop
+  ] ;
+}
+
+snake-init: ( -- ) [ (snake-reset) ] ;
+
+snake-update: ( tick -- ) [
+  drop
+  state alive>> [
+    (read-input)
+    state dup move-accum>> update-interval-nanos + >>move-accum drop
+    state move-accum>> state move-interval>> >=
+    [
+      state dup move-accum>> state move-interval>> - >>move-accum drop
+      (step)
+    ] when
+  ] when
+] ;
+
+snake-draw: ( -- ) [
+  page-color clear-background
+  board-px-x board-px-y board-cols cell-px * board-rows cell-px * board-color draw-rectangle
+
+  state food>> [ state food>> food-color (cell-rect) ] when
+
+  state body>> [
+    dup state body>> #len 1 - =
+    [ drop head-color ]
+    [ 2 % 0 = [ body-color ] [ body-alt-color ] if ]
+    if
+    (cell-rect)
+  ] #each-index
+] ;
+
+[ snake-init ] [ snake-update ] [ snake-draw ] start-game

@@ -1,0 +1,213 @@
+\ Unit tests for examples/wasm-snake/snake.1z, run under 1z test, which borrows the
+\ sibling's private words.
+\
+\ The tests drive snake-update directly with tick counts instead of run-frame, so no
+\ fake clock is needed: movement is banked per update call from the platform's fixed
+\ tick length. Every test that ticks the game swaps a scratch keyboard in via
+\ with-parameter, since (wasm-keyboard) only exists under the wasm C-API root, and
+\ binds a seeded generator via with-random so food placement is deterministic.
+\
+\ At the starting interval (150ms per move against the 16.67ms tick) the first move
+\ lands on the 10th update tick: nine ticks bank 149,999,994ns, just under one move.
+
+use "testing" ;
+use "bytes" ;
+use "random" ;
+use "./snake.1z" ;
+
+private{
+  (scratch-keyboard): ( -- byte-array ) [ 48 bytes-alloc ] ;
+  (tick): ( n -- ) [ [ 0 snake-update ] times ] ;
+  (press): ( index -- ) [ current-keyboard get swap 1 1 #poke! drop ] ;
+}
+
+test-reset-state: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state body>> #len 3 "the snake starts three segments long" assert=
+      state alive>> "the snake starts alive" assert-true
+      state dir>> 1 "the snake starts moving right" assert=
+      state move-interval>> start-move-interval "the pace starts at the full interval" assert=
+      state eaten>> 0 "nothing eaten yet" assert=
+      (head-cell) 10 10 (cell) "the head starts at the board center" assert=
+
+      state food>> dup 0 >= swap board-cols board-rows * < and
+      "food lands on the board" assert-true
+      state body>> state food>> #index-of not
+      "food does not land on the snake" assert-true
+    ] with-random
+  ] with-parameter
+] ;
+
+test-food-placement-is-deterministic-under-a-seed: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [ (snake-reset) state food>> ] with-random
+    42 <random> [ (snake-reset) state food>> ] with-random
+    "the same seed places the same food" assert=
+  ] with-parameter
+] ;
+
+test-moves-one-cell-on-the-tenth-tick: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state 0 >>food drop
+      9 (tick)
+      (head-cell) 10 10 (cell) "nine ticks bank less than one move" assert=
+      1 (tick)
+      (head-cell) 11 10 (cell) "the tenth tick moves the head one column right" assert=
+      state body>> #len 3 "moving without eating keeps the length" assert=
+    ] with-random
+  ] with-parameter
+] ;
+
+test-arrow-key-turns: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state 0 >>food drop
+      0 (press)
+      10 (tick)
+      state dir>> 0 "arrow-up turns the snake upward" assert=
+      (head-cell) 10 9 (cell) "the head moves up one row" assert=
+    ] with-random
+  ] with-parameter
+] ;
+
+test-wasd-key-turns: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state 0 >>food drop
+      22 (press)
+      10 (tick)
+      state dir>> 2 "key-s turns the snake downward" assert=
+      (head-cell) 10 11 (cell) "the head moves down one row" assert=
+    ] with-random
+  ] with-parameter
+] ;
+
+test-neck-reversal-is-ignored: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state 0 >>food drop
+      2 (press)
+      10 (tick)
+      state dir>> 1 "arrow-left while moving right is dropped" assert=
+      (head-cell) 11 10 (cell) "the snake continues straight" assert=
+      state alive>> "the snake stays alive" assert-true
+    ] with-random
+  ] with-parameter
+] ;
+
+test-eating-grows-and-ramps: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state 11 10 (cell) >>food drop
+      10 (tick)
+      state body>> #len 4 "eating grows the snake by one segment" assert=
+      (head-cell) 11 10 (cell) "the head lands on the food cell" assert=
+      state eaten>> 1 "the eaten count advances" assert=
+      state move-interval>> start-move-interval ramp-per-food -
+      "one food shortens the move interval by the ramp step" assert=
+      state body>> state food>> #index-of not
+      "the replacement food avoids the grown body" assert-true
+    ] with-random
+  ] with-parameter
+] ;
+
+test-ramp-clamps-at-the-floor: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state 100 >>eaten drop
+      (ramp)
+      state move-interval>> floor-move-interval "a long game pins the interval at the floor" assert=
+    ] with-random
+  ] with-parameter
+] ;
+
+test-wall-collision-kills-without-moving: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state
+      [ ] make-vector 17 10 (cell) #push! 18 10 (cell) #push! 19 10 (cell) #push! >>body
+      0 >>food
+      drop
+      10 (tick)
+      state alive>> not "driving into the right wall kills the snake" assert-true
+      state body>> #len 3 "death does not mutate the body" assert=
+      (head-cell) 19 10 (cell) "the head stays on its last cell" assert=
+    ] with-random
+  ] with-parameter
+] ;
+
+test-self-collision-kills-without-moving: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state
+      [ ] make-vector
+      4 10 (cell) #push! 5 10 (cell) #push! 6 10 (cell) #push!
+      6 9 (cell) #push! 5 9 (cell) #push!
+      >>body
+      2 >>dir 2 >>pending 0 >>food
+      drop
+      10 (tick)
+      state alive>> not "stepping onto a non-tail body cell kills the snake" assert-true
+      state body>> #len 5 "death does not mutate the body" assert=
+      (head-cell) 5 9 (cell) "the head stays on its last cell" assert=
+    ] with-random
+  ] with-parameter
+] ;
+
+test-moving-into-the-vacating-tail-is-legal: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state
+      [ ] make-vector
+      5 5 (cell) #push! 6 5 (cell) #push! 6 6 (cell) #push! 5 6 (cell) #push!
+      >>body
+      0 >>dir 0 >>pending 0 >>food
+      drop
+      10 (tick)
+      state alive>> "stepping onto the cell the tail vacates survives" assert-true
+      (head-cell) 5 5 (cell) "the head lands on the vacated tail cell" assert=
+      state body>> #len 4 "the length is unchanged" assert=
+    ] with-random
+  ] with-parameter
+] ;
+
+test-dead-snake-stays-frozen: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state
+      [ ] make-vector 17 10 (cell) #push! 18 10 (cell) #push! 19 10 (cell) #push! >>body
+      0 >>food
+      drop
+      10 (tick)
+      state alive>> not "the snake is dead" assert-true
+      0 (press)
+      30 (tick)
+      (head-cell) 19 10 (cell) "further ticks do not move a dead snake" assert=
+      state dir>> 1 "further input does not turn a dead snake" assert=
+    ] with-random
+  ] with-parameter
+] ;
+
+test-full-board-leaves-food-unset: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      state board-cols board-rows * iota >iterator #collect >>body drop
+      (place-food)
+      state food>> not "a board with no free cell places no food" assert-true
+    ] with-random
+  ] with-parameter
+] ;
