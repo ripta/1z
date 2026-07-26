@@ -84,6 +84,36 @@ pub fn parserEntryPoint() callconv(.c) void {
     co.status = .completed;
 }
 
+// Apple's aarch64 makecontext trampoline enters the coroutine with x29 set to one past the
+// stack top, leaving the frame-pointer chain unterminated. A stack walker (the debug
+// allocator's trace capture runs on every allocation) then reads past the stack and dies with
+// SIGBUS whenever the adjacent page is PROT_NONE, such as another coroutine stack's leading
+// guard page.
+//
+// The shim zeroes x29 only for the duration of the entry call, so the entry frame's record
+// terminates the chain and walkers stop there -- the same guarantee minicoro's zeroed context
+// gives task coroutines. The trampoline's x29 and x30 are restored before returning: the
+// trampoline anchors its post-return uc_link handoff on them, and zeroing x29 across the
+// return dies with SIGILL. The walker never reads the shim's saved pair, because the walk
+// already stopped at the entry frame's zero.
+const use_entry_shim = !is_freestanding and builtin.cpu.arch == .aarch64;
+
+const entry_asm_name = if (builtin.os.tag.isDarwin()) "_onez_parser_entry_point" else "onez_parser_entry_point";
+
+comptime {
+    if (use_entry_shim) {
+        @export(&parserEntryPoint, .{ .name = "onez_parser_entry_point" });
+    }
+}
+
+fn parserEntryShim() callconv(.naked) void {
+    asm volatile ("stp x29, x30, [sp, #-16]!\n" ++
+            "mov x29, xzr\n" ++
+            "bl " ++ entry_asm_name ++ "\n" ++
+            "ldp x29, x30, [sp], #16\n" ++
+            "ret");
+}
+
 /// Initialize a ucontext_t for a parser coroutine, setting up the stack and
 /// entry function. Parallel to task.initTaskContext. Never called on
 /// freestanding targets; see the freestanding stub note at the top of this file.
@@ -98,5 +128,49 @@ pub fn initCoroutineContext(co: *ParserCoroutine) void {
     co.uctx.stack.flags = 0;
     co.uctx.link = &co.caller_uctx;
 
-    c.makecontext(&co.uctx, &parserEntryPoint, 0);
+    const entry: *const fn () callconv(.c) void = if (comptime use_entry_shim)
+        @ptrCast(&parserEntryShim)
+    else
+        &parserEntryPoint;
+    c.makecontext(&co.uctx, entry, 0);
+}
+
+test "debug-allocator stack capture on the coroutine survives a PROT_NONE page above the stack" {
+    if (comptime is_freestanding or builtin.cpu.arch != .aarch64) return error.SkipZigTest;
+
+    const page = std.heap.page_size_min;
+    const stack_size: usize = 1 << 20;
+    const total = stack_size + page;
+    const region = try std.posix.mmap(
+        null,
+        total,
+        std.posix.PROT.READ | std.posix.PROT.WRITE,
+        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+        -1,
+        0,
+    );
+    defer std.posix.munmap(region);
+
+    // Model the hostile layout behind the recorded field crashes: the leading PROT_NONE guard
+    // page of an adjacently-mapped coroutine stack sits directly above this stack's top, which is
+    // where the makecontext trampoline frame points. Every allocation below parses under the
+    // testing debug allocator, whose stack capture walks the frame chain; an unterminated chain
+    // reads that page and dies with SIGBUS.
+    try std.posix.mprotect(@alignCast(region[stack_size..total]), std.posix.PROT.NONE);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var co = ParserCoroutine{
+        .stack_mem = @alignCast(region[0..stack_size]),
+        .allocator = arena.allocator(),
+        .ctx = null,
+        .initial_input = "first-word second-word: 42",
+    };
+    initCoroutineContext(&co);
+    pending_entry_coroutine = &co;
+    co.@"resume"();
+
+    try std.testing.expectEqual(Status.completed, co.status);
+    try std.testing.expect(co.result.? == .success);
 }
