@@ -24,6 +24,7 @@ const PAGE_COLOR = [8, 8, 24]
 const BOARD_COLOR = [16, 16, 40]
 const HEAD_COLOR = [96, 224, 96]
 const FOOD_COLOR = [224, 64, 48]
+const HUD_COLOR = [255, 255, 255]
 
 // Board geometry, matching snake.1z's constants: 20x20 cells of 8px at x 0..160,
 // vertically centered at y 32.
@@ -45,6 +46,8 @@ async function instantiate() {
   const bytes = readFileSync(wasmPath)
   let memory = null
   let presentCount = 0
+  const loadedSamples = []
+  const playedSamples = []
 
   const imports = {
     env: {
@@ -54,8 +57,14 @@ async function instantiate() {
       onez_host_present: () => {
         presentCount++
       },
-      onez_host_load_sample: () => 0,
-      onez_host_play_sample: () => {},
+      onez_host_load_sample: (ptr, len, channels, rate) => {
+        const bytesCopy = new Uint8Array(memory.buffer.slice(ptr, ptr + len))
+        loadedSamples.push({ channels, rate, byteLength: bytesCopy.length })
+        return loadedSamples.length - 1
+      },
+      onez_host_play_sample: (handle) => {
+        playedSamples.push(handle)
+      },
     },
   }
 
@@ -100,10 +109,37 @@ async function instantiate() {
     get presentCount() {
       return presentCount
     },
+    loadedSamples,
+    playedSamples,
     evalSource,
     lastError,
     cellColor,
   }
+}
+
+// Count pixels matching `color` within the rectangle [x, x+w) x [y, y+h).
+function countPixels(onez, color, x, y, w, h) {
+  const ptr = onez.exports.onez_wasm_framebuffer_ptr()
+  const pixels = new Uint8Array(onez.memory.buffer, ptr, onez.exports.onez_wasm_framebuffer_len())
+  let count = 0
+  for (let row = y; row < y + h; row++) {
+    for (let col = x; col < x + w; col++) {
+      const offset = (row * CANVAS_WIDTH + col) * 4
+      if (pixels[offset] === color[0] && pixels[offset + 1] === color[1] && pixels[offset + 2] === color[2]) count++
+    }
+  }
+  return count
+}
+
+// White pixels over the board region: zero during play, nonzero once the GAME OVER
+// overlay is drawn.
+function boardOverlayWhite(onez) {
+  return countPixels(onez, HUD_COLOR, BOARD_PX_X, BOARD_PX_Y, 20 * CELL_PX, 20 * CELL_PX)
+}
+
+// White pixels in the sidebar text region the SCORE label and value land in.
+function sidebarWhite(onez) {
+  return countPixels(onez, HUD_COLOR, 168, BOARD_PX_Y, 80, 20)
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -161,13 +197,50 @@ test('run-frame draws the board, snake, and food', async () => {
   assert.deepEqual(
     [pixels[sidebarOffset], pixels[sidebarOffset + 1], pixels[sidebarOffset + 2]],
     PAGE_COLOR,
-    'the sidebar strip keeps the page background'
+    'the sidebar strip above the HUD text keeps the page background'
   )
   const corner = onez.cellColor(0, 0)
   assert.ok(
     JSON.stringify(corner) === JSON.stringify(BOARD_COLOR) || JSON.stringify(corner) === JSON.stringify(FOOD_COLOR),
     'an empty board cell carries the board background'
   )
+
+  assert.ok(sidebarWhite(onez) > 0, 'the sidebar shows the score text in the HUD color')
+  assert.equal(boardOverlayWhite(onez), 0, 'no overlay is drawn over the board during play')
+})
+
+test('death on the top wall shows GAME OVER and a keypress restarts', async () => {
+  const onez = await instantiate()
+  await bootSnake(onez)
+
+  const keyboardPtr = onez.exports.onez_wasm_keyboard_ptr()
+  const keyboardLen = onez.exports.onez_wasm_keyboard_len()
+  const keyboard = () => new Uint8Array(onez.memory.buffer, keyboardPtr, keyboardLen)
+
+  // Hold arrow-up (index 0): ten moves reach the top wall and the eleventh dies there.
+  // Each interpreted frame takes seconds of real time, and run-frame banks that elapsed
+  // time (capped per frame), so death arrives within a few dozen frames; the cap is a
+  // hang guard, not an expected count.
+  keyboard()[0] = 1
+  let died = false
+  for (let frame = 0; frame < 200; frame++) {
+    await tickFrame(onez)
+    if (boardOverlayWhite(onez) > 0) {
+      died = true
+      break
+    }
+  }
+  assert.ok(died, 'steering into the top wall shows the GAME OVER overlay')
+  assert.ok(sidebarWhite(onez) > 0, 'the sidebar still shows the final score')
+
+  // Release the arrow, then press space to restart; the fresh snake redraws at the
+  // board center before its first move interval elapses.
+  keyboard()[0] = 0
+  keyboard()[40] = 1
+  await tickFrame(onez)
+  await tickFrame(onez)
+  assert.equal(boardOverlayWhite(onez), 0, 'the restart clears the GAME OVER overlay')
+  assert.deepEqual(onez.cellColor(10, 10), HEAD_COLOR, 'the restart recenters the head')
 })
 
 test('an arrow-key poke steers the snake, observable in the framebuffer', async () => {

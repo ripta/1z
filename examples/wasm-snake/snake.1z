@@ -1,13 +1,17 @@
 \ examples/wasm-snake/snake.1z - Snake on the browser game platform: a 20x20 board of 8px
 \ cells at the left of the 256x224 canvas, arrows or WASD to steer, food grows the snake,
 \ walls and its own body kill it, and the pace ramps up as it eats. The right-hand 96px
-\ strip is the score/HUD sidebar.
+\ strip is the score/HUD sidebar, showing the live score. Eating plays a rising arpeggio;
+\ death freezes the board under a GAME OVER screen until space or enter restarts.
 \
 \ Movement runs on the platform's fixed update tick: each tick banks one tick's worth of
 \ nanoseconds, and the snake moves one cell whenever the bank covers the current per-move
 \ interval, so speed is a real-world duration independent of frame rate.
 
 use "game" ;
+use "game/font" ;
+use "math" ;
+use "math/packed" ;
 use "random" ;
 use "ranges" ;
 use "sequences" ;
@@ -18,6 +22,9 @@ private{
   cell-px:    ( -- n ) const [ 8 ] ;
   board-px-x: ( -- n ) const [ 0 ] ;
   board-px-y: ( -- n ) const [ framebuffer-height board-rows cell-px * - 2 div ] ;
+
+  \\ The HUD column: one cell-width of margin past the board's right edge.
+  sidebar-px-x: ( -- n ) const [ board-cols cell-px * cell-px + ] ;
 
   \\ The speed ramp, in nanoseconds per move: start at 150ms, drop 5ms per food eaten,
   \\ floor at 60ms.
@@ -31,13 +38,22 @@ private{
   body-alt-color: ( -- color ) const [ 32 112 48 255 <color> ] ;
   head-color:     ( -- color ) const [ 96 224 96 255 <color> ] ;
   food-color:     ( -- color ) const [ 224 64 48 255 <color> ] ;
+  hud-color:      ( -- color ) const [ 255 255 255 255 <color> ] ;
+
+  \\ The eat sound: a rising three-note arpeggio (C5 E5 G5), 60ms per note at 8000 Hz mono,
+  \\ each note fading linearly to zero so the note boundaries do not click.
+  eat-sound-rate:        ( -- n ) const [ 8000 ] ;
+  eat-sound-note-frames: ( -- n ) const [ 480 ] ;
+  eat-sound-notes:       ( -- seq ) const [ { 523.25 659.25 783.99 } ] ;
+  eat-sound-amplitude:   ( -- f ) const [ 0.25 ] ;
 
   \\ Directions are 0=up 1=right 2=down 3=left. body holds packed cells (row * 20 + col)
   \\ with the head last; food is a packed cell, or f when the board has no free cell.
   \\ pending is the latest turn request, applied at the next move; dir is the direction
   \\ actually traveled last move, which is what the neck-reversal filter judges against.
-  snake-state: mutable struct{ alive dir pending body food move-interval move-accum eaten } ;
-  state: t 1 1 [ ] make-vector f start-move-interval 0 0 make-snake-state ;
+  \\ eat-sound caches the synthesized arpeggio sample, f until the first eat.
+  snake-state: mutable struct{ alive dir pending body food move-interval move-accum eaten eat-sound } ;
+  state: t 1 1 [ ] make-vector f start-move-interval 0 0 f make-snake-state ;
 
   (dir-dx): ( d -- dx ) [ { 0 1 0 -1 } swap #nth ] ;
   (dir-dy): ( d -- dy ) [ { -1 0 1 0 } swap #nth ] ;
@@ -92,6 +108,31 @@ private{
     state swap >>food drop
   ] ;
 
+  (make-eat-sound): ( -- sample ) [
+    eat-sound-notes #len eat-sound-note-frames * iota >iterator
+    [
+      i: swap ;
+      phase: i eat-sound-note-frames % ;
+      phase tau *
+      eat-sound-notes i eat-sound-note-frames div #nth *
+      eat-sound-rate / sin
+      eat-sound-note-frames phase - *
+      eat-sound-note-frames /
+      eat-sound-amplitude *
+    ]
+    #map #collect
+    >packed:f32 unmake-packed-f32
+    1 eat-sound-rate <sample>
+  ] ;
+
+  \\ Play the eat arpeggio, synthesized on first use and cached across resets. It cannot be
+  \\ synthesized at init: start-game runs snake-init at module load, before a test can
+  \\ rebind the audio seams away from the wasm-only host words.
+  (eat-beep): ( -- ) [
+    state eat-sound>> not [ (make-eat-sound) state swap >>eat-sound drop ] when
+    state eat-sound>> play-sample
+  ] ;
+
   (snake-reset): ( -- ) [
     state
     t >>alive
@@ -120,6 +161,7 @@ private{
         state dup eaten>> 1 + >>eaten drop
         (ramp)
         (place-food)
+        (eat-beep)
       ]
       if
     ]
@@ -150,6 +192,13 @@ private{
     if
   ] ;
 
+  \\ On the game-over screen: restart on the rising edge of space or enter. key-pressed?
+  \\ rather than key-down?, so a key still held from before death cannot restart.
+  (restart-input): ( -- ) [
+    space: key-pressed? enter: key-pressed? or
+    [ (snake-reset) ] when
+  ] ;
+
   \\ Fill one board cell with a color. ( cell color -- )
   (cell-rect): ( cell color -- ) [
     swap cell: swap ;
@@ -159,6 +208,24 @@ private{
     4 pick-n
     draw-rectangle
     drop
+  ] ;
+
+  \\ The x that centers str over the board.
+  (board-centered-x): ( str -- x ) [
+    #len font-cell-size * board-cols cell-px * swap - 2 div board-px-x +
+  ] ;
+
+  (draw-hud): ( -- ) [
+    sidebar-px-x board-px-y "SCORE" hud-color draw-text
+    sidebar-px-x board-px-y font-cell-size + 4 + state eaten>> >string hud-color draw-text
+  ] ;
+
+  \\ Centered over the frozen board: the title with the final score beneath it.
+  (draw-game-over): ( -- ) [
+    cy: board-px-y board-rows cell-px * 2 div + ;
+    "GAME OVER" (board-centered-x) cy font-cell-size 2 * - "GAME OVER" hud-color draw-text
+    score: state eaten>> >string ;
+    score (board-centered-x) cy score hud-color draw-text
   ] ;
 }
 
@@ -174,7 +241,7 @@ snake-update: ( tick -- ) [
       state dup move-accum>> state move-interval>> - >>move-accum drop
       (step)
     ] when
-  ] when
+  ] [ (restart-input) ] if
 ] ;
 
 snake-draw: ( -- ) [
@@ -190,6 +257,9 @@ snake-draw: ( -- ) [
     if
     (cell-rect)
   ] #each-index
+
+  (draw-hud)
+  state alive>> not [ (draw-game-over) ] when
 ] ;
 
 [ snake-init ] [ snake-update ] [ snake-draw ] start-game

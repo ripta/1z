@@ -501,6 +501,14 @@ pub const Context = struct {
     /// stays on the pre-capture fast path. Maintained at the module-deps push, pop, and spawn-clone
     /// sites, index-free of the frame arrays since only the count matters.
     live_module_deps_frames: usize = 0,
+    /// The deps-visibility filter of the body currently executing, saved and restored around each
+    /// `executeInstructions` call.
+    ///
+    /// `defineWordLocked` targets the topmost frame this filter admits, so a body's runtime
+    /// definitions land in a frame the body's own filtered lookups can see. A body whose filter
+    /// rejects the top `.module_deps` frame would otherwise define its named locals into that
+    /// frame and immediately fail to resolve them.
+    active_deps_vis: ?ModuleDepsVisibility = null,
     /// Count of live transient lexical frames (above `import_frame_index`, kind `.lexical`) that
     /// currently hold at least one definition. A fast-path gate for `captureQuotationScope`: when
     /// zero, no quotation push has anything to close over, so the capture scan is skipped.
@@ -2500,13 +2508,33 @@ pub const Context = struct {
         }
     }
 
+    /// The topmost local frame the currently executing body may define into: the frame walk skips
+    /// exactly the `.module_deps` frames `lookupWordLocked` skips under `active_deps_vis`, so a
+    /// definition never lands in a frame the defining body's own filtered lookups cannot see. Null
+    /// when no local frame is live.
+    fn defineTargetFrameIndex(self: *const Context) ?usize {
+        var i = self.local_frames.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.active_deps_vis) |v| {
+                if (i < self.local_frame_kinds.items.len and self.local_frame_kinds.items[i] == .module_deps) {
+                    const m = if (i < self.local_frame_modules.items.len) self.local_frame_modules.items[i] else null;
+                    if (m) |module| {
+                        if (!v.admits(module)) continue;
+                    }
+                }
+            }
+            return i;
+        }
+        return null;
+    }
+
     /// Remove a word from the same scope `defineWordLocked` writes to: the
-    /// top-level local frame when one exists, otherwise the dictionary.
+    /// topmost visible local frame when one exists, otherwise the dictionary.
     pub fn removeWord(self: *Context, name: []const u8) bool {
         self.acquireSharedWrite();
         defer self.releaseSharedWrite();
-        if (self.local_frames.items.len > 0) {
-            const top_index = self.local_frames.items.len - 1;
+        if (self.defineTargetFrameIndex()) |top_index| {
             const removed = self.local_frames.items[top_index].remove(name);
             if (removed and self.local_frames.items[top_index].count() == 0 and
                 self.isTransientLexicalFrame(top_index) and self.nonempty_transient_lexical_frames > 0)
@@ -2534,8 +2562,10 @@ pub const Context = struct {
             }
         }
 
-        const same_scope_existing = if (self.local_frames.items.len > 0)
-            self.local_frames.items[self.local_frames.items.len - 1].get(name)
+        const target_frame_index = self.defineTargetFrameIndex();
+
+        const same_scope_existing = if (target_frame_index) |ti|
+            self.local_frames.items[ti].get(name)
         else
             self.dictionary.get(name);
         if (same_scope_existing) |existing| {
@@ -2592,8 +2622,7 @@ pub const Context = struct {
         }
         def.exec_flags = computeExecFlags(def);
 
-        if (self.local_frames.items.len > 0) {
-            const top_index = self.local_frames.items.len - 1;
+        if (target_frame_index) |top_index| {
             const was_empty = self.local_frames.items[top_index].count() == 0;
             try self.local_frames.items[top_index].put(self.allocator, name, def);
             if (was_empty and self.isTransientLexicalFrame(top_index)) {
@@ -6110,6 +6139,12 @@ pub const Context = struct {
             };
         } else null;
 
+        // Published for `defineWordLocked`, which targets the topmost frame this body can see. The
+        // slices inside ride `captured_scope`, retained above for at least as long as this call.
+        const saved_deps_vis = self.active_deps_vis;
+        self.active_deps_vis = deps_vis;
+        defer self.active_deps_vis = saved_deps_vis;
+
         for (instructions, 0..) |instr, idx| {
             // The stepwise debugger is wired up only from capi.zig (C debugger API) and main.zig
             // (--debug), neither built for freestanding targets, so ctx.debugger is always null
@@ -8322,6 +8357,43 @@ test "pushModuleDepsFrame: clones the template, word overrides same-named dep" {
     try std.testing.expectEqual(@as(u32, 20), (frame.get("shared") orelse return error.Missing).dispatch_id);
     try std.testing.expectEqual(@as(u32, 11), (frame.get("dep-only") orelse return error.Missing).dispatch_id);
     try std.testing.expectEqual(@as(u32, 21), (frame.get("word-only") orelse return error.Missing).dispatch_id);
+}
+
+test "defineWordLocked: a definition skips a module-deps frame the active visibility rejects" {
+    const alloc = std.testing.allocator;
+    var ctx = Context.init(alloc);
+    defer ctx.deinit();
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    defer {
+        module.words.deinit(alloc);
+        module.deps.deinit(alloc);
+        if (module.deps_template) |*t| t.frame.deinit(alloc);
+    }
+
+    try ctx.pushLocalFrame();
+    try ctx.pushModuleDepsFrame(&module);
+    defer {
+        ctx.popLocalFrame();
+        ctx.popLocalFrame();
+    }
+
+    // A body whose visibility filter rejects m's frame defines below it, into the lexical
+    // frame, so its own filtered lookup can resolve the binding it just made.
+    ctx.active_deps_vis = .{ .deps_modules = &.{}, .defining_module = null };
+    try ctx.defineWord("local-binding", .{ .name = "local-binding", .action = .{ .literal = .{ .fixnum = 7 } } });
+
+    try std.testing.expect(ctx.local_frames.items[1].get("local-binding") == null);
+    try std.testing.expect(ctx.local_frames.items[0].get("local-binding") != null);
+    try std.testing.expect(ctx.lookupWordFiltered("local-binding", ctx.active_deps_vis) != null);
+
+    // A body whose filter admits m keeps defining into the top deps frame, preserving the
+    // nested-definition lifetime for module-word bodies.
+    ctx.active_deps_vis = .{ .deps_modules = &.{}, .defining_module = &module };
+    try ctx.defineWord("deps-binding", .{ .name = "deps-binding", .action = .{ .literal = .{ .fixnum = 8 } } });
+    try std.testing.expect(ctx.local_frames.items[1].get("deps-binding") != null);
+
+    ctx.active_deps_vis = null;
 }
 
 test "captureQuotationScope: snapshots a lexical local, skips a module-deps frame" {

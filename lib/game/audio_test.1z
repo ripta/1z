@@ -1,8 +1,7 @@
 \ Unit tests for lib/game/audio.1z.
 \
-\ A bound (sample-loader) stands in for the host load call, which only exists under the wasm
-\ C-API root. 1z test borrows lib/game/audio.1z's private words into this file, so the
-\ parameter is reachable here by name.
+\ A bound current-sample-loader stands in for the host load call, which only exists under
+\ the wasm C-API root.
 
 use "testing" ;
 use "game/audio" ;
@@ -20,7 +19,7 @@ test-sample-hands-its-inputs-to-the-loader-and-wraps-the-handle: ( -- ) [
     #len 8 "<sample> hands the PCM bytes to the loader" assert=
     7
   ]
-  (sample-loader)
+  current-sample-loader
   [
     (eight-pcm-bytes) 1 8000 <sample>
     unmake-sample 7 "<sample> wraps the handle the loader returned" assert=
@@ -28,7 +27,7 @@ test-sample-hands-its-inputs-to-the-loader-and-wraps-the-handle: ( -- ) [
 ] ;
 
 test-sample-accepts-multiple-channels: ( -- ) [
-  [ drop drop drop 3 ] (sample-loader)
+  [ drop drop drop 3 ] current-sample-loader
   [
     (eight-pcm-bytes) 2 8000 <sample>
     unmake-sample 3 "<sample> accepts eight bytes as one stereo frame" assert=
@@ -70,20 +69,20 @@ test-sample-rejects-a-non-byte-array: ( -- ) [
 ] ;
 
 test-play-sample-hands-the-raw-handle-to-the-player: ( -- ) [
-  [ drop drop drop 7 ] (sample-loader)
+  [ drop drop drop 7 ] current-sample-loader
   [
     (eight-pcm-bytes) 1 8000 <sample>
-    [ 7 "play-sample unwraps the sample before crossing the seam" assert= ] (sample-player)
+    [ 7 "play-sample unwraps the sample before crossing the seam" assert= ] current-sample-player
     [ play-sample ] with-parameter
   ] with-parameter
 ] ;
 
 test-play-sample-allows-unbounded-overlapping-plays: ( -- ) [
   plays: V{ } ;
-  [ drop drop drop 7 ] (sample-loader)
+  [ drop drop drop 7 ] current-sample-loader
   [
     (eight-pcm-bytes) 1 8000 <sample>
-    [ plays swap #push! drop ] (sample-player)
+    [ plays swap #push! drop ] current-sample-player
     [ dup play-sample play-sample ] with-parameter
   ] with-parameter
   plays #len 2 "each play-sample call reaches the player independently" assert=

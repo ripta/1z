@@ -5,11 +5,13 @@
 \ that single buffer. The native `(wasm-framebuffer)` word (src/capi_wasm.zig) is the only
 \ Zig-level piece: a borrowed, mutable byte-array view over the wasm-owned framebuffer memory.
 \
-\ Two interpreter limitations shape the loop bodies below. A word with named `name: swap ;`
-\ locals leaks memory when called tens of thousands of times, so the per-pixel (set-pixel!)
-\ helper uses none. An inner #each quotation sees a stale snapshot of an outer #each's
-\ per-iteration local, so every pixel-covering loop here is a single flat #each (row/column
-\ derived via div/%) rather than nested #eachs.
+\ Two interpreter limitations shape the loop bodies below. A named `name: swap ;` local bound
+\ to a refcounted value (a color struct, say) leaks memory per call, and even a scalar-bound
+\ local costs per-call work, so the per-pixel (set-pixel!) helper uses no locals at all and
+\ the text words pack a color to a plain fixnum before any local binds it. An inner #each
+\ quotation sees a stale snapshot of an outer #each's per-iteration local, so every
+\ pixel-covering loop here is a single flat #each (row/column derived via div/%) rather than
+\ nested #eachs.
 
 use "ranges" ;
 use "sequences" ;
@@ -149,43 +151,51 @@ blit-sprite: ( x y sprite -- ) [
   #each
 ] ;
 
+private{
+  \\ Draw one glyph from an already-packed color. The shared body under draw-char and
+  \\ draw-text: both pack the color before any local binds it, because a named local bound
+  \\ to a color struct leaks memory per call, and text is drawn every frame.
+  (draw-glyph-packed): ( x y ch packed -- ) [
+    dp:  swap ;
+    dch: swap ;
+    dy:  swap ;
+    dx:  swap ;
+    dch >codepoint (font-glyph-offset)
+    dup f =
+    [
+      drop
+    ] [
+      doff: swap ;
+      font-cell-size font-cell-size * iota >iterator [
+        di: swap ;
+        font-glyph-bytes doff di font-cell-size div + #peek8
+        di font-cell-size % shift-right 1 bitand
+        bit: swap ;
+        \ An unset bit steers (set-pixel!) to (-1, -1), which its own bounds check clips as a
+        \ no-op, rather than branching on `bit`.
+        \
+        \ An inner [ ... ] when/if quotation referencing di (or anything derived from it) here
+        \ would see a stale, first-iteration-only snapshot of di instead of the current one.
+        dx di font-cell-size % + 1 + bit * 1 -
+        dy di font-cell-size div + 1 + bit * 1 -
+        dp
+        (set-pixel!)
+      ] #each
+    ] if
+  ] ;
+}
+
 \\ Draw one character's glyph at (x, y). Characters outside the font's covered range
 \\ (0x20-0x7E) are silently skipped. Background pixels (unset glyph bits) are transparent --
 \\ not drawn in any background color.
-draw-char: ( x y ch color -- ) [
-  (color>packed)
-  dp:  swap ;
-  dch: swap ;
-  dy:  swap ;
-  dx:  swap ;
-  dch >codepoint (font-glyph-offset)
-  dup f =
-  [
-    drop
-  ] [
-    doff: swap ;
-    font-cell-size font-cell-size * iota >iterator [
-      di: swap ;
-      font-glyph-bytes doff di font-cell-size div + #peek8
-      di font-cell-size % shift-right 1 bitand
-      bit: swap ;
-      \ An unset bit steers (set-pixel!) to (-1, -1), which its own bounds check clips as a
-      \ no-op, rather than branching on `bit`.
-      \
-      \ An inner [ ... ] when/if quotation referencing di (or anything derived from it) here
-      \ would see a stale, first-iteration-only snapshot of di instead of the current one.
-      dx di font-cell-size % + 1 + bit * 1 -
-      dy di font-cell-size div + 1 + bit * 1 -
-      dp
-      (set-pixel!)
-    ] #each
-  ] if
-] ;
+draw-char: ( x y ch color -- ) [ (color>packed) (draw-glyph-packed) ] ;
 
 \\ Draw a string starting at (x, y), advancing by font-cell-size pixels per character.
-\\ Characters outside the font's covered range are silently skipped (via draw-char).
+\\ Characters outside the font's covered range are silently skipped (via draw-char's glyph
+\\ lookup).
 draw-text: ( x y str color -- ) [
-  tc: swap ;
+  (color>packed)
+  tp: swap ;
   ts: swap ;
   ty: swap ;
   tx: swap ;
@@ -194,7 +204,7 @@ draw-text: ( x y str color -- ) [
     tx ti font-cell-size * +
     ty
     ts ti #nth
-    tc
-    draw-char
+    tp
+    (draw-glyph-packed)
   ] #each
 ] ;

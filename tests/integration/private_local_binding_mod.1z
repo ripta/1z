@@ -1,0 +1,9 @@
+\ Sibling module for private_local_binding.1z: the same private-to-private direct call
+\ with body-referenced locals, inside a use-loaded module.
+
+private{
+  (area): ( w h -- n ) [ h: swap ; w: swap ; w h * ] ;
+  (call-area): ( -- n ) [ 3 4 (area) ] ;
+}
+
+probe-entry: ( -- n ) [ (call-area) ] ;

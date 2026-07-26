@@ -1,0 +1,29 @@
+\ A private word that binds name: swap ; locals and references them in its own body must
+\ resolve them when called directly from another private word. The locals used to land in
+\ the live module-deps frame while the callee's filtered lookups skipped that same frame,
+\ failing with unknown-word; definitions now target the topmost frame the defining body's
+\ own lookups can see.
+
+use "ranges" ;
+use "sequences" ;
+use "./private_local_binding_mod.1z" ;
+
+private{
+  (area): ( w h -- n ) [ h: swap ; w: swap ; w h * ] ;
+
+  (call-tail): ( -- n ) [ 3 4 (area) ] ;
+  (call-non-tail): ( -- n ) [ 3 4 (area) 1 + ] ;
+
+  (count-zeros): ( w h -- n ) [
+    h: swap ;
+    w: swap ;
+    0
+    w h * iota >iterator [ i: swap ; i w % 0 = [ 1 + ] when ] #each
+  ] ;
+  (call-loop): ( -- n ) [ 3 4 (count-zeros) ] ;
+}
+
+(call-tail) .
+(call-non-tail) .
+(call-loop) .
+probe-entry .

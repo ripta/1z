@@ -12,18 +12,19 @@
 \\ An opaque handle to PCM the host has loaded and can play.
 sample: virtual{ fixnum } ;
 
+\\ The host's load call, held as a quotation ( bytes channels rate -- handle ). Defaults to
+\\ the real wasm primitive; tests (and any non-wasm caller) rebind it via with-parameter,
+\\ since (wasm-load-sample) only exists under the wasm C-API root.
+current-sample-loader: parameter{ [ [ (wasm-load-sample) ] ] } ;
+
+\\ The host's trigger call, held as a quotation ( handle -- ). Defaults to the real wasm
+\\ primitive and is rebindable, since (wasm-play-sample) only exists under the wasm C-API
+\\ root.
+current-sample-player: parameter{ [ [ (wasm-play-sample) ] ] } ;
+
 private{
   \\ One 32-bit float per PCM value. A frame is one value per channel.
   bytes-per-pcm-value: 4 ;
-
-  \\ The host's load call, held as a quotation ( bytes channels rate -- handle ). Defaults to
-  \\ the real wasm primitive; tests (and any non-wasm caller) rebind it via with-parameter,
-  \\ since (wasm-load-sample) only exists under the wasm C-API root.
-  (sample-loader): parameter{ [ [ (wasm-load-sample) ] ] } ;
-
-  \\ The host's trigger call, held as a quotation ( handle -- ), for the same reason as
-  \\ (sample-loader): (wasm-play-sample) only exists under the wasm C-API root.
-  (sample-player): parameter{ [ [ (wasm-play-sample) ] ] } ;
 }
 
 \\ Load interleaved 32-bit float PCM into the host and wrap the handle it returns.
@@ -44,7 +45,7 @@ private{
   sb #len sc bytes-per-pcm-value * % 0 = not
   [ f "<sample> requires a PCM byte length that is a whole multiple of channels * 4" EInvalidArgument make-error throw ] when
 
-  sb sc sr (sample-loader) get call
+  sb sc sr current-sample-loader get call
   >sample
 ] ;
 
@@ -54,4 +55,4 @@ private{
 \\ The browser gates audio output on a first user gesture, which the host arms transparently.
 \\ A play before that gesture is not an error; it simply produces sound once the output is
 \\ armed.
-play-sample: ( sample -- ) [ unmake-sample (sample-player) get call ] ;
+play-sample: ( sample -- ) [ unmake-sample current-sample-player get call ] ;

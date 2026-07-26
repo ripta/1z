@@ -5,7 +5,9 @@
 \ fake clock is needed: movement is banked per update call from the platform's fixed
 \ tick length. Every test that ticks the game swaps a scratch keyboard in via
 \ with-parameter, since (wasm-keyboard) only exists under the wasm C-API root, and
-\ binds a seeded generator via with-random so food placement is deterministic.
+\ binds a seeded generator via with-random so food placement is deterministic. Tests
+\ that eat also bind the audio seams (current-sample-loader/current-sample-player) to
+\ fakes, and the drawing tests bind a scratch framebuffer, for the same reason.
 \
 \ At the starting interval (150ms per move against the 16.67ms tick) the first move
 \ lands on the 10th update tick: nine ticks bank 149,999,994ns, just under one move.
@@ -17,8 +19,43 @@ use "./snake.1z" ;
 
 private{
   (scratch-keyboard): ( -- byte-array ) [ 48 bytes-alloc ] ;
-  (tick): ( n -- ) [ [ 0 snake-update ] times ] ;
-  (press): ( index -- ) [ current-keyboard get swap 1 1 #poke! drop ] ;
+  (scratch-framebuffer): ( -- byte-array ) [ framebuffer-width framebuffer-height * 4 * bytes-alloc ] ;
+  (tick):    ( n -- ) [ [ 0 snake-update ] times ] ;
+  (press):   ( index -- ) [ current-keyboard get swap 1 1 #poke! drop ] ;
+  (release): ( index -- ) [ current-keyboard get swap 0 1 #poke! drop ] ;
+
+  \\ Drive the snake dead against the right wall: the body on the last three columns of
+  \\ row 10, food parked out of the way at cell 0, one move.
+  (kill-on-the-wall): ( -- ) [
+    state
+    [ ] make-vector 17 10 (cell) #push! 18 10 (cell) #push! 19 10 (cell) #push! >>body
+    0 >>food
+    drop
+    10 (tick)
+  ] ;
+
+  \\ Count pixels of packed little-endian RGBA white within [x, x+w) x [y, y+h) of the
+  \\ bound framebuffer.
+  (white-count-in): ( x y w h -- n ) [
+    h: swap ;
+    w: swap ;
+    y: swap ;
+    x: swap ;
+    0
+    w h * iota >iterator [
+      i: swap ;
+      current-framebuffer get
+      y i w div + framebuffer-width * x + i w % + 4 *
+      #peek32
+      0xffffffff = [ 1 + ] when
+    ] #each
+  ] ;
+
+  \\ White pixels in the band of the board the GAME OVER title and final score land in.
+  (overlay-band-white): ( -- n ) [ 40 92 88 32 (white-count-in) ] ;
+
+  \\ White pixels in the sidebar region the SCORE label and value land in.
+  (sidebar-white): ( -- n ) [ sidebar-px-x board-px-y 80 20 (white-count-in) ] ;
 }
 
 test-reset-state: ( -- ) [
@@ -105,16 +142,79 @@ test-neck-reversal-is-ignored: ( -- ) [
 test-eating-grows-and-ramps: ( -- ) [
   (scratch-keyboard) current-keyboard [
     42 <random> [
-      (snake-reset)
-      state 11 10 (cell) >>food drop
-      10 (tick)
-      state body>> #len 4 "eating grows the snake by one segment" assert=
-      (head-cell) 11 10 (cell) "the head lands on the food cell" assert=
-      state eaten>> 1 "the eaten count advances" assert=
-      state move-interval>> start-move-interval ramp-per-food -
-      "one food shortens the move interval by the ramp step" assert=
-      state body>> state food>> #index-of not
-      "the replacement food avoids the grown body" assert-true
+      [ drop drop drop 7 ] current-sample-loader [
+        [ drop ] current-sample-player [
+          (snake-reset)
+          state 11 10 (cell) >>food drop
+          10 (tick)
+          state body>> #len 4 "eating grows the snake by one segment" assert=
+          (head-cell) 11 10 (cell) "the head lands on the food cell" assert=
+          state eaten>> 1 "the eaten count advances" assert=
+          state move-interval>> start-move-interval ramp-per-food -
+          "one food shortens the move interval by the ramp step" assert=
+          state body>> state food>> #index-of not
+          "the replacement food avoids the grown body" assert-true
+        ] with-parameter
+      ] with-parameter
+    ] with-random
+  ] with-parameter
+] ;
+
+test-eating-plays-the-arpeggio-once-per-eat: ( -- ) [
+  loads: V{ } ;
+  plays: V{ } ;
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      [ drop drop drop loads 1 #push! drop 7 ] current-sample-loader [
+        [ plays swap #push! drop ] current-sample-player [
+          (snake-reset)
+          \ The synthesized sample is cached across resets by design; clear it so this
+          \ test's load count does not depend on which test ran first.
+          state f >>eat-sound drop
+          state 11 10 (cell) >>food drop
+          10 (tick)
+          plays #len 1 "the first eat plays the sample" assert=
+          plays 0 #nth 7 "the play carries the loaded handle" assert=
+
+          \ The interval is now 145ms and 16.67ms of bank carried over, so the next move
+          \ (and eat) lands within another ten ticks, with no second move after it.
+          state 12 10 (cell) >>food drop
+          10 (tick)
+          plays #len 2 "the second eat plays again" assert=
+          loads #len 1 "the sample is synthesized and loaded only once" assert=
+        ] with-parameter
+      ] with-parameter
+    ] with-random
+  ] with-parameter
+] ;
+
+test-eat-sound-pcm-shape: ( -- ) [
+  loads: V{ } ;
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      [ 3 array-n loads swap #push! drop 7 ] current-sample-loader [
+        [ drop ] current-sample-player [
+          (snake-reset)
+          state f >>eat-sound drop
+          state 11 10 (cell) >>food drop
+          10 (tick)
+
+          loads #len 1 "one sample reaches the loader" assert=
+          loads 0 #nth 1 #nth 1 "the arpeggio is mono" assert=
+          loads 0 #nth 2 #nth eat-sound-rate "the arpeggio uses the eat-sound rate" assert=
+
+          pcm: loads 0 #nth 0 #nth ;
+          pcm #len eat-sound-notes #len eat-sound-note-frames * 4 *
+          "the PCM covers every frame of every note" assert=
+
+          \ Each note opens at sin(0) scaled to zero (32-bit float +0.0 is all-zero bits)
+          \ and is off zero one frame later.
+          pcm 0 #peek32 0 "the first note starts at zero" assert=
+          pcm eat-sound-note-frames 4 * #peek32 0 "the second note starts at zero" assert=
+          pcm eat-sound-note-frames 2 * 4 * #peek32 0 "the third note starts at zero" assert=
+          pcm 4 #peek32 0 = not "the wave rises off zero" assert-true
+        ] with-parameter
+      ] with-parameter
     ] with-random
   ] with-parameter
 ] ;
@@ -134,11 +234,7 @@ test-wall-collision-kills-without-moving: ( -- ) [
   (scratch-keyboard) current-keyboard [
     42 <random> [
       (snake-reset)
-      state
-      [ ] make-vector 17 10 (cell) #push! 18 10 (cell) #push! 19 10 (cell) #push! >>body
-      0 >>food
-      drop
-      10 (tick)
+      (kill-on-the-wall)
       state alive>> not "driving into the right wall kills the snake" assert-true
       state body>> #len 3 "death does not mutate the body" assert=
       (head-cell) 19 10 (cell) "the head stays on its last cell" assert=
@@ -187,17 +283,95 @@ test-dead-snake-stays-frozen: ( -- ) [
   (scratch-keyboard) current-keyboard [
     42 <random> [
       (snake-reset)
-      state
-      [ ] make-vector 17 10 (cell) #push! 18 10 (cell) #push! 19 10 (cell) #push! >>body
-      0 >>food
-      drop
-      10 (tick)
+      (kill-on-the-wall)
       state alive>> not "the snake is dead" assert-true
       0 (press)
       30 (tick)
       (head-cell) 19 10 (cell) "further ticks do not move a dead snake" assert=
       state dir>> 1 "further input does not turn a dead snake" assert=
+      state alive>> not "a movement key does not restart the game" assert-true
     ] with-random
+  ] with-parameter
+] ;
+
+test-space-restarts-after-death: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      (kill-on-the-wall)
+      state alive>> not "the snake is dead" assert-true
+      state 5 >>eaten drop
+      40 (press)
+      1 (tick)
+      state alive>> "space restarts the game" assert-true
+      (head-cell) 10 10 (cell) "the restart recenters the head" assert=
+      state body>> #len 3 "the restart resets the length" assert=
+      state eaten>> 0 "the restart clears the score" assert=
+      state move-interval>> start-move-interval "the restart resets the pace" assert=
+    ] with-random
+  ] with-parameter
+] ;
+
+test-enter-restarts-after-death: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      (kill-on-the-wall)
+      41 (press)
+      1 (tick)
+      state alive>> "enter restarts the game" assert-true
+    ] with-random
+  ] with-parameter
+] ;
+
+test-held-key-does-not-restart: ( -- ) [
+  (scratch-keyboard) current-keyboard [
+    42 <random> [
+      (snake-reset)
+      (kill-on-the-wall)
+      40 (press)
+      advance-keyboard-frame
+      5 (tick)
+      state alive>> not "a key held since before the snapshot does not restart" assert-true
+
+      40 (release)
+      advance-keyboard-frame
+      40 (press)
+      1 (tick)
+      state alive>> "releasing and pressing again restarts" assert-true
+    ] with-random
+  ] with-parameter
+] ;
+
+\ The HUD tests call the drawing helpers directly rather than snake-draw: a full
+\ interpreted snake-draw clears all 57,344 canvas pixels and costs ~20 seconds, which
+\ blows the make-level per-test timeout. The alive/dead overlay gating inside snake-draw
+\ is covered by tests/wasm/verify-snake.mjs against real frames.
+
+test-hud-draws-the-score-in-the-sidebar: ( -- ) [
+  (scratch-framebuffer) current-framebuffer [
+    (scratch-keyboard) current-keyboard [
+      42 <random> [
+        (snake-reset)
+        (draw-hud)
+        (sidebar-white) 0 > "the HUD draws the score text in the sidebar" assert-true
+        (overlay-band-white) 0 "the HUD stays out of the board region" assert=
+      ] with-random
+    ] with-parameter
+  ] with-parameter
+] ;
+
+test-game-over-overlay-covers-the-board-center: ( -- ) [
+  (scratch-framebuffer) current-framebuffer [
+    (scratch-keyboard) current-keyboard [
+      42 <random> [
+        (snake-reset)
+        (kill-on-the-wall)
+        (draw-game-over)
+        (overlay-band-white) 0 > "the overlay draws the title and final score over the board" assert-true
+        (sidebar-white) 0 "the overlay stays out of the sidebar" assert=
+      ] with-random
+    ] with-parameter
   ] with-parameter
 ] ;
 
