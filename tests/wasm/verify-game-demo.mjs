@@ -110,6 +110,17 @@ test('wasm module loads and initializes', async () => {
   assert.ok(ptr > 0, 'framebuffer pointer should be non-null')
 })
 
+test('use "testing" loads as the first statement of a fresh session', async () => {
+  // The testing module's reporter selection reads `environ`, which does not exist on
+  // freestanding builds; its parse-time target gate must keep the module loadable here.
+  const onez = await instantiate()
+  const status = onez.evalSource('use "testing" ;')
+  assert.equal(status, ONEZ_EVAL_COMPLETE, 'use "testing" failed: ' + onez.lastError())
+
+  const assertStatus = onez.evalSource('4 2 2 + "two plus two" assert=')
+  assert.equal(assertStatus, ONEZ_EVAL_COMPLETE, 'assert= failed: ' + onez.lastError())
+})
+
 test('demo-game.1z evaluates and registers init/update/draw via start-game', async () => {
   const onez = await instantiate()
   const gameSource = readFileSync(gameSourcePath, 'utf8')

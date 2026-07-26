@@ -115,6 +115,18 @@ fn setUnmatchedDiagnostics(ctx: ?*Context, comptime error_name: []const u8, open
 
 const WordDefinition = @import("dictionary.zig").WordDefinition;
 
+/// Discard what a failed parse-time execution left behind: values pushed above the entry
+/// depth and deferred emissions queued after entry. A failed statement must have no
+/// half-effects. Leftover stack values feed garbage into the reparse of an incomplete
+/// statement, and a stale emission would be spliced by the next successful parse-time word
+/// into an unrelated instruction stream.
+fn rollbackParseTimeExecution(c: *Context, pre_depth: usize, pre_emissions: usize) void {
+    while (c.stack.depth() > pre_depth) {
+        c.stack.popAndRelease() catch break;
+    }
+    c.parse_time_deferred_emissions.shrinkRetainingCapacity(pre_emissions);
+}
+
 /// Execute a parse-time word during parsing:
 ///
 /// 1. Find trailing `push_literal` instructions after the last `call_word` barrier
@@ -247,6 +259,7 @@ fn executeParseTimeWord(
     column: usize,
 ) ParseError!void {
     const pre_depth = c.stack.depth();
+    const pre_emissions = c.parse_time_deferred_emissions.items.len;
 
     // 1. Find trailing `push_literal` instructions after the last `call_word` barrier
     var tail_start = instructions.items.len;
@@ -301,9 +314,18 @@ fn executeParseTimeWord(
 
     // 4. Run the parse-time word
     switch (word.action) {
-        .native, .host_callback => word.invoke(c) catch |err| return handleParseTimeError(c, err),
-        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
-        .literal => |v| c.stack.push(v) catch |err| return handleParseTimeError(c, err),
+        .native, .host_callback => word.invoke(c) catch |err| {
+            rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+            return handleParseTimeError(c, err);
+        },
+        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| {
+            rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+            return handleParseTimeError(c, err);
+        },
+        .literal => |v| c.stack.push(v) catch |err| {
+            rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+            return handleParseTimeError(c, err);
+        },
     }
 
     // 5. Capture all values above the pre-depth stack as `push_literal` instructions
@@ -1176,15 +1198,25 @@ fn executeParseTimeWordForArray(
     allocator: Allocator,
 ) ParseError!void {
     const pre_depth = c.stack.depth();
+    const pre_emissions = c.parse_time_deferred_emissions.items.len;
 
     const old_tokenizer = c.parse_tokenizer;
     c.parse_tokenizer = tokenizer;
     defer c.parse_tokenizer = old_tokenizer;
 
     switch (word.action) {
-        .native, .host_callback => word.invoke(c) catch |err| return handleParseTimeError(c, err),
-        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
-        .literal => |v| c.stack.push(v) catch |err| return handleParseTimeError(c, err),
+        .native, .host_callback => word.invoke(c) catch |err| {
+            rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+            return handleParseTimeError(c, err);
+        },
+        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| {
+            rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+            return handleParseTimeError(c, err);
+        },
+        .literal => |v| c.stack.push(v) catch |err| {
+            rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+            return handleParseTimeError(c, err);
+        },
     }
 
     // Execute deferred emissions, e.g., `emit-call` from `V{`, `B{`, `M{`, so
@@ -1197,13 +1229,25 @@ fn executeParseTimeWordForArray(
             .call => |call_name| {
                 if (c.lookupWord(call_name)) |deferred_word| {
                     switch (deferred_word.action) {
-                        .native, .host_callback => deferred_word.invoke(c) catch |err| return handleParseTimeError(c, err),
-                        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| return handleParseTimeError(c, err),
-                        .literal => |v| c.stack.push(v) catch |err| return handleParseTimeError(c, err),
+                        .native, .host_callback => deferred_word.invoke(c) catch |err| {
+                            rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+                            return handleParseTimeError(c, err);
+                        },
+                        .compound => |instrs| c.executeQuotationWithFrame(.{ .instructions = instrs }) catch |err| {
+                            rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+                            return handleParseTimeError(c, err);
+                        },
+                        .literal => |v| c.stack.push(v) catch |err| {
+                            rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+                            return handleParseTimeError(c, err);
+                        },
                     }
                 }
             },
-            .body => |body| c.executeQuotationWithFrame(.{ .instructions = body }) catch |err| return handleParseTimeError(c, err),
+            .body => |body| c.executeQuotationWithFrame(.{ .instructions = body }) catch |err| {
+                rollbackParseTimeExecution(c, pre_depth, pre_emissions);
+                return handleParseTimeError(c, err);
+            },
         }
     }
     c.parse_time_deferred_emissions.clearRetainingCapacity();
@@ -2092,6 +2136,63 @@ test "incomplete struct field list reports incompleteness instead of a truncated
     const result = parseTopLevel(alloc, &tokenizer, &ctx);
 
     try std.testing.expectError(ParseError.UnterminatedTokenScan, result);
+}
+
+test "choose statement reparsed across incomplete attempts leaves no parse-time residue" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.target_os = .freestanding;
+
+    const alloc = ctx.quotationAllocator();
+    const lines = [_][]const u8{
+        "target-os choose{",
+        "  freestanding: [",
+        "    probe-arm: [ 1 ] ;",
+        "  ]",
+        "  _ [",
+        "    probe-arm: [ 2 ] ;",
+        "  ]",
+        "}",
+    };
+
+    // Feed growing line-boundary prefixes to one context, mirroring
+    // tryParseDirect's reparse-from-scratch contract on a multi-line module
+    // load. Each incomplete attempt must classify as incomplete rather than a
+    // hard error, and must leave no stack values or deferred emissions behind
+    // to corrupt the next attempt.
+    var buffer: std.ArrayListUnmanaged(u8) = .{};
+    defer buffer.deinit(std.testing.allocator);
+
+    for (lines, 1..) |source_line, fed| {
+        try buffer.appendSlice(std.testing.allocator, source_line);
+        try buffer.append(std.testing.allocator, '\n');
+
+        var tokenizer = Tokenizer.init(buffer.items);
+        if (parseTopLevel(alloc, &tokenizer, &ctx)) |instructions| {
+            try std.testing.expectEqual(lines.len, fed);
+            try ctx.executeQuotation(.{ .instructions = instructions });
+        } else |err| {
+            try std.testing.expect(isIncompleteError(err));
+            try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+            try std.testing.expectEqual(@as(usize, 0), ctx.parse_time_deferred_emissions.items.len);
+        }
+    }
+
+    try std.testing.expect(ctx.lookupWord("probe-arm") != null);
+}
+
+test "failed parse-time execution rolls back stack values and deferred emissions" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.load_paths.clearRetainingCapacity();
+
+    const alloc = ctx.quotationAllocator();
+    var tokenizer = Tokenizer.init("use \"no-such-module-for-rollback\" ;");
+    const result = parseTopLevel(alloc, &tokenizer, &ctx);
+
+    try std.testing.expectError(ParseError.ParseTimeExecutionError, result);
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    try std.testing.expectEqual(@as(usize, 0), ctx.parse_time_deferred_emissions.items.len);
 }
 
 test "bare use with no filename yet reports incompleteness" {

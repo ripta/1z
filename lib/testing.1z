@@ -127,14 +127,24 @@ section-state: ( -- mmap ) [ (section-state-storage) ] ;
 
 \ --- Reporter selection ---
 
-(select-reporter): ( -- hash ) [
-  environ "ONEZ_TEST_REPORTER" @has?
-  [ environ "ONEZ_TEST_REPORTER" @get "tap" =
-    [ (tap-reporter) ] [ (default-reporter) ] if
+\ `environ` does not exist on freestanding targets, so the environ-reading
+\ selector is excluded at parse time and those builds always get the default
+\ reporter.
+target-os choose{
+  freestanding: [
+    (select-reporter): ( -- hash ) [ (default-reporter) ] ;
   ]
-  [ (default-reporter) ]
-  if
-] ;
+  _ [
+    (select-reporter): ( -- hash ) [
+      environ "ONEZ_TEST_REPORTER" @has?
+      [ environ "ONEZ_TEST_REPORTER" @get "tap" =
+        [ (tap-reporter) ] [ (default-reporter) ] if
+      ]
+      [ (default-reporter) ]
+      if
+    ] ;
+  ]
+}
 
 \ --- Dynamic parameter and dispatch helper ---
 

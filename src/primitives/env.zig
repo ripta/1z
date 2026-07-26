@@ -12,7 +12,7 @@ const is_freestanding = builtin.os.tag == .freestanding;
 pub const primitives = [_]Primitive{
     .{ .name = "environ", .stack_effect = "-- hash", .doc = "Return a fresh hash of current environment variables.", .func = nativeEnviron, .capability = .system },
     .{ .name = "sys-info", .stack_effect = "-- hash", .doc = "Return a hash of system/platform information.", .func = nativeSysInfo, .capability = .system },
-    .{ .name = "target-os", .stack_effect = "-- symbol", .doc = "Resolve at parse time to the build target's OS as a symbol (macos, linux).", .func = nativeTargetOs, .parse_time = true },
+    .{ .name = "target-os", .stack_effect = "-- symbol", .doc = "Resolve at parse time to the build target's OS as a symbol (macos, linux, freestanding).", .func = nativeTargetOs, .parse_time = true },
     .{ .name = "target-arch", .stack_effect = "-- symbol", .doc = "Resolve at parse time to the build target's architecture as a symbol (x86_64, aarch64).", .func = nativeTargetArch, .parse_time = true },
 };
 
@@ -110,6 +110,7 @@ fn nativeTargetOs(ctx: *Context) anyerror!void {
     const os_name: []const u8 = switch (ctx.target_os) {
         .macos => "macos",
         .linux => "linux",
+        .freestanding => "freestanding",
         else => return throwUnsupportedTarget(ctx, "target-os", "OS", @tagName(ctx.target_os)),
     };
     try ctx.stack.push(.{ .symbol = os_name });
@@ -138,6 +139,10 @@ test "target-os returns the enumerated OS symbol" {
     ctx.target_os = .linux;
     try nativeTargetOs(&ctx);
     try testing.expectEqualStrings("linux", (try ctx.stack.pop()).symbol);
+
+    ctx.target_os = .freestanding;
+    try nativeTargetOs(&ctx);
+    try testing.expectEqualStrings("freestanding", (try ctx.stack.pop()).symbol);
 }
 
 test "target-arch returns the enumerated architecture symbol" {
