@@ -1,0 +1,38 @@
+Stack: [ ]
+=== sequence access misses ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: #len on a struct raises
+Stack: [ ]
+PASS: #nth on a struct raises
+Stack: [ ]
+PASS: >hash on a vector raises
+Stack: [ ]
+=== bitwise misses ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: bitand on a struct raises
+Stack: [ ]
+PASS: bitnot on a struct raises
+Stack: [ ]
+PASS: shift on a struct raises
+Stack: [ ]
+Stack: [ ]
+PASS: non-fixnum shift count raises
+Stack: [ ]
+=== symbol conversion miss ===
+Stack: [ ]
+Stack: [ ]
+PASS: >symbol on a struct raises
+Stack: [ ]
+PASS: string converts to a symbol
+Stack: [ ]

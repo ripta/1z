@@ -636,6 +636,7 @@ pub const primitives = [_]Primitive{
 pub fn nativeLen(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "#len")) return;
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(val)});
     return error.TypeMismatch;
 }
@@ -644,8 +645,9 @@ pub fn nativeLen(ctx: *Context) anyerror!void {
 pub fn nativeNth(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "#nth")) return;
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
-    _ = b;
+    defer container_backing.releaseValue(a);
     setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(a)});
     return error.TypeMismatch;
 }
@@ -2832,6 +2834,7 @@ fn nativeToHashHash(_: *Context) anyerror!void {}
 fn nativeToHash(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, ">hash")) return;
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     setErrorContext(ctx, ">hash expected mutable-map, hash, struct, virtual, or enum, got {s}", .{valueTypeName(val)});
     return error.TypeMismatch;
 }

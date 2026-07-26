@@ -1,0 +1,50 @@
+\ A generic native whose dispatch lookup misses must release the operands it
+\ popped before raising. The operands here are refcounted struct instances and
+\ containers, so a missing release shows up as a GPA leak report on stderr,
+\ which this test's empty stderr golden rejects.
+\
+\ Each path is driven repeatedly so one leaked operand per call accumulates,
+\ then asserted once for the error itself. The repetition is written inline
+\ rather than through a helper word: a word body that passes its own quotation
+\ parameter to `times` miscompiles under `--compile=eager`
+\ (spec/bugs/20260726-eager-loop-combinator-parameter-quotation.md).
+
+use "testing" ;
+
+boxed: struct{ a } ;
+
+"sequence access misses" test-section
+
+20 [ [ 1 make-boxed #len drop ] [ drop ] recover ] times
+20 [ [ 1 make-boxed 0 #nth drop ] [ drop ] recover ] times
+20 [ [ V{ 1 2 } >hash drop ] [ drop ] recover ] times
+[ 1 make-boxed #len drop ] "#len on a struct raises" assert-error
+[ 1 make-boxed 0 #nth drop ] "#nth on a struct raises" assert-error
+[ V{ 1 2 } >hash drop ] ">hash on a vector raises" assert-error
+
+"bitwise misses" test-section
+
+20 [ [ 1 make-boxed 1 bitand drop ] [ drop ] recover ] times
+20 [ [ 1 make-boxed 1 bitor drop ] [ drop ] recover ] times
+20 [ [ 1 make-boxed 1 bitxor drop ] [ drop ] recover ] times
+20 [ [ 1 make-boxed bitnot drop ] [ drop ] recover ] times
+20 [ [ 1 make-boxed 1 shift-left drop ] [ drop ] recover ] times
+20 [ [ 1 make-boxed 1 shift-right drop ] [ drop ] recover ] times
+20 [ [ 1 make-boxed 1 ushift-right drop ] [ drop ] recover ] times
+20 [ [ 1 make-boxed 1 shift drop ] [ drop ] recover ] times
+[ 1 make-boxed 1 bitand drop ] "bitand on a struct raises" assert-error
+[ 1 make-boxed bitnot drop ] "bitnot on a struct raises" assert-error
+[ 1 make-boxed 1 shift drop ] "shift on a struct raises" assert-error
+
+\ A non-fixnum shift count is rejected before the value is inspected, so the
+\ count and the value take separate release paths.
+20 [ [ 1 make-boxed V{ 1 } shift-left drop ] [ drop ] recover ] times
+[ 1 make-boxed V{ 1 } shift-left drop ] "non-fixnum shift count raises" assert-error
+
+"symbol conversion miss" test-section
+
+20 [ [ 1 make-boxed >symbol drop ] [ drop ] recover ] times
+[ 1 make-boxed >symbol drop ] ">symbol on a struct raises" assert-error
+
+\ The success arm hands its slice to the pushed symbol rather than releasing it.
+"ok" >symbol ok: "string converts to a symbol" assert=

@@ -10,6 +10,7 @@ const dispatch_helpers = @import("dispatch_helpers.zig");
 const dispatch_mod = @import("../dispatch.zig");
 const DispatchTable = dispatch_mod.DispatchTable;
 const markers_mod = @import("markers.zig");
+const container_backing = @import("../container_backing.zig");
 
 const demoteBignum = helpers.demoteBignum;
 const ensureBignum = helpers.ensureBignum;
@@ -240,7 +241,9 @@ fn isNativeBitwise(val: Value) bool {
 fn nativeBitand(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "bitand")) return;
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     helpers.setErrorHint(ctx, "operands must be integers (fixnum or bignum)");
     helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (!isNativeBitwise(a)) a else b);
     return error.TypeMismatch;
@@ -249,7 +252,9 @@ fn nativeBitand(ctx: *Context) anyerror!void {
 fn nativeBitor(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "bitor")) return;
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     helpers.setErrorHint(ctx, "operands must be integers (fixnum or bignum)");
     helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (!isNativeBitwise(a)) a else b);
     return error.TypeMismatch;
@@ -258,7 +263,9 @@ fn nativeBitor(ctx: *Context) anyerror!void {
 fn nativeBitxor(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "bitxor")) return;
     const b = try ctx.stack.pop();
+    defer container_backing.releaseValue(b);
     const a = try ctx.stack.pop();
+    defer container_backing.releaseValue(a);
     helpers.setErrorHint(ctx, "operands must be integers (fixnum or bignum)");
     helpers.setTypeMismatchError(ctx, "fixnum or bignum", if (!isNativeBitwise(a)) a else b);
     return error.TypeMismatch;
@@ -267,6 +274,7 @@ fn nativeBitxor(ctx: *Context) anyerror!void {
 fn nativeBitnot(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchUnary(ctx, "bitnot")) return;
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     helpers.setErrorHint(ctx, "operand must be an integer (fixnum or bignum)");
     helpers.setTypeMismatchError(ctx, "fixnum or bignum", val);
     return error.TypeMismatch;
@@ -275,7 +283,9 @@ fn nativeBitnot(ctx: *Context) anyerror!void {
 fn nativeShiftLeft(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "shift-left")) return;
     const count = try ctx.stack.pop();
+    defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (count != .fixnum) {
         helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum", count);
@@ -289,7 +299,9 @@ fn nativeShiftLeft(ctx: *Context) anyerror!void {
 fn nativeShiftRight(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "shift-right")) return;
     const count = try ctx.stack.pop();
+    defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (count != .fixnum) {
         helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum", count);
@@ -303,7 +315,9 @@ fn nativeShiftRight(ctx: *Context) anyerror!void {
 fn nativeUshiftRight(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "ushift-right")) return;
     const count = try ctx.stack.pop();
+    defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (count != .fixnum) {
         helpers.setErrorHint(ctx, "shift count must be a non-negative fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum", count);
@@ -317,7 +331,9 @@ fn nativeUshiftRight(ctx: *Context) anyerror!void {
 fn nativeShift(ctx: *Context) anyerror!void {
     if (try dispatch_helpers.tryDispatchBinary(ctx, "shift")) return;
     const count = try ctx.stack.pop();
+    defer container_backing.releaseValue(count);
     const val = try ctx.stack.pop();
+    defer container_backing.releaseValue(val);
     if (count != .fixnum) {
         helpers.setErrorHint(ctx, "shift count must be a fixnum");
         helpers.setTypeMismatchError(ctx, "fixnum", count);

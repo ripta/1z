@@ -145,6 +145,9 @@ fn nativeToSymbol(ctx: *Context) anyerror!void {
             try ctx.stack.push(.{ .symbol = s });
         },
         else => {
+            // Only this arm releases. The `.string` arm hands its slice to the
+            // pushed symbol instead of dropping it.
+            defer container_backing.releaseValue(val);
             helpers.setErrorHint(ctx, "use >string to convert a symbol to a string first");
             helpers.setTypeMismatchError(ctx, "string", val);
             return error.TypeMismatch;
