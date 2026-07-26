@@ -1,0 +1,10 @@
+\ Monomorphized dispatch sites are counted and reported by --compilation-stats.
+\
+\ Both `inspect` sites see a proven operand (a literal fixnum and float), so each
+\ compiles to one direct dispatch call and neither counts as an inline PIC site.
+\
+\ Build-only: the golden is the --compilation-stats report, pinning the
+\ "Monomorphized dispatch sites" line. No fallback inventory appears because
+\ the monomorphized sites record none.
+30 inspect print-line
+2.5 inspect print-line

@@ -1,0 +1,8 @@
+\ Binary monomorph-lite dispatch: `bitand` is a generic native with two
+\ operands, and its PIC path always emits cold interpreter-callback branches,
+\ so this program could not build under the lock before. With two
+\ statically-proven fixnum operands the site compiles to one direct dispatch
+\ call with no fallback; a successful locked build is itself the proof. The
+\ result lands opaque (output-type propagation is a separate capability), so
+\ correctness of the value is covered by the interpreter suite, not here.
+12 10 bitand drop

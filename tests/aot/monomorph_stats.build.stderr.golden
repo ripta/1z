@@ -1,0 +1,8 @@
+Prelude compilation: 5/5 words compiled (100.0%)
+Quotation bodies compiled: 0
+Inline PIC sites: 0/2 generic call sites preseeded
+Monomorphized dispatch sites: 2
+artifact: interpreter
+interpreter: linked (--interpreter-fallback=false without --lock-interpreter-setting)
+jitInterpretedCall: not linked
+runtime-image: words=0 stack-effects=1 typevalue-slots=63 blob-present=false

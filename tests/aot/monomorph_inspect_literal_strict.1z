@@ -1,0 +1,8 @@
+\ Monomorph-lite dispatch: `inspect` is a generic native, and its PIC path
+\ always emits cold interpreter-callback branches, so this program could not
+\ build under the lock before. With statically-proven operands (a literal
+\ fixnum, float, and boolean) each site compiles to one direct dispatch call
+\ with no fallback; a successful locked build is itself the proof.
+30 inspect print-line
+2.5 inspect print-line
+t inspect print-line

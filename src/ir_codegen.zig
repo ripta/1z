@@ -227,6 +227,7 @@ pub const UncompiledQuotation = struct {
 pub const PicStats = struct {
     sites_attempted: u32 = 0,
     sites_emitted: u32 = 0,
+    monomorphized: u32 = 0,
 };
 
 /// Classification of an AOT-mode interpreter-callback emission. Covers both
@@ -6383,6 +6384,8 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             return IrCodegenError.StackUnderflow;
         }
 
+        const mono = monomorphizedDispatchTags(state, stack, sp.*, name, resolved, effective_in);
+
         try materializeQuotations(state, stack, sp.*, false);
         flushToPhysicalStack(state, stack, sp.*);
         const ctx_val = emitCallbackPreamble(state, sp.*);
@@ -6391,15 +6394,17 @@ fn emitGenericResolvedNativeCall(ec: EmitCtx, resolved: ResolvedWord) IrCodegenE
             emitParamValidation(state, eff_ptr);
         }
 
-        // Try inline PIC (from interpreter profiling) or
-        // dispatch-table-driven inline checks (from frozen
-        // dispatch table) before falling back to generic
-        // native call. The binary variants apply to two-operand
-        // words; the unary variants gate on `effective_in == 1`
-        // and cover strictly-unary generics like `inspect`. Each
-        // includes the slow-path fallback internally, so when any
-        // one succeeds no separate call is needed.
-        if (!emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, line) and
+        // A site with statically-proven operand types monomorphizes to one direct dispatch call
+        // with no cold branch.
+        //
+        // Otherwise try inline PIC (from interpreter profiling) or dispatch-table-driven inline
+        // checks (from the frozen dispatch table) before falling back to a generic native call.
+        // The binary variants apply to two-operand words; the unary variants gate on
+        // `effective_in == 1` and cover strictly-unary generics like `inspect`. Each includes the
+        // slow-path fallback internally, so when any one succeeds no separate call is needed.
+        if (mono) |m| {
+            emitMonomorphizedDispatch(state, ctx_val, resolved, m);
+        } else if (!emitInlinePicCheck(state, idx, ctx_val, name, resolved, effective_in, line) and
             !emitInlineDispatchTableCheck(state, ctx_val, name, resolved, effective_in, line) and
             !emitInlinePicCheckUnary(state, idx, ctx_val, name, resolved, effective_in, line) and
             !emitInlineDispatchTableCheckUnary(state, ctx_val, name, resolved, effective_in, line))
@@ -11634,6 +11639,117 @@ fn emitInlineDispatchTableCheckUnary(
     }
 
     return emitInlinePicEntries(state, ctx_val, name, resolved, line, qualified[0..qualified_count], interp_ctx.dispatch.generation, true);
+}
+
+/// A dispatch site whose operand types are statically proven, eligible for
+/// monomorph-lite emission. A null `tag_b` means a unary site.
+const MonomorphizedDispatch = struct {
+    tag_a: std.meta.Tag(Value),
+    tag_b: ?std.meta.Tag(Value),
+};
+
+/// Map a typed StackEntry variant to the runtime Value tag it is proven to
+/// box to. The opaque and structural variants carry no type.
+fn stackEntryTag(entry: StackEntry) ?std.meta.Tag(Value) {
+    return switch (entry) {
+        .i64_ref => .fixnum,
+        .f64_ref => .float,
+        .bool_ref => .boolean,
+        .raw_at_slot, .row_region, .quotation_body => null,
+    };
+}
+
+/// Descriptor of the builtin type at `tag`'s ordinal in builtin_type_array.
+fn builtinTagDescriptor(interp_ctx: *const Context, tag: std.meta.Tag(Value)) ?*const TypeDescriptor {
+    const idx = @intFromEnum(tag);
+    if (idx >= interp_ctx.builtin_type_array.len) return null;
+    const tv = interp_ctx.builtin_type_array[idx] orelse return null;
+    return tv.descriptor;
+}
+
+/// Decide whether a generic-native dispatch site can be monomorphized.
+///
+/// Eligible when every operand's abstract entry carries a proven type and a concrete `native_fn`
+/// method resolves for those types in the frozen dispatch table. The lookup honors the `any`
+/// wildcard and walks dispatch frames and parent contexts -- the same resolution
+/// jitPicDispatch(Unary) performs at runtime, so a freeze-time hit cannot miss at runtime in an
+/// interpreter-free binary, where no new method can be defined.
+///
+/// Gated to interpreter-free AOT builds: with the interpreter linked, eval can replace a method
+/// at runtime, and only the generation-guarded PIC path handles that. Freestanding is excluded
+/// because its runtime exports no jitPicDispatch(Unary).
+///
+/// Must run before flushToPhysicalStack relabels the entries to raw_at_slot.
+fn monomorphizedDispatchTags(
+    state: *CompileState,
+    stack: []const StackEntry,
+    sp: usize,
+    name: []const u8,
+    resolved: ResolvedWord,
+    effective_in: u8,
+) ?MonomorphizedDispatch {
+    if (!state.aot_mode or !state.interpreter_free or state.freestanding) return null;
+    const interp_ctx = state.interp_ctx orelse return null;
+    if (resolved.never_returns) return null;
+    if (effective_in != 1 and effective_in != 2) return null;
+    if (sp < effective_in) return null;
+
+    const tag_a = stackEntryTag(stack[sp - effective_in]) orelse return null;
+    const tag_b: ?std.meta.Tag(Value) = if (effective_in == 2)
+        stackEntryTag(stack[sp - 1]) orelse return null
+    else
+        null;
+
+    const dispatch_id = interp_ctx.resolveDispatchId(name) orelse return null;
+    const desc_a = builtinTagDescriptor(interp_ctx, tag_a) orelse return null;
+
+    const entry = if (tag_b) |tb| blk: {
+        const desc_b = builtinTagDescriptor(interp_ctx, tb) orelse return null;
+        break :blk interp_ctx.lookupBinaryDispatch(dispatch_id, desc_a, desc_b) orelse return null;
+    } else interp_ctx.lookupUnaryDispatch(dispatch_id, desc_a) orelse return null;
+
+    // jitPicDispatch(Unary) runs only native bodies; a quotation or host
+    // callback method would return the miss status.
+    switch (entry.body) {
+        .native_fn => {},
+        .quotation, .host_callback => return null,
+    }
+
+    return .{ .tag_a = tag_a, .tag_b = tag_b };
+}
+
+/// Emit a monomorphized dispatch: one direct jitPicDispatch(Unary) call with
+/// the proven tags -- no generation guard, no inline-PIC entries, and no cold
+/// emitNativeWordCall branch, so the site records no interpreter fallback.
+///
+/// Status 1 means the freeze-time-resolved method is missing or non-native,
+/// impossible in an interpreter-free binary; it traps through the NullCodePtr
+/// error callback. Status 2 means the native ran and raised with
+/// jit_pending_error already set, and propagates untouched.
+fn emitMonomorphizedDispatch(
+    state: *CompileState,
+    ctx_val: c.ir_ref,
+    resolved: ResolvedWord,
+    mono: MonomorphizedDispatch,
+) void {
+    const ictx = state.ctx;
+    const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
+    const tag_a_const = c.ir_const_addr(ictx, @intFromEnum(mono.tag_a));
+    const call_result = if (mono.tag_b) |tag_b|
+        c._ir_CALL_4(ictx, c.IR_I32, state.pic_dispatch_fn, ctx_val, word_id_const, tag_a_const, c.ir_const_addr(ictx, @intFromEnum(tag_b)))
+    else
+        c._ir_CALL_3(ictx, c.IR_I32, state.pic_dispatch_unary_fn, ctx_val, word_id_const, tag_a_const);
+
+    const miss_status = c.ir_const_i32(ictx, 1);
+    const missed = c.ir_fold2(ictx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), call_result, miss_status);
+    const if_miss = c._ir_IF(ictx, missed);
+    c._ir_IF_TRUE_cold(ictx, if_miss);
+    emitErrorReturn(state, state.null_code_ptr_error_fn);
+    c._ir_IF_FALSE(ictx, if_miss);
+
+    emitCallbackPostCheck(state, call_result, state.error_propagate_status, null, .none);
+
+    if (state.pic_stats) |ps| ps.monomorphized += 1;
 }
 
 /// Emit a native word call. In JIT mode, calls through jitNativeCall with
@@ -18315,6 +18431,122 @@ test "a declared annotation takes precedence over an inferred type" {
 
     try testing.expect(try arithFallbackCount(&annotated, &.{ .fixnum, .fixnum }) > 0);
     try testing.expectEqual(@as(u32, 0), try arithFallbackCount(&bare, &.{ .fixnum, .fixnum }));
+}
+
+/// Resolve `inspect` and `bitand` as generic natives for the monomorph tests.
+/// The word ids are dummies: the tests inspect the emitted C, never run it,
+/// and the freeze-time dispatch query keys on the interp context's real
+/// dispatch table, not on these ids.
+fn resolveMonomorphOpForTest(name: []const u8, user_data: *anyopaque) ?ResolvedWord {
+    _ = user_data;
+    if (std.mem.eql(u8, name, "inspect")) {
+        return .{ .word_id = 7, .input_count = 1, .output_count = 1, .is_native = true };
+    }
+    if (std.mem.eql(u8, name, "bitand")) {
+        return .{ .word_id = 8, .input_count = 2, .output_count = 1, .is_native = true };
+    }
+    return null;
+}
+
+const monomorph_test_resolver = WordResolver{
+    .resolve = &resolveMonomorphOpForTest,
+    .user_data = @ptrCast(&arith_test_resolver_dummy),
+    .dispatch_table_ptr = @ptrCast(&arith_test_resolver_dummy),
+};
+
+/// Compile a body against a real interpreter context and report the emitted C
+/// alongside the fallback count, for asserting monomorph-lite emission.
+fn monomorphEmittedSource(
+    instrs: []const Instruction,
+    input_count: u8,
+    interp_ctx: *const Context,
+    interpreter_free: bool,
+    fallback_count: *u32,
+) ![]u8 {
+    var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
+    defer compiled_names.deinit(testing.allocator);
+
+    return emitWordCAot(
+        instrs,
+        input_count,
+        1,
+        "mono-test",
+        monomorph_test_resolver,
+        null,
+        &compiled_names,
+        null,
+        null,
+        null,
+        testing.allocator,
+        null,
+        &.{},
+        null,
+        null,
+        null,
+        interp_ctx,
+        null,
+        fallback_count,
+        null,
+        null,
+        false,
+        null,
+        interpreter_free,
+        false,
+    );
+}
+
+test "a generic native on a proven operand monomorphizes with no fallback" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const instrs = makeInstructions(.{ @as(i64, 30), "inspect" });
+    var count: u32 = 0;
+    const source = try monomorphEmittedSource(&instrs, 0, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expectEqual(@as(u32, 0), count);
+    try testing.expect(std.mem.indexOf(u8, source, "jitPicDispatchUnary(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") == null);
+}
+
+test "a generic native on an opaque operand keeps the fallback path" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const instrs = makeInstructions(.{"inspect"});
+    var count: u32 = 0;
+    const source = try monomorphEmittedSource(&instrs, 1, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(count > 0);
+    try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") != null);
+}
+
+test "a binary generic native on two proven operands monomorphizes" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const instrs = makeInstructions(.{ @as(i64, 12), @as(i64, 10), "bitand" });
+    var count: u32 = 0;
+    const source = try monomorphEmittedSource(&instrs, 0, &ictx, true, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expectEqual(@as(u32, 0), count);
+    try testing.expect(std.mem.indexOf(u8, source, "jitPicDispatch(") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") == null);
+}
+
+test "an interpreter-linked AOT build does not monomorphize" {
+    var ictx = Context.init(testing.allocator);
+    defer ictx.deinit();
+
+    const instrs = makeInstructions(.{ @as(i64, 30), "inspect" });
+    var count: u32 = 0;
+    const source = try monomorphEmittedSource(&instrs, 0, &ictx, false, &count);
+    defer testing.allocator.free(source);
+
+    try testing.expect(count > 0);
+    try testing.expect(std.mem.indexOf(u8, source, "jitNativeWordCall(") != null);
 }
 
 // --- rewriteIndexedStackOp tests ---

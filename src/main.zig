@@ -2295,11 +2295,16 @@ fn printPicStats(
     err_writer: anytype,
 ) void {
     const stats = &diagnostics.pic_stats;
-    if (stats.sites_attempted == 0 and stats.sites_emitted == 0) return;
-    err_writer.print("Inline PIC sites: {d}/{d} generic call sites preseeded\n", .{
-        stats.sites_emitted,
-        stats.sites_attempted,
-    }) catch {};
+    if (stats.sites_attempted == 0 and stats.sites_emitted == 0 and stats.monomorphized == 0) return;
+    if (stats.sites_attempted != 0 or stats.sites_emitted != 0) {
+        err_writer.print("Inline PIC sites: {d}/{d} generic call sites preseeded\n", .{
+            stats.sites_emitted,
+            stats.sites_attempted,
+        }) catch {};
+    }
+    if (stats.monomorphized != 0) {
+        err_writer.print("Monomorphized dispatch sites: {d}\n", .{stats.monomorphized}) catch {};
+    }
     err_writer.flush() catch {};
 }
 
