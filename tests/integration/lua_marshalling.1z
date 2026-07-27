@@ -28,7 +28,7 @@ use "lua" ;
   dup "return {}" [ eval ] curry curry
   lua-error: "a table result raises" assert-error-type
 
-  dup unmake-lua-state (gettop) 0 "Lua stack balanced" assert=
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced" assert=
   drop
 ] using-lua
 
@@ -72,7 +72,7 @@ use "lua" ;
   dup "undefg" [ get-global ] curry curry
   lua-error: "get-global on an undefined global raises" assert-error-type
 
-  dup unmake-lua-state (gettop) 0 "Lua stack balanced after the error paths" assert=
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced after the error paths" assert=
   drop
 ] using-lua
 
@@ -123,7 +123,7 @@ use "lua" ;
   dup "undefg" [ get-global-hash ] curry curry
   lua-error: "undefined global raises" assert-error-type
 
-  dup unmake-lua-state (gettop) 0 "Lua stack balanced after the error paths" assert=
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced after the error paths" assert=
   drop
 ] using-lua
 
@@ -168,7 +168,7 @@ use "lua" ;
   dup "ca" [ get-global-hash ] curry curry
   lua-error: "two-table cycle raises" assert-error-type
 
-  dup unmake-lua-state (gettop) 0 "Lua stack balanced after the error paths" assert=
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced after the error paths" assert=
   drop
 ] using-lua
 
@@ -197,7 +197,7 @@ use "lua" ;
   dup "m" M{ } [ set-global ] curry curry curry
   "a mutable map value raises" assert-error
 
-  dup unmake-lua-state (gettop) 0 "Lua stack balanced" assert=
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced" assert=
   dup "return srv.name" eval option:some> "edge" "state usable after the error paths" assert=
   drop
 ] using-lua

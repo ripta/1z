@@ -1,7 +1,7 @@
 === lua state lifecycle ===
 Stack: [ ]
 PASS: open returns a lua-state
-Stack: [ <lua-state <resource:lua-state>> ]
+Stack: [ <lua-state lua-state-inner{ state: <resource:lua-state> callbacks: V{ } }> ]
 Stack: [ ]
 Stack: [ ]
 PASS: using-lua provides a lua-state

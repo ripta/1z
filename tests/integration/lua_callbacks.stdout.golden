@@ -1,0 +1,38 @@
+=== register and invoke with scalars ===
+Stack: [ ]
+PASS: fixnum args and result
+PASS: float arg and result
+PASS: string arg and result
+PASS: boolean arg and result
+PASS: zero-arg callback
+PASS: zero-result callback returns nothing
+PASS: zero-result callback side effect
+PASS: two-result callback
+PASS: Lua stack balanced
+Stack: [ ]
+=== callback reuse and replacement ===
+Stack: [ ]
+PASS: callback invoked repeatedly
+PASS: closure-capturing callback
+PASS: re-registering replaces the global
+PASS: all registered callbacks stay tracked
+PASS: Lua stack balanced
+Stack: [ ]
+=== callbacks freed on close ===
+Stack: [ ]
+Stack: [ lua-state-inner{ state: <resource:lua-state (closed)> callbacks: V{ <resource:ffi-callback (closed)> <resource:ffi-callback (closed)> } } ]
+PASS: two callbacks tracked
+Stack: [ lua-state-inner{ state: <resource:lua-state (closed)> callbacks: V{ <resource:ffi-callback (closed)> <resource:ffi-callback (closed)> } } ]
+PASS: first callback freed on close
+Stack: [ lua-state-inner{ state: <resource:lua-state (closed)> callbacks: V{ <resource:ffi-callback (closed)> <resource:ffi-callback (closed)> } } ]
+PASS: second callback freed on close
+Stack: [ lua-state-inner{ state: <resource:lua-state (closed)> callbacks: V{ <resource:ffi-callback (closed)> <resource:ffi-callback (closed)> } } ]
+PASS: state closed before its callbacks
+Stack: [ ]
+Stack: [ <lua-state lua-state-inner{ state: <resource:lua-state> callbacks: V{ } }> ]
+Stack: [ <lua-state lua-state-inner{ state: <resource:lua-state> callbacks: V{ <resource:ffi-callback> } }> ]
+Stack: [ <lua-state lua-state-inner{ state: <resource:lua-state (closed)> callbacks: V{ <resource:ffi-callback (closed)> } }> ]
+Stack: [ <lua-state lua-state-inner{ state: <resource:lua-state (closed)> callbacks: V{ <resource:ffi-callback (closed)> } }> ]
+Stack: [ "<resource:ffi-callback (closed)>" ]
+PASS: callback stays closed after double close
+Stack: [ ]

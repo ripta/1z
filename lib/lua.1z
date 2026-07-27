@@ -91,13 +91,22 @@ use "os/path" ;
   (is-integer):  "lua_isinteger" ffi{ ptr i32 -> i32 }
   (to-pointer):  "lua_topointer" ffi{ ptr i32 -> isize }
   (check-stack): "lua_checkstack" ffi{ ptr i32 -> i32 }
+  (push-closure): "lua_pushcclosure" ffi{ ptr ptr:ffi-callback i32 -> void }
 } call
 over "lua_close" ffi{ ptr -> void } bound-symbol [ ] curry
 "(lua-close-fn)" swap @set!
 swap drop "lua-raw" swap >module reexport
 
-\\ An open Lua interpreter state.
-lua-state: virtual{ resource } ;
+\\ An open Lua interpreter state: the raw state resource plus the callback
+\\ resources registered into it, which the state owns and frees on close.
+\\
+\\ The fields are untyped: a ptr:lua-state resource reports its FFI pointer
+\\ name, not resource, as its type, and typed and untyped fields cannot mix.
+lua-state-inner: struct{ state callbacks } ;
+lua-state: virtual{ lua-state-inner } ;
+
+\\ The raw state resource backing lua.
+(raw-state): ( lua -- state ) [ unmake-lua-state state>> ] ;
 
 \\ Open a Lua state with the standard libraries loaded. lua_close is bound as the
 \\ resource's close function, so generic resource-close frees the state.
@@ -105,11 +114,17 @@ open: ( -- lua-state ) [
   (new-state)
   dup (lua-close-fn) bind-close
   dup (open-libs)
-  >lua-state
+  V{ } make-lua-state-inner >lua-state
 ] ;
 
-\\ Close a Lua state opened with `open`. Double-close is a no-op.
-close-lua: ( lua-state -- ) [ unmake-lua-state resource-close ] ;
+\\ Close a Lua state opened with `open`. The state closes first and its
+\\ registered callbacks free after, so no live Lua reference can reach a freed
+\\ callback. Double-close is a no-op.
+close-lua: ( lua-state -- ) [
+  unmake-lua-state
+  dup state>> resource-close
+  callbacks>> [ resource-close ] #each
+] ;
 
 \\ Open a Lua state for the duration of a quotation, closing it on every exit path.
 using-lua: ( ..a quot: ( ..a lua: lua-state -- ..b ) -- ..b ) [ [ open ] dip over [ close-lua ] curry cleanup ] ;
@@ -210,7 +225,7 @@ ELuaError: [ lua-error: ] ;
 \\ indistinguishable in Lua. Extra results are discarded. A table, function,
 \\ or userdata result raises ELuaError.
 eval: ( lua: lua-state src: string -- opt ) [
-  [ unmake-lua-state ] dip
+  [ (raw-state) ] dip
   over [
     1 (eval-n)
     dup -1 (type) LUA_TNIL = [
@@ -224,23 +239,23 @@ eval: ( lua: lua-state src: string -- opt ) [
 \\ Run Lua source and read its single result as a fixnum, through Lua's number
 \\ coercion; raises ELuaError on a non-convertible result.
 eval>fixnum: ( lua: lua-state src: string -- fixnum ) [
-  [ unmake-lua-state ] dip over [ 1 (eval-n) [ (to-integer) ] (read-pop) ] (lua-guard)
+  [ (raw-state) ] dip over [ 1 (eval-n) [ (to-integer) ] (read-pop) ] (lua-guard)
 ] ;
 
 \\ Run Lua source and read its single result as a float, through Lua's number
 \\ coercion; raises ELuaError on a non-convertible result.
 eval>float: ( lua: lua-state src: string -- float ) [
-  [ unmake-lua-state ] dip over [ 1 (eval-n) [ (to-number) ] (read-pop) ] (lua-guard)
+  [ (raw-state) ] dip over [ 1 (eval-n) [ (to-number) ] (read-pop) ] (lua-guard)
 ] ;
 
 \\ Run Lua source and read its single result as a string, through Lua's string
 \\ coercion of numbers; raises ELuaError on a non-convertible result.
 eval>string: ( lua: lua-state src: string -- string ) [
-  [ unmake-lua-state ] dip over [ 1 (eval-n) [ (to-lstring) ] (read-pop) ] (lua-guard)
+  [ (raw-state) ] dip over [ 1 (eval-n) [ (to-lstring) ] (read-pop) ] (lua-guard)
 ] ;
 
 \\ Run Lua source and read its single result as a boolean, via Lua truthiness.
-eval>boolean: ( lua: lua-state src: string -- boolean ) [ [ unmake-lua-state ] dip 1 (eval-n) [ (to-boolean) ] (read-pop) ] ;
+eval>boolean: ( lua: lua-state src: string -- boolean ) [ [ (raw-state) ] dip 1 (eval-n) [ (to-boolean) ] (read-pop) ] ;
 
 \\ Convert a 1z boolean to the Lua C boolean integer.
 (to-lua-bool): ( boolean -- i32 ) [ [ 1 ] [ 0 ] if ] ;
@@ -298,34 +313,34 @@ eval>boolean: ( lua: lua-state src: string -- boolean ) [ [ unmake-lua-state ] d
 
 \\ Set a Lua global from a 1z value: a scalar pushes directly; a hash or array
 \\ builds a Lua table recursively.
-set-global: ( lua: lua-state name: string value -- ) [ [ unmake-lua-state ] 2dip (do-set-global) ] ;
+set-global: ( lua: lua-state name: string value -- ) [ [ (raw-state) ] 2dip (do-set-global) ] ;
 
 \\ Read a Lua global as a fixnum, through Lua's number coercion; raises
 \\ ELuaError on a non-convertible global.
 get-global>fixnum: ( lua: lua-state name: string -- fixnum ) [
-  [ unmake-lua-state ] dip over [ [ (to-integer) ] (with-global) ] (lua-guard)
+  [ (raw-state) ] dip over [ [ (to-integer) ] (with-global) ] (lua-guard)
 ] ;
 
 \\ Read a Lua global as a float, through Lua's number coercion; raises
 \\ ELuaError on a non-convertible global.
 get-global>float: ( lua: lua-state name: string -- float ) [
-  [ unmake-lua-state ] dip over [ [ (to-number) ] (with-global) ] (lua-guard)
+  [ (raw-state) ] dip over [ [ (to-number) ] (with-global) ] (lua-guard)
 ] ;
 
 \\ Read a Lua global as a string, through Lua's string coercion of numbers;
 \\ raises ELuaError on a non-convertible global.
 get-global>string: ( lua: lua-state name: string -- string ) [
-  [ unmake-lua-state ] dip over [ [ (to-lstring) ] (with-global) ] (lua-guard)
+  [ (raw-state) ] dip over [ [ (to-lstring) ] (with-global) ] (lua-guard)
 ] ;
 
 \\ Read a Lua global as a boolean, via Lua truthiness.
-get-global>boolean: ( lua: lua-state name: string -- boolean ) [ [ unmake-lua-state ] dip [ (to-boolean) ] (with-global) ] ;
+get-global>boolean: ( lua: lua-state name: string -- boolean ) [ [ (raw-state) ] dip [ (to-boolean) ] (with-global) ] ;
 
 \\ Read a Lua global as its natural 1z scalar type: boolean, fixnum for an
 \\ integer number, float for any other number, or string. A table global
 \\ raises; read it with get-global-hash or get-global-array instead.
 get-global: ( lua: lua-state name: string -- value ) [
-  [ unmake-lua-state ] dip
+  [ (raw-state) ] dip
   over [
     2dup (get-global) LUA_TTABLE = [
       over 1 (pop) nip
@@ -335,6 +350,26 @@ get-global: ( lua: lua-state name: string -- value ) [
       drop [ (to-value) ] (read-pop)
     ] if
   ] (lua-guard)
+] ;
+
+\\ Register quot as a Lua-callable global function under name. The quotation
+\\ receives the raw lua_State resource, reads its scalar arguments off the Lua
+\\ stack with the scalar readers at indices 1..n, pushes its scalar results,
+\\ and returns the result count.
+\\
+\\ The state owns the callback and frees it on close, so no handle is
+\\ returned. Registering an existing name replaces the Lua global; the old
+\\ callback stays owned until the state closes. The callback is tracked before
+\\ it touches Lua, so a failure during install still frees it on close.
+\\
+\\ The quotation must not yield the green thread from inside the live Lua C
+\\ frame; that is out of scope for the scalar tier.
+register: ( lua: lua-state name: string quot: ( state -- nresults ) -- ) [
+  ffi{ ptr:lua-state -> i32 } ffi-callback
+  [ unmake-lua-state ] 2dip
+  2 pick-n callbacks>> over #push! drop
+  [ state>> ] 2dip
+  2 pick-n [ 2 pick-n swap 0 (push-closure) (set-global) ] (lua-guard)
 ] ;
 
 \ Raw table access
@@ -424,13 +459,13 @@ get-global: ( lua: lua-state name: string -- value ) [
 
 \\ Create a fresh empty table and bind it to the named Lua global.
 new-table: ( lua: lua-state name: string -- ) [
-  [ unmake-lua-state ] dip over 0 0 (create-table) (set-global)
+  [ (raw-state) ] dip over 0 0 (create-table) (set-global)
 ] ;
 
 \\ Set key in the table global named name: a scalar value stores directly; a
 \\ hash or array value builds a nested Lua table.
 table-set: ( lua: lua-state name: string key value -- ) [
-  [ [ unmake-lua-state ] dip ] 2dip
+  [ [ (raw-state) ] dip ] 2dip
   3 pick-n [
     [ (push-table) ] 2dip
     2 pick-n swap (push-value)
@@ -443,7 +478,7 @@ table-set: ( lua: lua-state name: string key value -- ) [
 \\ A nil entry, which is also how a missing key reads, raises ELuaError; use
 \\ table-get-or for a default instead.
 table-get: ( lua: lua-state name: string key -- value ) [
-  [ unmake-lua-state ] 2dip
+  [ (raw-state) ] 2dip
   dup [ 2 pick-n [ (table-lookup) ] (lua-guard) ] dip
   swap dup option:none? [
     drop dup >string [ "key not found: " ] dip #append
@@ -456,21 +491,21 @@ table-get: ( lua: lua-state name: string key -- value ) [
 \\ Read key from the table global named name, returning default for a nil
 \\ entry.
 table-get-or: ( lua: lua-state name: string key default -- value ) [
-  [ [ unmake-lua-state ] 2dip 2 pick-n [ (table-lookup) ] (lua-guard) ] dip
+  [ [ (raw-state) ] 2dip 2 pick-n [ (table-lookup) ] (lua-guard) ] dip
   swap dup option:none? [ drop ] [ nip option:some> ] if
 ] ;
 
 \\ Raw sequence length of the table global named name via lua_rawlen: the
 \\ count of consecutive integer keys from 1, ignoring any __len metamethod.
 table-len: ( lua: lua-state name: string -- fixnum ) [
-  [ unmake-lua-state ] dip (push-table)
+  [ (raw-state) ] dip (push-table)
   dup -1 (raw-len) swap 1 (pop)
 ] ;
 
 \\ Call quot with each key/value entry of the table global named name, both
 \\ converted to 1z scalars. Iteration order is unspecified, per Lua semantics.
 table-each: ( lua: lua-state name: string quot: ( key value -- ) -- ) [
-  [ [ unmake-lua-state ] dip ] dip
+  [ [ (raw-state) ] dip ] dip
   2 pick-n [
     [ (push-table) ] dip
     over (gettop)
@@ -614,7 +649,7 @@ table-each: ( lua: lua-state name: string quot: ( key value -- ) -- ) [
 \\ index, with the ancestor path seeded with the table's own identity; pop the
 \\ table and return builder's value. The Lua stack is restored on any error.
 (read-table): ( lua name builder: ( state tidx path -- value ) -- value ) [
-  [ [ unmake-lua-state ] dip ] dip
+  [ [ (raw-state) ] dip ] dip
   2 pick-n [
     [ (push-table) ] dip
     over dup (gettop)

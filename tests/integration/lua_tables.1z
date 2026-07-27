@@ -85,7 +85,7 @@ use "lua" ;
   "expected string or fixnum, got float" "table-set bad-key error names the key type" assert=
 
   \ every error path above restored the Lua value stack it had pushed onto
-  dup unmake-lua-state (gettop) 0 "Lua stack balanced after the error paths" assert=
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced after the error paths" assert=
 
   \ the state stays usable after the error paths above
   dup "cfg" "port" table-get 8080 "state usable after errors" assert=

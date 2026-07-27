@@ -1,0 +1,96 @@
+use "testing" ;
+use "lua" ;
+
+"register and invoke with scalars" test-section
+
+[
+  \ fixnum args and result
+  dup "add2" [
+    dup 1 (to-integer)
+    over 2 (to-integer) +
+    (push-integer) 1
+  ] register
+  dup "return add2(3, 4)" eval>fixnum 7 "fixnum args and result" assert=
+
+  \ float args and result
+  dup "twice" [ dup 1 (to-number) 2.0 * (push-number) 1 ] register
+  dup "return twice(1.5)" eval>float 3.0 "float arg and result" assert=
+
+  \ string arg and result
+  dup "greet" [ dup 1 (to-lstring) "hello, " swap #append (push-string) drop 1 ] register
+  dup "return greet('world')" eval>string "hello, world" "string arg and result" assert=
+
+  \ boolean arg and result
+  dup "negate" [ dup 1 (to-boolean) [ 0 ] [ 1 ] if (push-boolean) 1 ] register
+  dup "return negate(false)" eval>boolean "boolean arg and result" assert-true
+
+  \ a zero-arg callback
+  dup "answer" [ 42 (push-integer) 1 ] register
+  dup "return answer()" eval>fixnum 42 "zero-arg callback" assert=
+
+  \ a zero-result callback observed through its side effect on a global
+  dup "mark" [ dup 7 (push-integer) "seven" (set-global) 0 ] register
+  dup "mark()" eval option:none? "zero-result callback returns nothing" assert-true
+  dup "seven" get-global>fixnum 7 "zero-result callback side effect" assert=
+
+  \ a two-result callback consumed by Lua
+  dup "pair" [ dup 10 (push-integer) 20 (push-integer) 2 ] register
+  dup "local a, b = pair() return a + b" eval>fixnum 30 "two-result callback" assert=
+
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced" assert=
+  drop
+] using-lua
+
+"callback reuse and replacement" test-section
+
+[
+  dup "add2" [
+    dup 1 (to-integer)
+    over 2 (to-integer) +
+    (push-integer) 1
+  ] register
+
+  \ one callback invoked repeatedly from a Lua loop
+  dup "local s = 0 for i = 1, 10 do s = s + add2(i, i) end return s" eval>fixnum
+  110 "callback invoked repeatedly" assert=
+
+  \ a closure-capturing body
+  5 [ over 1 (to-integer) + (push-integer) 1 ] curry
+  [ dup "plus5" ] dip register
+  dup "return plus5(37)" eval>fixnum 42 "closure-capturing callback" assert=
+
+  \ registering an existing name replaces the Lua global
+  dup "add2" [
+    dup 1 (to-integer)
+    over 2 (to-integer) *
+    (push-integer) 1
+  ] register
+  dup "return add2(3, 4)" eval>fixnum 12 "re-registering replaces the global" assert=
+
+  \ the replaced callback stays owned by the state
+  dup unmake-lua-state callbacks>> #len 3 "all registered callbacks stay tracked" assert=
+
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced" assert=
+  drop
+] using-lua
+
+"callbacks freed on close" test-section
+
+\ a using-lua scope frees its registered callbacks on close
+[
+  dup "one" [ drop 0 ] register
+  dup "two" [ drop 0 ] register
+  unmake-lua-state
+] using-lua
+dup callbacks>> #len 2 "two callbacks tracked" assert=
+dup callbacks>> 0 #nth inspect "<resource:ffi-callback (closed)>" "first callback freed on close" assert=
+dup callbacks>> 1 #nth inspect "<resource:ffi-callback (closed)>" "second callback freed on close" assert=
+state>> inspect "<resource:lua-state (closed)>" "state closed before its callbacks" assert=
+
+\ double-close stays a no-op with callbacks tracked
+open
+dup "cb" [ drop 0 ] register
+dup close-lua
+dup close-lua
+unmake-lua-state callbacks>> 0 #nth inspect
+"<resource:ffi-callback (closed)>" "callback stays closed after double close" assert=
