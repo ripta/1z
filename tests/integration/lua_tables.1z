@@ -1,0 +1,93 @@
+use "testing" ;
+use "strings" ;
+use "lua" ;
+
+\ Run quot, catch its error, and return only the error's message. A throw can
+\ leave partial results on the stack, so a marker bounds what to discard.
+(cm-until): ( marker-and-junk msg -- msg ) [
+  swap dup "::cm::" = [ drop ] [ drop (cm-until) ] if
+] ;
+(caught-message): ( quot -- msg ) [
+  "::cm::" swap [ call "no error raised" ] [ message: @get ] recover (cm-until)
+] ;
+
+"lua raw table access" test-section
+
+[
+  \ create a table and round-trip scalars by string key and integer index
+  dup "t" new-table
+  dup "t" "answer" 42 table-set
+  dup "t" "answer" table-get 42 "fixnum value by string key round-trips" assert=
+  dup "t" "pi" 3.5 table-set
+  dup "t" "pi" table-get 3.5 "float value round-trips" assert=
+  dup "t" "name" "lua" table-set
+  dup "t" "name" table-get "lua" "string value round-trips" assert=
+  dup "t" "flag" t table-set
+  dup "t" "flag" table-get "boolean true value round-trips" assert-true
+  dup "t" 1 "one" table-set
+  dup "t" 1 table-get "one" "value by integer index round-trips" assert=
+
+  \ a value written from 1z is visible to Lua code
+  dup "return t.answer" eval>fixnum 42 "1z write visible to Lua" assert=
+
+  \ a table built in Lua reads back field-by-field
+  dup "cfg = { host = 'localhost', port = 8080, debug = false }" eval
+  dup "cfg" "host" table-get "localhost" "Lua-built string field" assert=
+  dup "cfg" "port" table-get 8080 "Lua-built integer field" assert=
+  dup "cfg" "debug" table-get "false entry reads back, not treated as missing" assert-false
+
+  \ missing keys: table-get raises, table-get-or defaults
+  dup "cfg" "absent" [ table-get ] curry curry curry
+  lua-error: "table-get on a missing key raises ELuaError" assert-error-type
+  dup "cfg" "absent" 7 table-get-or 7 "table-get-or default on a missing key" assert=
+  dup "cfg" "port" 7 table-get-or 8080 "table-get-or value when present" assert=
+  dup "cfg" "debug" t table-get-or "table-get-or returns a false entry, not the default" assert-false
+
+  \ raw sequence length
+  dup "seq" new-table
+  dup "seq" 1 10 table-set
+  dup "seq" 2 20 table-set
+  dup "seq" 3 30 table-set
+  dup "seq" table-len 3 "table-len counts the sequence part" assert=
+
+  \ iteration visits every entry; sort the collected entries since Lua's
+  \ traversal order is unspecified
+  V{ } over "cfg" 2 pick-n
+  [ [ [ >string "=" #append ] dip >string #append ] dip swap #push! drop ] curry
+  table-each
+  [ ] #sort-by "," #join
+  "debug=f,host=localhost,port=8080" "table-each visits every entry" assert=
+
+  \ iterating an empty table runs the quotation zero times
+  dup "empty" new-table
+  V{ } over "empty" 2 pick-n
+  [ [ 2drop ] dip "x" #push! drop ] curry
+  table-each
+  #len 0 "table-each over an empty table runs zero entries" assert=
+
+  \ error paths: non-table global, undefined global, bad key type, and a
+  \ non-scalar value under iteration
+  dup "notatable = 5" eval
+  dup "notatable" "x" [ table-get ] curry curry curry
+  lua-error: "table word on a non-table global raises" assert-error-type
+  dup "undefinedglobal" "x" [ table-get ] curry curry curry
+  lua-error: "table word on an undefined global raises" assert-error-type
+  dup "cfg" 1.5 "v" [ table-set ] curry curry curry curry
+  "a non-string, non-fixnum key raises" assert-error
+  dup "nested = { sub = {} }" eval
+  dup "nested" [ 2drop ] [ table-each ] curry curry curry
+  lua-error: "table-each over a non-scalar value raises" assert-error-type
+
+  \ a bad-key type error names the actual key, not its type-name string
+  dup "cfg" 1.5 [ table-get ] curry curry curry (caught-message)
+  "expected string or fixnum, got float" "table-get bad-key error names the key type" assert=
+  dup "cfg" 2.5 "v" [ table-set ] curry curry curry curry (caught-message)
+  "expected string or fixnum, got float" "table-set bad-key error names the key type" assert=
+
+  \ every error path above restored the Lua value stack it had pushed onto
+  dup unmake-lua-state (gettop) 0 "Lua stack balanced after the error paths" assert=
+
+  \ the state stays usable after the error paths above
+  dup "cfg" "port" table-get 8080 "state usable after errors" assert=
+  drop
+] using-lua

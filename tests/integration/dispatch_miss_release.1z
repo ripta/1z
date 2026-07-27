@@ -6,8 +6,7 @@
 \ Each path is driven repeatedly so one leaked operand per call accumulates,
 \ then asserted once for the error itself. The repetition is written inline
 \ rather than through a helper word: a word body that passes its own quotation
-\ parameter to `times` miscompiles under `--compile=eager`
-\ (spec/bugs/20260726-eager-loop-combinator-parameter-quotation.md).
+\ parameter to `times` miscompiles under `--compile=eager`, a known open bug.
 
 use "testing" ;
 

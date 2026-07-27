@@ -1,0 +1,29 @@
+Stack: [ ]
+Stack: [ ]
+=== lua raw table access ===
+Stack: [ ]
+PASS: fixnum value by string key round-trips
+PASS: float value round-trips
+PASS: string value round-trips
+PASS: boolean true value round-trips
+PASS: value by integer index round-trips
+PASS: 1z write visible to Lua
+PASS: Lua-built string field
+PASS: Lua-built integer field
+PASS: false entry reads back, not treated as missing
+PASS: table-get on a missing key raises ELuaError
+PASS: table-get-or default on a missing key
+PASS: table-get-or value when present
+PASS: table-get-or returns a false entry, not the default
+PASS: table-len counts the sequence part
+PASS: table-each visits every entry
+PASS: table-each over an empty table runs zero entries
+PASS: table word on a non-table global raises
+PASS: table word on an undefined global raises
+PASS: a non-string, non-fixnum key raises
+PASS: table-each over a non-scalar value raises
+PASS: table-get bad-key error names the key type
+PASS: table-set bad-key error names the key type
+PASS: Lua stack balanced after the error paths
+PASS: state usable after errors
+Stack: [ ]

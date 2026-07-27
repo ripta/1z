@@ -47,8 +47,8 @@ use "os/path" ;
 
 \\ Bind the Lua C API and the lua_close function, all resolved once at load.
 \\
-\\ lua_pcall, lua_tonumber, lua_tointeger, lua_tostring, and lua_pop are macros;
-\\ the exported targets are bound here and the macros recomposed in 1z.
+\\ lua_pcall, lua_tonumber, lua_tointeger, lua_tostring, lua_pop, and lua_newtable
+\\ are macros; the exported targets are bound here and the macros recomposed in 1z.
 \\
 \\ luaL_newstate raises on a null return via the errno null sentinel.
 \\
@@ -75,6 +75,16 @@ use "os/path" ;
   (toboolean):  "lua_toboolean" ffi{ ptr i32 -> i32 }
   (gettop):     "lua_gettop" ffi{ ptr -> i32 }
   (settop):     "lua_settop" ffi{ ptr i32 -> void }
+  (create-table): "lua_createtable" ffi{ ptr i32 i32 -> void }
+  (get-table):    "lua_gettable" ffi{ ptr i32 -> i32 }
+  (set-table):    "lua_settable" ffi{ ptr i32 -> void }
+  (get-i):        "lua_geti" ffi{ ptr i32 i64 -> i32 }
+  (set-i):        "lua_seti" ffi{ ptr i32 i64 -> void }
+  (get-field):    "lua_getfield" ffi{ ptr i32 cstring -> i32 }
+  (set-field):    "lua_setfield" ffi{ ptr i32 cstring -> void }
+  (next):       "lua_next" ffi{ ptr i32 -> i32 }
+  (raw-len):    "lua_rawlen" ffi{ ptr i32 -> usize }
+  (is-integer): "lua_isinteger" ffi{ ptr i32 -> i32 }
 } call
 over "lua_close" ffi{ ptr -> void } bound-symbol [ ] curry
 "(lua-close-fn)" swap @set!
@@ -202,3 +212,160 @@ get-global>string: ( lua: lua-state name: string -- string ) [ [ unmake-lua-stat
 
 \\ Read a Lua global as a boolean.
 get-global>boolean: ( lua: lua-state name: string -- boolean ) [ [ unmake-lua-state ] dip [ (to-boolean) ] (with-global) ] ;
+
+\ Raw table access
+\
+\ Tables are reached through named Lua globals. Each word looks the global up,
+\ works on it with the Lua stack balanced, and pops what it pushed. Keys are
+\ strings for fields or fixnums for indices; values are the scalar set that
+\ (push-value) and (to-value) cover. A nested table stays reachable by aliasing
+\ it to a global with eval.
+
+\\ Run quot, and if it raises, restore the Lua stack top captured on entry
+\\ before rethrowing. This keeps an error thrown mid-word, after values are
+\\ already pushed, from leaking Lua stack slots on a long-lived state.
+(lua-guard): ( ..a state quot: ( ..a -- ..b ) -- ..b ) [
+  swap dup (gettop)
+  [ (settop) throw ] curry curry
+  recover
+] ;
+
+\\ The lua_type tag for nil.
+LUA_TNIL: 0 ;
+
+\\ The lua_type tag for tables.
+LUA_TTABLE: 5 ;
+
+\\ Read the Lua value at idx as its natural 1z scalar: boolean, fixnum for an
+\\ integer number, float for any other number, or string. Any other Lua type
+\\ raises ELuaError carrying the type tag.
+\\
+\\ Number keys during lua_next traversal must be read here, never via
+\\ (to-lstring): lua_tolstring converts a number in place and corrupts the
+\\ traversal.
+(to-value): ( state idx -- value ) [
+  2dup (type) {
+    { 1 [ (to-boolean) ] }
+    { 3 [ 2dup (is-integer) 1 = [ (to-integer) ] [ (to-number) ] if ] }
+    { 4 [ (to-lstring) ] }
+    [ [ 2drop ] dip "expected a boolean, number, or string Lua value" ELuaError make-error throw ]
+  } case
+] ;
+
+\\ Push the global named name onto the Lua stack, requiring it to be a table.
+\\ Any other type, including an undefined global, is popped back off and raises
+\\ ELuaError naming the global. The check also keeps a non-table from reaching
+\\ the table C calls, whose failure mode is an unprotected Lua panic.
+(push-table): ( state name -- state ) [
+  2dup (get-global) LUA_TTABLE = [ drop ] [
+    over 1 (pop) nip
+    dup "global " swap #append " is not a table" #append
+    ELuaError make-error throw
+  ] if
+] ;
+
+\\ Push the value at key from the table on top of the Lua stack, returning the
+\\ pushed value's type tag. A string key routes to lua_getfield, a fixnum key
+\\ to lua_geti.
+(get-key): ( state key -- state tag ) [
+  over swap dup type-name {
+    { "string" [ -1 swap (get-field) ] }
+    { "fixnum" [ -1 swap (get-i) ] }
+    [ drop "string or fixnum" throw-type-error ]
+  } case
+] ;
+
+\\ Store the value on top of the Lua stack at key in the table just below it,
+\\ popping the value. A string key routes to lua_setfield, a fixnum key to
+\\ lua_seti.
+(set-key): ( state key -- ) [
+  dup type-name {
+    { "string" [ -2 swap (set-field) ] }
+    { "fixnum" [ -2 swap (set-i) ] }
+    [ drop "string or fixnum" throw-type-error ]
+  } case
+] ;
+
+\\ Look key up in the table global named name: option:some of the converted
+\\ scalar, or option:none for a nil entry. Missing and explicitly-nil entries
+\\ are indistinguishable in Lua.
+(table-lookup): ( state name key -- opt ) [
+  [ (push-table) ] dip (get-key)
+  LUA_TNIL = [
+    2 (pop) option:none
+  ] [
+    dup -1 (to-value) swap 2 (pop) >option:some
+  ] if
+] ;
+
+\\ One lua_next step per call: with the table at absolute index tidx and the
+\\ previous key on top of the Lua stack, visit the next entry with quot and
+\\ recurse; once the table is exhausted, pop it.
+(each-loop): ( state quot tidx -- ) [
+  2 pick-n over (next) 0 = [
+    2drop 1 (pop)
+  ] [
+    2 pick-n -2 (to-value)
+    3 pick-n -1 (to-value)
+    3 pick-n call
+    2 pick-n 1 (pop)
+    (each-loop)
+  ] if
+] ;
+
+\\ Create a fresh empty table and bind it to the named Lua global.
+new-table: ( lua: lua-state name: string -- ) [
+  [ unmake-lua-state ] dip over 0 0 (create-table) (set-global)
+] ;
+
+\\ Set key in the table global named name to a scalar value: a fixnum, float,
+\\ string, or boolean.
+table-set: ( lua: lua-state name: string key value -- ) [
+  [ [ unmake-lua-state ] dip ] 2dip
+  3 pick-n [
+    [ (push-table) ] 2dip
+    2 pick-n swap (push-value)
+    over swap (set-key)
+    1 (pop)
+  ] (lua-guard)
+] ;
+
+\\ Read key from the table global named name as its natural 1z scalar type.
+\\ A nil entry, which is also how a missing key reads, raises ELuaError; use
+\\ table-get-or for a default instead.
+table-get: ( lua: lua-state name: string key -- value ) [
+  [ unmake-lua-state ] 2dip
+  dup [ 2 pick-n [ (table-lookup) ] (lua-guard) ] dip
+  swap dup option:none? [
+    drop dup >string [ "key not found: " ] dip #append
+    ELuaError make-error throw
+  ] [
+    nip option:some>
+  ] if
+] ;
+
+\\ Read key from the table global named name, returning default for a nil
+\\ entry.
+table-get-or: ( lua: lua-state name: string key default -- value ) [
+  [ [ unmake-lua-state ] 2dip 2 pick-n [ (table-lookup) ] (lua-guard) ] dip
+  swap dup option:none? [ drop ] [ nip option:some> ] if
+] ;
+
+\\ Raw sequence length of the table global named name via lua_rawlen: the
+\\ count of consecutive integer keys from 1, ignoring any __len metamethod.
+table-len: ( lua: lua-state name: string -- fixnum ) [
+  [ unmake-lua-state ] dip (push-table)
+  dup -1 (raw-len) swap 1 (pop)
+] ;
+
+\\ Call quot with each key/value entry of the table global named name, both
+\\ converted to 1z scalars. Iteration order is unspecified, per Lua semantics.
+table-each: ( lua: lua-state name: string quot: ( key value -- ) -- ) [
+  [ [ unmake-lua-state ] dip ] dip
+  2 pick-n [
+    [ (push-table) ] dip
+    over (gettop)
+    2 pick-n (push-nil)
+    (each-loop)
+  ] (lua-guard)
+] ;
