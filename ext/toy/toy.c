@@ -1,4 +1,5 @@
 #include "toy.h"
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -162,6 +163,38 @@ void toy_null_string_out(const char **out) {
 
 int toy_apply2(int a, int b, int (*fn)(int, int)) {
     return fn(a, b);
+}
+
+/* A setjmp-protected caller plus error hooks, exercising the ffi-callback
+ * error-hook boundary contract the way a longjmp-based C API like Lua would. */
+static jmp_buf toy_protected_env;
+
+int toy_apply2_protected(int a, int b, int (*fn)(int, int)) {
+    if (setjmp(toy_protected_env)) return -999;
+    return fn(a, b);
+}
+
+int toy_apply_ptr(void *p, int (*fn)(void *)) {
+    return fn(p);
+}
+
+void toy_error_hook_longjmp(void *arg0, void *userdata, const char *message) {
+    (void)arg0;
+    if (userdata) {
+        strncpy((char *)userdata, message, 63);
+        ((char *)userdata)[63] = '\0';
+    }
+    longjmp(toy_protected_env, 1);
+}
+
+void toy_error_hook_note(void *arg0, void *userdata, const char *message) {
+    if (userdata) {
+        char *buf = (char *)userdata;
+        buf[0] = 'H';
+        strncpy(buf + 1, message, 62);
+        buf[63] = '\0';
+    }
+    if (arg0) ((char *)arg0)[0] = 'A';
 }
 
 void toy_sort_ints(int *arr, int len, int (*cmp)(const void *, const void *)) {

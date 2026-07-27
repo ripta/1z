@@ -1,0 +1,20 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: longjmp hook re-raises the original error type
+PASS: the hook received the thrown message
+PASS: interpreter stack intact after the longjmp
+PASS: the protected caller still works after the abort
+Stack: [ ]
+PASS: returning hook still re-raises via the courier
+PASS: note hook recorded its marker and the message
+PASS: a hooked callback still returns normally
+PASS: the hook is not invoked on success
+Stack: [ ]
+PASS: the hook received the callback's first ptr argument
+Stack: [ ]
+PASS: a non-ffi-fn hook is rejected
+PASS: userdata without a hook is rejected
+PASS: t is not a valid hook
+PASS: t is not a valid userdata
+Stack: [ ]

@@ -13,6 +13,10 @@ pub const primitives = [_]Primitive{
 };
 
 /// resource-close ( resource -- )
+///
+/// An FFI close function may invoke a 1z callback whose error lands in the callback courier; drain
+/// it here so it surfaces now instead of leaking into the next unrelated ffi-call. The resource
+/// still closes first.
 fn nativeResourceClose(ctx: *Context) anyerror!void {
     const r = try helpers.popResource(ctx);
     if (r.closed) return;
@@ -25,6 +29,15 @@ fn nativeResourceClose(ctx: *Context) anyerror!void {
     }
     r.ptr = null;
     r.closed = true;
+
+    if (ctx.callback_error) |err| {
+        ctx.callback_error = null;
+        if (ctx.callback_error_context) |ectx| {
+            helpers.setErrorContext(ctx, "{s}", .{ectx});
+            ctx.callback_error_context = null;
+        }
+        return err;
+    }
 }
 
 /// resource? ( val -- bool )
@@ -45,4 +58,24 @@ fn nativeTestResource(ctx: *Context) anyerror!void {
         .close_fn = .none,
     };
     try ctx.stack.push(.{ .resource = r });
+}
+
+test "resource-close drains a callback error left by the close call" {
+    const std = @import("std");
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var payload: u8 = 0;
+    var r = Resource{
+        .type_name = "drain-test",
+        .ptr = @ptrCast(&payload),
+        .closed = false,
+        .close_fn = .none,
+    };
+    try ctx.stack.push(.{ .resource = &r });
+    ctx.callback_error = error.UserThrown;
+
+    try std.testing.expectError(error.UserThrown, nativeResourceClose(&ctx));
+    try std.testing.expect(ctx.callback_error == null);
+    try std.testing.expect(r.closed);
 }

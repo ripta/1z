@@ -81,7 +81,26 @@ bind-close: ( resource ffi-fn -- ) [ native.bind-close ] ;
 \\ Create a C-callable function pointer from a 1z quotation and FFI signature.
 \\ The returned resource can be passed as a ptr:ffi-callback argument to ffi-call.
 \\ Close the resource when done to free the closure memory.
-ffi-callback: ( quotation sig -- ffi-callback ) [ native.ffi-callback ] ;
+ffi-callback: ( quotation sig -- ffi-callback ) [ f f native.ffi-callback ] ;
+
+\\ Like ffi-callback, but with an error hook bound at creation.
+\\
+\\ When the callback fails for any reason -- the quotation throws, an argument cannot be
+\\ unmarshalled, or the result cannot be marshalled -- the trampoline invokes hook from its
+\\ boundary frame instead of only stashing the error.
+\\
+\\ `hook` is an `ffi-fn` symbol with the C signature:
+\\
+\\    void hook(void *arg0, void *userdata, const char *message)
+\\
+\\ arg0 is the callback's first argument when its declared type is ptr, else NULL.
+\\ userdata is a resource whose pointer is passed through, or f for NULL.
+\\ message is the 1z error message.
+\\
+\\ The Zig stack has fully unwound when the hook runs, so the hook may raise the C library's own
+\\ non-local error, such as lua_error's longjmp. The error courier is set before the hook runs, so
+\\ the original 1z error is still re-raised when control returns to the driving ffi-call.
+ffi-callback-with-error-hook: ( quotation sig hook userdata -- ffi-callback ) [ native.ffi-callback ] ;
 
 \\ Extract the raw buffer pointer and length from a byte array.
 \\ The resource wraps the byte array's internal buffer; it becomes

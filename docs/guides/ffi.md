@@ -327,6 +327,30 @@ the quotation with the arguments on the stack.
 Callbacks are resources -- close them with `resource-close` when done. If
 the quotation throws, the error bubbles back through `ffi-call`.
 
+### Error hooks
+
+By default a failing callback stashes its error and returns normally to C;
+the driving `ffi-call` re-raises it afterwards. For a C library that keeps
+running after the callback returns -- an interpreter like Lua -- that is too
+late. `ffi-callback-with-error-hook` binds a C error hook at creation:
+
+```
+[ ... ] ffi{ ptr:lua-state -> i32 } hook-fn userdata ffi-callback-with-error-hook
+```
+
+`hook-fn` is an `ffi-fn` from `lib-symbol` with the C signature
+`void hook(void *arg0, void *userdata, const char *message)`. When the
+callback fails for any reason -- the quotation throws, an argument cannot be
+unmarshalled, or the result cannot be marshalled -- the hook is invoked from
+the trampoline's boundary frame: `arg0` is the callback's first argument when
+its declared type is `ptr` (else NULL), `userdata` is the bound resource's
+pointer (`f` binds NULL), and `message` is the 1z error message.
+
+The Zig stack has fully unwound when the hook runs, so the hook may raise the
+C library's own non-local error, such as `lua_error`'s `longjmp`. The error
+courier is set before the hook runs, so the original 1z error is still
+re-raised when control returns to the driving `ffi-call`.
+
 ## Wrapping a C Library
 
 The recommended pattern for a clean API: load the library, define bindings

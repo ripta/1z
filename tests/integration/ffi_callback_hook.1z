@@ -1,0 +1,105 @@
+use "testing" ;
+use "ffi" ;
+
+toy-lib-ext: ( -- ext ) [
+  sys-info "os" @get "macos" = [ ".dylib" ] [ ".so" ] if
+] ;
+
+toy-lib-path: ( -- path ) [
+  environ "PWD" @get "/zig-out/ext/libtoy" #append toy-lib-ext #append
+] ;
+
+\\ Read the C string a hook wrote into a buffer back as a byte-array.
+hook-message: ( lib bufptr -- bytes ) [
+  swap "toy_strlen" ffi{ ptr -> i32 } bound-symbol
+  over swap [ ffi-call ] curry curry call
+  ffi-ptr+len>bytes
+] ;
+
+\\ --- A longjmp hook aborts the protected C call at the boundary ---
+
+[
+  lib: toy-lib-path lib-open ;
+  apply-prot: lib "toy_apply2_protected" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol ;
+  hook:   lib "toy_error_hook_longjmp" lib-symbol ;
+  buf:    64 bytes-alloc ;
+  bufptr: buf bytes>ffi-ptr nip ;
+
+  cb: [ 2drop f "kaboom" test-error: make-error throw ] ffi{ i32 i32 -> i32 }
+  hook bufptr ffi-callback-with-error-hook ;
+
+  [ 3 4 cb apply-prot ffi-call ]
+  [ error-type: @get test-error: = "longjmp hook re-raises the original error type" assert-true ]
+  recover
+
+  lib bufptr hook-message "kaboom" >bytes "the hook received the thrown message" assert=
+
+  111 222 + 333 "interpreter stack intact after the longjmp" assert=
+
+  ok-cb: [ + ] ffi{ i32 i32 -> i32 } ffi-callback ;
+  3 4 ok-cb apply-prot ffi-call 7 "the protected caller still works after the abort" assert=
+] call
+
+\\ --- A hook that returns normally falls through to the courier path ---
+
+[
+  lib:    toy-lib-path lib-open ;
+  apply2: lib "toy_apply2" ffi{ i32 i32 ptr:ffi-callback -> i32 } bound-symbol ;
+  hook:   lib "toy_error_hook_note" lib-symbol ;
+  buf:    64 bytes-alloc ;
+  bufptr: buf bytes>ffi-ptr nip ;
+
+  cb: [ 2drop f "note me" test-error: make-error throw ] ffi{ i32 i32 -> i32 }
+  hook bufptr ffi-callback-with-error-hook ;
+
+  [ 5 6 cb apply2 ffi-call ]
+  [ error-type: @get test-error: = "returning hook still re-raises via the courier" assert-true ]
+  recover
+
+  lib bufptr hook-message "Hnote me" >bytes "note hook recorded its marker and the message" assert=
+
+  \ a hooked callback that does not throw never invokes the hook
+  buf2:    64 bytes-alloc ;
+  bufptr2: buf2 bytes>ffi-ptr nip ;
+  ok-cb:   [ + ] ffi{ i32 i32 -> i32 } hook bufptr2 ffi-callback-with-error-hook ;
+  3 9 ok-cb apply2 ffi-call 12 "a hooked callback still returns normally" assert=
+  buf2 0 #nth 0 "the hook is not invoked on success" assert=
+] call
+
+\\ --- The hook receives the callback's first ptr argument as arg0 ---
+
+[
+  lib: toy-lib-path lib-open ;
+  apply-ptr: lib "toy_apply_ptr" ffi{ ptr ptr:ffi-callback -> i32 } bound-symbol ;
+  hook:      lib "toy_error_hook_note" lib-symbol ;
+  arg-buf:   8 bytes-alloc ;
+  argptr:    arg-buf bytes>ffi-ptr nip ;
+
+  cb: [ drop f "argh" test-error: make-error throw ] ffi{ ptr -> i32 }
+  hook f ffi-callback-with-error-hook ;
+
+  [ argptr cb apply-ptr ffi-call ] [ drop ] recover
+
+  \ 65 is 'A', the note hook's arg0 marker; userdata was f, so only arg0 is written
+  arg-buf 0 #nth 65 "the hook received the callback's first ptr argument" assert=
+] call
+
+\\ --- Registration-time validation ---
+
+[
+  lib:    toy-lib-path lib-open ;
+  buf:    8 bytes-alloc ;
+  bufptr: buf bytes>ffi-ptr nip ;
+
+  [ [ + ] ffi{ i32 i32 -> i32 } 42 f ffi-callback-with-error-hook ]
+  "a non-ffi-fn hook is rejected" assert-error
+
+  [ [ + ] ffi{ i32 i32 -> i32 } f bufptr ffi-callback-with-error-hook ]
+  "userdata without a hook is rejected" assert-error
+
+  [ [ + ] ffi{ i32 i32 -> i32 } t f ffi-callback-with-error-hook ]
+  "t is not a valid hook" assert-error
+
+  [ [ + ] ffi{ i32 i32 -> i32 } f t ffi-callback-with-error-hook ]
+  "t is not a valid userdata" assert-error
+] call

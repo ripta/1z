@@ -48,6 +48,11 @@ void toy_null_string_out(const char **out);
 int toy_apply2(int a, int b, int (*fn)(int, int));
 void toy_sort_ints(int *arr, int len, int (*cmp)(const void *, const void *));
 
+int toy_apply2_protected(int a, int b, int (*fn)(int, int));
+int toy_apply_ptr(void *p, int (*fn)(void *));
+void toy_error_hook_longjmp(void *arg0, void *userdata, const char *message);
+void toy_error_hook_note(void *arg0, void *userdata, const char *message);
+
 typedef struct { float x; float y; } toy_vec2;
 float toy_vec2_length_sq(toy_vec2 v);
 toy_vec2 toy_vec2_add(toy_vec2 a, toy_vec2 b);

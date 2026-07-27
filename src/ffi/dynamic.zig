@@ -1601,6 +1601,126 @@ test "errnoName normalizes known and unknown errnos" {
     try std.testing.expectEqualStrings("e31337", unknown);
 }
 
+const TestHookState = struct {
+    fired: bool = false,
+    arg0: ?*anyopaque = null,
+    userdata: ?*anyopaque = null,
+    message: [64]u8 = [_]u8{0} ** 64,
+    message_len: usize = 0,
+    courier_set_before_hook: bool = false,
+    ctx: ?*Context = null,
+};
+var test_hook_state: TestHookState = .{};
+
+fn testErrorHook(arg0: ?*anyopaque, userdata: ?*anyopaque, message: [*:0]const u8) callconv(.c) void {
+    test_hook_state.fired = true;
+    test_hook_state.arg0 = arg0;
+    test_hook_state.userdata = userdata;
+    const span = std.mem.span(message);
+    const n = @min(span.len, test_hook_state.message.len);
+    @memcpy(test_hook_state.message[0..n], span[0..n]);
+    test_hook_state.message_len = n;
+    if (test_hook_state.ctx) |c| test_hook_state.courier_set_before_hook = c.callback_error != null;
+}
+
+fn testCallbackUserData(
+    ctx: *Context,
+    sig: *const FfiSignature,
+    hook: ?ErrorHookFn,
+    userdata: ?*anyopaque,
+) CallbackUserData {
+    return .{
+        .ctx = ctx,
+        .quotation = undefined,
+        .sig = sig,
+        .cif = undefined,
+        .arg_types = undefined,
+        .closure = undefined,
+        .code_ptr = undefined,
+        .error_hook = hook,
+        .error_hook_userdata = userdata,
+    };
+}
+
+test "callbackFail invokes the error hook with the courier already set" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var marker: u8 = 0;
+    test_hook_state = .{ .ctx = &ctx };
+
+    const sig = FfiSignature{ .param_types = &.{}, .return_type = .{ .tag = .i32 } };
+    var ud = testCallbackUserData(&ctx, &sig, testErrorHook, @ptrCast(&marker));
+
+    var ret_buf = [_]u8{0xFF} ** 8;
+    ctx.pending_error_message = "callback exploded";
+    var no_args = [_]?*anyopaque{};
+    callbackFail(&ud, &no_args, @ptrCast(&ret_buf), error.UserThrown, true);
+
+    try std.testing.expect(test_hook_state.fired);
+    try std.testing.expect(test_hook_state.courier_set_before_hook);
+    try std.testing.expect(test_hook_state.arg0 == null);
+    try std.testing.expect(test_hook_state.userdata == @as(?*anyopaque, @ptrCast(&marker)));
+    try std.testing.expectEqualStrings("callback exploded", test_hook_state.message[0..test_hook_state.message_len]);
+    try std.testing.expect(ctx.callback_error != null);
+    try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 8), &ret_buf);
+    ctx.pending_error_message = null;
+    ctx.callback_error = null;
+    ctx.callback_error_context = null;
+}
+
+test "callbackFail passes the first ptr argument as arg0" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    test_hook_state = .{ .ctx = &ctx };
+
+    var target: u32 = 0;
+    const params = [_]FfiType{.{ .tag = .ptr }};
+    const sig = FfiSignature{ .param_types = &params, .return_type = .{ .tag = .void_type } };
+    var ud = testCallbackUserData(&ctx, &sig, testErrorHook, null);
+
+    var arg0_slot: ?*anyopaque = @ptrCast(&target);
+    var args = [_]?*anyopaque{@ptrCast(&arg0_slot)};
+    callbackFail(&ud, &args, null, error.FFITypeMismatch, false);
+
+    try std.testing.expect(test_hook_state.fired);
+    try std.testing.expect(test_hook_state.arg0 == @as(?*anyopaque, @ptrCast(&target)));
+    try std.testing.expectEqualStrings("FFITypeMismatch", test_hook_state.message[0..test_hook_state.message_len]);
+    ctx.callback_error = null;
+}
+
+test "callbackFail without a hook keeps the stash-only path" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    test_hook_state = .{};
+
+    const sig = FfiSignature{ .param_types = &.{}, .return_type = .{ .tag = .i32 } };
+    var ud = testCallbackUserData(&ctx, &sig, null, null);
+
+    var ret_buf = [_]u8{0xFF} ** 8;
+    var no_args = [_]?*anyopaque{};
+    callbackFail(&ud, &no_args, @ptrCast(&ret_buf), error.StackUnderflow, false);
+
+    try std.testing.expect(!test_hook_state.fired);
+    try std.testing.expect(ctx.callback_error != null);
+    try std.testing.expectEqualSlices(u8, &([_]u8{0} ** 8), &ret_buf);
+    ctx.callback_error = null;
+}
+
+test "callbackErrorMessage prefers the thrown error's message" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var thrown = value_mod.ErrorObject{ .error_type = "test-error", .message = "thrown boom" };
+    ctx.thrown_error = &thrown;
+    const msg = callbackErrorMessage(&ctx, error.UserThrown, true);
+    try std.testing.expectEqualStrings("thrown boom", std.mem.span(msg));
+    ctx.thrown_error = null;
+
+    const name_msg = callbackErrorMessage(&ctx, error.FFITypeMismatch, false);
+    try std.testing.expectEqualStrings("FFITypeMismatch", std.mem.span(name_msg));
+}
+
 /// Call a foreign close function via libffi with the signature (ptr -> void).
 pub fn ffiCloseCall(ffi_close: *const FfiCloseFn, ptr: *anyopaque) void {
     var arg_slot = ArgSlot{ .ptr_val = ptr };
@@ -1662,6 +1782,13 @@ fn nativeBindClose(ctx: *Context) anyerror!void {
     resource.close_fn = .{ .ffi = ffi_close };
 }
 
+/// Error-hook ABI: (arg0, userdata, message). arg0 is the callback's first C argument when its
+/// declared type is ptr, else null; message is a NUL-terminated copy of the 1z error message.
+///
+/// The hook runs from the trampoline's boundary frame after the Zig stack has unwound, so it may
+/// perform a non-local exit such as lua_error's longjmp.
+pub const ErrorHookFn = *const fn (?*anyopaque, ?*anyopaque, [*:0]const u8) callconv(.c) void;
+
 const CallbackUserData = struct {
     ctx: *Context,
     quotation: Quotation,
@@ -1670,7 +1797,57 @@ const CallbackUserData = struct {
     arg_types: [][*c]c_ffi.ffi_type,
     closure: *c_ffi.ffi_closure,
     code_ptr: *anyopaque,
+    error_hook: ?ErrorHookFn,
+    error_hook_userdata: ?*anyopaque,
 };
+
+/// The message handed to an error hook: the thrown 1z error's message when the quotation threw
+/// one, else the pending error context, else the Zig error name.
+///
+/// The static fallback covers allocation failure, since the trampoline cannot propagate an error
+/// to its C caller.
+fn callbackErrorMessage(ctx: *Context, err: anyerror, quotation_throw: bool) [*:0]const u8 {
+    const alloc = ctx.arena.allocator();
+    if (quotation_throw) {
+        if (err == error.UserThrown) {
+            if (ctx.thrown_error) |thrown| {
+                return alloc.dupeZ(u8, thrown.message) catch "callback error";
+            }
+        }
+        if (ctx.pending_error_message) |msg| {
+            return alloc.dupeZ(u8, msg) catch "callback error";
+        }
+    }
+    return alloc.dupeZ(u8, @errorName(err)) catch "callback error";
+}
+
+/// Shared failure path for every trampoline catch site: stash the courier so the driver can
+/// re-raise the original error, zero the C return slot, then invoke the error hook when one is
+/// bound.
+///
+/// The courier is set before the hook because the hook may never return.
+fn callbackFail(
+    ud: *CallbackUserData,
+    args: [*c]?*anyopaque,
+    ret: ?*anyopaque,
+    err: anyerror,
+    quotation_throw: bool,
+) void {
+    const ctx = ud.ctx;
+    ctx.callback_error = err;
+    if (quotation_throw) ctx.callback_error_context = ctx.pending_error_message;
+    if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
+
+    if (ud.error_hook) |hook| {
+        const arg0: ?*anyopaque = blk: {
+            if (ud.sig.param_types.len == 0) break :blk null;
+            if (ud.sig.param_types[0].tag != .ptr) break :blk null;
+            const val: *const ?*anyopaque = @ptrCast(@alignCast(args[0].?));
+            break :blk val.*;
+        };
+        hook(arg0, ud.error_hook_userdata, callbackErrorMessage(ctx, err, quotation_throw));
+    }
+}
 
 fn callbackTrampoline(
     _: [*c]c_ffi.ffi_cif,
@@ -1684,29 +1861,20 @@ fn callbackTrampoline(
     for (ud.sig.param_types, 0..) |pt, i| {
         const arg_ptr = args[i].?;
         unmarshalArg(ctx, pt, arg_ptr) catch |err| {
-            if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
-            ctx.callback_error = err;
-            return;
+            return callbackFail(ud, args, ret, err, false);
         };
     }
 
     ctx.executeQuotationWithFrame(ud.quotation) catch |err| {
-        if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
-        ctx.callback_error = err;
-        ctx.callback_error_context = ctx.pending_error_message;
-        return;
+        return callbackFail(ud, args, ret, err, true);
     };
 
     if (ud.sig.return_type.tag != .void_type) {
         const result_val = ctx.stack.pop() catch {
-            if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
-            ctx.callback_error = error.StackUnderflow;
-            return;
+            return callbackFail(ud, args, ret, error.StackUnderflow, false);
         };
         marshalCallbackReturn(ret, ud.sig.return_type, result_val) catch |err| {
-            if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
-            ctx.callback_error = err;
-            return;
+            return callbackFail(ud, args, ret, err, false);
         };
     }
 }
@@ -1822,6 +1990,10 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
     if (is_freestanding) return helpers.throwBuildUnsupported(ctx, "ffi-callback");
     const alloc = ctx.arena.allocator();
 
+    const userdata_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(userdata_val);
+    const hook_val = try ctx.stack.pop();
+    defer container_backing.releaseValue(hook_val);
     const sig_val = try ctx.stack.pop();
     // The signature struct carries the params array; everything read out of
     // it is parsed into the native FfiSignature before this release runs.
@@ -1832,6 +2004,44 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
         helpers.setTypeMismatchError(ctx, "quotation", quot_val);
         return error.TypeMismatch;
     };
+
+    var error_hook: ?ErrorHookFn = null;
+    switch (hook_val) {
+        .boolean => |b| if (b) {
+            helpers.setTypeMismatchError(ctx, "ffi-fn or f for error hook", hook_val);
+            return error.TypeMismatch;
+        },
+        .resource => |res| {
+            if (!std.mem.eql(u8, res.type_name, "ffi-fn") or res.closed or res.ptr == null) {
+                helpers.setErrorContext(ctx, "error hook must be an open ffi-fn symbol", .{});
+                return error.FFITypeMismatch;
+            }
+            error_hook = @ptrCast(@alignCast(res.ptr.?));
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "ffi-fn or f for error hook", hook_val);
+            return error.TypeMismatch;
+        },
+    }
+
+    var error_hook_userdata: ?*anyopaque = null;
+    switch (userdata_val) {
+        .boolean => |b| if (b) {
+            helpers.setTypeMismatchError(ctx, "resource or f for error hook userdata", userdata_val);
+            return error.TypeMismatch;
+        },
+        .resource => |res| {
+            if (error_hook == null) {
+                helpers.setErrorContext(ctx, "error hook userdata requires an error hook", .{});
+                return error.FFITypeMismatch;
+            }
+            error_hook_userdata = res.ptr;
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "resource or f for error hook userdata", userdata_val);
+            return error.TypeMismatch;
+        },
+    }
 
     const si = switch (sig_val) {
         .struct_instance => |s| s,
@@ -1933,6 +2143,8 @@ fn nativeFfiCallback(ctx: *Context) anyerror!void {
         .arg_types = arg_types,
         .closure = undefined,
         .code_ptr = undefined,
+        .error_hook = error_hook,
+        .error_hook_userdata = error_hook_userdata,
     };
 
     const prep_status = c_ffi.ffi_prep_cif(
