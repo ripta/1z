@@ -1,7 +1,10 @@
 Stack: [ ]
 Stack: [ ]
 Stack: [ ]
-PASS: longjmp hook re-raises the original error type
+PASS: the longjmp aborts the protected C call
+PASS: take-callback-error delivers the original error type
+PASS: the taken error preserves the thrown message
+PASS: a second take yields f
 PASS: the hook received the thrown message
 PASS: interpreter stack intact after the longjmp
 PASS: the protected caller still works after the abort

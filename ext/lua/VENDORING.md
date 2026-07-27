@@ -42,6 +42,8 @@ MIT obligation to retain the copyright and permission notice.
 - `VENDORING.md` -- this file.
 - `LICENSE` -- derived from `src/lua.h` by `vendor.sh`.
 - `vendor.sh` -- the vendoring script.
+- `onez_shim.c` -- the ffi-callback error hook (`onez_lua_error_hook`) compiled
+  into `liblua5.4` alongside the vendored sources.
 
 ## Re-vendoring or bumping the version
 

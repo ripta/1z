@@ -98,9 +98,21 @@ ffi-callback: ( quotation sig -- ffi-callback ) [ f f native.ffi-callback ] ;
 \\ message is the 1z error message.
 \\
 \\ The Zig stack has fully unwound when the hook runs, so the hook may raise the C library's own
-\\ non-local error, such as lua_error's longjmp. The error courier is set before the hook runs, so
-\\ the original 1z error is still re-raised when control returns to the driving ffi-call.
+\\ non-local error, such as lua_error's longjmp. The error courier is set before the hook runs.
+\\
+\\ A hook that returns falls through to the stash path: the original 1z error is re-raised when
+\\ control returns to the driving ffi-call. A hook that never returns (a longjmp) hands the error
+\\ to the C library's own error protocol, so the automatic re-raise is disabled; the binding calls
+\\ take-callback-error after the library's protected call returns and reconciles against the
+\\ library's status.
 ffi-callback-with-error-hook: ( quotation sig hook userdata -- ffi-callback ) [ native.ffi-callback ] ;
+
+\\ Drain a pending callback error without raising it. Pushes the boxed original error, or f when
+\\ no callback error is pending.
+\\
+\\ An error a longjmp hook delivered into the C library is exempt from the automatic ffi-call
+\\ re-raise, so this is the only way it is delivered.
+take-callback-error: ( -- error/f ) [ native.take-callback-error ] ;
 
 \\ Extract the raw buffer pointer and length from a byte array.
 \\ The resource wraps the byte array's internal buffer; it becomes

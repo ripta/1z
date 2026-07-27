@@ -30,13 +30,16 @@ fn nativeResourceClose(ctx: *Context) anyerror!void {
     r.ptr = null;
     r.closed = true;
 
-    if (ctx.callback_error) |err| {
-        ctx.callback_error = null;
-        if (ctx.callback_error_context) |ectx| {
-            helpers.setErrorContext(ctx, "{s}", .{ectx});
-            ctx.callback_error_context = null;
+    // A hook-raised courier is exempt (see nativeFfiCall in ffi/dynamic.zig).
+    if (!ctx.callback_error_hook_raised) {
+        if (ctx.callback_error) |err| {
+            ctx.callback_error = null;
+            if (ctx.callback_error_context) |ectx| {
+                helpers.setErrorContext(ctx, "{s}", .{ectx});
+                ctx.callback_error_context = null;
+            }
+            return err;
         }
-        return err;
     }
 }
 
@@ -78,4 +81,27 @@ test "resource-close drains a callback error left by the close call" {
     try std.testing.expectError(error.UserThrown, nativeResourceClose(&ctx));
     try std.testing.expect(ctx.callback_error == null);
     try std.testing.expect(r.closed);
+}
+
+test "resource-close skips a hook-raised callback error" {
+    const std = @import("std");
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var payload: u8 = 0;
+    var r = Resource{
+        .type_name = "skip-test",
+        .ptr = @ptrCast(&payload),
+        .closed = false,
+        .close_fn = .none,
+    };
+    try ctx.stack.push(.{ .resource = &r });
+    ctx.callback_error = error.UserThrown;
+    ctx.callback_error_hook_raised = true;
+
+    try nativeResourceClose(&ctx);
+    try std.testing.expect(ctx.callback_error != null);
+    try std.testing.expect(r.closed);
+    ctx.callback_error = null;
+    ctx.callback_error_hook_raised = false;
 }

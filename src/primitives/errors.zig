@@ -110,6 +110,70 @@ pub const primitives = [_]Primitive{
     .{ .name = "with-isolation", .stack_effect = "quot --", .doc = "Execute quotation with isolated type registry, dispatch tables, and protocol obligations. Only stack effects survive.", .func = nativeWithIsolation },
 };
 
+/// Box a caught error onto the stack: the stashed thrown ErrorObject with its
+/// stack trace when err is a user throw, else a generic error object named
+/// after the kebab-cased Zig error. Clears the execution details it captures.
+pub fn pushCaughtError(ctx: *Context, err: anyerror) anyerror!void {
+    // Check if this is a user-thrown error with a stashed ErrorObject
+    if (err == error.UserThrown) {
+        if (ctx.thrown_error) |thrown_ptr| {
+            ctx.thrown_error = null;
+
+            // Capture stack trace from error_details if not already present
+            if (thrown_ptr.stack_trace == null and ctx.error_details.items.len > 0) {
+                const alloc = ctx.quotationAllocator();
+                const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
+                if (frames) |f| {
+                    for (ctx.error_details.items, 0..) |detail, i| {
+                        f[i] = .{
+                            .word_name = detail.word_name orelse detail.message,
+                            .source = detail.source,
+                            .line = detail.line,
+                        };
+                    }
+                    thrown_ptr.stack_trace = f;
+                }
+            }
+
+            // The stash held the sole owning reference to the thrown
+            // error's data; transfer it to the stack slot without an
+            // extra retain.
+            try ctx.stack.pushMoved(.{ .error_value = thrown_ptr });
+            ctx.clearExecutionDetails();
+            return;
+        }
+    }
+
+    const alloc = ctx.quotationAllocator();
+    var stack_trace: ?[]const StackFrame = null;
+
+    if (ctx.error_details.items.len > 0) {
+        const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
+        if (frames) |f| {
+            for (ctx.error_details.items, 0..) |detail, i| {
+                f[i] = .{
+                    .word_name = detail.word_name orelse detail.message,
+                    .source = detail.source,
+                    .line = detail.line,
+                };
+            }
+            stack_trace = f;
+        }
+    }
+
+    var kebab_buf: [128]u8 = undefined;
+    const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
+    const duped_name = alloc.dupe(u8, kebab_name) catch @errorName(err);
+    const error_ptr = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = duped_name,
+        .message = duped_name,
+        .data = null,
+        .stack_trace = stack_trace,
+    });
+    try ctx.stack.push(.{ .error_value = error_ptr });
+    ctx.clearExecutionDetails();
+}
+
 /// recover ( try-quot recover-quot -- )
 pub fn nativeRecover(ctx: *Context) anyerror!void {
     // Note: Parameter effects are validated statically by validateParameterEffects
@@ -119,67 +183,7 @@ pub fn nativeRecover(ctx: *Context) anyerror!void {
 
     // Execute try quotation with error-catching
     ctx.executeQuotationWithFrame(try_quot) catch |err| {
-        // Check if this is a user-thrown error with a stashed ErrorObject
-        if (err == error.UserThrown) {
-            if (ctx.thrown_error) |thrown_ptr| {
-                ctx.thrown_error = null;
-
-                // Capture stack trace from error_details if not already present
-                if (thrown_ptr.stack_trace == null and ctx.error_details.items.len > 0) {
-                    const alloc = ctx.quotationAllocator();
-                    const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
-                    if (frames) |f| {
-                        for (ctx.error_details.items, 0..) |detail, i| {
-                            f[i] = .{
-                                .word_name = detail.word_name orelse detail.message,
-                                .source = detail.source,
-                                .line = detail.line,
-                            };
-                        }
-                        thrown_ptr.stack_trace = f;
-                    }
-                }
-
-                // The stash held the sole owning reference to the thrown
-                // error's data; transfer it to the stack slot without an
-                // extra retain.
-                try ctx.stack.pushMoved(.{ .error_value = thrown_ptr });
-                ctx.clearExecutionDetails();
-                try ctx.executeQuotationWithFrame(recover_quot);
-                return;
-            }
-        }
-
-        const alloc = ctx.quotationAllocator();
-        var stack_trace: ?[]const StackFrame = null;
-
-        if (ctx.error_details.items.len > 0) {
-            const frames = alloc.alloc(StackFrame, ctx.error_details.items.len) catch null;
-            if (frames) |f| {
-                for (ctx.error_details.items, 0..) |detail, i| {
-                    f[i] = .{
-                        .word_name = detail.word_name orelse detail.message,
-                        .source = detail.source,
-                        .line = detail.line,
-                    };
-                }
-                stack_trace = f;
-            }
-        }
-
-        var kebab_buf: [128]u8 = undefined;
-        const kebab_name = pascalToKebabRuntime(@errorName(err), &kebab_buf);
-        const duped_name = alloc.dupe(u8, kebab_name) catch @errorName(err);
-        const error_ptr = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
-            .error_type = duped_name,
-            .message = duped_name,
-            .data = null,
-            .stack_trace = stack_trace,
-        });
-        try ctx.stack.push(.{ .error_value = error_ptr });
-
-        // Clear error details after capturing, and execute recovery
-        ctx.clearExecutionDetails();
+        try pushCaughtError(ctx, err);
         try ctx.executeQuotationWithFrame(recover_quot);
         return;
     };

@@ -59,6 +59,11 @@ use "os/path" ;
 \\ (lua-close-fn) is the raw lua_close ffi-fn, folded into the reexported module so
 \\ `open` can bind it to each state for generic resource-close. ffi-def only exposes
 \\ callable wrappers, so the raw function is looked up separately.
+\\
+\\ (lua-error-hook) is the raw onez_lua_error_hook ffi-fn from the local shim in the
+\\ same dylib: the ffi-callback error hook `register` binds so a callback error
+\\ raises lua_error from the trampoline boundary. It is looked up unbound, since a
+\\ hook is passed as a function pointer, never called through ffi-call.
 (lua-lib-path) lib-open dup ffi-def{
   (new-state):    "luaL_newstate" H{ errno: null: } ffi{ -> ptr:lua-state }
   (open-libs):    "luaL_openlibs" ffi{ ptr -> void }
@@ -95,6 +100,8 @@ use "os/path" ;
 } call
 over "lua_close" ffi{ ptr -> void } bound-symbol [ ] curry
 "(lua-close-fn)" swap @set!
+over "onez_lua_error_hook" lib-symbol [ ] curry
+"(lua-error-hook)" swap @set!
 swap drop "lua-raw" swap >module reexport
 
 \\ An open Lua interpreter state: the raw state resource plus the callback
@@ -156,9 +163,20 @@ ELuaError: [ lua-error: ] ;
   over -1 0 (tolstring) <rot- -2 (settop) ELuaError make-error throw
 ] ;
 
-\\ Pass a load or call status through when OK, otherwise raise ELuaError.
+\\ Pass a load or call status through when OK, otherwise raise an error,
+\\ reconciling a pending callback error against the status first.
+\\
+\\ A callback error the hook raised into Lua is exempt from the automatic
+\\ ffi-call re-raise, so it is still pending here. A non-OK status means the
+\\ abort reached this pcall: pop Lua's error object and re-raise the original
+\\ 1z error. An OK status means a script-side pcall caught it: drop the stale
+\\ error and continue. A non-OK status with no pending callback error is a
+\\ genuine Lua error and raises ELuaError as before.
 (check-ok): ( state rc -- state ) [
-  dup LUA_OK = [ drop ] [ (raise-lua-error) ] if
+  take-callback-error
+  over LUA_OK = [ 2drop ] [
+    dup [ nip over -2 (settop) nip throw ] [ drop (raise-lua-error) ] if
+  ] if
 ] ;
 
 \\ lua_pcall(state, nargs, nresults, 0): no message handler, no continuation.
@@ -364,8 +382,14 @@ get-global: ( lua: lua-state name: string -- value ) [
 \\
 \\ The quotation must not yield the green thread from inside the live Lua C
 \\ frame; that is out of scope for the scalar tier.
+\\
+\\ A quotation that throws aborts the enclosing Lua pcall: the error hook raises
+\\ lua_error with the 1z error message from the trampoline boundary. When the
+\\ abort reaches the driving pcall, the original 1z error is re-raised with its
+\\ error-type intact; a script-side pcall that catches it sees Lua's usual
+\\ false-plus-message and the script continues.
 register: ( lua: lua-state name: string quot: ( state -- nresults ) -- ) [
-  ffi{ ptr:lua-state -> i32 } ffi-callback
+  ffi{ ptr:lua-state -> i32 } (lua-error-hook) f ffi-callback-with-error-hook
   [ unmake-lua-state ] 2dip
   2 pick-n callbacks>> over #push! drop
   [ state>> ] 2dip

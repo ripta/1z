@@ -81,6 +81,7 @@ pub const c_ffi = if (is_freestanding) struct {
 const Context = @import("../context.zig").Context;
 const helpers = @import("../primitives/helpers.zig");
 const error_mapping = @import("../primitives/error_mapping.zig");
+const errors_mod = @import("../primitives/errors.zig");
 
 const types_mod = @import("../primitives/types.zig");
 const RegistryEntry = types_mod.RegistryEntry;
@@ -116,6 +117,7 @@ pub const registry_entries = [_]RegistryEntry{
     .{ .name = "bind-close", .func = nativeBindClose, .capability = .ffi },
     .{ .name = "ffi-call", .func = nativeFfiCall, .capability = .none },
     .{ .name = "ffi-callback", .func = nativeFfiCallback, .capability = .ffi },
+    .{ .name = "take-callback-error", .func = nativeTakeCallbackError, .capability = .none, .stack_effect = "-- error/f" },
     .{ .name = "bytes-raw-ptr", .func = nativeBytesRawPtr, .capability = .ffi },
     .{ .name = "ffi-ptr+len>bytes", .func = nativeFfiPtrLenToBytes, .capability = .ffi, .stack_effect = "resource n -- byte-array" },
     .{ .name = "ffi-ptr+len>borrowed-bytes", .func = nativeFfiPtrLenToBorrowedBytes, .capability = .ffi, .stack_effect = "resource n -- byte-array" },
@@ -795,13 +797,18 @@ fn nativeFfiCall(ctx: *Context) anyerror!void {
         else
             null;
 
-    if (ctx.callback_error) |err| {
-        ctx.callback_error = null;
-        if (ctx.callback_error_context) |ectx| {
-            helpers.setErrorContext(ctx, "{s}", .{ectx});
-            ctx.callback_error_context = null;
+    // A hook-raised courier is exempt: the longjmp delivered the error into the
+    // C library's own error protocol, so the binding reconciles it against the
+    // library's status via take-callback-error.
+    if (!ctx.callback_error_hook_raised) {
+        if (ctx.callback_error) |err| {
+            ctx.callback_error = null;
+            if (ctx.callback_error_context) |ectx| {
+                helpers.setErrorContext(ctx, "{s}", .{ectx});
+                ctx.callback_error_context = null;
+            }
+            return err;
         }
-        return err;
     }
 
     if (posix_errno) |e| return raisePosixError(ctx, e);
@@ -1050,13 +1057,16 @@ fn nativeFfiCallVariadic(ctx: *Context, ffi_fn: *Resource, sig: *const FfiSignat
         else
             null;
 
-    if (ctx.callback_error) |err| {
-        ctx.callback_error = null;
-        if (ctx.callback_error_context) |ectx| {
-            helpers.setErrorContext(ctx, "{s}", .{ectx});
-            ctx.callback_error_context = null;
+    // A hook-raised courier is exempt (see nativeFfiCall).
+    if (!ctx.callback_error_hook_raised) {
+        if (ctx.callback_error) |err| {
+            ctx.callback_error = null;
+            if (ctx.callback_error_context) |ectx| {
+                helpers.setErrorContext(ctx, "{s}", .{ectx});
+                ctx.callback_error_context = null;
+            }
+            return err;
         }
-        return err;
     }
 
     if (posix_errno) |e| return raisePosixError(ctx, e);
@@ -1608,6 +1618,7 @@ const TestHookState = struct {
     message: [64]u8 = [_]u8{0} ** 64,
     message_len: usize = 0,
     courier_set_before_hook: bool = false,
+    hook_raised_during_hook: bool = false,
     ctx: ?*Context = null,
 };
 var test_hook_state: TestHookState = .{};
@@ -1620,7 +1631,10 @@ fn testErrorHook(arg0: ?*anyopaque, userdata: ?*anyopaque, message: [*:0]const u
     const n = @min(span.len, test_hook_state.message.len);
     @memcpy(test_hook_state.message[0..n], span[0..n]);
     test_hook_state.message_len = n;
-    if (test_hook_state.ctx) |c| test_hook_state.courier_set_before_hook = c.callback_error != null;
+    if (test_hook_state.ctx) |c| {
+        test_hook_state.courier_set_before_hook = c.callback_error != null;
+        test_hook_state.hook_raised_during_hook = c.callback_error_hook_raised;
+    }
 }
 
 fn testCallbackUserData(
@@ -1719,6 +1733,75 @@ test "callbackErrorMessage prefers the thrown error's message" {
 
     const name_msg = callbackErrorMessage(&ctx, error.FFITypeMismatch, false);
     try std.testing.expectEqualStrings("FFITypeMismatch", std.mem.span(name_msg));
+}
+
+test "callbackFail sets the hook-raised flag only while the hook runs" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    test_hook_state = .{ .ctx = &ctx };
+
+    const sig = FfiSignature{ .param_types = &.{}, .return_type = .{ .tag = .i32 } };
+    var ud = testCallbackUserData(&ctx, &sig, testErrorHook, null);
+
+    var no_args = [_]?*anyopaque{};
+    callbackFail(&ud, &no_args, null, error.UserThrown, true);
+
+    // The returning hook saw the flag set; after it returned, the courier is
+    // back on the auto-drained stash semantics.
+    try std.testing.expect(test_hook_state.hook_raised_during_hook);
+    try std.testing.expect(!ctx.callback_error_hook_raised);
+    try std.testing.expect(ctx.callback_error != null);
+    ctx.callback_error = null;
+    ctx.callback_error_context = null;
+}
+
+test "take-callback-error pushes f when no callback error is pending" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try nativeTakeCallbackError(&ctx);
+    const val = try ctx.stack.pop();
+    try std.testing.expect(val == .boolean);
+    try std.testing.expect(!val.boolean);
+}
+
+test "take-callback-error delivers the boxed thrown error and clears the courier" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const thrown = try value_mod.boxErrorObject(ctx.quotationAllocator(), .{
+        .error_type = "test-error",
+        .message = "boom",
+        .data = null,
+        .stack_trace = null,
+    });
+    ctx.thrown_error = thrown;
+    ctx.callback_error = error.UserThrown;
+    ctx.callback_error_context = "boom context";
+    ctx.callback_error_hook_raised = true;
+
+    try nativeTakeCallbackError(&ctx);
+
+    const val = try ctx.stack.pop();
+    try std.testing.expect(val == .error_value);
+    try std.testing.expectEqualStrings("test-error", val.error_value.error_type);
+    try std.testing.expect(ctx.callback_error == null);
+    try std.testing.expect(ctx.callback_error_context == null);
+    try std.testing.expect(!ctx.callback_error_hook_raised);
+    try std.testing.expect(ctx.thrown_error == null);
+}
+
+test "take-callback-error boxes a generic error for a non-throw failure" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    ctx.callback_error = error.StackUnderflow;
+    try nativeTakeCallbackError(&ctx);
+
+    const val = try ctx.stack.pop();
+    try std.testing.expect(val == .error_value);
+    try std.testing.expectEqualStrings("stack-underflow", val.error_value.error_type);
+    try std.testing.expect(ctx.callback_error == null);
 }
 
 /// Call a foreign close function via libffi with the signature (ptr -> void).
@@ -1835,6 +1918,7 @@ fn callbackFail(
 ) void {
     const ctx = ud.ctx;
     ctx.callback_error = err;
+    ctx.callback_error_hook_raised = false;
     if (quotation_throw) ctx.callback_error_context = ctx.pending_error_message;
     if (ret) |r| @memset(@as([*]u8, @ptrCast(r))[0..8], 0);
 
@@ -1845,8 +1929,29 @@ fn callbackFail(
             const val: *const ?*anyopaque = @ptrCast(@alignCast(args[0].?));
             break :blk val.*;
         };
+        // Set before the hook call so a hook that longjmps leaves it set; a
+        // hook that returns falls back to the auto-drained stash semantics.
+        ctx.callback_error_hook_raised = true;
         hook(arg0, ud.error_hook_userdata, callbackErrorMessage(ctx, err, quotation_throw));
+        ctx.callback_error_hook_raised = false;
     }
+}
+
+/// take-callback-error ( -- error/f )
+///
+/// Drain a pending callback error without raising it: push the boxed original error, or f when no
+/// callback error is pending. A courier a longjmp hook delivered into the C library is exempt from
+/// the automatic ffi-call drains, so this is the only way it is delivered; the binding calls it
+/// after the C library's protected call returns and reconciles against the library's own status.
+fn nativeTakeCallbackError(ctx: *Context) anyerror!void {
+    const err = ctx.callback_error orelse {
+        try ctx.stack.push(.{ .boolean = false });
+        return;
+    };
+    ctx.callback_error = null;
+    ctx.callback_error_hook_raised = false;
+    ctx.callback_error_context = null;
+    try errors_mod.pushCaughtError(ctx, err);
 }
 
 fn callbackTrampoline(

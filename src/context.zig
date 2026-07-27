@@ -637,6 +637,12 @@ pub const Context = struct {
     callback_error: ?anyerror = null,
     /// Human-readable context string for the callback error.
     callback_error_context: ?[]const u8 = null,
+    /// True while a callback error-hook is being invoked. A hook that never
+    /// returns (a longjmp such as lua_error) leaves it set, marking the stashed
+    /// callback error as owned by the C library's error protocol: the automatic
+    /// drains skip it, and the binding reconciles it against the library's own
+    /// status via take-callback-error.
+    callback_error_hook_raised: bool = false,
     /// Optional debugger. When non-null, the execution loop checks whether to
     /// pause before each instruction. When null (the default), the cost is a
     /// single pointer check per instruction.

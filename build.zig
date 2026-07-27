@@ -2422,5 +2422,12 @@ fn addLuaSources(b: *std.Build, module: *std.Build.Module) void {
         });
     }
 
+    // Local shim, not vendored: the ffi-callback error hook lib/lua.1z resolves
+    // from the same dylib handle.
+    module.addCSourceFile(.{
+        .file = b.path("ext/lua/onez_shim.c"),
+        .flags = flags,
+    });
+
     module.addIncludePath(b.path("ext/lua"));
 }

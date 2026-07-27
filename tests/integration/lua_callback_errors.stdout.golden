@@ -1,0 +1,19 @@
+=== callback error propagation ===
+Stack: [ ]
+PASS: driver-caught abort re-raises the original error type
+PASS: the original message survives the round trip
+PASS: Lua stack balanced after the abort
+PASS: the state is usable after the abort
+PASS: a script-side pcall catches the raised error
+PASS: no stale re-raise after a script-side catch
+PASS: a callback after a script-side catch still works
+PASS: Lua stack balanced
+Stack: [ ]
+=== non-throw callback failures ===
+Stack: [ ]
+PASS: a marshal failure raises the generic boxed error
+PASS: a script-side pcall sees the marshal failure
+PASS: the state is usable after a marshal failure
+PASS: a genuine Lua error still raises ELuaError
+PASS: Lua stack balanced
+Stack: [ ]

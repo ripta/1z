@@ -1,0 +1,62 @@
+use "testing" ;
+use "lua" ;
+
+"callback error propagation" test-section
+
+[
+  \ The throw is wrapped in a when so the body's inferred effect stays
+  \ ( state -- nresults ); a bare terminal throw fails register's declared
+  \ parameter effect.
+  dup "fail" [ drop t [ f "boom" boom-error: make-error throw ] when 1 ] register
+  dup "double" [ dup 1 (to-integer) 2 * (push-integer) 1 ] register
+
+  \ driver-caught: the abort reaches the driving pcall and the original
+  \ 1z error is re-raised with its identity intact
+  dup [ "return fail()" eval ] [
+    dup error-type: @get boom-error: = "driver-caught abort re-raises the original error type" assert-true
+    message: @get "boom" "the original message survives the round trip" assert=
+  ] recover
+
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced after the abort" assert=
+  dup "return double(21)" eval>fixnum 42 "the state is usable after the abort" assert=
+
+  \ script-side pcall: the script observes Lua's usual false-plus-message
+  dup "local ok, msg = pcall(fail) return tostring(ok) .. ' ' .. tostring(msg)"
+  eval>string "false boom" "a script-side pcall catches the raised error" assert=
+
+  \ and the stale courier is cleared: nothing re-raises afterward
+  dup "return 1" eval>fixnum 1 "no stale re-raise after a script-side catch" assert=
+
+  \ a later callback in the same chunk is not poisoned by the caught error
+  dup "pcall(fail) return double(3)" eval>fixnum 6
+  "a callback after a script-side catch still works" assert=
+
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced" assert=
+  drop
+] using-lua
+
+"non-throw callback failures" test-section
+
+[
+  dup "badresult" [ drop "not a number" ] register
+  dup "seven" [ 7 (push-integer) 1 ] register
+
+  \ a result the trampoline cannot marshal aborts the pcall like a throw,
+  \ carrying the generic boxed error on the driver-caught path
+  dup [ "return badresult()" eval ] [
+    error-type: @get ffi-type-mismatch: = "a marshal failure raises the generic boxed error" assert-true
+  ] recover
+
+  \ a script-side pcall sees the Zig error name as the message
+  dup "local ok, msg = pcall(badresult) return tostring(ok) .. ' ' .. tostring(msg)"
+  eval>string "false FFITypeMismatch" "a script-side pcall sees the marshal failure" assert=
+
+  dup "return seven()" eval>fixnum 7 "the state is usable after a marshal failure" assert=
+
+  \ a genuine Lua error still maps to ELuaError
+  dup "error('plain lua')" [ eval ] curry curry
+  lua-error: "a genuine Lua error still raises ELuaError" assert-error-type
+
+  dup unmake-lua-state state>> (gettop) 0 "Lua stack balanced" assert=
+  drop
+] using-lua
