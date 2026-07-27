@@ -137,8 +137,10 @@ fn propagateDeps(ctx: *Context, new_instrs: []const Instruction, bases: []const 
     var deps: std.ArrayListUnmanaged(*const value_mod.Module) = .{};
     defer deps.deinit(ctx.allocator);
     for (bases) |base| {
-        if (ctx.quotation_captured_scope.get(@intFromPtr(base.ptr))) |s| {
-            for (s.deps_modules) |m| try deps.append(ctx.allocator, m);
+        if (ctx.quotation_scope_info.get(@intFromPtr(base.ptr))) |info| {
+            if (info.scope) |s| {
+                for (s.deps_modules) |m| try deps.append(ctx.allocator, m);
+            }
         }
     }
 

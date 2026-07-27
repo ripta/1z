@@ -1,0 +1,16 @@
+=== own-module precedence ===
+Stack: [ ]
+PASS: a module word resolves its own probe
+Stack: [ ]
+PASS: a parameter default resolves the defining module's probe
+Stack: [ ]
+PASS: a stored quotation resolves the defining module's probe
+Stack: [ ]
+PASS: a container-embedded quotation resolves the defining module's probe
+Stack: [ ]
+PASS: a stored quotation resolves the defining module's private helper
+Stack: [ ]
+PASS: an in-body rebinding of an own-module name resolves the module's definition
+Stack: [ ]
+PASS: the entry file's own import still resolves the imported module's probe
+Stack: [ ]

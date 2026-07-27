@@ -1,0 +1,31 @@
+\ Own-module precedence: a body written inside a module resolves its bare words against that
+\ module's own scope, even when the module's frame is not live and the entry file's durable
+\ import frame binds the same name to a foreign word.
+\
+\ Two companions each export `probe`. This file imports moda's accessors and modb's `probe`,
+\ so the durable frame's `probe` is modb's. Every moda-written body must still resolve moda's:
+\ the parameter default and the stored quotation used to find modb's via the durable frame,
+\ because the miss-only lazy re-resolve never runs when a wrong binding is found first.
+\
+\ `a-shadow` pins the settled precedence for in-body rebinding: a runtime rebinding of a name
+\ the module itself defines resolves the module's definition, not the fresh binding.
+
+use "testing" ;
+use { a-param: a-word: a-quot: a-hidden-quot: a-table: a-shadow: } "./own_module_precedence_a.1z" ;
+use { probe: } "./own_module_precedence_b.1z" ;
+
+"own-module precedence" test-section
+
+a-word "A-PROBE" "a module word resolves its own probe" assert=
+
+a-param get "A-PROBE" "a parameter default resolves the defining module's probe" assert=
+
+a-quot call "A-PROBE" "a stored quotation resolves the defining module's probe" assert=
+
+a-table run: @get call "A-PROBE" "a container-embedded quotation resolves the defining module's probe" assert=
+
+a-hidden-quot call "A-HIDDEN" "a stored quotation resolves the defining module's private helper" assert=
+
+a-shadow "A-PROBE" "an in-body rebinding of an own-module name resolves the module's definition" assert=
+
+probe "B-PROBE" "the entry file's own import still resolves the imported module's probe" assert=

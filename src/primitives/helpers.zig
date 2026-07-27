@@ -509,10 +509,10 @@ pub fn popCallableWithScope(ctx: *Context) !CallableWithScope {
             // context's side map: `push_literal` captured it here, where the literal was created.
             // The child task stamps it. Self-map only (lock-free), gated so the common no-closure
             // program pays a single count check.
-            const scope: ?*const CapturedScope = if (ctx.quotation_captured_scope.count() > 0)
-                ctx.quotation_captured_scope.get(@intFromPtr(q.instructions.ptr))
-            else
-                null;
+            const scope: ?*const CapturedScope = if (ctx.quotation_scope_info.count() > 0) blk: {
+                const info = ctx.quotation_scope_info.get(@intFromPtr(q.instructions.ptr)) orelse break :blk null;
+                break :blk info.scope;
+            } else null;
             return .{ .quot = q, .scope = scope };
         },
         .closure => |c| return .{ .quot = c.asQuotation(), .scope = c.captured_scope },

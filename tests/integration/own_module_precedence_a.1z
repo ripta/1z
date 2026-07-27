@@ -1,0 +1,24 @@
+\ Companion module for own_module_precedence.1z: the module whose own scope must win.
+\
+\ Every body below is written inside this module, so every bare `probe` must resolve this
+\ module's `probe` no matter where the body runs. The accessors hand the bodies out in the
+\ exposed shapes: a parameter default, a stored quotation, a container-embedded quotation,
+\ and a quotation reaching a `private{ }` helper.
+
+probe: ( -- s ) [ "A-PROBE" ] ;
+
+private{
+  hidden: ( -- s ) [ "A-HIDDEN" ] ;
+}
+
+a-param: parameter{ [ probe ] } ;
+
+a-word: ( -- s ) [ probe ] ;
+
+a-quot: ( -- quot ) [ [ probe ] ] ;
+
+a-hidden-quot: ( -- quot ) [ [ hidden ] ] ;
+
+a-table: ( -- h ) [ H{ run: [ probe ] } ] ;
+
+a-shadow: ( -- s ) [ "LOCAL" probe: swap ; probe ] ;

@@ -1,0 +1,4 @@
+\ Companion module for own_module_precedence.1z: the foreign module whose same-named export
+\ lands in the entry file's durable import frame.
+
+probe: ( -- s ) [ "B-PROBE" ] ;

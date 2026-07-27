@@ -173,14 +173,14 @@ pub fn isSyntheticScopeModule(module: ?*const value_mod.Module) bool {
 /// creation. Bare-word resolution consults it (via `ModuleDepsVisibility`) to admit a frame the
 /// quotation legitimately closed over while rejecting a foreign one. A quotation created with no such
 /// frame live records no entry at all; resolution treats that absence as an empty ambient-deps set
-/// and leans on the `quotation_defining_module` stamp to tell a module-less quotation apart from a
+/// and leans on the entry's `defining_module` stamp to tell a module-less quotation apart from a
 /// word body.
 ///
-/// Module-scope resolution for a quotation's own defining module still flows through the existing
-/// `quotation_defining_module` stamp; `deps_modules` covers only frames ambient at creation.
+/// Module-scope resolution for a quotation's own defining module still flows through the entry's
+/// `defining_module` stamp; `deps_modules` covers only frames ambient at creation.
 ///
 /// Two lifetimes share this type. A map-owned ("tier-1") scope lives in a `Context`'s
-/// `quotation_captured_scope`, heap-allocated on that context's durable allocator, and is
+/// `quotation_scope_info`, heap-allocated on that context's durable allocator, and is
 /// refcounted: `captureQuotationScope` supersedes it with a fresh capture on every push of the
 /// same body, freeing the old one once every in-flight reader has released it (an
 /// `executeInstructions` call holding it for the call's duration, or a descendant task reached
@@ -230,6 +230,18 @@ pub const CapturedScope = struct {
     pub fn refcountValue(self: *const CapturedScope) u32 {
         return self.refcount.load(.monotonic);
     }
+};
+
+/// Everything resolution knows about one quotation/word body, keyed in `quotation_scope_info` by
+/// the body's instruction-slice pointer.
+///
+/// The two halves have independent writers and lifetimes. `defining_module` is stamped once at
+/// module finalization and never changes; first stamp wins, see `stampQuotationBodies`. `scope` is
+/// recorded at quotation push and closure execution, refcounted, and superseded freely. They share
+/// one entry so the body-entry hot path pays a single map probe for both.
+pub const QuotationScopeInfo = struct {
+    defining_module: ?*const value_mod.Module = null,
+    scope: ?*CapturedScope = null,
 };
 
 /// Compute the constant-per-word `ExecFlags` from a definition's markers and
@@ -744,24 +756,14 @@ pub const Context = struct {
     /// PIC cache mapping instruction slice pointers to their PIC tables.
     /// Lazily populated on first generic dispatch through a compound word body.
     pic_cache: std.AutoHashMapUnmanaged(usize, *PicTable) = .{},
-    /// Maps a quotation/word body instruction-slice pointer to the module it was
-    /// written in, so a `use`-imported word called inside the body resolves even
-    /// when the defining module's deps frame is no longer on the frame stack.
-    /// Populated at module finalization; consulted only on the unknown-word path.
-    quotation_defining_module: std.AutoHashMapUnmanaged(usize, *const value_mod.Module) = .{},
-    /// Maps a quotation body's instruction-slice pointer to the lexical scope captured where the
-    /// quotation was created. Populated only when live lexical frames exist at creation, so a
-    /// program that never closes over a local binding never touches it and resolution stays on
-    /// the fast path.
-    quotation_captured_scope: std.AutoHashMapUnmanaged(usize, *CapturedScope) = .{},
-    /// True once any scope carrying at least one non-empty lexical frame has entered
-    /// `quotation_captured_scope`. `executeInstructions` gates its per-call captured-scope lookup on
-    /// this rather than the raw map count, so the deps-only entries `captureQuotationScope` now
-    /// records for module-less quotations do not force a lookup on the lexical resolution hot path.
-    /// Monotonic: an entry may later be superseded, but keeping the flag set only costs an occasional
-    /// extra lookup, never a wrong resolution.
-    lexical_capture_recorded: bool = false,
-    /// Guards `quotation_captured_scope` against the one cross-task access it has: a descendant
+    /// Maps a quotation/word body instruction-slice pointer to everything resolution knows about
+    /// the body: the module it was written in and the scope captured where it was created. The
+    /// stamp half is populated at module finalization; the scope half at quotation push and
+    /// closure execution. One map, so a body entry pays a single probe for both halves, gated on
+    /// the map count -- a program that never loads a module and never captures a scope pays one
+    /// count check per body and no probe.
+    quotation_scope_info: std.AutoHashMapUnmanaged(usize, QuotationScopeInfo) = .{},
+    /// Guards `quotation_scope_info` against the one cross-task access it has: a descendant
     /// task reading this context's map through `findCapturedScopeForBody`'s parent walk while this
     /// context's own task inserts into it. It is per-context, so a task inserting into its own map
     /// contends with nothing unless a descendant is walking that exact context, which keeps the
@@ -1495,7 +1497,6 @@ pub const Context = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.pic_cache.deinit(self.allocator);
-        self.quotation_defining_module.deinit(self.allocator);
         // thrown_error, error_value boxes, bignum boxes (header and limbs),
         // and task error_obj boxes are all arena-allocated; they are
         // reclaimed by arena.deinit. The refcounted backing carried in an
@@ -1894,10 +1895,12 @@ pub const Context = struct {
         // descendant's `findCapturedScopeForBody` read. Two reads never conflict, and a supersede on
         // this key can only come from this same task, which is right here.
         if (!has_lexical) {
-            if (self.quotation_captured_scope.get(key)) |old| {
-                if (old.lexical_frames.len == 0 and self.liveDepsMatch(floor, old.deps_modules)) {
-                    frames.deinit(self.allocator);
-                    return null;
+            if (self.quotation_scope_info.get(key)) |info| {
+                if (info.scope) |old| {
+                    if (old.lexical_frames.len == 0 and self.liveDepsMatch(floor, old.deps_modules)) {
+                        frames.deinit(self.allocator);
+                        return null;
+                    }
                 }
             }
         }
@@ -1943,10 +1946,10 @@ pub const Context = struct {
         // descendant-task read permanently blocked on this context's mutex.
         self.captured_scope_mu.lock();
         errdefer self.captured_scope_mu.unlock();
-        const gop = try self.quotation_captured_scope.getOrPut(self.allocator, key);
-        const superseded: ?*CapturedScope = if (gop.found_existing) gop.value_ptr.* else null;
-        gop.value_ptr.* = scope;
-        if (has_lexical) self.lexical_capture_recorded = true;
+        const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        const superseded: ?*CapturedScope = gop.value_ptr.scope;
+        gop.value_ptr.scope = scope;
         self.captured_scope_mu.unlock();
         if (superseded) |old| old.release();
         return if (has_lexical) scope else null;
@@ -2050,9 +2053,9 @@ pub const Context = struct {
     /// this context's scopes by the time its own teardown runs, so each entry's refcount is
     /// exactly 1 here and `release()` frees it.
     fn deinitCapturedScopes(self: *Context) void {
-        var it = self.quotation_captured_scope.valueIterator();
-        while (it.next()) |scope_ptr| scope_ptr.*.release();
-        self.quotation_captured_scope.deinit(self.allocator);
+        var it = self.quotation_scope_info.valueIterator();
+        while (it.next()) |info| if (info.scope) |s| s.release();
+        self.quotation_scope_info.deinit(self.allocator);
     }
 
     /// Deep-copy a captured scope with `alloc`. Each `LocalFrame` is cloned entry-by-entry, the
@@ -2108,8 +2111,10 @@ pub const Context = struct {
         // A deps-only entry (empty lexical frames) carries nothing `curry`/`compose` consume, so it is
         // invisible here: a caller sourcing a lexical scope must fall through exactly as it would if no
         // entry had been recorded, or it would spuriously wrap the result in a closure.
-        if (self.quotation_captured_scope.get(body_ptr)) |s| {
-            if (s.lexical_frames.len > 0) return try dupeCapturedScope(alloc, s);
+        if (self.quotation_scope_info.get(body_ptr)) |info| {
+            if (info.scope) |s| {
+                if (s.lexical_frames.len > 0) return try dupeCapturedScope(alloc, s);
+            }
         }
 
         var ancestor = self.parent_context;
@@ -2118,7 +2123,7 @@ pub const Context = struct {
             // does not mutate the context's value. `@constCast` is the standard lock-in-const idiom.
             const mu: *std.Thread.Mutex = @constCast(&ctx.captured_scope_mu);
             mu.lock();
-            const found = ctx.quotation_captured_scope.get(body_ptr);
+            const found: ?*CapturedScope = if (ctx.quotation_scope_info.get(body_ptr)) |info| info.scope else null;
             const carryable = if (found) |s| s.lexical_frames.len > 0 else false;
             if (carryable) found.?.retain();
             mu.unlock();
@@ -2166,10 +2171,10 @@ pub const Context = struct {
         const key = @intFromPtr(instructions.ptr);
         self.captured_scope_mu.lock();
         errdefer self.captured_scope_mu.unlock();
-        const gop = try self.quotation_captured_scope.getOrPut(self.allocator, key);
-        const superseded: ?*CapturedScope = if (gop.found_existing) gop.value_ptr.* else null;
-        gop.value_ptr.* = dup;
-        if (dup.lexical_frames.len > 0) self.lexical_capture_recorded = true;
+        const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        const superseded: ?*CapturedScope = gop.value_ptr.scope;
+        gop.value_ptr.scope = dup;
         self.captured_scope_mu.unlock();
         if (superseded) |old| old.release();
     }
@@ -2186,11 +2191,25 @@ pub const Context = struct {
         // The first module to stamp a body is its original defining module. A body's instruction
         // slice is shared when a module reexports another's word, so a reexporting module later
         // reprocesses the same pointers. Keep the original stamp: the body's private helpers live in
-        // the module it was written in, not the one reexporting it. A found key means this body and
-        // everything nested under it were already stamped, so stop here.
-        const gop = try self.quotation_defining_module.getOrPut(self.allocator, @intFromPtr(instructions.ptr));
-        if (gop.found_existing) return;
-        gop.value_ptr.* = module;
+        // the module it was written in, not the one reexporting it. A found stamp means this body
+        // and everything nested under it were already stamped, so stop here. An entry holding only a
+        // captured scope does not prune: it says nothing about the nested bodies.
+        //
+        // The map op is taken under the scope mutex because the map is shared with the capture
+        // sites, whose entries a descendant task may be reading through `findCapturedScopeForBody`
+        // while this insert rehashes. The mutex is not held across the recursion below.
+        self.captured_scope_mu.lock();
+        const gop = self.quotation_scope_info.getOrPut(self.allocator, @intFromPtr(instructions.ptr)) catch |err| {
+            self.captured_scope_mu.unlock();
+            return err;
+        };
+        if (gop.found_existing and gop.value_ptr.defining_module != null) {
+            self.captured_scope_mu.unlock();
+            return;
+        }
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        gop.value_ptr.defining_module = module;
+        self.captured_scope_mu.unlock();
 
         for (instructions) |instr| {
             switch (instr.op) {
@@ -2929,6 +2948,73 @@ pub const Context = struct {
         if (!self.runtime_image_loaded) return null;
         if (self.lookupModuleCacheWordLocked(name)) |def| return def;
         return self.lookupAotCompiledWordLocked(name);
+    }
+
+    /// `lookupWordForExecutionFiltered` with the executing body's own module scope probed first,
+    /// ahead of the transient frame walk, all under one shared-read acquisition. A body written
+    /// inside a module thereby resolves a bare word against that module's scope even when the
+    /// module's frame is not live and an unrelated frame binds the same name.
+    ///
+    /// The probe consults `own_module`'s `words` then `deps`, then each `ambient_deps` module the
+    /// same way; first hit wins. `words` before `deps` mirrors `populateModuleDepsFrame`, so a
+    /// module's own definition beats its import of the same name. A hit pushes no frame and
+    /// allocates nothing, and is synthesized in the same shape the module's own deps frame would
+    /// hold, so a probe hit executes exactly like a frame hit. See `lookupModuleScopeWord` for the
+    /// one addition, source attribution.
+    pub fn lookupWordForExecutionOwnScope(
+        self: *const Context,
+        name: []const u8,
+        vis: ?ModuleDepsVisibility,
+        own_module: ?*const value_mod.Module,
+        ambient_deps: []const *const value_mod.Module,
+    ) ?WordDefinition {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        if (lookupOwnScopeLocked(name, own_module, ambient_deps)) |def| return def;
+        if (self.lookupWordLocked(name, vis)) |def| return def;
+        if (!self.runtime_image_loaded) return null;
+        if (self.lookupModuleCacheWordLocked(name)) |def| return def;
+        return self.lookupAotCompiledWordLocked(name);
+    }
+
+    fn lookupOwnScopeLocked(
+        name: []const u8,
+        own_module: ?*const value_mod.Module,
+        ambient_deps: []const *const value_mod.Module,
+    ) ?WordDefinition {
+        if (own_module) |m| {
+            if (lookupModuleScopeWord(name, m)) |def| return def;
+        }
+        for (ambient_deps) |m| {
+            if (m == own_module) continue;
+            if (lookupModuleScopeWord(name, m)) |def| return def;
+        }
+        return null;
+    }
+
+    fn lookupModuleScopeWord(name: []const u8, module: *const value_mod.Module) ?WordDefinition {
+        // The deps template is the pristine words-over-deps merge of the two maps probed below, so
+        // a name absent from it is absent from both. Most probes are misses -- every prelude word
+        // called inside a module body probes here first -- and the template makes a miss cost one
+        // map get instead of two.
+        if (module.deps_template) |tmpl| {
+            if (tmpl.frame.get(name) == null) return null;
+        }
+
+        const mod_word = module.words.get(name) orelse module.deps.get(name) orelse return null;
+        var def = moduleWordFrameDef(name, mod_word, module);
+
+        // Carry the recorded definition site so `executeResolvedWord` attributes the body's error
+        // frames to the file the word is written in, matching a durable-frame resolution. A
+        // `private{ }` helper is the exception: its recorded source points at the machinery that
+        // defined it, not the module file, so the fields stay null and the caller's source stands,
+        // which for a helper is the enclosing module's own file.
+        if (!isSyntheticScopeModule(mod_word.source_module)) {
+            def.source_file = mod_word.source_file;
+            def.source_line = mod_word.source_line;
+            def.source_column = mod_word.source_column;
+        }
+        return def;
     }
 
     /// Final fallback for AOT runtimes: a user word may live only in `jit_dispatch` with no entry in
@@ -6101,49 +6187,56 @@ pub const Context = struct {
             lazy_pushed.deinit(self.allocator);
         }
 
-        // The lexical scope captured where this body was created, if any. A bare word that this
-        // scope binds resolves to that binding, ahead of a same-named word merely live on the
-        // frame stack this body runs against. The fetch is on the fast path for programs that never
-        // close over a local binding: `lexical_capture_recorded` gates the lexical case, and a live
-        // `.module_deps` frame gates the deps case (a deps-only entry, which does not set the flag,
-        // still feeds the visibility filter below).
+        // Everything resolution knows about this body, fetched with one map probe: the scope
+        // captured where the body was created, and the defining-module stamp. The probe runs for
+        // module-less bodies too -- the accepted hot-path cost -- because a wrong binding used to
+        // win exactly when no deps frame was live and the miss-only lazy re-resolve never ran. The
+        // count gate keeps a program that never loads a module and never captures a scope off the
+        // map entirely.
         //
-        // Retained for the full duration of this call and released via `defer`, so a nested or
-        // recursive `executeInstructions` call made from within this one (e.g. through `if`/`when`)
-        // is free to supersede the map's entry for this same body without freeing the scope this
-        // outer frame still holds.
-        const need_scope = self.lexical_capture_recorded or self.live_module_deps_frames > 0;
-        const captured_scope: ?*CapturedScope = if (need_scope)
-            self.quotation_captured_scope.get(@intFromPtr(instructions.ptr))
+        // The scope is retained for the full duration of this call and released via `defer`, so a
+        // nested or recursive `executeInstructions` call made from within this one (e.g. through
+        // `if`/`when`) is free to supersede the map's entry for this same body without freeing the
+        // scope this outer frame still holds. `own_ambient_deps` below rides the retained scope,
+        // which is what keeps it alive for the whole body.
+        const scope_info: QuotationScopeInfo = if (self.quotation_scope_info.count() != 0)
+            self.quotation_scope_info.get(@intFromPtr(instructions.ptr)) orelse .{}
         else
-            null;
+            .{};
+        const captured_scope: ?*CapturedScope = scope_info.scope;
         if (captured_scope) |cs| cs.retain();
         defer if (captured_scope) |cs| cs.release();
 
-        // When a `.module_deps` frame is live, this body resolves bare words only against the frames
-        // it may legitimately see: its own defining module and the ambient-deps set captured at its
-        // creation. The defining module comes from `body_module` for a module-word body (threaded
-        // from `executeResolvedWord`, so it is available even in a spawned child whose stamp map is
-        // empty), falling back to the pointer-keyed `quotation_defining_module` stamp for a stored
-        // quotation resolved in its own context. A quotation spawned onto a child, where neither is
-        // present, rides its captured `deps_modules`, which `curry`/`compose` propagate and `spawn`
-        // copies into the child. All are fixed for the body's lifetime; the filter is applied to
-        // whatever frames are live at each call site. Null when no deps frame is live, keeping the
-        // common path free of the filter.
+        // The body's own module scope, consulted by resolution ahead of the transient frame walk:
+        // its defining module plus the ambient-deps modules captured at its creation. The defining
+        // module comes from `body_module` for a module-word body (threaded from
+        // `executeResolvedWord`, so it is available even in a spawned child whose stamp map is
+        // empty), falling back to the stamp for a stored quotation resolved in its own context. A
+        // quotation spawned onto a child, where neither is present, rides its captured
+        // `deps_modules`, which `curry`/`compose` propagate and `spawn` copies into the child.
         //
-        // A synthetic scope body is exempt (`deps_vis` stays null); see `isSyntheticScopeModule`.
-        //
-        // Computed only when a deps frame is actually live: the `quotation_defining_module` lookup
-        // is a map probe on the hot path, and with no deps frame there is nothing to filter, so a
-        // program that never crosses a module boundary in its inner loop pays none of it.
-        const deps_vis: ?ModuleDepsVisibility = if (self.live_module_deps_frames > 0) blk: {
-            const defining = body_module orelse self.quotation_defining_module.get(@intFromPtr(instructions.ptr));
-            if (isSyntheticScopeModule(defining)) break :blk null;
-            break :blk ModuleDepsVisibility{
-                .deps_modules = if (captured_scope) |cs| cs.deps_modules else &.{},
-                .defining_module = defining,
-            };
-        } else null;
+        // A synthetic scope body (`<local-scope>`, `<scope>`) is exempt from the probe and the
+        // visibility filter alike; see `isSyntheticScopeModule`.
+        const defining_raw: ?*const value_mod.Module = body_module orelse scope_info.defining_module;
+        const stamp_synthetic = isSyntheticScopeModule(defining_raw);
+        const own_module: ?*const value_mod.Module = if (stamp_synthetic) null else defining_raw;
+        const own_ambient_deps: []const *const value_mod.Module = if (stamp_synthetic)
+            &.{}
+        else if (captured_scope) |cs|
+            cs.deps_modules
+        else
+            &.{};
+
+        // When a `.module_deps` frame is live, the frame walk admits only the frames this body may
+        // legitimately see: its defining module's and its captured ambient-deps modules'. Both sets
+        // are fixed for the body's lifetime; the filter is applied to whatever frames are live at
+        // each call site. Null when no deps frame is live, keeping the common path free of the
+        // filter.
+        const deps_vis: ?ModuleDepsVisibility =
+            if (self.live_module_deps_frames > 0 and !stamp_synthetic)
+                .{ .deps_modules = own_ambient_deps, .defining_module = defining_raw }
+            else
+                null;
 
         // Published for `defineWordLocked`, which targets the topmost frame this body can see. The
         // slices inside ride `captured_scope`, retained above for at least as long as this call.
@@ -6212,7 +6305,7 @@ pub const Context = struct {
                         }
                     }
 
-                    if (self.lookupWordForExecutionFiltered(name, deps_vis)) |word| {
+                    if (self.lookupWordForExecutionOwnScope(name, deps_vis, own_module, own_ambient_deps)) |word| {
                         switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
                             .proceed => {},
                             .tail_call_set => return,
@@ -6237,16 +6330,18 @@ pub const Context = struct {
                         if (!lazy_tried) {
                             lazy_tried = true;
 
-                            // The captured ambient-deps modules, fetched directly here so this rare
-                            // path works even when no deps frame was live at body entry (`deps_vis`
-                            // null).
+                            // The body's scope info, fetched fresh here so this rare path sees an
+                            // entry superseded since body entry, and works even when no deps frame
+                            // was live then (`deps_vis` null).
+                            const lazy_info: QuotationScopeInfo =
+                                self.quotation_scope_info.get(@intFromPtr(instructions.ptr)) orelse .{};
                             const lazy_deps: []const *const value_mod.Module = if (deps_vis) |v|
                                 v.deps_modules
-                            else if (self.quotation_captured_scope.get(@intFromPtr(instructions.ptr))) |cs|
+                            else if (lazy_info.scope) |cs|
                                 cs.deps_modules
                             else
                                 &.{};
-                            const stamp_module = self.quotation_defining_module.get(@intFromPtr(instructions.ptr));
+                            const stamp_module = lazy_info.defining_module;
 
                             // Reserve up front so a `pushModuleDepsFrame` success is always paired
                             // with a tracking append that cannot then OOM, leaving no untracked live
@@ -8470,12 +8565,12 @@ test "captureQuotationScope: records ambient module-deps modules without promoti
     try ctx.pushModuleDepsFrame(&module);
 
     // A body with no live lexical binding to close over: the deps set is still recorded, but the
-    // quotation is not promoted, so the return is null and the lexical fast path stays disarmed.
+    // quotation is not promoted, so the return is null.
     const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
     try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
-    try std.testing.expect(!ctx.lexical_capture_recorded);
 
-    const entry = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    const info = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    const entry = info.scope orelse return error.TestExpectedScope;
     try std.testing.expectEqual(@as(usize, 0), entry.lexical_frames.len);
     try std.testing.expectEqual(@as(usize, 1), entry.deps_modules.len);
     try std.testing.expectEqual(@as(*const value_mod.Module, &module), entry.deps_modules[0]);
@@ -8499,12 +8594,12 @@ test "captureQuotationScope: equality-skip leaves an unchanged deps-only entry i
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
     try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
-    const first = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    const first = (ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry).scope;
 
     // Re-pushing the same body against the same ambient deps must not supersede the entry: the
     // stored pointer is identical, so no fresh scope was allocated.
     try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
-    const second = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    const second = (ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry).scope;
     try std.testing.expectEqual(first, second);
 }
 
@@ -8520,7 +8615,7 @@ test "captureQuotationScope: no live module-deps frame and no local records noth
     try std.testing.expectEqual(@as(usize, 0), ctx.live_module_deps_frames);
     const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
     try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
-    try std.testing.expectEqual(@as(usize, 0), ctx.quotation_captured_scope.count());
+    try std.testing.expectEqual(@as(usize, 0), ctx.quotation_scope_info.count());
 }
 
 test "lookupWordLocked: visibility filter admits or skips a module-deps frame by module" {
@@ -8562,6 +8657,152 @@ test "lookupWordLocked: visibility filter admits or skips a module-deps frame by
     // Neither: the module frame is skipped, so resolution falls through to the durable binding.
     const rejected = ctx.lookupWordLocked("shadowed", .{ .deps_modules = &.{}, .defining_module = null }) orelse return error.TestExpectedResolution;
     try std.testing.expectEqualStrings("durable", rejected.source_file.?);
+}
+
+test "lookupWordForExecutionOwnScope: words beat deps, defining module beats ambient deps" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    // The durable import frame binds `shared` and `frame-only`; no module frame is live, so any
+    // module-scope hit below comes from the probe alone.
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.local_frames.items[0].put(ctx.allocator, "shared", .{
+        .name = "shared",
+        .source_file = "durable",
+        .action = .{ .native = noop },
+    });
+    try ctx.local_frames.items[0].put(ctx.allocator, "frame-only", .{
+        .name = "frame-only",
+        .source_file = "durable",
+        .action = .{ .native = noop },
+    });
+
+    var mod_a: value_mod.Module = .{ .name = "a", .words = .{} };
+    defer {
+        mod_a.words.deinit(std.testing.allocator);
+        mod_a.deps.deinit(std.testing.allocator);
+    }
+    try mod_a.words.put(std.testing.allocator, "shared", .{ .dispatch_id = 20, .action = .{ .native = noop } });
+    try mod_a.deps.put(std.testing.allocator, "shared", .{ .dispatch_id = 10, .action = .{ .native = noop } });
+    try mod_a.deps.put(std.testing.allocator, "dep-only", .{ .dispatch_id = 11, .action = .{ .native = noop } });
+
+    var mod_b: value_mod.Module = .{ .name = "b", .words = .{} };
+    defer {
+        mod_b.words.deinit(std.testing.allocator);
+        mod_b.deps.deinit(std.testing.allocator);
+    }
+    try mod_b.words.put(std.testing.allocator, "shared", .{ .dispatch_id = 30, .action = .{ .native = noop } });
+    try mod_b.words.put(std.testing.allocator, "b-only", .{ .dispatch_id = 31, .action = .{ .native = noop } });
+    try mod_b.deps.put(std.testing.allocator, "b-dep-only", .{ .dispatch_id = 32, .action = .{ .native = noop } });
+
+    const ambient = [_]*const value_mod.Module{&mod_b};
+
+    // The defining module's `words` wins over its own `deps`, every ambient module, and the
+    // durable frame; the synthesized definition matches what the module's deps frame would hold.
+    const shared = ctx.lookupWordForExecutionOwnScope("shared", null, &mod_a, &ambient) orelse return error.TestExpectedResolution;
+    try std.testing.expectEqual(@as(u32, 20), shared.dispatch_id);
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &mod_a), shared.source_module);
+    try std.testing.expectEqual(@as(?[]const u8, null), shared.source_file);
+
+    // The defining module's `deps` is probed when `words` misses.
+    const dep_only = ctx.lookupWordForExecutionOwnScope("dep-only", null, &mod_a, &ambient) orelse return error.TestExpectedResolution;
+    try std.testing.expectEqual(@as(u32, 11), dep_only.dispatch_id);
+
+    // With no defining module, an ambient-deps module's binding still outranks the durable frame.
+    const ambient_shared = ctx.lookupWordForExecutionOwnScope("shared", null, null, &ambient) orelse return error.TestExpectedResolution;
+    try std.testing.expectEqual(@as(u32, 30), ambient_shared.dispatch_id);
+
+    // An ambient module is reached for names the defining module lacks, its `deps` included.
+    const b_only = ctx.lookupWordForExecutionOwnScope("b-only", null, &mod_a, &ambient) orelse return error.TestExpectedResolution;
+    try std.testing.expectEqual(@as(u32, 31), b_only.dispatch_id);
+    const b_dep_only = ctx.lookupWordForExecutionOwnScope("b-dep-only", null, &mod_a, &ambient) orelse return error.TestExpectedResolution;
+    try std.testing.expectEqual(@as(u32, 32), b_dep_only.dispatch_id);
+
+    // A probe miss falls through to the ordinary ladder.
+    const frame_only = ctx.lookupWordForExecutionOwnScope("frame-only", null, null, &.{}) orelse return error.TestExpectedResolution;
+    try std.testing.expectEqualStrings("durable", frame_only.source_file.?);
+}
+
+test "executeInstructions: a stamped body resolves its own module ahead of the durable frame" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const push_durable: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 1 });
+        }
+    }.f;
+    const push_module: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 2 });
+        }
+    }.f;
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.local_frames.items[0].put(ctx.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .native = push_durable },
+    });
+
+    const arena_alloc = ctx.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "m", .words = .{} };
+    try module.words.put(arena_alloc, "probe-word", .{ .action = .{ .native = push_module } });
+
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+
+    // Unstamped, the durable frame's binding wins, exactly as before the probe existed.
+    try ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
+
+    // Stamped with its defining module, the same body resolves the module's binding instead.
+    try ctx.quotation_scope_info.put(ctx.allocator, @intFromPtr(instrs.ptr), .{ .defining_module = module });
+    try ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).fixnum);
+}
+
+test "executeInstructions: a synthetic-scope stamp leaves the own-module probe off" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const push_durable: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 1 });
+        }
+    }.f;
+    const push_module: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 2 });
+        }
+    }.f;
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.local_frames.items[0].put(ctx.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .native = push_durable },
+    });
+
+    // A `<local-scope>` module deliberately captures only imports and sibling privates, so a body
+    // stamped with one keeps resolving against the enclosing frames, not the synthetic module.
+    const arena_alloc = ctx.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "<local-scope>", .words = .{} };
+    try module.words.put(arena_alloc, "probe-word", .{ .action = .{ .native = push_module } });
+
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+    try ctx.quotation_scope_info.put(ctx.allocator, @intFromPtr(instrs.ptr), .{ .defining_module = module });
+
+    try ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
 }
 
 test "nonempty_transient_lexical_frames: define, remove, and pop stay balanced" {
@@ -8793,7 +9034,8 @@ test "stampCapturedScopeForExecution: a second stamp with a different scope supe
     const body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
     try ctx.stampCapturedScopeForExecution(&body, &scope1);
 
-    const stamped = ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedStamp;
+    const stamped = (ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedStamp).scope orelse
+        return error.TestExpectedStamp;
     // The map owns a distinct copy, not the source pointer.
     try std.testing.expect(stamped != &scope1);
     var resolved = Context.lookupInCapturedScope(stamped, "w") orelse return error.TestExpectedResolution;
@@ -8804,7 +9046,7 @@ test "stampCapturedScopeForExecution: a second stamp with a different scope supe
     // built by repeated executions of the same loop-nested literal, via `promoteToClosure`) must
     // each resolve against their own carried scope, not whichever was stamped first.
     try ctx.stampCapturedScopeForExecution(&body, &scope2);
-    const again = ctx.quotation_captured_scope.get(@intFromPtr(&body)).?;
+    const again = ctx.quotation_scope_info.get(@intFromPtr(&body)).?.scope.?;
     // Compare addresses only: `stamped` is superseded and released by this second call, so it
     // must not be dereferenced.
     try std.testing.expect(again != stamped);
@@ -8838,7 +9080,8 @@ test "stampCapturedScopeForExecution: a retained scope survives a supersede, fre
 
     const body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
     try ctx.stampCapturedScopeForExecution(&body, &scope1);
-    const first: *CapturedScope = @constCast(ctx.quotation_captured_scope.get(@intFromPtr(&body)) orelse return error.TestExpectedStamp);
+    const first: *CapturedScope = (ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedStamp).scope orelse
+        return error.TestExpectedStamp;
 
     // Simulate an in-flight `executeInstructions` reader retaining the scope for the duration of
     // its call.
@@ -8868,7 +9111,7 @@ test "findCapturedScopeForBody: finds in self, then parent-walks to an ancestor"
     const scope = try parent.allocator.create(CapturedScope);
     scope.* = .{ .lexical_frames = frames, .allocator = parent.allocator };
     const body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
-    try parent.quotation_captured_scope.put(parent.allocator, @intFromPtr(&body), scope);
+    try parent.quotation_scope_info.put(parent.allocator, @intFromPtr(&body), .{ .scope = scope });
 
     var child = Context.init(std.testing.allocator);
     defer child.deinit();
