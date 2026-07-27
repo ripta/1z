@@ -52,6 +52,10 @@ use "os/path" ;
 \\
 \\ luaL_newstate raises on a null return via the errno null sentinel.
 \\
+\\ lua_topointer returns const void*; it is bound as isize so a table's identity
+\\ lands as a plain fixnum for cycle tracking. isize rather than usize, since a
+\\ high address as usize would promote to bignum.
+\\
 \\ (lua-close-fn) is the raw lua_close ffi-fn, folded into the reexported module so
 \\ `open` can bind it to each state for generic resource-close. ffi-def only exposes
 \\ callable wrappers, so the raw function is looked up separately.
@@ -69,8 +73,8 @@ use "os/path" ;
   (set-global):   "lua_setglobal" ffi{ ptr cstring -> void }
   (get-global):   "lua_getglobal" ffi{ ptr cstring -> i32 }
   (type):       "lua_type" ffi{ ptr i32 -> i32 }
-  (tonumberx):  "lua_tonumberx" ffi{ ptr i32 isize -> f64 }
-  (tointegerx): "lua_tointegerx" ffi{ ptr i32 isize -> i64 }
+  (tonumberx):  "lua_tonumberx" ffi{ ptr i32 out-i32 -> f64 }
+  (tointegerx): "lua_tointegerx" ffi{ ptr i32 out-i32 -> i64 }
   (tolstring):  "lua_tolstring" ffi{ ptr i32 isize -> cstring }
   (toboolean):  "lua_toboolean" ffi{ ptr i32 -> i32 }
   (gettop):     "lua_gettop" ffi{ ptr -> i32 }
@@ -82,9 +86,11 @@ use "os/path" ;
   (set-i):        "lua_seti" ffi{ ptr i32 i64 -> void }
   (get-field):    "lua_getfield" ffi{ ptr i32 cstring -> i32 }
   (set-field):    "lua_setfield" ffi{ ptr i32 cstring -> void }
-  (next):       "lua_next" ffi{ ptr i32 -> i32 }
-  (raw-len):    "lua_rawlen" ffi{ ptr i32 -> usize }
-  (is-integer): "lua_isinteger" ffi{ ptr i32 -> i32 }
+  (next):        "lua_next" ffi{ ptr i32 -> i32 }
+  (raw-len):     "lua_rawlen" ffi{ ptr i32 -> usize }
+  (is-integer):  "lua_isinteger" ffi{ ptr i32 -> i32 }
+  (to-pointer):  "lua_topointer" ffi{ ptr i32 -> isize }
+  (check-stack): "lua_checkstack" ffi{ ptr i32 -> i32 }
 } call
 over "lua_close" ffi{ ptr -> void } bound-symbol [ ] curry
 "(lua-close-fn)" swap @set!
@@ -112,6 +118,12 @@ using-lua: ( ..a quot: ( ..a lua: lua-state -- ..b ) -- ..b ) [ [ open ] dip ove
 
 \\ The lua_pcall/luaL_loadstring success status.
 LUA_OK: 0 ;
+
+\\ The lua_type tag for nil.
+LUA_TNIL: 0 ;
+
+\\ The lua_type tag for tables.
+LUA_TTABLE: 5 ;
 
 \\ The 1z error type raised for a Lua load or runtime failure, mirroring
 \\ ESqliteError: the numeric status code is the error data, the Lua message the
@@ -149,10 +161,34 @@ ELuaError: [ lua-error: ] ;
 \\ lua_pop(state, n): drop the top n values off the Lua stack.
 (pop): ( state n -- ) [ -1 * 1 - (settop) ] ;
 
-\ Read the value at Lua stack index idx as each scalar type.
-(to-integer): ( state idx -- fixnum )  [ 0 (tointegerx) ] ;
-(to-number):  ( state idx -- float )   [ 0 (tonumberx) ] ;
-(to-lstring): ( state idx -- string )  [ 0 (tolstring) ] ;
+\ Read the value at Lua stack index idx as each scalar type, raising ELuaError
+\ when Lua cannot convert the value.
+\
+\ The number readers check the isnum out-parameter, which the out-i32 binding
+\ pushes below the converted result.
+\
+\ The string reader admits only the number and string type tags, exactly what
+\ lua_tolstring converts; its NULL return for other types would otherwise
+\ marshal to an ambiguous "".
+\
+\ lua_toboolean is total (Lua truthiness), so the boolean reader never raises.
+(to-integer): ( state idx -- fixnum ) [
+  (tointegerx) swap 1 = [ ] [
+    drop f "Lua value is not convertible to a fixnum" ELuaError make-error throw
+  ] if
+] ;
+(to-number): ( state idx -- float ) [
+  (tonumberx) swap 1 = [ ] [
+    drop f "Lua value is not convertible to a float" ELuaError make-error throw
+  ] if
+] ;
+(to-lstring): ( state idx -- string ) [
+  2dup (type) {
+    { 3 [ 0 (tolstring) ] }
+    { 4 [ 0 (tolstring) ] }
+    [ [ 2drop ] dip "Lua value is not convertible to a string" ELuaError make-error throw ]
+  } case
+] ;
 (to-boolean): ( state idx -- boolean ) [ (toboolean) 1 = ] ;
 
 \\ Read the value on top of the Lua stack with reader, then pop it.
@@ -160,32 +196,94 @@ ELuaError: [ lua-error: ] ;
   [ dup -1 ] dip call swap 1 (pop)
 ] ;
 
-\\ Run Lua source for its side effects, discarding any results.
-eval: ( lua: lua-state src: string -- ) [ [ unmake-lua-state ] dip 0 (eval-n) drop ] ;
+\\ Run quot, and if it raises, restore the Lua stack top captured on entry
+\\ before rethrowing. This keeps an error thrown mid-word, after values are
+\\ already pushed, from leaking Lua stack slots on a long-lived state.
+(lua-guard): ( ..a state quot: ( ..a -- ..b ) -- ..b ) [
+  swap dup (gettop)
+  [ (settop) throw ] curry curry
+  recover
+] ;
 
-\\ Run Lua source and read its single result as a fixnum.
-eval>fixnum: ( lua: lua-state src: string -- fixnum ) [ [ unmake-lua-state ] dip 1 (eval-n) [ (to-integer) ] (read-pop) ] ;
+\\ Run Lua source and return its first result: option:some of the natural 1z
+\\ scalar, or option:none when the chunk returns nothing or nil, which are
+\\ indistinguishable in Lua. Extra results are discarded. A table, function,
+\\ or userdata result raises ELuaError.
+eval: ( lua: lua-state src: string -- opt ) [
+  [ unmake-lua-state ] dip
+  over [
+    1 (eval-n)
+    dup -1 (type) LUA_TNIL = [
+      1 (pop) option:none
+    ] [
+      [ (to-value) ] (read-pop) >option:some
+    ] if
+  ] (lua-guard)
+] ;
 
-\\ Run Lua source and read its single result as a float.
-eval>float: ( lua: lua-state src: string -- float ) [ [ unmake-lua-state ] dip 1 (eval-n) [ (to-number) ] (read-pop) ] ;
+\\ Run Lua source and read its single result as a fixnum, through Lua's number
+\\ coercion; raises ELuaError on a non-convertible result.
+eval>fixnum: ( lua: lua-state src: string -- fixnum ) [
+  [ unmake-lua-state ] dip over [ 1 (eval-n) [ (to-integer) ] (read-pop) ] (lua-guard)
+] ;
 
-\\ Run Lua source and read its single result as a string.
-eval>string: ( lua: lua-state src: string -- string ) [ [ unmake-lua-state ] dip 1 (eval-n) [ (to-lstring) ] (read-pop) ] ;
+\\ Run Lua source and read its single result as a float, through Lua's number
+\\ coercion; raises ELuaError on a non-convertible result.
+eval>float: ( lua: lua-state src: string -- float ) [
+  [ unmake-lua-state ] dip over [ 1 (eval-n) [ (to-number) ] (read-pop) ] (lua-guard)
+] ;
 
-\\ Run Lua source and read its single result as a boolean.
+\\ Run Lua source and read its single result as a string, through Lua's string
+\\ coercion of numbers; raises ELuaError on a non-convertible result.
+eval>string: ( lua: lua-state src: string -- string ) [
+  [ unmake-lua-state ] dip over [ 1 (eval-n) [ (to-lstring) ] (read-pop) ] (lua-guard)
+] ;
+
+\\ Run Lua source and read its single result as a boolean, via Lua truthiness.
 eval>boolean: ( lua: lua-state src: string -- boolean ) [ [ unmake-lua-state ] dip 1 (eval-n) [ (to-boolean) ] (read-pop) ] ;
 
 \\ Convert a 1z boolean to the Lua C boolean integer.
 (to-lua-bool): ( boolean -- i32 ) [ [ 1 ] [ 0 ] if ] ;
 
-\\ Push a 1z scalar onto the Lua stack, dispatching on its type.
+\\ Ensure headroom on the Lua C stack before a table descent. Lua guarantees
+\\ only LUA_MINSTACK free slots; pushing past that unchecked is undefined
+\\ behavior, so every recursion level reserves its few slots here first.
+(check-lua-stack): ( state -- ) [
+  4 (check-stack) 0 = [
+    f "cannot grow the Lua stack" ELuaError make-error throw
+  ] when
+] ;
+
+\\ Push hash as a fresh Lua table: each entry's value goes through
+\\ (push-value), so nested hashes and arrays build nested tables. @keys yields
+\\ symbols, so keys are coerced back through >string before lua_setfield.
+(push-hash): ( state hash -- ) [
+  over (check-lua-stack)
+  over 0 0 (create-table)
+  dup @keys
+  swap [ <rot- >string 2dup @get 3 pick-n swap (push-value) nip -2 swap (set-field) ] curry
+  <rot- swap curry #each
+] ;
+
+\\ Push array as a fresh Lua table sequence: element i lands at Lua key i+1,
+\\ each element pushed through (push-value).
+(push-array): ( state array -- ) [
+  over (check-lua-stack)
+  over 0 0 (create-table)
+  swap [ <rot- over swap (push-value) swap 1 + -2 swap (set-i) ] curry #each-index
+] ;
+
+\\ Push a 1z value onto the Lua stack, dispatching on its type: scalars push
+\\ directly; a hash or array builds a Lua table recursively.
 (push-value): ( state value -- ) [
   dup type-name {
     { "fixnum" [ (push-integer) ] }
     { "float" [ (push-number) ] }
     { "string" [ (push-string) drop ] }
     { "boolean" [ (to-lua-bool) (push-boolean) ] }
-    [ "fixnum, float, string, or boolean" throw-type-error ]
+    { "hash" [ (push-hash) ] }
+    { "array" [ (push-array) ] }
+    [ "fixnum, float, string, boolean, hash, or array" throw-type-error ]
   } case
 ] ;
 
@@ -198,20 +296,46 @@ eval>boolean: ( lua: lua-state src: string -- boolean ) [ [ unmake-lua-state ] d
 \\ Push the named Lua global, read it with reader, then pop it.
 (with-global): ( state name reader: ( state idx -- value ) -- value ) [ [ (push-global) ] dip (read-pop) ] ;
 
-\\ Set a Lua global from a 1z scalar value.
+\\ Set a Lua global from a 1z value: a scalar pushes directly; a hash or array
+\\ builds a Lua table recursively.
 set-global: ( lua: lua-state name: string value -- ) [ [ unmake-lua-state ] 2dip (do-set-global) ] ;
 
-\\ Read a Lua global as a fixnum.
-get-global>fixnum: ( lua: lua-state name: string -- fixnum ) [ [ unmake-lua-state ] dip [ (to-integer) ] (with-global) ] ;
+\\ Read a Lua global as a fixnum, through Lua's number coercion; raises
+\\ ELuaError on a non-convertible global.
+get-global>fixnum: ( lua: lua-state name: string -- fixnum ) [
+  [ unmake-lua-state ] dip over [ [ (to-integer) ] (with-global) ] (lua-guard)
+] ;
 
-\\ Read a Lua global as a float.
-get-global>float: ( lua: lua-state name: string -- float ) [ [ unmake-lua-state ] dip [ (to-number) ] (with-global) ] ;
+\\ Read a Lua global as a float, through Lua's number coercion; raises
+\\ ELuaError on a non-convertible global.
+get-global>float: ( lua: lua-state name: string -- float ) [
+  [ unmake-lua-state ] dip over [ [ (to-number) ] (with-global) ] (lua-guard)
+] ;
 
-\\ Read a Lua global as a string.
-get-global>string: ( lua: lua-state name: string -- string ) [ [ unmake-lua-state ] dip [ (to-lstring) ] (with-global) ] ;
+\\ Read a Lua global as a string, through Lua's string coercion of numbers;
+\\ raises ELuaError on a non-convertible global.
+get-global>string: ( lua: lua-state name: string -- string ) [
+  [ unmake-lua-state ] dip over [ [ (to-lstring) ] (with-global) ] (lua-guard)
+] ;
 
-\\ Read a Lua global as a boolean.
+\\ Read a Lua global as a boolean, via Lua truthiness.
 get-global>boolean: ( lua: lua-state name: string -- boolean ) [ [ unmake-lua-state ] dip [ (to-boolean) ] (with-global) ] ;
+
+\\ Read a Lua global as its natural 1z scalar type: boolean, fixnum for an
+\\ integer number, float for any other number, or string. A table global
+\\ raises; read it with get-global-hash or get-global-array instead.
+get-global: ( lua: lua-state name: string -- value ) [
+  [ unmake-lua-state ] dip
+  over [
+    2dup (get-global) LUA_TTABLE = [
+      over 1 (pop) nip
+      dup "global " swap #append " is a table; use get-global-hash or get-global-array" #append
+      ELuaError make-error throw
+    ] [
+      drop [ (to-value) ] (read-pop)
+    ] if
+  ] (lua-guard)
+] ;
 
 \ Raw table access
 \
@@ -220,21 +344,6 @@ get-global>boolean: ( lua: lua-state name: string -- boolean ) [ [ unmake-lua-st
 \ strings for fields or fixnums for indices; values are the scalar set that
 \ (push-value) and (to-value) cover. A nested table stays reachable by aliasing
 \ it to a global with eval.
-
-\\ Run quot, and if it raises, restore the Lua stack top captured on entry
-\\ before rethrowing. This keeps an error thrown mid-word, after values are
-\\ already pushed, from leaking Lua stack slots on a long-lived state.
-(lua-guard): ( ..a state quot: ( ..a -- ..b ) -- ..b ) [
-  swap dup (gettop)
-  [ (settop) throw ] curry curry
-  recover
-] ;
-
-\\ The lua_type tag for nil.
-LUA_TNIL: 0 ;
-
-\\ The lua_type tag for tables.
-LUA_TTABLE: 5 ;
 
 \\ Read the Lua value at idx as its natural 1z scalar: boolean, fixnum for an
 \\ integer number, float for any other number, or string. Any other Lua type
@@ -318,8 +427,8 @@ new-table: ( lua: lua-state name: string -- ) [
   [ unmake-lua-state ] dip over 0 0 (create-table) (set-global)
 ] ;
 
-\\ Set key in the table global named name to a scalar value: a fixnum, float,
-\\ string, or boolean.
+\\ Set key in the table global named name: a scalar value stores directly; a
+\\ hash or array value builds a nested Lua table.
 table-set: ( lua: lua-state name: string key value -- ) [
   [ [ unmake-lua-state ] dip ] 2dip
   3 pick-n [
@@ -368,4 +477,171 @@ table-each: ( lua: lua-state name: string quot: ( key value -- ) -- ) [
     2 pick-n (push-nil)
     (each-loop)
   ] (lua-guard)
+] ;
+
+\ Table marshalling
+\
+\ Whole-table conversion from Lua tables to 1z values: an eager immutable
+\ snapshot, never a live view. The walk auto-detects nested shapes: a nested
+\ table that is a Lua sequence becomes a 0-based array, any other nested table
+\ a hash; the caller-directed shape demand applies only to the top-level
+\ table. Cycles are refused by tracking the ancestor path of lua_topointer
+\ identities; shared non-cyclic subtables convert normally.
+
+\\ One lua_next step of the sequence check: count entries whose key is an
+\\ integer in 1..n; any other key ends the check early. True iff the table
+\\ holds exactly n such entries, which means the keys are exactly 1..n.
+(seq-loop): ( state tidx n count -- bool ) [
+  3 pick-n 3 pick-n (next) 0 = [
+    = [ 2drop ] dip
+  ] [
+    3 pick-n -2 (is-integer) 1 = [
+      3 pick-n -2 (to-integer)
+      dup 3 pick-n <= over 1 >= and [
+        drop 1 +
+        3 pick-n 1 (pop)
+        (seq-loop)
+      ] [
+        drop 3 pick-n 2 (pop)
+        2drop 2drop f
+      ] if
+    ] [
+      3 pick-n 2 (pop)
+      2drop 2drop f
+    ] if
+  ] if
+] ;
+
+\\ True when the table at absolute Lua stack index tidx is a Lua sequence:
+\\ lua_rawlen gives n, and the table holds exactly n entries with integer keys
+\\ in 1..n. An empty table passes with n = 0.
+(sequence?): ( state tidx -- bool ) [
+  2dup (raw-len)
+  2 pick-n (push-nil)
+  0 (seq-loop)
+] ;
+
+\\ The lua_next key at Lua stack index -2 as a 1z hash key: a string key is
+\\ taken verbatim; an integer key is stringified, as is a non-integral float
+\\ key (Lua normalizes an integral float key to an integer key). Any other
+\\ key type raises.
+\\
+\\ Number keys go through the numeric readers, never lua_tolstring, which
+\\ would convert the key in place and corrupt the traversal.
+(key-string): ( state -- str ) [
+  dup -2 (type) {
+    { 3 [ dup -2 (is-integer) 1 = [ -2 (to-integer) ] [ -2 (to-number) ] if >string ] }
+    { 4 [ -2 (to-lstring) ] }
+    [ [ drop ] dip "unsupported Lua table key type for a hash" ELuaError make-error throw ]
+  } case
+] ;
+
+\\ One lua_next step of the hash walk: stringify the key, refuse a
+\\ stringification collision, convert the value, and store it in the staging
+\\ map m.
+(hash-loop): ( state tidx path m -- hash ) [
+  3 pick-n 3 pick-n (next) 0 = [
+    >hash [ drop 2drop ] dip
+  ] [
+    3 pick-n (key-string)
+    2dup @has? [
+      dup "Lua keys collide after stringification: " swap #append
+      ELuaError make-error throw
+    ] when
+    4 pick-n dup (gettop) 4 pick-n (table-to-value)
+    @set!
+    3 pick-n 1 (pop)
+    (hash-loop)
+  ] if
+] ;
+
+\\ Convert the table at absolute Lua stack index tidx to a hash, walking its
+\\ entries with lua_next into a staging mutable map.
+(table-to-hash): stack-recursive ( state tidx path -- hash ) [
+  M{ }
+  3 pick-n (push-nil)
+  (hash-loop)
+] ;
+
+\\ One step of the array walk: read t[i], convert it, and push it onto the
+\\ staging vector v.
+(array-loop): ( state tidx path n v i -- array ) [
+  2 pick-n over < [
+    drop nip >array [ drop 2drop ] dip
+  ] [
+    5 pick-n 5 pick-n 2 pick-n (get-i) drop
+    5 pick-n dup (gettop) 5 pick-n (table-to-value)
+    swap [ #push! ] dip
+    5 pick-n 1 (pop)
+    1 + (array-loop)
+  ] if
+] ;
+
+\\ Convert the sequence at absolute Lua stack index tidx to a 0-based array,
+\\ reading keys 1..n in order. Callers must have verified (sequence?) first.
+(table-to-array): stack-recursive ( state tidx path -- array ) [
+  2 pick-n 2 pick-n (raw-len)
+  V{ }
+  1 (array-loop)
+] ;
+
+\\ Enter the table at absolute Lua stack index idx: reserve C-stack headroom,
+\\ refuse a table already on its own ancestor path, then convert as an array
+\\ when it is a sequence and as a hash otherwise.
+(table-descend): ( state idx path -- value ) [
+  2 pick-n (check-lua-stack)
+  2 pick-n 2 pick-n (to-pointer)
+  2dup #in? [
+    f "cannot marshal a cyclic Lua table" ELuaError make-error throw
+  ] when
+  #push
+  2 pick-n 2 pick-n (sequence?)
+  [ (table-to-array) ] [ (table-to-hash) ] if
+] ;
+
+\\ Convert the Lua value at absolute Lua stack index idx to a 1z value: a
+\\ scalar through (to-value), a table through the marshalling walk with path
+\\ carrying the ancestor table identities.
+(table-to-value): stack-recursive ( state idx path -- value ) [
+  2 pick-n 2 pick-n (type) LUA_TTABLE = [
+    (table-descend)
+  ] [
+    drop (to-value)
+  ] if
+] ;
+
+\\ Push the table global named name and hand it to builder at its absolute
+\\ index, with the ancestor path seeded with the table's own identity; pop the
+\\ table and return builder's value. The Lua stack is restored on any error.
+(read-table): ( lua name builder: ( state tidx path -- value ) -- value ) [
+  [ [ unmake-lua-state ] dip ] dip
+  2 pick-n [
+    [ (push-table) ] dip
+    over dup (gettop)
+    2dup (to-pointer) 1array
+    3 pick-n call
+    nip
+    swap 1 (pop)
+  ] (lua-guard)
+] ;
+
+\\ Read the table global named name as a hash: string keys verbatim, number
+\\ keys stringified, values converted recursively with nested auto-detection.
+\\ Raises ELuaError when the global is not a table, on an unsupported or
+\\ colliding key, and on a cyclic table.
+get-global-hash: ( lua: lua-state name: string -- hash ) [
+  [ (table-to-hash) ] (read-table)
+] ;
+
+\\ Read the table global named name as a 0-based array, demanding the table
+\\ be a Lua sequence (keys exactly 1..n); values convert recursively with
+\\ nested auto-detection. Raises ELuaError when the global is not a table or
+\\ not a sequence, and on a cyclic table.
+get-global-array: ( lua: lua-state name: string -- array ) [
+  [
+    2 pick-n 2 pick-n (sequence?) [ ] [
+      f "global is not a Lua sequence" ELuaError make-error throw
+    ] if
+    (table-to-array)
+  ] (read-table)
 ] ;

@@ -1,5 +1,6 @@
 === lua scalar exchange ===
 Stack: [ ]
+PASS: eval of a statement returns option:none
 PASS: eval sets a global; read as fixnum
 PASS: eval>fixnum returns a fixnum result
 PASS: eval>float returns a float result

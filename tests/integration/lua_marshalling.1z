@@ -1,0 +1,203 @@
+use "testing" ;
+use "lua" ;
+
+\ Run quot, catch its error, and return only the error's message. A throw can
+\ leave partial results on the stack, so a marker bounds what to discard.
+(cm-until): ( marker-and-junk msg -- msg ) [
+  swap dup "::cm::" = [ drop ] [ drop (cm-until) ] if
+] ;
+(caught-message): ( quot -- msg ) [
+  "::cm::" swap [ call "no error raised" ] [ message: @get ] recover (cm-until)
+] ;
+
+"lua eval result option" test-section
+
+[
+  \ a statement chunk and an explicit nil result both read as option:none
+  dup "x = 5" eval option:none? "eval of a statement returns option:none" assert-true
+  dup "return nil" eval option:none? "eval of a nil result returns option:none" assert-true
+
+  \ scalar results come back as their natural 1z types
+  dup "return 42" eval option:some> 42 "fixnum result" assert=
+  dup "return 1.5" eval option:some> 1.5 "float result" assert=
+  dup "return 'hi'" eval option:some> "hi" "string result" assert=
+  dup "return true" eval option:some> "boolean result" assert-true
+  dup "return 1, 2" eval option:some> 1 "multi-value result truncates to the first" assert=
+
+  \ a table result raises; structured results go through a global instead
+  dup "return {}" [ eval ] curry curry
+  lua-error: "a table result raises" assert-error-type
+
+  dup unmake-lua-state (gettop) 0 "Lua stack balanced" assert=
+  drop
+] using-lua
+
+"lua readers raise on non-convertible values" test-section
+
+[
+  dup "nan = {}" eval drop
+  dup "nan" [ get-global>fixnum ] curry curry
+  lua-error: "get-global>fixnum on a table raises" assert-error-type
+  dup "nan" [ get-global>float ] curry curry
+  lua-error: "get-global>float on a table raises" assert-error-type
+  dup "nan" [ get-global>string ] curry curry
+  lua-error: "get-global>string on a table raises" assert-error-type
+  dup "s = 'abc'" eval drop
+  dup "s" [ get-global>fixnum ] curry curry
+  lua-error: "get-global>fixnum on a non-numeric string raises" assert-error-type
+  dup "fl = 1.5" eval drop
+  dup "fl" [ get-global>fixnum ] curry curry
+  lua-error: "get-global>fixnum on a non-integral float raises" assert-error-type
+  dup "return {}" [ eval>fixnum ] curry curry
+  lua-error: "eval>fixnum on a table result raises" assert-error-type
+  dup "return {}" [ eval>string ] curry curry
+  lua-error: "eval>string on a table result raises" assert-error-type
+
+  \ Lua's own coercions still apply where they exist
+  dup "n7 = '7'" eval drop
+  dup "n7" get-global>fixnum 7 "numeric string coerces to fixnum" assert=
+  dup "answer = 42" eval drop
+  dup "answer" get-global>string "42" "number coerces to string" assert=
+  dup "nan" get-global>boolean "boolean read stays total via truthiness" assert-true
+
+  \ dynamic get-global returns the natural type, no coercion
+  dup "answer" get-global 42 "get-global fixnum" assert=
+  dup "fl" get-global 1.5 "get-global float" assert=
+  dup "s" get-global "abc" "get-global string" assert=
+  dup "b = false" eval drop
+  dup "b" get-global "get-global boolean false" assert-false
+  dup "nan" [ get-global ] curry curry (caught-message)
+  "global nan is a table; use get-global-hash or get-global-array"
+  "get-global on a table points at the structured readers" assert=
+  dup "undefg" [ get-global ] curry curry
+  lua-error: "get-global on an undefined global raises" assert-error-type
+
+  dup unmake-lua-state (gettop) 0 "Lua stack balanced after the error paths" assert=
+  drop
+] using-lua
+
+"lua get-global-hash" test-section
+
+[
+  dup "cfg = { host = 'localhost', port = 8080, ratio = 1.5, debug = false }" eval drop
+  dup "cfg" get-global-hash
+  dup "host" @get "localhost" "string value" assert=
+  dup "port" @get 8080 "fixnum value" assert=
+  dup "ratio" @get 1.5 "float value" assert=
+  dup "debug" @get "boolean false value reads back, not missing" assert-false
+  #len 4 "entry count" assert=
+
+  \ integer and non-integral float keys stringify; string keys stay verbatim
+  dup "mixed = { [1] = 'one', [2.5] = 'half', name = 'x' }" eval drop
+  dup "mixed" get-global-hash
+  dup "1" @get "one" "integer key stringifies" assert=
+  dup "2.5" @get "half" "non-integral float key stringifies" assert=
+  "name" @get "x" "string key verbatim" assert=
+
+  \ nested tables auto-detect their shape
+  dup "nest = { tags = { 'fast', 'edge' }, limits = { cpu = 1.5 }, empty = {} }" eval drop
+  dup "nest" get-global-hash
+  dup "tags" @get { "fast" "edge" } "nested sequence becomes a 0-based array" assert=
+  dup "tags" @get array? "nested sequence is an immutable array" assert-true
+  dup "limits" @get hash? "nested non-sequence is an immutable hash" assert-true
+  dup "limits" @get "cpu" @get 1.5 "nested hash value" assert=
+  "empty" @get { } "nested empty table passes the sequence check vacuously" assert=
+
+  \ the top-level shape is caller-directed: an empty table is an empty hash here
+  dup "e = {}" eval drop
+  dup "e" get-global-hash #len 0 "empty table reads as an empty hash" assert=
+
+  \ error paths
+  dup "coll = { [1] = 'a', ['1'] = 'b' }" eval drop
+  dup "coll" [ get-global-hash ] curry curry (caught-message)
+  "Lua keys collide after stringification: 1" "stringify collision raises" assert=
+  dup "bk = { [true] = 1 }" eval drop
+  dup "bk" [ get-global-hash ] curry curry
+  lua-error: "boolean key raises" assert-error-type
+  dup "fv = { f = print }" eval drop
+  dup "fv" [ get-global-hash ] curry curry
+  lua-error: "function value raises" assert-error-type
+  dup "scalarg = 5" eval drop
+  dup "scalarg" [ get-global-hash ] curry curry
+  lua-error: "non-table global raises" assert-error-type
+  dup "undefg" [ get-global-hash ] curry curry
+  lua-error: "undefined global raises" assert-error-type
+
+  dup unmake-lua-state (gettop) 0 "Lua stack balanced after the error paths" assert=
+  drop
+] using-lua
+
+"lua get-global-array" test-section
+
+[
+  dup "nums = { 10, 20, 30 }" eval drop
+  dup "nums" get-global-array { 10 20 30 } "sequence re-bases to a 0-based array" assert=
+  dup "nums" get-global-hash
+  dup "1" @get 10 "the same table as a hash keeps 1-based stringified keys" assert=
+  #len 3 "hash of a sequence has n entries" assert=
+
+  \ nested shapes inside a sequence auto-detect
+  dup "objs = { { id = 1 }, { id = 2 } }" eval drop
+  dup "objs" get-global-array
+  dup 0 #nth "id" @get 1 "nested object in a sequence" assert=
+  #len 2 "array length" assert=
+
+  dup "ee = {}" eval drop
+  dup "ee" get-global-array { } "empty table is a valid empty sequence" assert=
+
+  dup "deep = { { { { 'leaf' } } } }" eval drop
+  dup "deep" get-global-array 0 #nth 0 #nth 0 #nth 0 #nth "leaf" "deep nesting converts" assert=
+
+  \ a shared subtable is a DAG, not a cycle; it converts once per reference
+  dup "shared = { 1 } dag = { a = shared, b = shared }" eval drop
+  dup "dag" get-global-hash
+  dup "a" @get { 1 } "first reference to the shared subtable" assert=
+  "b" @get { 1 } "second reference to the shared subtable" assert=
+
+  \ non-sequences and cycles raise
+  dup "holes = { [1] = 'a', [3] = 'c' }" eval drop
+  dup "holes" [ get-global-array ] curry curry (caught-message)
+  "global is not a Lua sequence" "holes raise" assert=
+  dup "strkeys = { a = 1 }" eval drop
+  dup "strkeys" [ get-global-array ] curry curry
+  lua-error: "string-keyed table raises" assert-error-type
+  dup "cy = {} cy.self = cy" eval drop
+  dup "cy" [ get-global-hash ] curry curry (caught-message)
+  "cannot marshal a cyclic Lua table" "self-cycle raises" assert=
+  dup "ca = {} cb = { a = ca } ca.b = cb" eval drop
+  dup "ca" [ get-global-hash ] curry curry
+  lua-error: "two-table cycle raises" assert-error-type
+
+  dup unmake-lua-state (gettop) 0 "Lua stack balanced after the error paths" assert=
+  drop
+] using-lua
+
+"lua structured set-global and table-set" test-section
+
+[
+  dup "srv" H{ "name" "edge" "ports" { 80 443 } "limits" H{ "cpu" 1.5 } } set-global
+  dup "return srv.name" eval option:some> "edge" "hash global readable from Lua" assert=
+  dup "return srv.ports[2]" eval option:some> 443 "0-based array re-bases to Lua 1..n" assert=
+  dup "return #srv.ports" eval option:some> 2 "array length in Lua" assert=
+  dup "return srv.limits.cpu" eval option:some> 1.5 "nested hash builds a nested table" assert=
+
+  \ round-trip back to 1z
+  dup "srv" get-global-hash
+  dup "ports" @get { 80 443 } "array round-trips" assert=
+  "limits" @get "cpu" @get 1.5 "nested hash round-trips" assert=
+
+  \ table-set with a structured value nests a table
+  dup "t" new-table
+  dup "t" "cfg" H{ "on" t } table-set
+  dup "return t.cfg.on" eval option:some> "table-set stores a nested table" assert-true
+
+  \ mutable containers stay rejected
+  dup "v" V{ 1 2 } [ set-global ] curry curry curry
+  "a vector value raises" assert-error
+  dup "m" M{ } [ set-global ] curry curry curry
+  "a mutable map value raises" assert-error
+
+  dup unmake-lua-state (gettop) 0 "Lua stack balanced" assert=
+  dup "return srv.name" eval option:some> "edge" "state usable after the error paths" assert=
+  drop
+] using-lua

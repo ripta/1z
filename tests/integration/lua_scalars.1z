@@ -4,8 +4,8 @@ use "lua" ;
 "lua scalar exchange" test-section
 
 [
-  \ eval runs source for side effects; the global it sets reads back
-  dup "answer = 42" eval
+  \ eval on a statement chunk returns option:none; the global it sets reads back
+  dup "answer = 42" eval option:none? "eval of a statement returns option:none" assert-true
   dup "answer" get-global>fixnum 42 "eval sets a global; read as fixnum" assert=
 
   \ eval> readers return the single result as each scalar type

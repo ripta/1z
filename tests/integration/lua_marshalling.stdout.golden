@@ -1,0 +1,88 @@
+Stack: [ ]
+Stack: [ ]
+=== lua eval result option ===
+Stack: [ ]
+PASS: eval of a statement returns option:none
+PASS: eval of a nil result returns option:none
+PASS: fixnum result
+PASS: float result
+PASS: string result
+PASS: boolean result
+PASS: multi-value result truncates to the first
+PASS: a table result raises
+PASS: Lua stack balanced
+Stack: [ ]
+=== lua readers raise on non-convertible values ===
+Stack: [ ]
+PASS: get-global>fixnum on a table raises
+PASS: get-global>float on a table raises
+PASS: get-global>string on a table raises
+PASS: get-global>fixnum on a non-numeric string raises
+PASS: get-global>fixnum on a non-integral float raises
+PASS: eval>fixnum on a table result raises
+PASS: eval>string on a table result raises
+PASS: numeric string coerces to fixnum
+PASS: number coerces to string
+PASS: boolean read stays total via truthiness
+PASS: get-global fixnum
+PASS: get-global float
+PASS: get-global string
+PASS: get-global boolean false
+PASS: get-global on a table points at the structured readers
+PASS: get-global on an undefined global raises
+PASS: Lua stack balanced after the error paths
+Stack: [ ]
+=== lua get-global-hash ===
+Stack: [ ]
+PASS: string value
+PASS: fixnum value
+PASS: float value
+PASS: boolean false value reads back, not missing
+PASS: entry count
+PASS: integer key stringifies
+PASS: non-integral float key stringifies
+PASS: string key verbatim
+PASS: nested sequence becomes a 0-based array
+PASS: nested sequence is an immutable array
+PASS: nested non-sequence is an immutable hash
+PASS: nested hash value
+PASS: nested empty table passes the sequence check vacuously
+PASS: empty table reads as an empty hash
+PASS: stringify collision raises
+PASS: boolean key raises
+PASS: function value raises
+PASS: non-table global raises
+PASS: undefined global raises
+PASS: Lua stack balanced after the error paths
+Stack: [ ]
+=== lua get-global-array ===
+Stack: [ ]
+PASS: sequence re-bases to a 0-based array
+PASS: the same table as a hash keeps 1-based stringified keys
+PASS: hash of a sequence has n entries
+PASS: nested object in a sequence
+PASS: array length
+PASS: empty table is a valid empty sequence
+PASS: deep nesting converts
+PASS: first reference to the shared subtable
+PASS: second reference to the shared subtable
+PASS: holes raise
+PASS: string-keyed table raises
+PASS: self-cycle raises
+PASS: two-table cycle raises
+PASS: Lua stack balanced after the error paths
+Stack: [ ]
+=== lua structured set-global and table-set ===
+Stack: [ ]
+PASS: hash global readable from Lua
+PASS: 0-based array re-bases to Lua 1..n
+PASS: array length in Lua
+PASS: nested hash builds a nested table
+PASS: array round-trips
+PASS: nested hash round-trips
+PASS: table-set stores a nested table
+PASS: a vector value raises
+PASS: a mutable map value raises
+PASS: Lua stack balanced
+PASS: state usable after the error paths
+Stack: [ ]

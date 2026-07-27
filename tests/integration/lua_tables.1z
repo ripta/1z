@@ -31,7 +31,7 @@ use "lua" ;
   dup "return t.answer" eval>fixnum 42 "1z write visible to Lua" assert=
 
   \ a table built in Lua reads back field-by-field
-  dup "cfg = { host = 'localhost', port = 8080, debug = false }" eval
+  dup "cfg = { host = 'localhost', port = 8080, debug = false }" eval drop
   dup "cfg" "host" table-get "localhost" "Lua-built string field" assert=
   dup "cfg" "port" table-get 8080 "Lua-built integer field" assert=
   dup "cfg" "debug" table-get "false entry reads back, not treated as missing" assert-false
@@ -67,14 +67,14 @@ use "lua" ;
 
   \ error paths: non-table global, undefined global, bad key type, and a
   \ non-scalar value under iteration
-  dup "notatable = 5" eval
+  dup "notatable = 5" eval drop
   dup "notatable" "x" [ table-get ] curry curry curry
   lua-error: "table word on a non-table global raises" assert-error-type
   dup "undefinedglobal" "x" [ table-get ] curry curry curry
   lua-error: "table word on an undefined global raises" assert-error-type
   dup "cfg" 1.5 "v" [ table-set ] curry curry curry curry
   "a non-string, non-fixnum key raises" assert-error
-  dup "nested = { sub = {} }" eval
+  dup "nested = { sub = {} }" eval drop
   dup "nested" [ 2drop ] [ table-each ] curry curry curry
   lua-error: "table-each over a non-scalar value raises" assert-error-type
 
