@@ -59,10 +59,13 @@ const flag_bit_native: u8 = 1 << 1;
 const flag_bit_host_callback: u8 = 1 << 2;
 const flag_bit_has_stack_effect: u8 = 1 << 3;
 const flag_bit_never_returns: u8 = 1 << 4;
+/// A `private{ }` helper row. The loader routes it into the module's `deps` instead of `words`,
+/// keeping it off the public by-name surface.
+pub const flag_bit_module_private: u8 = 1 << 5;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 14;
+pub const format_version: u32 = 15;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -3220,14 +3223,16 @@ fn writeWordMarkersSym(
 
 /// Resolve an image word back to the live `ModuleWord` so the emitter
 /// can read markers, the stack effect, and the action variant. Returns
-/// a pointer into the module's words map so callers may take stable
-/// addresses of nested fields (e.g., the stack effect).
+/// a pointer into the module's words map -- or its deps map for a
+/// `private{ }` helper entry -- so callers may take stable addresses
+/// of nested fields (e.g., the stack effect).
 fn lookupModuleWord(ctx: *const Context, entry: ImageEntry) ?*const ModuleWord {
     var it = ctx.module_cache_value.map.iterator();
     while (it.next()) |cached| {
         if (cached.value_ptr.* != .module) continue;
         const mod = cached.value_ptr.*.module;
         if (!std.mem.eql(u8, mod.name, entry.module_name)) continue;
+        if (entry.module_private) return mod.deps.getPtr(entry.word_name);
         return mod.words.getPtr(entry.word_name);
     }
     return null;
@@ -3693,11 +3698,13 @@ fn emitWordDiagnosticStrings(
             try out.appendSlice(allocator, ";\n");
             emitted_any = true;
         }
-        if (mw_ptr.source_file) |sf| {
+        // Private-helper rows suppress their source location; see the word-table emission for
+        // the rationale.
+        if (!entry.module_private and mw_ptr.source_file != null) {
             try out.appendSlice(allocator, "static const char ");
             try writeWordSourceFileSym(out, allocator, idx);
             try out.appendSlice(allocator, "[] = ");
-            try emitCStringLiteral(out, allocator, sf);
+            try emitCStringLiteral(out, allocator, mw_ptr.source_file.?);
             try out.appendSlice(allocator, ";\n");
             emitted_any = true;
         }
@@ -3963,7 +3970,8 @@ fn emitModuleAndWordTables(
         const fallback_mw = ModuleWord{ .action = .{ .compound = &.{} } };
         const mw_ptr: *const ModuleWord = lookupModuleWord(ctx, entry) orelse &fallback_mw;
 
-        const flags = computeFlags(mw_ptr);
+        var flags = computeFlags(mw_ptr);
+        if (entry.module_private) flags |= flag_bit_module_private;
         const input_count: u8 = if (mw_ptr.stack_effect) |eff|
             @intCast(eff.concreteInputCount())
         else
@@ -4049,7 +4057,11 @@ fn emitModuleAndWordTables(
         } else {
             try out.appendSlice(allocator, "        .doc = NULL,\n        .doc_len = 0,\n");
         }
-        if (mw_ptr.source_file) |sf| {
+        // A private helper's recorded source points at the machinery that defined it, not the
+        // module file, so its row carries no location.
+        const suppress_source = entry.module_private;
+        if (!suppress_source and mw_ptr.source_file != null) {
+            const sf = mw_ptr.source_file.?;
             try out.appendSlice(allocator, "        .source_file = ");
             try writeWordSourceFileSym(out, allocator, idx);
             try out.appendSlice(allocator, ",\n        .source_file_len = ");
@@ -4059,9 +4071,9 @@ fn emitModuleAndWordTables(
             try out.appendSlice(allocator, "        .source_file = NULL,\n        .source_file_len = 0,\n");
         }
         try out.appendSlice(allocator, "        .source_line = ");
-        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{mw_ptr.source_line}) catch unreachable);
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{if (suppress_source) 0 else mw_ptr.source_line}) catch unreachable);
         try out.appendSlice(allocator, ",\n        .source_column = ");
-        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{mw_ptr.source_column}) catch unreachable);
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}u", .{if (suppress_source) 0 else mw_ptr.source_column}) catch unreachable);
         try out.appendSlice(allocator, ",\n");
         if (mw_ptr.provenance) |p| {
             try out.appendSlice(allocator, "        .provenance_generator = ");
@@ -4245,10 +4257,11 @@ const ModuleDepRow = struct {
 ///
 /// Returns the emitted row count. Noüp returns 0 when no edge survives.
 ///
-/// An edge is kept only when its source module is itself an image module, is not a synthetic scope.
-/// A `private{` helper has no image representation, and carries the word in its public `words`
-/// with an action the image materializes. Native and host-callback targets resolve through the
-/// dictionary at runtime, so that their edges are dropped rather than serialized dead.
+/// An edge is kept only when its source module is itself an image module and is not a synthetic
+/// scope. A `private{ }` helper needs no dep row: it rides in the owner's own word-table window as
+/// a `flag_bit_module_private` row, which the loader routes back into `deps` directly. Native and
+/// host-callback targets resolve through the dictionary at runtime, so their edges are dropped
+/// rather than serialized dead.
 fn emitModuleDepTable(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, ctx: *const Context, manifest: ImageManifest) ImageEmitError!u32 {
     var module_names: std.ArrayListUnmanaged([]const u8) = .{};
     defer module_names.deinit(allocator);
@@ -4521,7 +4534,9 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 14") != null);
+    var version_buf: [48]u8 = undefined;
+    const version_needle = std.fmt.bufPrint(&version_buf, ".format_version = {d}", .{format_version}) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, version_needle) != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
@@ -6095,11 +6110,102 @@ test "emitImageC: module dep rows for resolvable edges, unresolvable edges skipp
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_deps = onez_image_module_deps_storage") != null);
 
     // The synthetic-scope, outside-the-image, missing-word, and
-    // native-target edges emit no row.
+    // native-target edges emit no row. The synthetic-scope helper is
+    // carried as a flagged private word row instead of a dep reference.
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dep_3_name") == null);
-    try testing.expect(std.mem.indexOf(u8, out.items, "\"hidden\"") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_1_name[] = \"hidden\"") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "\"ext\"") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, "\"raw\"") == null);
+}
+
+test "emitImageC: private helper rows set the flag, suppress source, and read from deps" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    const blob_ht_ptr = try arena.create(value_mod.HashTable);
+    blob_ht_ptr.* = .{ .header = undefined };
+    const blob_instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .hash = blob_ht_ptr } }, .line = 0, .column = 0 },
+    });
+
+    const synthetic = try arena.create(Module);
+    synthetic.* = .{ .name = "<local-scope>", .words = .{} };
+
+    const owner = try arena.create(Module);
+    owner.* = .{ .name = "owner", .words = .{} };
+    // A same-named public/private pair with distinct docs pins that each row reads its own map,
+    // and the recorded source location on the private helper pins the suppression.
+    try owner.words.put(arena, "dup", .{
+        .doc = "pub-dup-doc",
+        .source_file = "owner-src.1z",
+        .source_line = 3,
+        .source_column = 4,
+        .action = .{ .compound = instrs },
+    });
+    try owner.deps.put(arena, "dup", .{
+        .source_module = synthetic,
+        .doc = "priv-dup-doc",
+        .source_file = "src/prelude.1z",
+        .source_line = 9,
+        .source_column = 9,
+        .action = .{ .compound = instrs },
+    });
+    try owner.deps.put(arena, "helper", .{
+        .source_module = synthetic,
+        .action = .{ .compound = instrs },
+    });
+    try owner.deps.put(arena, "zz-blob", .{
+        .source_module = synthetic,
+        .action = .{ .compound = blob_instrs },
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "owner"), .{ .module = owner });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const stats = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
+    try testing.expectEqual(@as(u32, 4), stats.word_count);
+
+    // Manifest order: the public "dup", then the privates "dup", "helper", "zz-blob". Public rows
+    // keep bit 5 clear; the fixture words carry no stack effect, so private flags are exactly the
+    // bit.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_name[] = \"dup\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_1_name[] = \"dup\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_2_name[] = \"helper\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_3_name[] = \"zz-blob\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".flags = 0") != null);
+    var flag_buf: [32]u8 = undefined;
+    const flag_needle = std.fmt.bufPrint(&flag_buf, ".flags = {d}", .{flag_bit_module_private}) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, flag_needle) != null);
+
+    // Each same-named row reads its own map: distinct docs survive per row.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_doc[] = \"pub-dup-doc\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_1_doc[] = \"priv-dup-doc\"") != null);
+
+    // The public row keeps its source location; the private row's is suppressed even though the
+    // live word records one.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_0_sf[] = \"owner-src.1z\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".source_line = 3u") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_1_sf") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "src/prelude.1z") == null);
+
+    // Structural private bodies serialize; the blob private row emits none.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_1_body") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_2_body") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_3_body") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".classification = 1") != null);
 }
 
 test "emitImageC: no parameter or marker literals emits no slot tables" {

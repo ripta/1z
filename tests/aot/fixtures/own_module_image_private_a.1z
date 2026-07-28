@@ -1,0 +1,14 @@
+\ Fixture for own_module_image_private. Two private{ } helpers reached from
+\ stored quotations whose nested definitions keep the quotation bodies
+\ uncompilable, so they run interpreted inside the runtime image. `tag`
+\ collides with own_module_image_private_b's public export; `hidden` exists
+\ nowhere else.
+
+private{
+  hidden: ( -- str ) [ "A-HIDDEN" ] ;
+  tag: ( -- str ) [ "A-TAG" ] ;
+}
+
+a-hidden-quot: ( -- q ) [ [ inner: [ hidden ] ; inner ] ] ;
+
+a-tag-quot: ( -- q ) [ [ inner2: [ tag ] ; inner2 ] ] ;

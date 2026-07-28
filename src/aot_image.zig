@@ -21,7 +21,9 @@ const Module = value_mod.Module;
 const ModuleWord = value_mod.ModuleWord;
 const Instruction = value_mod.Instruction;
 
-const Context = @import("context.zig").Context;
+const context_mod = @import("context.zig");
+const Context = context_mod.Context;
+const embedded_stdlib = @import("embedded_stdlib.zig");
 
 /// Module names that the runtime loads independently of the image. The
 /// startup loader does not need to, and must not, recreate entries for
@@ -228,7 +230,23 @@ pub const ImageEntry = struct {
     path: ImagePath,
     /// `.none` when `path == .structural`; populated otherwise.
     blob_reason: BlobReason = .none,
+    /// True for a `private{ }` helper serialized out of the module's `deps`.
+    ///
+    /// The emitter reads the live word from `deps` instead of `words`, and the loader routes the
+    /// row back into the loaded module's `deps`, keeping it off the public by-name surface.
+    module_private: bool = false,
 };
+
+/// True for a deps entry that is a module's own `private{ }` helper rather than a `use`-import:
+/// its source is an ephemeral synthetic scope.
+///
+/// An embedded-stdlib module is cached under `<stdlib>/...`, which is `<`-prefixed but real and
+/// runtime-available, so it stays an import.
+pub fn isPrivateHelperSource(module: ?*const Module) bool {
+    const m = module orelse return false;
+    if (!context_mod.isSyntheticScopeModule(m)) return false;
+    return !std.mem.startsWith(u8, m.name, embedded_stdlib.virtual_prefix);
+}
 
 /// The result of walking `ctx.module_cache_value`. Owns its `entries`
 /// slice; callers must `deinit` after use. The string fields inside
@@ -299,6 +317,39 @@ pub fn buildImageManifest(ctx: *Context, allocator: Allocator) Allocator.Error!I
                 .word_name = word_name,
                 .path = classification.path,
                 .blob_reason = classification.reason,
+            });
+            switch (classification.path) {
+                .structural => structural_count += 1,
+                .blob => blob_count += 1,
+            }
+        }
+
+        // The module's `private{ }` helpers live in `deps`, not `words`, so they get their own
+        // flagged entries, appended after the public words to keep the module's word-table window
+        // contiguous. `use`-imports in the same map are carried as dep-table references instead.
+        var private_names: std.ArrayListUnmanaged([]const u8) = .{};
+        defer private_names.deinit(allocator);
+
+        var dep_iter = mod.deps.iterator();
+        while (dep_iter.next()) |dep_entry| {
+            if (!isPrivateHelperSource(dep_entry.value_ptr.source_module)) continue;
+            try private_names.append(allocator, dep_entry.key_ptr.*);
+        }
+        std.mem.sort([]const u8, private_names.items, {}, struct {
+            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lessThan);
+
+        for (private_names.items) |word_name| {
+            const mw = mod.deps.get(word_name) orelse continue;
+            const classification = classifyModuleWord(mw) orelse continue;
+            try entries.append(allocator, .{
+                .module_name = mod.name,
+                .word_name = word_name,
+                .path = classification.path,
+                .blob_reason = classification.reason,
+                .module_private = true,
             });
             switch (classification.path) {
                 .structural => structural_count += 1,
@@ -721,6 +772,118 @@ test "buildImageManifest: synthetic modules produce sorted, classified entries" 
     try testing.expectEqualStrings("alpha", manifest.entries[2].word_name);
     try testing.expectEqualStrings("zeta", manifest.entries[3].module_name);
     try testing.expectEqualStrings("beta", manifest.entries[3].word_name);
+}
+
+test "buildImageManifest: private helpers get flagged entries after the public words" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
+    });
+
+    const local_scope = try arena.create(Module);
+    local_scope.* = .{ .name = "<local-scope>", .words = .{} };
+    const stdlib_mod = try arena.create(Module);
+    stdlib_mod.* = .{ .name = "<stdlib>/lib/testing.1z", .words = .{} };
+    const real_source = try arena.create(Module);
+    real_source.* = .{ .name = "other", .words = .{} };
+
+    const owner = try arena.create(Module);
+    owner.* = .{ .name = "owner", .words = .{} };
+    // Public words that sort around the private names, so the appended private block is
+    // observable as ordering.
+    try owner.words.put(arena, "zz-public", .{ .action = .{ .compound = instrs } });
+    try owner.words.put(arena, "aa-public", .{ .action = .{ .compound = instrs } });
+    // Two private helpers out of alphabetical order, plus every skip case: a use-import from a
+    // real module, an embedded-stdlib import, a native helper, and a null-source entry.
+    try owner.deps.put(arena, "priv-b", .{ .source_module = local_scope, .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "priv-a", .{ .source_module = local_scope, .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "use-import", .{ .source_module = real_source, .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "stdlib-import", .{ .source_module = stdlib_mod, .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "native-helper", .{ .source_module = local_scope, .action = .{ .native = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f } });
+    try owner.deps.put(arena, "no-source", .{ .source_module = null, .action = .{ .compound = instrs } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "owner"), .{ .module = owner });
+
+    var manifest = try buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u32, 4), manifest.total_count);
+    try testing.expectEqual(@as(u32, 4), manifest.structural_count);
+
+    try testing.expectEqualStrings("aa-public", manifest.entries[0].word_name);
+    try testing.expect(!manifest.entries[0].module_private);
+    try testing.expectEqualStrings("zz-public", manifest.entries[1].word_name);
+    try testing.expect(!manifest.entries[1].module_private);
+    try testing.expectEqualStrings("priv-a", manifest.entries[2].word_name);
+    try testing.expect(manifest.entries[2].module_private);
+    try testing.expectEqualStrings("priv-b", manifest.entries[3].word_name);
+    try testing.expect(manifest.entries[3].module_private);
+}
+
+test "buildImageManifest: same-named public word and private helper both get entries" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+
+    const local_scope = try arena.create(Module);
+    local_scope.* = .{ .name = "<local-scope>", .words = .{} };
+
+    const owner = try arena.create(Module);
+    owner.* = .{ .name = "owner", .words = .{} };
+    try owner.words.put(arena, "dup-name", .{ .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "dup-name", .{ .source_module = local_scope, .action = .{ .compound = instrs } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "owner"), .{ .module = owner });
+
+    var manifest = try buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u32, 2), manifest.total_count);
+    try testing.expectEqualStrings("dup-name", manifest.entries[0].word_name);
+    try testing.expect(!manifest.entries[0].module_private);
+    try testing.expectEqualStrings("dup-name", manifest.entries[1].word_name);
+    try testing.expect(manifest.entries[1].module_private);
+}
+
+test "buildImageManifest: blob-classified private helper stays a flagged entry" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const blob_ht_ptr = try arena.create(value_mod.HashTable);
+    blob_ht_ptr.* = .{ .header = undefined };
+    const blob_instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .hash = blob_ht_ptr } }, .line = 0, .column = 0 },
+    });
+
+    const local_scope = try arena.create(Module);
+    local_scope.* = .{ .name = "<local-scope>", .words = .{} };
+
+    const owner = try arena.create(Module);
+    owner.* = .{ .name = "owner", .words = .{} };
+    try owner.deps.put(arena, "blob-helper", .{ .source_module = local_scope, .action = .{ .compound = blob_instrs } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "owner"), .{ .module = owner });
+
+    var manifest = try buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u32, 1), manifest.total_count);
+    try testing.expectEqual(@as(u32, 1), manifest.blob_count);
+    try testing.expect(manifest.entries[0].module_private);
+    try testing.expectEqual(ImagePath.blob, manifest.entries[0].path);
 }
 
 test "buildImageManifest: skipped modules are excluded" {

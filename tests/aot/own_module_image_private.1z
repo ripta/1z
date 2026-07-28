@@ -1,0 +1,11 @@
+\ Module A's stored quotations call its private{ } helpers from interpreted
+\ bodies inside the runtime image. `hidden` exists only as A's private helper,
+\ so it must resolve at all; `tag` collides with module B's public export, so
+\ A's own helper must win while the entry's own `tag` still resolves B's.
+
+use { a-hidden-quot: a-tag-quot: } "fixtures/own_module_image_private_a.1z" ;
+use { tag: } "fixtures/own_module_image_private_b.1z" ;
+
+a-hidden-quot call print-line
+a-tag-quot call print-line
+tag print-line

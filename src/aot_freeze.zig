@@ -23,7 +23,7 @@ const WordDefinition = dictionary_mod.WordDefinition;
 const markers_mod = @import("primitives/markers.zig");
 const ArtifactClass = markers_mod.ArtifactClass;
 
-const embedded_stdlib = @import("embedded_stdlib.zig");
+const aot_image = @import("aot_image.zig");
 
 const dispatch_helpers = @import("primitives/dispatch_helpers.zig");
 const pic_mod = @import("pic.zig");
@@ -1188,14 +1188,8 @@ fn classifyCallee(ctx: *const Context, name: []const u8, vis: ?ModuleDepsVisibil
 
 /// True for a callee defined in an ephemeral private scope -- a `private{ }` helper or a
 /// `local-scope`/`current-scope` snapshot.
-///
-/// Narrower than `isSyntheticScopeModule`, which matches any `<`-prefixed name: an embedded-stdlib
-/// module is cached under `<stdlib>/...` (`embedded_stdlib.virtual_prefix`) and is available at
-/// runtime, so it must not count as a private helper needing composite-literal seeding.
 fn isPrivateHelperCallee(callee: WordDefinition) bool {
-    const m = callee.source_module orelse return false;
-    if (!context_mod.isSyntheticScopeModule(m)) return false;
-    return !std.mem.startsWith(u8, m.name, embedded_stdlib.virtual_prefix);
+    return aot_image.isPrivateHelperSource(callee.source_module);
 }
 
 /// Recurse through a composite literal Value to reach every buried `.quotation` and seed its callees

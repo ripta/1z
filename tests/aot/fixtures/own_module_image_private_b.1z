@@ -1,0 +1,4 @@
+\ Fixture for own_module_image_private. Exports a public `tag` colliding with
+\ the private helper of the same name in own_module_image_private_a.
+
+tag: ( -- str ) [ "B-TAG" ] ;

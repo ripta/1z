@@ -2957,9 +2957,9 @@ pub const Context = struct {
     /// e.g. a parameter's default quotation that calls a module-private helper.
     ///
     /// The fallback is gated on `runtime_image_loaded` so normal `load`-based module sessions
-    /// keep their privacy boundary. The AOT loader places every word -- public and module-
-    /// private -- into `module.words`, but a source-level `load` keeps private helpers in
-    /// `module.deps`. Only the AOT case wants the `words`-only sweep to reach in.
+    /// keep their privacy boundary. Both the AOT loader and a source-level `load` keep private
+    /// helpers in `module.deps`, so the `words`-only sweep reaches a loaded image's public
+    /// surface without crossing into any module's private names.
     ///
     /// Definition- and parse-time callers must stick to `lookupWord` so they never see
     /// sibling modules' words.
@@ -3119,8 +3119,8 @@ pub const Context = struct {
     /// API through `words` only. Checking deps would leak names out
     /// of their owning module's privacy boundary (see the
     /// `local_scope` integration test). The AOT runtime-image
-    /// loader places every word -- public or module-private -- into
-    /// `words`, so the words-only sweep is enough for both cases.
+    /// loader routes its private-flagged rows into `deps` too, so
+    /// the words-only sweep holds the same boundary for both cases.
     fn lookupModuleCacheWordLocked(self: *const Context, name: []const u8) ?WordDefinition {
         var iter = self.module_cache_value.map.iterator();
         while (iter.next()) |entry| {

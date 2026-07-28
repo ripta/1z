@@ -293,7 +293,12 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
 
         const cache_entry = ctx.module_cache_value.map.getPtr(module_name) orelse continue;
         if (cache_entry.* != .module) continue;
-        const word_entry = cache_entry.*.module.words.getPtr(word_name) orelse continue;
+        // A same-named public word and private helper may coexist in one module, so the row's own
+        // flag picks the map.
+        const word_entry = if (w.flags & aot_image_emit.flag_bit_module_private != 0)
+            cache_entry.*.module.deps.getPtr(word_name) orelse continue
+        else
+            cache_entry.*.module.words.getPtr(word_name) orelse continue;
 
         // A non-provenance word whose by-value decode already produced a body
         // in `populateModulesAndWords` is final; only generator-emitted words
@@ -393,6 +398,15 @@ fn stampWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
             ctx.stampQuotationBodies(mw.action.compound, module_ptr) catch
                 return LoaderError.OutOfMemory;
         }
+
+        // `deps` holds only the module's private helpers at this point, since `populateModuleDeps`
+        // runs after this pass, so their bodies stamp with the owning module.
+        var dep_it = module_ptr.deps.valueIterator();
+        while (dep_it.next()) |mw| {
+            if (mw.action != .compound) continue;
+            ctx.stampQuotationBodies(mw.action.compound, module_ptr) catch
+                return LoaderError.OutOfMemory;
+        }
     }
 }
 
@@ -473,7 +487,14 @@ fn populateModulesAndWords(
                 .word_id = word_id_opt,
                 .action = .{ .compound = body },
             };
-            module_ptr.words.put(arena, word_name, mw) catch return LoaderError.OutOfMemory;
+            // A `private{ }` helper row goes into `deps`, not `words`. The public by-name surface
+            // never sees it, since `lookupModuleCacheWordLocked` scans `words` only, while the
+            // own-module probe and the module's deps frame still reach it.
+            if (w.flags & aot_image_emit.flag_bit_module_private != 0) {
+                module_ptr.deps.put(arena, word_name, mw) catch return LoaderError.OutOfMemory;
+            } else {
+                module_ptr.words.put(arena, word_name, mw) catch return LoaderError.OutOfMemory;
+            }
         }
 
         const cache_alloc = ctx.module_cache_value.header.allocator;
@@ -1270,7 +1291,10 @@ fn replaceWordBodyWithTypeValuePush(
     const cache_entry = ctx.module_cache_value.map.getPtr(module_name) orelse return;
     if (cache_entry.* != .module) return;
     const module_ptr = cache_entry.*.module;
-    const word_entry = module_ptr.words.getPtr(word_name) orelse return;
+    const word_entry = if (w.flags & aot_image_emit.flag_bit_module_private != 0)
+        module_ptr.deps.getPtr(word_name) orelse return
+    else
+        module_ptr.words.getPtr(word_name) orelse return;
 
     const arena = ctx.quotationAllocator();
     const instrs = arena.alloc(value_mod.Instruction, 1) catch return LoaderError.OutOfMemory;
@@ -1625,6 +1649,64 @@ test "loadIntoContext: resource TypeValue rehydrates kind + universal bools + re
     try testing.expectEqual(@as(usize, 1), w.action.compound.len);
     try testing.expect(w.action.compound[0].op == .push_literal);
     try testing.expectEqual(tv, w.action.compound[0].op.push_literal.type_val);
+}
+
+test "loadIntoContext: private-flagged type word's deps body rewrites to the runtime TypeValue" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const tv_name = "priv-type";
+    const w_name = "PrivType";
+    const m_name = "demo";
+
+    var drow = zeroDescriptor();
+    drow.kind = 6;
+    const resource_kind = "priv-handle";
+    drow.resource_kind = resource_kind.ptr;
+    drow.resource_kind_len = resource_kind.len;
+
+    const descriptors = [_]TypeDescriptor{drow};
+    const typevalues = [_]TypeValueRow{
+        .{
+            .name = tv_name.ptr,
+            .name_len = tv_name.len,
+            .slot = 1,
+            .descriptor = &descriptors[0],
+            .member_type_slots = null,
+            .member_type_count = 0,
+        },
+    };
+    const words = [_]Word{
+        blk: {
+            var w = wordRow(w_name, 200, 0);
+            w.flags = aot_image_emit.flag_bit_module_private;
+            w.typevalue_slot = 1;
+            break :blk w;
+        },
+    };
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+
+    var slot_storage: [2]?*const value_mod.TypeValue = .{ null, null };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.typevalue_slot_count = 2;
+    header.typevalue_count = typevalues.len;
+    header.modules = &modules;
+    header.words = &words;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+
+    try loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null);
+
+    const tv = slot_storage[1] orelse return error.TestExpectedTypeValue;
+    const module_ptr = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
+    const mw = module_ptr.deps.get(w_name) orelse return error.TestExpectedDep;
+    try testing.expectEqual(@as(usize, 1), mw.action.compound.len);
+    try testing.expectEqual(@as(*const value_mod.TypeValue, tv), mw.action.compound[0].op.push_literal.type_val);
+    try testing.expect(module_ptr.words.get(w_name) == null);
 }
 
 test "loadIntoContext: struct TypeDescriptor with field-types resolves cross-references" {
@@ -2663,6 +2745,256 @@ test "replayMethodDispatch: patches a dep entry's dispatch_id like a word entry"
     try testing.expectEqual(@as(u32, 7), word.dispatch_id);
     const dep = owner.deps.get(generic_name) orelse return error.TestExpectedDep;
     try testing.expectEqual(@as(u32, 7), dep.dispatch_id);
+}
+
+test "populateModulesAndWords: private-flagged rows land in deps, coexisting with a same-named word" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const pub_body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    };
+    const priv_body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0, .column = 0 },
+    };
+    const helper_body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 0, .column = 0 },
+    };
+    var pub_encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer pub_encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&pub_encoded, &pub_body, testing.allocator, null);
+    var priv_encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer priv_encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&priv_encoded, &priv_body, testing.allocator, null);
+    var helper_encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer helper_encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&helper_encoded, &helper_body, testing.allocator, null);
+
+    const m_name = "demo";
+    var pub_row = wordRow("dup", 0, 0);
+    pub_row.body_bytecode = pub_encoded.items.ptr;
+    pub_row.body_bytecode_len = @intCast(pub_encoded.items.len);
+    var priv_row = wordRow("dup", 1, 0);
+    priv_row.flags = aot_image_emit.flag_bit_module_private;
+    priv_row.body_bytecode = priv_encoded.items.ptr;
+    priv_row.body_bytecode_len = @intCast(priv_encoded.items.len);
+    var helper_row = wordRow("helper", 2, 0);
+    helper_row.flags = aot_image_emit.flag_bit_module_private;
+    helper_row.body_bytecode = helper_encoded.items.ptr;
+    helper_row.body_bytecode_len = @intCast(helper_encoded.items.len);
+
+    const words = [_]Word{ pub_row, priv_row, helper_row };
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 3 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 3;
+    header.modules = &modules;
+    header.words = &words;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    const module_ptr = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
+
+    // The public row is the only entry in `words`; both flagged rows are in `deps`, each with its
+    // own decoded body.
+    try testing.expectEqual(@as(usize, 1), module_ptr.words.count());
+    try testing.expectEqual(@as(usize, 2), module_ptr.deps.count());
+    const pub_dup = module_ptr.words.get("dup") orelse return error.TestExpectedWord;
+    try testing.expectEqual(@as(i64, 1), pub_dup.action.compound[0].op.push_literal.fixnum);
+    const priv_dup = module_ptr.deps.get("dup") orelse return error.TestExpectedDep;
+    try testing.expectEqual(@as(i64, 2), priv_dup.action.compound[0].op.push_literal.fixnum);
+    const helper = module_ptr.deps.get("helper") orelse return error.TestExpectedDep;
+    try testing.expectEqual(@as(i64, 3), helper.action.compound[0].op.push_literal.fixnum);
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), helper.source_module);
+    try testing.expect(module_ptr.words.get("helper") == null);
+
+    // End-to-end resolution: the own-module probe reaches the helper and prefers the public
+    // `dup`, while resolution without the owning module never sees the helper -- the module-cache
+    // scan reads `words` only.
+    ctx.runtime_image_loaded = true;
+    const probed = ctx.lookupWordForExecutionOwnScope("helper", null, module_ptr, &.{}) orelse
+        return error.TestExpectedProbeHit;
+    try testing.expectEqual(@as(i64, 3), probed.action.compound[0].op.push_literal.fixnum);
+    const probed_dup = ctx.lookupWordForExecutionOwnScope("dup", null, module_ptr, &.{}) orelse
+        return error.TestExpectedProbeHit;
+    try testing.expectEqual(@as(i64, 1), probed_dup.action.compound[0].op.push_literal.fixnum);
+    try testing.expect(ctx.lookupWordForExecutionOwnScope("helper", null, null, &.{}) == null);
+}
+
+test "loadIntoContext: stamps a private helper's decoded body with the owning module" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const inner = [_]value_mod.Instruction{
+        .{ .op = .{ .call_word = "probe" }, .line = 0, .column = 0 },
+    };
+    const outer = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner } } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null);
+
+    const m_name = "demo";
+    var w = wordRow("helper", 1, 0);
+    w.flags = aot_image_emit.flag_bit_module_private;
+    w.body_bytecode = encoded.items.ptr;
+    w.body_bytecode_len = @intCast(encoded.items.len);
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    const module_ptr = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
+    const mw = module_ptr.deps.get("helper") orelse return error.TestExpectedDep;
+    const decoded = mw.action.compound;
+
+    const outer_info = ctx.quotation_scope_info.get(@intFromPtr(decoded.ptr)) orelse
+        return error.TestExpectedStamp;
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), outer_info.defining_module);
+    const nested = decoded[0].op.push_literal.quotation.instructions;
+    const nested_info = ctx.quotation_scope_info.get(@intFromPtr(nested.ptr)) orelse
+        return error.TestExpectedStamp;
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), nested_info.defining_module);
+}
+
+test "decodeWordBodies: provenanced private row decodes into the deps entry" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 9 } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+
+    const m_name = "demo";
+    const gen = "struct{";
+    const parent = "point";
+    const role = "getter";
+    var w = wordRow("x>>", 1, 0);
+    w.flags = aot_image_emit.flag_bit_module_private;
+    w.body_bytecode = encoded.items.ptr;
+    w.body_bytecode_len = @intCast(encoded.items.len);
+    w.provenance_generator = gen.ptr;
+    w.provenance_generator_len = gen.len;
+    w.provenance_parent = parent.ptr;
+    w.provenance_parent_len = parent.len;
+    w.provenance_role = role.ptr;
+    w.provenance_role_len = role.len;
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    // A provenanced row skips the inline by-value decode, so a body here proves the deferred
+    // image pass resolved the deps entry by its flag.
+    const module_ptr = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
+    const mw = module_ptr.deps.get("x>>") orelse return error.TestExpectedDep;
+    try testing.expectEqual(@as(usize, 1), mw.action.compound.len);
+    try testing.expectEqual(@as(i64, 9), mw.action.compound[0].op.push_literal.fixnum);
+    try testing.expect(module_ptr.words.get("x>>") == null);
+}
+
+test "populateModulesAndWords: blob private row loads as an empty deps body" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const m_name = "demo";
+    var w = wordRow("blob-helper", 1, 0);
+    w.flags = aot_image_emit.flag_bit_module_private;
+    w.classification = 1;
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    // The empty compound body is the empty-compound backfill's precondition: a compiled helper
+    // still dispatches by bare name.
+    const module_ptr = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
+    const mw = module_ptr.deps.get("blob-helper") orelse return error.TestExpectedDep;
+    try testing.expectEqual(@as(usize, 0), mw.action.compound.len);
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), mw.source_module);
+}
+
+test "replayMethodDispatch: patches a private deps entry and templates the helper" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+
+    const m_name = "demo";
+    const generic_name = "gword";
+    var priv_row = wordRow(generic_name, 1, 0);
+    priv_row.flags = aot_image_emit.flag_bit_module_private;
+    priv_row.body_bytecode = encoded.items.ptr;
+    priv_row.body_bytecode_len = @intCast(encoded.items.len);
+    const words = [_]Word{ wordRow("w", 0, 0), priv_row };
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 2 },
+    };
+    const rows = [_]DispatchEntryDescription{.{
+        .dispatch_id = 7,
+        .type_a_slot = dispatch_type_any,
+        .type_b_slot = dispatch_type_unary,
+        .quotation_id = populate_core.dispatch_interp_quotation_id_sentinel,
+        .module_name = m_name.ptr,
+        .module_name_len = m_name.len,
+        .generic_name = generic_name.ptr,
+        .generic_name_len = generic_name.len,
+        .body_bytecode = encoded.items.ptr,
+        .body_bytecode_len = @intCast(encoded.items.len),
+    }};
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 2;
+    header.modules = &modules;
+    header.words = &words;
+    header.dispatch_entry_slot_count = 1;
+    header.dispatch_entry_descriptions = &rows;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+    try replayMethodDispatch(&ctx);
+
+    const module_ptr = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
+    const dep = module_ptr.deps.get(generic_name) orelse return error.TestExpectedDep;
+    try testing.expectEqual(@as(u32, 7), dep.dispatch_id);
+
+    // The warmed deps template merges `deps` under `words`, so the private helper is present and
+    // the template fast path admits probes for it.
+    const tmpl = module_ptr.deps_template orelse return error.TestExpectedTemplate;
+    try testing.expect(tmpl.frame.get(generic_name) != null);
+    try testing.expect(tmpl.frame.get("w") != null);
 }
 
 test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {
