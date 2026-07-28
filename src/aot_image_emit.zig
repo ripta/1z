@@ -17,7 +17,8 @@ const ImageManifest = aot_image.ImageManifest;
 const ImagePath = aot_image.ImagePath;
 const BlobReason = aot_image.BlobReason;
 
-const Context = @import("context.zig").Context;
+const context_mod = @import("context.zig");
+const Context = context_mod.Context;
 const value_mod = @import("value.zig");
 const ModuleWord = value_mod.ModuleWord;
 const TypeValue = value_mod.TypeValue;
@@ -61,7 +62,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 12;
+pub const format_version: u32 = 13;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -240,6 +241,14 @@ pub fn collectImageSlots(
     return collection;
 }
 
+/// One reified quotation literal with a defining module, handed to the image
+/// emitter by codegen. `lit_idx` names the `onez_quot_<n>` data array the
+/// caller already emitted into the same translation unit.
+pub const ReifiedQuotationModuleInput = struct {
+    lit_idx: usize,
+    module_name: []const u8,
+};
+
 /// Emit the runtime image as static C data into `out`, reading
 /// slot-table contents from a pre-populated `ImageCollection`. Use
 /// this entry point when the caller has already run
@@ -257,6 +266,7 @@ pub fn emitImageCFromCollection(
     quotation_id_map: ?*const std.AutoHashMapUnmanaged(usize, u32),
     dispatch_id_names: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
     interpreter_run_bodies: ?*const std.AutoHashMapUnmanaged(u32, []const u8),
+    reified_quotation_modules: []const ReifiedQuotationModuleInput,
 ) ImageEmitError!ImageEmissionStats {
     var stats: ImageEmissionStats = .{};
 
@@ -291,7 +301,7 @@ pub fn emitImageCFromCollection(
     try emitStructInstanceSlotTable(out, allocator, effect_table);
     try emitVectorSlotTable(out, allocator, effect_table);
     try emitMarkerDescriptionsStorage(out, allocator, effect_table);
-    try emitParameterDescriptionsStorage(out, allocator, effect_table);
+    try emitParameterDescriptionsStorage(out, allocator, ctx, effect_table);
     try emitStructTypeSlotTable(out, allocator, struct_plans_items);
     try emitStackEffectTable(out, allocator, effect_table);
     try emitTypeValueData(out, allocator, effect_table, struct_plans_items, struct_index);
@@ -311,7 +321,8 @@ pub fn emitImageCFromCollection(
         try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens, effect_table, struct_index);
     }
     try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, &stats);
-    try emitHeader(out, allocator, manifest, marker_pool, effect_table, struct_plans_items, stats);
+    try emitReifiedQuotationModules(out, allocator, reified_quotation_modules);
+    try emitHeader(out, allocator, manifest, marker_pool, effect_table, struct_plans_items, stats, reified_quotation_modules.len);
 
     stats.typevalue_slot_count = effect_table.slotCount();
     stats.stack_effect_count = effect_table.effectCount();
@@ -350,7 +361,7 @@ pub fn emitImageC(
 ) ImageEmitError!ImageEmissionStats {
     var collection = try collectImageSlots(allocator, ctx, manifest, options, &.{});
     defer collection.deinit();
-    return emitImageCFromCollection(out, allocator, ctx, manifest, word_id_lookup, &collection, options, null, null, null);
+    return emitImageCFromCollection(out, allocator, ctx, manifest, word_id_lookup, &collection, options, null, null, null, &.{});
 }
 
 /// Combined table for stack effects, the params they reference, and
@@ -1316,6 +1327,16 @@ fn writeParamDescBodySym(
     try out.appendSlice(allocator, s);
 }
 
+fn writeParamDescModuleSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [64]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_param_desc_{d}_module", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
 /// Emit `onez_image_marker_descriptions_storage[]`: one row per slot in
 /// `onez_image_marker_slots[]`. Each row carries the marker's name; the
 /// loader resolves the name to either a well-known marker singleton or
@@ -1351,15 +1372,30 @@ fn emitMarkerDescriptionsStorage(
     try out.appendSlice(allocator, "};\n\n");
 }
 
+/// Defining module of a parameter's default quotation, resolved through the
+/// freeze context's `quotation_scope_info` stamp written at module
+/// finalization. Null for a default written outside any module or inside a
+/// synthetic scope.
+fn parameterDefaultModule(ctx: *const Context, param: *const Parameter) ?*const value_mod.Module {
+    const instrs = param.default_quotation.instructions;
+    if (instrs.len == 0) return null;
+    const info = ctx.quotation_scope_info.get(@intFromPtr(instrs.ptr)) orelse return null;
+    const module = info.defining_module orelse return null;
+    if (context_mod.isSyntheticScopeModule(module)) return null;
+    return module;
+}
+
 /// Emit `onez_image_parameter_descriptions_storage[]`: one row per slot
 /// in `onez_image_parameter_slots[]`. Each row carries the parameter's
-/// name and the serialized bytecode for its lazy default quotation. The
-/// loader deserializes the bytecode and allocates the runtime
-/// `*Parameter`, then patches the slot. No-op when no parameters have
-/// been interned.
+/// name, the serialized bytecode for its lazy default quotation, and the
+/// default's defining module when it has one. The loader deserializes the
+/// bytecode, allocates the runtime `*Parameter`, patches the slot, and
+/// stamps the decoded default with the module. No-op when no parameters
+/// have been interned.
 fn emitParameterDescriptionsStorage(
     out: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
+    ctx: *const Context,
     table: *const StackEffectTable,
 ) ImageEmitError!void {
     if (table.parameterSlotCount() == 0) return;
@@ -1386,6 +1422,14 @@ fn emitParameterDescriptionsStorage(
             try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{byte}) catch unreachable);
         }
         try out.appendSlice(allocator, "};\n");
+
+        if (parameterDefaultModule(ctx, param)) |module| {
+            try out.appendSlice(allocator, "static const char ");
+            try writeParamDescModuleSym(out, allocator, i);
+            try out.appendSlice(allocator, "[] = ");
+            try emitCStringLiteral(out, allocator, module.name);
+            try out.appendSlice(allocator, ";\n");
+        }
     }
     try out.append(allocator, '\n');
 
@@ -1401,7 +1445,16 @@ fn emitParameterDescriptionsStorage(
         try writeParamDescBodySym(out, allocator, i);
         try out.appendSlice(allocator, ", .default_quotation_bytecode_len = sizeof(");
         try writeParamDescBodySym(out, allocator, i);
-        try out.appendSlice(allocator, ") },\n");
+        try out.appendSlice(allocator, ")");
+        if (parameterDefaultModule(ctx, param)) |module| {
+            try out.appendSlice(allocator, ", .module_name = ");
+            try writeParamDescModuleSym(out, allocator, i);
+            try out.appendSlice(allocator, ", .module_name_len = ");
+            try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{module.name.len}) catch unreachable);
+        } else {
+            try out.appendSlice(allocator, ", .module_name = NULL, .module_name_len = 0");
+        }
+        try out.appendSlice(allocator, " },\n");
     }
     try out.appendSlice(allocator, "};\n\n");
 }
@@ -3403,6 +3456,8 @@ fn emitTypeDeclarations(
         \\    uint32_t    slot;                 /* index into onez_image_parameter_slots */
         \\    const uint8_t *default_quotation_bytecode;
         \\    uint32_t       default_quotation_bytecode_len;
+        \\    const char *module_name;          /* defining module of the default, or NULL */
+        \\    uint32_t    module_name_len;
         \\} onez_image_parameter_description_t;
         \\
         \\/* Per-slot description for `.tagged` literal pushes. The loader walks   */
@@ -3528,6 +3583,16 @@ fn emitTypeDeclarations(
         \\    uint32_t    body_bytecode_len;
         \\} onez_image_dispatch_entry_description_t;
         \\
+        \\/* One reified quotation literal whose body was written inside a module. */
+        \\/* Keyed by the static serialized-data pointer -- the same pointer       */
+        \\/* jitPushQuotation receives at each push site -- so the runtime can     */
+        \\/* stamp the decoded body with its defining module.                      */
+        \\typedef struct onez_image_reified_quotation_module {
+        \\    const uint8_t *data;          /* the onez_quot_<n> serialized body */
+        \\    const char *module_name;
+        \\    uint32_t    module_name_len;
+        \\} onez_image_reified_quotation_module_t;
+        \\
         \\typedef struct onez_image_header {
         \\    uint32_t format_version;
         \\    uint32_t module_count;
@@ -3562,6 +3627,8 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
         \\    const struct onez_image_constraintcombinator_description *constraintcombinator_descriptions;
         \\    const struct onez_image_dispatch_entry_description *dispatch_entry_descriptions;
+        \\    uint32_t reified_quotation_module_count;
+        \\    const struct onez_image_reified_quotation_module *reified_quotation_modules;
         \\} onez_image_header_t;
         \\
         \\
@@ -4111,6 +4178,42 @@ fn emitCStringLiteral(
     try out.append(allocator, '"');
 }
 
+/// Emit `onez_image_reified_quotation_modules_storage[]`: one row per
+/// reified quotation literal with a defining module, referencing the
+/// `onez_quot_<n>` data array codegen already emitted into the same
+/// translation unit. The loader keys each row by that data pointer so
+/// `jitPushQuotation` can stamp the decoded body. No-op when no reified
+/// literal carries a module.
+fn emitReifiedQuotationModules(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    rows: []const ReifiedQuotationModuleInput,
+) ImageEmitError!void {
+    if (rows.len == 0) return;
+    var num_buf: [32]u8 = undefined;
+
+    for (rows, 0..) |row, i| {
+        try out.appendSlice(allocator, "static const char onez_image_reified_quot_");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, "_module[] = ");
+        try emitCStringLiteral(out, allocator, row.module_name);
+        try out.appendSlice(allocator, ";\n");
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_reified_quotation_module_t onez_image_reified_quotation_modules_storage[] = {\n");
+    for (rows, 0..) |row, i| {
+        try out.appendSlice(allocator, "    { .data = onez_quot_");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.lit_idx}) catch unreachable);
+        try out.appendSlice(allocator, ", .module_name = onez_image_reified_quot_");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{i}) catch unreachable);
+        try out.appendSlice(allocator, "_module, .module_name_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.module_name.len}) catch unreachable);
+        try out.appendSlice(allocator, " },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+}
+
 /// Emit the `onez_image_v1` header symbol referencing the storage
 /// arrays above. The header is the single externally-visible entry
 /// point the loader reads.
@@ -4122,6 +4225,7 @@ fn emitHeader(
     effect_table: *const StackEffectTable,
     struct_plans: []const StructTypePlan,
     stats: ImageEmissionStats,
+    reified_quotation_module_count: usize,
 ) Allocator.Error!void {
     var num_buf: [32]u8 = undefined;
 
@@ -4235,6 +4339,10 @@ fn emitHeader(
     try out.appendSlice(allocator, constraintcombinator_descs_ref);
     try out.appendSlice(allocator, ",\n    .dispatch_entry_descriptions = ");
     try out.appendSlice(allocator, dispatch_entry_descs_ref);
+    try out.appendSlice(allocator, ",\n    .reified_quotation_module_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{reified_quotation_module_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .reified_quotation_modules = ");
+    try out.appendSlice(allocator, if (reified_quotation_module_count > 0) "onez_image_reified_quotation_modules_storage" else "NULL");
     try out.appendSlice(allocator,
         \\,
         \\};
@@ -4280,7 +4388,7 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 12") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 13") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
@@ -5734,6 +5842,58 @@ test "emitImageC: parameter and marker literals create slot tables" {
     try testing.expect(std.mem.indexOf(u8, out.items, "marker deprecated") != null);
 }
 
+test "emitImageC: module-attributed parameter default emits module fields" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const module = try arena.create(value_mod.Module);
+    module.* = .{ .name = "demo-module", .words = .{} };
+
+    const default_instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .call_word = "probe" }, .line = 0, .column = 0 },
+    });
+    const param = try arena.create(value_mod.Parameter);
+    param.* = .{ .name = "a-param", .default_quotation = .{ .instructions = default_instrs } };
+    try ctx.stampQuotationBodies(default_instrs, module);
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .parameter = param } }, .line = 0, .column = 0 },
+    });
+    try putTopLevelWord(&ctx, "demo-word", instrs);
+
+    const empty: ImageManifest = .{
+        .entries = &.{},
+        .structural_count = 0,
+        .blob_count = 0,
+        .total_count = 0,
+    };
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, empty, &lookup, .{});
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_param_desc_0_module[] = \"demo-module\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".module_name = onez_image_param_desc_0_module, .module_name_len = 11") != null);
+}
+
+test "emitReifiedQuotationModules: rows reference quotation data arrays" {
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    const rows = [_]ReifiedQuotationModuleInput{
+        .{ .lit_idx = 3, .module_name = "demo-module" },
+    };
+    try emitReifiedQuotationModules(&out, testing.allocator, &rows);
+
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_reified_quot_0_module[] = \"demo-module\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".data = onez_quot_3, .module_name = onez_image_reified_quot_0_module, .module_name_len = 11") != null);
+}
+
 test "emitImageC: no parameter or marker literals emits no slot tables" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
@@ -6127,7 +6287,7 @@ test "emitDispatchEntryTable: one row per reachable user quotation entry, types 
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null);
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null, &.{});
 
     try testing.expectEqual(@as(u32, 2), stats.dispatch_entry_slot_count);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_entry_descriptions_storage[] = {") != null);
@@ -6209,7 +6369,7 @@ test "emitDispatchEntryTable: an interpreter-run method body carries its bytecod
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, &run_bodies);
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, &run_bodies, &.{});
 
     try testing.expectEqual(@as(u32, 1), stats.dispatch_entry_slot_count);
     // The per-row bytecode array is emitted and the row references it.
@@ -6252,7 +6412,7 @@ test "emitDispatchEntryTable: a freeze-unreached entry body emits an interpreter
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null);
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null, &.{});
 
     try testing.expectEqual(@as(u32, 1), stats.dispatch_entry_slot_count);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_q_0_body[] = {") != null);
@@ -6294,7 +6454,7 @@ test "emitDispatchEntryTable: wildcard type_a emits the reserved ANY sentinel" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null);
+    const stats = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null, &.{});
 
     try testing.expectEqual(@as(u32, 1), stats.dispatch_entry_slot_count);
     // type_a = ANY (4294967294), type_b = UNARY (4294967295).
@@ -6337,7 +6497,7 @@ test "emitDispatchEntryTable: rows are emitted in deterministic sorted order" {
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
 
-    _ = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null);
+    _ = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null, &.{});
 
     const pos3 = std.mem.indexOf(u8, out.items, ".dispatch_id = 3, ").?;
     const pos4 = std.mem.indexOf(u8, out.items, ".dispatch_id = 4, ").?;

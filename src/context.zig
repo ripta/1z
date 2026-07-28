@@ -716,6 +716,17 @@ pub const Context = struct {
     /// import cycle; the loader casts it to `[*]const DispatchEntryDescription`.
     image_dispatch_entry_descriptions: ?*const anyopaque = null,
     image_dispatch_entry_count: u32 = 0,
+    /// Defining module per reified quotation literal, keyed by the static
+    /// serialized-data pointer `jitPushQuotation` receives. Built once by the
+    /// image loader on process-lifetime storage and shared by pointer with
+    /// spawned task contexts.
+    image_reified_quotation_modules: ?*const std.AutoHashMapUnmanaged(usize, *const value_mod.Module) = null,
+    /// Decoded-instruction cache for reified quotation pushes, keyed by the same static data
+    /// pointer. Per-context, single writer; the slices are borrowed from the quotation arena.
+    ///
+    /// One decode and one defining-module stamp per push site instead of per push, which is what
+    /// keeps `quotation_scope_info` from growing on every push in a loop.
+    reified_quotation_cache: std.AutoHashMapUnmanaged(usize, []const value_mod.Instruction) = .{},
     /// name -> dispatch_id for user generic words, replayed from the AOT image
     /// dispatch-entry table at startup. The AOT runtime keeps user generics
     /// only in compiled form, so `resolveDispatchId` consults this to resolve a
@@ -1203,6 +1214,10 @@ pub const Context = struct {
         // pick up their compiled bodies, matching the parent.
         ctx.aot_quotation_fns = parent.aot_quotation_fns;
 
+        // Share the loader-built reified-quotation module table so a task's
+        // `jitPushQuotation` stamps decoded bodies the same way the root does.
+        ctx.image_reified_quotation_modules = parent.image_reified_quotation_modules;
+
         // Share the parent's hook registry so all contexts fire the same hooks.
         ctx.hook_registry = parent.hook_registry;
 
@@ -1497,6 +1512,8 @@ pub const Context = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.pic_cache.deinit(self.allocator);
+        // Cached instruction slices live on the quotation arena; only the map itself is freed.
+        self.reified_quotation_cache.deinit(self.allocator);
         // thrown_error, error_value boxes, bignum boxes (header and limbs),
         // and task error_obj boxes are all arena-allocated; they are
         // reclaimed by arena.deinit. The refcounted backing carried in an

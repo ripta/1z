@@ -197,6 +197,11 @@ pub const ParameterDescription = extern struct {
     slot: u32,
     default_quotation_bytecode: ?[*]const u8,
     default_quotation_bytecode_len: u32,
+    /// Defining module of the default quotation, or null when the parameter was created outside
+    /// any module. The loader stamps the decoded default with this module so its bare words
+    /// resolve against the module's own scope.
+    module_name: ?[*]const u8 = null,
+    module_name_len: u32 = 0,
 };
 
 /// Zig mirror of `onez_image_tagged_description_t`.
@@ -333,6 +338,18 @@ pub const DispatchEntryDescription = extern struct {
     body_bytecode_len: u32,
 };
 
+/// Zig mirror of `onez_image_reified_quotation_module_t`.
+///
+/// One row per reified quotation literal whose body was written inside a module. The row is keyed
+/// by the static serialized-data pointer, which is exactly the pointer `jitPushQuotation` receives
+/// at each push site, so the runtime can stamp the decoded body with its defining module without
+/// any change to the push call.
+pub const ReifiedQuotationModule = extern struct {
+    data: [*]const u8,
+    module_name: [*]const u8,
+    module_name_len: u32,
+};
+
 pub const Header = extern struct {
     format_version: u32,
     module_count: u32,
@@ -367,6 +384,8 @@ pub const Header = extern struct {
     protocoldescriptor_descriptions: ?[*]const ProtocolDescriptorDescription,
     constraintcombinator_descriptions: ?[*]const ConstraintCombinatorDescription,
     dispatch_entry_descriptions: ?[*]const DispatchEntryDescription,
+    reified_quotation_module_count: u32 = 0,
+    reified_quotation_modules: ?[*]const ReifiedQuotationModule = null,
 };
 
 /// Slot table type matching the C declaration:

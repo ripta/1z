@@ -1,0 +1,12 @@
+\ Two image modules export `probe`. The entry imports module B's, and module
+\ A hands out a parameter default and a stored quotation -- both interpreted
+\ at runtime inside the image -- that call A's own `probe`. The load-time
+\ stamp must make them resolve A's deterministically instead of scanning the
+\ module cache by name.
+
+use { a-param: a-quot: } "fixtures/own_module_image_a.1z" ;
+use { probe: } "fixtures/own_module_image_b.1z" ;
+
+probe print-line
+a-param get print-line
+a-quot call print-line

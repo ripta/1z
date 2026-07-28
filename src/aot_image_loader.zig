@@ -213,6 +213,17 @@ pub fn loadIntoContext(
     // mutable_map, struct_instance, ...) resolve through the now-patched
     // slot tables.
     try decodeWordBodies(ctx, header);
+
+    // Stamp every decoded body with its module once all bodies are final.
+    //
+    // The stamp is what lets a buried quotation inside an interpreter-run word body resolve its
+    // bare words against its own module's scope instead of falling through to the module-cache
+    // scan.
+    try stampWordBodies(ctx, header);
+
+    // Resolve the reified-quotation module table so `jitPushQuotation` can
+    // stamp each decoded escaping-quotation body with its defining module.
+    try populateReifiedQuotationModules(ctx, header);
 }
 
 /// Decode every word body now that the slot tables are patched.
@@ -290,6 +301,62 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
             return LoaderError.OutOfMemory;
         ctx.registerQuotationContainerLiterals(instrs) catch return LoaderError.OutOfMemory;
         word_entry.action = .{ .compound = instrs };
+    }
+}
+
+/// Resolve each reified-quotation row's module name against the loaded module
+/// cache and build the data-pointer-keyed table `jitPushQuotation` consults
+/// when it decodes an escaping quotation. The map lives on the loader arena
+/// for the life of the process and is shared by pointer with task contexts.
+fn populateReifiedQuotationModules(ctx: *Context, header: *const Header) LoaderError!void {
+    if (header.reified_quotation_module_count == 0) return;
+    const rows = header.reified_quotation_modules orelse return;
+    const arena = ctx.quotationAllocator();
+
+    const map = arena.create(std.AutoHashMapUnmanaged(usize, *const value_mod.Module)) catch
+        return LoaderError.OutOfMemory;
+    map.* = .{};
+
+    var i: u32 = 0;
+    while (i < header.reified_quotation_module_count) : (i += 1) {
+        const row = rows[i];
+        const module_name = nameSlice(row.module_name, row.module_name_len);
+        const cached = ctx.module_cache_value.map.get(module_name) orelse continue;
+        if (cached != .module) continue;
+        map.put(arena, @intFromPtr(row.data), cached.module) catch return LoaderError.OutOfMemory;
+    }
+
+    ctx.image_reified_quotation_modules = map;
+}
+
+/// Record each image module as the defining module of its words' bodies and every quotation
+/// literal nested inside them, mirroring what `nativeLoadImpl` does at interpreter module
+/// finalization.
+///
+/// Runs as a post-pass because `decodeWordBodies` skips the majority of bodies -- those already
+/// decoded inline in `populateModulesAndWords` -- and only here are all bodies final.
+///
+/// Iterates the header's modules so interpreter-loaded modules, already stamped at their own
+/// load, are not re-walked.
+fn stampWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
+    if (header.module_count == 0) return;
+    const modules = header.modules orelse return;
+
+    var module_i: u32 = 0;
+    while (module_i < header.module_count) : (module_i += 1) {
+        const m = modules[module_i];
+        const module_name = nameSlice(m.name, m.name_len);
+
+        const cache_entry = ctx.module_cache_value.map.get(module_name) orelse continue;
+        if (cache_entry != .module) continue;
+        const module_ptr = cache_entry.module;
+
+        var word_it = module_ptr.words.valueIterator();
+        while (word_it.next()) |mw| {
+            if (mw.action != .compound) continue;
+            ctx.stampQuotationBodies(mw.action.compound, module_ptr) catch
+                return LoaderError.OutOfMemory;
+        }
     }
 }
 
@@ -664,6 +731,20 @@ fn populateParameterSlots(
             .default_quotation = .{ .instructions = instructions, .code_ptr = null },
         };
         slot_table[row.slot] = param;
+
+        // The default runs standalone through `executeQuotation`, so the stamp is its only route
+        // to its module's scope.
+        //
+        // The module cache is live: `populateModulesAndWords` runs first.
+        if (row.module_name) |mn_ptr| {
+            const module_name = nameSlice(mn_ptr, row.module_name_len);
+            if (ctx.module_cache_value.map.get(module_name)) |cached| {
+                if (cached == .module) {
+                    ctx.stampQuotationBodies(instructions, cached.module) catch
+                        return LoaderError.OutOfMemory;
+                }
+            }
+        }
     }
 }
 
@@ -1056,6 +1137,19 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
                 else => null,
             };
         } else null;
+
+        // Stamp an interpreter-run body and its nested quotation literals with the method's
+        // defining module.
+        //
+        // The entry's `source_module` covers only the top-level body, via the deps frame
+        // `executeDispatchBody` pushes around it. A buried quotation runs standalone and has only
+        // the stamp.
+        if (module) |mod| {
+            if (body_instructions.len > 0) {
+                ctx.stampQuotationBodies(body_instructions, mod) catch
+                    return LoaderError.OutOfMemory;
+            }
+        }
 
         if (row.generic_name) |gname_ptr| {
             const gname = nameSlice(gname_ptr, row.generic_name_len);
@@ -2154,6 +2248,206 @@ test "loadIntoContext: nested quotation literal round-trips" {
     const nested = decoded[0].op.push_literal.quotation.instructions;
     try testing.expectEqual(@as(usize, 1), nested.len);
     try testing.expectEqual(@as(i64, 3), nested[0].op.push_literal.fixnum);
+}
+
+test "loadIntoContext: stamps decoded bodies and nested quotations with their module" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const inner = [_]value_mod.Instruction{
+        .{ .op = .{ .call_word = "probe" }, .line = 0, .column = 0 },
+    };
+    const outer = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner } } }, .line = 0, .column = 0 },
+    };
+
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null);
+
+    const w_name = "handout";
+    const m_name = "demo";
+    var w = wordRow(w_name, 1, 0);
+    w.body_bytecode = encoded.items.ptr;
+    w.body_bytecode_len = @intCast(encoded.items.len);
+    const words = [_]Word{w};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    const entry = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
+    const module_ptr = entry.module;
+    const mw = module_ptr.words.get(w_name) orelse return error.TestExpectedWord;
+    const decoded = mw.action.compound;
+
+    const outer_info = ctx.quotation_scope_info.get(@intFromPtr(decoded.ptr)) orelse
+        return error.TestExpectedStamp;
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), outer_info.defining_module);
+
+    const nested = decoded[0].op.push_literal.quotation.instructions;
+    const nested_info = ctx.quotation_scope_info.get(@intFromPtr(nested.ptr)) orelse
+        return error.TestExpectedStamp;
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), nested_info.defining_module);
+}
+
+test "replayMethodDispatch: stamps interpreter-run body with its module" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const inner = [_]value_mod.Instruction{
+        .{ .op = .{ .call_word = "probe" }, .line = 0, .column = 0 },
+    };
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner } } }, .line = 0, .column = 0 },
+        .{ .op = .{ .call_word = "call" }, .line = 0, .column = 0 },
+    };
+
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+
+    const m_name = "demo";
+    const words = [_]Word{wordRow("stub", 0, 0)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const rows = [_]DispatchEntryDescription{.{
+        .dispatch_id = 7,
+        .type_a_slot = dispatch_type_any,
+        .type_b_slot = dispatch_type_unary,
+        .quotation_id = populate_core.dispatch_interp_quotation_id_sentinel,
+        .module_name = m_name.ptr,
+        .module_name_len = m_name.len,
+        .generic_name = null,
+        .generic_name_len = 0,
+        .body_bytecode = encoded.items.ptr,
+        .body_bytecode_len = @intCast(encoded.items.len),
+    }};
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.dispatch_entry_slot_count = 1;
+    header.dispatch_entry_descriptions = &rows;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+    try replayMethodDispatch(&ctx);
+
+    const entry = ctx.dispatch.entries.get(.{
+        .dispatch_id = 7,
+        .type_a = ctx.getDispatchAnySentinel().descriptor.?,
+        .type_b = ctx.getDispatchUnarySentinel().descriptor.?,
+    }) orelse return error.TestExpectedEntry;
+    const decoded = entry.body.quotation.instructions;
+    try testing.expectEqual(@as(usize, 2), decoded.len);
+
+    const cached = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
+    const module_ptr = cached.module;
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), entry.source_module);
+
+    const body_info = ctx.quotation_scope_info.get(@intFromPtr(decoded.ptr)) orelse
+        return error.TestExpectedStamp;
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), body_info.defining_module);
+
+    const nested = decoded[0].op.push_literal.quotation.instructions;
+    const nested_info = ctx.quotation_scope_info.get(@intFromPtr(nested.ptr)) orelse
+        return error.TestExpectedStamp;
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), nested_info.defining_module);
+}
+
+test "populateParameterSlots: stamps a module-attributed default" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const inner = [_]value_mod.Instruction{
+        .{ .op = .{ .call_word = "probe" }, .line = 0, .column = 0 },
+    };
+    const default_body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner } } }, .line = 0, .column = 0 },
+        .{ .op = .{ .call_word = "call" }, .line = 0, .column = 0 },
+    };
+
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &default_body, testing.allocator, null);
+
+    const m_name = "demo";
+    const p_name = "p";
+    const words = [_]Word{wordRow("stub", 0, 0)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const param_rows = [_]ParameterDescription{.{
+        .name = p_name.ptr,
+        .name_len = p_name.len,
+        .slot = 0,
+        .default_quotation_bytecode = encoded.items.ptr,
+        .default_quotation_bytecode_len = @intCast(encoded.items.len),
+        .module_name = m_name.ptr,
+        .module_name_len = m_name.len,
+    }};
+    var param_slots = [_]?*value_mod.Parameter{null};
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.parameter_slot_count = 1;
+    header.parameter_descriptions = &param_rows;
+
+    try loadIntoContext(&ctx, &header, .{ .parameters = &param_slots }, null);
+
+    const cached = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
+    const module_ptr = cached.module;
+    const param = param_slots[0] orelse return error.TestExpectedParameter;
+
+    const default_info = ctx.quotation_scope_info.get(@intFromPtr(param.default_quotation.instructions.ptr)) orelse
+        return error.TestExpectedStamp;
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), default_info.defining_module);
+
+    const nested = param.default_quotation.instructions[0].op.push_literal.quotation.instructions;
+    const nested_info = ctx.quotation_scope_info.get(@intFromPtr(nested.ptr)) orelse
+        return error.TestExpectedStamp;
+    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), nested_info.defining_module);
+}
+
+test "populateReifiedQuotationModules: keys rows by data pointer" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const m_name = "demo";
+    const words = [_]Word{wordRow("stub", 0, 0)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const data = [_]u8{ 1, 2, 3 };
+    const rows = [_]populate_core.ReifiedQuotationModule{
+        .{ .data = &data, .module_name = m_name.ptr, .module_name_len = m_name.len },
+    };
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.reified_quotation_module_count = 1;
+    header.reified_quotation_modules = &rows;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    const cached = ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule;
+    const map = ctx.image_reified_quotation_modules orelse return error.TestExpectedTable;
+    const module = map.get(@intFromPtr(&data)) orelse return error.TestExpectedEntry;
+    try testing.expectEqual(@as(*const value_mod.Module, cached.module), module);
 }
 
 test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {

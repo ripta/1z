@@ -1,0 +1,11 @@
+\ Fixture for own_module_image_param. Exports `probe` under the same name as
+\ own_module_image_b, plus a parameter default and a stored quotation that
+\ call this module's own `probe`. The nested definitions keep those bodies
+\ uncompilable, so they run interpreted inside the runtime image and must
+\ resolve `probe` against this module, not the colliding export.
+
+probe: ( -- str ) [ "A-PROBE" ] ;
+
+a-param: parameter{ [ dflt: [ probe ] ; dflt ] } ;
+
+a-quot: ( -- q ) [ [ inner: [ probe ] ; inner ] ] ;

@@ -1,0 +1,4 @@
+\ Fixture for own_module_image_param. Exports a `probe` colliding with
+\ own_module_image_a's, so an unscoped by-name lookup could land here.
+
+probe: ( -- str ) [ "B-PROBE" ] ;

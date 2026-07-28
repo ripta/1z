@@ -175,6 +175,8 @@ typedef struct onez_image_parameter_description {
     uint32_t    slot;                 /* index into onez_image_parameter_slots */
     const uint8_t *default_quotation_bytecode;
     uint32_t       default_quotation_bytecode_len;
+    const char *module_name;          /* defining module of the default, or NULL */
+    uint32_t    module_name_len;
 } onez_image_parameter_description_t;
 
 /* Per-slot description for `.tagged` literal pushes. The loader walks   */
@@ -300,6 +302,16 @@ typedef struct onez_image_dispatch_entry_description {
     uint32_t    body_bytecode_len;
 } onez_image_dispatch_entry_description_t;
 
+/* One reified quotation literal whose body was written inside a module. */
+/* Keyed by the static serialized-data pointer -- the same pointer       */
+/* jitPushQuotation receives at each push site -- so the runtime can     */
+/* stamp the decoded body with its defining module.                      */
+typedef struct onez_image_reified_quotation_module {
+    const uint8_t *data;          /* the onez_quot_<n> serialized body */
+    const char *module_name;
+    uint32_t    module_name_len;
+} onez_image_reified_quotation_module_t;
+
 typedef struct onez_image_header {
     uint32_t format_version;
     uint32_t module_count;
@@ -334,6 +346,8 @@ typedef struct onez_image_header {
     const struct onez_image_protocoldescriptor_description *protocoldescriptor_descriptions;
     const struct onez_image_constraintcombinator_description *constraintcombinator_descriptions;
     const struct onez_image_dispatch_entry_description *dispatch_entry_descriptions;
+    uint32_t reified_quotation_module_count;
+    const struct onez_image_reified_quotation_module *reified_quotation_modules;
 } onez_image_header_t;
 
 static const char onez_image_mk_0_name[] = "parse-time";
@@ -459,12 +473,12 @@ static const char onez_image_param_desc_5_name[] = "module-cache";
 static const uint8_t onez_image_param_desc_5_body[] = {1,0,0,0,2,0,0,0,28,0,0,0,1,25,0,0,0,110,97,116,105,118,101,46,109,111,100,117,108,101,45,99,97,99,104,101,45,118,97,108,117,101};
 
 static const onez_image_parameter_description_t onez_image_parameter_descriptions_storage[] = {
-    { .name = onez_image_param_desc_0_name, .name_len = 19, .slot = 0, .default_quotation_bytecode = onez_image_param_desc_0_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_0_body) },
-    { .name = onez_image_param_desc_1_name, .name_len = 12, .slot = 1, .default_quotation_bytecode = onez_image_param_desc_1_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_1_body) },
-    { .name = onez_image_param_desc_2_name, .name_len = 13, .slot = 2, .default_quotation_bytecode = onez_image_param_desc_2_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_2_body) },
-    { .name = onez_image_param_desc_3_name, .name_len = 18, .slot = 3, .default_quotation_bytecode = onez_image_param_desc_3_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_3_body) },
-    { .name = onez_image_param_desc_4_name, .name_len = 12, .slot = 4, .default_quotation_bytecode = onez_image_param_desc_4_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_4_body) },
-    { .name = onez_image_param_desc_5_name, .name_len = 12, .slot = 5, .default_quotation_bytecode = onez_image_param_desc_5_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_5_body) },
+    { .name = onez_image_param_desc_0_name, .name_len = 19, .slot = 0, .default_quotation_bytecode = onez_image_param_desc_0_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_0_body), .module_name = NULL, .module_name_len = 0 },
+    { .name = onez_image_param_desc_1_name, .name_len = 12, .slot = 1, .default_quotation_bytecode = onez_image_param_desc_1_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_1_body), .module_name = NULL, .module_name_len = 0 },
+    { .name = onez_image_param_desc_2_name, .name_len = 13, .slot = 2, .default_quotation_bytecode = onez_image_param_desc_2_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_2_body), .module_name = NULL, .module_name_len = 0 },
+    { .name = onez_image_param_desc_3_name, .name_len = 18, .slot = 3, .default_quotation_bytecode = onez_image_param_desc_3_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_3_body), .module_name = NULL, .module_name_len = 0 },
+    { .name = onez_image_param_desc_4_name, .name_len = 12, .slot = 4, .default_quotation_bytecode = onez_image_param_desc_4_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_4_body), .module_name = NULL, .module_name_len = 0 },
+    { .name = onez_image_param_desc_5_name, .name_len = 12, .slot = 5, .default_quotation_bytecode = onez_image_param_desc_5_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_5_body), .module_name = NULL, .module_name_len = 0 },
 };
 
 __attribute__((used)) struct onez_struct_type *onez_image_struct_type_slots[12] = {
@@ -1091,7 +1105,7 @@ static const onez_image_module_t onez_image_modules_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 12,
+    .format_version = 13,
     .module_count = 1,
     .word_count = 3,
     .marker_pool_count = 3,
@@ -1124,5 +1138,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .protocoldescriptor_descriptions = onez_image_protocoldescriptor_descriptions_storage,
     .constraintcombinator_descriptions = onez_image_constraintcombinator_descriptions_storage,
     .dispatch_entry_descriptions = NULL,
+    .reified_quotation_module_count = 0,
+    .reified_quotation_modules = NULL,
 };
 
