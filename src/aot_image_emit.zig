@@ -62,7 +62,7 @@ const flag_bit_never_returns: u8 = 1 << 4;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 13;
+pub const format_version: u32 = 14;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -322,7 +322,8 @@ pub fn emitImageCFromCollection(
     }
     try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, &stats);
     try emitReifiedQuotationModules(out, allocator, reified_quotation_modules);
-    try emitHeader(out, allocator, manifest, marker_pool, effect_table, struct_plans_items, stats, reified_quotation_modules.len);
+    const module_dep_count = try emitModuleDepTable(out, allocator, ctx, manifest);
+    try emitHeader(out, allocator, manifest, marker_pool, effect_table, struct_plans_items, stats, reified_quotation_modules.len, module_dep_count);
 
     stats.typevalue_slot_count = effect_table.slotCount();
     stats.stack_effect_count = effect_table.effectCount();
@@ -3593,6 +3594,17 @@ fn emitTypeDeclarations(
         \\    uint32_t    module_name_len;
         \\} onez_image_reified_quotation_module_t;
         \\
+        \\/* One import edge: the owning module's deps entry for a word it      */
+        \\/* imported from another image module. The loader resolves the source */
+        \\/* module by name and copies its word into the owner's deps map.      */
+        \\typedef struct onez_image_module_dep {
+        \\    uint32_t module_idx;          /* owner, index into modules table */
+        \\    const char *name;             /* imported word name */
+        \\    uint32_t name_len;
+        \\    const char *source_module_name;
+        \\    uint32_t source_module_name_len;
+        \\} onez_image_module_dep_t;
+        \\
         \\typedef struct onez_image_header {
         \\    uint32_t format_version;
         \\    uint32_t module_count;
@@ -3629,6 +3641,8 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_dispatch_entry_description *dispatch_entry_descriptions;
         \\    uint32_t reified_quotation_module_count;
         \\    const struct onez_image_reified_quotation_module *reified_quotation_modules;
+        \\    uint32_t module_dep_count;
+        \\    const struct onez_image_module_dep *module_deps;
         \\} onez_image_header_t;
         \\
         \\
@@ -4214,6 +4228,120 @@ fn emitReifiedQuotationModules(
     try out.appendSlice(allocator, "};\n\n");
 }
 
+/// One import edge selected for emission.
+const ModuleDepRow = struct {
+    module_idx: u32,
+    name: []const u8,
+    source_module_name: []const u8,
+
+    fn lessThan(_: void, a: ModuleDepRow, b: ModuleDepRow) bool {
+        if (a.module_idx != b.module_idx) return a.module_idx < b.module_idx;
+        return std.mem.lessThan(u8, a.name, b.name);
+    }
+};
+
+/// Emit `onez_image_module_deps_storage[]`: one row per import edge the loader can resolve inside
+/// the image, sorted by owner module index then name for deterministic output.
+///
+/// Returns the emitted row count. Noüp returns 0 when no edge survives.
+///
+/// An edge is kept only when its source module is itself an image module, is not a synthetic scope.
+/// A `private{` helper has no image representation, and carries the word in its public `words`
+/// with an action the image materializes. Native and host-callback targets resolve through the
+/// dictionary at runtime, so that their edges are dropped rather than serialized dead.
+fn emitModuleDepTable(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, ctx: *const Context, manifest: ImageManifest) ImageEmitError!u32 {
+    var module_names: std.ArrayListUnmanaged([]const u8) = .{};
+    defer module_names.deinit(allocator);
+    var emitted_names: std.StringHashMapUnmanaged(void) = .{};
+    defer emitted_names.deinit(allocator);
+    {
+        var i: usize = 0;
+        while (i < manifest.entries.len) {
+            const mod_name = manifest.entries[i].module_name;
+            try emitted_names.put(allocator, mod_name, {});
+            try module_names.append(allocator, mod_name);
+            while (i < manifest.entries.len and
+                std.mem.eql(u8, manifest.entries[i].module_name, mod_name)) : (i += 1)
+            {}
+        }
+    }
+    if (module_names.items.len == 0) return 0;
+
+    var rows: std.ArrayListUnmanaged(ModuleDepRow) = .{};
+    defer rows.deinit(allocator);
+
+    for (module_names.items, 0..) |mod_name, mod_idx| {
+        const module = ctx.moduleByNameInCache(mod_name) orelse continue;
+        var dep_it = module.deps.iterator();
+        while (dep_it.next()) |dep| {
+            const source = dep.value_ptr.source_module orelse continue;
+            if (context_mod.isSyntheticScopeModule(source)) continue;
+            if (!emitted_names.contains(source.name)) continue;
+            const target = source.words.get(dep.key_ptr.*) orelse continue;
+            if (aot_image.classifyModuleWord(target) == null) continue;
+            try rows.append(allocator, .{
+                .module_idx = @intCast(mod_idx),
+                .name = dep.key_ptr.*,
+                .source_module_name = source.name,
+            });
+        }
+    }
+    if (rows.items.len == 0) return 0;
+    std.mem.sort(ModuleDepRow, rows.items, {}, ModuleDepRow.lessThan);
+
+    var num_buf: [32]u8 = undefined;
+    for (rows.items, 0..) |row, i| {
+        try out.appendSlice(allocator, "static const char ");
+        try writeModuleDepNameSym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = ");
+        try emitCStringLiteral(out, allocator, row.name);
+        try out.appendSlice(allocator, ";\n");
+        try out.appendSlice(allocator, "static const char ");
+        try writeModuleDepModuleSym(out, allocator, i);
+        try out.appendSlice(allocator, "[] = ");
+        try emitCStringLiteral(out, allocator, row.source_module_name);
+        try out.appendSlice(allocator, ";\n");
+    }
+    try out.append(allocator, '\n');
+
+    try out.appendSlice(allocator, "static const onez_image_module_dep_t onez_image_module_deps_storage[] = {\n");
+    for (rows.items, 0..) |row, i| {
+        try out.appendSlice(allocator, "    { .module_idx = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.module_idx}) catch unreachable);
+        try out.appendSlice(allocator, ", .name = ");
+        try writeModuleDepNameSym(out, allocator, i);
+        try out.appendSlice(allocator, ", .name_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.name.len}) catch unreachable);
+        try out.appendSlice(allocator, ", .source_module_name = ");
+        try writeModuleDepModuleSym(out, allocator, i);
+        try out.appendSlice(allocator, ", .source_module_name_len = ");
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{row.source_module_name.len}) catch unreachable);
+        try out.appendSlice(allocator, " },\n");
+    }
+    try out.appendSlice(allocator, "};\n\n");
+    return @intCast(rows.items.len);
+}
+
+fn writeModuleDepNameSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_dep_{d}_name", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
+fn writeModuleDepModuleSym(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    idx: usize,
+) Allocator.Error!void {
+    var buf: [48]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "onez_image_dep_{d}_module", .{idx}) catch unreachable;
+    try out.appendSlice(allocator, s);
+}
+
 /// Emit the `onez_image_v1` header symbol referencing the storage
 /// arrays above. The header is the single externally-visible entry
 /// point the loader reads.
@@ -4226,6 +4354,7 @@ fn emitHeader(
     struct_plans: []const StructTypePlan,
     stats: ImageEmissionStats,
     reified_quotation_module_count: usize,
+    module_dep_count: u32,
 ) Allocator.Error!void {
     var num_buf: [32]u8 = undefined;
 
@@ -4343,6 +4472,10 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{reified_quotation_module_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .reified_quotation_modules = ");
     try out.appendSlice(allocator, if (reified_quotation_module_count > 0) "onez_image_reified_quotation_modules_storage" else "NULL");
+    try out.appendSlice(allocator, ",\n    .module_dep_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{module_dep_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .module_deps = ");
+    try out.appendSlice(allocator, if (module_dep_count > 0) "onez_image_module_deps_storage" else "NULL");
     try out.appendSlice(allocator,
         \\,
         \\};
@@ -4388,11 +4521,12 @@ test "emitImageC: empty manifest emits header with zero counts and NULL tables" 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_header_t") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_v1") != null);
 
-    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 13") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".format_version = 14") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".module_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".word_count = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".modules = NULL") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".words = NULL") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".module_deps = NULL") != null);
 }
 
 test "emitImageC: type declarations include all schema structs" {
@@ -4423,6 +4557,7 @@ test "emitImageC: type declarations include all schema structs" {
         "struct onez_image_typedescriptor",
         "struct onez_image_struct_type",
         "struct onez_image_enum_variant",
+        "struct onez_image_module_dep",
         "struct onez_image_header",
     };
     for (required_structs) |needle| {
@@ -5892,6 +6027,79 @@ test "emitReifiedQuotationModules: rows reference quotation data arrays" {
 
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_reified_quot_0_module[] = \"demo-module\"") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, ".data = onez_quot_3, .module_name = onez_image_reified_quot_0_module, .module_name_len = 11") != null);
+}
+
+test "emitImageC: module dep rows for resolvable edges, unresolvable edges skipped" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    const natives = struct {
+        fn nop(_: *Context) anyerror!void {}
+    };
+
+    const src = try arena.create(Module);
+    src.* = .{ .name = "modc", .words = .{} };
+    try src.words.put(arena, "probe", .{ .action = .{ .compound = instrs } });
+    try src.words.put(arena, "aardvark", .{ .action = .{ .compound = instrs } });
+    try src.words.put(arena, "raw", .{ .action = .{ .native = natives.nop } });
+
+    const synthetic = try arena.create(Module);
+    synthetic.* = .{ .name = "<local-scope>", .words = .{} };
+    try synthetic.words.put(arena, "hidden", .{ .action = .{ .compound = instrs } });
+
+    const outside = try arena.create(Module);
+    outside.* = .{ .name = "outside", .words = .{} };
+    try outside.words.put(arena, "ext", .{ .action = .{ .compound = instrs } });
+
+    const owner = try arena.create(Module);
+    owner.* = .{ .name = "moda", .words = .{} };
+    try owner.words.put(arena, "w", .{ .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "probe", .{ .source_module = src, .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "aardvark", .{ .source_module = src, .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "hidden", .{ .source_module = synthetic, .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "ext", .{ .source_module = outside, .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "missing", .{ .source_module = src, .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "raw", .{ .source_module = src, .action = .{ .compound = instrs } });
+    try src.deps.put(arena, "w", .{ .source_module = owner, .action = .{ .compound = instrs } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "modc"), .{ .module = src });
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "moda"), .{ .module = owner });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{});
+
+    // "moda" sorts first in the module table. Rows sort by owner index then name regardless of
+    // deps hash-iteration order, so moda's two surviving edges precede modc's one.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dep_0_name[] = \"aardvark\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dep_0_module[] = \"modc\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dep_1_name[] = \"probe\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dep_2_name[] = \"w\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dep_2_module[] = \"moda\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "{ .module_idx = 0, .name = onez_image_dep_0_name, .name_len = 8, .source_module_name = onez_image_dep_0_module, .source_module_name_len = 4 }") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "{ .module_idx = 0, .name = onez_image_dep_1_name, .name_len = 5, .source_module_name = onez_image_dep_1_module, .source_module_name_len = 4 }") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "{ .module_idx = 1, .name = onez_image_dep_2_name, .name_len = 1, .source_module_name = onez_image_dep_2_module, .source_module_name_len = 4 }") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".module_dep_count = 3") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".module_deps = onez_image_module_deps_storage") != null);
+
+    // The synthetic-scope, outside-the-image, missing-word, and
+    // native-target edges emit no row.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dep_3_name") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "\"hidden\"") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "\"ext\"") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "\"raw\"") == null);
 }
 
 test "emitImageC: no parameter or marker literals emits no slot tables" {

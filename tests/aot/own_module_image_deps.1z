@@ -1,0 +1,13 @@
+\ Module A imports `probe` from module C and defines none of its own; the
+\ entry imports a colliding `probe` from module B. A's stored quotation and
+\ its undiscovered module word -- both interpreted at runtime inside the
+\ image -- must resolve `probe` through A's serialized import edges
+\ (Module.deps), deterministically landing on C's export instead of
+\ scanning the module cache by name.
+
+use { a-quot: a-call: } "fixtures/own_module_image_deps_a.1z" ;
+use { probe: } "fixtures/own_module_image_deps_b.1z" ;
+
+probe print-line
+a-quot call print-line
+a-call call print-line

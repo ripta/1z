@@ -1,0 +1,4 @@
+\ Fixture for own_module_image_deps. The module A imports `probe` from; its
+\ export must win inside A's bodies over the entry file's colliding import.
+
+probe: ( -- str ) [ "C-PROBE" ] ;

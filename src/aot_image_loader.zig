@@ -58,6 +58,7 @@ pub const ConstraintCombinatorDescription = populate_core.ConstraintCombinatorDe
 pub const dispatch_type_unary = populate_core.dispatch_type_unary;
 pub const dispatch_type_any = populate_core.dispatch_type_any;
 pub const DispatchEntryDescription = populate_core.DispatchEntryDescription;
+pub const ModuleDep = populate_core.ModuleDep;
 pub const Header = populate_core.Header;
 
 pub const SlotTable = populate_core.SlotTable;
@@ -224,6 +225,11 @@ pub fn loadIntoContext(
     // Resolve the reified-quotation module table so `jitPushQuotation` can
     // stamp each decoded escaping-quotation body with its defining module.
     try populateReifiedQuotationModules(ctx, header);
+
+    // Populate each module's import edges after every body is decoded and
+    // stamped, so the dep copies carry final bodies. This must run before
+    // `replayMethodDispatch` builds the deps-and-words frame templates.
+    try populateModuleDeps(ctx, header);
 }
 
 /// Decode every word body now that the slot tables are patched.
@@ -327,6 +333,36 @@ fn populateReifiedQuotationModules(ctx: *Context, header: *const Header) LoaderE
     }
 
     ctx.image_reified_quotation_modules = map;
+}
+
+/// Populate each image module's `deps` from the serialized import edges.
+///
+/// Each dep entry is a copy of the source module's word, so it carries the decoded body and the
+/// source module as its `source_module`. A row whose source module or word cannot be resolved is
+/// skipped, matching the loader's silent-miss convention for module-name references.
+fn populateModuleDeps(ctx: *Context, header: *const Header) LoaderError!void {
+    if (header.module_dep_count == 0) return;
+    const rows = header.module_deps orelse return;
+    const modules = header.modules orelse return;
+    const arena = ctx.quotationAllocator();
+
+    var i: u32 = 0;
+    while (i < header.module_dep_count) : (i += 1) {
+        const row = rows[i];
+        if (row.module_idx >= header.module_count) return LoaderError.BadWordIndex;
+        const owner_row = modules[row.module_idx];
+        const owner_name = nameSlice(owner_row.name, owner_row.name_len);
+        const owner_cached = ctx.module_cache_value.map.get(owner_name) orelse continue;
+        if (owner_cached != .module) continue;
+
+        const source_name = nameSlice(row.source_module_name, row.source_module_name_len);
+        const source_cached = ctx.module_cache_value.map.get(source_name) orelse continue;
+        if (source_cached != .module) continue;
+
+        const name = nameSlice(row.name, row.name_len);
+        const mw = source_cached.module.words.get(name) orelse continue;
+        owner_cached.module.deps.put(arena, name, mw) catch return LoaderError.OutOfMemory;
+    }
 }
 
 /// Record each image module as the defining module of its words' bodies and every quotation
@@ -1189,7 +1225,8 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
     // interpreter generic dispatch (`tryDispatchGenericById`) keys on
     // `word.dispatch_id`, so without this it never matches the replayed
     // method entries and every generic call from an interpreted quotation
-    // fails with "no method found".
+    // fails with "no method found". Dep entries are value copies made in
+    // `populateModuleDeps` before this patch, so they are patched too.
     var mod_it = ctx.module_cache_value.map.valueIterator();
     while (mod_it.next()) |cached| {
         if (cached.* != .module) continue;
@@ -1197,6 +1234,12 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
         while (word_it.next()) |word_entry| {
             if (ctx.aot_generic_dispatch_ids.get(word_entry.key_ptr.*)) |did| {
                 word_entry.value_ptr.dispatch_id = did;
+            }
+        }
+        var dep_it = cached.*.module.deps.iterator();
+        while (dep_it.next()) |dep_entry| {
+            if (ctx.aot_generic_dispatch_ids.get(dep_entry.key_ptr.*)) |did| {
+                dep_entry.value_ptr.dispatch_id = did;
             }
         }
 
@@ -2448,6 +2491,178 @@ test "populateReifiedQuotationModules: keys rows by data pointer" {
     const map = ctx.image_reified_quotation_modules orelse return error.TestExpectedTable;
     const module = map.get(@intFromPtr(&data)) orelse return error.TestExpectedEntry;
     try testing.expectEqual(@as(*const value_mod.Module, cached.module), module);
+}
+
+test "populateModuleDeps: fills owner deps from the source module's words" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+
+    const owner_name = "moda";
+    const source_name = "modc";
+    const dep_name = "probe";
+    var probe = wordRow(dep_name, 1, 1);
+    probe.body_bytecode = encoded.items.ptr;
+    probe.body_bytecode_len = @intCast(encoded.items.len);
+    const words = [_]Word{ wordRow("w", 0, 0), probe };
+    const modules = [_]Module{
+        .{ .name = owner_name.ptr, .name_len = owner_name.len, .word_start_idx = 0, .word_count = 1 },
+        .{ .name = source_name.ptr, .name_len = source_name.len, .word_start_idx = 1, .word_count = 1 },
+    };
+    const deps = [_]ModuleDep{.{
+        .module_idx = 0,
+        .name = dep_name.ptr,
+        .name_len = dep_name.len,
+        .source_module_name = source_name.ptr,
+        .source_module_name_len = source_name.len,
+    }};
+
+    var header = emptyHeader();
+    header.module_count = 2;
+    header.word_count = 2;
+    header.modules = &modules;
+    header.words = &words;
+    header.module_dep_count = 1;
+    header.module_deps = &deps;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    const owner = (ctx.module_cache_value.map.get(owner_name) orelse return error.TestExpectedModule).module;
+    const source = (ctx.module_cache_value.map.get(source_name) orelse return error.TestExpectedModule).module;
+    const dep = owner.deps.get(dep_name) orelse return error.TestExpectedDep;
+    try testing.expectEqual(@as(?*const value_mod.Module, source), dep.source_module);
+    try testing.expectEqual(@as(usize, 1), dep.action.compound.len);
+    try testing.expectEqual(@as(i64, 7), dep.action.compound[0].op.push_literal.fixnum);
+}
+
+test "populateModuleDeps: unresolvable rows are skipped, bad owner index errors" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const m_name = "demo";
+    const stub_name = "stub";
+    const words = [_]Word{wordRow(stub_name, 0, 0)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const unknown_module = "nowhere";
+    const unknown_word = "ghost";
+    const deps = [_]ModuleDep{
+        .{
+            .module_idx = 0,
+            .name = stub_name.ptr,
+            .name_len = stub_name.len,
+            .source_module_name = unknown_module.ptr,
+            .source_module_name_len = unknown_module.len,
+        },
+        .{
+            .module_idx = 0,
+            .name = unknown_word.ptr,
+            .name_len = unknown_word.len,
+            .source_module_name = m_name.ptr,
+            .source_module_name_len = m_name.len,
+        },
+    };
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.module_dep_count = 2;
+    header.module_deps = &deps;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    const cached = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
+    try testing.expectEqual(@as(usize, 0), cached.deps.count());
+
+    var bad_ctx = Context.init(testing.allocator);
+    defer bad_ctx.deinit();
+    const bad_deps = [_]ModuleDep{.{
+        .module_idx = 5,
+        .name = unknown_word.ptr,
+        .name_len = unknown_word.len,
+        .source_module_name = m_name.ptr,
+        .source_module_name_len = m_name.len,
+    }};
+    var bad_header = emptyHeader();
+    bad_header.module_count = 1;
+    bad_header.word_count = 1;
+    bad_header.modules = &modules;
+    bad_header.words = &words;
+    bad_header.module_dep_count = 1;
+    bad_header.module_deps = &bad_deps;
+    try testing.expectError(
+        LoaderError.BadWordIndex,
+        loadIntoContext(&bad_ctx, &bad_header, .{}, null),
+    );
+}
+
+test "replayMethodDispatch: patches a dep entry's dispatch_id like a word entry" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+
+    const owner_name = "moda";
+    const source_name = "modc";
+    const generic_name = "gword";
+    const words = [_]Word{ wordRow("w", 0, 0), wordRow(generic_name, 1, 1) };
+    const modules = [_]Module{
+        .{ .name = owner_name.ptr, .name_len = owner_name.len, .word_start_idx = 0, .word_count = 1 },
+        .{ .name = source_name.ptr, .name_len = source_name.len, .word_start_idx = 1, .word_count = 1 },
+    };
+    const deps = [_]ModuleDep{.{
+        .module_idx = 0,
+        .name = generic_name.ptr,
+        .name_len = generic_name.len,
+        .source_module_name = source_name.ptr,
+        .source_module_name_len = source_name.len,
+    }};
+    const rows = [_]DispatchEntryDescription{.{
+        .dispatch_id = 7,
+        .type_a_slot = dispatch_type_any,
+        .type_b_slot = dispatch_type_unary,
+        .quotation_id = populate_core.dispatch_interp_quotation_id_sentinel,
+        .module_name = source_name.ptr,
+        .module_name_len = source_name.len,
+        .generic_name = generic_name.ptr,
+        .generic_name_len = generic_name.len,
+        .body_bytecode = encoded.items.ptr,
+        .body_bytecode_len = @intCast(encoded.items.len),
+    }};
+
+    var header = emptyHeader();
+    header.module_count = 2;
+    header.word_count = 2;
+    header.modules = &modules;
+    header.words = &words;
+    header.module_dep_count = 1;
+    header.module_deps = &deps;
+    header.dispatch_entry_slot_count = 1;
+    header.dispatch_entry_descriptions = &rows;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+    try replayMethodDispatch(&ctx);
+
+    const owner = (ctx.module_cache_value.map.get(owner_name) orelse return error.TestExpectedModule).module;
+    const source = (ctx.module_cache_value.map.get(source_name) orelse return error.TestExpectedModule).module;
+    const word = source.words.get(generic_name) orelse return error.TestExpectedWord;
+    try testing.expectEqual(@as(u32, 7), word.dispatch_id);
+    const dep = owner.deps.get(generic_name) orelse return error.TestExpectedDep;
+    try testing.expectEqual(@as(u32, 7), dep.dispatch_id);
 }
 
 test "loadIntoContext: truncated body bytecode surfaces OutOfMemory" {

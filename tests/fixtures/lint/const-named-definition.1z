@@ -1,0 +1,8 @@
+use "strings" ;
+
+\ Defines a word whose name collides with a const type word the linter's own
+\ import graph carries (ranges' `range`). The semantic pass must still load
+\ this file in check mode; the collision must not abort the load.
+range: ( -- n ) [ 42 ] ;
+
+helper: ( s -- array ) [ "," split ] ;

@@ -350,6 +350,18 @@ pub const ReifiedQuotationModule = extern struct {
     module_name_len: u32,
 };
 
+/// Zig mirror of `onez_image_module_dep_t`.
+///
+/// One import edge: the owning module's deps entry for a word it imported from another image
+/// module. The owner is referenced by module-table index and the source module by name.
+pub const ModuleDep = extern struct {
+    module_idx: u32,
+    name: [*]const u8,
+    name_len: u32,
+    source_module_name: [*]const u8,
+    source_module_name_len: u32,
+};
+
 pub const Header = extern struct {
     format_version: u32,
     module_count: u32,
@@ -386,6 +398,8 @@ pub const Header = extern struct {
     dispatch_entry_descriptions: ?[*]const DispatchEntryDescription,
     reified_quotation_module_count: u32 = 0,
     reified_quotation_modules: ?[*]const ReifiedQuotationModule = null,
+    module_dep_count: u32 = 0,
+    module_deps: ?[*]const ModuleDep = null,
 };
 
 /// Slot table type matching the C declaration:

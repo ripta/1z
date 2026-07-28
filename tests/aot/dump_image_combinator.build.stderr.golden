@@ -312,6 +312,17 @@ typedef struct onez_image_reified_quotation_module {
     uint32_t    module_name_len;
 } onez_image_reified_quotation_module_t;
 
+/* One import edge: the owning module's deps entry for a word it      */
+/* imported from another image module. The loader resolves the source */
+/* module by name and copies its word into the owner's deps map.      */
+typedef struct onez_image_module_dep {
+    uint32_t module_idx;          /* owner, index into modules table */
+    const char *name;             /* imported word name */
+    uint32_t name_len;
+    const char *source_module_name;
+    uint32_t source_module_name_len;
+} onez_image_module_dep_t;
+
 typedef struct onez_image_header {
     uint32_t format_version;
     uint32_t module_count;
@@ -348,6 +359,8 @@ typedef struct onez_image_header {
     const struct onez_image_dispatch_entry_description *dispatch_entry_descriptions;
     uint32_t reified_quotation_module_count;
     const struct onez_image_reified_quotation_module *reified_quotation_modules;
+    uint32_t module_dep_count;
+    const struct onez_image_module_dep *module_deps;
 } onez_image_header_t;
 
 static const char onez_image_mk_0_name[] = "parse-time";
@@ -1105,7 +1118,7 @@ static const onez_image_module_t onez_image_modules_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 13,
+    .format_version = 14,
     .module_count = 1,
     .word_count = 3,
     .marker_pool_count = 3,
@@ -1140,5 +1153,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .dispatch_entry_descriptions = NULL,
     .reified_quotation_module_count = 0,
     .reified_quotation_modules = NULL,
+    .module_dep_count = 0,
+    .module_deps = NULL,
 };
 

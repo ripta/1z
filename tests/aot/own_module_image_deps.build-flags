@@ -1,0 +1,2 @@
+--emit-runtime-image
+--allow-interpreter-fallback

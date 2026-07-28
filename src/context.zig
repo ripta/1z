@@ -2286,6 +2286,13 @@ pub const Context = struct {
             .source_module = mod_word.source_module orelse module,
             .capability = mod_word.capability,
             .dispatch_id = mod_word.dispatch_id,
+            // Deliberately no `word_id`: compiled functions are keyed by bare name, so two modules'
+            // same-named words share one id and the id may name the wrong module's body. A frame or
+            // own-module-probe hit interprets the entry's own decoded body instead, which is exact.
+            //
+            // An image blob word's empty body still dispatches compiled through the empty-compound
+            // backfill, which resolves by the same bare name the image word row's `word_id` was
+            // built from, so this path is no weaker than a module-cache-scan resolution.
             .action = switch (mod_word.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
@@ -2591,7 +2598,13 @@ pub const Context = struct {
     }
 
     fn defineWordLocked(self: *Context, name: []const u8, definition: WordDefinition) !void {
-        if (self.lookupWordLocked(name, null)) |existing| {
+        // The const guard looks through an empty visibility, which admits no module and so skips
+        // every `module_deps` frame. A deps frame is execution context for a module's bodies, not
+        // a scope definitions land in. A const word visible only through such a frame, e.g.,
+        // while a check-mode load runs from inside a module word whose module imports that const,
+        // must not block the loaded file's own definitions.
+        const const_guard_vis: ModuleDepsVisibility = .{ .deps_modules = &.{}, .defining_module = null };
+        if (self.lookupWordLocked(name, const_guard_vis)) |existing| {
             for (existing.markers) |mk| {
                 if (markers_mod.isConstMarker(mk)) {
                     self.pending_error_message = std.fmt.allocPrint(
@@ -8523,6 +8536,45 @@ test "defineWordLocked: a definition skips a module-deps frame the active visibi
     try std.testing.expect(ctx.local_frames.items[1].get("deps-binding") != null);
 
     ctx.active_deps_vis = null;
+}
+
+test "defineWordLocked: const guard skips module-deps frames but not lexical frames" {
+    const alloc = std.testing.allocator;
+    var ctx = Context.init(alloc);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    const const_markers: []const *value_mod.Marker = &.{@constCast(&markers_mod.const_marker)};
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+    defer {
+        module.words.deinit(alloc);
+        module.deps.deinit(alloc);
+        if (module.deps_template) |*t| t.frame.deinit(alloc);
+    }
+    try module.deps.put(alloc, "shielded", .{ .markers = const_markers, .action = .{ .native = noop } });
+
+    // A const word visible only through a foreign module's live deps frame must not block a
+    // definition, matching a check-mode load running under a module word.
+    try ctx.pushModuleDepsFrame(&module);
+    try ctx.pushLocalFrame();
+    defer {
+        ctx.popLocalFrame();
+        ctx.popLocalFrame();
+    }
+    try ctx.defineWord("shielded", .{ .name = "shielded", .action = .{ .literal = .{ .fixnum = 7 } } });
+
+    try ctx.local_frames.items[ctx.local_frames.items.len - 1].put(alloc, "blocking", .{
+        .name = "blocking",
+        .markers = const_markers,
+        .action = .{ .native = noop },
+    });
+    try std.testing.expectError(
+        error.CannotRedefineConst,
+        ctx.defineWord("blocking", .{ .name = "blocking", .action = .{ .literal = .{ .fixnum = 8 } } }),
+    );
 }
 
 test "captureQuotationScope: snapshots a lexical local, skips a module-deps frame" {

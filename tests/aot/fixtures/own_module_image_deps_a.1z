@@ -1,0 +1,16 @@
+\ Fixture for own_module_image_deps. Imports `probe` from module C without
+\ defining its own. `a-quot` hands out a stored quotation whose bare `probe`
+\ must resolve through this module's serialized import edge, not the
+\ colliding export the entry file imported. `a-call` hands out a quotation
+\ that calls `a-helper`, a module word the freeze never discovers, so the
+\ helper's own body runs interpreted with this module's deps frame pushed.
+\ The nested definitions keep the quotation bodies uncompilable, so they run
+\ interpreted inside the runtime image.
+
+use { probe: } "./own_module_image_deps_c.1z" ;
+
+a-quot: ( -- q ) [ [ inner: [ probe ] ; inner ] ] ;
+
+a-helper: ( -- str ) [ probe ] ;
+
+a-call: ( -- q ) [ [ inner2: [ a-helper ] ; inner2 ] ] ;
