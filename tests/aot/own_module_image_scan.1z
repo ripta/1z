@@ -1,0 +1,16 @@
+\ Both modules are loaded at runtime, so their words live only in the module
+\ cache: no compiled functions, no image rows, no frame bindings. The stored
+\ quotation has no defining module, so its bare `probe` falls through to the
+\ residual module-cache scan, which must answer deterministically with the
+\ export of the lexicographically smallest module name, module A's,
+\ regardless of hash-iteration order.
+
+load-fixtures: ( -- ) [
+  "tests/aot/fixtures/own_module_image_scan_a.1z" load drop
+  "tests/aot/fixtures/own_module_image_scan_b.1z" load drop
+] ;
+
+e-quot: ( -- q ) [ [ inner: [ probe ] ; inner ] ] ;
+
+load-fixtures
+e-quot call print-line

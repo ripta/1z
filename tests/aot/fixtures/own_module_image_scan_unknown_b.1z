@@ -1,0 +1,8 @@
+\ Fixture for own_module_image_scan_unknown. Exports `b-only`, which module
+\ A's stamped quotation references without importing; the scan skip must
+\ keep it unreachable from A. The entry imports only `b-tag`, which keeps
+\ this module in the image.
+
+b-only: ( -- str ) [ "B-ONLY" ] ;
+
+b-tag: ( -- str ) [ "B-TAG" ] ;

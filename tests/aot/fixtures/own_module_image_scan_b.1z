@@ -1,0 +1,5 @@
+\ Fixture for own_module_image_scan, loaded at runtime. Exports a `probe`
+\ colliding with own_module_image_scan_a's; its module name sorts second, so
+\ the residual module-cache scan must never answer with this export.
+
+probe: ( -- str ) [ "B-PROBE" ] ;

@@ -2989,19 +2989,31 @@ pub const Context = struct {
     /// Definition- and parse-time callers must stick to `lookupWord` so they never see
     /// sibling modules' words.
     pub fn lookupWordForExecution(self: *const Context, name: []const u8) ?WordDefinition {
-        return self.lookupWordForExecutionFiltered(name, null);
+        return self.lookupWordForExecutionFiltered(name, null, null);
     }
 
     /// Like `lookupWordForExecution`, but `vis` filters the executing body's view of transient
-    /// `.module_deps` frames (see `ModuleDepsVisibility`). The runtime-image fallback is left
-    /// unfiltered: it resolves a module's public `words`, not the transient frame stack, so it
-    /// carries no shadowing hazard.
-    pub fn lookupWordForExecutionFiltered(self: *const Context, name: []const u8, vis: ?ModuleDepsVisibility) ?WordDefinition {
+    /// `.module_deps` frames (see `ModuleDepsVisibility`), and `defining_module` is the executing
+    /// body's defining module when it has one.
+    ///
+    /// The runtime-image fallback is scoped by `defining_module`. A module-less body takes the
+    /// module-cache scan as its by-name last resort. A body with a defining module skips it and
+    /// misses on any module-owned name outside its scope; see `moduleCacheContainsWordLocked`.
+    pub fn lookupWordForExecutionFiltered(
+        self: *const Context,
+        name: []const u8,
+        vis: ?ModuleDepsVisibility,
+        defining_module: ?*const value_mod.Module,
+    ) ?WordDefinition {
         self.acquireSharedRead();
         defer self.releaseSharedRead();
         if (self.lookupWordLocked(name, vis)) |def| return def;
         if (!self.runtime_image_loaded) return null;
-        if (self.lookupModuleCacheWordLocked(name)) |def| return def;
+        if (defining_module == null) {
+            if (self.lookupModuleCacheWordLocked(name)) |def| return def;
+        } else if (self.moduleCacheContainsWordLocked(name)) {
+            return null;
+        }
         return self.lookupAotCompiledWordLocked(name);
     }
 
@@ -3016,6 +3028,9 @@ pub const Context = struct {
     /// allocates nothing, and is synthesized in the same shape the module's own deps frame would
     /// hold, so a probe hit executes exactly like a frame hit. See `lookupModuleScopeWord` for the
     /// one addition, source attribution.
+    ///
+    /// A body with an `own_module` skips the module-cache scan and misses on any module-owned
+    /// name outside its scope; see `moduleCacheContainsWordLocked`.
     pub fn lookupWordForExecutionOwnScope(
         self: *const Context,
         name: []const u8,
@@ -3028,7 +3043,11 @@ pub const Context = struct {
         if (lookupOwnScopeLocked(name, own_module, ambient_deps)) |def| return def;
         if (self.lookupWordLocked(name, vis)) |def| return def;
         if (!self.runtime_image_loaded) return null;
-        if (self.lookupModuleCacheWordLocked(name)) |def| return def;
+        if (own_module == null) {
+            if (self.lookupModuleCacheWordLocked(name)) |def| return def;
+        } else if (self.moduleCacheContainsWordLocked(name)) {
+            return null;
+        }
         return self.lookupAotCompiledWordLocked(name);
     }
 
@@ -3146,16 +3165,59 @@ pub const Context = struct {
     /// `local_scope` integration test). The AOT runtime-image
     /// loader routes its private-flagged rows into `deps` too, so
     /// the words-only sweep holds the same boundary for both cases.
+    ///
+    /// This is the last-resort by-name rung, reachable only by a body with no defining module:
+    /// dynamic-eval'd code and unstamped quotations. When two cached modules export the same
+    /// name, the hit from the lexicographically smallest `Module.name` wins. Two runtime loads
+    /// of same-named files from different directories carry equal names, so the cache key, a
+    /// unique resolved path, breaks the tie. The answer is independent of hash-iteration order.
     fn lookupModuleCacheWordLocked(self: *const Context, name: []const u8) ?WordDefinition {
+        const Candidate = struct {
+            mod_word: value_mod.ModuleWord,
+            module: *const value_mod.Module,
+            cache_key: []const u8,
+        };
+        var best: ?Candidate = null;
         var iter = self.module_cache_value.map.iterator();
         while (iter.next()) |entry| {
             if (entry.value_ptr.* != .module) continue;
             const module = entry.value_ptr.*.module;
-            if (module.words.get(name)) |mod_word| {
-                return wordDefFromModuleWord(name, mod_word, module);
+            const mod_word = module.words.get(name) orelse continue;
+            const better = if (best) |b| switch (std.mem.order(u8, module.name, b.module.name)) {
+                .lt => true,
+                .gt => false,
+                .eq => std.mem.lessThan(u8, entry.key_ptr.*, b.cache_key),
+            } else true;
+            if (better) {
+                best = .{ .mod_word = mod_word, .module = module, .cache_key = entry.key_ptr.* };
             }
         }
-        return null;
+        const hit = best orelse return null;
+        return wordDefFromModuleWord(name, hit.mod_word, hit.module);
+    }
+
+    /// True when any cached module's public `words` holds `name`.
+    ///
+    /// This is the module-word veto for a body with a defining module. Such a body resolves
+    /// everything it may legitimately see through its own module scope, the frame walk, and the
+    /// dictionary, so a hit anywhere else could only be a foreign module's unimported word.
+    /// Skipping the scan alone would not make that name miss: a public module word in an image
+    /// build is normally compiled and bare-name registered in `jit_dispatch`, so the sweep below
+    /// the scan would resolve it. A module-owned name therefore resolves nowhere for such a body,
+    /// matching the interpreter.
+    ///
+    /// A name owned by no module still falls through to the sweep, so a stamped body keeps
+    /// reaching an entry-file top-level word. That parity is partial: a module export colliding
+    /// with the entry word's name trips the veto, where the interpreter's durable frame would
+    /// resolve the entry word. The pre-gate scan resolved the module's word on that path too, so
+    /// nothing that worked is lost.
+    fn moduleCacheContainsWordLocked(self: *const Context, name: []const u8) bool {
+        var iter = self.module_cache_value.map.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.* != .module) continue;
+            if (entry.value_ptr.*.module.words.contains(name)) return true;
+        }
+        return false;
     }
 
     /// Find a cached module by its exact name.
@@ -6412,11 +6474,15 @@ pub const Context = struct {
                             }
 
                             if (lazy_pushed.items.len > 0) {
+                                const lazy_module = body_module orelse stamp_module;
                                 const lazy_vis: ModuleDepsVisibility = .{
                                     .deps_modules = lazy_deps,
-                                    .defining_module = body_module orelse stamp_module,
+                                    .defining_module = lazy_module,
                                 };
-                                if (self.lookupWordForExecutionFiltered(name, lazy_vis)) |word| {
+                                // A synthetic-scope stamp counts as module-less for the scan gate,
+                                // mirroring the body-entry probe's exemption.
+                                const gate_module = if (isSyntheticScopeModule(lazy_module)) null else lazy_module;
+                                if (self.lookupWordForExecutionFiltered(name, lazy_vis, gate_module)) |word| {
                                     switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
                                         .proceed => {},
                                         .tail_call_set => return,
@@ -8000,6 +8066,151 @@ test "lookupWordForExecution: does not leak module deps across modules" {
     // module's `deps` is private to that module and must not be visible.
     ctx.runtime_image_loaded = true;
     try std.testing.expectEqual(@as(?WordDefinition, null), ctx.lookupWordForExecution("dep-only"));
+}
+
+test "lookupModuleCacheWordLocked: smallest module name wins a public-name collision" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const arena_alloc = ctx.arena.allocator();
+    const zeta = try arena_alloc.create(value_mod.Module);
+    zeta.* = .{ .name = "zeta-mod", .words = .{} };
+    try zeta.words.put(arena_alloc, "probe", .{
+        .source_module = zeta,
+        .action = .{ .native = noop },
+    });
+
+    const alpha = try arena_alloc.create(value_mod.Module);
+    alpha.* = .{ .name = "alpha-mod", .words = .{} };
+    try alpha.words.put(arena_alloc, "probe", .{
+        .source_module = alpha,
+        .action = .{ .native = noop },
+    });
+
+    // Inserted zeta-first so insertion order disagrees with name order; the
+    // winner must not depend on either insertion or hash-iteration order.
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "zeta-mod"),
+        .{ .module = zeta },
+    );
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "alpha-mod"),
+        .{ .module = alpha },
+    );
+
+    ctx.runtime_image_loaded = true;
+    const found = ctx.lookupWordForExecution("probe") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, alpha), found.source_module);
+}
+
+test "lookupModuleCacheWordLocked: cache key breaks a tie between same-named modules" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    // Two runtime loads of same-named files from different directories: equal
+    // `Module.name`, distinct resolved-path cache keys.
+    const arena_alloc = ctx.arena.allocator();
+    const first = try arena_alloc.create(value_mod.Module);
+    first.* = .{ .name = "helpers", .words = .{} };
+    try first.words.put(arena_alloc, "probe", .{
+        .source_module = first,
+        .action = .{ .native = noop },
+    });
+
+    const second = try arena_alloc.create(value_mod.Module);
+    second.* = .{ .name = "helpers", .words = .{} };
+    try second.words.put(arena_alloc, "probe", .{
+        .source_module = second,
+        .action = .{ .native = noop },
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "/z/helpers.1z"),
+        .{ .module = first },
+    );
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "/a/helpers.1z"),
+        .{ .module = second },
+    );
+
+    ctx.runtime_image_loaded = true;
+    const found = ctx.lookupWordForExecution("probe") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, second), found.source_module);
+}
+
+test "module-cache scan is skipped for a body with a defining module" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const arena_alloc = ctx.arena.allocator();
+    const foreign = try arena_alloc.create(value_mod.Module);
+    foreign.* = .{ .name = "foreign-mod", .words = .{} };
+    try foreign.words.put(arena_alloc, "probe", .{
+        .source_module = foreign,
+        .action = .{ .native = noop },
+    });
+
+    const own = try arena_alloc.create(value_mod.Module);
+    own.* = .{ .name = "own-mod", .words = .{} };
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "foreign-mod"),
+        .{ .module = foreign },
+    );
+    ctx.runtime_image_loaded = true;
+
+    // A live compiled entry for the module-owned name sits in jit_dispatch below the scan. The
+    // veto must decide the miss before the sweep can resolve it.
+    const fake_code: *const anyopaque = @ptrCast(&fakeAotCodeMarker);
+    const probe_wid = try ctx.jit_dispatch.assignId("probe");
+    ctx.jit_dispatch.setCodePtr(probe_wid, fake_code);
+
+    // A module-owned name outside the stamped body's scope must miss. Neither the foreign
+    // module's export nor its compiled function may resolve.
+    try std.testing.expectEqual(
+        @as(?WordDefinition, null),
+        ctx.lookupWordForExecutionOwnScope("probe", null, own, &.{}),
+    );
+    try std.testing.expectEqual(
+        @as(?WordDefinition, null),
+        ctx.lookupWordForExecutionFiltered("probe", null, own),
+    );
+
+    // A compiled name owned by no module (an entry-file top-level word) still
+    // reaches the stamped body through the sweep.
+    const top_wid = try ctx.jit_dispatch.assignId("top-level");
+    ctx.jit_dispatch.setCodePtr(top_wid, fake_code);
+    const swept = ctx.lookupWordForExecutionOwnScope("top-level", null, own, &.{}) orelse
+        return error.TestExpectedLookup;
+    try std.testing.expectEqual(@as(?u32, top_wid), swept.word_id);
+
+    // A module-less body keeps the scan as its by-name last resort.
+    const scanned = ctx.lookupWordForExecutionOwnScope("probe", null, null, &.{}) orelse
+        return error.TestExpectedLookup;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, foreign), scanned.source_module);
+    const filtered = ctx.lookupWordForExecutionFiltered("probe", null, null) orelse
+        return error.TestExpectedLookup;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, foreign), filtered.source_module);
 }
 
 test "lookupWordForExecution: walks parent jit_dispatch for AOT-compiled-only words" {

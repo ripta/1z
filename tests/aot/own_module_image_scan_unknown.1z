@@ -1,0 +1,13 @@
+\ Module A's stored quotation calls `b-only`, which only module B exports
+\ and A never imports. A stamped body's module scope is authoritative: a
+\ module-owned name outside it resolves nowhere, so the call must fail with
+\ an unknown-word error, matching the interpreter, instead of resolving B's
+\ export through the module-cache scan or B's compiled function through the
+\ bare-name jit_dispatch sweep.
+
+use { a-quot: a-tag: } "fixtures/own_module_image_scan_unknown_a.1z" ;
+use { b-tag: } "fixtures/own_module_image_scan_unknown_b.1z" ;
+
+a-tag print-line
+b-tag print-line
+a-quot call print-line

@@ -4278,13 +4278,13 @@ const ModuleDepRow = struct {
 /// Emit `onez_image_module_deps_storage[]`: one row per import edge the loader can resolve inside
 /// the image, sorted by owner module index then name for deterministic output.
 ///
-/// Returns the emitted row count. Noüp returns 0 when no edge survives.
+/// Returns the emitted row count. Noöp returns 0 when no edge survives.
 ///
-/// An edge is kept only when its source module is itself an image module and is not a synthetic
-/// scope. A `private{ }` helper needs no dep row: it rides in the owner's own word-table window as
-/// a `flag_bit_module_private` row, which the loader routes back into `deps` directly. Native and
-/// host-callback targets resolve through the dictionary at runtime, so their edges are dropped
-/// rather than serialized dead.
+/// An edge is kept only when its source module is itself an image module and is not a private
+/// scope, so an embedded-stdlib source survives. A `private{ }` helper needs no dep row: it rides
+/// in the owner's own word-table window as a `flag_bit_module_private` row, which the loader
+/// routes back into `deps` directly. Native and host-callback targets resolve through the
+/// dictionary at runtime, so their edges are dropped rather than serialized dead.
 fn emitModuleDepTable(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, ctx: *const Context, manifest: ImageManifest) ImageEmitError!u32 {
     var module_names: std.ArrayListUnmanaged([]const u8) = .{};
     defer module_names.deinit(allocator);
@@ -4311,7 +4311,7 @@ fn emitModuleDepTable(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, ct
         var dep_it = module.deps.iterator();
         while (dep_it.next()) |dep| {
             const source = dep.value_ptr.source_module orelse continue;
-            if (context_mod.isSyntheticScopeModule(source)) continue;
+            if (aot_image.isPrivateHelperSource(source)) continue;
             if (!emitted_names.contains(source.name)) continue;
             const target = source.words.get(dep.key_ptr.*) orelse continue;
             if (aot_image.classifyModuleWord(target) == null) continue;
@@ -4394,9 +4394,8 @@ const EntryImportRow = struct {
 /// Returns the emitted row count.
 ///
 /// A row is kept only when its source module is itself an image module and is not a private
-/// scope. Native and host-callback targets resolve through the dictionary at runtime, so their
-/// rows are dropped rather than serialized dead. Unlike `emitModuleDepTable`, the private-scope
-/// skip uses `isPrivateHelperSource`, so embedded-stdlib sources survive.
+/// scope, so an embedded-stdlib source survives. Native and host-callback targets resolve through
+/// the dictionary at runtime, so their rows are dropped rather than serialized dead.
 fn emitEntryImportTable(
     out: *std.ArrayListUnmanaged(u8),
     allocator: Allocator,
@@ -6255,6 +6254,48 @@ test "emitImageC: module dep rows for resolvable edges, unresolvable edges skipp
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_1_name[] = \"hidden\"") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "\"ext\"") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, "\"raw\"") == null);
+}
+
+test "emitImageC: module dep row survives an embedded-stdlib source" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+
+    // An embedded-stdlib module is synthetic-scoped by name but is a real image module, so a dep
+    // edge sourced from it must survive the private-scope skip, matching `emitEntryImportTable`.
+    const stdlib_mod = try arena.create(Module);
+    stdlib_mod.* = .{ .name = "<stdlib>/util", .words = .{} };
+    try stdlib_mod.words.put(arena, "helper", .{ .action = .{ .compound = instrs } });
+
+    const owner = try arena.create(Module);
+    owner.* = .{ .name = "moda", .words = .{} };
+    try owner.words.put(arena, "w", .{ .action = .{ .compound = instrs } });
+    try owner.deps.put(arena, "helper", .{ .source_module = stdlib_mod, .action = .{ .compound = instrs } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "<stdlib>/util"), .{ .module = stdlib_mod });
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "moda"), .{ .module = owner });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{}, &.{});
+
+    // "<stdlib>/util" sorts before "moda", so moda is module index 1.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dep_0_name[] = \"helper\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dep_0_module[] = \"<stdlib>/util\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "{ .module_idx = 1, .name = onez_image_dep_0_name, .name_len = 6, .source_module_name = onez_image_dep_0_module, .source_module_name_len = 13 }") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".module_dep_count = 1") != null);
 }
 
 test "emitImageC: entry import rows for resolvable imports, unresolvable imports skipped" {

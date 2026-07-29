@@ -1,0 +1,10 @@
+\ Fixture for own_module_image_scan_unknown. `a-quot` hands out a stored
+\ quotation whose bare `b-only` is outside this module's scope: never
+\ defined here, never imported. The nested definition keeps the quotation
+\ uncompilable, so the `b-only` call resolves at runtime inside the image
+\ under this module's stamp; a compilable inner quotation would instead get
+\ a freeze-baked call and never reach runtime resolution.
+
+a-quot: ( -- q ) [ [ inner: [ 0 ] ; inner drop b-only ] ] ;
+
+a-tag: ( -- str ) [ "A-TAG" ] ;
