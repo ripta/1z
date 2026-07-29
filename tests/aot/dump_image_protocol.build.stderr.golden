@@ -323,6 +323,17 @@ typedef struct onez_image_module_dep {
     uint32_t source_module_name_len;
 } onez_image_module_dep_t;
 
+/* One entry-file `use` import: the imported word name and the image  */
+/* module it came from. The entry file is not a module, so the row    */
+/* has no owner reference; the loader restores the set into a durable */
+/* import frame.                                                      */
+typedef struct onez_image_entry_import {
+    const char *name;             /* imported word name */
+    uint32_t name_len;
+    const char *source_module_name;
+    uint32_t source_module_name_len;
+} onez_image_entry_import_t;
+
 typedef struct onez_image_header {
     uint32_t format_version;
     uint32_t module_count;
@@ -361,6 +372,8 @@ typedef struct onez_image_header {
     const struct onez_image_reified_quotation_module *reified_quotation_modules;
     uint32_t module_dep_count;
     const struct onez_image_module_dep *module_deps;
+    uint32_t entry_import_count;
+    const struct onez_image_entry_import *entry_imports;
 } onez_image_header_t;
 
 static const char onez_image_mk_0_name[] = "parse-time";
@@ -1061,8 +1074,18 @@ static const onez_image_module_t onez_image_modules_storage[] = {
     { .name = onez_image_m_0_name, .name_len = 35, .word_start_idx = 0, .word_count = 2 },
 };
 
+static const char onez_image_entry_import_0_name[] = "by-cmp";
+static const char onez_image_entry_import_0_module[] = "fixtures/dump_image_protocol_dep.1z";
+static const char onez_image_entry_import_1_name[] = "sortable";
+static const char onez_image_entry_import_1_module[] = "fixtures/dump_image_protocol_dep.1z";
+
+static const onez_image_entry_import_t onez_image_entry_imports_storage[] = {
+    { .name = onez_image_entry_import_0_name, .name_len = 6, .source_module_name = onez_image_entry_import_0_module, .source_module_name_len = 35 },
+    { .name = onez_image_entry_import_1_name, .name_len = 8, .source_module_name = onez_image_entry_import_1_module, .source_module_name_len = 35 },
+};
+
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 15,
+    .format_version = 16,
     .module_count = 1,
     .word_count = 2,
     .marker_pool_count = 2,
@@ -1099,5 +1122,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .reified_quotation_modules = NULL,
     .module_dep_count = 0,
     .module_deps = NULL,
+    .entry_import_count = 2,
+    .entry_imports = onez_image_entry_imports_storage,
 };
 

@@ -9856,6 +9856,8 @@ pub fn emitProgramC(
     /// composite-buried quotations. Non-empty in an interpreter-linked
     /// metadata-only build rejects the build with `RuntimeImageRequired`.
     interpreted_reach: []const InterpretedReachViolation,
+    /// The entry file's `use` imports, serialized into a full runtime image.
+    entry_imports: []const aot_image_emit_mod.EntryImportInput,
     allocator: Allocator,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .{};
@@ -10979,6 +10981,13 @@ pub fn emitProgramC(
             try reified_rows.append(allocator, .{ .lit_idx = lit_idx, .module_name = mn });
         }
 
+        // Entry-import rows serve interpreted resolution against real word bodies, so only a full
+        // runtime image with a linked interpreter carries them. An interpreter-free binary boots
+        // with no durable frame and the loader would discard every row; a metadata-only image
+        // rehydrates empty bodies, which must not shadow the prelude frame.
+        const image_entry_imports: []const aot_image_emit_mod.EntryImportInput =
+            if (!want_metadata_only and !interpreter_free) entry_imports else &.{};
+
         const stats = aot_image_emit_mod.emitImageCFromCollection(
             &out,
             allocator,
@@ -10991,6 +11000,7 @@ pub fn emitProgramC(
             &dispatch_id_names,
             &interpreter_run_bodies,
             reified_rows.items,
+            image_entry_imports,
         ) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // The freeze classifier already concluded each
@@ -14661,7 +14671,7 @@ test "emitProgramC: generated word forward declaration carries qualified asm-nam
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "asm(\"Person/name>>\")") != null);
@@ -14683,7 +14693,7 @@ test "emitProgramC: generated word with null parent falls back to bare asm-name"
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "asm(\"lonely?\")") != null);
@@ -14710,7 +14720,7 @@ test "emitProgramC: compiled quotation forward declaration carries asm-name" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_q_0(uintptr_t jit_ctx) asm(\"main/quot@7:11\");") != null);
@@ -14724,7 +14734,7 @@ test "emitProgramC: hosted preamble contains libc includes and main shim" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdio.h>") != null);
@@ -14753,7 +14763,7 @@ test "emitProgramC: freestanding preamble drops libc and emits kernel_main" {
     meta.target_triple = "riscv64-freestanding-none";
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, meta, &diag, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, meta, &diag, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdio.h>") == null);
@@ -17177,7 +17187,7 @@ test "emitProgramC generates complete C source" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -17221,7 +17231,7 @@ test "emitProgramC omits legacy name-lookup typed-literal helpers" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "jitPushWordLiteral") == null);
@@ -17239,7 +17249,7 @@ test "emitProgramC dispatch table has correct entries" {
     };
 
     var diag2: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -17264,7 +17274,7 @@ test "emitProgramC quotation table with all compiled entries" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // Table exists with all entries
@@ -17302,7 +17312,7 @@ test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
     try testing.expectError(error.UncompiledQuotations, result);
 
     // Diagnostics report the uncompiled quotation
@@ -17332,7 +17342,7 @@ test "emitProgramC applies Option C to an escaping uncompiled quotation" {
             .{ .quotation_id = 0, .instructions = &bad_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
         };
         var diag: CodegenDiagnostics = .{};
-        const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+        const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
         try testing.expectError(error.UncompiledQuotations, result);
         try testing.expectEqual(@as(usize, 1), diag.uncompiled_quotations.len);
         try testing.expectEqualStrings("onez_q_0", diag.uncompiled_quotations[0].c_name);
@@ -17348,7 +17358,7 @@ test "emitProgramC applies Option C to an escaping uncompiled quotation" {
             .{ .quotation_id = 0, .instructions = &bad_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
         };
         var diag: CodegenDiagnostics = .{};
-        const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+        const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
         defer testing.allocator.free(source);
         try testing.expectEqual(@as(usize, 0), diag.uncompiled_quotations.len);
     }
@@ -17362,7 +17372,7 @@ test "emitProgramC no quotation table when quotations empty" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // No quotation table emitted (extern decl exists but table and call do not)
@@ -17380,7 +17390,7 @@ test "emitProgramC output compiles with cc" {
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});

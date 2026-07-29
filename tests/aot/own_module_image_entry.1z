@@ -1,0 +1,16 @@
+\ The entry file imports `probe` from module A while module B exports a
+\ colliding `probe`. `e-quot` is an entry-file word handing out a stored
+\ quotation kept uncompilable by its nested definition, so the quotation
+\ runs interpreted inside the runtime image with no defining module. Its
+\ bare `probe` must resolve through the entry's restored durable import
+\ frame, deterministically landing on A's export instead of scanning the
+\ module cache by name.
+
+use { probe: } "fixtures/own_module_image_entry_a.1z" ;
+use { b-tag: } "fixtures/own_module_image_entry_b.1z" ;
+
+e-quot: ( -- q ) [ [ inner: [ probe ] ; inner ] ] ;
+
+probe print-line
+e-quot call print-line
+b-tag print-line

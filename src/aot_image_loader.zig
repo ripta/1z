@@ -59,6 +59,7 @@ pub const dispatch_type_unary = populate_core.dispatch_type_unary;
 pub const dispatch_type_any = populate_core.dispatch_type_any;
 pub const DispatchEntryDescription = populate_core.DispatchEntryDescription;
 pub const ModuleDep = populate_core.ModuleDep;
+pub const EntryImport = populate_core.EntryImport;
 pub const Header = populate_core.Header;
 
 pub const SlotTable = populate_core.SlotTable;
@@ -230,6 +231,10 @@ pub fn loadIntoContext(
     // stamped, so the dep copies carry final bodies. This must run before
     // `replayMethodDispatch` builds the deps-and-words frame templates.
     try populateModuleDeps(ctx, header);
+
+    // Restore the entry file's `use` imports last, so the frame definitions
+    // copy final decoded, stamped bodies.
+    try populateEntryImports(ctx, header);
 }
 
 /// Decode every word body now that the slot tables are patched.
@@ -367,6 +372,37 @@ fn populateModuleDeps(ctx: *Context, header: *const Header) LoaderError!void {
         const name = nameSlice(row.name, row.name_len);
         const mw = source_cached.module.words.get(name) orelse continue;
         owner_cached.module.deps.put(arena, name, mw) catch return LoaderError.OutOfMemory;
+    }
+}
+
+/// Restore the entry file's `use` imports into a fresh durable import frame, so an interpreted
+/// entry-body call resolves them at the frame walk instead of the module-cache scan.
+///
+/// The frame is pushed above the prelude frame and `import_frame_index` repoints to it, the shape
+/// every interpreter driver gives the entry file, so an entry import shadows a prelude word
+/// exactly as it does interpreted.
+///
+/// A no-prelude boot has no durable frame and nothing resolving through frames, so the whole pass
+/// is skipped there.
+fn populateEntryImports(ctx: *Context, header: *const Header) LoaderError!void {
+    if (header.entry_import_count == 0) return;
+    const rows = header.entry_imports orelse return;
+    if (ctx.import_frame_index == null) return;
+
+    ctx.pushLocalFrame() catch return LoaderError.OutOfMemory;
+    ctx.import_frame_index = ctx.local_frames.items.len - 1;
+    ctx.image_entry_import_frame = ctx.import_frame_index;
+
+    var i: u32 = 0;
+    while (i < header.entry_import_count) : (i += 1) {
+        const row = rows[i];
+        const source_name = nameSlice(row.source_module_name, row.source_module_name_len);
+        const source_cached = ctx.module_cache_value.map.get(source_name) orelse continue;
+        if (source_cached != .module) continue;
+
+        const name = nameSlice(row.name, row.name_len);
+        const mw = source_cached.module.words.get(name) orelse continue;
+        ctx.defineImageEntryImport(name, mw, source_cached.module) catch return LoaderError.OutOfMemory;
     }
 }
 
@@ -1269,6 +1305,18 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
         // loader arena outlives the process. A binary with no dispatch entries
         // returns early above and leaves modules to the per-entry rebuild.
         Context.buildModuleDepsTemplate(cached.*.module, ctx.quotationAllocator()) catch return LoaderError.OutOfMemory;
+    }
+
+    // Entry-import frame definitions are value copies made in `populateEntryImports` before this
+    // patch, so patch them too, or a generic imported by the entry never matches its replayed
+    // methods.
+    if (ctx.image_entry_import_frame) |frame_idx| {
+        var frame_it = ctx.local_frames.items[frame_idx].iterator();
+        while (frame_it.next()) |entry| {
+            if (ctx.aot_generic_dispatch_ids.get(entry.key_ptr.*)) |did| {
+                entry.value_ptr.dispatch_id = did;
+            }
+        }
     }
 }
 
@@ -2685,6 +2733,165 @@ test "populateModuleDeps: unresolvable rows are skipped, bad owner index errors"
         LoaderError.BadWordIndex,
         loadIntoContext(&bad_ctx, &bad_header, .{}, null),
     );
+}
+
+test "populateEntryImports: restores imports into a fresh durable frame above the prelude frame" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // Stand in for the prelude frame `loadPrelude` would have pushed.
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+
+    const source_name = "modc";
+    const import_name = "probe";
+    var probe = wordRow(import_name, 0, 0);
+    probe.body_bytecode = encoded.items.ptr;
+    probe.body_bytecode_len = @intCast(encoded.items.len);
+    const words = [_]Word{probe};
+    const modules = [_]Module{
+        .{ .name = source_name.ptr, .name_len = source_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const unknown_module = "nowhere";
+    const unknown_word = "ghost";
+    const imports = [_]EntryImport{
+        .{
+            .name = import_name.ptr,
+            .name_len = import_name.len,
+            .source_module_name = source_name.ptr,
+            .source_module_name_len = source_name.len,
+        },
+        .{
+            .name = unknown_word.ptr,
+            .name_len = unknown_word.len,
+            .source_module_name = source_name.ptr,
+            .source_module_name_len = source_name.len,
+        },
+        .{
+            .name = import_name.ptr,
+            .name_len = import_name.len,
+            .source_module_name = unknown_module.ptr,
+            .source_module_name_len = unknown_module.len,
+        },
+    };
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.entry_import_count = 3;
+    header.entry_imports = &imports;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    try testing.expectEqual(@as(usize, 2), ctx.local_frames.items.len);
+    try testing.expectEqual(@as(?usize, 1), ctx.import_frame_index);
+    try testing.expectEqual(@as(?usize, 1), ctx.image_entry_import_frame);
+
+    const source = (ctx.module_cache_value.map.get(source_name) orelse return error.TestExpectedModule).module;
+    const frame = &ctx.local_frames.items[1];
+    try testing.expectEqual(@as(usize, 1), frame.count());
+    const def = frame.get(import_name) orelse return error.TestExpectedImport;
+    try testing.expect(def.imported);
+    try testing.expectEqual(@as(?*const value_mod.Module, source), def.source_module);
+    try testing.expectEqual(@as(usize, 1), def.action.compound.len);
+    try testing.expectEqual(@as(i64, 7), def.action.compound[0].op.push_literal.fixnum);
+}
+
+test "populateEntryImports: skipped when no durable frame exists" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const source_name = "modc";
+    const import_name = "probe";
+    const words = [_]Word{wordRow(import_name, 0, 0)};
+    const modules = [_]Module{
+        .{ .name = source_name.ptr, .name_len = source_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const imports = [_]EntryImport{.{
+        .name = import_name.ptr,
+        .name_len = import_name.len,
+        .source_module_name = source_name.ptr,
+        .source_module_name_len = source_name.len,
+    }};
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.entry_import_count = 1;
+    header.entry_imports = &imports;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    try testing.expectEqual(@as(usize, 0), ctx.local_frames.items.len);
+    try testing.expectEqual(@as(?usize, null), ctx.image_entry_import_frame);
+}
+
+test "replayMethodDispatch: patches an entry-import frame def's dispatch_id" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    const body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    };
+    var encoded: std.ArrayListUnmanaged(u8) = .{};
+    defer encoded.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+
+    const source_name = "modc";
+    const generic_name = "gword";
+    const words = [_]Word{wordRow(generic_name, 0, 0)};
+    const modules = [_]Module{
+        .{ .name = source_name.ptr, .name_len = source_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const imports = [_]EntryImport{.{
+        .name = generic_name.ptr,
+        .name_len = generic_name.len,
+        .source_module_name = source_name.ptr,
+        .source_module_name_len = source_name.len,
+    }};
+    const rows = [_]DispatchEntryDescription{.{
+        .dispatch_id = 7,
+        .type_a_slot = dispatch_type_any,
+        .type_b_slot = dispatch_type_unary,
+        .quotation_id = populate_core.dispatch_interp_quotation_id_sentinel,
+        .module_name = source_name.ptr,
+        .module_name_len = source_name.len,
+        .generic_name = generic_name.ptr,
+        .generic_name_len = generic_name.len,
+        .body_bytecode = encoded.items.ptr,
+        .body_bytecode_len = @intCast(encoded.items.len),
+    }};
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.entry_import_count = 1;
+    header.entry_imports = &imports;
+    header.dispatch_entry_slot_count = 1;
+    header.dispatch_entry_descriptions = &rows;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+    try replayMethodDispatch(&ctx);
+
+    const frame_idx = ctx.image_entry_import_frame orelse return error.TestExpectedFrame;
+    const def = ctx.local_frames.items[frame_idx].get(generic_name) orelse return error.TestExpectedImport;
+    try testing.expectEqual(@as(u32, 7), def.dispatch_id);
 }
 
 test "replayMethodDispatch: patches a dep entry's dispatch_id like a word entry" {

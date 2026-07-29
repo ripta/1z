@@ -1,0 +1,7 @@
+\ Fixture for own_module_image_entry. Exports a `probe` colliding with
+\ own_module_image_entry_a's, so an unscoped by-name lookup could land here.
+\ The entry imports only `b-tag`, which keeps this module in the image.
+
+probe: ( -- str ) [ "B-PROBE" ] ;
+
+b-tag: ( -- str ) [ "B-TAG" ] ;

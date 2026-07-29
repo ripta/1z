@@ -721,6 +721,11 @@ pub const Context = struct {
     /// image loader on process-lifetime storage and shared by pointer with
     /// spawned task contexts.
     image_reified_quotation_modules: ?*const std.AutoHashMapUnmanaged(usize, *const value_mod.Module) = null,
+    /// Index of the durable import frame the image loader pushed for the entry
+    /// file's restored `use` imports. Null when no image or no entry imports
+    /// loaded. Guards the replay dispatch_id patch so it never touches the
+    /// prelude frame.
+    image_entry_import_frame: ?usize = null,
     /// Decoded-instruction cache for reified quotation pushes, keyed by the same static data
     /// pointer. Per-context, single writer; the slices are borrowed from the quotation arena.
     ///
@@ -746,8 +751,8 @@ pub const Context = struct {
     /// Set true when `aot_image_loader.loadIntoContext` has populated
     /// this context from an AOT runtime image. Gates the module-cache
     /// fallback in `lookupWordForExecution` so the fallback only fires
-    /// for runtime-image-loaded modules, where the loader places every
-    /// word -- public and module-private -- into `module.words`.
+    /// for runtime-image-loaded modules; the loader routes public rows
+    /// into `module.words` and private-flagged rows into `module.deps`.
     /// Normal interpreter sessions and `load`-based module loading
     /// leave this false, so the fallback stays inert and module
     /// privacy holds.
@@ -2301,6 +2306,26 @@ pub const Context = struct {
         };
         def.exec_flags = computeExecFlags(def);
         return def;
+    }
+
+    /// Restore one image-serialized entry-file import into the durable import
+    /// frame at `import_frame_index`. The definition goes through the
+    /// module-word conversion and is marked `imported`, matching what the
+    /// interpreter's `use` records there.
+    ///
+    /// Writes the frame without the shared lock: the only caller runs during
+    /// image load, before any worker thread exists. A null
+    /// `import_frame_index` is a no-prelude boot with nothing to restore.
+    pub fn defineImageEntryImport(
+        self: *Context,
+        name: []const u8,
+        mod_word: value_mod.ModuleWord,
+        source: *const value_mod.Module,
+    ) !void {
+        const idx = self.import_frame_index orelse return;
+        var def = moduleWordFrameDef(name, mod_word, source);
+        def.imported = true;
+        try self.local_frames.items[idx].put(self.allocator, name, def);
     }
 
     /// Fill `frame` with `module`'s deps then words (words override same-named

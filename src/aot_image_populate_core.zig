@@ -362,6 +362,18 @@ pub const ModuleDep = extern struct {
     source_module_name_len: u32,
 };
 
+/// Zig mirror of `onez_image_entry_import_t`.
+///
+/// One entry-file `use` import: the imported word name and the image module it came from. The
+/// entry file is not a module, so the row has no owner reference; the loader restores the set
+/// into a durable import frame.
+pub const EntryImport = extern struct {
+    name: [*]const u8,
+    name_len: u32,
+    source_module_name: [*]const u8,
+    source_module_name_len: u32,
+};
+
 pub const Header = extern struct {
     format_version: u32,
     module_count: u32,
@@ -400,6 +412,8 @@ pub const Header = extern struct {
     reified_quotation_modules: ?[*]const ReifiedQuotationModule = null,
     module_dep_count: u32 = 0,
     module_deps: ?[*]const ModuleDep = null,
+    entry_import_count: u32 = 0,
+    entry_imports: ?[*]const EntryImport = null,
 };
 
 /// Slot table type matching the C declaration:

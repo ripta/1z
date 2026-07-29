@@ -1,0 +1,5 @@
+\ Fixture for own_module_image_entry. The entry file imports `probe` from
+\ here; its export must win inside the entry's interpreted bodies over
+\ own_module_image_entry_b's colliding export.
+
+probe: ( -- str ) [ "A-PROBE" ] ;

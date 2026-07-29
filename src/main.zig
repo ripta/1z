@@ -2946,6 +2946,20 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
     // Freeze leaves the entry file's pragma frame pushed; balance it after emission.
     defer ctx.popPragmaFrame();
 
+    // The freeze-side entry-import snapshot in the emitter's input shape.
+    var entry_import_inputs: std.ArrayListUnmanaged(aot_image_emit.EntryImportInput) = .{};
+    defer entry_import_inputs.deinit(allocator);
+    for (freeze_result.entry_imports) |ei| {
+        entry_import_inputs.append(allocator, .{
+            .name = ei.name,
+            .source_module_name = ei.source_module_name,
+        }) catch {
+            err_writer.writeAll("Error: out of memory while collecting entry imports\n") catch {};
+            err_writer.flush() catch {};
+            return 1;
+        };
+    }
+
     if (dump_image_classification) {
         var manifest = aot_image.buildImageManifest(ctx, allocator) catch |err| {
             err_writer.print("Error building image manifest: {s}\n", .{@errorName(err)}) catch {};
@@ -2992,7 +3006,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
 
         var dump_buf: std.ArrayListUnmanaged(u8) = .{};
         defer dump_buf.deinit(allocator);
-        _ = aot_image_emit.emitImageC(&dump_buf, allocator, ctx, manifest, &image_word_lookup, .{}) catch {
+        _ = aot_image_emit.emitImageC(&dump_buf, allocator, ctx, manifest, &image_word_lookup, .{}, entry_import_inputs.items) catch {
             err_writer.writeAll("Error: out of memory rendering image C\n") catch {};
             err_writer.flush() catch {};
             return 1;
@@ -3083,6 +3097,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         ctx,
         emit_runtime_image_flag,
         freeze_result.interpreted_reach,
+        entry_import_inputs.items,
         allocator,
     ) catch |err| {
         printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);

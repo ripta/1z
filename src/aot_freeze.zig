@@ -72,6 +72,14 @@ pub const AotQuotationDesc = struct {
     inferred_param_types: []const ir_codegen.InferredParamType = &.{},
 };
 
+/// One entry-file `use` import: the imported name and the origin module it
+/// resolved to. Snapshotted from the entry's durable import frame before
+/// freeze pops it, so the runtime-image emitter can serialize the set.
+pub const EntryImport = struct {
+    name: []const u8,
+    source_module_name: []const u8,
+};
+
 pub const FreezeResult = struct {
     words: []AotWordDesc,
     quotations: []AotQuotationDesc,
@@ -94,6 +102,8 @@ pub const FreezeResult = struct {
     /// descriptors. One slab rather than a slice per descriptor, so the table costs a single
     /// allocation and a single free no matter how many parameters were proved.
     inferred_param_storage: []ir_codegen.InferredParamType = &.{},
+    /// The entry file's `use` imports.
+    entry_imports: []EntryImport = &.{},
 
     /// The descriptor carrying `id`, or null when no word has it.
     ///
@@ -127,6 +137,11 @@ pub const FreezeResult = struct {
         allocator.free(self.call_targets);
         allocator.free(self.interpreted_reach);
         allocator.free(self.inferred_param_storage);
+        for (self.entry_imports) |ei| {
+            allocator.free(ei.name);
+            allocator.free(ei.source_module_name);
+        }
+        allocator.free(self.entry_imports);
     }
 };
 
@@ -458,6 +473,7 @@ pub fn freezeModuleGraphOpts(
         error.FileReadFailed => return error.FileReadFailed,
         else => return error.ExecutionFailed,
     };
+    const entry_frame_index = ctx.local_frames.items.len - 1;
 
     // Phase 2: Discover all reachable compound words via BFS.
     // The entry file's local frame is still on the stack, so lookupWord
@@ -575,6 +591,33 @@ pub fn freezeModuleGraphOpts(
         }
     }
 
+    // Snapshot the entry file's `use` imports before the frame holding them is destroyed.
+    var entry_imports_list: std.ArrayListUnmanaged(EntryImport) = .{};
+    errdefer {
+        for (entry_imports_list.items) |ei| {
+            allocator.free(ei.name);
+            allocator.free(ei.source_module_name);
+        }
+        entry_imports_list.deinit(allocator);
+    }
+    {
+        var frame_it = ctx.local_frames.items[entry_frame_index].iterator();
+        while (frame_it.next()) |entry| {
+            if (!entry.value_ptr.imported) continue;
+            const source = entry.value_ptr.source_module orelse continue;
+
+            const name_copy = try allocator.dupe(u8, entry.key_ptr.*);
+            errdefer allocator.free(name_copy);
+            const module_copy = try allocator.dupe(u8, source.name);
+            errdefer allocator.free(module_copy);
+
+            try entry_imports_list.append(allocator, .{
+                .name = name_copy,
+                .source_module_name = module_copy,
+            });
+        }
+    }
+
     // The pragma frame outlives freeze on success (see the function doc); error paths from here
     // still pop it.
     ctx.popLocalFrame();
@@ -590,6 +633,7 @@ pub fn freezeModuleGraphOpts(
     }
 
     result.interpreted_reach = try allocator.dupe(ir_codegen.InterpretedReachViolation, discovered.interpreted_reach.items);
+    result.entry_imports = try entry_imports_list.toOwnedSlice(allocator);
 
     // Success: path slices have been duped into result.call_targets. Free
     // the BFS-time originals; the idempotent free renders the errdefer
