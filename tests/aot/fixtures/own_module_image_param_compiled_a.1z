@@ -1,0 +1,9 @@
+\ Fixture for own_module_image_param_compiled. Exports `probe` under the same
+\ name as the sibling B fixture, plus a parameter whose default has no nested
+\ definition, the shape the freeze-compiled-default bug report exercised. The
+\ default is never compiled at freeze; it runs interpreted inside the runtime
+\ image under the loader's module stamp and must resolve this module's `probe`.
+
+probe: ( -- str ) [ "A-PROBE" ] ;
+
+a-param: parameter{ [ probe ] } ;

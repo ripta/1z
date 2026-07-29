@@ -1,0 +1,4 @@
+\ Fixture for own_module_image_param_compiled. The colliding `probe` export
+\ the entry imports.
+
+probe: ( -- str ) [ "B-PROBE" ] ;

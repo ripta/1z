@@ -1,0 +1,11 @@
+\ Two image modules export `probe`, and module A's parameter default is a
+\ plain `[ probe ]` with no nested definition -- the compilable shape from
+\ the freeze-compiled-default bug report. The default still runs interpreted
+\ inside the image, and the load-time module stamp must resolve A's own
+\ `probe` ahead of the colliding export the entry imported from B.
+
+use { a-param: } "fixtures/own_module_image_param_compiled_a.1z" ;
+use { probe: } "fixtures/own_module_image_param_compiled_b.1z" ;
+
+probe print-line
+a-param get print-line
