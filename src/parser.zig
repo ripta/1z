@@ -243,7 +243,7 @@ fn hasParseTimeMarkerInTrail(instructions: []const Instruction) bool {
                     else => {},
                 }
             },
-            .call_word, .call_word_direct => break,
+            .call_word, .call_word_direct, .call_word_module => break,
         }
     }
     return false;
@@ -266,7 +266,7 @@ fn executeParseTimeWord(
     while (tail_start > 0) {
         switch (instructions.items[tail_start - 1].op) {
             .push_literal => tail_start -= 1,
-            .call_word, .call_word_direct => break,
+            .call_word, .call_word_direct, .call_word_module => break,
         }
     }
 

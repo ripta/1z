@@ -1,0 +1,6 @@
+\ Fixture for aot_module_word_identity_scope. Exports `probe` under the same name as the sibling
+\ B fixture, plus `a-probe`, which calls this module's own `probe`.
+
+probe: ( -- str ) [ "A-PROBE" ] ;
+
+a-probe: ( -- str ) [ probe ] ;

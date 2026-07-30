@@ -427,7 +427,7 @@ pub fn releaseInstructionsContainerLiterals(instructions: []const Instruction) v
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| releaseValue(val),
-            .call_word, .call_word_direct => {},
+            .call_word, .call_word_direct, .call_word_module => {},
         }
     }
 }
@@ -441,7 +441,7 @@ pub fn retainInstructionsContainerLiterals(instructions: []const Instruction) vo
     for (instructions) |instr| {
         switch (instr.op) {
             .push_literal => |val| retainValue(val),
-            .call_word, .call_word_direct => {},
+            .call_word, .call_word_direct, .call_word_module => {},
         }
     }
 }
@@ -478,7 +478,7 @@ pub fn instructionsHaveContainerLiteral(instructions: []const Instruction) bool 
             .push_literal => |val| {
                 if (valueHoldsRefcountedBacking(val)) return true;
             },
-            .call_word, .call_word_direct => {},
+            .call_word, .call_word_direct, .call_word_module => {},
         }
     }
     return false;

@@ -1188,7 +1188,7 @@ fn nativeQuotationToOpcodes(ctx: *Context) anyerror!void {
                 pair[0] = .{ .symbol = "call-word" };
                 pair[1] = .{ .string = name };
             },
-            .call_word_direct => |slot| {
+            .call_word_direct, .call_word_module => |slot| {
                 pair[0] = .{ .symbol = "call-word" };
                 pair[1] = .{ .string = slot.name };
             },

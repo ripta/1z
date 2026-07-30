@@ -206,7 +206,7 @@ fn classifyInstructions(instrs: []const Instruction) Classification {
     for (instrs) |instr| {
         switch (instr.op) {
             .push_literal => |lit| acc = acc.combine(classifyValue(lit)),
-            .call_word, .call_word_direct => {},
+            .call_word, .call_word_direct, .call_word_module => {},
         }
     }
     return acc;

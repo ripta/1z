@@ -1,0 +1,26 @@
+\ The entry body's own callee bindings must survive the promoting walks.
+\
+\ A branch table is walked a second time, after the entry's own walk, with no module frame on top,
+\ so its unfiltered resolution of `probe` reaches module A's export. That later recording must not
+\ replace the entry's own, which resolved `probe` against the entry's import frame and so reaches
+\ module B's.
+\
+\ A `method{ }` body is walked out of the dispatch table rather than out of any word's body, so it
+\ is keyed to the polymorphic word's scope. Without that key it would compile with no scope at all,
+\ and the ambiguous bare `probe` would leave it uncompilable.
+
+use { a-probe: } "fixtures/aot_module_word_identity_scope_a.1z" ;
+use { probe: } "fixtures/aot_module_word_identity_scope_b.1z" ;
+
+shape: struct{ serial } ;
+
+describe: ( 'a -- str ) generic [ drop "none" ] ;
+describe: method{ shape } [ drop probe ] ;
+
+a-probe print-line
+probe print-line
+1 {
+  { 1 [ probe ] }
+  [ drop "other" ]
+} case print-line
+1 make-shape describe print-line

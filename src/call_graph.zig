@@ -78,7 +78,7 @@ pub fn collectCalleesPublic(instructions: []const Instruction, callee_set: *std.
 fn collectCallees(instructions: []const Instruction, callee_set: *std.StringHashMapUnmanaged(void), has_opaque: *bool, allocator: Allocator) !void {
     for (instructions) |instr| {
         switch (instr.op) {
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const name = instr.op.callTargetName().?;
                 if (std.mem.eql(u8, name, ">quotation")) {
                     has_opaque.* = true;
@@ -131,7 +131,7 @@ pub fn hasTailCallTo(instructions: []const Instruction, target_name: []const u8)
     if (instructions.len == 0) return false;
     const last = instructions[instructions.len - 1];
     switch (last.op) {
-        .call_word, .call_word_direct => {
+        .call_word, .call_word_direct, .call_word_module => {
             const name = last.op.callTargetName().?;
             if (std.mem.eql(u8, name, target_name)) return true;
 

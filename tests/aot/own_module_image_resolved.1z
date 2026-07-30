@@ -1,0 +1,15 @@
+\ Module A defines its own `probe`; the entry imports a colliding `probe` from
+\ module B. A's stored quotation runs interpreted inside the image, and its
+\ bare `probe` is baked to A's word row at build time, so it resolves without
+\ a name lookup and cannot land on B's export.
+\
+\ Code created after freeze has no baked target and must still resolve by
+\ name, through the entry file's own serialized import set: the `eval-string`
+\ below sees B's `probe`, exactly as the entry body does.
+
+use { a-quot: } "fixtures/own_module_image_resolved_a.1z" ;
+use { probe: } "fixtures/own_module_image_resolved_b.1z" ;
+
+probe print-line
+a-quot call print-line
+"probe print-line" eval-string

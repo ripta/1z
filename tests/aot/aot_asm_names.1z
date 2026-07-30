@@ -6,6 +6,10 @@
 \ Word names below intentionally include `?`, `-`, and `>` so the verbatim-preservation policy
 \ is observable in both the saved C source and the binary's symbol table.
 
+\ A module word, whose symbol carries the module segment of its compiled identity ahead of the
+\ word name. Two modules can export one name, so the module is what makes the symbol unique.
+use { tagged-probe: } "fixtures/aot_asm_names_mod.1z" ;
+
 parse-json?: ( -- ) [ "ok" print-line ] ;
 >foo: ( -- ) [ "in" print-line ] ;
 
@@ -39,6 +43,7 @@ status: enum{
 } ;
 
 parse-json?
+tagged-probe
 >foo
 t pick-quot
 f pick-quot

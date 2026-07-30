@@ -1,0 +1,3 @@
+\ Fixture for aot_module_word_identity_scope. The colliding `probe` the entry imports.
+
+probe: ( -- str ) [ "B-PROBE" ] ;

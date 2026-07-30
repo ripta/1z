@@ -1,0 +1,5 @@
+\ Fixture for aot_module_word_identity. Exports a `probe` colliding with module
+\ A's. The entry file imports this one, so a bare-name compiled dispatch would
+\ route A's `a-probe` here.
+
+probe: ( -- str ) [ "B-PROBE" ] ;

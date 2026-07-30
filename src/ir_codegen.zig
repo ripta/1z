@@ -51,6 +51,8 @@ const WordDefinition = @import("dictionary.zig").WordDefinition;
 
 const aot_wrappers = @import("aot_native_wrappers.zig");
 const AotQuotationDesc = @import("aot_freeze.zig").AotQuotationDesc;
+const CalleeScope = @import("aot_freeze.zig").CalleeScope;
+const CalleeBinding = @import("aot_freeze.zig").CalleeBinding;
 
 pub const IrCodegenError = error{
     NotCompilable,
@@ -557,6 +559,16 @@ pub const InferredParamType = enum {
 /// Description of a word to be compiled for AOT C emission.
 pub const AotWordDesc = struct {
     name: []const u8,
+    /// The module segment of this word's compiled identity, or null for a genuinely module-less
+    /// word: an entry-file top-level word, a prelude word, or a dot-qualified native. Two modules
+    /// can export one name, so the name alone does not identify a compiled function; see
+    /// `wordIdentityString`.
+    module: ?[]const u8 = null,
+    /// This word's identity string, memoized by `buildAotDescs` and owned by the freeze result.
+    /// Read through `identityOf`, which falls back to the bare name for a descriptor built without
+    /// one. Kept alongside `module` rather than derived per use, so the strings the emitter keys
+    /// its tables on outlive the emitter and can be borrowed by build diagnostics.
+    identity: ?[]const u8 = null,
     instructions: []const Instruction,
     input_count: u8,
     output_count: u8,
@@ -628,7 +640,79 @@ pub const AotWordDesc = struct {
     bounded_constraint: ?dispatch_helpers.BoundedConstraint = null,
     /// Arity for the bounded dispatch. Meaningful only when `bounded_constraint` is non-null.
     bounded_arity: dispatch_helpers.ProtocolArity = .unary,
+
+    /// This word's identity string. Falls back to the bare name for a hand-built descriptor with
+    /// no memoized identity, which is what a module-less word composes to anyway.
+    pub fn identityOf(self: AotWordDesc) []const u8 {
+        return self.identity orelse self.name;
+    }
 };
+
+/// A compiled word's identity string: `<module>/<word>`, or the bare name when the word has no
+/// defining module. It keys every name-keyed table in AOT emission and is the source the C
+/// identifier and the `asm("...")` clause are both built from.
+///
+/// The grammar is not decodable, since a module name is a spelled import path and may itself
+/// contain `/`. That is fine: the string is composed and never decomposed.
+///
+/// Two words can compose to one string, because an ephemeral `private{ }` scope the freeze-time
+/// identity table never saw falls back to the verbatim `<local-scope>`. `buildAotDescs` breaks
+/// such a tie with a numeric suffix, so the identity a descriptor carries is unique.
+pub fn wordIdentityString(allocator: Allocator, module: ?[]const u8, name: []const u8) Allocator.Error![]u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    errdefer buf.deinit(allocator);
+    try appendWordIdentity(&buf, allocator, module, name);
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Append a word's identity string to `out`. Lets a caller that composes many identities reuse one
+/// buffer instead of allocating a string per lookup.
+pub fn appendWordIdentity(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, module: ?[]const u8, name: []const u8) Allocator.Error!void {
+    if (module) |m| {
+        try out.appendSlice(allocator, m);
+        try out.append(allocator, '/');
+    }
+    try out.appendSlice(allocator, name);
+}
+
+/// One defining body's callee bindings: each callee's bare name mapped to its identity string.
+/// Built by `emitProgramC` from what freeze published.
+pub const CalleeScopeMap = std.StringHashMapUnmanaged([]const u8);
+
+/// Program-wide bare name to identity, with a name owned by more than one identity mapped to null.
+pub const BareIdentityMap = std.StringHashMapUnmanaged(?[]const u8);
+
+/// How the body being compiled turns a call site's bare spelling into the callee's identity.
+pub const CalleeResolution = struct {
+    /// The bindings freeze published for this body, or null when it published none.
+    scope: ?*const CalleeScopeMap = null,
+    /// Consulted only where the body's own scope has no binding, which happens for a quotation
+    /// with no known defining word and for a callee reached through a seeding walk that records
+    /// none. An ambiguous name resolves to nothing rather than to one module's word chosen at
+    /// random, which drops the enclosing body from the compiled set.
+    bare: ?*const BareIdentityMap = null,
+
+    /// The identity `name` resolves to. Falls through to the bare name when neither map answers,
+    /// which is correct for a module-less word: its identity is its name.
+    fn identityOf(self: CalleeResolution, name: []const u8) []const u8 {
+        if (self.scope) |s| {
+            if (s.get(name)) |identity| return identity;
+        }
+        if (self.bare) |b| {
+            if (b.get(name)) |maybe| {
+                if (maybe) |identity| return identity;
+            }
+        }
+        return name;
+    }
+};
+
+/// The callee bindings freeze recorded for the body `identity` names, or null when it recorded
+/// none.
+fn scopeFor(scopes: *const std.StringHashMapUnmanaged(CalleeScopeMap), identity: ?[]const u8) ?*const CalleeScopeMap {
+    const key = identity orelse return null;
+    return scopes.getPtr(key);
+}
 
 const supported_indexed_stack_ops = [_][]const u8{ "pick-n", "<rot-n", "rot-n>", "nip-n" };
 
@@ -1982,11 +2066,14 @@ const CompileState = struct {
     /// discarded code, so any path that would emit a native call or
     /// physical-stack stores must raise `BranchlessTrialImpure` instead.
     in_branchless_trial: bool = false,
-    /// Set of compiled word names available in AOT mode. Used to decide whether
+    /// Set of compiled word identities available in AOT mode. Used to decide whether
     /// a compound word call can be a direct function call or must fall through
     /// to `jitInterpretedCall` (permissive AOT only; strict AOT rejects the
     /// build at any such site).
     aot_compiled_names: ?*const std.StringHashMapUnmanaged(u32) = null,
+    /// How the body being compiled turns a call site's bare spelling into the callee's identity,
+    /// which is what picks between two modules' same-named words.
+    aot_callee_resolution: CalleeResolution = .{},
     /// Prototype ref for 1-arg callbacks in AOT mode: (uintptr_t) -> int32_t.
     aot_proto_1arg: c.ir_ref = c.IR_UNUSED,
     /// Prototype ref for 2-arg callbacks in AOT mode: (uintptr_t, uintptr_t) -> int32_t.
@@ -2091,6 +2178,11 @@ const CompileState = struct {
     /// that emits code into the new block. `c.IR_UNUSED` when nothing
     /// is pending.
     pending_line_ref: c.ir_ref = c.IR_UNUSED,
+
+    /// The identity of the word `name` resolves to from the body being compiled.
+    fn calleeIdentity(state: *const CompileState, name: []const u8) []const u8 {
+        return state.aot_callee_resolution.identityOf(name);
+    }
 
     /// Allocate a fresh RowId, unique within this compilation.
     fn nextRowId(state: *CompileState) RowId {
@@ -2347,7 +2439,7 @@ pub fn inferQuotationEffect(
                 sp += 1;
                 delta += 1;
             },
-            .call_word, .call_word_direct => blk: {
+            .call_word, .call_word_direct, .call_word_module => blk: {
                 const name = instr.op.callTargetName().?;
                 if (try inferBuiltinEffect(name, &mini_stack, &sp, &delta, &min_delta, resolver)) |ok| {
                     if (!ok) return null;
@@ -3158,7 +3250,7 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, e
             .quotation_body => |body| {
                 if (state.aot_mode) {
                     // Serialize the instruction body and record it for C emission.
-                    const serialized = serializeQuotationInstructions(body, std.heap.page_allocator, null) catch {
+                    const serialized = serializeQuotationInstructions(body, std.heap.page_allocator, null, null) catch {
                         state.not_compilable_reason = .non_serializable_literal;
                         return IrCodegenError.NotCompilable;
                     };
@@ -5537,7 +5629,7 @@ fn bodyCallsRowReturning(instructions: []const Instruction, resolver: ?WordResol
             .push_literal => |val| {
                 if (val == .quotation and bodyCallsRowReturning(val.quotation.instructions, resolver)) return true;
             },
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const cname = instr.op.callTargetName() orelse continue;
                 if (intrinsic_table.get(cname) != null) continue;
                 const res = resolver orelse return true;
@@ -5557,7 +5649,7 @@ fn bodyCallsName(instructions: []const Instruction, name: []const u8) bool {
             .push_literal => |val| {
                 if (val == .quotation and bodyCallsName(val.quotation.instructions, name)) return true;
             },
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const cname = instr.op.callTargetName() orelse continue;
                 if (std.mem.eql(u8, cname, name)) return true;
             },
@@ -5902,7 +5994,7 @@ fn armBodyBranchlessEligible(body: []const Instruction) bool {
                 .fixnum, .float, .boolean => {},
                 else => return false,
             },
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const name = instr.op.callTargetName() orelse return false;
                 if (!branchless_arm_ops.has(name)) return false;
             },
@@ -5970,7 +6062,7 @@ fn condSelectMergeKind(
 fn armBodyHasShuffleOp(body: []const Instruction) bool {
     for (body) |instr| {
         switch (instr.op) {
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const name = instr.op.callTargetName() orelse continue;
                 if (branchless_shuffle_ops.has(name)) return true;
             },
@@ -6703,7 +6795,7 @@ fn bodyHasExcludedOp(instructions: []const Instruction) bool {
             .push_literal => |val| {
                 if (val == .quotation and bodyHasExcludedOp(val.quotation.instructions)) return true;
             },
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const cname = instr.op.callTargetName() orelse continue;
                 if (std.mem.eql(u8, cname, ";")) return true;
                 if (std.mem.eql(u8, cname, "if") or std.mem.eql(u8, cname, "choose")) return true;
@@ -7884,7 +7976,7 @@ fn compileInstructions(
                     // their compiled global ID; jitPushArray attaches the matching
                     // code_ptr when reconstructing the composite at runtime.
                     var ser_buf: std.ArrayListUnmanaged(u8) = .{};
-                    serializeValueInto(&ser_buf, val, std.heap.page_allocator, state.aot_quotation_id_map) catch {
+                    serializeValueInto(&ser_buf, val, std.heap.page_allocator, state.aot_quotation_id_map, null) catch {
                         state.not_compilable_reason = .non_serializable_literal;
                         return IrCodegenError.NotCompilable;
                     };
@@ -7945,7 +8037,7 @@ fn compileInstructions(
                     sp.* += 1;
                 }
             },
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const name = instr.op.callTargetName().?;
                 var intrinsic_handled = false;
                 if (intrinsic_table.get(name)) |entry| {
@@ -7973,7 +8065,7 @@ fn compileInstructions(
                 state.self_name != null and
                     state.loop_begin_ref != c.IR_UNUSED and
                     idx == instructions.len - 1 and
-                    std.mem.eql(u8, name, state.self_name.?))
+                    std.mem.eql(u8, state.calleeIdentity(name), state.self_name.?))
                 {
                     // Self-recursive tail call: emit back-edge to LOOP_BEGIN
                     const ic = state.input_count;
@@ -8071,7 +8163,7 @@ fn compileInstructions(
                 } else if (state.mutual_group != null and
                     idx == instructions.len - 1 and
                     isMutualGroupMember(state.mutual_group.?, name) and
-                    (state.self_name == null or !std.mem.eql(u8, name, state.self_name.?)))
+                    (state.self_name == null or !std.mem.eql(u8, state.calleeIdentity(name), state.self_name.?)))
                 {
                     // Mutual recursion trampoline: flush stack, set target, return 3
                     const ic = state.input_count;
@@ -8212,13 +8304,17 @@ fn isMutualGroupMember(group: []const []const u8, name: []const u8) bool {
 /// Check whether any tail-position instruction is a self-call.
 /// "Tail position" means last instruction of the sequence, or last instruction
 /// inside a quotation argument to an `if` that is itself in tail position.
-fn hasSelfTailCall(instructions: []const Instruction, self_name: []const u8) bool {
+///
+/// `self_name` is the compiling word's identity, so the call site's bare spelling is resolved
+/// through `callee_scope` first. Without that, a body in one module calling another module's
+/// same-named word would read as a self-call.
+fn hasSelfTailCall(instructions: []const Instruction, self_name: []const u8, callee_resolution: CalleeResolution) bool {
     if (instructions.len == 0) return false;
     const last = instructions[instructions.len - 1];
     switch (last.op) {
-        .call_word, .call_word_direct => {
+        .call_word, .call_word_direct, .call_word_module => {
             const name = last.op.callTargetName().?;
-            if (std.mem.eql(u8, name, self_name)) return true;
+            if (std.mem.eql(u8, callee_resolution.identityOf(name), self_name)) return true;
             if (std.mem.eql(u8, name, "if")) {
                 // Check the two quotation literals preceding `if`
                 if (instructions.len < 3) return false;
@@ -8232,7 +8328,7 @@ fn hasSelfTailCall(instructions: []const Instruction, self_name: []const u8) boo
                     .push_literal => |v| if (v == .quotation) v.quotation.instructions else return false,
                     else => return false,
                 };
-                return hasSelfTailCall(true_body, self_name) or hasSelfTailCall(false_body, self_name);
+                return hasSelfTailCall(true_body, self_name, callee_resolution) or hasSelfTailCall(false_body, self_name, callee_resolution);
             }
             return false;
         },
@@ -8298,7 +8394,7 @@ fn preScanInstructions(
                     try preScanInstructions(val.quotation.instructions, resolver, flags, true, splice_scan, splice_depth);
                 }
             },
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const name = instr.op.callTargetName().?;
                 if (intrinsic_table.get(name)) |entry| {
                     flags.applyCaps(entry.caps);
@@ -8362,7 +8458,7 @@ fn isNestedDefinedName(instructions: []const Instruction, target: []const u8) bo
             .push_literal => |val| {
                 if (val == .symbol) pending_name = val.symbol;
             },
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const cname = instr.op.callTargetName() orelse continue;
                 if (std.mem.eql(u8, cname, ";")) {
                     if (pending_name) |pn| {
@@ -8393,7 +8489,7 @@ fn findUndiscoverableNestedDef(
 ) ?[]const u8 {
     for (instructions) |instr| {
         switch (instr.op) {
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const name = instr.op.callTargetName() orelse continue;
                 if (std.mem.eql(u8, name, ";")) continue;
                 if (intrinsic_table.has(name) and !isIndexedStackOp(name)) continue;
@@ -8707,8 +8803,11 @@ fn compileWordPass(
 
     // If this word contains a self-tail-call, wrap the body in a LOOP_BEGIN
     // so the self-call becomes a back-edge instead of a recursive native call.
+    //
+    // JIT compilation carries no callee scope: it compiles one word at a time against the live
+    // dictionary, where a bare name and the compiling word's name identify the same word.
     if (self_name) |sn| {
-        if (hasSelfTailCall(instructions, sn)) {
+        if (hasSelfTailCall(instructions, sn, .{})) {
             const entry_end = c._ir_END(&ctx);
             state.loop_begin_ref = c._ir_LOOP_BEGIN(&ctx, entry_end);
             state.self_name = sn;
@@ -8995,6 +9094,7 @@ pub fn emitWordCAot(
     resolver: ?WordResolver,
     self_name: ?[]const u8,
     aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
+    callee_resolution: CalleeResolution,
     string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
     quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral),
     array_literals: ?*std.ArrayListUnmanaged(AotArrayLiteral),
@@ -9015,7 +9115,7 @@ pub fn emitWordCAot(
     freestanding: bool,
     fallbacks_locked: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
-    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked);
+    return emitWordCAotWithCName(instructions, input_count, output_count, name, null, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, reason_out, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked);
 }
 
 /// Like emitWordCAot but with a pre-mangled C function name override.
@@ -9030,6 +9130,7 @@ fn emitWordCAotWithCName(
     resolver: ?WordResolver,
     self_name: ?[]const u8,
     aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
+    callee_resolution: CalleeResolution,
     string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
     quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral),
     array_literals: ?*std.ArrayListUnmanaged(AotArrayLiteral),
@@ -9051,13 +9152,13 @@ fn emitWordCAotWithCName(
     fallbacks_locked: bool,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var reason: ?NotCompilableReason = null;
-    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false) catch |err| {
+    const discovered = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, null, &reason, quotation_id_map, pic_table, interp_ctx, null, null, null, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, false) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
     if (discovered.body) |b| allocator.free(b);
     reason = null;
-    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, discovered.row_aware_self_loop) catch |err| {
+    const result = emitWordCAotPass(instructions, input_count, output_count, name, c_name_override, resolver, self_name, aot_compiled_names, callee_resolution, string_literals, quotation_literals, array_literals, allocator, stack_effect, inferred_param_types, discovered.peak_stack_depth, &reason, quotation_id_map, pic_table, interp_ctx, pic_stats_out, aot_fallback_emit_count_out, aot_fallback_report_out, slot_maps, emit_slot_table_literals, source_file, interpreter_free, freestanding, fallbacks_locked, discovered.row_aware_self_loop) catch |err| {
         if (reason_out) |ro| ro.* = reason;
         return err;
     };
@@ -9092,6 +9193,7 @@ fn emitWordCAotPass(
     resolver: ?WordResolver,
     self_name: ?[]const u8,
     aot_compiled_names: *const std.StringHashMapUnmanaged(u32),
+    callee_resolution: CalleeResolution,
     string_literals: ?*std.ArrayListUnmanaged(AotStringLiteral),
     quotation_literals: ?*std.ArrayListUnmanaged(AotQuotationLiteral),
     array_literals: ?*std.ArrayListUnmanaged(AotArrayLiteral),
@@ -9402,6 +9504,7 @@ fn emitWordCAotPass(
         .freestanding = freestanding,
         .fallbacks_locked = fallbacks_locked,
         .aot_compiled_names = aot_compiled_names,
+        .aot_callee_resolution = callee_resolution,
         .aot_proto_1arg = proto_1arg,
         .aot_proto_2arg = proto_2arg,
         .call_quotation_fn = call_quotation_fn,
@@ -9427,7 +9530,7 @@ fn emitWordCAotPass(
 
     // Self-tail-call detection for AOT
     if (self_name) |sn| {
-        if (hasSelfTailCall(instructions, sn)) {
+        if (hasSelfTailCall(instructions, sn, callee_resolution)) {
             const entry_end = c._ir_END(&ctx);
             state.loop_begin_ref = c._ir_LOOP_BEGIN(&ctx, entry_end);
             state.self_name = sn;
@@ -9563,27 +9666,33 @@ fn appendAsmNameClause(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, n
     try out.appendSlice(allocator, "\")");
 }
 
-/// Append an asm-name clause for a generated word, formatted as `<parent>/<name>`, when `parent` is
-/// non-empty and as the bare `name` otherwise.
+/// Append an asm-name clause for a generated word, formatted as `<module>/<parent>/<name>`, with
+/// each qualifier dropped when absent.
 ///
-/// Profile samples landing in struct accessors, enum predicates, and other type-attached generated
-/// words are attributed to a symbol that names both the originating type and the synthesized word,
-/// so accessors named the same across structs (e.g., `name>>` on `Person` vs `Account`) no longer
-/// collide in profiler output.
+/// The two qualifiers answer different collisions. The provenance parent separates `name>>` on
+/// `Person` from `name>>` on `Account`. The module separates two modules that each declare a
+/// `Person`. Module comes first, matching the identity grammar the C identifier is built from.
 ///
 /// The byte-level toolchain-hostile-character check is delegated to `appendAsmNameClause`, so a
-/// hostile byte anywhere in either component drops the asm-name and leaves the forward declaration
+/// hostile byte anywhere in any component drops the asm-name and leaves the forward declaration
 /// on its mangled C identifier.
-fn appendGeneratedWordAsmNameClause(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, name: []const u8, parent: ?[]const u8) Allocator.Error!void {
-    if (parent) |p| {
-        if (p.len > 0) {
-            const formatted = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ p, name });
-            defer allocator.free(formatted);
-            try appendAsmNameClause(out, allocator, formatted);
-            return;
+fn appendGeneratedWordAsmNameClause(out: *std.ArrayListUnmanaged(u8), allocator: Allocator, module: ?[]const u8, name: []const u8, parent: ?[]const u8) Allocator.Error!void {
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(allocator);
+    if (module) |m| {
+        if (m.len > 0) {
+            try buf.appendSlice(allocator, m);
+            try buf.append(allocator, '/');
         }
     }
-    try appendAsmNameClause(out, allocator, name);
+    if (parent) |p| {
+        if (p.len > 0) {
+            try buf.appendSlice(allocator, p);
+            try buf.append(allocator, '/');
+        }
+    }
+    try buf.appendSlice(allocator, name);
+    try appendAsmNameClause(out, allocator, buf.items);
 }
 
 /// Append an asm-name clause for a compiled quotation, formatted as
@@ -9783,6 +9892,18 @@ pub const AotMetadata = struct {
     freestanding: bool = false,
 };
 
+/// True when `--trace-aot-word=PAT` selects `name`.
+///
+/// A compiled word is named by its identity, so a module word traces as `data/url/encode`. The
+/// flag documents exact names, and a user filtering a build types the word they wrote, so the
+/// segment after the last `/` is matched too. Over-matching a debug filter costs an extra line;
+/// under-matching hides the word the user asked for.
+fn matchesAotWordPattern(ctx: *const Context, name: []const u8) bool {
+    if (trace_mod.matchesPattern(name, ctx.trace.trace_aot_word_pattern)) return true;
+    const slash = std.mem.lastIndexOfScalar(u8, name, '/') orelse return false;
+    return trace_mod.matchesPattern(name[slash + 1 ..], ctx.trace.trace_aot_word_pattern);
+}
+
 /// Emit a `--trace-aot=codegen` line for a word or quotation trial-compile.
 /// `kind` is `"word"` or `"quot"`. A null `reason` is a success; otherwise the
 /// reason's code and message name the rejection. No-op unless `interp_ctx`
@@ -9790,7 +9911,7 @@ pub const AotMetadata = struct {
 fn emitAotCodegenTrace(interp_ctx: ?*const Context, kind: []const u8, name: []const u8, reason: ?NotCompilableReason) void {
     const ctx = interp_ctx orelse return;
     if (!ctx.trace.trace_aot.codegen) return;
-    if (!trace_mod.matchesPattern(name, ctx.trace.trace_aot_word_pattern)) return;
+    if (!matchesAotWordPattern(ctx, name)) return;
     var tw = trace_mod.TraceWriter.init();
     if (reason) |r| {
         trace_mod.traceAotCodegen(&tw, kind, name, r.code(), r.message());
@@ -9813,7 +9934,7 @@ fn emitAotInstrTrace(state: *const CompileState, instr: Instruction, stack: []co
     const ctx = state.interp_ctx orelse return;
     if (!ctx.trace.trace_aot.instr) return;
     const word = state.caller_name_for_report orelse state.self_name orelse "<unknown>";
-    if (!trace_mod.matchesPattern(word, ctx.trace.trace_aot_word_pattern)) return;
+    if (!matchesAotWordPattern(ctx, word)) return;
     const target = instr.op.callTargetName() orelse "-";
     var tw = trace_mod.TraceWriter.init();
     trace_mod.traceAotInstr(&tw, word, @tagName(instr.op), target, sp, hasRowRegion(stack, sp), instr.line);
@@ -9826,7 +9947,7 @@ fn emitAotInstrTrace(state: *const CompileState, instr: Instruction, stack: []co
 fn emitAotEffectTrace(interp_ctx: ?*const Context, name: []const u8, in_arity: u8, out_arity: ?u8, reason: ?NotCompilableReason) void {
     const ctx = interp_ctx orelse return;
     if (!ctx.trace.trace_aot.effect) return;
-    if (!trace_mod.matchesPattern(name, ctx.trace.trace_aot_word_pattern)) return;
+    if (!matchesAotWordPattern(ctx, name)) return;
     var tw = trace_mod.TraceWriter.init();
     if (out_arity) |out| {
         trace_mod.traceAotEffectAttempt(&tw, name, in_arity, out, null, "");
@@ -9858,6 +9979,9 @@ pub fn emitProgramC(
     interpreted_reach: []const InterpretedReachViolation,
     /// The entry file's `use` imports, serialized into a full runtime image.
     entry_imports: []const aot_image_emit_mod.EntryImportInput,
+    /// What freeze resolved each defining body's callees to, so a call site picks the callee's own
+    /// compiled function instead of whichever same-named word its bare spelling reaches first.
+    freeze_callee_scopes: []const CalleeScope,
     allocator: Allocator,
 ) (IrCodegenError || ir_mod.IrError || Allocator.Error)![]u8 {
     var out: std.ArrayListUnmanaged(u8) = .{};
@@ -9869,13 +9993,65 @@ pub fn emitProgramC(
     // no visibility into that decision.
     var meta = metadata;
 
-    // Build name->word_id map for compiled words, excluding native words,
+    // Identity strings, index-aligned with `words`. Two modules can export one name, so every
+    // name-keyed table below keys on the identity rather than the bare `w.name`, and the emitted C
+    // identifier and asm-name are both built from it. Borrowed from the freeze result, which
+    // outlives the build diagnostics that name a word.
+    const identities = try allocator.alloc([]const u8, words.len);
+    defer allocator.free(identities);
+    for (words, 0..) |w, i| identities[i] = w.identityOf();
+
+    // The emitted C identifier, mangled from the identity so `moda/probe` and `modb/probe` become
+    // distinct functions. One array, so the forward declaration, the definition, and the dispatch
+    // table entry are the same string rather than three independent manglings.
+    const c_identifiers = try allocator.alloc([:0]u8, words.len);
+    var c_identifiers_built: usize = 0;
+    defer {
+        for (c_identifiers[0..c_identifiers_built]) |s| allocator.free(s);
+        allocator.free(c_identifiers);
+    }
+    for (identities, 0..) |identity, i| {
+        c_identifiers[i] = try mangleWordName(identity, allocator);
+        c_identifiers_built = i + 1;
+    }
+
+    // The bare-name fallback every body shares. A name owned by two identities maps to null, so a
+    // call site freeze published no binding for resolves to nothing rather than to one module's
+    // body chosen at random; the enclosing body then drops out of the compiled set.
+    var bare_identities: BareIdentityMap = .{};
+    defer bare_identities.deinit(allocator);
+    for (words, 0..) |w, i| {
+        const gop = try bare_identities.getOrPut(allocator, w.name);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = identities[i];
+        } else if (gop.value_ptr.*) |existing| {
+            if (!std.mem.eql(u8, existing, identities[i])) gop.value_ptr.* = null;
+        }
+    }
+
+    // Per-body callee resolution, keyed by the defining body's identity. Built up front so the
+    // value pointers handed to each emit pass stay valid for the rest of the function.
+    var callee_scopes: std.StringHashMapUnmanaged(CalleeScopeMap) = .{};
+    defer {
+        var scope_it = callee_scopes.valueIterator();
+        while (scope_it.next()) |scope| scope.deinit(allocator);
+        callee_scopes.deinit(allocator);
+    }
+    try callee_scopes.ensureTotalCapacity(allocator, @intCast(freeze_callee_scopes.len));
+    for (freeze_callee_scopes) |scope| {
+        var bindings: CalleeScopeMap = .{};
+        errdefer bindings.deinit(allocator);
+        for (scope.bindings) |b| try bindings.put(allocator, b.name, b.identity);
+        callee_scopes.putAssumeCapacity(scope.caller, bindings);
+    }
+
+    // Build identity->word_id map for compiled words, excluding native words,
     // which dispatch through `jitNativeWordCall` rather than direct C calls.
     var compiled_names: std.StringHashMapUnmanaged(u32) = .{};
     defer compiled_names.deinit(allocator);
-    for (words) |w| {
+    for (words, 0..) |w, i| {
         if (w.is_native) continue;
-        try compiled_names.put(allocator, w.name, w.word_id);
+        try compiled_names.put(allocator, identities[i], w.word_id);
     }
 
     // 1. Preamble
@@ -9930,11 +10106,11 @@ pub fn emitProgramC(
     // Build a resolver from the AOT word list for cross-word calls
     var word_map: std.StringHashMapUnmanaged(AotWordDesc) = .{};
     defer word_map.deinit(allocator);
-    for (words) |w| {
-        try word_map.put(allocator, w.name, w);
+    for (words, 0..) |w, i| {
+        try word_map.put(allocator, identities[i], w);
     }
 
-    // Names of words whose compiled body returns through the row / dynamic-call
+    // Identities of words whose compiled body returns through the row / dynamic-call
     // finalization branch. Populated by the row-returning fixpoint below, before
     // Pass 1a, and consulted by the resolver so call sites collapse to a row.
     var returns_row_names: std.StringHashMapUnmanaged(void) = .{};
@@ -9943,10 +10119,14 @@ pub fn emitProgramC(
     const AotResolverData = struct {
         map: *const std.StringHashMapUnmanaged(AotWordDesc),
         returns_row_names: *const std.StringHashMapUnmanaged(void),
+        /// Rebound before each pass so a call site's bare spelling resolves to the word the
+        /// compiling body's own scope names.
+        callee_resolution: CalleeResolution = .{},
 
         fn resolve(name_ptr: []const u8, user_data: *anyopaque) ?ResolvedWord {
             const self: *const @This() = @ptrCast(@alignCast(user_data));
-            const entry = self.map.getPtr(name_ptr) orelse return null;
+            const identity = self.callee_resolution.identityOf(name_ptr);
+            const entry = self.map.getPtr(identity) orelse return null;
             var result = ResolvedWord{
                 .word_id = entry.word_id,
                 .input_count = entry.input_count,
@@ -9958,7 +10138,7 @@ pub fn emitProgramC(
                 .bounded_constraint = entry.bounded_constraint,
                 .bounded_arity = entry.bounded_arity,
                 .is_generic = entry.is_generic,
-                .returns_row = self.returns_row_names.contains(name_ptr),
+                .returns_row = self.returns_row_names.contains(identity),
             };
             if (!entry.is_native) result.body = entry.instructions;
             if (entry.stack_effect) |*eff| {
@@ -9983,6 +10163,8 @@ pub fn emitProgramC(
     const fallbacks_locked = strict_interpreter_free and lock_interpreter_setting;
 
     var resolver_data = AotResolverData{ .map = &word_map, .returns_row_names = &returns_row_names };
+    // Rebound per compiled body below; `bare` is program-wide and never changes.
+    resolver_data.callee_resolution.bare = &bare_identities;
     const resolver = WordResolver{
         .resolve = &AotResolverData.resolve,
         .user_data = @ptrCast(&resolver_data),
@@ -10083,19 +10265,21 @@ pub fn emitProgramC(
         var changed = true;
         while (changed) {
             changed = false;
-            for (words) |*w| {
+            for (words, 0..) |*w, i| {
                 if (w.is_native) continue;
-                if (returns_row_names.contains(w.name)) continue;
+                if (returns_row_names.contains(identities[i])) continue;
+                resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, identities[i]);
                 var reason: ?NotCompilableReason = null;
                 const discovered = emitWordCAotPass(
                     w.instructions,
                     w.input_count,
                     w.output_count,
-                    w.name,
-                    w.name,
+                    identities[i],
+                    identities[i],
                     resolver,
-                    w.name,
+                    identities[i],
                     &compiled_names,
+                    resolver_data.callee_resolution,
                     null,
                     null,
                     null,
@@ -10120,7 +10304,7 @@ pub fn emitProgramC(
                 ) catch continue;
                 if (discovered.body) |b| allocator.free(b);
                 if (discovered.returns_row) {
-                    try returns_row_names.put(allocator, w.name, {});
+                    try returns_row_names.put(allocator, identities[i], {});
                     changed = true;
                 }
             }
@@ -10142,7 +10326,7 @@ pub fn emitProgramC(
     defer compilable_names.deinit(allocator);
     var failure_reasons: std.StringHashMapUnmanaged(NotCompilableReason) = .{};
     defer failure_reasons.deinit(allocator);
-    for (words) |*w| {
+    for (words, 0..) |*w, i| {
         if (w.is_native) continue;
         // A word that calls a helper it defines via a nested `name: [ ... ] ;`
         // statement in its own body cannot be compiled correctly: codegen
@@ -10151,19 +10335,22 @@ pub fn emitProgramC(
         // generated struct converter) mis-binds to the global. Run such a word
         // interpreted, where nested-scope shadowing is honored.
         if (findUndiscoverableNestedDef(w.instructions) != null) {
-            try failure_reasons.put(allocator, w.name, .nested_definition);
-            emitAotCodegenTrace(interp_ctx, "word", w.name, .nested_definition);
+            try failure_reasons.put(allocator, identities[i], .nested_definition);
+            emitAotCodegenTrace(interp_ctx, "word", identities[i], .nested_definition);
             continue;
         }
+        resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, identities[i]);
         var reason: ?NotCompilableReason = null;
-        const trial = emitWordCAot(
+        const trial = emitWordCAotWithCName(
             w.instructions,
             w.input_count,
             w.output_count,
-            w.name,
+            identities[i],
+            identities[i],
             resolver,
-            w.name,
+            identities[i],
             &compiled_names,
+            resolver_data.callee_resolution,
             null,
             null,
             null,
@@ -10190,19 +10377,22 @@ pub fn emitProgramC(
                 .abstract_stack_underflow
             else
                 null;
-            if (rejected) |r| try failure_reasons.put(allocator, w.name, r);
-            emitAotCodegenTrace(interp_ctx, "word", w.name, rejected orelse .unknown_reason);
+            if (rejected) |r| try failure_reasons.put(allocator, identities[i], r);
+            emitAotCodegenTrace(interp_ctx, "word", identities[i], rejected orelse .unknown_reason);
             continue;
         };
         allocator.free(trial);
-        emitAotCodegenTrace(interp_ctx, "word", w.name, null);
-        try compilable_names.put(allocator, w.name, w.word_id);
+        emitAotCodegenTrace(interp_ctx, "word", identities[i], null);
+        try compilable_names.put(allocator, identities[i], w.word_id);
     }
 
     // Pass 1b: trial compile quotation bodies to discover the compilable set
     var compilable_quotation_ids: std.AutoHashMapUnmanaged(u32, void) = .{};
     defer compilable_quotation_ids.deinit(allocator);
     for (quotations) |*q| {
+        // A quotation resolves its bare words under its defining body's scope, which is the
+        // visibility `collectCallWords` walked it under at freeze.
+        resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, q.defining_word);
         const effect = q.inferred_effect orelse blk: {
             // Compile-to-discover: `inferQuotationEffect` could not derive an effect for this
             // quotation, e.g., its body uses a row-variable combinator like `dip`, which
@@ -10224,7 +10414,7 @@ pub fn emitProgramC(
                 var dreason: ?NotCompilableReason = null;
                 // No inferred types: the freeze-time pass sizes a quotation's table by its
                 // `inferred_effect`, and this branch runs precisely when it has none.
-                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, false) catch {
+                const dres = emitWordCAotPass(q.instructions, ic, 0, q.c_name, q.c_name, resolver, null, &compiled_names, resolver_data.callee_resolution, null, null, null, allocator, null, &.{}, null, &dreason, null, null, interp_ctx, null, null, null, slot_maps_ptr, emit_slot_table_literals, q.source_file, strict_interpreter_free, meta.freestanding, fallbacks_locked, false) catch {
                     emitAotEffectTrace(interp_ctx, q.c_name, ic, null, dreason);
                     continue;
                 };
@@ -10247,6 +10437,7 @@ pub fn emitProgramC(
             resolver,
             null,
             &compiled_names,
+            resolver_data.callee_resolution,
             null,
             null,
             null,
@@ -10310,16 +10501,19 @@ pub fn emitProgramC(
     var aot_fallback_builder = AotFallbackReportBuilder.init(allocator);
     defer aot_fallback_builder.deinit();
 
-    for (words) |*w| {
-        if (!compilable_names.contains(w.name)) continue;
-        const raw_body = emitWordCAot(
+    for (words, 0..) |*w, i| {
+        if (!compilable_names.contains(identities[i])) continue;
+        resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, identities[i]);
+        const raw_body = emitWordCAotWithCName(
             w.instructions,
             w.input_count,
             w.output_count,
-            w.name,
+            identities[i],
+            c_identifiers[i],
             resolver,
-            w.name,
+            identities[i],
             &compilable_names,
+            resolver_data.callee_resolution,
             &string_literals,
             &quotation_literals,
             &array_literals,
@@ -10357,6 +10551,7 @@ pub fn emitProgramC(
     }
     for (quotations) |*q| {
         if (!compilable_quotation_ids.contains(q.quotation_id)) continue;
+        resolver_data.callee_resolution.scope = scopeFor(&callee_scopes, q.defining_word);
         const effect = q.inferred_effect.?;
         const raw_body = emitWordCAotWithCName(
             q.instructions,
@@ -10367,6 +10562,7 @@ pub fn emitProgramC(
             resolver,
             null,
             &compilable_names,
+            resolver_data.callee_resolution,
             &string_literals,
             &quotation_literals,
             &array_literals,
@@ -10408,8 +10604,8 @@ pub fn emitProgramC(
     // emit a distinct message instead of saying "reason not categorized."
     var words_by_name: std.StringHashMapUnmanaged(*const AotWordDesc) = .{};
     defer words_by_name.deinit(allocator);
-    for (words) |*w| {
-        try words_by_name.put(allocator, w.name, w);
+    for (words, 0..) |*w, i| {
+        try words_by_name.put(allocator, identities[i], w);
     }
     for (aot_fallback_builder.sites.items) |*site| {
         if (site.category != .compound_uncompiled) continue;
@@ -10435,14 +10631,14 @@ pub fn emitProgramC(
     // Collect quotation fallback warnings for all words with stack effects.
     {
         var fallbacks: std.ArrayListUnmanaged(QuotationFallbackWarning) = .{};
-        for (words) |w| {
+        for (words, 0..) |w, i| {
             if (w.is_native) continue;
             if (w.stack_effect == null) continue;
             const slot_map = buildQuotationSlotMap(&w.stack_effect.?) orelse continue;
             try collectQuotationFallbacks(
                 &w.stack_effect.?,
                 &slot_map,
-                w.name,
+                identities[i],
                 &fallbacks,
                 allocator,
             );
@@ -10463,17 +10659,17 @@ pub fn emitProgramC(
     // dedicated checks, not via this gate.
     {
         var uncompiled: std.ArrayListUnmanaged(UncompiledWord) = .{};
-        for (words) |w| {
+        for (words, 0..) |w, i| {
             if (!w.is_prelude and !actually_compiled.contains(w.word_id)) {
                 if (findUndiscoverableNestedDef(w.instructions)) |nested| {
                     try uncompiled.append(allocator, .{
-                        .name = w.name,
+                        .name = identities[i],
                         .reason = .nested_definition,
                         .nested_definition = nested,
                     });
                 } else {
-                    const reason = failure_reasons.get(w.name) orelse .unknown_reason;
-                    try uncompiled.append(allocator, .{ .name = w.name, .reason = reason });
+                    const reason = failure_reasons.get(identities[i]) orelse .unknown_reason;
+                    try uncompiled.append(allocator, .{ .name = identities[i], .reason = reason });
                 }
             }
         }
@@ -10548,9 +10744,9 @@ pub fn emitProgramC(
                 if (q.compiled) continue;
                 if (emit_runtime_image and can_link_interpreter) {
                     const maybe_bytes = if (method_slot_maps) |*sm|
-                        ibc.serializeQuotationInstructionsForImage(q.instructions, allocator, sm)
+                        ibc.serializeQuotationInstructionsForImage(q.instructions, allocator, sm, null)
                     else
-                        serializeQuotationInstructions(q.instructions, allocator, null);
+                        serializeQuotationInstructions(q.instructions, allocator, null, null);
                     const bytes = maybe_bytes catch |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
                         error.NotEncodable => {
@@ -10617,14 +10813,14 @@ pub fn emitProgramC(
         var total: u32 = 0;
         var compiled: u32 = 0;
         var uncompiled_list: std.ArrayListUnmanaged(UncompiledWord) = .{};
-        for (words) |w| {
+        for (words, 0..) |w, i| {
             if (!w.is_prelude or w.is_native) continue;
             total += 1;
             if (actually_compiled.contains(w.word_id)) {
                 compiled += 1;
             } else {
-                const reason = failure_reasons.get(w.name) orelse .unknown_reason;
-                try uncompiled_list.append(allocator, .{ .name = w.name, .reason = reason });
+                const reason = failure_reasons.get(identities[i]) orelse .unknown_reason;
+                try uncompiled_list.append(allocator, .{ .name = identities[i], .reason = reason });
             }
         }
         diagnostics.prelude_stats = .{
@@ -10778,18 +10974,16 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "\n");
 
     // 4a. Forward declarations (only for successfully compiled words)
-    for (words) |w| {
+    for (words, 0..) |w, i| {
         if (!actually_compiled.contains(w.word_id)) continue;
-        const mangled = try mangleWordName(w.name, allocator);
-        defer allocator.free(mangled);
         try out.appendSlice(allocator, "int32_t ");
-        try out.appendSlice(allocator, mangled);
+        try out.appendSlice(allocator, c_identifiers[i]);
         try out.appendSlice(allocator, "(uintptr_t jit_ctx)");
         if (!w.is_native) {
             if (w.is_generated) {
-                try appendGeneratedWordAsmNameClause(&out, allocator, w.name, w.parent);
+                try appendGeneratedWordAsmNameClause(&out, allocator, w.module, w.name, w.parent);
             } else {
-                try appendAsmNameClause(&out, allocator, w.name);
+                try appendAsmNameClause(&out, allocator, identities[i]);
             }
         }
         try out.appendSlice(allocator, ";\n");
@@ -10843,12 +11037,10 @@ pub fn emitProgramC(
     const table_size = max_word_id + 1;
     for (0..table_size) |id| {
         var found = false;
-        for (words) |w| {
+        for (words, 0..) |w, i| {
             if (w.word_id == id and actually_compiled.contains(w.word_id)) {
-                const mangled = try mangleWordName(w.name, allocator);
-                defer allocator.free(mangled);
                 try out.appendSlice(allocator, "    ");
-                try out.appendSlice(allocator, mangled);
+                try out.appendSlice(allocator, c_identifiers[i]);
                 try out.appendSlice(allocator, ",\n");
                 found = true;
                 break;
@@ -12406,10 +12598,11 @@ fn emitNativeWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8,
 /// strict AOT fails the build at this site).
 fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, resolved: ResolvedWord, line: usize) void {
     const ictx = state.ctx;
+    const target = state.calleeIdentity(name);
     if (state.aot_compiled_names) |names| {
-        if (names.get(name)) |_| {
+        if (names.get(target)) |_| {
             // Direct call to the compiled word's C function
-            const mangled = mangleWordName(name, std.heap.page_allocator) catch unreachable;
+            const mangled = mangleWordName(target, std.heap.page_allocator) catch unreachable;
             defer std.heap.page_allocator.free(mangled);
             const callee_fn = c.ir_const_func(ictx, c.ir_str(ictx, mangled.ptr), state.aot_proto_1arg);
             const call_result = c._ir_CALL_1(ictx, c.IR_I32, callee_fn, state.jit_ctx_ptr);
@@ -12420,7 +12613,7 @@ fn emitAotWordCall(state: *CompileState, ctx_val: c.ir_ref, name: []const u8, re
     // Fall through to interpreter for uncompiled words
     const word_id_const = c.ir_const_addr(ictx, resolved.word_id);
     const line_const = c.ir_const_addr(ictx, line);
-    state.noteAotFallbackEmission(.compound_uncompiled, name, resolved.word_id, line);
+    state.noteAotFallbackEmission(.compound_uncompiled, target, resolved.word_id, line);
     const call_result = c._ir_CALL_3(ictx, c.IR_I32, state.interpreted_call_fn, ctx_val, word_id_const, line_const);
     emitCallbackPostCheck(state, call_result, state.error_propagate_status, if (resolved.never_returns) state.error_propagate_status else null, .none);
 }
@@ -14102,7 +14295,7 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try ibc.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+    try ibc.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
 
     var module = value_mod.Module{ .name = "demo", .words = .{} };
     var modules: std.AutoHashMapUnmanaged(usize, *const value_mod.Module) = .{};
@@ -14610,7 +14803,7 @@ test "appendGeneratedWordAsmNameClause: formats <parent>/<name>" {
     const allocator = testing.allocator;
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(allocator);
-    try appendGeneratedWordAsmNameClause(&out, allocator, "name>>", "Person");
+    try appendGeneratedWordAsmNameClause(&out, allocator, null, "name>>", "Person");
     try testing.expectEqualStrings(" asm(\"Person/name>>\")", out.items);
 }
 
@@ -14618,8 +14811,8 @@ test "appendGeneratedWordAsmNameClause: same accessor name on different parents 
     const allocator = testing.allocator;
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(allocator);
-    try appendGeneratedWordAsmNameClause(&out, allocator, "name>>", "Person");
-    try appendGeneratedWordAsmNameClause(&out, allocator, "name>>", "Account");
+    try appendGeneratedWordAsmNameClause(&out, allocator, null, "name>>", "Person");
+    try appendGeneratedWordAsmNameClause(&out, allocator, null, "name>>", "Account");
     try testing.expectEqualStrings(" asm(\"Person/name>>\") asm(\"Account/name>>\")", out.items);
 }
 
@@ -14627,7 +14820,7 @@ test "appendGeneratedWordAsmNameClause: null parent falls back to bare name" {
     const allocator = testing.allocator;
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(allocator);
-    try appendGeneratedWordAsmNameClause(&out, allocator, "active?", null);
+    try appendGeneratedWordAsmNameClause(&out, allocator, null, "active?", null);
     try testing.expectEqualStrings(" asm(\"active?\")", out.items);
 }
 
@@ -14635,7 +14828,7 @@ test "appendGeneratedWordAsmNameClause: empty parent falls back to bare name" {
     const allocator = testing.allocator;
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(allocator);
-    try appendGeneratedWordAsmNameClause(&out, allocator, "active?", "");
+    try appendGeneratedWordAsmNameClause(&out, allocator, null, "active?", "");
     try testing.expectEqualStrings(" asm(\"active?\")", out.items);
 }
 
@@ -14643,7 +14836,7 @@ test "appendGeneratedWordAsmNameClause: toolchain-hostile parent triggers fallba
     const allocator = testing.allocator;
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(allocator);
-    try appendGeneratedWordAsmNameClause(&out, allocator, "name>>", "bad\"parent");
+    try appendGeneratedWordAsmNameClause(&out, allocator, null, "name>>", "bad\"parent");
     try testing.expectEqualStrings("", out.items);
 }
 
@@ -14651,8 +14844,50 @@ test "appendGeneratedWordAsmNameClause: toolchain-hostile name triggers fallback
     const allocator = testing.allocator;
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(allocator);
-    try appendGeneratedWordAsmNameClause(&out, allocator, "bad\"name", "Person");
+    try appendGeneratedWordAsmNameClause(&out, allocator, null, "bad\"name", "Person");
     try testing.expectEqualStrings("", out.items);
+}
+
+test "appendGeneratedWordAsmNameClause: a module qualifier comes before the provenance parent" {
+    const allocator = testing.allocator;
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(allocator);
+    try appendGeneratedWordAsmNameClause(&out, allocator, "data/url", "name>>", "Person");
+    try testing.expectEqualStrings(" asm(\"data/url/Person/name>>\")", out.items);
+
+    out.clearRetainingCapacity();
+    try appendGeneratedWordAsmNameClause(&out, allocator, "data/url", "name>>", null);
+    try testing.expectEqualStrings(" asm(\"data/url/name>>\")", out.items);
+}
+
+test "emitProgramC: two modules' same-named words get their own functions and call sites" {
+    const probe_a_body = makeInstructions(.{@as(i64, 1)});
+    const probe_b_body = makeInstructions(.{@as(i64, 2)});
+    const caller_body = [_]Instruction{
+        .{ .op = .{ .call_word = "probe" }, .line = 1 },
+    };
+
+    const words = [_]AotWordDesc{
+        .{ .name = "probe", .module = "moda", .identity = "moda/probe", .instructions = &probe_a_body, .input_count = 0, .output_count = 1, .word_id = 0 },
+        .{ .name = "probe", .module = "modb", .identity = "modb/probe", .instructions = &probe_b_body, .input_count = 0, .output_count = 1, .word_id = 1 },
+        .{ .name = "a-probe", .module = "moda", .identity = "moda/a-probe", .instructions = &caller_body, .input_count = 0, .output_count = 1, .word_id = 2 },
+    };
+
+    // `a-probe` spells its callee `probe`; only this binding says which module's word that is.
+    const bindings = [_]CalleeBinding{.{ .name = "probe", .identity = "moda/probe" }};
+    const scopes = [_]CalleeScope{.{ .caller = "moda/a-probe", .bindings = &bindings }};
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 2, 2, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &scopes, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_w_moda_Dprobe(uintptr_t jit_ctx) asm(\"moda/probe\")") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_w_modb_Dprobe(uintptr_t jit_ctx) asm(\"modb/probe\")") != null);
+    // The bare symbol the collapse used to produce is gone entirely.
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_probe(") == null);
+    // And the call site reaches module A's function, not whichever won the bare name.
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_moda_Dprobe(d_1)") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_w_modb_Dprobe(d_1)") == null);
 }
 
 test "emitProgramC: generated word forward declaration carries qualified asm-name" {
@@ -14671,7 +14906,7 @@ test "emitProgramC: generated word forward declaration carries qualified asm-nam
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "asm(\"Person/name>>\")") != null);
@@ -14693,7 +14928,7 @@ test "emitProgramC: generated word with null parent falls back to bare asm-name"
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "asm(\"lonely?\")") != null);
@@ -14720,7 +14955,7 @@ test "emitProgramC: compiled quotation forward declaration carries asm-name" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "int32_t onez_q_0(uintptr_t jit_ctx) asm(\"main/quot@7:11\");") != null);
@@ -14734,7 +14969,7 @@ test "emitProgramC: hosted preamble contains libc includes and main shim" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdio.h>") != null);
@@ -14763,7 +14998,7 @@ test "emitProgramC: freestanding preamble drops libc and emits kernel_main" {
     meta.target_triple = "riscv64-freestanding-none";
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, meta, &diag, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, meta, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "#include <stdio.h>") == null);
@@ -16602,7 +16837,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const dup_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "dup" }, .line = 1 },
     };
-    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false);
+    const dup_res = try emitWordCAotPass(&dup_instrs, 1, 2, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false);
     if (dup_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 2), dup_res.discovered_output);
 
@@ -16610,7 +16845,7 @@ test "emitWordCAotPass reports discovered_output as the body's final depth" {
     const drop_instrs = [_]Instruction{
         .{ .op = .{ .call_word = "drop" }, .line = 1 },
     };
-    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false);
+    const drop_res = try emitWordCAotPass(&drop_instrs, 1, 0, "q", "q", null, null, &compiled_names, .{}, null, null, null, testing.allocator, null, &.{}, null, &reason, null, null, null, null, null, null, null, false, null, false, false, false, false);
     if (drop_res.body) |b| testing.allocator.free(b);
     try testing.expectEqual(@as(u8, 0), drop_res.discovered_output);
 }
@@ -16907,6 +17142,7 @@ test "emitWordCAot emits named callback for safepoint" {
         null,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -16954,6 +17190,7 @@ test "emitWordCAot basic arithmetic" {
         null,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -16998,6 +17235,7 @@ test "emitWordCAot quotation call emits code_ptr dispatch" {
         null,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -17060,6 +17298,7 @@ test "emitWordCAot interpreter-free quotation call traps instead of interpreter 
         null,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -17118,6 +17357,7 @@ test "emitWordCAot freestanding routes non-generic natives through jitNativeWord
         resolver,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -17151,6 +17391,7 @@ test "emitWordCAot freestanding routes non-generic natives through jitNativeWord
         resolver,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -17187,7 +17428,7 @@ test "emitProgramC generates complete C source" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 1, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // Preamble
@@ -17231,7 +17472,7 @@ test "emitProgramC omits legacy name-lookup typed-literal helpers" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     try testing.expect(std.mem.indexOf(u8, source, "jitPushWordLiteral") == null);
@@ -17249,7 +17490,7 @@ test "emitProgramC dispatch table has correct entries" {
     };
 
     var diag2: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 2, &.{}, .auto, false, test_aot_metadata, &diag2, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // word_id 0 -> onez_w_foo
@@ -17274,7 +17515,7 @@ test "emitProgramC quotation table with all compiled entries" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // Table exists with all entries
@@ -17312,7 +17553,7 @@ test "emitProgramC rejects uncompiled quotation bodies with inferred effects" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+    const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     try testing.expectError(error.UncompiledQuotations, result);
 
     // Diagnostics report the uncompiled quotation
@@ -17342,7 +17583,7 @@ test "emitProgramC applies Option C to an escaping uncompiled quotation" {
             .{ .quotation_id = 0, .instructions = &bad_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
         };
         var diag: CodegenDiagnostics = .{};
-        const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+        const result = emitProgramC(&words, &quotations, 0, 0, &.{}, .false, true, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
         try testing.expectError(error.UncompiledQuotations, result);
         try testing.expectEqual(@as(usize, 1), diag.uncompiled_quotations.len);
         try testing.expectEqualStrings("onez_q_0", diag.uncompiled_quotations[0].c_name);
@@ -17358,7 +17599,7 @@ test "emitProgramC applies Option C to an escaping uncompiled quotation" {
             .{ .quotation_id = 0, .instructions = &bad_instrs, .c_name = "onez_q_0", .inferred_effect = .{ .input_count = 1, .output_count = 1 } },
         };
         var diag: CodegenDiagnostics = .{};
-        const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+        const source = try emitProgramC(&words, &quotations, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
         defer testing.allocator.free(source);
         try testing.expectEqual(@as(usize, 0), diag.uncompiled_quotations.len);
     }
@@ -17372,7 +17613,7 @@ test "emitProgramC no quotation table when quotations empty" {
     };
 
     var diag: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     // No quotation table emitted (extern decl exists but table and call do not)
@@ -17390,7 +17631,7 @@ test "emitProgramC output compiles with cc" {
     };
 
     var diag3: CodegenDiagnostics = .{};
-    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, &.{}, &.{}, testing.allocator);
+    const source = try emitProgramC(&words, &.{}, 1, 1, &.{}, .auto, false, test_aot_metadata, &diag3, null, false, &.{}, &.{}, &.{}, testing.allocator);
     defer testing.allocator.free(source);
 
     var tmp_dir = testing.tmpDir(.{});
@@ -18725,6 +18966,7 @@ test "row underflow: a word reaching below its declared inputs compiles in AOT m
         resolver,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -18781,6 +19023,7 @@ test "epilogue reifies an escaping quotation output instead of bailing" {
         null,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -18840,6 +19083,7 @@ test "branch merge reifies an escaping quotation arm instead of bailing" {
         null,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -18892,6 +19136,7 @@ test "loop carry reifies an escaping quotation before the loop header" {
         null,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -18959,6 +19204,7 @@ test "self-tail-call carry reifies an escaping quotation argument" {
         null,
         "acc",
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -19020,6 +19266,7 @@ test "swap over a row compiles in AOT mode with the row pinned at slot 0" {
         resolver,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -19067,6 +19314,7 @@ fn arithFallbackCount(
         arith_test_resolver,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -19168,6 +19416,7 @@ fn monomorphEmittedSource(
         monomorph_test_resolver,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -19236,6 +19485,7 @@ fn outputNarrowEmittedSource(
         resolver,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -19420,6 +19670,7 @@ fn dipSpliceEmittedSource(
         null,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -19480,6 +19731,7 @@ fn dipDeclineEmittedSource(
         dip_decline_resolver,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,
@@ -19629,6 +19881,7 @@ fn compoundSpliceEmittedSource(
         resolver,
         null,
         &compiled_names,
+        .{},
         null,
         null,
         null,

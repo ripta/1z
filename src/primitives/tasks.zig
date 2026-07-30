@@ -1047,7 +1047,10 @@ fn deepCopyQuotation(quot: value_mod.Quotation, alloc: Allocator, longlived: All
             .op = switch (instr.op) {
                 .push_literal => |v| .{ .push_literal = try deepCopyValue(v, alloc, longlived) },
                 .call_word => |name| .{ .call_word = try alloc.dupe(u8, name) },
+                // Both slot forms are heap-stable for the process: the dictionary owns one, the
+                // runtime-image loader arena the other. The copy shares the pointer.
                 .call_word_direct => |slot| .{ .call_word_direct = slot },
+                .call_word_module => |slot| .{ .call_word_module = slot },
             },
             .line = instr.line,
         };

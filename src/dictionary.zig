@@ -170,6 +170,26 @@ fn storeSlot(slot: *WordSlot, def: *WordDefinition) void {
     slot.store(@ptrCast(def));
 }
 
+/// Allocate a slot and its boxed definition outside any dictionary.
+///
+/// The AOT runtime-image loader owns these: a build-time-resolved call target names a module word,
+/// which lives in a `Module`'s map rather than in the dictionary, so it has no slot of its own. The
+/// caller replaces the definition in place through `loadSlot`, keeping the slot address stable for
+/// the instructions that already reference it. Both allocations belong to `allocator` and are
+/// freed with it, so the caller must pass one that outlives every referencing instruction.
+pub fn createDetachedSlot(allocator: Allocator, name: []const u8, definition: WordDefinition) !*WordSlot {
+    const def_box = try allocator.create(WordDefinition);
+    errdefer allocator.destroy(def_box);
+    def_box.* = definition;
+
+    const slot = try allocator.create(WordSlot);
+    slot.* = .{
+        .name = name,
+        .definition = std.atomic.Value(*word_slot_mod.WordDefinition).init(@ptrCast(def_box)),
+    };
+    return slot;
+}
+
 /// Dictionary maps word names to their definitions.
 pub const Dictionary = struct {
     entries: std.StringHashMapUnmanaged(*WordSlot),

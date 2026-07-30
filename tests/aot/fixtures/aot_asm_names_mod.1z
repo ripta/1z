@@ -1,0 +1,4 @@
+\ Fixture for `make aot-asm-name-check`. A module word so the check can observe that a compiled
+\ word's C identifier and asm-name both carry the module segment of its identity.
+
+tagged-probe: ( -- ) [ "mod" print-line ] ;

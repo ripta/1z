@@ -73,7 +73,7 @@ pub const Inspector = struct {
                             .call_word => |w| {
                                 try writer.print("call  {s}", .{w});
                             },
-                            .call_word_direct => |slot| {
+                            .call_word_direct, .call_word_module => |slot| {
                                 try writer.print("call  {s}", .{slot.name});
                             },
                         }

@@ -1,0 +1,9 @@
+\ Fixture for own_module_image_resolved. Defines its own `probe` and hands out
+\ a stored quotation whose bare `probe` must bake to this module's row at
+\ build time rather than resolving by name against the entry's colliding
+\ import. The nested definition keeps the quotation body uncompilable, so it
+\ runs interpreted inside the runtime image and exercises the baked call site.
+
+probe: ( -- str ) [ "A-PROBE" ] ;
+
+a-quot: ( -- q ) [ [ inner: [ probe ] ; inner ] ] ;

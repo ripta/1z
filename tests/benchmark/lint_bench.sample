@@ -1,6 +1,6 @@
 === tests/integration/combinators.1z (73 lines) ===
-  interpreted 1z lint      1.53 real         1.51 user         0.01 sys
-  runtime-image AOT (<=45s) 45.01 real        44.78 user         0.16 sys
+  interpreted 1z lint      0.45 real         0.43 user         0.01 sys
+  runtime-image AOT (<=90s) 1.60 real         1.56 user         0.03 sys
 === lib/data/json.1z (429 lines) ===
-  interpreted 1z lint      4.37 real         4.34 user         0.02 sys
-  runtime-image AOT (<=45s) 45.00 real        44.69 user         0.21 sys
+  interpreted 1z lint      1.20 real         1.19 user         0.01 sys
+  runtime-image AOT (<=90s) 4.07 real         4.04 user         0.02 sys

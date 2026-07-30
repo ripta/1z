@@ -374,6 +374,8 @@ typedef struct onez_image_header {
     const struct onez_image_module_dep *module_deps;
     uint32_t entry_import_count;
     const struct onez_image_entry_import *entry_imports;
+    uint32_t call_target_count;
+    const uint32_t *call_targets;
 } onez_image_header_t;
 
 static const char onez_image_mk_0_name[] = "parse-time";
@@ -1085,7 +1087,7 @@ static const onez_image_entry_import_t onez_image_entry_imports_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 16,
+    .format_version = 17,
     .module_count = 1,
     .word_count = 2,
     .marker_pool_count = 2,
@@ -1124,5 +1126,7 @@ __attribute__((used)) const onez_image_header_t onez_image_v1 = {
     .module_deps = NULL,
     .entry_import_count = 2,
     .entry_imports = onez_image_entry_imports_storage,
+    .call_target_count = 0,
+    .call_targets = NULL,
 };
 

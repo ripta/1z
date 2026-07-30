@@ -93,7 +93,7 @@ fn recoverLocalName(instructions: []const Instruction, semi_index: usize) ?Local
                 else => return null,
             },
             // A marker (or `const`) before the body is produced by a word call.
-            .call_word, .call_word_direct => continue,
+            .call_word, .call_word_direct, .call_word_module => continue,
         }
     }
     return null;
@@ -132,7 +132,7 @@ fn markNestedLocalReferences(locals: []LocalDef, instructions: []const Instructi
 fn markLocalReferencesDeep(locals: []LocalDef, instructions: []const Instruction) void {
     for (instructions) |instr| {
         switch (instr.op) {
-            .call_word, .call_word_direct => {
+            .call_word, .call_word_direct, .call_word_module => {
                 const name = instr.op.callTargetName() orelse continue;
                 for (locals) |*ld| {
                     if (!ld.referenced and std.mem.eql(u8, ld.name, name)) {
@@ -788,7 +788,7 @@ pub const InferenceEngine = struct {
                     delta += 1;
                     try stack_model.append(self.allocator, self.stackEntryForValue(val));
                 },
-                .call_word, .call_word_direct => {
+                .call_word, .call_word_direct, .call_word_module => {
                     const name = instr.op.callTargetName().?;
 
                     // A `;` call defines a quotation-local; record it (still let

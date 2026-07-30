@@ -23,9 +23,15 @@
 //! u32 line | u32 column | u8 op_tag | payload
 //! ```
 //!
-//! Op tags: `0 = push_literal`, `1 = call_word`.
+//! Op tags: `0 = push_literal`, `1 = call_word`, `2 = call_word_module`.
 //!
 //! `call_word` payload: `u32 name_len | name_bytes`.
+//!
+//! `call_word_module` payload: `u32 call_target_slot_index`. Image-mode only.
+//! The index resolves through `SlotResolutionTables.call_target_slots` to a
+//! loader-owned `WordSlot`, which carries the name, so none is stored. Emitted
+//! only when the serializer is given a `CallTargetResolver`, i.e. for a module
+//! word body whose owning module scope resolved the name to an image word row.
 //!
 //! `push_literal` payload: `u8 value_tag | value_payload`.
 //!
@@ -82,6 +88,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const value_mod = @import("value.zig");
+const word_slot_mod = @import("word_slot.zig");
+const WordSlot = word_slot_mod.WordSlot;
 const Instruction = value_mod.Instruction;
 const Value = value_mod.Value;
 const HashTable = value_mod.HashTable;
@@ -128,6 +136,19 @@ pub const SlotEncodingMaps = struct {
     quotation_id_map: ?*const QuotationIdMap = null,
 };
 
+/// Build-time resolution of a call site against the executing body's own module scope.
+///
+/// Supplied only where the owning module is known, which today is the AOT image emitter
+/// serializing a module word body. `resolve` returns the call-target slot index for a name that
+/// module's scope resolves to an image word row, or null to keep the bare-name lowering. It
+/// allocates when it interns a new target, so it can fail.
+///
+/// The indirection through `state` keeps the emitter's manifest and `Context` out of this module.
+pub const CallTargetResolver = struct {
+    state: *anyopaque,
+    resolve: *const fn (state: *anyopaque, name: []const u8) Allocator.Error!?u32,
+};
+
 /// Key for the tagged slot map, mirrored from `aot_image_emit.TaggedSlotKey`
 /// to avoid a cyclic module dependency. Identity is `(tag, inner_ptr)`.
 pub const TaggedKey = struct {
@@ -156,6 +177,12 @@ pub const SlotResolutionTables = struct {
     struct_instance_slot_count: u32,
     vector_slots: ?[*]?*Vector,
     vector_slot_count: u32,
+    /// Loader-owned `WordSlot`s for build-time-resolved call targets, indexed by the slot index a
+    /// `call_word_module` instruction carries. Null leaves the tag undecodable, which is a
+    /// malformed stream rather than a degradation: an emitter that wrote the tag must supply the
+    /// table.
+    call_target_slots: ?[*]?*WordSlot = null,
+    call_target_slot_count: u32 = 0,
     /// Runtime quotation-function table (`ctx.aot_quotation_fns.table[0..size]`).
     /// When supplied, `deserializeValueAtForImage` attaches `table[id]` as the
     /// `code_ptr` of each decoded nested `.quotation`, so a runtime-selected
@@ -176,6 +203,7 @@ pub const SlotResolutionTables = struct {
 /// Op tags. Stored in the bytecode stream.
 const op_tag_push_literal: u8 = 0;
 const op_tag_call_word: u8 = 1;
+const op_tag_call_word_module: u8 = 2;
 
 /// Value tags. Stored in the bytecode stream after `op_tag_push_literal`.
 const value_tag_fixnum: u8 = 0;
@@ -242,16 +270,30 @@ pub const QuotationIdMap = std.AutoHashMapUnmanaged(usize, u32);
 /// Serialize an instruction slice into a freshly allocated byte buffer.
 /// Caller owns the returned slice. `qid_map` stamps each nested quotation with
 /// its global ID; pass `null` to write the sentinel for every quotation.
-pub fn serializeQuotationInstructions(instructions: []const Instruction, allocator: Allocator, qid_map: ?*const QuotationIdMap) SerializeError![]u8 {
+/// `call_targets` bakes call sites the body's own module scope resolves; pass
+/// `null` to keep every call a bare name.
+pub fn serializeQuotationInstructions(
+    instructions: []const Instruction,
+    allocator: Allocator,
+    qid_map: ?*const QuotationIdMap,
+    call_targets: ?CallTargetResolver,
+) SerializeError![]u8 {
     var buf = std.ArrayListUnmanaged(u8){};
     errdefer buf.deinit(allocator);
-    try serializeInstructionsInto(&buf, instructions, allocator, qid_map);
+    try serializeInstructionsInto(&buf, instructions, allocator, qid_map, call_targets);
     return buf.toOwnedSlice(allocator);
 }
 
 /// Append a serialized instruction slice to an existing buffer. `qid_map`
 /// stamps each nested quotation with its global ID; pass `null` for the sentinel.
-pub fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions: []const Instruction, allocator: Allocator, qid_map: ?*const QuotationIdMap) SerializeError!void {
+/// See `serializeQuotationInstructions` for `call_targets`.
+pub fn serializeInstructionsInto(
+    buf: *std.ArrayListUnmanaged(u8),
+    instructions: []const Instruction,
+    allocator: Allocator,
+    qid_map: ?*const QuotationIdMap,
+    call_targets: ?CallTargetResolver,
+) SerializeError!void {
     const count: u32 = @intCast(instructions.len);
     try buf.appendSlice(allocator, std.mem.asBytes(&count));
     for (instructions) |instr| {
@@ -261,18 +303,20 @@ pub fn serializeInstructionsInto(buf: *std.ArrayListUnmanaged(u8), instructions:
         try buf.appendSlice(allocator, std.mem.asBytes(&col));
         switch (instr.op) {
             .push_literal => |val| {
+                // A lowered literal is a value-recovery call, not a call to the word the resolver
+                // would bake, so it keeps the bare name whatever the resolver says.
                 if (lowerableName(val)) |name| {
                     try writeCallWord(buf, allocator, name);
                 } else {
                     try buf.append(allocator, op_tag_push_literal);
-                    try serializeValueInto(buf, val, allocator, qid_map);
+                    try serializeValueInto(buf, val, allocator, qid_map, call_targets);
                 }
             },
             .call_word => |name| {
-                try writeCallWord(buf, allocator, name);
+                try writeCall(buf, allocator, name, call_targets);
             },
-            .call_word_direct => |slot| {
-                try writeCallWord(buf, allocator, slot.name);
+            .call_word_direct, .call_word_module => |slot| {
+                try writeCall(buf, allocator, slot.name, call_targets);
             },
         }
     }
@@ -291,6 +335,7 @@ pub fn serializeInstructionsIntoForImage(
     instructions: []const Instruction,
     allocator: Allocator,
     slot_maps: *const SlotEncodingMaps,
+    call_targets: ?CallTargetResolver,
 ) SerializeError!void {
     const count: u32 = @intCast(instructions.len);
     try buf.appendSlice(allocator, std.mem.asBytes(&count));
@@ -302,10 +347,10 @@ pub fn serializeInstructionsIntoForImage(
         switch (instr.op) {
             .push_literal => |val| {
                 try buf.append(allocator, op_tag_push_literal);
-                try serializeValueIntoForImage(buf, val, allocator, slot_maps);
+                try serializeValueIntoForImage(buf, val, allocator, slot_maps, call_targets);
             },
-            .call_word => |name| try writeCallWord(buf, allocator, name),
-            .call_word_direct => |slot| try writeCallWord(buf, allocator, slot.name),
+            .call_word => |name| try writeCall(buf, allocator, name, call_targets),
+            .call_word_direct, .call_word_module => |slot| try writeCall(buf, allocator, slot.name, call_targets),
         }
     }
 }
@@ -316,10 +361,11 @@ pub fn serializeQuotationInstructionsForImage(
     instructions: []const Instruction,
     allocator: Allocator,
     slot_maps: *const SlotEncodingMaps,
+    call_targets: ?CallTargetResolver,
 ) SerializeError![]u8 {
     var buf = std.ArrayListUnmanaged(u8){};
     errdefer buf.deinit(allocator);
-    try serializeInstructionsIntoForImage(&buf, instructions, allocator, slot_maps);
+    try serializeInstructionsIntoForImage(&buf, instructions, allocator, slot_maps, call_targets);
     return buf.toOwnedSlice(allocator);
 }
 
@@ -342,9 +388,35 @@ fn writeCallWord(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, name: [
     try buf.appendSlice(allocator, name);
 }
 
+/// Write a call instruction, baking the target when `call_targets` resolves the name in the
+/// body's own module scope and falling back to the bare name otherwise.
+fn writeCall(
+    buf: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    name: []const u8,
+    call_targets: ?CallTargetResolver,
+) SerializeError!void {
+    if (call_targets) |resolver| {
+        if (try resolver.resolve(resolver.state, name)) |slot_index| {
+            try buf.append(allocator, op_tag_call_word_module);
+            try buf.appendSlice(allocator, std.mem.asBytes(&slot_index));
+            return;
+        }
+    }
+    try writeCallWord(buf, allocator, name);
+}
+
 /// Serialize a single Value payload (without the op_tag prefix). `qid_map`
 /// stamps each nested quotation with its global ID; pass `null` for the sentinel.
-pub fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocator: Allocator, qid_map: ?*const QuotationIdMap) SerializeError!void {
+/// `call_targets` bakes call sites inside nested quotation bodies, which share the enclosing
+/// body's module scope; pass `null` to keep them bare names.
+pub fn serializeValueInto(
+    buf: *std.ArrayListUnmanaged(u8),
+    val: Value,
+    allocator: Allocator,
+    qid_map: ?*const QuotationIdMap,
+    call_targets: ?CallTargetResolver,
+) SerializeError!void {
     switch (val) {
         .fixnum => |v| {
             try buf.append(allocator, value_tag_fixnum);
@@ -374,7 +446,7 @@ pub fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocato
             try buf.append(allocator, value_tag_quotation);
             const q_id: u32 = if (qid_map) |m| (m.get(@intFromPtr(q.instructions.ptr)) orelse quotation_id_sentinel) else quotation_id_sentinel;
             try buf.appendSlice(allocator, std.mem.asBytes(&q_id));
-            try serializeInstructionsInto(buf, q.instructions, allocator, qid_map);
+            try serializeInstructionsInto(buf, q.instructions, allocator, qid_map, call_targets);
         },
         .closure => |cl| {
             // A closure (a runtime curry/compose result) serializes as its plain
@@ -384,14 +456,14 @@ pub fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocato
             // arm keeps a stray closure from breaking serialization.
             try buf.append(allocator, value_tag_quotation);
             try buf.appendSlice(allocator, std.mem.asBytes(&quotation_id_sentinel));
-            try serializeInstructionsInto(buf, cl.instructions, allocator, qid_map);
+            try serializeInstructionsInto(buf, cl.instructions, allocator, qid_map, call_targets);
         },
         .array => |arr| {
             try buf.append(allocator, value_tag_array);
             const elem_count: u32 = @intCast(arr.items.len);
             try buf.appendSlice(allocator, std.mem.asBytes(&elem_count));
             for (arr.items) |elem| {
-                try serializeValueInto(buf, elem, allocator, qid_map);
+                try serializeValueInto(buf, elem, allocator, qid_map, call_targets);
             }
         },
         .hash => |h| {
@@ -404,7 +476,7 @@ pub fn serializeValueInto(buf: *std.ArrayListUnmanaged(u8), val: Value, allocato
                 const key_len: u32 = @intCast(key.len);
                 try buf.appendSlice(allocator, std.mem.asBytes(&key_len));
                 try buf.appendSlice(allocator, key);
-                try serializeValueInto(buf, entry.value_ptr.*, allocator, qid_map);
+                try serializeValueInto(buf, entry.value_ptr.*, allocator, qid_map, call_targets);
             }
         },
         // A mutable_map is an identity-bearing, runtime-mutable object: encoding
@@ -444,8 +516,9 @@ pub fn serializeValueIntoForImage(
     val: Value,
     allocator: Allocator,
     slot_maps: ?*const SlotEncodingMaps,
+    call_targets: ?CallTargetResolver,
 ) SerializeError!void {
-    const maps = slot_maps orelse return serializeValueInto(buf, val, allocator, null);
+    const maps = slot_maps orelse return serializeValueInto(buf, val, allocator, null, call_targets);
     switch (val) {
         .type_val => |tv| {
             const slot = maps.typevalue_slot_index.get(tv) orelse return error.NotEncodable;
@@ -493,7 +566,7 @@ pub fn serializeValueIntoForImage(
             const elem_count: u32 = @intCast(arr.items.len);
             try buf.appendSlice(allocator, std.mem.asBytes(&elem_count));
             for (arr.items) |elem| {
-                try serializeValueIntoForImage(buf, elem, allocator, slot_maps);
+                try serializeValueIntoForImage(buf, elem, allocator, slot_maps, call_targets);
             }
         },
         .hash => |h| {
@@ -506,7 +579,7 @@ pub fn serializeValueIntoForImage(
                 const key_len: u32 = @intCast(key.len);
                 try buf.appendSlice(allocator, std.mem.asBytes(&key_len));
                 try buf.appendSlice(allocator, key);
-                try serializeValueIntoForImage(buf, entry.value_ptr.*, allocator, slot_maps);
+                try serializeValueIntoForImage(buf, entry.value_ptr.*, allocator, slot_maps, call_targets);
             }
         },
         .quotation => |q| {
@@ -517,9 +590,9 @@ pub fn serializeValueIntoForImage(
             try buf.append(allocator, value_tag_quotation);
             const q_id: u32 = if (maps.quotation_id_map) |m| (m.get(@intFromPtr(q.instructions.ptr)) orelse quotation_id_sentinel) else quotation_id_sentinel;
             try buf.appendSlice(allocator, std.mem.asBytes(&q_id));
-            try serializeInstructionsIntoForImage(buf, q.instructions, allocator, maps);
+            try serializeInstructionsIntoForImage(buf, q.instructions, allocator, maps, call_targets);
         },
-        else => try serializeValueInto(buf, val, allocator, null),
+        else => try serializeValueInto(buf, val, allocator, null, call_targets),
     }
 }
 
@@ -551,6 +624,7 @@ pub fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Al
     const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
     offset.* += 4;
     const instructions = try allocator.alloc(Instruction, count);
+    errdefer allocator.free(instructions);
     for (instructions) |*instr| {
         if (offset.* + 9 > data.len) return error.OutOfMemory; // line(4)+col(4)+op_tag(1)
         const line = std.mem.readInt(u32, data[offset.*..][0..4], .little);
@@ -604,6 +678,7 @@ pub fn deserializeInstructionsAtForImage(
     const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
     offset.* += 4;
     const instructions = try allocator.alloc(Instruction, count);
+    errdefer allocator.free(instructions);
     for (instructions) |*instr| {
         if (offset.* + 9 > data.len) return error.OutOfMemory; // line(4)+col(4)+op_tag(1)
         const line = std.mem.readInt(u32, data[offset.*..][0..4], .little);
@@ -623,6 +698,14 @@ pub fn deserializeInstructionsAtForImage(
             const name_copy = try allocator.dupe(u8, data[offset.*..][0..nlen]);
             offset.* += nlen;
             instr.* = .{ .op = .{ .call_word = name_copy }, .line = line, .column = col };
+        } else if (op_tag == op_tag_call_word_module) {
+            if (offset.* + 4 > data.len) return error.OutOfMemory;
+            const slot_index = std.mem.readInt(u32, data[offset.*..][0..4], .little);
+            offset.* += 4;
+            const slots = slot_tables.call_target_slots orelse return error.OutOfMemory;
+            if (slot_index >= slot_tables.call_target_slot_count) return error.OutOfMemory;
+            const slot = slots[slot_index] orelse return error.OutOfMemory;
+            instr.* = .{ .op = .{ .call_word_module = slot }, .line = line, .column = col };
         } else {
             return error.OutOfMemory;
         }
@@ -953,10 +1036,10 @@ fn freeDecodedOp(op: Instruction.Op) void {
     switch (op) {
         .push_literal => |v| freeDecodedValue(v),
         .call_word => |n| testing.allocator.free(n),
-        // Direct-call instructions reference a heap-stable `WordSlot` owned
-        // by the dictionary; nothing here to free, and direct-call ops are
-        // not produced by the bytecode decoder in the first place.
-        .call_word_direct => {},
+        // Both slot-carrying call forms reference a heap-stable `WordSlot` owned elsewhere -- the
+        // dictionary for a direct call, the runtime-image loader for a module call -- so there is
+        // nothing here to free. A direct call is never produced by the decoder at all.
+        .call_word_direct, .call_word_module => {},
     }
 }
 
@@ -1001,7 +1084,7 @@ test "roundtrip: fixnum push + call" {
         .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 2 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1013,11 +1096,89 @@ test "roundtrip: fixnum push + call" {
     try testing.expectEqualStrings("+", decoded[1].op.call_word);
 }
 
+/// A resolver that bakes exactly one name, so a test can cover both arms of `writeCall`.
+const OneNameResolver = struct {
+    name: []const u8,
+    slot_index: u32,
+
+    fn resolve(state_raw: *anyopaque, name: []const u8) Allocator.Error!?u32 {
+        const self: *OneNameResolver = @ptrCast(@alignCast(state_raw));
+        if (!std.mem.eql(u8, name, self.name)) return null;
+        return self.slot_index;
+    }
+
+    fn resolver(self: *OneNameResolver) CallTargetResolver {
+        return .{ .state = self, .resolve = resolve };
+    }
+};
+
+test "call target: a resolved name bakes a slot index, an unresolved one stays a bare name" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "own-word" }, .line = 1 },
+        .{ .op = .{ .call_word = "+" }, .line = 2 },
+    };
+    var state: OneNameResolver = .{ .name = "own-word", .slot_index = 0 };
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, state.resolver());
+    defer testing.allocator.free(data);
+
+    // The decoder only stores the slot address; nothing here dereferences the definition, so a
+    // stand-in pointer is enough to keep this test free of the dictionary's type graph.
+    var definition_placeholder: u8 = 0;
+    var slot: WordSlot = .{
+        .name = "own-word",
+        .definition = std.atomic.Value(*word_slot_mod.WordDefinition).init(@ptrCast(&definition_placeholder)),
+    };
+    var slots = [_]?*WordSlot{&slot};
+    const tables: SlotResolutionTables = .{
+        .typevalue_slots = null,
+        .typevalue_slot_count = 0,
+        .struct_type_slots = null,
+        .struct_type_slot_count = 0,
+        .marker_slots = null,
+        .marker_slot_count = 0,
+        .parameter_slots = null,
+        .parameter_slot_count = 0,
+        .tagged_slots = null,
+        .tagged_slot_count = 0,
+        .mutable_map_slots = null,
+        .mutable_map_slot_count = 0,
+        .struct_instance_slots = null,
+        .struct_instance_slot_count = 0,
+        .vector_slots = null,
+        .vector_slot_count = 0,
+        .call_target_slots = &slots,
+        .call_target_slot_count = 1,
+    };
+
+    const decoded = try deserializeQuotationInstructionsForImage(data, testing.allocator, &tables);
+    defer freeDecodedInstructions(decoded);
+
+    try testing.expectEqual(@as(usize, 2), decoded.len);
+    try testing.expect(decoded[0].op == .call_word_module);
+    try testing.expectEqual(&slot, decoded[0].op.call_word_module);
+    try testing.expect(decoded[1].op == .call_word);
+    try testing.expectEqualStrings("+", decoded[1].op.call_word);
+}
+
+test "call target: the by-value decoder rejects a baked call, deferring to the image decoder" {
+    const instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "own-word" }, .line = 1 },
+    };
+    var state: OneNameResolver = .{ .name = "own-word", .slot_index = 0 };
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, state.resolver());
+    defer testing.allocator.free(data);
+
+    try testing.expectError(
+        error.OutOfMemory,
+        deserializeQuotationInstructions(data, testing.allocator, null),
+    );
+}
+
 test "roundtrip: string literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1029,7 +1190,7 @@ test "roundtrip: string literal" {
 
 test "roundtrip: empty body" {
     const instrs: [0]Instruction = .{};
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer testing.allocator.free(decoded);
@@ -1041,7 +1202,7 @@ test "roundtrip: bool and float" {
         .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
         .{ .op = .{ .push_literal = .{ .float = 3.14 } }, .line = 2 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1055,7 +1216,7 @@ test "preserves line and column" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 5, .column = 10 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1067,7 +1228,7 @@ test "roundtrip: symbol literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .symbol = "foo" } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1081,7 +1242,7 @@ test "roundtrip: empty array" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .array = &empty } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1101,7 +1262,7 @@ test "roundtrip: array with elements" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .array = &arr_lit } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1126,7 +1287,7 @@ test "roundtrip: nested array" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .array = &outer_arr } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1146,7 +1307,7 @@ test "roundtrip: empty hash" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .hash = h_ptr } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1163,7 +1324,7 @@ test "roundtrip: hash with entries" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .hash = h_ptr } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1183,7 +1344,7 @@ test "roundtrip: nested quotation" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner_instrs } } }, .line = 1 },
         .{ .op = .{ .call_word = "call" }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&outer_instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&outer_instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1204,7 +1365,7 @@ test "roundtrip: array containing symbol" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .array = &arr_lit } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1226,7 +1387,7 @@ test "roundtrip: stack_effect literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1253,7 +1414,7 @@ test "roundtrip: stack_effect preserves is_row_variable" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1270,7 +1431,7 @@ test "roundtrip: stack_effect with empty params" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1284,7 +1445,7 @@ test "roundtrip: unit literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .unit = {} } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1337,7 +1498,7 @@ test "image roundtrip: struct_instance encodes as a slot and decodes to the same
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(alloc);
-    try serializeValueIntoForImage(&buf, .{ .struct_instance = si }, alloc, &enc);
+    try serializeValueIntoForImage(&buf, .{ .struct_instance = si }, alloc, &enc, null);
 
     // Decode side: a slot table whose only entry resolves back to `si`.
     var si_slots = [_]?*StructInstance{si};
@@ -1413,7 +1574,7 @@ test "image roundtrip: quotation carrying a struct_type literal slot-encodes" {
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(alloc);
-    try serializeValueIntoForImage(&buf, q, alloc, &enc);
+    try serializeValueIntoForImage(&buf, q, alloc, &enc, null);
 
     var st_slots = [_]?*StructType{&st};
     const tables = SlotResolutionTables{
@@ -1494,7 +1655,7 @@ test "image roundtrip: nested quotation carries id and compiled code_ptr" {
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(alloc);
-    try serializeValueIntoForImage(&buf, q, alloc, &enc);
+    try serializeValueIntoForImage(&buf, q, alloc, &enc, null);
 
     // The encoded u32 immediately after the tag byte is the stamped id.
     try testing.expectEqual(value_tag_quotation, buf.items[0]);
@@ -1570,7 +1731,7 @@ test "image roundtrip: nested quotation decodes null code_ptr without a map or t
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(alloc);
-    try serializeValueIntoForImage(&buf, q, alloc, &enc);
+    try serializeValueIntoForImage(&buf, q, alloc, &enc, null);
     try testing.expectEqual(quotation_id_sentinel, std.mem.readInt(u32, buf.items[1..5], .little));
 
     const tables = SlotResolutionTables{
@@ -1607,7 +1768,7 @@ test "lowering: type_val push_literal becomes call_word" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .type_val = &tv } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1626,7 +1787,7 @@ test "lowering: tagged push_literal becomes call_word using tag name" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .tagged = .{ .tag = &virtual, .inner = &inner_val } } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1643,7 +1804,7 @@ test "lowering: parameter push_literal becomes call_word" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .parameter = &param } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1657,7 +1818,7 @@ test "lowering: marker push_literal becomes call_word" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .marker = &marker } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null);
+    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
     defer freeDecodedInstructions(decoded);
@@ -1687,7 +1848,7 @@ test "nested quotation in array literal carries compiled code_ptr" {
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(testing.allocator);
-    try serializeValueInto(&buf, arr, testing.allocator, &qid_map);
+    try serializeValueInto(&buf, arr, testing.allocator, &qid_map, null);
 
     // Quotation table: slot 3 holds a dummy compiled function pointer.
     const dummy_fn: *const anyopaque = @ptrFromInt(0x1234);
@@ -1721,7 +1882,7 @@ test "nested quotation in hash literal carries compiled code_ptr" {
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(testing.allocator);
-    try serializeValueInto(&buf, hash_val, testing.allocator, &qid_map);
+    try serializeValueInto(&buf, hash_val, testing.allocator, &qid_map, null);
 
     const dummy_fn: *const anyopaque = @ptrFromInt(0x5678);
     var table = [_]?*const anyopaque{ null, dummy_fn };
@@ -1751,7 +1912,7 @@ test "nested quotation decodes to null code_ptr without a map or table" {
 
     var buf: std.ArrayListUnmanaged(u8) = .{};
     defer buf.deinit(testing.allocator);
-    try serializeValueInto(&buf, arr, testing.allocator, null);
+    try serializeValueInto(&buf, arr, testing.allocator, null, null);
 
     var offset: usize = 0;
     const decoded = try deserializeValueAt(buf.items, &offset, testing.allocator, null);

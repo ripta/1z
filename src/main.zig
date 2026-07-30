@@ -3098,6 +3098,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         emit_runtime_image_flag,
         freeze_result.interpreted_reach,
         entry_import_inputs.items,
+        freeze_result.callee_scopes,
         allocator,
     ) catch |err| {
         printQuotationFallbackWarnings(&codegen_diagnostics, allow_interpreter_fallback, err_writer, allocator);

@@ -414,6 +414,11 @@ pub const Header = extern struct {
     module_deps: ?[*]const ModuleDep = null,
     entry_import_count: u32 = 0,
     entry_imports: ?[*]const EntryImport = null,
+    /// One word-table index per build-time-resolved call target, addressed by the slot index a
+    /// `call_word_module` instruction carries. The word row it names already carries the owning
+    /// module index, the name, and the public-or-private flag, so no further row shape is needed.
+    call_target_count: u32 = 0,
+    call_targets: ?[*]const u32 = null,
 };
 
 /// Slot table type matching the C declaration:

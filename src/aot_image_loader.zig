@@ -211,6 +211,15 @@ pub fn loadIntoContext(
     // must be patched first.
     try populateTaggedSlots(ctx, header, slots.tagged);
 
+    // Mint the call-target slots before any body decodes, since a decoded `call_word_module`
+    // instruction stores the slot address.
+    //
+    // Every decode above this point captures an `imageSlotTables` snapshot whose
+    // `call_target_slots` is still null, so a baked target in a parameter default, a container
+    // slot description, or a tagged inner value would fail to decode. Only `emitWordBodyBytecode`
+    // supplies a `CallTargetResolver`, which is what keeps those streams free of the tag.
+    try allocateCallTargetSlots(ctx, header);
+
     // Word bodies decode last: their slot-encoded literals (struct_type,
     // mutable_map, struct_instance, ...) resolve through the now-patched
     // slot tables.
@@ -235,6 +244,9 @@ pub fn loadIntoContext(
     // Restore the entry file's `use` imports last, so the frame definitions
     // copy final decoded, stamped bodies.
     try populateEntryImports(ctx, header);
+
+    // Fill the call-target slots now that every module's `words` and `deps` hold final bodies.
+    try fillCallTargetSlots(ctx, header);
 }
 
 /// Decode every word body now that the slot tables are patched.
@@ -266,6 +278,8 @@ fn imageSlotTables(ctx: *Context) instruction_bytecode.SlotResolutionTables {
         .struct_instance_slot_count = ctx.image_struct_instance_slot_count,
         .vector_slots = ctx.image_vector_slots,
         .vector_slot_count = ctx.image_vector_slot_count,
+        .call_target_slots = ctx.image_call_target_slots,
+        .call_target_slot_count = ctx.image_call_target_slot_count,
         // Compiled-quotation table (registered before image load, so available
         // here), so a quotation nested in a container slot value -- the lint
         // registry's `check` quotations -- decodes with its compiled code_ptr.
@@ -317,6 +331,77 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
             return LoaderError.OutOfMemory;
         ctx.registerQuotationContainerLiterals(instrs) catch return LoaderError.OutOfMemory;
         word_entry.action = .{ .compound = instrs };
+    }
+}
+
+/// Body of a call-target slot between `allocateCallTargetSlots` and `fillCallTargetSlots`, and of
+/// one the fill could not resolve. The emitter only writes a row for a word it found in the
+/// manifest, so an unresolved slot means a corrupt image; raising at the call beats silently
+/// running an empty body.
+fn unresolvedCallTargetSentinel(_: *Context) anyerror!void {
+    return error.UnknownWord;
+}
+
+/// Mint one `WordSlot` per call-target row, before any word body decodes.
+///
+/// The decoder writes the slot's address into each `call_word_module` instruction, so every
+/// address must exist first and must not move afterwards. `fillCallTargetSlots` replaces the
+/// definition through the box once the modules are final, leaving the address alone.
+fn allocateCallTargetSlots(ctx: *Context, header: *const Header) LoaderError!void {
+    if (header.call_target_count == 0) return;
+    const rows = header.call_targets orelse return;
+    const words = header.words orelse return;
+    const arena = ctx.quotationAllocator();
+
+    const slots = arena.alloc(?*dictionary_mod.WordSlot, header.call_target_count) catch
+        return LoaderError.OutOfMemory;
+
+    var i: u32 = 0;
+    while (i < header.call_target_count) : (i += 1) {
+        const word_idx = rows[i];
+        if (word_idx >= header.word_count) return LoaderError.BadWordIndex;
+        const name = nameSlice(words[word_idx].name, words[word_idx].name_len);
+        slots[i] = dictionary_mod.createDetachedSlot(arena, name, .{
+            .name = name,
+            .action = .{ .native = unresolvedCallTargetSentinel },
+        }) catch return LoaderError.OutOfMemory;
+    }
+
+    ctx.image_call_target_slots = slots.ptr;
+    ctx.image_call_target_slot_count = header.call_target_count;
+}
+
+/// Fill each call-target slot with the definition its module scope resolves, matching what the
+/// runtime's own-module probe would have synthesized for the same hit.
+///
+/// Runs after `populateModuleDeps`, so a target that is a `private{ }` helper or a `use`-imported
+/// word is reachable. A row that cannot be resolved is skipped, the loader's convention for
+/// module-name references, leaving the raising sentinel in place.
+fn fillCallTargetSlots(ctx: *Context, header: *const Header) LoaderError!void {
+    const slots = ctx.image_call_target_slots orelse return;
+    const rows = header.call_targets orelse return;
+    const words = header.words orelse return;
+    const modules = header.modules orelse return;
+
+    var i: u32 = 0;
+    while (i < ctx.image_call_target_slot_count) : (i += 1) {
+        const slot = slots[i] orelse continue;
+        const w = words[rows[i]];
+        if (w.module_idx >= header.module_count) return LoaderError.BadWordIndex;
+
+        const m = modules[w.module_idx];
+        const module_name = nameSlice(m.name, m.name_len);
+        const word_name = nameSlice(w.name, w.name_len);
+
+        const cached = ctx.module_cache_value.map.get(module_name) orelse continue;
+        if (cached != .module) continue;
+
+        const mw = if (w.flags & aot_image_emit.flag_bit_module_private != 0)
+            cached.module.deps.get(word_name) orelse continue
+        else
+            cached.module.words.get(word_name) orelse continue;
+
+        dictionary_mod.loadSlot(slot).* = Context.moduleScopeWordDef(word_name, mw, cached.module);
     }
 }
 
@@ -495,7 +580,13 @@ fn populateModulesAndWords(
             // slot-free body decodes here through the by-value decoder; one
             // that carries a slot tag fails that decode (the slot tag is not a
             // by-value tag) and is left empty for the deferred image pass.
-            const body: []const value_mod.Instruction = if (w.provenance_generator != null)
+            //
+            // An image carrying baked call targets skips the inline attempt entirely. Their tag is
+            // not a by-value tag either, so a body holding one would fail here after arena-allocating
+            // its instruction array and every name it had already decoded. That memory is
+            // unreclaimable on an arena, and a body calling a sibling word is the common case rather
+            // than the exception, so the wasted pass would scale with the image.
+            const body: []const value_mod.Instruction = if (w.provenance_generator != null or header.call_target_count != 0)
                 &.{}
             else
                 decodeWordBodyInline(arena, w);
@@ -1315,6 +1406,18 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
         while (frame_it.next()) |entry| {
             if (ctx.aot_generic_dispatch_ids.get(entry.key_ptr.*)) |did| {
                 entry.value_ptr.dispatch_id = did;
+            }
+        }
+    }
+
+    // Call-target slot definitions are value copies made in `fillCallTargetSlots`, also before
+    // this patch, so a generic reached through a baked call site needs the same treatment.
+    if (ctx.image_call_target_slots) |target_slots| {
+        var ti: u32 = 0;
+        while (ti < ctx.image_call_target_slot_count) : (ti += 1) {
+            const slot = target_slots[ti] orelse continue;
+            if (ctx.aot_generic_dispatch_ids.get(slot.name)) |did| {
+                dictionary_mod.loadSlot(slot).dispatch_id = did;
             }
         }
     }
@@ -2187,6 +2290,7 @@ test "loadIntoContext: tagged slot reconstructs Value via VirtualType back-refer
         .{ .symbol = "red" },
         testing.allocator,
         null,
+        null,
     );
 
     const tag_name = "color:red";
@@ -2276,7 +2380,7 @@ test "populateMutableMapSlots: lower slot forward-references a higher slot" {
     const klen0: u32 = 3;
     try enc0.appendSlice(testing.allocator, std.mem.asBytes(&klen0));
     try enc0.appendSlice(testing.allocator, "ref");
-    try instruction_bytecode.serializeValueIntoForImage(&enc0, .{ .mutable_map = key_map }, testing.allocator, &enc_maps);
+    try instruction_bytecode.serializeValueIntoForImage(&enc0, .{ .mutable_map = key_map }, testing.allocator, &enc_maps, null);
 
     // Slot 1: one entry "v" -> fixnum 42.
     var enc1: std.ArrayListUnmanaged(u8) = .{};
@@ -2285,7 +2389,7 @@ test "populateMutableMapSlots: lower slot forward-references a higher slot" {
     const klen1: u32 = 1;
     try enc1.appendSlice(testing.allocator, std.mem.asBytes(&klen1));
     try enc1.appendSlice(testing.allocator, "v");
-    try instruction_bytecode.serializeValueIntoForImage(&enc1, .{ .fixnum = 42 }, testing.allocator, &enc_maps);
+    try instruction_bytecode.serializeValueIntoForImage(&enc1, .{ .fixnum = 42 }, testing.allocator, &enc_maps, null);
 
     const descs = [_]MutableMapDescription{
         .{ .slot = 0, .entries_bytecode = enc0.items.ptr, .entries_bytecode_len = @intCast(enc0.items.len) },
@@ -2324,7 +2428,7 @@ test "loadIntoContext: bytecode body decodes into compound action" {
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1, .column = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 1, .column = 3 },
     };
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &sample, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &sample, testing.allocator, null, null);
 
     const w_name = "twiddle";
     const m_name = "demo";
@@ -2393,7 +2497,7 @@ test "loadIntoContext: nested quotation literal round-trips" {
 
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null, null);
 
     const w_name = "wrap";
     const m_name = "demo";
@@ -2436,7 +2540,7 @@ test "loadIntoContext: stamps decoded bodies and nested quotations with their mo
 
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null, null);
 
     const w_name = "handout";
     const m_name = "demo";
@@ -2484,7 +2588,7 @@ test "replayMethodDispatch: stamps interpreter-run body with its module" {
 
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
 
     const m_name = "demo";
     const words = [_]Word{wordRow("stub", 0, 0)};
@@ -2550,7 +2654,7 @@ test "populateParameterSlots: stamps a module-attributed default" {
 
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &default_body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &default_body, testing.allocator, null, null);
 
     const m_name = "demo";
     const p_name = "p";
@@ -2632,7 +2736,7 @@ test "populateModuleDeps: fills owner deps from the source module's words" {
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
 
     const owner_name = "moda";
     const source_name = "modc";
@@ -2669,6 +2773,89 @@ test "populateModuleDeps: fills owner deps from the source module's words" {
     try testing.expectEqual(@as(?*const value_mod.Module, source), dep.source_module);
     try testing.expectEqual(@as(usize, 1), dep.action.compound.len);
     try testing.expectEqual(@as(i64, 7), dep.action.compound[0].op.push_literal.fixnum);
+}
+
+test "call-target slots: a decoded baked call carries the target module's own definition" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    // `caller`'s body is one baked call at slot 0, which the row points at `target`'s word index.
+    const target_body = [_]value_mod.Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 0, .column = 0 },
+    };
+    var target_enc: std.ArrayListUnmanaged(u8) = .{};
+    defer target_enc.deinit(testing.allocator);
+    try instruction_bytecode.serializeInstructionsInto(&target_enc, &target_body, testing.allocator, null, null);
+
+    var caller_enc: std.ArrayListUnmanaged(u8) = .{};
+    defer caller_enc.deinit(testing.allocator);
+    const one: u32 = 1;
+    try caller_enc.appendSlice(testing.allocator, std.mem.asBytes(&one));
+    const line: u32 = 3;
+    const col: u32 = 5;
+    try caller_enc.appendSlice(testing.allocator, std.mem.asBytes(&line));
+    try caller_enc.appendSlice(testing.allocator, std.mem.asBytes(&col));
+    try caller_enc.append(testing.allocator, 2); // op_tag_call_word_module
+    const slot_index: u32 = 0;
+    try caller_enc.appendSlice(testing.allocator, std.mem.asBytes(&slot_index));
+
+    const m_name = "demo";
+    var caller = wordRow("caller", 0, 0);
+    caller.body_bytecode = caller_enc.items.ptr;
+    caller.body_bytecode_len = @intCast(caller_enc.items.len);
+    var target = wordRow("target", 1, 0);
+    target.body_bytecode = target_enc.items.ptr;
+    target.body_bytecode_len = @intCast(target_enc.items.len);
+
+    const words = [_]Word{ caller, target };
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 2 },
+    };
+    const call_targets = [_]u32{1};
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 2;
+    header.modules = &modules;
+    header.words = &words;
+    header.call_target_count = 1;
+    header.call_targets = &call_targets;
+
+    try loadIntoContext(&ctx, &header, .{}, null);
+
+    const module = (ctx.module_cache_value.map.get(m_name) orelse return error.TestExpectedModule).module;
+    const decoded = (module.words.get("caller") orelse return error.TestExpectedWord).action.compound;
+    try testing.expectEqual(@as(usize, 1), decoded.len);
+    try testing.expect(decoded[0].op == .call_word_module);
+
+    const slot = decoded[0].op.call_word_module;
+    try testing.expectEqualStrings("target", slot.name);
+    const def = dictionary_mod.loadSlot(slot).*;
+    try testing.expectEqual(@as(?*const value_mod.Module, module), def.source_module);
+    try testing.expectEqual(@as(usize, 1), def.action.compound.len);
+    try testing.expectEqual(@as(i64, 7), def.action.compound[0].op.push_literal.fixnum);
+}
+
+test "call-target slots: an out-of-range row is rejected" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const m_name = "demo";
+    const words = [_]Word{wordRow("only", 0, 0)};
+    const modules = [_]Module{
+        .{ .name = m_name.ptr, .name_len = m_name.len, .word_start_idx = 0, .word_count = 1 },
+    };
+    const call_targets = [_]u32{7};
+
+    var header = emptyHeader();
+    header.module_count = 1;
+    header.word_count = 1;
+    header.modules = &modules;
+    header.words = &words;
+    header.call_target_count = 1;
+    header.call_targets = &call_targets;
+
+    try testing.expectError(LoaderError.BadWordIndex, loadIntoContext(&ctx, &header, .{}, null));
 }
 
 test "populateModuleDeps: unresolvable rows are skipped, bad owner index errors" {
@@ -2748,7 +2935,7 @@ test "populateEntryImports: restores imports into a fresh durable frame above th
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
 
     const source_name = "modc";
     const import_name = "probe";
@@ -2849,7 +3036,7 @@ test "replayMethodDispatch: patches an entry-import frame def's dispatch_id" {
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
 
     const source_name = "modc";
     const generic_name = "gword";
@@ -2903,7 +3090,7 @@ test "replayMethodDispatch: patches a dep entry's dispatch_id like a word entry"
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
 
     const owner_name = "moda";
     const source_name = "modc";
@@ -2969,13 +3156,13 @@ test "populateModulesAndWords: private-flagged rows land in deps, coexisting wit
     };
     var pub_encoded: std.ArrayListUnmanaged(u8) = .{};
     defer pub_encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&pub_encoded, &pub_body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&pub_encoded, &pub_body, testing.allocator, null, null);
     var priv_encoded: std.ArrayListUnmanaged(u8) = .{};
     defer priv_encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&priv_encoded, &priv_body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&priv_encoded, &priv_body, testing.allocator, null, null);
     var helper_encoded: std.ArrayListUnmanaged(u8) = .{};
     defer helper_encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&helper_encoded, &helper_body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&helper_encoded, &helper_body, testing.allocator, null, null);
 
     const m_name = "demo";
     var pub_row = wordRow("dup", 0, 0);
@@ -3042,7 +3229,7 @@ test "loadIntoContext: stamps a private helper's decoded body with the owning mo
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null, null);
 
     const m_name = "demo";
     var w = wordRow("helper", 1, 0);
@@ -3083,7 +3270,7 @@ test "decodeWordBodies: provenanced private row decodes into the deps entry" {
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
 
     const m_name = "demo";
     const gen = "struct{";
@@ -3157,7 +3344,7 @@ test "replayMethodDispatch: patches a private deps entry and templates the helpe
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
 
     const m_name = "demo";
     const generic_name = "gword";

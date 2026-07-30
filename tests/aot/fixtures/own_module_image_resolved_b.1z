@@ -1,0 +1,4 @@
+\ Fixture for own_module_image_resolved. Exports a `probe` colliding with
+\ module A's, imported by the entry file so a by-name resolution lands here.
+
+probe: ( -- str ) [ "B-PROBE" ] ;

@@ -90,6 +90,7 @@ const Instruction = struct {
         push_literal: Value,
         call_word: []const u8,
         call_word_direct: *WordSlot,
+        call_word_module: *WordSlot,
     };
 };
 

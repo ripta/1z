@@ -1,0 +1,9 @@
+\ Fixture for aot_module_word_identity. Exports `probe` under the same name as
+\ the sibling B fixture, plus `a-probe`, whose body calls this module's own
+\ `probe` directly. Both bodies are plain and compilable, so freeze discovers
+\ and compiles them, and `a-probe`'s call site must reach this module's `probe`
+\ rather than B's.
+
+probe: ( -- str ) [ "A-PROBE" ] ;
+
+a-probe: ( -- str ) [ probe ] ;

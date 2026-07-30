@@ -26,6 +26,14 @@ pub const SandboxSpec = types_mod.SandboxSpec;
 pub const BigIntManaged = std.math.big.int.Managed;
 
 /// Instruction represents a single operation in a compiled quotation.
+///
+/// The three call forms differ only in how much resolution they skip.
+///
+/// `call_word` runs the full resolution ladder. `call_word_direct` is the parser's pre-resolution,
+/// emitted only for a name `preResolveCallTarget` proved cannot be shadowed by any frame or module,
+/// so it resolves nothing. `call_word_module` is the AOT image's build-time resolution of a name in
+/// the executing body's own module scope, so it still yields to a captured lexical scope but skips
+/// every rung below that.
 pub const Instruction = struct {
     op: Op,
     line: usize, // 1-based line number from source
@@ -35,25 +43,24 @@ pub const Instruction = struct {
         push_literal: Value,
         call_word: []const u8,
         call_word_direct: *WordSlot,
+        call_word_module: *WordSlot,
 
-        /// Name of the word a call instruction targets. Returns null for
-        /// non-call instructions. Both `call_word` and `call_word_direct`
-        /// surface their target name through this helper so analysis passes
-        /// don't have to discriminate between the two forms.
+        /// Name of the word a call instruction targets. Returns null for non-call instructions.
+        /// All three call forms surface their target name here, so an analysis pass never has to
+        /// discriminate between them.
         pub fn callTargetName(op: Op) ?[]const u8 {
             return switch (op) {
                 .push_literal => null,
                 .call_word => |name| name,
-                .call_word_direct => |slot| slot.name,
+                .call_word_direct, .call_word_module => |slot| slot.name,
             };
         }
 
-        /// True for either `call_word` or `call_word_direct`, false for any
-        /// non-call instruction.
+        /// True for any of the three call forms, false for a non-call instruction.
         pub fn isCall(op: Op) bool {
             return switch (op) {
                 .push_literal => false,
-                .call_word, .call_word_direct => true,
+                .call_word, .call_word_direct, .call_word_module => true,
             };
         }
     };
@@ -340,7 +347,7 @@ pub fn valueContainsBorrowedBuffer(val: Value) bool {
                     .push_literal => |literal| {
                         if (valueContainsBorrowedBuffer(literal)) break :blk true;
                     },
-                    .call_word, .call_word_direct => {},
+                    .call_word, .call_word_direct, .call_word_module => {},
                 }
             }
             break :blk false;
@@ -423,7 +430,7 @@ pub fn findTaskArenaOwned(val: Value) ?std.meta.Tag(Value) {
                     .push_literal => |literal| {
                         if (findTaskArenaOwned(literal)) |tag| break :blk tag;
                     },
-                    .call_word, .call_word_direct => {},
+                    .call_word, .call_word_direct, .call_word_module => {},
                 }
             }
             break :blk null;
@@ -1317,6 +1324,7 @@ fn instructionEql(a: Instruction, b: Instruction) bool {
         .push_literal => |va| va.eql(b.op.push_literal),
         .call_word => |na| std.mem.eql(u8, na, b.op.call_word),
         .call_word_direct => |slot| slot == b.op.call_word_direct,
+        .call_word_module => |slot| slot == b.op.call_word_module,
     };
 }
 
@@ -1526,7 +1534,7 @@ pub const Value = union(enum) {
                             try writer.writeAll(" ");
                         },
                         .call_word => |name| try writer.print("{s} ", .{name}),
-                        .call_word_direct => |slot| try writer.print("{s} ", .{slot.name}),
+                        .call_word_direct, .call_word_module => |slot| try writer.print("{s} ", .{slot.name}),
                     }
                 }
                 try writer.writeAll("]");
@@ -1867,7 +1875,7 @@ pub const Value = union(enum) {
                             hasher.update(std.mem.asBytes(&v_hash));
                         },
                         .call_word => |name| hasher.update(name),
-                        .call_word_direct => |slot| hasher.update(slot.name),
+                        .call_word_direct, .call_word_module => |slot| hasher.update(slot.name),
                     }
                 }
             },
@@ -1881,7 +1889,7 @@ pub const Value = union(enum) {
                             hasher.update(std.mem.asBytes(&v_hash));
                         },
                         .call_word => |name| hasher.update(name),
-                        .call_word_direct => |slot| hasher.update(slot.name),
+                        .call_word_direct, .call_word_module => |slot| hasher.update(slot.name),
                     }
                 }
             },

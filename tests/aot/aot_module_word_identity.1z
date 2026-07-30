@@ -1,0 +1,10 @@
+\ Two modules export `probe`, and both bodies are directly reachable and
+\ compilable. Module A's `a-probe` calls A's `probe`; the entry file imports B's.
+\ Each module's word gets its own compiled function, so A's call site reaches A's
+\ body rather than whichever `probe` won the bare name at discovery.
+
+use { a-probe: } "fixtures/aot_module_word_identity_a.1z" ;
+use { probe: } "fixtures/aot_module_word_identity_b.1z" ;
+
+a-probe print-line
+probe print-line

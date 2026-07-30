@@ -65,7 +65,7 @@ pub const flag_bit_module_private: u8 = 1 << 5;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 16;
+pub const format_version: u32 = 17;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -328,14 +328,19 @@ pub fn emitImageCFromCollection(
 
     try emitWordNameStrings(out, allocator, manifest);
     try emitWordDiagnosticStrings(out, allocator, ctx, manifest);
+    // Filled while the word bodies serialize, since a slot is minted the first time some body's
+    // call site resolves to it. A metadata-only image emits no bodies, so it mints nothing.
+    var call_targets: CallTargetTable = .{};
+    defer call_targets.deinit(allocator);
     if (!options.metadata_only) {
-        try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens, effect_table, struct_index);
+        try emitWordBodyBytecode(out, allocator, ctx, manifest, word_body_lens, effect_table, struct_index, &call_targets);
     }
     try emitModuleAndWordTables(out, allocator, ctx, manifest, word_id_lookup, marker_pool, effect_table, word_to_typevalue_slot, word_body_lens, &stats);
     try emitReifiedQuotationModules(out, allocator, reified_quotation_modules);
     const module_dep_count = try emitModuleDepTable(out, allocator, ctx, manifest);
     const entry_import_count = try emitEntryImportTable(out, allocator, ctx, manifest, entry_imports);
-    try emitHeader(out, allocator, manifest, marker_pool, effect_table, struct_plans_items, stats, reified_quotation_modules.len, module_dep_count, entry_import_count);
+    const call_target_count = try emitCallTargetTable(out, allocator, call_targets.word_indices.items);
+    try emitHeader(out, allocator, manifest, marker_pool, effect_table, struct_plans_items, stats, reified_quotation_modules.len, module_dep_count, entry_import_count, call_target_count);
 
     stats.typevalue_slot_count = effect_table.slotCount();
     stats.stack_effect_count = effect_table.effectCount();
@@ -840,7 +845,7 @@ fn findTypeValueLiteral(mw: *const ModuleWord) ?*const TypeValue {
                 .type_val => |tv| return tv,
                 else => {},
             },
-            .call_word, .call_word_direct => {},
+            .call_word, .call_word_direct, .call_word_module => {},
         }
     }
     return null;
@@ -883,7 +888,7 @@ fn internInstructionTypeLiterals(
     for (instrs) |instr| {
         switch (instr.op) {
             .push_literal => |lit| try internValueTypeLiterals(struct_plans, struct_index, effect_table, lit),
-            .call_word, .call_word_direct => {},
+            .call_word, .call_word_direct, .call_word_module => {},
         }
     }
 }
@@ -1422,7 +1427,7 @@ fn emitParameterDescriptionsStorage(
         try emitCStringLiteral(out, allocator, param.name);
         try out.appendSlice(allocator, ";\n");
 
-        const bytes = instruction_bytecode.serializeQuotationInstructions(param.default_quotation.instructions, allocator, null) catch |err| switch (err) {
+        const bytes = instruction_bytecode.serializeQuotationInstructions(param.default_quotation.instructions, allocator, null, null) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NotEncodable => return error.NotEncodable,
         };
@@ -1557,7 +1562,7 @@ fn emitTaggedDescriptionsStorage(
 
         var inner_buf: std.ArrayListUnmanaged(u8) = .{};
         defer inner_buf.deinit(allocator);
-        instruction_bytecode.serializeValueIntoForImage(&inner_buf, entry.inner.*, allocator, &slot_maps) catch |err| switch (err) {
+        instruction_bytecode.serializeValueIntoForImage(&inner_buf, entry.inner.*, allocator, &slot_maps, null) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NotEncodable => return error.NotEncodable,
         };
@@ -1669,7 +1674,7 @@ fn emitMutableMapDescriptionsStorage(
             const key_len: u32 = @intCast(key.len);
             try entries_buf.appendSlice(allocator, std.mem.asBytes(&key_len));
             try entries_buf.appendSlice(allocator, key);
-            instruction_bytecode.serializeValueIntoForImage(&entries_buf, entry.value_ptr.*, allocator, &slot_maps) catch |err| switch (err) {
+            instruction_bytecode.serializeValueIntoForImage(&entries_buf, entry.value_ptr.*, allocator, &slot_maps, null) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.NotEncodable => return error.NotEncodable,
             };
@@ -1768,7 +1773,7 @@ fn emitStructInstanceDescriptionsStorage(
         const field_count: u32 = @intCast(si.fields.len);
         try fields_buf.appendSlice(allocator, std.mem.asBytes(&field_count));
         for (si.fields) |field| {
-            instruction_bytecode.serializeValueIntoForImage(&fields_buf, field, allocator, &slot_maps) catch |err| switch (err) {
+            instruction_bytecode.serializeValueIntoForImage(&fields_buf, field, allocator, &slot_maps, null) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.NotEncodable => return error.NotEncodable,
             };
@@ -1873,7 +1878,7 @@ fn emitVectorDescriptionsStorage(
         defer elements_buf.deinit(allocator);
         try elements_buf.appendSlice(allocator, std.mem.asBytes(&elem_count));
         for (v.list.items) |elem| {
-            instruction_bytecode.serializeValueIntoForImage(&elements_buf, elem, allocator, &slot_maps) catch |err| switch (err) {
+            instruction_bytecode.serializeValueIntoForImage(&elements_buf, elem, allocator, &slot_maps, null) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.NotEncodable => return error.NotEncodable,
             };
@@ -2263,7 +2268,7 @@ fn emitDispatchEntryTable(
         } else {
             if (!emit_unreached_interp_run) continue;
             quotation_id = dispatch_interp_quotation_id_sentinel;
-            body_bytecode = instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps) catch |err| switch (err) {
+            body_bytecode = instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps, null) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.NotEncodable => continue,
             };
@@ -3671,6 +3676,8 @@ fn emitTypeDeclarations(
         \\    const struct onez_image_module_dep *module_deps;
         \\    uint32_t entry_import_count;
         \\    const struct onez_image_entry_import *entry_imports;
+        \\    uint32_t call_target_count;
+        \\    const uint32_t *call_targets;
         \\} onez_image_header_t;
         \\
         \\
@@ -3814,8 +3821,12 @@ fn emitWordBodyBytecode(
     word_body_lens: []u32,
     effect_table: *const StackEffectTable,
     struct_index: *const std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
+    call_targets: *CallTargetTable,
 ) ImageEmitError!void {
     if (manifest.entries.len == 0) return;
+
+    var row_index = try RowIndex.build(allocator, manifest);
+    defer row_index.deinit(allocator);
 
     const slot_maps: instruction_bytecode.SlotEncodingMaps = .{
         .typevalue_slot_index = &effect_table.type_slot_index,
@@ -3848,6 +3859,22 @@ fn emitWordBodyBytecode(
         // populate the body from `typevalue_slot`.
         if (findTypeValueLiteral(mw_ptr) != null) continue;
 
+        // The body resolves its bare words against the module it is written in, so the resolver
+        // needs that module. The manifest is built from the cache, so a miss is unreachable. It
+        // leaves this body's calls as bare names rather than failing the build.
+        var resolver_state: ?CallTargetResolverState = if (ctx.moduleByNameInCache(entry.module_name)) |module|
+            .{
+                .allocator = allocator,
+                .module = module,
+                .module_name = entry.module_name,
+                .row_index = &row_index,
+                .table = call_targets,
+            }
+        else
+            null;
+        const resolver: ?instruction_bytecode.CallTargetResolver =
+            if (resolver_state) |*s| s.resolver() else null;
+
         // Generator-emitted words (struct constructors, getters,
         // predicates, ...) push a runtime `.struct_type` literal the
         // by-value serializer cannot encode. Route them through the
@@ -3856,16 +3883,13 @@ fn emitWordBodyBytecode(
         // body these words run as no-ops when an interpreted quotation
         // (`jitCallQuotation`) calls them. A still-unencodable generated
         // body falls back to the prior empty-body behavior.
-        if (std.posix.getenv("ONEZ_DEBUG_NTH") != null and mw_ptr.provenance != null) {
-            std.debug.print("DBG emit-body parent={?s} role={?s} bodylen={d}\n", .{ if (mw_ptr.provenance) |p| p.parent else null, if (mw_ptr.provenance) |p| p.role else null, body.len });
-        }
         const bytes = if (mw_ptr.provenance != null)
-            instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps) catch |err| switch (err) {
+            instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps, resolver) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.NotEncodable => continue,
             }
         else
-            instruction_bytecode.serializeQuotationInstructions(body, allocator, null) catch |err| switch (err) {
+            instruction_bytecode.serializeQuotationInstructions(body, allocator, null, resolver) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 // A user word body may push a slot-encodable literal (i.e., a mutable_map holding
                 // struct instances, a struct instance, a nested array of them) that the by-value
@@ -3874,7 +3898,7 @@ fn emitWordBodyBytecode(
                 // Fall back to the image serializer so the literal slot-references the live runtime
                 // value. The loader decodes every body through the image decoder, which resolves the
                 // slot tags.
-                error.NotEncodable => instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps) catch |e| switch (e) {
+                error.NotEncodable => instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps, resolver) catch |e| switch (e) {
                     error.OutOfMemory => return error.OutOfMemory,
                     error.NotEncodable => return error.NotEncodable,
                 },
@@ -4263,6 +4287,125 @@ fn emitReifiedQuotationModules(
     try out.appendSlice(allocator, "};\n\n");
 }
 
+/// The manifest rows of one module, split by the two maps the loader routes them into. A public
+/// word and a `private{ }` helper may share a name inside one module, so they cannot share a map.
+const ModuleRows = struct {
+    public: std.StringHashMapUnmanaged(u32) = .{},
+    private: std.StringHashMapUnmanaged(u32) = .{},
+};
+
+/// `(module name, word name) -> manifest row index`, built once per emission from the manifest.
+const RowIndex = struct {
+    by_module: std.StringHashMapUnmanaged(ModuleRows) = .{},
+
+    fn build(allocator: Allocator, manifest: ImageManifest) Allocator.Error!RowIndex {
+        var self: RowIndex = .{};
+        errdefer self.deinit(allocator);
+        for (manifest.entries, 0..) |entry, idx| {
+            const gop = try self.by_module.getOrPut(allocator, entry.module_name);
+            if (!gop.found_existing) gop.value_ptr.* = .{};
+            const target = if (entry.module_private) &gop.value_ptr.private else &gop.value_ptr.public;
+            try target.put(allocator, entry.word_name, @intCast(idx));
+        }
+        return self;
+    }
+
+    fn deinit(self: *RowIndex, allocator: Allocator) void {
+        var it = self.by_module.valueIterator();
+        while (it.next()) |rows| {
+            rows.public.deinit(allocator);
+            rows.private.deinit(allocator);
+        }
+        self.by_module.deinit(allocator);
+    }
+
+    fn lookup(self: *const RowIndex, module_name: []const u8, word_name: []const u8, private: bool) ?u32 {
+        const rows = self.by_module.getPtr(module_name) orelse return null;
+        return if (private) rows.private.get(word_name) else rows.public.get(word_name);
+    }
+};
+
+/// Interning table for build-time-resolved call targets. One slot per distinct manifest row a call
+/// site reaches, so a name called many times costs one table entry.
+const CallTargetTable = struct {
+    word_indices: std.ArrayListUnmanaged(u32) = .{},
+    slot_by_word: std.AutoHashMapUnmanaged(u32, u32) = .{},
+
+    fn deinit(self: *CallTargetTable, allocator: Allocator) void {
+        self.word_indices.deinit(allocator);
+        self.slot_by_word.deinit(allocator);
+    }
+
+    fn intern(self: *CallTargetTable, allocator: Allocator, word_idx: u32) Allocator.Error!u32 {
+        if (self.slot_by_word.get(word_idx)) |slot| return slot;
+        const slot: u32 = @intCast(self.word_indices.items.len);
+        try self.word_indices.append(allocator, word_idx);
+        errdefer _ = self.word_indices.pop();
+        try self.slot_by_word.put(allocator, word_idx, slot);
+        return slot;
+    }
+};
+
+/// Per-body state behind the serializer's `CallTargetResolver` callback.
+///
+/// `resolve` reproduces `Context.lookupModuleScopeWord`, the runtime rung that sits directly below
+/// the captured lexical scope: the owning module's own `words` first, then its `deps`. A hit is
+/// mapped to the manifest row that holds it and interned. Anything the module scope does not
+/// resolve -- a prelude word, a native module word the manifest drops -- keeps its bare name and
+/// resolves through the full ladder at runtime.
+const CallTargetResolverState = struct {
+    allocator: Allocator,
+    module: *const value_mod.Module,
+    module_name: []const u8,
+    row_index: *const RowIndex,
+    table: *CallTargetTable,
+
+    fn resolver(self: *CallTargetResolverState) instruction_bytecode.CallTargetResolver {
+        return .{ .state = self, .resolve = resolve };
+    }
+
+    fn resolve(state_raw: *anyopaque, name: []const u8) Allocator.Error!?u32 {
+        const self: *CallTargetResolverState = @ptrCast(@alignCast(state_raw));
+        const word_idx = self.rowFor(name) orelse return null;
+        return try self.table.intern(self.allocator, word_idx);
+    }
+
+    fn rowFor(self: *const CallTargetResolverState, name: []const u8) ?u32 {
+        if (self.module.words.contains(name)) {
+            return self.row_index.lookup(self.module_name, name, false);
+        }
+        const dep = self.module.deps.get(name) orelse return null;
+        const source = dep.source_module orelse return null;
+        // A `private{ }` helper rides in this module's own window as a flagged row; an ordinary
+        // `use`-import points at the source module's public row.
+        if (aot_image.isPrivateHelperSource(source)) {
+            return self.row_index.lookup(self.module_name, name, true);
+        }
+        return self.row_index.lookup(source.name, name, false);
+    }
+};
+
+/// Emit `onez_image_call_targets_storage[]`: the word-table index behind each call-target slot.
+///
+/// Returns the emitted count. The order is the interning order, which is the emission order of the
+/// word bodies that referenced them, so it is deterministic for a given manifest.
+fn emitCallTargetTable(
+    out: *std.ArrayListUnmanaged(u8),
+    allocator: Allocator,
+    word_indices: []const u32,
+) Allocator.Error!u32 {
+    if (word_indices.len == 0) return 0;
+
+    var num_buf: [32]u8 = undefined;
+    try out.appendSlice(allocator, "static const uint32_t onez_image_call_targets_storage[] = {");
+    for (word_indices, 0..) |word_idx, i| {
+        if (i > 0) try out.append(allocator, ',');
+        try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{word_idx}) catch unreachable);
+    }
+    try out.appendSlice(allocator, "};\n\n");
+    return @intCast(word_indices.len);
+}
+
 /// One import edge selected for emission.
 const ModuleDepRow = struct {
     module_idx: u32,
@@ -4500,6 +4643,7 @@ fn emitHeader(
     reified_quotation_module_count: usize,
     module_dep_count: u32,
     entry_import_count: u32,
+    call_target_count: u32,
 ) Allocator.Error!void {
     var num_buf: [32]u8 = undefined;
 
@@ -4625,6 +4769,10 @@ fn emitHeader(
     try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{entry_import_count}) catch unreachable);
     try out.appendSlice(allocator, ",\n    .entry_imports = ");
     try out.appendSlice(allocator, if (entry_import_count > 0) "onez_image_entry_imports_storage" else "NULL");
+    try out.appendSlice(allocator, ",\n    .call_target_count = ");
+    try out.appendSlice(allocator, std.fmt.bufPrint(&num_buf, "{d}", .{call_target_count}) catch unreachable);
+    try out.appendSlice(allocator, ",\n    .call_targets = ");
+    try out.appendSlice(allocator, if (call_target_count > 0) "onez_image_call_targets_storage" else "NULL");
     try out.appendSlice(allocator,
         \\,
         \\};
@@ -6254,6 +6402,75 @@ test "emitImageC: module dep rows for resolvable edges, unresolvable edges skipp
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_w_1_name[] = \"hidden\"") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "\"ext\"") == null);
     try testing.expect(std.mem.indexOf(u8, out.items, "\"raw\"") == null);
+}
+
+test "emitImageC: call targets bake own words, private helpers, and imports; other names stay bare" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const natives = struct {
+        fn nop(_: *Context) anyerror!void {}
+    };
+
+    const src = try arena.create(Module);
+    src.* = .{ .name = "modc", .words = .{} };
+    try src.words.put(arena, "imported", .{ .action = .{ .compound = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 9 } }, .line = 0, .column = 0 },
+    }) } });
+
+    const synthetic = try arena.create(Module);
+    synthetic.* = .{ .name = "<local-scope>", .words = .{} };
+
+    const owner = try arena.create(Module);
+    owner.* = .{ .name = "moda", .words = .{} };
+
+    // `caller` reaches one of each resolvable shape, plus a prelude name the module scope does not
+    // resolve and a native dep the manifest drops.
+    try owner.words.put(arena, "caller", .{ .action = .{ .compound = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .call_word = "sibling" }, .line = 1, .column = 0 },
+        .{ .op = .{ .call_word = "helper" }, .line = 2, .column = 0 },
+        .{ .op = .{ .call_word = "imported" }, .line = 3, .column = 0 },
+        .{ .op = .{ .call_word = "dup" }, .line = 4, .column = 0 },
+        .{ .op = .{ .call_word = "raw" }, .line = 5, .column = 0 },
+        .{ .op = .{ .call_word = "sibling" }, .line = 6, .column = 0 },
+    }) } });
+    try owner.words.put(arena, "sibling", .{ .action = .{ .compound = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    }) } });
+    try owner.deps.put(arena, "helper", .{ .source_module = synthetic, .action = .{ .compound = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0, .column = 0 },
+    }) } });
+    try owner.deps.put(arena, "imported", .{ .source_module = src, .action = .{ .compound = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 9 } }, .line = 0, .column = 0 },
+    }) } });
+    try owner.deps.put(arena, "raw", .{ .source_module = src, .action = .{ .native = natives.nop } });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "moda"), .{ .module = owner });
+    try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "modc"), .{ .module = src });
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{}, &.{});
+
+    // moda's window is `caller`, `sibling`, then the flagged `helper`; modc's `imported` follows.
+    // The three baked names intern in call order, and the repeat of `sibling` reuses slot 0.
+    try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_call_targets_storage[] = {1,2,3}") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".call_target_count = 3") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, ".call_targets = onez_image_call_targets_storage") != null);
+
+    // `dup` and `raw` resolve to no manifest row, so they keep the bare-name lowering. Their names
+    // survive in the body bytecode as length-prefixed bytes; a baked call stores no name at all.
+    try testing.expect(std.mem.indexOf(u8, out.items, "100,117,112") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "114,97,119") != null);
 }
 
 test "emitImageC: module dep row survives an embedded-stdlib source" {

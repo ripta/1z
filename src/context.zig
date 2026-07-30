@@ -481,7 +481,13 @@ pub const DeferredEmission = union(enum) {
 pub const Context = struct {
     stack: Stack,
     dictionary: Dictionary,
-    arena: std.heap.ArenaAllocator,
+    /// Heap-boxed, so the `Allocator` handle it hands out survives a by-value `Context` copy.
+    ///
+    /// `quotationAllocator` returns an `Allocator` whose `ptr` is this arena's address. An inline
+    /// arena would make that address part of the enclosing `Context`, so a constructor that builds
+    /// a context, allocates through it, and then returns the context by value would strand every
+    /// handle taken before the return. Boxing keeps the identity stable wherever the struct moves.
+    arena: *std.heap.ArenaAllocator,
     /// Instruction slices belonging to quotations the parser or `curry`
     /// allocated on this context's `arena`, recorded so the captured
     /// container literals can be released before the arena tears down.
@@ -710,6 +716,10 @@ pub const Context = struct {
     image_vector_slot_count: u32 = 0,
     image_protocoldescriptor_slot_count: u32 = 0,
     image_constraintcombinator_slot_count: u32 = 0,
+    /// One loader-owned `WordSlot` per build-time-resolved call target, addressed by the slot
+    /// index a `call_word_module` instruction carries.
+    image_call_target_slots: ?[*]?*dict_mod.WordSlot = null,
+    image_call_target_slot_count: u32 = 0,
     /// AOT method-dispatch replay table, stashed by `loadIntoContext` and
     /// consumed by `aot_image_loader.replayMethodDispatch` after the
     /// quotation-function table is registered. Stored opaquely to avoid an
@@ -961,7 +971,7 @@ pub const Context = struct {
         if (instrs.len == 0) return false;
         return switch (instrs[instrs.len - 1].op) {
             .call_word => |name| std.mem.eql(u8, name, ";"),
-            .call_word_direct => |slot| std.mem.eql(u8, slot.name, ";"),
+            .call_word_direct, .call_word_module => |slot| std.mem.eql(u8, slot.name, ";"),
             .push_literal => false,
         };
     }
@@ -1060,10 +1070,15 @@ pub const Context = struct {
     /// Initialize a new interpreter context with an empty stack and primitives.
     /// Note: This does NOT load the prelude. Call loadPrelude() separately.
     pub fn init(allocator: Allocator) Context {
+        const arena = allocator.create(std.heap.ArenaAllocator) catch |err| {
+            std.debug.panic("Failed to allocate context arena: {any}", .{err});
+        };
+        arena.* = std.heap.ArenaAllocator.init(allocator);
+
         var ctx = Context{
             .stack = Stack.init(allocator),
             .dictionary = Dictionary.init(allocator),
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arena = arena,
             .allocator = allocator,
             .call_stack = .{},
             .error_details = .{},
@@ -1149,10 +1164,15 @@ pub const Context = struct {
     /// registered here. They are resolved at lookup time by walking up the parent_context chain.
     /// Per-task state like the stack, dictionary, and arena are freshly allocated.
     pub fn initForTask(allocator: Allocator, parent: *Context, scheduler: *Scheduler) !Context {
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
+
         var ctx = Context{
             .stack = Stack.init(allocator),
             .dictionary = Dictionary.init(allocator),
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arena = arena,
             .allocator = allocator,
             .call_stack = .{},
             .error_details = .{},
@@ -1213,6 +1233,8 @@ pub const Context = struct {
         ctx.image_mutable_map_slot_count = parent.image_mutable_map_slot_count;
         ctx.image_struct_instance_slot_count = parent.image_struct_instance_slot_count;
         ctx.image_vector_slot_count = parent.image_vector_slot_count;
+        ctx.image_call_target_slots = parent.image_call_target_slots;
+        ctx.image_call_target_slot_count = parent.image_call_target_slot_count;
 
         // Inherit AOT-emitted quotation code pointer table so quotation
         // literals constructed in the task ctx via `jitPushQuotation`
@@ -1542,6 +1564,7 @@ pub const Context = struct {
         if (self.parent_context == null) self.releaseImageSlotReferences();
 
         self.arena.deinit();
+        self.allocator.destroy(self.arena);
         self.dictionary.deinit();
         if (self.parent_context == null) {
             // Release the refcounted module cache before tearing down the
@@ -1797,10 +1820,13 @@ pub const Context = struct {
     /// only ever pre-resolves a name it can prove is absent from every current local frame, so a
     /// name that could possibly resolve to a lexical local always stays a plain `call_word`
     /// instruction; `executeInstructions`'s captured-scope lookup likewise only ever consults it on
-    /// the `call_word` path, never `call_word_direct`. A quotation with no `call_word` name matching
-    /// a live frame therefore cannot resolve any bare word against a captured scope, so skipping
-    /// capture for it cannot reintroduce staleness -- it only skips work that would have produced an
-    /// unused scope.
+    /// the `call_word` path, never `call_word_direct`. A quotation with no matching name therefore
+    /// cannot resolve any bare word against a captured scope, so skipping capture for it cannot
+    /// reintroduce staleness -- it only skips work that would have produced an unused scope.
+    ///
+    /// `call_word_module` is scanned alongside `call_word` because its arm does consult the
+    /// captured scope: an image body's build-time module resolution yields to a lexical binding,
+    /// so the name must be able to trigger capture in the first place.
     fn quotationReferencesLiveFrame(self: *const Context, instructions: []const Instruction, floor: usize) bool {
         var i = floor;
         while (i < self.local_frames.items.len) : (i += 1) {
@@ -1810,6 +1836,7 @@ pub const Context = struct {
             for (instructions) |instr| {
                 switch (instr.op) {
                     .call_word => |name| if (frame.contains(name)) return true,
+                    .call_word_module => |slot| if (frame.contains(slot.name)) return true,
                     else => {},
                 }
             }
@@ -3066,16 +3093,14 @@ pub const Context = struct {
         return null;
     }
 
-    fn lookupModuleScopeWord(name: []const u8, module: *const value_mod.Module) ?WordDefinition {
-        // The deps template is the pristine words-over-deps merge of the two maps probed below, so
-        // a name absent from it is absent from both. Most probes are misses -- every prelude word
-        // called inside a module body probes here first -- and the template makes a miss cost one
-        // map get instead of two.
-        if (module.deps_template) |tmpl| {
-            if (tmpl.frame.get(name) == null) return null;
-        }
-
-        const mod_word = module.words.get(name) orelse module.deps.get(name) orelse return null;
+    /// Build the `WordDefinition` a body sees when its own module scope resolves `name`, without
+    /// performing the lookup. The AOT image loader uses this to fill a build-time-resolved call
+    /// target's slot with exactly what the runtime probe would have produced for the same hit.
+    pub fn moduleScopeWordDef(
+        name: []const u8,
+        mod_word: value_mod.ModuleWord,
+        module: *const value_mod.Module,
+    ) WordDefinition {
         var def = moduleWordFrameDef(name, mod_word, module);
 
         // Carry the recorded definition site so `executeResolvedWord` attributes the body's error
@@ -3089,6 +3114,19 @@ pub const Context = struct {
             def.source_column = mod_word.source_column;
         }
         return def;
+    }
+
+    fn lookupModuleScopeWord(name: []const u8, module: *const value_mod.Module) ?WordDefinition {
+        // The deps template is the pristine words-over-deps merge of the two maps probed below, so
+        // a name absent from it is absent from both. Most probes are misses -- every prelude word
+        // called inside a module body probes here first -- and the template makes a miss cost one
+        // map get instead of two.
+        if (module.deps_template) |tmpl| {
+            if (tmpl.frame.get(name) == null) return null;
+        }
+
+        const mod_word = module.words.get(name) orelse module.deps.get(name) orelse return null;
+        return moduleScopeWordDef(name, mod_word, module);
     }
 
     /// Final fallback for AOT runtimes: a user word may live only in `jit_dispatch` with no entry in
@@ -4882,7 +4920,7 @@ pub const Context = struct {
                         shadow.clearRetainingCapacity();
                     };
                 },
-                .call_word, .call_word_direct => {
+                .call_word, .call_word_direct, .call_word_module => {
                     const name = instr.op.callTargetName().?;
                     if (matchShuffleWord(name)) |shuffle| {
                         if (self.lookupWord(name)) |word| {
@@ -6513,6 +6551,38 @@ pub const Context = struct {
                         b.beginWordProfile();
                     }
                     if (self.profile) |p| p.recordWordStart(self.allocator);
+
+                    const word = dict_mod.loadSlot(slot).*;
+                    switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                        .proceed => {},
+                        .tail_call_set => return,
+                    }
+                },
+                .call_word_module => |slot| {
+                    const name = slot.name;
+                    signal.checkPendingSignals(self) catch |err| {
+                        self.pushCallFrame(name, self.current_source, instr.line, instr.column);
+                        return self.wordErrorCleanup(name, err);
+                    };
+
+                    if (self.benchmark) |b| {
+                        b.recordCallWord();
+                        b.beginWordProfile();
+                    }
+                    if (self.profile) |p| p.recordWordStart(self.allocator);
+
+                    // The build-time resolution stands in for rung 2 of the ladder and everything
+                    // below it, but rung 1 is still live: a lexical binding closed over at this
+                    // quotation's creation site outranks the body's own module scope.
+                    if (captured_scope) |scope| {
+                        if (lookupInCapturedScope(scope, name)) |word| {
+                            switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
+                                .proceed => {},
+                                .tail_call_set => return,
+                            }
+                            continue;
+                        }
+                    }
 
                     const word = dict_mod.loadSlot(slot).*;
                     switch (try self.executeResolvedWord(name, word, instr, idx, pic_table, is_last)) {
@@ -8211,6 +8281,48 @@ test "module-cache scan is skipped for a body with a defining module" {
     const filtered = ctx.lookupWordForExecutionFiltered("probe", null, null) orelse
         return error.TestExpectedLookup;
     try std.testing.expectEqual(@as(?*const value_mod.Module, foreign), filtered.source_module);
+}
+
+test "call_word_module executes its baked target, and a captured lexical binding still outranks it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const push_baked: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 1 });
+        }
+    }.f;
+    const push_lexical: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 2 });
+        }
+    }.f;
+
+    const alloc = ctx.arena.allocator();
+    const slot = try dict_mod.createDetachedSlot(alloc, "probe", .{
+        .name = "probe",
+        .action = .{ .native = push_baked },
+    });
+    const inner = try alloc.alloc(Instruction, 1);
+    inner[0] = .{ .op = .{ .call_word_module = slot }, .line = 1 };
+
+    // The scope is captured where the quotation literal is pushed, so the call has to run through
+    // a push-then-`call` body rather than a direct execute.
+    const outer = try alloc.alloc(Instruction, 2);
+    outer[0] = .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner } } }, .line = 1 };
+    outer[1] = .{ .op = .{ .call_word = "call" }, .line = 1 };
+
+    // With nothing closed over, the baked slot decides the call.
+    try ctx.executeQuotation(.{ .instructions = outer });
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
+
+    // A lexical binding live at the push site is rung 1 of the ladder, so it outranks the
+    // build-time module resolution the slot carries.
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    try ctx.defineWord("probe", .{ .name = "probe", .action = .{ .native = push_lexical } });
+    try ctx.executeQuotation(.{ .instructions = outer });
+    try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).fixnum);
 }
 
 test "lookupWordForExecution: walks parent jit_dispatch for AOT-compiled-only words" {

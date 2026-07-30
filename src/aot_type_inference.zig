@@ -223,11 +223,14 @@ const Inference = struct {
     result: *FreezeResult,
     options: Options,
 
-    /// Word descriptor index by name, last insert winning, mirroring the name-keyed resolver map
-    /// `emitProgramC` builds. Every call site in compiled code binds the same way.
+    /// Word descriptor index by name, last insert winning. The census walks instruction streams,
+    /// where a call site carries only the bare name it was spelled with.
     by_name: std.StringHashMapUnmanaged(u32) = .{},
-    /// Names carried by more than one descriptor. Those descriptors collapse onto one binding in
-    /// codegen, so neither can claim its own call sites.
+    /// Names carried by more than one descriptor, so neither can claim its own call sites.
+    ///
+    /// Codegen resolves such a call site through the per-body callee scope freeze publishes, which
+    /// this pass has no equivalent of. Two modules exporting one name therefore lose call-site
+    /// parameter inference, where before this pass they would have seen a single collapsed word.
     ambiguous: std.StringHashMapUnmanaged(void) = .{},
 
     /// Quotation descriptor index by body pointer.
@@ -486,7 +489,7 @@ const Inference = struct {
                     if (val != .quotation) try self.noteBuriedBodies(val, 0);
                     self.push(frame, abstractForLiteral(val));
                 },
-                .call_word, .call_word_direct => {
+                .call_word, .call_word_direct, .call_word_module => {
                     const name = instr.op.callTargetName().?;
                     if (mode == .record) {
                         try self.visited_calls.put(self.allocator, .{
