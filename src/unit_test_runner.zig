@@ -37,13 +37,16 @@ pub fn main() void {
 
         var state = TestState{};
         const watchdog = std.Thread.spawn(.{}, watchdogThread, .{ test_fn.name, &state }) catch null;
-        const started_ns = std.time.nanoTimestamp();
+        // Monotonic, not the wall clock: an NTP correction mid-run makes a wall-clock delta
+        // negative, and this only feeds the slow-test threshold. A platform with no monotonic
+        // clock reports every test as instant, which beats aborting the run.
+        var timer = std.time.Timer.start() catch null;
 
         const result = test_fn.func();
         state.done.store(true, .release);
         if (watchdog) |thread| thread.join();
 
-        const elapsed_ms = @as(u64, @intCast(@divTrunc(std.time.nanoTimestamp() - started_ns, std.time.ns_per_ms)));
+        const elapsed_ms: u64 = if (timer) |*t| t.read() / std.time.ns_per_ms else 0;
         const leak = testing.allocator_instance.deinit() == .leak;
         if (leak) leak_count += 1;
         total_log_err_count += log_err_count;
