@@ -2832,6 +2832,7 @@ test "call-target slots: a decoded baked call carries the target module's own de
     try testing.expectEqualStrings("target", slot.name);
     const def = dictionary_mod.loadSlot(slot).*;
     try testing.expectEqual(@as(?*const value_mod.Module, module), def.source_module);
+    try testing.expectEqual(@as(?u32, 1), def.word_id);
     try testing.expectEqual(@as(usize, 1), def.action.compound.len);
     try testing.expectEqual(@as(i64, 7), def.action.compound[0].op.push_literal.fixnum);
 }
@@ -2939,7 +2940,7 @@ test "populateEntryImports: restores imports into a fresh durable frame above th
 
     const source_name = "modc";
     const import_name = "probe";
-    var probe = wordRow(import_name, 0, 0);
+    var probe = wordRow(import_name, 9, 0);
     probe.body_bytecode = encoded.items.ptr;
     probe.body_bytecode_len = @intCast(encoded.items.len);
     const words = [_]Word{probe};
@@ -2989,6 +2990,7 @@ test "populateEntryImports: restores imports into a fresh durable frame above th
     const def = frame.get(import_name) orelse return error.TestExpectedImport;
     try testing.expect(def.imported);
     try testing.expectEqual(@as(?*const value_mod.Module, source), def.source_module);
+    try testing.expectEqual(@as(?u32, 9), def.word_id);
     try testing.expectEqual(@as(usize, 1), def.action.compound.len);
     try testing.expectEqual(@as(i64, 7), def.action.compound[0].op.push_literal.fixnum);
 }

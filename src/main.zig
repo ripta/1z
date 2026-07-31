@@ -2997,7 +2997,7 @@ fn handleBuild(base_allocator: std.mem.Allocator, args: []const []const u8) u8 {
         var image_word_lookup: std.StringHashMapUnmanaged(u32) = .{};
         defer image_word_lookup.deinit(allocator);
         for (freeze_result.words) |w| {
-            image_word_lookup.put(allocator, w.name, w.word_id) catch {
+            image_word_lookup.put(allocator, w.identityOf(), w.word_id) catch {
                 err_writer.writeAll("Error: out of memory while building word-id lookup\n") catch {};
                 err_writer.flush() catch {};
                 return 1;

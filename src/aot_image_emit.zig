@@ -3253,10 +3253,17 @@ fn lookupModuleWord(ctx: *const Context, entry: ImageEntry) ?*const ModuleWord {
     return null;
 }
 
-/// Compose the lookup key used against `word_id_lookup`. Tries the
-/// module-qualified form first, then the bare word name. Mirrors the
-/// AOT freezer's convention of recording calls to module-private
-/// words by their qualified name when discovered through `use`.
+/// Compose the lookup key used against `word_id_lookup` for one image row.
+///
+/// The dot-qualified form comes first, which is how the AOT freezer records
+/// calls to module-private words discovered through `use`. The
+/// `<module>/<word>` composed identity comes second, which is how every
+/// ordinary discovered module word is keyed.
+///
+/// There is no bare-name fallback. A bare key belongs to a module-less word,
+/// so for a row -- which always carries a module -- a bare hit would always be
+/// a different word's id. A row freeze never discovered keeps the sentinel and
+/// interprets its own decoded body.
 fn resolveWordId(
     entry: ImageEntry,
     word_id_lookup: *const std.StringHashMapUnmanaged(u32),
@@ -3271,8 +3278,9 @@ fn resolveWordId(
             entry.word_name,
         );
         if (word_id_lookup.get(qualified_buf[0..qualified_len])) |id| return id;
+        qualified_buf[entry.module_name.len] = '/';
+        if (word_id_lookup.get(qualified_buf[0..qualified_len])) |id| return id;
     }
-    if (word_id_lookup.get(entry.word_name)) |id| return id;
     return word_id_sentinel;
 }
 
@@ -4906,7 +4914,7 @@ test "emitImageC: module and word tables match the manifest order" {
 
     var lookup: std.StringHashMapUnmanaged(u32) = .{};
     defer lookup.deinit(testing.allocator);
-    try lookup.put(testing.allocator, "good", 42);
+    try lookup.put(testing.allocator, "alpha/good", 42);
 
     var out: std.ArrayListUnmanaged(u8) = .{};
     defer out.deinit(testing.allocator);
@@ -4934,8 +4942,8 @@ test "emitImageC: module and word tables match the manifest order" {
     const zeta_def = std.mem.indexOf(u8, out.items, "onez_image_m_1_name[] = \"zeta\"").?;
     try testing.expect(alpha_def < zeta_def);
 
-    // The matched lookup ("good" -> 42) shows up; misses fall back to
-    // the sentinel.
+    // The matched lookup ("alpha/good" -> 42) shows up; misses fall back
+    // to the sentinel.
     try testing.expect(std.mem.indexOf(u8, out.items, "0x0000002Au") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "0xFFFFFFFFu") != null);
 
@@ -5114,7 +5122,7 @@ test "emitImageC: stack-effect table dedupes type slots and emits sentinel index
     // baseline + 3 if it were not shared.
 }
 
-test "emitImageC: word_id_lookup falls back from qualified to bare name" {
+test "emitImageC: word_id_lookup probes dot-qualified then composed identity, never the bare name" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
     try buildSyntheticImageContext(&ctx);
@@ -5124,8 +5132,15 @@ test "emitImageC: word_id_lookup falls back from qualified to bare name" {
 
     var lookup: std.StringHashMapUnmanaged(u32) = .{};
     defer lookup.deinit(testing.allocator);
-    // Match the qualified form for one entry; bare form for another.
+    // (alpha, good): the dot-qualified probe wins over the composed identity.
     try lookup.put(testing.allocator, "alpha.good", 7);
+    try lookup.put(testing.allocator, "alpha/good", 55);
+    // (zeta, alpha): the composed identity resolves, and a same-named
+    // module-less bare key is never consulted.
+    try lookup.put(testing.allocator, "zeta/alpha", 33);
+    try lookup.put(testing.allocator, "alpha", 99);
+    // (zeta, beta): only a bare key exists, so the row keeps the sentinel
+    // rather than adopting the module-less word's id.
     try lookup.put(testing.allocator, "beta", 19);
 
     var out: std.ArrayListUnmanaged(u8) = .{};
@@ -5134,7 +5149,11 @@ test "emitImageC: word_id_lookup falls back from qualified to bare name" {
     _ = try emitImageC(&out, testing.allocator, &ctx, manifest, &lookup, .{}, &.{});
 
     try testing.expect(std.mem.indexOf(u8, out.items, "0x00000007u") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items, "0x00000013u") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "0x00000021u") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "0x00000013u") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "0x00000037u") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "0x00000063u") == null);
+    try testing.expect(std.mem.indexOf(u8, out.items, "0xFFFFFFFFu") != null);
 }
 
 test "emitImageC: required runtime-image symbols all appear" {

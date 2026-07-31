@@ -10193,7 +10193,7 @@ pub fn emitProgramC(
     if (interp_ctx) |ctx| {
         image_manifest = try aot_image_mod.buildImageManifest(@constCast(ctx), allocator);
         for (words) |w| {
-            try image_word_lookup.put(allocator, w.name, w.word_id);
+            try image_word_lookup.put(allocator, w.identityOf(), w.word_id);
         }
         // Post-freeze word bodies are the canonical source for any
         // type-carrier literal that lives in a user top-level word.

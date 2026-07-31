@@ -2318,13 +2318,9 @@ pub const Context = struct {
             .source_module = mod_word.source_module orelse module,
             .capability = mod_word.capability,
             .dispatch_id = mod_word.dispatch_id,
-            // Deliberately no `word_id`: compiled functions are keyed by bare name, so two modules'
-            // same-named words share one id and the id may name the wrong module's body. A frame or
-            // own-module-probe hit interprets the entry's own decoded body instead, which is exact.
-            //
-            // An image blob word's empty body still dispatches compiled through the empty-compound
-            // backfill, which resolves by the same bare name the image word row's `word_id` was
-            // built from, so this path is no weaker than a module-cache-scan resolution.
+            // Compiled functions and image word rows are keyed per (module, word), so the row's
+            // id names this entry's own body and a frame or probe hit dispatches compiled.
+            .word_id = mod_word.word_id,
             .action = switch (mod_word.action) {
                 .compound => |instrs| .{ .compound = instrs },
                 .native => |func| .{ .native = func },
@@ -6142,11 +6138,12 @@ pub const Context = struct {
         // compiled function exists in jit_dispatch, backfill the id so the compiled
         // function runs. Restricted to empty bodies so real-bodied words -- including
         // quotation-calling combinators -- stay on the interpreter path unchanged.
+        // Restricted to module-less words too; `backfillCompiledWordId` documents why.
         // On freestanding targets word.word_id is never assigned and runtime_image_loaded is
         // never set, so effective_word_id would always resolve to null anyway.
         if (comptime !is_freestanding) {
             const effective_word_id: ?u32 = word.word_id orelse blk: {
-                if (word.exec_flags.empty_compound_body and self.runtime_image_loaded) {
+                if (word.source_module == null and word.exec_flags.empty_compound_body and self.runtime_image_loaded) {
                     break :blk backfillCompiledWordId(self, name);
                 }
                 break :blk null;
@@ -6815,10 +6812,15 @@ fn propagateWordId(ctx: *Context, name: []const u8, word_id: u32) void {
 /// dictionary/frame slot via `propagateWordId` so the scan runs at most once per
 /// word.
 ///
-/// The caller restricts this to empty-bodied words: a word with a real body is
-/// interpretable and must stay on the interpreter path. Gated on
-/// `runtime_image_loaded`, matching `lookupAotCompiledWordLocked`, so interpreter
-/// sessions never name-sweep `jit_dispatch`.
+/// The caller restricts this to empty-bodied, module-less words.
+///
+/// A word with a real body is interpretable and must stay on the interpreter
+/// path. A module word carries its own per-(module, word) id from its image
+/// row, so it never needs the sweep, and a bare-name match could name another
+/// module's body.
+///
+/// Gated on `runtime_image_loaded`, matching `lookupAotCompiledWordLocked`, so
+/// interpreter sessions never name-sweep `jit_dispatch`.
 fn backfillCompiledWordId(self: *Context, name: []const u8) ?u32 {
     var ctx_opt: ?*const Context = self;
     while (ctx_opt) |ctx| : (ctx_opt = ctx.parent_context) {
@@ -8535,6 +8537,49 @@ test "backfillCompiledWordId: no live compiled entry returns null" {
     try std.testing.expectEqual(@as(?u32, null), backfillCompiledWordId(&ctx, "absent-word"));
 }
 
+test "executeResolvedWord: a module word with an empty body does not backfill by bare name" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    ctx.runtime_image_loaded = true;
+
+    const arena_alloc = ctx.arena.allocator();
+    const mod = try arena_alloc.create(value_mod.Module);
+    mod.* = .{ .name = "img-mod", .words = .{} };
+
+    // A live entry under the word's bare name. The retired sweep would resolve it
+    // and jump to the fake pointer, so surviving the call pins the guard.
+    const fake_code: *const anyopaque = @ptrCast(&fakeAotCodeMarker);
+    const wid = try ctx.jit_dispatch.assignId("mword");
+    ctx.jit_dispatch.setCodePtr(wid, fake_code);
+
+    var def: WordDefinition = .{
+        .name = "mword",
+        .source_module = mod,
+        .action = .{ .compound = &.{} },
+    };
+    def.exec_flags = computeExecFlags(def);
+    try std.testing.expect(def.exec_flags.empty_compound_body);
+    try ctx.dictionary.put("mword", def);
+
+    const body = try arena_alloc.alloc(Instruction, 1);
+    body[0] = .{ .op = .{ .call_word = "mword" }, .line = 1 };
+    try ctx.executeQuotation(.{ .instructions = body });
+
+    // The empty body interpreted as a no-op, and no swept id was written back.
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+    try std.testing.expectEqual(@as(?u32, null), ctx.dictionary.get("mword").?.word_id);
+}
+
+test "moduleScopeWordDef: carries the module word's compiled id" {
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const module: value_mod.Module = .{ .name = "m", .words = .{} };
+    const def = Context.moduleScopeWordDef("probe", .{ .word_id = 17, .action = .{ .native = noop } }, &module);
+    try std.testing.expectEqual(@as(?u32, 17), def.word_id);
+}
+
 test "initForTask: inherits AOT runtime-image state from parent" {
     var parent = Context.init(std.testing.allocator);
     defer parent.deinit();
@@ -8968,9 +9013,9 @@ test "pushModuleDepsFrame: clones the template, word overrides same-named dep" {
     }
 
     try module.deps.put(alloc, "shared", .{ .dispatch_id = 10, .action = .{ .native = noop } });
-    try module.deps.put(alloc, "dep-only", .{ .dispatch_id = 11, .action = .{ .native = noop } });
+    try module.deps.put(alloc, "dep-only", .{ .dispatch_id = 11, .word_id = 31, .action = .{ .native = noop } });
     try module.words.put(alloc, "shared", .{ .dispatch_id = 20, .action = .{ .native = noop } });
-    try module.words.put(alloc, "word-only", .{ .dispatch_id = 21, .action = .{ .native = noop } });
+    try module.words.put(alloc, "word-only", .{ .dispatch_id = 21, .word_id = 41, .action = .{ .native = noop } });
 
     try Context.buildModuleDepsTemplate(&module, alloc);
     try std.testing.expect(module.deps_template != null);
@@ -8985,6 +9030,12 @@ test "pushModuleDepsFrame: clones the template, word overrides same-named dep" {
     try std.testing.expectEqual(@as(u32, 20), (frame.get("shared") orelse return error.Missing).dispatch_id);
     try std.testing.expectEqual(@as(u32, 11), (frame.get("dep-only") orelse return error.Missing).dispatch_id);
     try std.testing.expectEqual(@as(u32, 21), (frame.get("word-only") orelse return error.Missing).dispatch_id);
+
+    // The frame entries carry the module word's compiled id, so a frame hit
+    // dispatches compiled.
+    try std.testing.expectEqual(@as(?u32, 31), (frame.get("dep-only") orelse return error.Missing).word_id);
+    try std.testing.expectEqual(@as(?u32, 41), (frame.get("word-only") orelse return error.Missing).word_id);
+    try std.testing.expectEqual(@as(?u32, null), (frame.get("shared") orelse return error.Missing).word_id);
 }
 
 test "defineWordLocked: a definition skips a module-deps frame the active visibility rejects" {

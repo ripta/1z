@@ -587,6 +587,11 @@ pub fn importWord(ctx: *Context, name: []const u8, mod_word: ModuleWord, module:
         .provenance = mod_word.provenance,
         .capability = mod_word.capability,
         .dispatch_id = effective_dispatch_id,
+        // An image-loaded module word carries its per-(module, word) compiled id.
+        // After a generic dispatch-merge the compiled body would still consult its
+        // baked pre-merge dispatch table and miss merged methods, so the merged
+        // case stays interpreted.
+        .word_id = if (effective_dispatch_id == mod_word.dispatch_id) mod_word.word_id else null,
         .action = switch (mod_word.action) {
             .compound => |instrs| .{ .compound = instrs },
             .native => |func| .{ .native = func },
@@ -1591,6 +1596,60 @@ test "moduleSourceKindOf maps file to filesystem" {
 test "moduleSourceKindOf maps embedded to embedded" {
     const rm: ResolvedModule = .{ .embedded = .{ .virtual_path = "<stdlib>/strings.1z", .source = "" } };
     try std.testing.expectEqual(trace_mod.ModuleSourceKind.embedded, moduleSourceKindOf(rm));
+}
+
+test "importWord: copies an image module word's compiled id" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    ctx.import_frame_index = 0;
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const module: Module = .{ .name = "m", .words = .{} };
+    try importWord(&ctx, "probe", .{ .word_id = 17, .action = .{ .native = noop } }, &module);
+
+    const def = ctx.lookupWord("probe") orelse return error.TestExpectedImport;
+    try std.testing.expectEqual(@as(?u32, 17), def.word_id);
+}
+
+test "importWord: a generic dispatch-merge drops the compiled id" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    ctx.import_frame_index = 0;
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+    const generic_markers: []const *value_mod.Marker = &.{@constCast(&markers_mod.generic_marker)};
+
+    // An existing generic in scope with a different dispatch_id forces the merge.
+    // Raw dictionary put, so definition finalization cannot reassign the id.
+    try ctx.dictionary.put("gword", .{
+        .name = "gword",
+        .markers = generic_markers,
+        .dispatch_id = 100,
+        .action = .{ .native = noop },
+    });
+
+    const module: Module = .{ .name = "m", .words = .{} };
+    try importWord(&ctx, "gword", .{
+        .markers = generic_markers,
+        .dispatch_id = 200,
+        .word_id = 17,
+        .action = .{ .native = noop },
+    }, &module);
+
+    // The imported def dispatches through the merged table, whose entries the
+    // baked compiled body would not consult, so the id stays null.
+    const def = ctx.lookupWord("gword") orelse return error.TestExpectedImport;
+    try std.testing.expectEqual(@as(u32, 100), def.dispatch_id);
+    try std.testing.expectEqual(@as(?u32, null), def.word_id);
 }
 
 test "resolveLoadPath falls back to embedded for top-level name" {
