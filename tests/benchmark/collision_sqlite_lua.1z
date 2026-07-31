@@ -1,0 +1,10 @@
+\ Build-cost driver for the colliding `open` exports in lib/sqlite.1z and
+\ lib/lua.1z. Per-module compiled word identity makes an AOT build compile
+\ both modules' bodies instead of one bare-name winner. The driver is built
+\ to measure build time and binary size; it is never part of a timed run.
+
+sql: "sqlite" load ;
+lua: "lua" load ;
+
+":memory:" sql.open drop
+lua.open drop

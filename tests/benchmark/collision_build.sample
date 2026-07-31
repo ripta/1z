@@ -1,0 +1,29 @@
+=== tests/benchmark/collision_url_base64.1z ===
+  metadata-only    4222976 bytes  1.14 real         0.97 user         0.15 sys
+  runtime-image    4270416 bytes  1.14 real         0.99 user         0.14 sys
+=== tests/benchmark/collision_tcp_tls.1z ===
+  metadata-only    build rejected:
+    Error: 2 words could not be compiled to C
+      word 'net/tls/tls-upgrade': NC.13: word body underflows the abstract stack (row-variable effects)
+      word 'net/tcp/connect-attempt': NC.13: word body underflows the abstract stack (row-variable effects)
+  runtime-image    build rejected:
+    Error: 2 words could not be compiled to C
+      word 'net/tls/tls-upgrade': NC.13: word body underflows the abstract stack (row-variable effects)
+      word 'net/tcp/connect-attempt': NC.13: word body underflows the abstract stack (row-variable effects)
+=== tests/benchmark/collision_sqlite_lua.1z ===
+  metadata-only    build rejected:
+    Error: word '(open-libs)' has no stack effect declaration
+    Error: word '(lua-close-fn)' has no stack effect declaration
+    Error: word '(new-state)' has no stack effect declaration
+    Error: word 'ESqliteError' has no stack effect declaration
+    Error: word '(errmsg)' has no stack effect declaration
+    Error: word 'SQLITE_OK' has no stack effect declaration
+    Error: word '(open)' has no stack effect declaration
+  runtime-image    build rejected:
+    Error: word '(open-libs)' has no stack effect declaration
+    Error: word '(lua-close-fn)' has no stack effect declaration
+    Error: word '(new-state)' has no stack effect declaration
+    Error: word 'ESqliteError' has no stack effect declaration
+    Error: word '(errmsg)' has no stack effect declaration
+    Error: word 'SQLITE_OK' has no stack effect declaration
+    Error: word '(open)' has no stack effect declaration

@@ -805,6 +805,50 @@ fn decodeEnumVariants(
     return out;
 }
 
+/// Structural equality for two fully-populated struct-kind descriptors: mutability, field
+/// names by content, and field-type constraint elements by pointer identity.
+///
+/// Duplicates the interpreter's `StructDescriptorKeyContext` semantics because this shared
+/// core is compiled for freestanding and cannot import `context.zig`; the two must stay in
+/// sync.
+fn structDescriptorShapeEql(a: *const value_mod.TypeDescriptor, b: *const value_mod.TypeDescriptor) bool {
+    const ad = a.kind.struct_;
+    const bd = b.kind.struct_;
+    if (a.mutable != b.mutable) return false;
+    if (ad.fields.len != bd.fields.len or ad.field_types.len != bd.field_types.len) return false;
+    for (ad.fields, bd.fields) |af, bf| {
+        if (!std.mem.eql(u8, af, bf)) return false;
+    }
+    for (ad.field_types, bd.field_types) |aft, bft| {
+        const ai = elementIdentity(aft);
+        const bi = elementIdentity(bft);
+        if (ai.tag != bi.tag or ai.ptr != bi.ptr) return false;
+    }
+    return true;
+}
+
+/// True when a struct-kind descriptor's decoded field constraints are faithful to the
+/// definition: either no constraint list at all, or every field concretely typed. A null
+/// element inside a non-empty list may be a protocol or combinator constraint the emitter
+/// erased, so its shape is not trustworthy for interning.
+fn structConstraintsRoundTrip(desc: *const value_mod.TypeDescriptor) bool {
+    const field_types = desc.kind.struct_.field_types;
+    for (field_types) |ft| {
+        if (ft == null) return false;
+    }
+    return true;
+}
+
+/// Pointer carried by a constraint element, tagged by kind.
+fn elementIdentity(element: ?value_mod.ConstraintCombinator.Element) struct { tag: u8, ptr: usize } {
+    const e = element orelse return .{ .tag = 0, .ptr = 0 };
+    return switch (e) {
+        .type => |tv| .{ .tag = 1, .ptr = @intFromPtr(tv) },
+        .protocol => |pd| .{ .tag = 2, .ptr = @intFromPtr(pd) },
+        .combinator => |cc| .{ .tag = 3, .ptr = @intFromPtr(cc) },
+    };
+}
+
 // -- Shared slot population core -----------------------------------------
 
 /// Shared walk that materializes descriptor instances and patches slot tables.
@@ -825,6 +869,9 @@ fn decodeEnumVariants(
 /// - `createProtocolDescriptor(name, methods, protocol_id)` and
 ///   `createConstraintCombinator(kind, elements, combinator_id)`, each returning `LoaderError!*`
 ///   of its descriptor type and owning both registration and preservation of the build-time id
+/// - `lookupInternedStructDescriptor(desc: *const TypeDescriptor) ?*TypeDescriptor` read-only
+///   probe of the environment's structural struct-descriptor registry; returning null makes
+///   the row keep its own descriptor, shared only with same-shaped rows of this load
 pub fn SlotPopulateCore(comptime Env: type) type {
     return struct {
         /// The pass-1/2 materialization arrays, index-aligned with `header.struct_types` and
@@ -1159,6 +1206,58 @@ pub fn SlotPopulateCore(comptime Env: type) type {
                         },
                         else => {},
                     }
+                }
+            }
+
+            // Final core pass: restore structural descriptor interning for struct types.
+            //
+            // Parse time interns struct descriptors by shape, so two same-shaped struct types
+            // are one type and every descriptor-pointer identity check (dispatch keys, the
+            // struct-field-get guard, predicates) treats them interchangeably. The image stores
+            // one descriptor row per typevalue slot, so a fresh materialization would split
+            // that identity.
+            //
+            // Runs after pass 3.5 so the descriptor being interned is fully populated,
+            // including its derived type parameters.
+            //
+            // Same-shaped rows within this load share the first row's descriptor, and a row
+            // whose shape the environment already interned adopts that descriptor. The reverse
+            // direction is deliberately absent: loaded descriptors are not seeded into the
+            // environment's registry, so a struct defined at runtime after the load keeps a
+            // fresh descriptor and its method registrations cannot collide with the image's
+            // replayed dispatch entries.
+            //
+            // Only shapes whose constraints round-trip through the image are interned. The
+            // emitter serializes a protocol- or combinator-bound field as unannotated, so a
+            // null element inside a non-empty constraint list may be an erased constraint
+            // rather than a genuinely untyped field, and interning on it would conflate two
+            // types the interpreter keeps distinct. Such rows keep their own descriptor.
+            {
+                var load_interned = std.ArrayListUnmanaged(*value_mod.TypeDescriptor){};
+                defer load_interned.deinit(arena);
+                var i: u32 = 0;
+                while (i < tv_count) : (i += 1) {
+                    if (tv_reused[i]) continue;
+                    const tv = tv_out[i];
+                    const desc = tv.descriptor orelse continue;
+                    if (desc.kind != .struct_) continue;
+                    if (!structConstraintsRoundTrip(desc)) continue;
+
+                    const within_load: ?*value_mod.TypeDescriptor = for (load_interned.items) |prior| {
+                        if (structDescriptorShapeEql(prior, desc)) break prior;
+                    } else null;
+                    if (within_load) |shared| {
+                        tv.descriptor = shared;
+                        continue;
+                    }
+
+                    if (env.lookupInternedStructDescriptor(desc)) |existing| {
+                        tv.descriptor = existing;
+                        continue;
+                    }
+
+                    load_interned.append(arena, desc) catch
+                        return LoaderError.OutOfMemory;
                 }
             }
 

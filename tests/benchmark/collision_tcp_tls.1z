@@ -1,0 +1,12 @@
+\ Build-cost driver for the colliding `connect` exports in lib/net/tcp.1z
+\ and lib/net/tls.1z. Per-module compiled word identity makes an AOT build
+\ compile both modules' bodies instead of one bare-name winner. The driver
+\ is only ever AOT-built by benchmark-collision-build and is excluded from
+\ `make benchmark`, since running it would dial live endpoints.
+
+net: "net" load ;
+tcp: "net/tcp" load ;
+tls: "net/tls" load ;
+
+"127.0.0.1" 9 net.make-addr:tcp tcp.connect drop
+"localhost" 9 tls.connect drop

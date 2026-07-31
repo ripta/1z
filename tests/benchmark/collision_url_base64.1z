@@ -1,0 +1,13 @@
+\ Build-cost driver for the colliding `encode`/`decode` exports in
+\ lib/data/url.1z and lib/data/base64.1z. Per-module compiled word identity
+\ makes an AOT build compile both modules' bodies instead of one bare-name
+\ winner. The driver is built to measure build time and binary size; it is
+\ never part of a timed run.
+
+url: "data/url" load ;
+b64: "data/base64" load ;
+
+"a b" url.encode print-line
+"a%20b" url.decode print-line
+"abc" b64.encode print-line
+"YWJj" b64.decode drop

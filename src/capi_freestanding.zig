@@ -598,6 +598,13 @@ const FreestandingPopulateEnv = struct {
         };
         return cc;
     }
+
+    pub fn lookupInternedStructDescriptor(
+        _: FreestandingPopulateEnv,
+        _: *const value_mod.TypeDescriptor,
+    ) ?*value_mod.TypeDescriptor {
+        return null;
+    }
 };
 
 const FreestandingPopulate = populate_core.SlotPopulateCore(FreestandingPopulateEnv);

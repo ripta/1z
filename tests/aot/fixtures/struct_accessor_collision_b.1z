@@ -1,0 +1,6 @@
+\ Fixture for struct_accessor_collision: defines a struct whose shape matches
+\ module A's, so the two generated `src>>` accessors share one dispatch key.
+
+b-state: mutable struct{ src pos } ;
+
+b-read: ( -- str ) [ "B" 0 make-b-state src>> ] ;

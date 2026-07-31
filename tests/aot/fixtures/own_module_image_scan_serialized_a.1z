@@ -1,0 +1,9 @@
+\ Fixture for own_module_image_scan_serialized, image-serialized via `use`.
+\ Exports a `probe` colliding with own_module_image_scan_serialized_b's. Its
+\ module name sorts first, so the residual module-cache scan must answer
+\ with this export. `a-tag` calls `probe` so the colliding body is
+\ reachable from the entry and compiles with this module's identity.
+
+probe: ( -- str ) [ "A-PROBE" ] ;
+
+a-tag: ( -- str ) [ probe ] ;

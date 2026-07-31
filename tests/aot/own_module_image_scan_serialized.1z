@@ -1,0 +1,17 @@
+\ Both modules are image-serialized via `use`, so their colliding `probe`
+\ bodies compile per-module and their image word rows carry per-module word
+\ ids. The entry imports only the non-colliding tags, leaving `probe`
+\ unbound in the entry frame, so the module-less stored quotation's bare
+\ `probe` falls through to the residual module-cache scan. The scan's
+\ deterministic winner, the lexicographically smallest module name, module
+\ A's, must print its own body. The tag lines pin per-module identity for
+\ the compiled bodies: each tag must answer with its own module's `probe`.
+
+use { a-tag: } "fixtures/own_module_image_scan_serialized_a.1z" ;
+use { b-tag: } "fixtures/own_module_image_scan_serialized_b.1z" ;
+
+e-quot: ( -- q ) [ [ inner: [ probe ] ; inner ] ] ;
+
+a-tag print-line
+b-tag print-line
+e-quot call print-line

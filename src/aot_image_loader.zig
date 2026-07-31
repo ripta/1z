@@ -763,6 +763,12 @@ const HostedPopulateEnv = struct {
         _ = self.ctx.next_combinator_id.fetchMax(combinator_id + 1, .monotonic);
         return cc;
     }
+
+    pub fn lookupInternedStructDescriptor(self: HostedPopulateEnv, desc: *const value_mod.TypeDescriptor) ?*value_mod.TypeDescriptor {
+        std.debug.assert(desc.kind == .struct_);
+        const data = desc.kind.struct_;
+        return self.ctx.lookupStructDescriptor(data.fields, data.field_types, desc.mutable);
+    }
 };
 
 const HostedPopulate = populate_core.SlotPopulateCore(HostedPopulateEnv);
@@ -1919,6 +1925,147 @@ test "loadIntoContext: struct TypeDescriptor with field-types resolves cross-ref
     try testing.expectEqual(@as(usize, 1), b_kind.struct_.field_types.len);
     try testing.expect(b_kind.struct_.field_types[0].? == .type);
     try testing.expectEqual(@as(*const value_mod.TypeValue, tv_a), b_kind.struct_.field_types[0].?.type);
+}
+
+test "loadIntoContext: same-shaped struct descriptors intern to one pointer" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const field_names = [_][*]const u8{ "src".ptr, "pos".ptr };
+    const field_lens = [_]u32{ 3, 3 };
+
+    var a_desc = zeroDescriptor();
+    a_desc.kind = 2; // struct_
+    a_desc.mutable = 1;
+    a_desc.field_names = &field_names;
+    a_desc.field_name_lens = &field_lens;
+    a_desc.field_count = 2;
+
+    const b_desc = a_desc;
+
+    // Same fields but immutable: a different shape, so it must stay distinct.
+    var c_desc = a_desc;
+    c_desc.mutable = 0;
+
+    const descriptors = [_]TypeDescriptor{ a_desc, b_desc, c_desc };
+    const a_name = "a-state";
+    const b_name = "b-state";
+    const c_name = "c-state";
+    const typevalues = [_]TypeValueRow{
+        .{ .name = a_name.ptr, .name_len = a_name.len, .slot = 1, .descriptor = &descriptors[0], .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = b_name.ptr, .name_len = b_name.len, .slot = 2, .descriptor = &descriptors[1], .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = c_name.ptr, .name_len = c_name.len, .slot = 3, .descriptor = &descriptors[2], .member_type_slots = null, .member_type_count = 0 },
+    };
+
+    var slot_storage: [4]?*const value_mod.TypeValue = .{ null, null, null, null };
+    var header = emptyHeader();
+    header.typevalue_slot_count = 4;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+
+    try loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null);
+
+    const tv_a = slot_storage[1] orelse return error.TestUnexpectedResult;
+    const tv_b = slot_storage[2] orelse return error.TestUnexpectedResult;
+    const tv_c = slot_storage[3] orelse return error.TestUnexpectedResult;
+
+    // The two same-shaped structs share one descriptor, so pointer-identity checks treat them as
+    // one type, matching the interpreter's structural interning.
+    try testing.expect(tv_a != tv_b);
+    try testing.expectEqual(tv_a.descriptor.?, tv_b.descriptor.?);
+    try testing.expect(tv_a.descriptor.? != tv_c.descriptor.?);
+}
+
+test "loadIntoContext: possibly-erased field constraints block struct descriptor interning" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const field_names = [_][*]const u8{"x".ptr};
+    const field_lens = [_]u32{1};
+    // Slot 0 is the "no annotation" sentinel. The emitter also writes it for a protocol- or
+    // combinator-bound field, so a decoded null element is ambiguous and must not intern.
+    const field_slots = [_]u32{0};
+
+    var a_desc = zeroDescriptor();
+    a_desc.kind = 2; // struct_
+    a_desc.field_names = &field_names;
+    a_desc.field_name_lens = &field_lens;
+    a_desc.field_count = 1;
+    a_desc.field_type_slots = &field_slots;
+    a_desc.field_type_count = 1;
+
+    const b_desc = a_desc;
+
+    const descriptors = [_]TypeDescriptor{ a_desc, b_desc };
+    const a_name = "a-state";
+    const b_name = "b-state";
+    const typevalues = [_]TypeValueRow{
+        .{ .name = a_name.ptr, .name_len = a_name.len, .slot = 1, .descriptor = &descriptors[0], .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = b_name.ptr, .name_len = b_name.len, .slot = 2, .descriptor = &descriptors[1], .member_type_slots = null, .member_type_count = 0 },
+    };
+
+    var slot_storage: [3]?*const value_mod.TypeValue = .{ null, null, null };
+    var header = emptyHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+
+    try loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null);
+
+    const tv_a = slot_storage[1] orelse return error.TestUnexpectedResult;
+    const tv_b = slot_storage[2] orelse return error.TestUnexpectedResult;
+    try testing.expect(tv_a.descriptor.? != tv_b.descriptor.?);
+}
+
+test "loadIntoContext: struct descriptor interning is shared with the context registry" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const fields = [_][]const u8{ "src", "pos" };
+    const no_ft = [_]?value_mod.ConstraintCombinator.Element{};
+    const pre_interned = try ctx.getOrCreateStructDescriptor(&fields, &no_ft, true);
+
+    const field_names = [_][*]const u8{ "src".ptr, "pos".ptr };
+    const field_lens = [_]u32{ 3, 3 };
+
+    var a_desc = zeroDescriptor();
+    a_desc.kind = 2; // struct_
+    a_desc.mutable = 1;
+    a_desc.field_names = &field_names;
+    a_desc.field_name_lens = &field_lens;
+    a_desc.field_count = 2;
+
+    var c_desc = a_desc;
+    c_desc.mutable = 0;
+
+    const descriptors = [_]TypeDescriptor{ a_desc, c_desc };
+    const a_name = "a-state";
+    const c_name = "c-state";
+    const typevalues = [_]TypeValueRow{
+        .{ .name = a_name.ptr, .name_len = a_name.len, .slot = 1, .descriptor = &descriptors[0], .member_type_slots = null, .member_type_count = 0 },
+        .{ .name = c_name.ptr, .name_len = c_name.len, .slot = 2, .descriptor = &descriptors[1], .member_type_slots = null, .member_type_count = 0 },
+    };
+
+    var slot_storage: [3]?*const value_mod.TypeValue = .{ null, null, null };
+    var header = emptyHeader();
+    header.typevalue_slot_count = 3;
+    header.typevalue_count = typevalues.len;
+    header.typevalues = &typevalues;
+    header.typedescriptors = &descriptors;
+
+    try loadIntoContext(&ctx, &header, .{ .typevalues = &slot_storage }, null);
+
+    // A loaded row whose shape the context already interned adopts the existing descriptor.
+    const tv_a = slot_storage[1] orelse return error.TestUnexpectedResult;
+    try testing.expectEqual(@as(*const value_mod.TypeDescriptor, pre_interned), tv_a.descriptor.?);
+
+    // A loaded row with a new shape is not seeded into the registry; see the no-seeding rationale
+    // on the interning pass in `aot_image_populate_core.zig`.
+    const tv_c = slot_storage[2] orelse return error.TestUnexpectedResult;
+    const later = try ctx.getOrCreateStructDescriptor(&fields, &no_ft, false);
+    try testing.expect(tv_c.descriptor.? != later);
 }
 
 test "loadIntoContext: type_parameter descriptor round-trips position and reconstructs struct type_params" {

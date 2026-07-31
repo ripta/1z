@@ -1,0 +1,13 @@
+\ Two modules each define a same-shaped struct, so their generated `src>>`
+\ accessors share one dispatch key and the table keeps only the later
+\ registration. That collapse is benign because struct descriptors are
+\ interned structurally: the surviving method's type guard compares
+\ descriptors, which the two structs share. The image loader must restore
+\ that interning, or the devirtualized accessor rejects the other module's
+\ instances at runtime.
+
+use { a-read: } "fixtures/struct_accessor_collision_a.1z" ;
+use { b-read: } "fixtures/struct_accessor_collision_b.1z" ;
+
+a-read print-line
+b-read print-line
