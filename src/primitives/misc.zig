@@ -1652,6 +1652,31 @@ test "importWord: a generic dispatch-merge drops the compiled id" {
     try std.testing.expectEqual(@as(?u32, null), def.word_id);
 }
 
+test ">module carries a quotation's attached effect into the word declaration" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.quotationAllocator();
+    const effect = try alloc.create(stack_effect_mod.StackEffect);
+    effect.* = try helpers.makeSimpleEffect(alloc, "a -- r");
+
+    const hash = try value_mod.HashTable.create(alloc);
+    try hash.map.put(alloc, "w", .{ .quotation = .{ .instructions = &.{}, .effect = effect } });
+    try hash.map.put(alloc, "bare", .{ .quotation = .{ .instructions = &.{} } });
+
+    try ctx.stack.push(.{ .string = "m" });
+    try ctx.stack.push(.{ .hash = hash });
+    try nativeToModule(&ctx);
+
+    const module_val = try ctx.stack.pop();
+    try std.testing.expect(module_val == .module);
+    const with_effect = module_val.module.words.get("w") orelse return error.TestExpectedWord;
+    try std.testing.expectEqual(@as(usize, 1), with_effect.stack_effect.?.inputs.len);
+    try std.testing.expectEqual(@as(usize, 1), with_effect.stack_effect.?.outputs.len);
+    const without = module_val.module.words.get("bare") orelse return error.TestExpectedWord;
+    try std.testing.expect(without.stack_effect == null);
+}
+
 test "resolveLoadPath falls back to embedded for top-level name" {
     if (!build_options.embed_stdlib) return error.SkipZigTest;
 

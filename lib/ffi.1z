@@ -158,12 +158,95 @@ bytes-alloc-ptr: ( n -- byte-array ptr ) [ bytes-alloc dup bytes>ffi-ptr+len dro
   make-ffi-sig
 ] ;
 
+\\ True when the token is one of the strings in set, keeping the token.
+(ffi-token-in?): ( token set -- token ? ) [ over [ = ] curry #any ] ;
+
+\\ 1z type name a non-out parameter token marshals from, or f when no single
+\\ 1z type matches. Every integer width maps to fixnum, because argument
+\\ marshalling accepts exactly a fixnum for all of them. Pointers and
+\\ struct-by-value stay untyped: a named ptr resource reports its FFI pointer
+\\ name as its type, so no concrete annotation would hold.
+(ffi-input-type): ( token -- typename/f ) [
+  dup "inout-" #starts-with? [ 6 #drop ] when
+  { "i8" "i16" "i32" "i64" "u8" "u16" "u32" "u64" "usize" "isize" } (ffi-token-in?) [ drop "fixnum" ] [
+    { "f32" "f64" } (ffi-token-in?) [ drop "float" ] [
+      dup "bool" = [ drop "boolean" ] [
+        { "cstring" "cstring-retained" } (ffi-token-in?) [ drop "string" ] [ drop f ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\\ 1z type name an out-capable token or return-type token pushes, or f when no
+\\ single 1z type matches. u64 and usize stay untyped, because a large value
+\\ promotes to bignum on the way out.
+(ffi-output-type): ( token -- typename/f ) [
+  dup "out-" #starts-with? [ 4 #drop ] when
+  dup "inout-" #starts-with? [ 6 #drop ] when
+  { "i8" "i16" "i32" "i64" "u8" "u16" "u32" "isize" } (ffi-token-in?) [ drop "fixnum" ] [
+    { "f32" "f64" } (ffi-token-in?) [ drop "float" ] [
+      dup "bool" = [ drop "boolean" ] [
+        { "cstring" "cstring-retained" "cstring-owned" } (ffi-token-in?) [ drop "string" ] [ drop f ] if
+      ] if
+    ] if
+  ] if
+] ;
+
+\\ One effect-source fragment: "name" for an untyped parameter, "name: type"
+\\ for an annotated one.
+(effect-frag): ( name typename/f -- frag ) [
+  dup f = [ drop ] [ ": " swap #append #append ] if
+] ;
+
+\ Append an input fragment for a non-out parameter, named by C position.
+(ffi-input-frag): ( acc token idx -- acc ) [
+  over "out-" #starts-with? [ 2drop ] [
+    1 + >string "a" swap #append  \ acc token name
+    swap (ffi-input-type)         \ acc name typename/f
+    (effect-frag)                 \ acc frag
+    swap " " #append swap #append
+  ] if
+] ;
+
+\ Append an output fragment for an out or inout parameter, named by C position.
+(ffi-output-frag): ( acc token idx -- acc ) [
+  over dup "out-" #starts-with? swap "inout-" #starts-with? or [
+    1 + >string "o" swap #append  \ acc token name
+    swap (ffi-output-type)        \ acc name typename/f
+    (effect-frag)                 \ acc frag
+    swap " " #append swap #append
+  ] [ 2drop ] if
+] ;
+
+\\ Derive a wrapper's stack effect from its ffi-sig: one input per non-out
+\\ parameter, then out and inout parameters followed by the return value as
+\\ outputs, mirroring what ffi-call consumes and pushes.
+(sig>effect): ( sig -- stack-effect ) [
+  dup params>>                      \ sig params
+  "" swap                           \ sig acc params
+  [ (ffi-input-frag) ] #each-index  \ sig acc
+  " --" #append
+  over params>>                      \ sig acc params
+  [ (ffi-output-frag) ] #each-index  \ sig acc
+  swap return-type>>                 \ acc ret
+  dup "void" = [ drop ] [
+    (ffi-output-type) "r" swap (effect-frag)
+    swap " " #append swap #append
+  ] if
+  native.parse-stack-effect
+] ;
+
 \\ Build one FFI binding entry in the accumulator mutable map.
 \\ Looks up the C symbol in the dylib, binds the signature, curries
-\\ into a self-contained [ ffi-call ] quotation, and stores it by name.
+\\ into a self-contained [ ffi-call ] quotation with the effect derived
+\\ from the signature attached, and stores it by name.
 (build-ffi-entry): ( mmap dylib word-name c-symbol sig -- mmap dylib ) [
-  3 pick-n -rot> bound-symbol
-  [ ffi-call ] curry
+  dup (sig>effect)  \ mmap dylib word-name c-symbol sig effect
+  [
+    3 pick-n -rot> bound-symbol
+    [ ffi-call ] curry
+  ] dip                       \ mmap dylib word-name wrapper effect
+  native.attach-stack-effect  \ mmap dylib word-name wrapper'
   <rot- [ @set! ] dip
 ] ;
 

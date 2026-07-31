@@ -9,6 +9,31 @@ PASS: ffi-def toy_strlen(hello)
 Stack: [ ]
 PASS: ffi-def toy_greeting(world)
 Stack: [ ]
+=== ffi-def{ derived stack effects ===
+Stack: [ ]
+Stack: [ M{ eff-add: [ <resource:ffi-fn> ffi-call ] eff-divmod: [ <resource:ffi-fn> ffi-call ] eff-greet: [ <resource:ffi-fn> ffi-call ] eff-open: [ <resource:ffi-fn> ffi-call ] } ]
+Stack: [ M{ eff-add: [ <resource:ffi-fn> ffi-call ] eff-divmod: [ <resource:ffi-fn> ffi-call ] eff-greet: [ <resource:ffi-fn> ffi-call ] eff-open: [ <resource:ffi-fn> ffi-call ] } "( a1: fixnum a2: fixnum -- r: fixnum )" ]
+PASS: derived effect for i32 i32 -> i32
+Stack: [ M{ eff-add: [ <resource:ffi-fn> ffi-call ] eff-divmod: [ <resource:ffi-fn> ffi-call ] eff-greet: [ <resource:ffi-fn> ffi-call ] eff-open: [ <resource:ffi-fn> ffi-call ] } ]
+Stack: [ M{ eff-add: [ <resource:ffi-fn> ffi-call ] eff-divmod: [ <resource:ffi-fn> ffi-call ] eff-greet: [ <resource:ffi-fn> ffi-call ] eff-open: [ <resource:ffi-fn> ffi-call ] } "( a1: string -- r: string )" ]
+PASS: derived effect for cstring -> cstring-owned
+Stack: [ M{ eff-add: [ <resource:ffi-fn> ffi-call ] eff-divmod: [ <resource:ffi-fn> ffi-call ] eff-greet: [ <resource:ffi-fn> ffi-call ] eff-open: [ <resource:ffi-fn> ffi-call ] } ]
+Stack: [ M{ eff-add: [ <resource:ffi-fn> ffi-call ] eff-divmod: [ <resource:ffi-fn> ffi-call ] eff-greet: [ <resource:ffi-fn> ffi-call ] eff-open: [ <resource:ffi-fn> ffi-call ] } "( a1: fixnum a2: fixnum -- o3: fixnum o4: fixnum )" ]
+PASS: derived effect includes out-params as outputs
+Stack: [ M{ eff-add: [ <resource:ffi-fn> ffi-call ] eff-divmod: [ <resource:ffi-fn> ffi-call ] eff-greet: [ <resource:ffi-fn> ffi-call ] eff-open: [ <resource:ffi-fn> ffi-call ] } ]
+Stack: [ M{ eff-add: [ <resource:ffi-fn> ffi-call ] eff-divmod: [ <resource:ffi-fn> ffi-call ] eff-greet: [ <resource:ffi-fn> ffi-call ] eff-open: [ <resource:ffi-fn> ffi-call ] } "( -- r )" ]
+PASS: derived effect keeps a ptr return untyped
+Stack: [ M{ eff-add: [ <resource:ffi-fn> ffi-call ] eff-divmod: [ <resource:ffi-fn> ffi-call ] eff-greet: [ <resource:ffi-fn> ffi-call ] eff-open: [ <resource:ffi-fn> ffi-call ] } ]
+Stack: [ ]
+PASS: wrapper with attached effect still calls
+Stack: [ ]
+Stack: [ 3 2 ]
+PASS: wrapper out-param remainder
+Stack: [ 3 ]
+PASS: wrapper out-param quotient
+Stack: [ ]
+PASS: typed wrapper annotation rejects a wrong-typed argument
+Stack: [ ]
 === ffi-def{ resource lifecycle ===
 Stack: [ ]
 Stack: [ <resource:dylib> ]

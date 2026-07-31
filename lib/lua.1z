@@ -99,8 +99,10 @@ use "os/path" ;
   (push-closure): "lua_pushcclosure" ffi{ ptr ptr:ffi-callback i32 -> void }
 } call
 over "lua_close" ffi{ ptr -> void } bound-symbol [ ] curry
+"-- fn" native.parse-stack-effect native.attach-stack-effect
 "(lua-close-fn)" swap @set!
 over "onez_lua_error_hook" lib-symbol [ ] curry
+"-- fn" native.parse-stack-effect native.attach-stack-effect
 "(lua-error-hook)" swap @set!
 swap drop "lua-raw" swap >module reexport
 

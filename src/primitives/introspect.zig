@@ -20,6 +20,8 @@ const ProtocolDescriptor = value_mod.ProtocolDescriptor;
 const ConstraintCombinator = value_mod.ConstraintCombinator;
 
 const StackEffect = @import("../stack_effect.zig").StackEffect;
+const Tokenizer = @import("../tokenizer.zig").Tokenizer;
+const parser_mod = @import("../parser.zig");
 
 const types_mod = @import("types.zig");
 const Primitive = types_mod.Primitive;
@@ -1156,15 +1158,30 @@ fn nativeQuotationToEffect(ctx: *Context) anyerror!void {
 
 /// parse-stack-effect ( string -- stack-effect ) - Build a stack-effect value
 /// from an effect body string with no surrounding parens, e.g. "a b -- result".
-/// The runtime analog of the parse-time `(` word, which reads from the tokenizer
-/// instead of a string.
+/// The runtime analog of the parse-time `(` word, sharing its parser, so typed
+/// annotations (`n: fixnum`), nested quotation effects, and row variables all
+/// resolve exactly as they would in source.
 fn nativeParseStackEffect(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
     const raw = try helpers.popString(ctx);
-    // makeSimpleEffect aliases parameter names into `raw`, so the backing memory
-    // must outlive the popped string. Dupe into the quotation allocator.
-    const owned = try alloc.dupe(u8, raw);
-    const effect = try helpers.makeSimpleEffect(alloc, owned);
+    // The shared parser consumes tokens up to the matching `)`; the body string
+    // carries no parens, so close it here. Parameter names are duped onto
+    // `alloc` by the parser, so nothing references the wrapped string after
+    // parsing.
+    const wrapped = try std.fmt.allocPrint(alloc, "{s} )", .{raw});
+    var tokenizer = Tokenizer.init(wrapped);
+    ctx.parse_diagnostics = null;
+    const effect = parser_mod.parseStackEffect(alloc, &tokenizer, ctx, 0) catch |err| {
+        if (err == error.OutOfMemory) return error.OutOfMemory;
+        if (ctx.parse_diagnostics) |diag| {
+            if (diag.message) |msg| {
+                helpers.setErrorContext(ctx, "parse-stack-effect: {s}", .{msg});
+                return error.InvalidArgument;
+            }
+        }
+        helpers.setErrorContext(ctx, "parse-stack-effect: invalid stack effect '{s}'", .{raw});
+        return error.InvalidArgument;
+    };
     try ctx.stack.push(.{ .stack_effect = effect });
 }
 
@@ -1197,4 +1214,69 @@ fn nativeQuotationToOpcodes(ctx: *Context) anyerror!void {
     }
 
     try helpers.pushAdoptedArray(ctx, alloc, result);
+}
+
+const testing = std.testing;
+
+test "parse-stack-effect parses an unannotated effect body" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "a b -- r" });
+    try nativeParseStackEffect(&ctx);
+
+    const val = try ctx.stack.pop();
+    try testing.expect(val == .stack_effect);
+    try testing.expectEqual(@as(usize, 2), val.stack_effect.inputs.len);
+    try testing.expectEqual(@as(usize, 1), val.stack_effect.outputs.len);
+    try testing.expectEqualStrings("a", val.stack_effect.inputs[0].name);
+    try testing.expectEqualStrings("b", val.stack_effect.inputs[1].name);
+    try testing.expectEqualStrings("r", val.stack_effect.outputs[0].name);
+    try testing.expect(val.stack_effect.inputs[0].type_annotation == null);
+}
+
+test "parse-stack-effect resolves type annotations" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(.{ .string = "a: fixnum b -- r: string" });
+    try nativeParseStackEffect(&ctx);
+
+    const val = try ctx.stack.pop();
+    try testing.expect(val == .stack_effect);
+    try testing.expectEqual(@as(usize, 2), val.stack_effect.inputs.len);
+    try testing.expectEqual(@as(usize, 1), val.stack_effect.outputs.len);
+
+    const fixnum_tv = ctx.lookupBuiltinTypeValue("fixnum").?;
+    const string_tv = ctx.lookupBuiltinTypeValue("string").?;
+    try testing.expectEqualStrings("a", val.stack_effect.inputs[0].name);
+    try testing.expect(val.stack_effect.inputs[0].type_annotation.?.type == fixnum_tv);
+    try testing.expect(val.stack_effect.inputs[1].type_annotation == null);
+    try testing.expectEqualStrings("r", val.stack_effect.outputs[0].name);
+    try testing.expect(val.stack_effect.outputs[0].type_annotation.?.type == string_tv);
+}
+
+test "parse-stack-effect keeps row variables" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "..a x -- ..a" });
+    try nativeParseStackEffect(&ctx);
+
+    const val = try ctx.stack.pop();
+    try testing.expect(val == .stack_effect);
+    try testing.expectEqual(@as(usize, 2), val.stack_effect.inputs.len);
+    try testing.expect(val.stack_effect.inputs[0].is_row_variable);
+    try testing.expect(!val.stack_effect.inputs[1].is_row_variable);
+    try testing.expect(val.stack_effect.outputs[0].is_row_variable);
+}
+
+test "parse-stack-effect rejects an unknown annotation type" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    try ctx.loadPrelude(null);
+
+    try ctx.stack.push(.{ .string = "a: no-such-type -- r" });
+    try testing.expectError(error.InvalidArgument, nativeParseStackEffect(&ctx));
 }

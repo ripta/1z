@@ -170,4 +170,5 @@ pub const extracted_registry_entries = structs.registry_entries ++
     misc.registry_entries ++
     packed_arrays.registry_entries ++
     simd_vector.registry_entries ++
-    pragmas.registry_entries;
+    pragmas.registry_entries ++
+    functional.registry_entries;

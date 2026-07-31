@@ -28,9 +28,9 @@ use "ffi" ;
   (db-handle):     "sqlite3_db_handle" ffi{ ptr -> ptr }
 } call "sqlite-raw" swap >module reexport
 
-SQLITE_OK:   0 ;
-SQLITE_ROW:  100 ;
-SQLITE_DONE: 101 ;
+SQLITE_OK:   ( -- fixnum ) 0 ;
+SQLITE_ROW:  ( -- fixnum ) 100 ;
+SQLITE_DONE: ( -- fixnum ) 101 ;
 
 \ Handle types
 
@@ -41,7 +41,7 @@ db-handle: virtual{ resource } ;
 stmt-handle: virtual{ resource } ;
 
 \ Error handling
-ESqliteError: [ sqlite-error: ] ;
+ESqliteError: ( -- sym ) [ sqlite-error: ] ;
 
 \\ Check that a return code is SQLITE_OK; throw ESqliteError with errmsg otherwise.
 (check-ok): ( rc db -- ) [

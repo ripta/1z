@@ -1,5 +1,6 @@
 use "testing" ;
 use "ffi" ;
+use "runtime/effect" ;
 
 \\ Helper to get the shared library extension for the host OS.
 toy-lib-ext: ( -- ext ) [
@@ -23,6 +24,36 @@ toy-lib-path lib-open ffi-def{
 3 4 toy-add 7 "ffi-def toy_add(3, 4)" assert=
 "hello" toy-strlen 5 "ffi-def toy_strlen(hello)" assert=
 "world" toy-greeting "Hello, world!" "ffi-def toy_greeting(world)" assert=
+
+\ === Derived stack effects on generated wrappers ===
+"ffi-def{ derived stack effects" test-section
+
+toy-lib-path lib-open ffi-def{
+  eff-add:    "toy_add" ffi{ i32 i32 -> i32 }
+  eff-greet:  "toy_greeting" ffi{ cstring -> cstring-owned }
+  eff-divmod: "toy_divmod" ffi{ i32 i32 out-i32 out-i32 -> void }
+  eff-open:   "toy_open" ffi{ -> ptr:toy-counter }
+} call
+
+dup "eff-add" @get quotation-effect-get >string
+"( a1: fixnum a2: fixnum -- r: fixnum )" "derived effect for i32 i32 -> i32" assert=
+
+dup "eff-greet" @get quotation-effect-get >string
+"( a1: string -- r: string )" "derived effect for cstring -> cstring-owned" assert=
+
+dup "eff-divmod" @get quotation-effect-get >string
+"( a1: fixnum a2: fixnum -- o3: fixnum o4: fixnum )" "derived effect includes out-params as outputs" assert=
+
+dup "eff-open" @get quotation-effect-get >string
+"( -- r )" "derived effect keeps a ptr return untyped" assert=
+
+"toy-eff" swap >module import
+
+3 4 eff-add 7 "wrapper with attached effect still calls" assert=
+17 5 eff-divmod
+2 "wrapper out-param remainder" assert=
+3 "wrapper out-param quotient" assert=
+[ "x" 4 eff-add ] "typed wrapper annotation rejects a wrong-typed argument" assert-error
 
 \ === Resource lifecycle via ffi-def{ ===
 "ffi-def{ resource lifecycle" test-section

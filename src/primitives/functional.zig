@@ -16,6 +16,8 @@ const BenchmarkStats = benchmark_mod.BenchmarkStats;
 
 const helpers = @import("helpers.zig");
 const Primitive = @import("types.zig").Primitive;
+const RegistryEntry = @import("types.zig").RegistryEntry;
+const StackEffect = @import("../stack_effect.zig").StackEffect;
 const container_backing = @import("../container_backing.zig");
 
 const popQuotation = helpers.popQuotation;
@@ -25,6 +27,10 @@ pub const primitives = [_]Primitive{
     .{ .name = "curry", .stack_effect = "x quot -- quot'", .doc = "Partially apply a value to a quotation.", .func = nativeCurry },
     .{ .name = "compose", .stack_effect = "quot1 quot2 -- quot'", .doc = "Concatenate two quotations into one.", .func = nativeCompose },
     .{ .name = "(benchmark-n)", .stack_effect = "n quot -- hash", .doc = "Run quot n times in one timing window; return the raw timing hash.", .func = nativeBenchmarkNRaw },
+};
+
+pub const registry_entries = [_]RegistryEntry{
+    .{ .name = "attach-stack-effect", .func = nativeAttachStackEffect, .stack_effect = "quot stack-effect -- quot'" },
 };
 
 /// The callable instruction body of a quotation or closure, or null for a
@@ -286,6 +292,55 @@ pub fn nativeCompose(ctx: *Context) anyerror!void {
     }
 }
 
+/// attach-stack-effect ( quot stack-effect -- quot' )
+///
+/// The write direction of `quotation>effect`: returns the callable with the declared effect
+/// attached, sharing instructions, segments, and captured scope with the input.
+///
+/// Runtime-built quotations carry no effect, because `curry` and `compose` cannot know the
+/// new shape. A builder that does know it -- e.g. `ffi-def{` deriving one from an FFI
+/// signature -- attaches it here, so consumers like `>module` see a declared effect.
+fn nativeAttachStackEffect(ctx: *Context) anyerror!void {
+    const eff_val = try ctx.stack.pop();
+    const effect = switch (eff_val) {
+        .stack_effect => |e| e,
+        else => {
+            helpers.setTypeMismatchError(ctx, "stack-effect", eff_val);
+            container_backing.releaseValue(eff_val);
+            return error.TypeMismatch;
+        },
+    };
+
+    // Shallow copy, like `;` lifting a popped stack-effect into a word definition: the
+    // effect's slices are owned by the quotation allocator and stack-effect values are not
+    // refcounted, so the boxed copy shares them safely for the context's lifetime.
+    const alloc = ctx.quotationAllocator();
+    const eff_ptr = try alloc.create(StackEffect);
+    eff_ptr.* = effect;
+
+    const quot_val = try ctx.stack.pop();
+    switch (quot_val) {
+        .quotation => |q| {
+            try ctx.stack.push(.{ .quotation = .{
+                .instructions = q.instructions,
+                .effect = eff_ptr,
+                .code_ptr = q.code_ptr,
+            } });
+        },
+        .closure => |c| {
+            const cl = try alloc.create(Closure);
+            cl.* = c.*;
+            cl.effect = eff_ptr;
+            try ctx.stack.push(.{ .closure = cl });
+        },
+        else => {
+            helpers.setTypeMismatchError(ctx, "quotation", quot_val);
+            container_backing.releaseValue(quot_val);
+            return error.TypeMismatch;
+        },
+    }
+}
+
 /// Execute a quotation N times inside a single timing window.
 fn executeBenchmarkN(ctx: *Context, quot: Quotation, n: u64) !*HashTable {
     // Create temporary benchmark stats for this execution
@@ -423,6 +478,56 @@ test "compose over compiled bases produces a closure with both segments in order
     try std.testing.expectEqual(@as(usize, 2), cl.segments.len);
     try std.testing.expectEqual(code_a, cl.segments[0].base_code_ptr);
     try std.testing.expectEqual(code_b, cl.segments[1].base_code_ptr);
+}
+
+test "attach-stack-effect sets the effect on a plain quotation" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const dummy_code: *const anyopaque = @ptrFromInt(0x1000);
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{}, .code_ptr = dummy_code } });
+    try ctx.stack.push(.{ .stack_effect = try helpers.makeSimpleEffect(ctx.quotationAllocator(), "a b -- r") });
+    try nativeAttachStackEffect(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .quotation);
+    try std.testing.expectEqual(@as(usize, 2), result.quotation.effect.?.inputs.len);
+    try std.testing.expectEqual(@as(usize, 1), result.quotation.effect.?.outputs.len);
+    try std.testing.expectEqual(dummy_code, result.quotation.code_ptr);
+}
+
+test "attach-stack-effect sets the effect on a curried closure" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const dummy_code: *const anyopaque = @ptrFromInt(0x1000);
+    try ctx.stack.push(.{ .fixnum = 7 });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{}, .code_ptr = dummy_code } });
+    try nativeCurry(&ctx);
+
+    try ctx.stack.push(.{ .stack_effect = try helpers.makeSimpleEffect(ctx.quotationAllocator(), "x -- y") });
+    try nativeAttachStackEffect(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expect(result == .closure);
+    const cl = result.closure;
+    try std.testing.expectEqual(@as(usize, 1), cl.effect.?.inputs.len);
+    try std.testing.expectEqual(@as(usize, 1), cl.effect.?.outputs.len);
+    try std.testing.expectEqual(@as(usize, 1), cl.segments.len);
+    try std.testing.expectEqual(dummy_code, cl.segments[0].base_code_ptr);
+}
+
+test "attach-stack-effect type-mismatches a non-effect and a non-quotation" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{} } });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try std.testing.expectError(error.TypeMismatch, nativeAttachStackEffect(&ctx));
+
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .stack_effect = try helpers.makeSimpleEffect(ctx.quotationAllocator(), "-- r") });
+    try std.testing.expectError(error.TypeMismatch, nativeAttachStackEffect(&ctx));
 }
 
 test "nested curry prepends a capture to the first segment" {
