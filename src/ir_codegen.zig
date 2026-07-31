@@ -10087,7 +10087,7 @@ pub fn emitProgramC(
         \\extern void *onez_init_no_prelude(void);
         \\extern int onez_set_args(void *ctx, int argc, char **argv);
         \\extern int onez_set_source(void *ctx, const char *data, unsigned long len);
-        \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
+        \\extern int32_t onez_runtime_register_compiled(void *rt, int32_t (**table)(uintptr_t), const char **names, const char **modules, uint32_t size);
         \\extern int32_t onez_runtime_register_quotations(void *rt, int32_t (**table)(uintptr_t), uint32_t size);
         \\extern int32_t onez_runtime_run(void *rt, uint32_t entry_word_id);
         \\extern void onez_fire_exit_hooks(void *rt, int32_t code);
@@ -11074,6 +11074,30 @@ pub fn emitProgramC(
     }
     try out.appendSlice(allocator, "};\n\n");
 
+    // 5b'. Module segment table, parallel to the name table; NULL for a
+    // module-less word.
+    try out.appendSlice(allocator, "static const char *onez_word_modules[] = {\n");
+    for (0..table_size) |id| {
+        var found = false;
+        for (words) |w| {
+            if (w.word_id == id) {
+                if (w.module) |module| {
+                    try out.appendSlice(allocator, "    \"");
+                    try out.appendSlice(allocator, module);
+                    try out.appendSlice(allocator, "\",\n");
+                } else {
+                    try out.appendSlice(allocator, "    NULL,\n");
+                }
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            try out.appendSlice(allocator, "    NULL,\n");
+        }
+    }
+    try out.appendSlice(allocator, "};\n\n");
+
     // 5c. Quotation function table
     if (quotations.len > 0) {
         var max_q_id: u32 = 0;
@@ -11606,7 +11630,7 @@ pub fn emitProgramC(
     var size_buf: [20]u8 = undefined;
     const size_str = std.fmt.bufPrint(&size_buf, "{d}", .{table_size}) catch unreachable;
 
-    try out.appendSlice(allocator, "    onez_runtime_register_compiled(rt, onez_dispatch_table, onez_word_names, ");
+    try out.appendSlice(allocator, "    onez_runtime_register_compiled(rt, onez_dispatch_table, onez_word_names, onez_word_modules, ");
     try out.appendSlice(allocator, size_str);
     try out.appendSlice(allocator, ");\n");
 
@@ -13819,6 +13843,19 @@ fn lookupAnyModuleWord(ctx: *Context, word_name: []const u8) ?ModuleWordHit {
     return null;
 }
 
+/// Resolve the word a `JitEntry` names for interpretation.
+///
+/// An entry carrying a module resolves through that module's own scope first, so a bare name
+/// owned by several modules runs the entry's own body rather than an unrelated same-named word.
+/// The bare ladder stays the fallback for module-less entries and for a segment the cache cannot
+/// answer, such as a freeze-discriminated one.
+fn resolveEntryWord(ctx: *Context, entry: jit_dispatch_mod.JitEntry, word_name: []const u8) ?WordDefinition {
+    if (entry.module) |segment| {
+        if (ctx.lookupWordViaModuleSegment(segment, word_name)) |def| return def;
+    }
+    return ctx.lookupWord(word_name);
+}
+
 /// Run a module-private word resolved via `lookupAnyModuleWord`. Pushes
 /// the owning module's deps frame so any references inside the word's
 /// body (other module-private helpers, struct types, etc.) resolve.
@@ -13891,21 +13928,22 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
         return 1;
     };
     const word_name = entry.word_name;
+    const display_name = entry.displayName();
 
     if (bail_stats_mod.enabled) {
-        bail_stats_mod.global.recordInterpretedCall(word_id, word_name);
+        bail_stats_mod.global.recordInterpretedCall(word_id, display_name);
     }
 
-    ctx.pushCallFrame(word_name, ctx.current_source, @intCast(line_raw), 0);
+    ctx.pushCallFrame(display_name, ctx.current_source, @intCast(line_raw), 0);
 
     if (entry.native) |leaf| {
         if (leaf.stack_effect) |effect| {
             ctx.validateParameterEffects(effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
             ctx.validateTypeAnnotations(effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
         }
@@ -13919,11 +13957,11 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
             break :blk2 p;
         };
         const dispatched = dispatch_helpers.tryDispatchGenericById(ctx, leaf.dispatch_id, dispatch_pic) catch |err| {
-            ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+            ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
             return 2;
         };
         if (dispatched) {
-            ctx.wordSuccessCleanup(word_name, null) catch |err| {
+            ctx.wordSuccessCleanup(display_name, null) catch |err| {
                 ctx.jit_pending_error = err;
                 return 2;
             };
@@ -13934,33 +13972,33 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
         const result = leaf.fn_ptr(ctx);
 
         if (result) |_| {
-            ctx.consumePropagatedTailCall(word_name) catch |err| {
+            ctx.consumePropagatedTailCall(display_name) catch |err| {
                 ctx.jit_pending_error = err;
                 return 2;
             };
-            ctx.wordSuccessCleanup(word_name, if (leaf.stack_effect) |se| se.* else null) catch |err| {
+            ctx.wordSuccessCleanup(display_name, if (leaf.stack_effect) |se| se.* else null) catch |err| {
                 ctx.jit_pending_error = err;
                 return 2;
             };
             return 0;
         } else |err| {
-            ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+            ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
             return 2;
         }
     }
 
-    const looked_up_word = ctx.lookupWord(word_name);
+    const looked_up_word = resolveEntryWord(ctx, entry, word_name);
     const module_hit = if (looked_up_word == null) lookupAnyModuleWord(ctx, word_name) else null;
 
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
             ctx.validateParameterEffects(&effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
             if (!shouldSkipTypeAnnotationValidation(word)) {
                 ctx.validateTypeAnnotations(&effect) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                     return 2;
                 };
             }
@@ -13980,11 +14018,11 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
                 break :blk2 p;
             };
             const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
             if (dispatched) {
-                ctx.wordSuccessCleanup(word_name, null) catch |err| {
+                ctx.wordSuccessCleanup(display_name, null) catch |err| {
                     ctx.jit_pending_error = err;
                     return 2;
                 };
@@ -14003,7 +14041,7 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
             .compound, .literal => {
                 const stderr_file: std.fs.File = .stderr();
                 stderr_file.writeAll("Fatal: jitNativeWordCall invoked for non-native word '") catch {};
-                stderr_file.writeAll(word_name) catch {};
+                stderr_file.writeAll(display_name) catch {};
                 stderr_file.writeAll("'\n") catch {};
                 ctx.jit_pending_error = error.InternalError;
                 return 2;
@@ -14016,18 +14054,18 @@ export fn jitNativeWordCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize)
     };
 
     if (result) |_| {
-        ctx.consumePropagatedTailCall(word_name) catch |err| {
+        ctx.consumePropagatedTailCall(display_name) catch |err| {
             ctx.jit_pending_error = err;
             return 2;
         };
         const cleanup_effect = if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null;
-        ctx.wordSuccessCleanup(word_name, cleanup_effect) catch |err| {
+        ctx.wordSuccessCleanup(display_name, cleanup_effect) catch |err| {
             ctx.jit_pending_error = err;
             return 2;
         };
         return 0;
     } else |err| {
-        ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+        ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
         return 2;
     }
 }
@@ -14044,31 +14082,32 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
         return 1;
     };
     const word_name = entry.word_name;
+    const display_name = entry.displayName();
     if (!ctx.allow_interpreted_fallback) {
         const stderr_file: std.fs.File = .stderr();
         stderr_file.writeAll("Fatal: word '") catch {};
-        stderr_file.writeAll(word_name) catch {};
+        stderr_file.writeAll(display_name) catch {};
         stderr_file.writeAll("' requires interpreter fallback; rebuild with --interpreter-fallback=true\n") catch {};
         ctx.jit_pending_error = error.InterpreterFallbackDisabled;
         return 2;
     }
     if (bail_stats_mod.enabled) {
-        bail_stats_mod.global.recordInterpretedCall(word_id, word_name);
+        bail_stats_mod.global.recordInterpretedCall(word_id, display_name);
     }
 
-    ctx.pushCallFrame(word_name, ctx.current_source, @intCast(line_raw), 0);
-    const looked_up_word = ctx.lookupWord(word_name);
+    ctx.pushCallFrame(display_name, ctx.current_source, @intCast(line_raw), 0);
+    const looked_up_word = resolveEntryWord(ctx, entry, word_name);
     const module_hit = if (looked_up_word == null) lookupAnyModuleWord(ctx, word_name) else null;
 
     const result = if (looked_up_word) |word| blk: {
         if (word.stack_effect) |effect| {
             ctx.validateParameterEffects(&effect) catch |err| {
-                ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                 return 2;
             };
             if (!shouldSkipTypeAnnotationValidation(word)) {
                 ctx.validateTypeAnnotations(&effect) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                     return 2;
                 };
             }
@@ -14089,11 +14128,11 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                     break :blk2 p;
                 };
                 const dispatched = dispatch_helpers.tryDispatchGenericWithPic(ctx, word_name, dispatch_pic) catch |err| {
-                    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
                     return 2;
                 };
                 if (dispatched) {
-                    ctx.wordSuccessCleanup(word_name, null) catch |err| {
+                    ctx.wordSuccessCleanup(display_name, null) catch |err| {
                         ctx.jit_pending_error = err;
                         return 2;
                     };
@@ -14101,7 +14140,7 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
                 }
                 if (word.action.compound.len == 0) {
                     ctx.setGenericDispatchErrorDetails(word_name, word.stack_effect);
-                    ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, error.TypeError);
+                    ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, error.TypeError);
                     return 2;
                 }
             }
@@ -14142,18 +14181,18 @@ export fn jitInterpretedCall(ctx_raw: usize, word_id_raw: usize, line_raw: usize
     };
 
     if (result) |_| {
-        ctx.consumePropagatedTailCall(word_name) catch |err| {
+        ctx.consumePropagatedTailCall(display_name) catch |err| {
             ctx.jit_pending_error = err;
             return 2;
         };
         const cleanup_effect = if (looked_up_word) |word| word.stack_effect else if (module_hit) |hit| hit.word.stack_effect else null;
-        ctx.wordSuccessCleanup(word_name, cleanup_effect) catch |err| {
+        ctx.wordSuccessCleanup(display_name, cleanup_effect) catch |err| {
             ctx.jit_pending_error = err;
             return 2;
         };
         return 0;
     } else |err| {
-        ctx.jit_pending_error = ctx.wordErrorCleanup(word_name, err);
+        ctx.jit_pending_error = ctx.wordErrorCleanup(display_name, err);
         return 2;
     }
 }
@@ -14193,7 +14232,7 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
         return .bail;
     };
     var code_ptr = entry.code_ptr orelse return .bail;
-    if (ctx.lookupWord(entry.word_name)) |word| {
+    if (resolveEntryWord(ctx, entry, entry.word_name)) |word| {
         ctx.jit_trace_source = word.source_file orelse ctx.current_source;
     } else {
         ctx.jit_trace_source = ctx.current_source;
@@ -14234,7 +14273,7 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
             ctx.stack.items.items.len = saved_sp;
             return .bail;
         };
-        if (ctx.lookupWord(target_entry.word_name)) |word| {
+        if (resolveEntryWord(ctx, target_entry, target_entry.word_name)) |word| {
             ctx.jit_trace_source = word.source_file orelse ctx.current_source;
         } else {
             ctx.jit_trace_source = ctx.current_source;
@@ -14250,7 +14289,7 @@ pub fn executeCompiled(ctx: *Context, word_id: u32) ExecResult {
     if (result == .bail) {
         ctx.clearPendingSyntheticErrorFrames();
         if (bail_stats_mod.enabled) {
-            const entry_name = if (ctx.jit_dispatch.get(word_id)) |e| e.word_name else "?";
+            const entry_name = if (ctx.jit_dispatch.get(word_id)) |e| e.displayName() else "?";
             bail_stats_mod.global.recordBail(word_id, entry_name);
         }
         ctx.stack.items.items.len = saved_sp;
@@ -14385,6 +14424,85 @@ test "jitNativeWordCall: unrecognized word_id with no cached native leaf returns
     const word_id = try ctx.jit_dispatch.assignId("some-compound-word");
     const rc = jitNativeWordCall(@intFromPtr(&ctx), word_id, 1);
     try testing.expectEqual(@as(i32, 1), rc);
+}
+
+test "jitInterpretedCall: entry module resolves that module's word, not the cache-scan winner" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const zeta_body = makeInstructions(.{@as(i64, 11)});
+    const alpha_body = makeInstructions(.{@as(i64, 22)});
+
+    const arena_alloc = ctx.arena.allocator();
+    const zeta = try arena_alloc.create(value_mod.Module);
+    zeta.* = .{ .name = "zeta-mod", .words = .{} };
+    try zeta.words.put(arena_alloc, "probe", .{
+        .source_module = zeta,
+        .action = .{ .compound = &zeta_body },
+    });
+
+    const alpha = try arena_alloc.create(value_mod.Module);
+    alpha.* = .{ .name = "alpha-mod", .words = .{} };
+    try alpha.words.put(arena_alloc, "probe", .{
+        .source_module = alpha,
+        .action = .{ .compound = &alpha_body },
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "zeta-mod"),
+        .{ .module = zeta },
+    );
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "alpha-mod"),
+        .{ .module = alpha },
+    );
+
+    const word_id = try ctx.jit_dispatch.assignId("probe");
+    ctx.jit_dispatch.getMut(word_id).?.module = "zeta-mod";
+
+    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 1);
+    try testing.expectEqual(@as(i32, 0), rc);
+
+    const result = try ctx.stack.pop();
+    try testing.expectEqual(@as(i64, 11), result.fixnum);
+}
+
+test "jitInterpretedCall: the qualified display name reaches the call frame" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const probe_fn = struct {
+        fn f(fn_ctx: *Context) anyerror!void {
+            const frame = fn_ctx.call_stack.items[fn_ctx.call_stack.items.len - 1];
+            try testing.expectEqualStrings("zeta-mod/probe", frame.word_name);
+        }
+    }.f;
+
+    const arena_alloc = ctx.arena.allocator();
+    const zeta = try arena_alloc.create(value_mod.Module);
+    zeta.* = .{ .name = "zeta-mod", .words = .{} };
+    try zeta.words.put(arena_alloc, "probe", .{
+        .source_module = zeta,
+        .action = .{ .native = probe_fn },
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "zeta-mod"),
+        .{ .module = zeta },
+    );
+
+    const word_id = try ctx.jit_dispatch.assignId("probe");
+    const entry = ctx.jit_dispatch.getMut(word_id).?;
+    entry.module = "zeta-mod";
+    entry.qualified_name = try testing.allocator.dupe(u8, "zeta-mod/probe");
+
+    const rc = jitInterpretedCall(@intFromPtr(&ctx), word_id, 1);
+    try testing.expectEqual(@as(i32, 0), rc);
 }
 
 /// Build a flush plan for `stack[0...sp]`, simulate it over an integer slot array where each slot
@@ -14888,6 +15006,41 @@ test "emitProgramC: two modules' same-named words get their own functions and ca
     // And the call site reaches module A's function, not whichever won the bare name.
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_moda_Dprobe(d_1)") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_modb_Dprobe(d_1)") == null);
+
+    // The registration tables carry the bare name and the module as separate
+    // parallel arrays, both `probe` rows keeping the bare name.
+    try testing.expect(std.mem.indexOf(u8, source,
+        \\static const char *onez_word_names[] = {
+        \\    "probe",
+        \\    "probe",
+        \\    "a-probe",
+        \\};
+    ) != null);
+    try testing.expect(std.mem.indexOf(u8, source,
+        \\static const char *onez_word_modules[] = {
+        \\    "moda",
+        \\    "modb",
+        \\    "moda",
+        \\};
+    ) != null);
+}
+
+test "emitProgramC: a module-less word's module row is NULL" {
+    const body_instrs = makeInstructions(.{@as(i64, 1)});
+
+    const words = [_]AotWordDesc{
+        .{ .name = "top-word", .instructions = &body_instrs, .input_count = 0, .output_count = 1, .word_id = 0 },
+    };
+
+    var diag: CodegenDiagnostics = .{};
+    const source = try emitProgramC(&words, &.{}, 0, 0, &.{}, .auto, false, test_aot_metadata, &diag, null, false, &.{}, &.{}, &.{}, testing.allocator);
+    defer testing.allocator.free(source);
+
+    try testing.expect(std.mem.indexOf(u8, source,
+        \\static const char *onez_word_modules[] = {
+        \\    NULL,
+        \\};
+    ) != null);
 }
 
 test "emitProgramC: generated word forward declaration carries qualified asm-name" {
@@ -17451,9 +17604,12 @@ test "emitProgramC generates complete C source" {
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_double") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_add3") != null);
 
-    // Dispatch table
+    // Dispatch table and the parallel registration tables
     try testing.expect(std.mem.indexOf(u8, source, "onez_dispatch_table") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_word_fn_t") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_word_names") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_word_modules") != null);
+    try testing.expect(std.mem.indexOf(u8, source, "onez_runtime_register_compiled(rt, onez_dispatch_table, onez_word_names, onez_word_modules, ") != null);
 
     // Main entry point
     try testing.expect(std.mem.indexOf(u8, source, "int main(") != null);

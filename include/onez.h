@@ -884,9 +884,13 @@ int onez_stack_peek(onez_t ctx, size_t index, onez_value_t *out);
 /*
  * Register the AOT-compiled dispatch table with the runtime.
  * `table` is an array of function pointers (NULL for uncompiled slots).
+ * `names` is a parallel array of bare word names (NULL for empty slots).
+ * `modules` is a parallel array of module segments, NULL for a module-less
+ * word. A named module scopes the word's runtime resolution and qualifies
+ * its display name as `<module>/<word>`.
  * `size` is the number of entries.
  */
-int onez_runtime_register_compiled(onez_t rt, int32_t (**table)(uintptr_t), const char **names, uint32_t size);
+int onez_runtime_register_compiled(onez_t rt, int32_t (**table)(uintptr_t), const char **names, const char **modules, uint32_t size);
 
 /*
  * Execute the AOT entry word. Returns 0 on success, non-zero on error.

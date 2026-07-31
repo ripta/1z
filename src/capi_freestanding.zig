@@ -700,7 +700,10 @@ fn onez_load_runtime_image(
     return ONEZ_OK;
 }
 
-fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, names: [*]const ?[*:0]const u8, size: u32) callconv(.c) i32 {
+fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, names: [*]const ?[*:0]const u8, modules: [*]const ?[*:0]const u8, size: u32) callconv(.c) i32 {
+    // The module array has no freestanding consumer: there is no interpreter
+    // fallback, no call frames, and the native matcher keys on bare names.
+    _ = modules;
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const n: usize = @intCast(size);
 

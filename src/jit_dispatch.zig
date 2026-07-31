@@ -19,7 +19,14 @@ pub const NativeLeafData = struct {
     /// Pointer into the dictionary's heap-boxed `WordDefinition`, reached
     /// via its `WordSlot`. Valid for the process's lifetime, even across
     /// redefinition (a displaced definition box is retired, not freed).
+    ///
+    /// A module-resolved leaf instead points at `owned_stack_effect`, a heap
+    /// copy, because a pointer into a module's word map would not survive the
+    /// map rehashing.
     stack_effect: ?*const StackEffect,
+    /// Set when `stack_effect` is a heap copy owned by this leaf rather than
+    /// a borrow of the dictionary's box; `JitDispatchTable.deinit` frees it.
+    owned_stack_effect: ?*StackEffect = null,
     source_file: ?[]const u8,
 };
 
@@ -27,6 +34,15 @@ pub const JitEntry = struct {
     code_ptr: ?*const anyopaque,
     jit_buf: ?JitBuffer,
     word_name: []const u8,
+    /// The module segment of this word's compiled identity, or null for a
+    /// module-less word. Set only by AOT registration, borrowing the binary's
+    /// static `onez_word_modules[]` string. Resolution keys stay bare:
+    /// `word_name` is the lookup key, the module scopes it.
+    module: ?[]const u8 = null,
+    /// The composed `<module>/<word>` display name, or null when the word has
+    /// no module. Composed once at AOT registration and owned by the table;
+    /// `deinit` frees it.
+    qualified_name: ?[]const u8 = null,
     call_count: u32 = 0,
     uncompilable: bool = false,
     /// Peak stack slots used above the current stack pointer during
@@ -46,6 +62,11 @@ pub const JitEntry = struct {
     /// Present only when this word_id is a hosted-AOT native primitive.
     /// See `NativeLeafData`.
     native: ?*NativeLeafData = null,
+
+    /// The name traces, profiles, and error frames display for this word.
+    pub fn displayName(self: JitEntry) []const u8 {
+        return self.qualified_name orelse self.word_name;
+    }
 };
 
 pub const JitDispatchTable = struct {
@@ -72,7 +93,13 @@ pub const JitDispatchTable = struct {
                 self.allocator.destroy(dp);
             }
             if (entry.native) |n| {
+                if (n.owned_stack_effect) |se| {
+                    self.allocator.destroy(se);
+                }
                 self.allocator.destroy(n);
+            }
+            if (entry.qualified_name) |q| {
+                self.allocator.free(q);
             }
         }
         self.entries.deinit(self.allocator);
@@ -384,6 +411,29 @@ test "ensureCapacity is no-op when already large enough" {
 
     try table.ensureCapacity(2);
     try std.testing.expectEqual(@as(usize, 3), table.entries.items.len);
+}
+
+test "displayName prefers qualified_name and falls back to word_name" {
+    const bare = JitEntry{ .code_ptr = null, .jit_buf = null, .word_name = "encode" };
+    try std.testing.expectEqualStrings("encode", bare.displayName());
+
+    const qualified = JitEntry{
+        .code_ptr = null,
+        .jit_buf = null,
+        .word_name = "encode",
+        .module = "data/url",
+        .qualified_name = "data/url/encode",
+    };
+    try std.testing.expectEqualStrings("data/url/encode", qualified.displayName());
+}
+
+test "deinit frees an owned qualified_name" {
+    var table = JitDispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const id = try table.assignId("encode");
+    const q = try std.testing.allocator.dupe(u8, "data/url/encode");
+    table.getMut(id).?.qualified_name = q;
 }
 
 test "setCodePtr sets pointer without JitBuffer" {

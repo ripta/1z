@@ -2033,20 +2033,32 @@ export fn onez_use_module(ptr: ?*anyopaque, name: [*]const u8, name_len: usize) 
 const ir_codegen = @import("ir_codegen.zig");
 const JitContext = ir_codegen.JitContext;
 
-export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, names: [*]const ?[*:0]const u8, size: u32) i32 {
+export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, names: [*]const ?[*:0]const u8, modules: [*]const ?[*:0]const u8, size: u32) i32 {
     const handle = castHandle(ptr) orelse return ONEZ_ERR_NULL_HANDLE;
     const ctx = handle.ctx;
 
     ctx.jit_dispatch.ensureCapacity(size) catch return ONEZ_ERR_ALLOC;
     for (0..size) |i| {
+        const module_segment: ?[]const u8 = if (modules[i]) |m| std.mem.span(m) else null;
         if (names[i]) |name_ptr| {
             const entry = ctx.jit_dispatch.getMut(@intCast(i)) orelse continue;
             entry.word_name = std.mem.span(name_ptr);
+            if (entry.qualified_name) |old| ctx.jit_dispatch.allocator.free(old);
+            entry.qualified_name = null;
+            entry.module = module_segment;
+            if (module_segment) |segment| {
+                // Composing here keeps traces and profiles off a per-call composition.
+                entry.qualified_name = std.fmt.allocPrint(
+                    ctx.jit_dispatch.allocator,
+                    "{s}/{s}",
+                    .{ segment, entry.word_name },
+                ) catch null;
+            }
         }
         if (table[i]) |code_ptr| {
             ctx.jit_dispatch.setCodePtr(@intCast(i), code_ptr);
         } else if (names[i]) |name_ptr| {
-            registerNativeLeaf(ctx, @intCast(i), std.mem.span(name_ptr));
+            registerNativeLeaf(ctx, @intCast(i), std.mem.span(name_ptr), module_segment);
         }
     }
     return ONEZ_OK;
@@ -2063,7 +2075,15 @@ export fn onez_runtime_register_compiled(ptr: ?*anyopaque, table: [*]const ?*con
 /// `native.virtual-struct-wrap`, which lives only in a module's own word
 /// map and which `jitNativeWordCall` still resolves via its
 /// `ctx.lookupWord`/`lookupAnyModuleWord` slow path.
-fn registerNativeLeaf(ctx: *Context, word_id: u32, name: []const u8) void {
+///
+/// A word registered with a module segment never probes the global
+/// dictionary: its bare name could hit an unrelated same-named global
+/// native.
+fn registerNativeLeaf(ctx: *Context, word_id: u32, name: []const u8, module_segment: ?[]const u8) void {
+    if (module_segment) |segment| {
+        registerModuleNativeLeaf(ctx, word_id, name, segment);
+        return;
+    }
     const slot = ctx.dictionary.getSlot(name) orelse return;
     const def = dictionary_mod.loadSlot(slot);
     if (def.action != .native) return;
@@ -2074,10 +2094,53 @@ fn registerNativeLeaf(ctx: *Context, word_id: u32, name: []const u8) void {
         .stack_effect = if (def.stack_effect != null) &def.stack_effect.? else null,
         .source_file = def.source_file,
     };
+    attachNativeLeaf(ctx, word_id, leaf);
+}
+
+/// Bind a module-carrying word's native leaf from the cached module's own scope.
+///
+/// A no-op when the segment names no cached module -- a build embedding no image registers
+/// before anything populates the cache -- or when the module's word is not a native; the
+/// call-time slow path resolves those.
+///
+/// The stack effect is heap-copied rather than borrowed: a pointer into the module's word map
+/// would not survive the map rehashing.
+fn registerModuleNativeLeaf(ctx: *Context, word_id: u32, name: []const u8, segment: []const u8) void {
+    const module = ctx.cachedModuleBySegment(segment) orelse return;
+    const mod_word = module.words.get(name) orelse module.deps.get(name) orelse return;
+    if (mod_word.action != .native) return;
+
+    const owned_effect: ?*StackEffect = if (mod_word.stack_effect) |se| blk: {
+        const boxed = ctx.allocator.create(StackEffect) catch break :blk null;
+        boxed.* = se;
+        break :blk boxed;
+    } else null;
+
+    const leaf = ctx.allocator.create(jit_dispatch_mod.NativeLeafData) catch {
+        if (owned_effect) |se| ctx.allocator.destroy(se);
+        return;
+    };
+    leaf.* = .{
+        .fn_ptr = mod_word.action.native,
+        .dispatch_id = mod_word.dispatch_id,
+        .stack_effect = owned_effect,
+        .owned_stack_effect = owned_effect,
+        .source_file = mod_word.source_file,
+    };
+    attachNativeLeaf(ctx, word_id, leaf);
+}
+
+/// Store `leaf` on `word_id`'s entry. A replaced leaf, or `leaf` itself when the entry does not
+/// exist, is freed here along with its owned stack effect.
+fn attachNativeLeaf(ctx: *Context, word_id: u32, leaf: *jit_dispatch_mod.NativeLeafData) void {
     if (ctx.jit_dispatch.getMut(word_id)) |entry| {
-        if (entry.native) |old| ctx.allocator.destroy(old);
+        if (entry.native) |old| {
+            if (old.owned_stack_effect) |se| ctx.allocator.destroy(se);
+            ctx.allocator.destroy(old);
+        }
         entry.native = leaf;
     } else {
+        if (leaf.owned_stack_effect) |se| ctx.allocator.destroy(se);
         ctx.allocator.destroy(leaf);
     }
 }
@@ -2091,8 +2154,9 @@ test "registerNativeLeaf: populates JitEntry.native from the dictionary for a ge
     const ctx = handle.ctx;
 
     var names: [1]?[*:0]const u8 = .{"+"};
+    var modules: [1]?[*:0]const u8 = .{null};
     var table: [1]?*const anyopaque = .{null};
-    try std.testing.expectEqual(ONEZ_OK, onez_runtime_register_compiled(handle_ptr, &table, &names, 1));
+    try std.testing.expectEqual(ONEZ_OK, onez_runtime_register_compiled(handle_ptr, &table, &names, &modules, 1));
 
     const entry = ctx.jit_dispatch.get(0).?;
     const leaf = entry.native orelse return error.TestExpectedLeafData;
@@ -2118,11 +2182,106 @@ test "registerNativeLeaf: no-op for a compound (non-native) word" {
     });
 
     var names: [1]?[*:0]const u8 = .{"a-compound-word-for-testing"};
+    var modules: [1]?[*:0]const u8 = .{null};
     var table: [1]?*const anyopaque = .{null};
-    try std.testing.expectEqual(ONEZ_OK, onez_runtime_register_compiled(handle_ptr, &table, &names, 1));
+    try std.testing.expectEqual(ONEZ_OK, onez_runtime_register_compiled(handle_ptr, &table, &names, &modules, 1));
 
     const entry = ctx.jit_dispatch.get(0).?;
     try std.testing.expectEqual(null, entry.native);
+}
+
+test "register_compiled: a module segment sets entry.module and composes the qualified name" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const handle = castHandle(handle_ptr).?;
+    const ctx = handle.ctx;
+
+    var names: [2]?[*:0]const u8 = .{ "encode", "top-word" };
+    var modules: [2]?[*:0]const u8 = .{ "data/url", null };
+    var table: [2]?*const anyopaque = .{ null, null };
+    try std.testing.expectEqual(ONEZ_OK, onez_runtime_register_compiled(handle_ptr, &table, &names, &modules, 2));
+
+    const module_entry = ctx.jit_dispatch.get(0).?;
+    try std.testing.expectEqualStrings("encode", module_entry.word_name);
+    try std.testing.expectEqualStrings("data/url", module_entry.module.?);
+    try std.testing.expectEqualStrings("data/url/encode", module_entry.qualified_name.?);
+    try std.testing.expectEqualStrings("data/url/encode", module_entry.displayName());
+
+    const bare_entry = ctx.jit_dispatch.get(1).?;
+    try std.testing.expectEqual(@as(?[]const u8, null), bare_entry.module);
+    try std.testing.expectEqual(@as(?[]const u8, null), bare_entry.qualified_name);
+    try std.testing.expectEqualStrings("top-word", bare_entry.displayName());
+
+    // Re-registering a slot without a module frees and clears the stale identity.
+    modules[0] = null;
+    try std.testing.expectEqual(ONEZ_OK, onez_runtime_register_compiled(handle_ptr, &table, &names, &modules, 2));
+    const cleared = ctx.jit_dispatch.get(0).?;
+    try std.testing.expectEqual(@as(?[]const u8, null), cleared.module);
+    try std.testing.expectEqual(@as(?[]const u8, null), cleared.qualified_name);
+}
+
+test "registerNativeLeaf: a module word does not bind a same-named global native" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const handle = castHandle(handle_ptr).?;
+    const ctx = handle.ctx;
+
+    // `+` is a global dictionary native; the module segment must keep the
+    // probe out of the dictionary, and the segment names no cached module,
+    // so no leaf binds at all.
+    var names: [1]?[*:0]const u8 = .{"+"};
+    var modules: [1]?[*:0]const u8 = .{"some-module"};
+    var table: [1]?*const anyopaque = .{null};
+    try std.testing.expectEqual(ONEZ_OK, onez_runtime_register_compiled(handle_ptr, &table, &names, &modules, 1));
+
+    const entry = ctx.jit_dispatch.get(0).?;
+    try std.testing.expectEqual(null, entry.native);
+}
+
+test "registerNativeLeaf: binds a cached module's own native through the segment" {
+    const handle_ptr = onez_init();
+    try std.testing.expect(handle_ptr != null);
+    defer onez_deinit(handle_ptr);
+
+    const handle = castHandle(handle_ptr).?;
+    const ctx = handle.ctx;
+
+    const noop: dictionary_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const arena_alloc = ctx.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "mod-native", .words = .{} };
+    try module.words.put(arena_alloc, "probe", .{
+        .source_module = module,
+        .action = .{ .native = noop },
+        .stack_effect = .{ .inputs = &.{}, .outputs = &.{} },
+        .dispatch_id = 7,
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "mod-native"),
+        .{ .module = module },
+    );
+
+    var names: [1]?[*:0]const u8 = .{"probe"};
+    var modules: [1]?[*:0]const u8 = .{"mod-native"};
+    var table: [1]?*const anyopaque = .{null};
+    try std.testing.expectEqual(ONEZ_OK, onez_runtime_register_compiled(handle_ptr, &table, &names, &modules, 1));
+
+    const entry = ctx.jit_dispatch.get(0).?;
+    const leaf = entry.native orelse return error.TestExpectedLeafData;
+    try std.testing.expectEqual(noop, leaf.fn_ptr);
+    try std.testing.expectEqual(@as(u32, 7), leaf.dispatch_id);
+    try std.testing.expect(leaf.stack_effect != null);
+    try std.testing.expectEqual(leaf.owned_stack_effect.?, @constCast(leaf.stack_effect.?));
 }
 
 export fn onez_runtime_register_quotations(ptr: ?*anyopaque, table: [*]const ?*const anyopaque, size: u32) i32 {

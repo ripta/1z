@@ -3272,6 +3272,54 @@ pub const Context = struct {
         return null;
     }
 
+    /// Resolve a compiled word's registered module segment to its cached module.
+    ///
+    /// The segment is an exact `Module.name`. Two cached modules can share one name; the hit
+    /// from the lexicographically smallest cache key wins, mirroring
+    /// `lookupModuleCacheWordLocked`'s tie-break, so the answer is independent of
+    /// hash-iteration order. A freeze-discriminated segment carries a `#rank` suffix that
+    /// matches no cached module, so a colliding pair's entries miss here and the caller falls
+    /// back to its bare-name ladder.
+    fn cachedModuleBySegmentLocked(self: *const Context, segment: []const u8) ?*const value_mod.Module {
+        const Candidate = struct {
+            module: *const value_mod.Module,
+            cache_key: []const u8,
+        };
+        var best: ?Candidate = null;
+        var iter = self.module_cache_value.map.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.* != .module) continue;
+            const module = entry.value_ptr.*.module;
+            if (!std.mem.eql(u8, module.name, segment)) continue;
+            const better = if (best) |b| std.mem.lessThan(u8, entry.key_ptr.*, b.cache_key) else true;
+            if (better) {
+                best = .{ .module = module, .cache_key = entry.key_ptr.* };
+            }
+        }
+        const hit = best orelse return null;
+        return hit.module;
+    }
+
+    /// `cachedModuleBySegmentLocked` under its own shared-read acquisition, for callers outside
+    /// the lookup ladder such as AOT startup registration.
+    pub fn cachedModuleBySegment(self: *const Context, segment: []const u8) ?*const value_mod.Module {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        return self.cachedModuleBySegmentLocked(segment);
+    }
+
+    /// Resolve `name` through the module scope of the cached module `segment` names, under one
+    /// shared-read acquisition. This is the exact resolution for a `JitEntry` carrying a module.
+    ///
+    /// Returns null when the segment resolves no cached module or the module's scope does not
+    /// hold `name`; the caller keeps its bare-name ladder for that case.
+    pub fn lookupWordViaModuleSegment(self: *const Context, segment: []const u8, name: []const u8) ?WordDefinition {
+        self.acquireSharedRead();
+        defer self.releaseSharedRead();
+        const module = self.cachedModuleBySegmentLocked(segment) orelse return null;
+        return lookupModuleScopeWord(name, module);
+    }
+
     /// Sentinel `.native` action for AOT-compiled-only words synthesized
     /// by `lookupAotCompiledWordLocked`. The intended dispatch path is
     /// the JIT one in `executeResolvedWord`, driven by the word's
@@ -8220,6 +8268,96 @@ test "lookupModuleCacheWordLocked: cache key breaks a tie between same-named mod
     ctx.runtime_image_loaded = true;
     const found = ctx.lookupWordForExecution("probe") orelse return error.TestExpectedLookup;
     try std.testing.expectEqual(@as(?*const value_mod.Module, second), found.source_module);
+}
+
+test "lookupWordViaModuleSegment resolves the named module's word, not the scan winner" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const arena_alloc = ctx.arena.allocator();
+    const zeta = try arena_alloc.create(value_mod.Module);
+    zeta.* = .{ .name = "zeta-mod", .words = .{} };
+    try zeta.words.put(arena_alloc, "probe", .{
+        .source_module = zeta,
+        .action = .{ .native = noop },
+    });
+
+    const alpha = try arena_alloc.create(value_mod.Module);
+    alpha.* = .{ .name = "alpha-mod", .words = .{} };
+    try alpha.words.put(arena_alloc, "probe", .{
+        .source_module = alpha,
+        .action = .{ .native = noop },
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "zeta-mod"),
+        .{ .module = zeta },
+    );
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "alpha-mod"),
+        .{ .module = alpha },
+    );
+
+    // The by-name scan's winner is alpha; the segment must override it.
+    const found = ctx.lookupWordViaModuleSegment("zeta-mod", "probe") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, zeta), found.source_module);
+
+    try std.testing.expectEqual(
+        @as(?WordDefinition, null),
+        ctx.lookupWordViaModuleSegment("zeta-mod", "absent"),
+    );
+}
+
+test "lookupWordViaModuleSegment: cache key breaks a same-named tie, discriminated segment misses" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    const arena_alloc = ctx.arena.allocator();
+    const first = try arena_alloc.create(value_mod.Module);
+    first.* = .{ .name = "helpers", .words = .{} };
+    try first.words.put(arena_alloc, "probe", .{
+        .source_module = first,
+        .action = .{ .native = noop },
+    });
+
+    const second = try arena_alloc.create(value_mod.Module);
+    second.* = .{ .name = "helpers", .words = .{} };
+    try second.words.put(arena_alloc, "probe", .{
+        .source_module = second,
+        .action = .{ .native = noop },
+    });
+
+    const cache_alloc = ctx.module_cache_value.header.allocator;
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "/z/helpers.1z"),
+        .{ .module = first },
+    );
+    try ctx.module_cache_value.map.put(
+        cache_alloc,
+        try cache_alloc.dupe(u8, "/a/helpers.1z"),
+        .{ .module = second },
+    );
+
+    const found = ctx.lookupWordViaModuleSegment("helpers", "probe") orelse return error.TestExpectedLookup;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, second), found.source_module);
+
+    // A freeze-discriminated segment names no cached module.
+    try std.testing.expectEqual(
+        @as(?WordDefinition, null),
+        ctx.lookupWordViaModuleSegment("helpers#0", "probe"),
+    );
 }
 
 test "module-cache scan is skipped for a body with a defining module" {
