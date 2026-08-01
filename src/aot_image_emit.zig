@@ -1391,15 +1391,13 @@ fn emitMarkerDescriptionsStorage(
     try out.appendSlice(allocator, "};\n\n");
 }
 
-/// Defining module of a parameter's default quotation, resolved through the
-/// freeze context's `quotation_scope_info` stamp written at module
-/// finalization. Null for a default written outside any module or inside a
+/// Defining module of a parameter's default quotation, resolved through the shared stamp store,
+/// written at module finalization. Null for a default written outside any module or inside a
 /// synthetic scope.
 fn parameterDefaultModule(ctx: *const Context, param: *const Parameter) ?*const value_mod.Module {
     const instrs = param.default_quotation.instructions;
     if (instrs.len == 0) return null;
-    const info = ctx.quotation_scope_info.get(@intFromPtr(instrs.ptr)) orelse return null;
-    const module = info.defining_module orelse return null;
+    const module = ctx.quotation_stamp_store.lookup(@intFromPtr(instrs.ptr)) orelse return null;
     if (context_mod.isSyntheticScopeModule(module)) return null;
     return module;
 }

@@ -4595,6 +4595,8 @@ test {
     _ = @import("stack.zig");
     _ = @import("context.zig");
     _ = @import("quotation_stamp_store.zig");
+    _ = @import("atomic_slot_map.zig");
+    _ = @import("reified_decode_cache.zig");
     _ = @import("tokenizer.zig");
     _ = @import("dictionary.zig");
     _ = @import("primitives.zig");

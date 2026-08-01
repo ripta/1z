@@ -59,6 +59,7 @@ const lock_order = @import("lock_order.zig");
 const LockOrderTracker = lock_order.LockOrderTracker;
 
 const QuotationStampStore = @import("quotation_stamp_store.zig").QuotationStampStore;
+const ReifiedDecodeCache = @import("reified_decode_cache.zig").ReifiedDecodeCache;
 
 const signal = @import("signal.zig");
 const control = @import("primitives/control.zig");
@@ -237,10 +238,12 @@ pub const CapturedScope = struct {
 /// Everything resolution knows about one quotation/word body, keyed in `quotation_scope_info` by
 /// the body's instruction-slice pointer.
 ///
-/// The two halves have independent writers and lifetimes. `defining_module` is stamped once at
-/// module finalization and never changes; first stamp wins, see `stampQuotationBodies`. `scope` is
-/// recorded at quotation push and closure execution, refcounted, and superseded freely. They share
-/// one entry so the body-entry hot path pays a single map probe for both.
+/// The two halves have independent writers and lifetimes. The authoritative defining-module
+/// stamp lives in the process-shared `quotation_stamp_store`; `defining_module` here is a
+/// per-context cache slot for it, read ahead of the store on the body-entry hot path and
+/// currently never written. `scope` is recorded at quotation push and closure execution,
+/// refcounted, and superseded freely. They share one entry so the body-entry hot path pays a
+/// single map probe for both.
 pub const QuotationScopeInfo = struct {
     defining_module: ?*const value_mod.Module = null,
     scope: ?*CapturedScope = null,
@@ -739,11 +742,10 @@ pub const Context = struct {
     /// prelude frame.
     image_entry_import_frame: ?usize = null,
     /// Decoded-instruction cache for reified quotation pushes, keyed by the same static data
-    /// pointer. Per-context, single writer; the slices are borrowed from the quotation arena.
-    ///
-    /// One decode and one defining-module stamp per push site instead of per push, which is what
-    /// keeps `quotation_scope_info` from growing on every push in a loop.
-    reified_quotation_cache: std.AutoHashMapUnmanaged(usize, []const value_mod.Instruction) = .{},
+    /// pointer. Root-owned and process-shared; slices live on the cache's own arena, so the keys
+    /// the decode path stamps into `quotation_stamp_store` are process-lifetime. One decode and
+    /// one defining-module stamp per push site serve every context. See `ReifiedDecodeCache`.
+    reified_decode_cache: *ReifiedDecodeCache = undefined,
     /// name -> dispatch_id for user generic words, replayed from the AOT image
     /// dispatch-entry table at startup. The AOT runtime keeps user generics
     /// only in compiled form, so `resolveDispatchId` consults this to resolve a
@@ -786,10 +788,11 @@ pub const Context = struct {
     pic_cache: std.AutoHashMapUnmanaged(usize, *PicTable) = .{},
     /// Maps a quotation/word body instruction-slice pointer to everything resolution knows about
     /// the body: the module it was written in and the scope captured where it was created. The
-    /// stamp half is populated at module finalization; the scope half at quotation push and
-    /// closure execution. One map, so a body entry pays a single probe for both halves, gated on
-    /// the map count -- a program that never loads a module and never captures a scope pays one
-    /// count check per body and no probe.
+    /// authoritative stamp half lives in the shared `quotation_stamp_store`; this map's stamp
+    /// half is a per-context cache slot, currently never written. The scope half is populated at
+    /// quotation push and closure execution. One map, so a body entry pays a single probe for
+    /// both halves, gated on the map count -- a program that never loads a module and never
+    /// captures a scope pays one count check per body and no map probe.
     quotation_scope_info: std.AutoHashMapUnmanaged(usize, QuotationScopeInfo) = .{},
     /// Guards `quotation_scope_info` against the one cross-task access it has: a descendant
     /// task reading this context's map through `findCapturedScopeForBody`'s parent walk while this
@@ -1130,6 +1133,12 @@ pub const Context = struct {
             std.debug.panic("Failed to allocate quotation stamp store: {any}", .{err});
         };
 
+        // Allocate the shared reified-quotation decode cache on the long-lived allocator; the
+        // root context frees it in deinit.
+        ctx.reified_decode_cache = ReifiedDecodeCache.create(allocator) catch |err| {
+            std.debug.panic("Failed to allocate reified decode cache: {any}", .{err});
+        };
+
         // Push base parameter frame so scoped hooks can be registered at top level.
         ctx.parameter_env.append(allocator, .{}) catch |err| {
             std.debug.panic("Failed to push base parameter frame: {any}", .{err});
@@ -1267,6 +1276,11 @@ pub const Context = struct {
         // Share the parent's quotation stamp store so a stored quotation executing here resolves
         // against its own defining module. Aliased, never retained: the root owns it.
         ctx.quotation_stamp_store = parent.quotation_stamp_store;
+
+        // Share the parent's reified-quotation decode cache so a task's `jitPushQuotation`
+        // reuses the process-wide decode instead of decoding onto its own arena. Aliased, never
+        // retained: the root owns it.
+        ctx.reified_decode_cache = parent.reified_decode_cache;
 
         // Inherit the parent's active sandbox, if any. Allocate a copy on the
         // task's arena so the pointer outlives the parent's stack frame.
@@ -1559,8 +1573,6 @@ pub const Context = struct {
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.pic_cache.deinit(self.allocator);
-        // Cached instruction slices live on the quotation arena; only the map itself is freed.
-        self.reified_quotation_cache.deinit(self.allocator);
         // thrown_error, error_value boxes, bignum boxes (header and limbs),
         // and task error_obj boxes are all arena-allocated; they are
         // reclaimed by arena.deinit. The refcounted backing carried in an
@@ -1594,6 +1606,7 @@ pub const Context = struct {
             self.hook_registry.deinit(self.allocator);
             self.allocator.destroy(self.hook_registry);
             self.quotation_stamp_store.destroy();
+            self.reified_decode_cache.destroy();
             self.allocator.destroy(self.lock_order_tracker);
             self.allocator.destroy(self.shared_lock);
         }
@@ -2258,28 +2271,16 @@ pub const Context = struct {
     pub fn stampQuotationBodies(self: *Context, instructions: []const Instruction, module: *const value_mod.Module) error{OutOfMemory}!void {
         if (instructions.len == 0) return;
 
-        // The first module to stamp a body is its original defining module. A body's instruction
-        // slice is shared when a module reexports another's word, so a reexporting module later
-        // reprocesses the same pointers. Keep the original stamp: the body's private helpers live in
-        // the module it was written in, not the one reexporting it. A found stamp means this body
-        // and everything nested under it were already stamped, so stop here. An entry holding only a
-        // captured scope does not prune: it says nothing about the nested bodies.
+        // The store applies first-stamp-wins: the first module to stamp a body is its original
+        // defining module.
         //
-        // The map op is taken under the scope mutex because the map is shared with the capture
-        // sites, whose entries a descendant task may be reading through `findCapturedScopeForBody`
-        // while this insert rehashes. The mutex is not held across the recursion below.
-        self.captured_scope_mu.lock();
-        const gop = self.quotation_scope_info.getOrPut(self.allocator, @intFromPtr(instructions.ptr)) catch |err| {
-            self.captured_scope_mu.unlock();
-            return err;
-        };
-        if (gop.found_existing and gop.value_ptr.defining_module != null) {
-            self.captured_scope_mu.unlock();
-            return;
-        }
-        if (!gop.found_existing) gop.value_ptr.* = .{};
-        gop.value_ptr.defining_module = module;
-        self.captured_scope_mu.unlock();
+        // That matters because a body's instruction slice is shared when a module reexports
+        // another's word. The reexporting module reprocesses the same pointers, and the body's
+        // private helpers live in the module it was written in, not the one reexporting it.
+        //
+        // A false return means this body and everything nested under it were already stamped, so
+        // stop here. The store's writer mutex is not held across the recursion below.
+        if (!try self.quotation_stamp_store.stamp(@intFromPtr(instructions.ptr), module)) return;
 
         for (instructions) |instr| {
             switch (instr.op) {
@@ -6409,11 +6410,11 @@ pub const Context = struct {
         }
 
         // Everything resolution knows about this body, fetched with one map probe: the scope
-        // captured where the body was created, and the defining-module stamp. The probe runs for
-        // module-less bodies too -- the accepted hot-path cost -- because a wrong binding used to
-        // win exactly when no deps frame was live and the miss-only lazy re-resolve never ran. The
-        // count gate keeps a program that never loads a module and never captures a scope off the
-        // map entirely.
+        // captured where the body was created, and the per-context memo of the defining-module
+        // stamp. The probe runs for module-less bodies too -- the accepted hot-path cost --
+        // because a wrong binding used to win exactly when no deps frame was live and the
+        // miss-only lazy re-resolve never ran. The count gate keeps a program that never loads a
+        // module and never captures a scope off the map entirely.
         //
         // The scope is retained for the full duration of this call and released via `defer`, so a
         // nested or recursive `executeInstructions` call made from within this one (e.g. through
@@ -6431,14 +6432,17 @@ pub const Context = struct {
         // The body's own module scope, consulted by resolution ahead of the transient frame walk:
         // its defining module plus the ambient-deps modules captured at its creation. The defining
         // module comes from `body_module` for a module-word body (threaded from
-        // `executeResolvedWord`, so it is available even in a spawned child whose stamp map is
-        // empty), falling back to the stamp for a stored quotation resolved in its own context. A
-        // quotation spawned onto a child, where neither is present, rides its captured
-        // `deps_modules`, which `curry`/`compose` propagate and `spawn` copies into the child.
+        // `executeResolvedWord`), then the per-context memo, then the shared stamp store -- the
+        // authoritative home, which is what lets a stored quotation resolve its module in a
+        // spawned child whose own map is empty. A quotation spawned onto a child, where none of
+        // the three is present, rides its captured `deps_modules`, which `curry`/`compose`
+        // propagate and `spawn` copies into the child.
         //
         // A synthetic scope body (`<local-scope>`, `<scope>`) is exempt from the probe and the
         // visibility filter alike; see `isSyntheticScopeModule`.
-        const defining_raw: ?*const value_mod.Module = body_module orelse scope_info.defining_module;
+        const defining_raw: ?*const value_mod.Module = body_module orelse
+            scope_info.defining_module orelse
+            self.quotation_stamp_store.lookup(@intFromPtr(instructions.ptr));
         const stamp_synthetic = isSyntheticScopeModule(defining_raw);
         const own_module: ?*const value_mod.Module = if (stamp_synthetic) null else defining_raw;
         const own_ambient_deps: []const *const value_mod.Module = if (stamp_synthetic)
@@ -6553,7 +6557,8 @@ pub const Context = struct {
 
                             // The body's scope info, fetched fresh here so this rare path sees an
                             // entry superseded since body entry, and works even when no deps frame
-                            // was live then (`deps_vis` null).
+                            // was live then (`deps_vis` null). The stamp falls back to the shared
+                            // store, its authoritative home, mirroring the body-entry probe.
                             const lazy_info: QuotationScopeInfo =
                                 self.quotation_scope_info.get(@intFromPtr(instructions.ptr)) orelse .{};
                             const lazy_deps: []const *const value_mod.Module = if (deps_vis) |v|
@@ -6562,7 +6567,8 @@ pub const Context = struct {
                                 cs.deps_modules
                             else
                                 &.{};
-                            const stamp_module = lazy_info.defining_module;
+                            const stamp_module = lazy_info.defining_module orelse
+                                self.quotation_stamp_store.lookup(@intFromPtr(instructions.ptr));
 
                             // Reserve up front so a `pushModuleDepsFrame` success is always paired
                             // with a tracking append that cannot then OOM, leaving no untracked live
@@ -8622,7 +8628,7 @@ test "initForTask: shares the parent's quotation stamp store" {
     defer scheduler.deinit();
 
     const module: value_mod.Module = .{ .name = "m", .words = .{} };
-    try parent.quotation_stamp_store.stamp(0x1000, &module);
+    _ = try parent.quotation_stamp_store.stamp(0x1000, &module);
 
     {
         var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
@@ -9432,7 +9438,8 @@ test "executeInstructions: a stamped body resolves its own module ahead of the d
     try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
 
     // Stamped with its defining module, the same body resolves the module's binding instead.
-    try ctx.quotation_scope_info.put(ctx.allocator, @intFromPtr(instrs.ptr), .{ .defining_module = module });
+    // The stamp goes to the shared store, so this also pins the body-entry store fallback.
+    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
     try ctx.executeQuotation(.{ .instructions = instrs });
     try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).fixnum);
 }
@@ -9468,7 +9475,7 @@ test "executeInstructions: a synthetic-scope stamp leaves the own-module probe o
 
     const instrs = try arena_alloc.alloc(Instruction, 1);
     instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
-    try ctx.quotation_scope_info.put(ctx.allocator, @intFromPtr(instrs.ptr), .{ .defining_module = module });
+    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
 
     try ctx.executeQuotation(.{ .instructions = instrs });
     try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);

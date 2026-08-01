@@ -3204,8 +3204,8 @@ const AotQuotationLiteral = struct {
     /// (callback) reifications, which keep their existing handling.
     escape_q_id: u32 = std.math.maxInt(u32),
     /// Defining module of the reified body, read from the freeze context's
-    /// `quotation_scope_info` stamp, or null when the body was written outside
-    /// any module. Rendered into the runtime image's reified-quotation module
+    /// shared stamp store, or null when the body was written outside any
+    /// module. Rendered into the runtime image's reified-quotation module
     /// table so `jitPushQuotation` can stamp the decoded body at load.
     module_name: ?[]const u8 = null,
 };
@@ -3223,14 +3223,12 @@ const serializeValueInto = ibc.serializeValueInto;
 const deserializeQuotationInstructions = ibc.deserializeQuotationInstructions;
 const deserializeValueAt = ibc.deserializeValueAt;
 
-/// Defining module name of a reified body, read from the freeze context's
-/// `quotation_scope_info` stamp written at module finalization. Null for a
-/// body written outside any module or inside a synthetic scope.
+/// Defining module name of a reified body, read from the shared stamp store, written at module
+/// finalization. Null for a body written outside any module or inside a synthetic scope.
 fn reifiedBodyModuleName(state: *const CompileState, body: []const Instruction) ?[]const u8 {
     const interp_ctx = state.interp_ctx orelse return null;
     if (body.len == 0) return null;
-    const info = interp_ctx.quotation_scope_info.get(@intFromPtr(body.ptr)) orelse return null;
-    const module = info.defining_module orelse return null;
+    const module = interp_ctx.quotation_stamp_store.lookup(@intFromPtr(body.ptr)) orelse return null;
     if (context_module.isSyntheticScopeModule(module)) return null;
     return module.name;
 }
@@ -13604,26 +13602,37 @@ export fn jitPushVectorSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 /// `dest_ptr`. Unlike jitPushString which appends to the stack, this writes
 /// to an existing slot position used by materializeQuotations.
 ///
-/// In a runtime-image binary the decode is cached per data pointer, so every push of the same
-/// literal shares one instruction slice. That matches the interpreter, where a literal push
-/// reuses the parsed slice. The defining-module stamp from the image's reified-quotation table
-/// is written once at first decode instead of once per push.
+/// In a runtime-image binary the decode is cached per data pointer in the process-shared
+/// `ReifiedDecodeCache`, so every push of the same literal in every context shares one
+/// instruction slice.
+///
+/// That matches the interpreter, where a literal push reuses the parsed slice and module bodies
+/// are process-shared through the module cache.
+///
+/// The defining-module stamp from the image's reified-quotation table is written into the shared
+/// stamp store before the slice is published, under the cache's decode mutex, so no context can
+/// obtain a body the store cannot resolve.
 export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, dest_raw: usize, quotation_id: usize) callconv(.c) i32 {
     if (ctx_raw == 0) return 1;
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(data_ptr);
-    const alloc = ctx.quotationAllocator();
 
     const instructions: []const Instruction = blk: {
         if (ctx.runtime_image_loaded) {
-            if (ctx.reified_quotation_cache.get(data_ptr)) |cached| break :blk cached;
-        }
-        const decoded = deserializeQuotationInstructions(src[0..data_len], alloc, null) catch {
-            ctx.jit_pending_error = error.OutOfMemory;
-            return 2;
-        };
-        if (ctx.runtime_image_loaded) {
-            ctx.reified_quotation_cache.put(ctx.allocator, data_ptr, decoded) catch {
+            const cache = ctx.reified_decode_cache;
+            if (cache.lookup(data_ptr)) |cached| break :blk cached;
+
+            cache.decode_mu.lock();
+            defer cache.decode_mu.unlock();
+
+            // Re-check under the mutex: another context may have decoded this site between the
+            // lock-free probe above and the acquisition.
+            if (cache.lookup(data_ptr)) |cached| break :blk cached;
+
+            // A failure below strands the partial decode on the shared arena, which cannot free
+            // it individually. Accepted: these paths fire only on true backing-allocator
+            // exhaustion.
+            const decoded = deserializeQuotationInstructions(src[0..data_len], cache.decodeAllocator(), null) catch {
                 ctx.jit_pending_error = error.OutOfMemory;
                 return 2;
             };
@@ -13635,8 +13644,16 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
                     };
                 }
             }
+            cache.insertAssumeLocked(data_ptr, decoded) catch {
+                ctx.jit_pending_error = error.OutOfMemory;
+                return 2;
+            };
+            break :blk decoded;
         }
-        break :blk decoded;
+        break :blk deserializeQuotationInstructions(src[0..data_len], ctx.quotationAllocator(), null) catch {
+            ctx.jit_pending_error = error.OutOfMemory;
+            return 2;
+        };
     };
 
     const dest: *Value = @ptrFromInt(dest_raw);
@@ -14342,28 +14359,38 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
     try modules.put(testing.allocator, @intFromPtr(encoded.items.ptr), &module);
     ctx.image_reified_quotation_modules = &modules;
 
+    // The first decode runs in a task context, which then tears down. The decoded slice and its
+    // stamp live on the process-shared cache and store, so both must survive the task.
+    var scheduler = try Scheduler.init(testing.allocator);
+    defer scheduler.deinit();
     var first: Value = undefined;
-    const rc1 = jitPushQuotation(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len, @intFromPtr(&first), std.math.maxInt(usize));
-    try testing.expectEqual(@as(i32, 0), rc1);
+    {
+        var task_ctx = try Context.initForTask(testing.allocator, &ctx, &scheduler);
+        defer task_ctx.deinit();
+        const rc1 = jitPushQuotation(@intFromPtr(&task_ctx), @intFromPtr(encoded.items.ptr), encoded.items.len, @intFromPtr(&first), std.math.maxInt(usize));
+        try testing.expectEqual(@as(i32, 0), rc1);
+    }
 
     const decoded = first.quotation.instructions;
-    const body_info = ctx.quotation_scope_info.get(@intFromPtr(decoded.ptr)) orelse
-        return error.TestExpectedStamp;
-    try testing.expectEqual(@as(?*const value_mod.Module, &module), body_info.defining_module);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, &module),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
+    );
 
     const nested = decoded[0].op.push_literal.quotation.instructions;
-    const nested_info = ctx.quotation_scope_info.get(@intFromPtr(nested.ptr)) orelse
-        return error.TestExpectedStamp;
-    try testing.expectEqual(@as(?*const value_mod.Module, &module), nested_info.defining_module);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, &module),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
+    );
 
-    // A second push of the same data reuses the cached slice: no fresh
-    // decode, no second stamp entry.
-    const stamp_count = ctx.quotation_scope_info.count();
+    // A push in the root reuses the task's decode: the identical slice, no fresh decode, no
+    // second stamp entry.
+    const stamp_count = ctx.quotation_stamp_store.count();
     var second: Value = undefined;
     const rc2 = jitPushQuotation(@intFromPtr(&ctx), @intFromPtr(encoded.items.ptr), encoded.items.len, @intFromPtr(&second), std.math.maxInt(usize));
     try testing.expectEqual(@as(i32, 0), rc2);
     try testing.expectEqual(decoded.ptr, second.quotation.instructions.ptr);
-    try testing.expectEqual(stamp_count, ctx.quotation_scope_info.count());
+    try testing.expectEqual(stamp_count, ctx.quotation_stamp_store.count());
 }
 
 test "jitNativeWordCall: dispatch hit runs the registered override, not the native's default body" {

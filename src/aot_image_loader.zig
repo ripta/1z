@@ -2711,14 +2711,16 @@ test "loadIntoContext: stamps decoded bodies and nested quotations with their mo
     const mw = module_ptr.words.get(w_name) orelse return error.TestExpectedWord;
     const decoded = mw.action.compound;
 
-    const outer_info = ctx.quotation_scope_info.get(@intFromPtr(decoded.ptr)) orelse
-        return error.TestExpectedStamp;
-    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), outer_info.defining_module);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, module_ptr),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
+    );
 
     const nested = decoded[0].op.push_literal.quotation.instructions;
-    const nested_info = ctx.quotation_scope_info.get(@intFromPtr(nested.ptr)) orelse
-        return error.TestExpectedStamp;
-    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), nested_info.defining_module);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, module_ptr),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
+    );
 }
 
 test "replayMethodDispatch: stamps interpreter-run body with its module" {
@@ -2777,14 +2779,16 @@ test "replayMethodDispatch: stamps interpreter-run body with its module" {
     const module_ptr = cached.module;
     try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), entry.source_module);
 
-    const body_info = ctx.quotation_scope_info.get(@intFromPtr(decoded.ptr)) orelse
-        return error.TestExpectedStamp;
-    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), body_info.defining_module);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, module_ptr),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
+    );
 
     const nested = decoded[0].op.push_literal.quotation.instructions;
-    const nested_info = ctx.quotation_scope_info.get(@intFromPtr(nested.ptr)) orelse
-        return error.TestExpectedStamp;
-    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), nested_info.defining_module);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, module_ptr),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
+    );
 }
 
 test "populateParameterSlots: stamps a module-attributed default" {
@@ -2834,14 +2838,16 @@ test "populateParameterSlots: stamps a module-attributed default" {
     const module_ptr = cached.module;
     const param = param_slots[0] orelse return error.TestExpectedParameter;
 
-    const default_info = ctx.quotation_scope_info.get(@intFromPtr(param.default_quotation.instructions.ptr)) orelse
-        return error.TestExpectedStamp;
-    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), default_info.defining_module);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, module_ptr),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(param.default_quotation.instructions.ptr)),
+    );
 
     const nested = param.default_quotation.instructions[0].op.push_literal.quotation.instructions;
-    const nested_info = ctx.quotation_scope_info.get(@intFromPtr(nested.ptr)) orelse
-        return error.TestExpectedStamp;
-    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), nested_info.defining_module);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, module_ptr),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
+    );
 }
 
 test "populateReifiedQuotationModules: keys rows by data pointer" {
@@ -3401,13 +3407,15 @@ test "loadIntoContext: stamps a private helper's decoded body with the owning mo
     const mw = module_ptr.deps.get("helper") orelse return error.TestExpectedDep;
     const decoded = mw.action.compound;
 
-    const outer_info = ctx.quotation_scope_info.get(@intFromPtr(decoded.ptr)) orelse
-        return error.TestExpectedStamp;
-    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), outer_info.defining_module);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, module_ptr),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
+    );
     const nested = decoded[0].op.push_literal.quotation.instructions;
-    const nested_info = ctx.quotation_scope_info.get(@intFromPtr(nested.ptr)) orelse
-        return error.TestExpectedStamp;
-    try testing.expectEqual(@as(?*const value_mod.Module, module_ptr), nested_info.defining_module);
+    try testing.expectEqual(
+        @as(?*const value_mod.Module, module_ptr),
+        ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
+    );
 }
 
 test "decodeWordBodies: provenanced private row decodes into the deps entry" {
