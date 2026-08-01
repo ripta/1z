@@ -1,0 +1,6 @@
+use "testing" ;
+
+"malformed stack effect strings" test-section
+[ "a:" native.parse-stack-effect ] invalid-argument: "dangling annotation raises invalid-argument, not out-of-memory" assert-error-type
+[ "a: -- b" native.parse-stack-effect ] invalid-argument: "annotation dangling before -- raises invalid-argument" assert-error-type
+[ "( x -- ) y" native.parse-stack-effect ] invalid-argument: "nested effect without a parameter name raises invalid-argument" assert-error-type

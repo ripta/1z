@@ -92,6 +92,7 @@ pub const ParseError = error{
     UnmatchedCloseParen,
     UnmatchedOpenQuote,
     UnterminatedTokenScan,
+    MalformedStackEffect,
     InvalidArrayElement,
     OutOfMemory,
     ParseTimeExecutionError,
@@ -1082,6 +1083,17 @@ fn isWhitespace(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\r' or c == '\n';
 }
 
+/// Raise a parse-time diagnostic for a malformed stack-effect declaration.
+fn malformedStackEffect(ctx: ?*Context, allocator: Allocator, comptime fmt: []const u8, args: anytype) ParseError {
+    if (ctx) |c| {
+        c.parse_diagnostics = .{
+            .error_type = "MalformedStackEffect",
+            .message = std.fmt.allocPrint(allocator, fmt, args) catch null,
+        };
+    }
+    return ParseError.MalformedStackEffect;
+}
+
 /// Parse a stack effect with support for quotation annotations.
 /// Handles nested parentheses for syntax like:
 ///   ( try-quot recover-quot: ( error -- ) -- )
@@ -1117,13 +1129,11 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
                 pending_param_name = null;
                 pending_is_annotated = false;
             } else {
-                // Unexpected ( without a parameter name
-                return ParseError.OutOfMemory;
+                return malformedStackEffect(ctx, allocator, "expected a parameter name like 'quot:' before '('", .{});
             }
         } else if (std.mem.eql(u8, token, ")")) {
             if (pending_is_annotated) {
-                // Annotation colon without a type following
-                return ParseError.OutOfMemory;
+                return malformedStackEffect(ctx, allocator, "expected a type after '{s}:'", .{pending_param_name orelse ""});
             }
             // Flush any pending parameter
             if (pending_param_name) |name| {
@@ -1136,8 +1146,7 @@ pub fn parseStackEffect(allocator: Allocator, tokenizer: *Tokenizer, ctx: ?*Cont
             };
         } else if (std.mem.eql(u8, token, "--")) {
             if (pending_is_annotated) {
-                // Annotation colon without a type following
-                return ParseError.OutOfMemory;
+                return malformedStackEffect(ctx, allocator, "expected a type after '{s}:'", .{pending_param_name orelse ""});
             }
             // Flush pending parameter before switching
             if (pending_param_name) |name| {
@@ -1496,6 +1505,29 @@ test "unmatched open paren" {
     var tokenizer = Tokenizer.init("n -- n");
     const result = parseStackEffect(arena.allocator(), &tokenizer, null, 0);
     try std.testing.expectError(ParseError.UnmatchedOpenParen, result);
+}
+
+test "malformed stack effect reports MalformedStackEffect, not OutOfMemory" {
+    for ([_][]const u8{ "a: )", "a: -- b )", "( x -- ) -- )" }) |src| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+
+        var tokenizer = Tokenizer.init(src);
+        const result = parseStackEffect(arena.allocator(), &tokenizer, null, 0);
+        try std.testing.expectError(ParseError.MalformedStackEffect, result);
+    }
+}
+
+test "malformed stack effect sets diagnostics naming the problem" {
+    var ctx = Context.initWithPrelude(std.testing.allocator);
+    defer ctx.deinit();
+
+    var tokenizer = Tokenizer.init("a: -- b )");
+    const result = parseStackEffect(ctx.quotationAllocator(), &tokenizer, &ctx, 0);
+
+    try std.testing.expectError(ParseError.MalformedStackEffect, result);
+    try std.testing.expectEqualStrings("MalformedStackEffect", ctx.parse_diagnostics.?.error_type.?);
+    try std.testing.expectEqualStrings("expected a type after 'a:'", ctx.parse_diagnostics.?.message.?);
 }
 
 test "parse stack effect with quotation annotation" {

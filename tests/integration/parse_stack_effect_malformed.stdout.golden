@@ -1,0 +1,8 @@
+=== malformed stack effect strings ===
+Stack: [ ]
+PASS: dangling annotation raises invalid-argument, not out-of-memory
+Stack: [ ]
+PASS: annotation dangling before -- raises invalid-argument
+Stack: [ ]
+PASS: nested effect without a parameter name raises invalid-argument
+Stack: [ ]

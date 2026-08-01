@@ -1,0 +1,3 @@
+\ A dangling `name:` annotation in a stack effect must raise a syntax
+\ diagnostic rather than misreporting out-of-memory.
+foo: ( a: -- b ) [ 1 ] ;

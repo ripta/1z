@@ -1,0 +1,1 @@
+tests/integration/stack_effect_malformed_paren.1z:3: error 'malformed-stack-effect' expected a parameter name like 'quot:' before '('
