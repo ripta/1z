@@ -5,6 +5,8 @@
 
 use "os/fs" ;
 use "os/path" ;
+use "scanner" ;
+use "1z-tokens" ;
 use "strings" ;
 use "sequences" ;
 use "runtime/introspect" ;
@@ -357,6 +359,7 @@ generate-one: ( key base-url grouped -- ) [
 load-source-base-url
 over [ generate-one ] curry
 curry
+[ curry [ spawn drop ] curry task-scope ] curry
 over @keys [ >string ] #sort-by
 swap #each
 
