@@ -240,10 +240,11 @@ pub const CapturedScope = struct {
 ///
 /// The two halves have independent writers and lifetimes. The authoritative defining-module
 /// stamp lives in the process-shared `quotation_stamp_store`; `defining_module` here is a
-/// per-context cache slot for it, read ahead of the store on the body-entry hot path and
-/// currently never written. `scope` is recorded at quotation push and closure execution,
-/// refcounted, and superseded freely. They share one entry so the body-entry hot path pays a
-/// single map probe for both.
+/// per-context read-through cache of it, filled from the store whenever an entry is created, so
+/// it is authoritative -- a null included -- whenever the entry exists. The one rewrite is
+/// `stampQuotationBodies`, which repairs a null cached before it stamped the store. `scope` is
+/// recorded at quotation push and closure execution, refcounted, and superseded freely. They
+/// share one entry so the body-entry hot path pays a single map probe for both.
 pub const QuotationScopeInfo = struct {
     defining_module: ?*const value_mod.Module = null,
     scope: ?*CapturedScope = null,
@@ -789,10 +790,11 @@ pub const Context = struct {
     /// Maps a quotation/word body instruction-slice pointer to everything resolution knows about
     /// the body: the module it was written in and the scope captured where it was created. The
     /// authoritative stamp half lives in the shared `quotation_stamp_store`; this map's stamp
-    /// half is a per-context cache slot, currently never written. The scope half is populated at
-    /// quotation push and closure execution. One map, so a body entry pays a single probe for
-    /// both halves, gated on the map count -- a program that never loads a module and never
-    /// captures a scope pays one count check per body and no map probe.
+    /// half is a read-through cache of it, filled -- a null included -- whenever an entry is
+    /// created, by the body-entry probe on a complete miss and by the scope writers, and
+    /// repaired in place by `stampQuotationBodies` for an entry that cached a null before the
+    /// stamp. The scope half is populated at quotation push and closure execution. One map, so a
+    /// body entry pays a single probe for both halves.
     quotation_scope_info: std.AutoHashMapUnmanaged(usize, QuotationScopeInfo) = .{},
     /// Guards `quotation_scope_info` against the one cross-task access it has: a descendant
     /// task reading this context's map through `findCapturedScopeForBody`'s parent walk while this
@@ -2027,10 +2029,15 @@ pub const Context = struct {
         // since a free should not run while the mutex is held. The mutex is also released on the
         // `getOrPut` error path (e.g. an OOM rehash), so a failed capture can't leave a live
         // descendant-task read permanently blocked on this context's mutex.
+        //
+        // A fresh entry's module half is filled from the shared stamp store, keeping every entry's
+        // module half authoritative: the body-entry probe trusts a map hit without a store probe.
+        // The lookup is lock-free, so taking it under the mutex costs one probe on creation only.
         self.captured_scope_mu.lock();
         errdefer self.captured_scope_mu.unlock();
         const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
-        if (!gop.found_existing) gop.value_ptr.* = .{};
+        if (!gop.found_existing)
+            gop.value_ptr.* = .{ .defining_module = self.quotation_stamp_store.lookup(key) };
         const superseded: ?*CapturedScope = gop.value_ptr.scope;
         gop.value_ptr.scope = scope;
         self.captured_scope_mu.unlock();
@@ -2251,11 +2258,14 @@ pub const Context = struct {
         const dup = try dupeCapturedScope(self.allocator, scope);
         errdefer dup.release();
 
+        // A fresh entry's module half is filled from the shared stamp store, so the body-entry
+        // probe can trust a map hit without a store probe.
         const key = @intFromPtr(instructions.ptr);
         self.captured_scope_mu.lock();
         errdefer self.captured_scope_mu.unlock();
         const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
-        if (!gop.found_existing) gop.value_ptr.* = .{};
+        if (!gop.found_existing)
+            gop.value_ptr.* = .{ .defining_module = self.quotation_stamp_store.lookup(key) };
         const superseded: ?*CapturedScope = gop.value_ptr.scope;
         gop.value_ptr.scope = dup;
         self.captured_scope_mu.unlock();
@@ -2281,6 +2291,20 @@ pub const Context = struct {
         // A false return means this body and everything nested under it were already stamped, so
         // stop here. The store's writer mutex is not held across the recursion below.
         if (!try self.quotation_stamp_store.stamp(@intFromPtr(instructions.ptr), module)) return;
+
+        // Repair this context's own read-through entry. Stamped-before-reachable covers other
+        // executors only: the loading context itself can push or execute this body before
+        // finalization reaches here, creating a map entry whose module half cached the store miss.
+        // A map hit is authoritative at body entry, so a stale null would lose the stamp exactly
+        // where the module's own top-level code stored the quotation. Only the first-stamp writer
+        // repairs: an entry created after the stamp was filled correctly at creation.
+        if (self.quotation_scope_info.count() != 0) {
+            self.captured_scope_mu.lock();
+            if (self.quotation_scope_info.getPtr(@intFromPtr(instructions.ptr))) |info| {
+                if (info.defining_module == null) info.defining_module = module;
+            }
+            self.captured_scope_mu.unlock();
+        }
 
         for (instructions) |instr| {
             switch (instr.op) {
@@ -6410,21 +6434,43 @@ pub const Context = struct {
         }
 
         // Everything resolution knows about this body, fetched with one map probe: the scope
-        // captured where the body was created, and the per-context memo of the defining-module
+        // captured where the body was created, and the read-through cache of the defining-module
         // stamp. The probe runs for module-less bodies too -- the accepted hot-path cost --
         // because a wrong binding used to win exactly when no deps frame was live and the
-        // miss-only lazy re-resolve never ran. The count gate keeps a program that never loads a
-        // module and never captures a scope off the map entirely.
+        // miss-only lazy re-resolve never ran.
+        //
+        // A complete miss for a value-invoked body probes the shared stamp store once and caches
+        // the result into the map, a null included. The negative cache is sound because a body is
+        // stamped before any other executor can reach it, so a body probed with no stamp never
+        // gains one. Every entry-creating writer fills the module half the same way, so a map hit
+        // is authoritative and the steady state is one lock-free probe. The fill is skipped when
+        // `body_module` is threaded -- the stamp would go unread, and word bodies are the common
+        // case -- and for the shared empty-body sentinel, which is never stamped.
         //
         // The scope is retained for the full duration of this call and released via `defer`, so a
         // nested or recursive `executeInstructions` call made from within this one (e.g. through
         // `if`/`when`) is free to supersede the map's entry for this same body without freeing the
         // scope this outer frame still holds. `own_ambient_deps` below rides the retained scope,
         // which is what keeps it alive for the whole body.
-        const scope_info: QuotationScopeInfo = if (self.quotation_scope_info.count() != 0)
-            self.quotation_scope_info.get(@intFromPtr(instructions.ptr)) orelse .{}
-        else
-            .{};
+        const scope_info: QuotationScopeInfo = blk: {
+            const key = @intFromPtr(instructions.ptr);
+            if (self.quotation_scope_info.count() != 0) {
+                if (self.quotation_scope_info.get(key)) |info| break :blk info;
+            }
+            if (body_module != null or instructions.len == 0) break :blk .{};
+
+            // The store probe runs before the lock: it is lock-free, and self is the map's only
+            // writer, so the miss above cannot be raced. The insert is taken under the map mutex
+            // to exclude a descendant's parent-walk read, released on the `getOrPut` error path.
+            const stamped = self.quotation_stamp_store.lookup(key);
+            self.captured_scope_mu.lock();
+            errdefer self.captured_scope_mu.unlock();
+            const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
+            if (!gop.found_existing) gop.value_ptr.* = .{ .defining_module = stamped };
+            const info = gop.value_ptr.*;
+            self.captured_scope_mu.unlock();
+            break :blk info;
+        };
         const captured_scope: ?*CapturedScope = scope_info.scope;
         if (captured_scope) |cs| cs.retain();
         defer if (captured_scope) |cs| cs.release();
@@ -6432,17 +6478,14 @@ pub const Context = struct {
         // The body's own module scope, consulted by resolution ahead of the transient frame walk:
         // its defining module plus the ambient-deps modules captured at its creation. The defining
         // module comes from `body_module` for a module-word body (threaded from
-        // `executeResolvedWord`), then the per-context memo, then the shared stamp store -- the
-        // authoritative home, which is what lets a stored quotation resolve its module in a
-        // spawned child whose own map is empty. A quotation spawned onto a child, where none of
-        // the three is present, rides its captured `deps_modules`, which `curry`/`compose`
-        // propagate and `spawn` copies into the child.
+        // `executeResolvedWord`), then the map's cached stamp -- which is what lets a stored
+        // quotation resolve its module in a spawned child whose own map starts empty. A quotation
+        // spawned onto a child, where neither is present, rides its captured `deps_modules`, which
+        // `curry`/`compose` propagate and `spawn` copies into the child.
         //
         // A synthetic scope body (`<local-scope>`, `<scope>`) is exempt from the probe and the
         // visibility filter alike; see `isSyntheticScopeModule`.
-        const defining_raw: ?*const value_mod.Module = body_module orelse
-            scope_info.defining_module orelse
-            self.quotation_stamp_store.lookup(@intFromPtr(instructions.ptr));
+        const defining_raw: ?*const value_mod.Module = body_module orelse scope_info.defining_module;
         const stamp_synthetic = isSyntheticScopeModule(defining_raw);
         const own_module: ?*const value_mod.Module = if (stamp_synthetic) null else defining_raw;
         const own_ambient_deps: []const *const value_mod.Module = if (stamp_synthetic)
@@ -6557,8 +6600,10 @@ pub const Context = struct {
 
                             // The body's scope info, fetched fresh here so this rare path sees an
                             // entry superseded since body entry, and works even when no deps frame
-                            // was live then (`deps_vis` null). The stamp falls back to the shared
-                            // store, its authoritative home, mirroring the body-entry probe.
+                            // was live then (`deps_vis` null). The store fallback covers the shape
+                            // the body-entry fill skips: a word body (`body_module` threaded) may
+                            // have no map entry, and its stamp is still needed for the deps-frame
+                            // push below. A value-invoked body always hits the filled entry.
                             const lazy_info: QuotationScopeInfo =
                                 self.quotation_scope_info.get(@intFromPtr(instructions.ptr)) orelse .{};
                             const lazy_deps: []const *const value_mod.Module = if (deps_vis) |v|
@@ -9430,18 +9475,212 @@ test "executeInstructions: a stamped body resolves its own module ahead of the d
     module.* = .{ .name = "m", .words = .{} };
     try module.words.put(arena_alloc, "probe-word", .{ .action = .{ .native = push_module } });
 
+    // Stamped before it is reachable, matching every production stamp site, the body resolves
+    // the module's binding ahead of the durable frame.
     const instrs = try arena_alloc.alloc(Instruction, 1);
     instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
-
-    // Unstamped, the durable frame's binding wins, exactly as before the probe existed.
-    try ctx.executeQuotation(.{ .instructions = instrs });
-    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
-
-    // Stamped with its defining module, the same body resolves the module's binding instead.
-    // The stamp goes to the shared store, so this also pins the body-entry store fallback.
     _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
     try ctx.executeQuotation(.{ .instructions = instrs });
     try std.testing.expectEqual(@as(i64, 2), (try ctx.stack.pop()).fixnum);
+
+    // The body-entry fill cached the store hit into the per-context map.
+    const info = ctx.quotation_scope_info.get(@intFromPtr(instrs.ptr)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, module), info.defining_module);
+
+    // An unstamped body keeps resolving the durable frame's binding.
+    const bare = try arena_alloc.alloc(Instruction, 1);
+    bare[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+    try ctx.executeQuotation(.{ .instructions = bare });
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
+}
+
+test "executeInstructions: a store miss is cached, so a late stamp is not observed" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const push_durable: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 1 });
+        }
+    }.f;
+    const push_module: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 2 });
+        }
+    }.f;
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+    try ctx.local_frames.items[0].put(ctx.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .native = push_durable },
+    });
+
+    const arena_alloc = ctx.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "m", .words = .{} };
+    try module.words.put(arena_alloc, "probe-word", .{ .action = .{ .native = push_module } });
+
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+
+    // The first execution caches the store miss as a null module half.
+    try ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
+    const info = ctx.quotation_scope_info.get(@intFromPtr(instrs.ptr)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, null), info.defining_module);
+
+    // A stamp arriving only now violates stamped-before-reachable, which production sites never
+    // do. The cached null stays authoritative: no store re-probe, the durable binding still wins.
+    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
+    try ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 1), (try ctx.stack.pop()).fixnum);
+}
+
+test "executeInstructions: the fill skips word bodies and empty bodies" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var module: value_mod.Module = .{ .name = "m", .words = .{} };
+
+    // A word body arrives with `body_module` threaded, so its stamp would go unread: no entry.
+    const arena_alloc = ctx.arena.allocator();
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 1 };
+    try ctx.executeInstructions(instrs, null, &module);
+    try std.testing.expectEqual(@as(i64, 42), (try ctx.stack.pop()).fixnum);
+    try std.testing.expectEqual(@as(usize, 0), ctx.quotation_scope_info.count());
+
+    // Empty bodies share a sentinel pointer and are never stamped: no entry either.
+    const empty: []const Instruction = &.{};
+    try ctx.executeInstructions(empty, null, null);
+    try std.testing.expectEqual(@as(usize, 0), ctx.quotation_scope_info.count());
+}
+
+test "executeInstructions: a stored quotation resolves its stamp in a child task" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    const push_durable: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 1 });
+        }
+    }.f;
+    const push_module: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 2 });
+        }
+    }.f;
+
+    // A same-named durable binding in the parent's import frame is what the child would silently
+    // resolve if the stamp were unreachable there -- the shadowing half of the bug, not just
+    // unknown-word.
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 0;
+    try parent.local_frames.items[0].put(parent.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .native = push_durable },
+    });
+
+    const arena_alloc = parent.arena.allocator();
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "m", .words = .{} };
+    try module.words.put(arena_alloc, "probe-word", .{ .action = .{ .native = push_module } });
+
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+    _ = try parent.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
+
+    // The child's own map starts empty; the fill reaches the stamp through the shared store.
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+    try task_ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 2), (try task_ctx.stack.pop()).fixnum);
+}
+
+test "captureQuotationScope: a fresh entry's module half is filled from the stamp store" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    var dep_module: value_mod.Module = .{ .name = "dep", .words = .{} };
+    try dep_module.words.put(std.testing.allocator, "foo", .{ .action = .{ .native = noop } });
+    defer dep_module.words.deinit(std.testing.allocator);
+    try ctx.pushModuleDepsFrame(&dep_module);
+
+    var def_module: value_mod.Module = .{ .name = "def", .words = .{} };
+    const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
+    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(&body), &def_module);
+
+    // The deps-only recording path creates the entry; its module half must carry the stamp, so a
+    // body-entry map hit stays authoritative.
+    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
+    const info = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &def_module), info.defining_module);
+    try std.testing.expect(info.scope != null);
+}
+
+test "stampCapturedScopeForExecution: a fresh entry's module half is filled from the stamp store" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    var def_module: value_mod.Module = .{ .name = "def", .words = .{} };
+    const body = [_]Instruction{.{ .op = .{ .call_word = "w" }, .line = 0 }};
+    _ = try ctx.quotation_stamp_store.stamp(@intFromPtr(&body), &def_module);
+
+    var scope: CapturedScope = .{ .lexical_frames = &.{}, .deps_modules = &.{}, .allocator = ctx.allocator };
+    try ctx.stampCapturedScopeForExecution(&body, &scope);
+    const info = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &def_module), info.defining_module);
+    try std.testing.expect(info.scope != null);
+
+    // A supersede rewrites only the scope half; the cached stamp stays.
+    try ctx.stampCapturedScopeForExecution(&body, &scope);
+    const again = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &def_module), again.defining_module);
+}
+
+test "stampQuotationBodies: repairs an entry created before the stamp" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const noop: dict_mod.NativeFn = struct {
+        fn f(_: *Context) anyerror!void {}
+    }.f;
+
+    try ctx.pushLocalFrame();
+    ctx.import_frame_index = 0;
+
+    var dep_module: value_mod.Module = .{ .name = "dep", .words = .{} };
+    try dep_module.words.put(std.testing.allocator, "foo", .{ .action = .{ .native = noop } });
+    defer dep_module.words.deinit(std.testing.allocator);
+    try ctx.pushModuleDepsFrame(&dep_module);
+
+    // The module's own top-level code pushes the literal before finalization stamps it, so the
+    // entry's module half caches the store miss.
+    const body = [_]Instruction{.{ .op = .{ .call_word = "foo" }, .line = 0 }};
+    try std.testing.expect((try ctx.captureQuotationScope(&body)) == null);
+    const before = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, null), before.defining_module);
+
+    // Finalization stamps the store and repairs the loading context's stale null in place, so the
+    // now-authoritative map hit carries the stamp.
+    var def_module: value_mod.Module = .{ .name = "def", .words = .{} };
+    try ctx.stampQuotationBodies(&body, &def_module);
+    const after = ctx.quotation_scope_info.get(@intFromPtr(&body)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, &def_module), after.defining_module);
+    try std.testing.expect(after.scope != null);
 }
 
 test "executeInstructions: a synthetic-scope stamp leaves the own-module probe off" {
