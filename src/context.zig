@@ -58,6 +58,8 @@ const StackEffectParam = stack_effect_mod.StackEffectParam;
 const lock_order = @import("lock_order.zig");
 const LockOrderTracker = lock_order.LockOrderTracker;
 
+const QuotationStampStore = @import("quotation_stamp_store.zig").QuotationStampStore;
+
 const signal = @import("signal.zig");
 const control = @import("primitives/control.zig");
 const nativeSuppressChecksValidator = @import("effect_inference.zig").nativeSuppressChecksValidator;
@@ -963,6 +965,14 @@ pub const Context = struct {
     /// Allocated on the container arena by the root context and shared by
     /// pointer to all child task contexts.
     hook_registry: *HookRegistry = undefined,
+    /// Process-shared defining-module stamps for quotation bodies, keyed by instruction-slice
+    /// pointer. Heap-allocated by the root context and shared by pointer to all child task
+    /// contexts.
+    ///
+    /// A body's defining module outlives any one context, so a per-context map loses it the
+    /// moment a spawned task executes a stored quotation. The per-execution captured-scope half
+    /// stays in `quotation_scope_info`, which is genuinely per-context.
+    quotation_stamp_store: *QuotationStampStore = undefined,
 
     /// Returns true when the instruction sequence ends with a call to `;`,
     /// which means it is a word definition and should be executed even in
@@ -1114,6 +1124,12 @@ pub const Context = struct {
         };
         ctx.hook_registry.* = .{};
 
+        // Allocate the shared quotation stamp store on the long-lived allocator; the root
+        // context frees it in deinit.
+        ctx.quotation_stamp_store = QuotationStampStore.create(allocator) catch |err| {
+            std.debug.panic("Failed to allocate quotation stamp store: {any}", .{err});
+        };
+
         // Push base parameter frame so scoped hooks can be registered at top level.
         ctx.parameter_env.append(allocator, .{}) catch |err| {
             std.debug.panic("Failed to push base parameter frame: {any}", .{err});
@@ -1247,6 +1263,10 @@ pub const Context = struct {
 
         // Share the parent's hook registry so all contexts fire the same hooks.
         ctx.hook_registry = parent.hook_registry;
+
+        // Share the parent's quotation stamp store so a stored quotation executing here resolves
+        // against its own defining module. Aliased, never retained: the root owns it.
+        ctx.quotation_stamp_store = parent.quotation_stamp_store;
 
         // Inherit the parent's active sandbox, if any. Allocate a copy on the
         // task's arena so the pointer outlives the parent's stack frame.
@@ -1573,6 +1593,7 @@ pub const Context = struct {
             container_backing.releaseValue(.{ .mutable_map = self.module_cache_value });
             self.hook_registry.deinit(self.allocator);
             self.allocator.destroy(self.hook_registry);
+            self.quotation_stamp_store.destroy();
             self.allocator.destroy(self.lock_order_tracker);
             self.allocator.destroy(self.shared_lock);
         }
@@ -8578,6 +8599,48 @@ test "moduleScopeWordDef: carries the module word's compiled id" {
     const module: value_mod.Module = .{ .name = "m", .words = .{} };
     const def = Context.moduleScopeWordDef("probe", .{ .word_id = 17, .action = .{ .native = noop } }, &module);
     try std.testing.expectEqual(@as(?u32, 17), def.word_id);
+}
+
+test "init: the root context owns an empty quotation stamp store" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), ctx.quotation_stamp_store.count());
+    try std.testing.expectEqual(
+        @as(?*const value_mod.Module, null),
+        ctx.quotation_stamp_store.lookup(0x1000),
+    );
+}
+
+test "initForTask: shares the parent's quotation stamp store" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    const module: value_mod.Module = .{ .name = "m", .words = .{} };
+    try parent.quotation_stamp_store.stamp(0x1000, &module);
+
+    {
+        var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+        defer task_ctx.deinit();
+
+        // A stamp written before the spawn is what a stored quotation executing here needs.
+        try std.testing.expectEqual(parent.quotation_stamp_store, task_ctx.quotation_stamp_store);
+        try std.testing.expectEqual(
+            @as(?*const value_mod.Module, &module),
+            task_ctx.quotation_stamp_store.lookup(0x1000),
+        );
+    }
+
+    // The task aliased the store without retaining, so its teardown left the root's intact.
+    try std.testing.expectEqual(
+        @as(?*const value_mod.Module, &module),
+        parent.quotation_stamp_store.lookup(0x1000),
+    );
 }
 
 test "initForTask: inherits AOT runtime-image state from parent" {

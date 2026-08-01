@@ -4594,6 +4594,7 @@ test {
     _ = @import("value.zig");
     _ = @import("stack.zig");
     _ = @import("context.zig");
+    _ = @import("quotation_stamp_store.zig");
     _ = @import("tokenizer.zig");
     _ = @import("dictionary.zig");
     _ = @import("primitives.zig");
