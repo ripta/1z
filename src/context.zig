@@ -191,11 +191,13 @@ pub fn isSyntheticScopeModule(module: ?*const value_mod.Module) bool {
 ///
 /// A closure-owned ("tier-2") scope is an independent deep copy allocated on a closure's own
 /// quotation arena; it is never retained or released, since it rides the arena's teardown exactly
-/// like the `Closure` struct that owns it. `promoteToClosure`, `curry`/`compose`
-/// (`functional.zig`), and `findCapturedScopeForBody`'s cross-task ancestor walk all build one of
-/// these via `dupeCapturedScope` whenever they hand a scope to something that can meaningfully
-/// outlive the map's current entry for the body it came from -- see `promoteToClosure`'s doc
-/// comment for why copying here is load-bearing, not merely defensive.
+/// like the `Closure` struct that owns it. `promoteToClosure` and `curry`/`compose`
+/// (`functional.zig`) build one of these via `dupeCapturedScope` whenever they hand a scope to
+/// something that can meaningfully outlive the map's current entry for the body it came from --
+/// see `promoteToClosure`'s doc comment for why copying here is load-bearing, not merely
+/// defensive. `findCapturedScopeForBody` builds its copy on whatever allocator the caller passes,
+/// so its result is tier-2 when `curry`/`compose` pass the quotation arena and tier-1 when the
+/// body-entry fill passes the durable allocator and installs the copy into the map.
 ///
 /// `retain`/`release` mirror `container_backing.ContainerHeader`'s pattern, minus the mutex --
 /// `lexical_frames` is immutable after construction, so no lock is needed for reads.
@@ -243,8 +245,9 @@ pub const CapturedScope = struct {
 /// per-context read-through cache of it, filled from the store whenever an entry is created, so
 /// it is authoritative -- a null included -- whenever the entry exists. The one rewrite is
 /// `stampQuotationBodies`, which repairs a null cached before it stamped the store. `scope` is
-/// recorded at quotation push and closure execution, refcounted, and superseded freely. They
-/// share one entry so the body-entry hot path pays a single map probe for both.
+/// recorded at quotation push and closure execution, inherited from an ancestor context's map at
+/// body entry, refcounted, and superseded freely. They share one entry so the body-entry hot path
+/// pays a single map probe for both.
 pub const QuotationScopeInfo = struct {
     defining_module: ?*const value_mod.Module = null,
     scope: ?*CapturedScope = null,
@@ -793,8 +796,9 @@ pub const Context = struct {
     /// half is a read-through cache of it, filled -- a null included -- whenever an entry is
     /// created, by the body-entry probe on a complete miss and by the scope writers, and
     /// repaired in place by `stampQuotationBodies` for an entry that cached a null before the
-    /// stamp. The scope half is populated at quotation push and closure execution. One map, so a
-    /// body entry pays a single probe for both halves.
+    /// stamp. The scope half is populated at quotation push and closure execution, and inherited
+    /// from an ancestor context's map by the body-entry fill. One map, so a body entry pays a
+    /// single probe for both halves.
     quotation_scope_info: std.AutoHashMapUnmanaged(usize, QuotationScopeInfo) = .{},
     /// Guards `quotation_scope_info` against the one cross-task access it has: a descendant
     /// task reading this context's map through `findCapturedScopeForBody`'s parent walk while this
@@ -2151,11 +2155,12 @@ pub const Context = struct {
     /// Deep-copy a captured scope with `alloc`. Each `LocalFrame` is cloned entry-by-entry, the
     /// same shallow copy `captureQuotationScope` uses because `WordDefinition` owns no allocation.
     ///
-    /// The allocator is a parameter so `promoteToClosure`, `curry`/`compose`, and
-    /// `findCapturedScopeForBody` can allocate the closure-carried copy on the quotation arena, and
-    /// the execution stamp can allocate the map-owned copy on the durable allocator. A copy
-    /// allocated with the durable allocator is released with `CapturedScope.release`; a copy on the
-    /// arena rides its context's teardown and is never retained or released.
+    /// The allocator is a parameter so `promoteToClosure` and `curry`/`compose` can allocate the
+    /// closure-carried copy on the quotation arena, while the execution stamp and the body-entry
+    /// fill allocate the map-owned copy on the durable allocator. `findCapturedScopeForBody`
+    /// serves both shapes and passes its caller's allocator through. A copy allocated with the
+    /// durable allocator is released with `CapturedScope.release`; a copy on the arena rides its
+    /// context's teardown and is never retained or released.
     pub fn dupeCapturedScope(alloc: Allocator, src: *const CapturedScope) !*CapturedScope {
         const frames = try alloc.alloc(LocalFrame, src.lexical_frames.len);
         var built: usize = 0;
@@ -2182,16 +2187,20 @@ pub const Context = struct {
     }
 
     /// Find the captured scope for a body pointer and return an independently owned copy: this
-    /// context's map first, then the durable scope of each ancestor context under the shared read
-    /// lock, mirroring `lookupWordLocked`'s parent walk.
+    /// context's map first, then each ancestor context's map under that ancestor's
+    /// `captured_scope_mu`, mirroring `lookupWordLocked`'s parent walk.
     ///
     /// `curry`/`compose` running in a descendant task use this to source a scope that an ancestor
-    /// task captured where the source quotation literal was created. The result is always a fresh
-    /// `dupeCapturedScope` copy on `alloc`, never a shared pointer into either map: the ancestor's
-    /// entry is a refcounted, supersedable map entry (`captureQuotationScope`), so embedding it
-    /// directly into a closure that may outlive the current call would risk a later use-after-free
-    /// once the ancestor supersedes and frees it -- see `promoteToClosure`'s doc comment for why
-    /// this is load-bearing, not merely defensive.
+    /// task captured where the source quotation literal was created. The body-entry fill in
+    /// `executeInstructions` uses it the same way, caching the copy into this context's map so a
+    /// stored quotation reached indirectly in a child task keeps its parent-recorded lexical
+    /// captures.
+    ///
+    /// The result is always a fresh `dupeCapturedScope` copy on `alloc`, never a shared pointer
+    /// into either map: the ancestor's entry is a refcounted, supersedable map entry
+    /// (`captureQuotationScope`), so embedding it directly into a closure that may outlive the
+    /// current call would risk a later use-after-free once the ancestor supersedes and frees it --
+    /// see `promoteToClosure`'s doc comment for why this is load-bearing, not merely defensive.
     ///
     /// The self read needs no lock (single-writer-self, synchronous within one task, so nothing can
     /// supersede the entry mid-call). The ancestor read retains the found scope while still holding
@@ -6447,6 +6456,16 @@ pub const Context = struct {
         // `body_module` is threaded -- the stamp would go unread, and word bodies are the common
         // case -- and for the shared empty-body sentinel, which is never stamped.
         //
+        // The same miss also walks the ancestor chain for the scope half, through
+        // `findCapturedScopeForBody`, so a stored quotation whose lexical captures were recorded
+        // in a parent context resolves them here. The walk's result is cached alongside the stamp,
+        // hit or null, which keeps a map hit final. That makes the cached scope a deliberate
+        // snapshot at first execution in this context: a later supersede in the ancestor is not
+        // observed through the walk. What bounds the staleness is that local writers still
+        // supersede this entry -- a literal pushed here recaptures, and a closure popped here
+        // restamps its carried scope. The walk covers the parent chain only; captures recorded in
+        // a sibling task stay unreachable.
+        //
         // The scope is retained for the full duration of this call and released via `defer`, so a
         // nested or recursive `executeInstructions` call made from within this one (e.g. through
         // `if`/`when`) is free to supersede the map's entry for this same body without freeing the
@@ -6459,16 +6478,24 @@ pub const Context = struct {
             }
             if (body_module != null or instructions.len == 0) break :blk .{};
 
-            // The store probe runs before the lock: it is lock-free, and self is the map's only
-            // writer, so the miss above cannot be raced. The insert is taken under the map mutex
-            // to exclude a descendant's parent-walk read, released on the `getOrPut` error path.
+            // The store probe and the ancestor walk run before the lock: the probe is lock-free,
+            // the walk takes one ancestor mutex at a time and never this context's own, and self
+            // is the map's only writer, so the miss above cannot be raced.
+            //
+            // The insert is taken under the map mutex to exclude a descendant's parent-walk read,
+            // released on the `getOrPut` error path. The walk's copy is released after unlocking
+            // on the found-existing path, which single-writer-self makes unreachable in practice.
             const stamped = self.quotation_stamp_store.lookup(key);
+            const inherited = try self.findCapturedScopeForBody(self.allocator, key);
+            errdefer if (inherited) |s| s.release();
             self.captured_scope_mu.lock();
             errdefer self.captured_scope_mu.unlock();
             const gop = try self.quotation_scope_info.getOrPut(self.allocator, key);
-            if (!gop.found_existing) gop.value_ptr.* = .{ .defining_module = stamped };
+            const fresh = !gop.found_existing;
+            if (fresh) gop.value_ptr.* = .{ .defining_module = stamped, .scope = inherited };
             const info = gop.value_ptr.*;
             self.captured_scope_mu.unlock();
+            if (!fresh) if (inherited) |s| s.release();
             break :blk info;
         };
         const captured_scope: ?*CapturedScope = scope_info.scope;
@@ -9601,6 +9628,227 @@ test "executeInstructions: a stored quotation resolves its stamp in a child task
     defer task_ctx.deinit();
     try task_ctx.executeQuotation(.{ .instructions = instrs });
     try std.testing.expectEqual(@as(i64, 2), (try task_ctx.stack.pop()).fixnum);
+}
+
+test "executeInstructions: a stored quotation resolves a parent-captured lexical binding in a child task" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    const push_durable: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 1 });
+        }
+    }.f;
+    const push_captured: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 2 });
+        }
+    }.f;
+    const push_module: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 3 });
+        }
+    }.f;
+
+    // A same-named durable binding is what the child would resolve if the parent-recorded scope
+    // were unreachable there -- the shadowing half of the gap, not just unknown-word.
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 0;
+    try parent.local_frames.items[0].put(parent.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .native = push_durable },
+    });
+
+    const arena_alloc = parent.arena.allocator();
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+
+    // The parent's map holds the body's captured scope; no live frame carries the binding, so an
+    // `initForTask` frame clone cannot mask the walk.
+    var frame: LocalFrame = .{};
+    try frame.put(parent.allocator, "probe-word", .{ .name = "probe-word", .action = .{ .native = push_captured } });
+    const frames = try parent.allocator.alloc(LocalFrame, 1);
+    frames[0] = frame;
+    const parent_scope = try parent.allocator.create(CapturedScope);
+    parent_scope.* = .{ .lexical_frames = frames, .allocator = parent.allocator };
+    try parent.quotation_scope_info.put(parent.allocator, @intFromPtr(instrs.ptr), .{ .scope = parent_scope });
+
+    const module = try arena_alloc.create(value_mod.Module);
+    module.* = .{ .name = "m", .words = .{} };
+    try module.words.put(arena_alloc, "probe-word", .{ .action = .{ .native = push_module } });
+    _ = try parent.quotation_stamp_store.stamp(@intFromPtr(instrs.ptr), module);
+
+    // The child's fill walks to the parent's entry; the captured binding outranks both the durable
+    // one and the stamped module's.
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+    try task_ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 2), (try task_ctx.stack.pop()).fixnum);
+
+    // Both halves land in one entry, and the scope is an independent copy, not the parent's.
+    const info = task_ctx.quotation_scope_info.get(@intFromPtr(instrs.ptr)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(?*const value_mod.Module, module), info.defining_module);
+    const inherited = info.scope orelse return error.TestExpectedScope;
+    try std.testing.expect(inherited != parent_scope);
+}
+
+test "executeInstructions: the inherited scope copy survives the ancestor's entry being superseded" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    const push_first: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 2 });
+        }
+    }.f;
+    const push_second: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 3 });
+        }
+    }.f;
+
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 0;
+
+    const arena_alloc = parent.arena.allocator();
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+
+    const makeScope = struct {
+        fn f(ctx: *Context, action: dict_mod.NativeFn) !*CapturedScope {
+            var frame: LocalFrame = .{};
+            try frame.put(ctx.allocator, "probe-word", .{ .name = "probe-word", .action = .{ .native = action } });
+            const frames = try ctx.allocator.alloc(LocalFrame, 1);
+            frames[0] = frame;
+            const scope = try ctx.allocator.create(CapturedScope);
+            scope.* = .{ .lexical_frames = frames, .allocator = ctx.allocator };
+            return scope;
+        }
+    }.f;
+
+    const first = try makeScope(&parent, push_first);
+    try parent.quotation_scope_info.put(parent.allocator, @intFromPtr(instrs.ptr), .{ .scope = first });
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+    try task_ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 2), (try task_ctx.stack.pop()).fixnum);
+
+    // Superseding the parent's entry frees the original scope, since only the parent's map owned
+    // it. The child's cached copy is a snapshot at first execution: still valid, and the newer
+    // capture is deliberately not observed.
+    const entry = parent.quotation_scope_info.getPtr(@intFromPtr(instrs.ptr)).?;
+    entry.scope.?.release();
+    entry.scope = try makeScope(&parent, push_second);
+
+    try task_ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 2), (try task_ctx.stack.pop()).fixnum);
+}
+
+test "executeInstructions: a deps-only ancestor entry is not carried by the fill" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    const push_durable: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 1 });
+        }
+    }.f;
+
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 0;
+    try parent.local_frames.items[0].put(parent.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .native = push_durable },
+    });
+
+    const arena_alloc = parent.arena.allocator();
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+
+    const dep_module = try arena_alloc.create(value_mod.Module);
+    dep_module.* = .{ .name = "dep", .words = .{} };
+
+    // An entry with deps modules but no lexical frames carries nothing the walk considers
+    // carryable, mirroring `findCapturedScopeForBody`'s rule for `curry`/`compose`.
+    const frames = try parent.allocator.alloc(LocalFrame, 0);
+    const deps = try parent.allocator.dupe(*const value_mod.Module, &.{dep_module});
+    const parent_scope = try parent.allocator.create(CapturedScope);
+    parent_scope.* = .{ .lexical_frames = frames, .deps_modules = deps, .allocator = parent.allocator };
+    try parent.quotation_scope_info.put(parent.allocator, @intFromPtr(instrs.ptr), .{ .scope = parent_scope });
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+    try task_ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 1), (try task_ctx.stack.pop()).fixnum);
+
+    const info = task_ctx.quotation_scope_info.get(@intFromPtr(instrs.ptr)) orelse return error.TestExpectedEntry;
+    try std.testing.expectEqual(@as(?*CapturedScope, null), info.scope);
+}
+
+test "executeInstructions: a walk miss caches a null scope, so a late ancestor capture is not observed" {
+    var parent = Context.init(std.testing.allocator);
+    defer parent.deinit();
+
+    var scheduler = try std.testing.allocator.create(Scheduler);
+    defer std.testing.allocator.destroy(scheduler);
+    scheduler.* = try Scheduler.init(std.testing.allocator);
+    defer scheduler.deinit();
+
+    const push_durable: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 1 });
+        }
+    }.f;
+    const push_captured: dict_mod.NativeFn = struct {
+        fn f(c: *Context) anyerror!void {
+            try c.stack.push(.{ .fixnum = 2 });
+        }
+    }.f;
+
+    try parent.pushLocalFrame();
+    parent.import_frame_index = 0;
+    try parent.local_frames.items[0].put(parent.allocator, "probe-word", .{
+        .name = "probe-word",
+        .action = .{ .native = push_durable },
+    });
+
+    const arena_alloc = parent.arena.allocator();
+    const instrs = try arena_alloc.alloc(Instruction, 1);
+    instrs[0] = .{ .op = .{ .call_word = "probe-word" }, .line = 1 };
+
+    var task_ctx = try Context.initForTask(std.testing.allocator, &parent, scheduler);
+    defer task_ctx.deinit();
+    try task_ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 1), (try task_ctx.stack.pop()).fixnum);
+
+    // A capture arriving only after the child's first execution mirrors the late-stamp shape: the
+    // child's entry already caches the walk's null, and a map hit is final.
+    var frame: LocalFrame = .{};
+    try frame.put(parent.allocator, "probe-word", .{ .name = "probe-word", .action = .{ .native = push_captured } });
+    const frames = try parent.allocator.alloc(LocalFrame, 1);
+    frames[0] = frame;
+    const parent_scope = try parent.allocator.create(CapturedScope);
+    parent_scope.* = .{ .lexical_frames = frames, .allocator = parent.allocator };
+    try parent.quotation_scope_info.put(parent.allocator, @intFromPtr(instrs.ptr), .{ .scope = parent_scope });
+
+    try task_ctx.executeQuotation(.{ .instructions = instrs });
+    try std.testing.expectEqual(@as(i64, 1), (try task_ctx.stack.pop()).fixnum);
 }
 
 test "captureQuotationScope: a fresh entry's module half is filled from the stamp store" {

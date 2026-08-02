@@ -813,38 +813,48 @@ const ValueLayout = struct {
         var v: Value = .{ .fixnum = 0 };
         payload_offset = @intFromPtr(&v.fixnum) - @intFromPtr(&v);
 
-        // Discover the tag offset by finding the byte position where three
-        // differently-tagged values each store their expected tag integer.
-        // Padding bytes are undefined in Zig unions, so comparing only two
-        // values can produce false positives. Three values with distinct
-        // non-adjacent tag integers (0, 1, 3) make a coincidental match
-        // in padding astronomically unlikely.
-        const tag0: u8 = @intFromEnum(@as(TagType, .fixnum)); // 0
-        const tag1: u8 = @intFromEnum(@as(TagType, .float)); // 1
-        const tag3: u8 = @intFromEnum(@as(TagType, .boolean)); // 3
-
-        var v1: Value = .{ .fixnum = 0 };
-        var v2: Value = .{ .float = 0.0 };
-        var v3: Value = .{ .boolean = false };
-
-        const b1: [*]const u8 = @ptrCast(&v1);
-        const b2: [*]const u8 = @ptrCast(&v2);
-        const b3: [*]const u8 = @ptrCast(&v3);
-
-        for (0..@sizeOf(Value)) |i| {
-            if (b1[i] == tag0 and b2[i] == tag1 and b3[i] == tag3) {
-                tag_offset = i;
-                break;
-            }
+        // Discover the tag offset: the byte position where every variant stores its own tag
+        // integer.
+        //
+        // Padding bytes are undefined in Zig unions, so a scan over a few variants can hit a
+        // stale-byte coincidence. That once baked a padding offset into an AOT binary, corrupting
+        // every tag the binary wrote while the linked runtime read the real position. Probing
+        // every variant makes a coincidence require the full tag sequence in padding.
+        //
+        // Anything but exactly one surviving position panics rather than letting codegen emit
+        // against a guessed layout. The panic must survive release builds, so it is not a debug
+        // assert.
+        const TagBacking = std.meta.Int(.unsigned, tag_size * 8);
+        const tag_fields = @typeInfo(TagType).@"enum".fields;
+        var probes: [tag_fields.len]Value = undefined;
+        inline for (tag_fields, 0..) |f, k| {
+            probes[k] = @unionInit(Value, f.name, undefined);
         }
 
-        // Discover the slice len offset. Zig slices are {ptr, len} but the
-        // exact position relative to the Value base must be verified at runtime.
+        var tag_candidate: ?usize = null;
+        for (0..value_size - tag_size + 1) |i| {
+            var all_match = true;
+            inline for (0..tag_fields.len) |k| {
+                const bytes: [*]const u8 = @ptrCast(&probes[k]);
+                const at: *align(1) const TagBacking = @ptrCast(bytes + i);
+                if (at.* != @as(TagBacking, tag_fields[k].value)) all_match = false;
+            }
+            if (all_match) {
+                if (tag_candidate != null) @panic("Value tag offset discovery found two candidate positions");
+                tag_candidate = i;
+            }
+        }
+        tag_offset = tag_candidate orelse @panic("Value tag offset discovery found no candidate position");
+
+        // Discover the slice len offset. Zig slices are {ptr, len} but the exact position
+        // relative to the Value base must be verified at runtime. The verification panics for the
+        // same reason the tag discovery does: a wrong layout must reject the build in release
+        // mode, not ship inside emitted code.
         slice_len_offset = payload_offset + @sizeOf(usize);
         var sv: Value = .{ .string = "ABCDE" };
         const sv_bytes: [*]const u8 = @ptrCast(&sv);
         const len_at_offset: *align(1) const usize = @ptrCast(sv_bytes + slice_len_offset);
-        std.debug.assert(len_at_offset.* == 5);
+        if (len_at_offset.* != 5) @panic("Value slice len offset verification failed");
 
         // Discover the code_ptr offset within a quotation Value by writing
         // a sentinel pointer and scanning for it.
@@ -860,7 +870,7 @@ const ValueLayout = struct {
                 break;
             }
         }
-        std.debug.assert(found_code_ptr);
+        if (!found_code_ptr) @panic("quotation code_ptr offset discovery found no sentinel");
 
         // tag and inner pointer offsets within the `tagged` variant's double-indirection
         const tag_sentinel_addr: usize = 0xDEAD_BEEF_CAFE_0010;
@@ -887,8 +897,8 @@ const ValueLayout = struct {
             if (found_tag_ptr and found_inner_ptr) break;
         }
 
-        std.debug.assert(found_tag_ptr);
-        std.debug.assert(found_inner_ptr);
+        if (!found_tag_ptr) @panic("tagged tag pointer offset discovery found no sentinel");
+        if (!found_inner_ptr) @panic("tagged inner pointer offset discovery found no sentinel");
 
         initialized = true;
     }
@@ -14336,6 +14346,25 @@ fn registerTestNativeLeaf(ctx: *Context, word_id: u32, def: *WordDefinition) !vo
         .source_file = def.source_file,
     };
     ctx.jit_dispatch.getMut(word_id).?.native = leaf;
+}
+
+test "ValueLayout: discovered tag offset reads back every live variant's tag" {
+    ValueLayout.ensureInit();
+
+    const TagBacking = std.meta.Int(.unsigned, ValueLayout.tag_size * 8);
+    const cases = [_]Value{
+        .{ .fixnum = 42 },
+        .{ .float = 1.5 },
+        .{ .boolean = true },
+        .{ .string = "abc" },
+        .{ .symbol = "sym" },
+        .{ .unit = {} },
+    };
+    for (cases) |case| {
+        const bytes: [*]const u8 = @ptrCast(&case);
+        const at: *align(1) const TagBacking = @ptrCast(bytes + ValueLayout.tag_offset);
+        try testing.expectEqual(@as(TagBacking, @intFromEnum(std.meta.activeTag(case))), at.*);
+    }
 }
 
 test "jitPushQuotation: runtime-image push caches the decode and stamps the defining module" {
