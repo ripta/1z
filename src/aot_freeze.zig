@@ -873,7 +873,11 @@ const DiscoveredWords = struct {
     /// The `method{` dispatch bodies, keyed by instruction-slice pointer. Sets
     /// `AotQuotationDesc.is_method_body` at manifest-build time, and carries the polymorphic word
     /// each body was walked from, which is the scope freeze filed the body's callee bindings under.
-    method_body_ptrs: std.AutoHashMapUnmanaged(usize, MethodBody) = .{},
+    ///
+    /// An array-hash map so iteration follows insertion order rather than the pointer keys' hash
+    /// order. The attribution walk over it is first-wins, so a pointer-order walk would let a
+    /// nested slice reachable from two method bodies draw a different callee scope per run.
+    method_body_ptrs: std.AutoArrayHashMapUnmanaged(usize, MethodBody) = .{},
     /// Instruction-slice pointers of the quotation bodies reached only through composite literals,
     /// used to set `AotQuotationDesc.from_composite` at manifest-build time.
     composite_body_ptrs: std.AutoHashMapUnmanaged(usize, void) = .{},
@@ -2227,7 +2231,7 @@ fn walkDispatchMethodBodies(
     seen: *WordIdentitySet,
     quotation_bodies: *std.ArrayListUnmanaged([]const Instruction),
     quotation_seen: *std.AutoHashMapUnmanaged(usize, void),
-    method_body_ptrs: *std.AutoHashMapUnmanaged(usize, MethodBody),
+    method_body_ptrs: *std.AutoArrayHashMapUnmanaged(usize, MethodBody),
     pending_call_targets: *std.ArrayListUnmanaged(PendingCallTarget),
     pending_callee_bindings: *std.ArrayListUnmanaged(PendingCalleeBinding),
     diagnostics: *FreezeDiagnostics,
@@ -6519,7 +6523,7 @@ test "walkDispatchMethodBodies adds every quotation method body and skips native
     defer quotation_bodies.deinit(allocator);
     var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
     defer quotation_seen.deinit(allocator);
-    var method_body_ptrs = std.AutoHashMapUnmanaged(usize, MethodBody){};
+    var method_body_ptrs = std.AutoArrayHashMapUnmanaged(usize, MethodBody){};
     defer method_body_ptrs.deinit(allocator);
     var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
     defer pending_call_targets.deinit(allocator);
@@ -6535,6 +6539,75 @@ test "walkDispatchMethodBodies adds every quotation method body and skips native
     try testing.expect(quotationBodiesContain(quotation_bodies.items, body_b));
     try testing.expect(method_body_ptrs.contains(@intFromPtr(body_a.ptr)));
     try testing.expect(method_body_ptrs.contains(@intFromPtr(body_b.ptr)));
+}
+
+test "walkDispatchMethodBodies records method bodies in registration order" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+
+    // Four method bodies on one generic, registered on descriptors no registry has a name for.
+    // The collection sort then ties on the empty name for every pair, so the registration-sequence
+    // tie-break alone decides the order, and the insertion-ordered map must preserve it.
+    var bodies: [4][]Instruction = undefined;
+    for (&bodies, 0..) |*body, i| {
+        body.* = try allocator.dupe(Instruction, &[_]Instruction{
+            .{ .op = .{ .push_literal = .{ .fixnum = @intCast(i) } }, .line = 1 },
+        });
+    }
+    defer for (bodies) |body| allocator.free(body);
+
+    var tds: [4]*value_mod.TypeDescriptor = undefined;
+    for (&tds) |*td| {
+        td.* = try allocator.create(value_mod.TypeDescriptor);
+        td.*.* = .{ .kind = .builtin };
+    }
+    defer for (tds) |td| allocator.destroy(td);
+    const td_sentinel = try allocator.create(value_mod.TypeDescriptor);
+    defer allocator.destroy(td_sentinel);
+    td_sentinel.* = .{ .kind = .sentinel };
+
+    const did: u32 = 7;
+    for (bodies, tds) |body, td| {
+        try ctx.registerDispatch(
+            .{ .dispatch_id = did, .type_a = td, .type_b = td_sentinel },
+            .{ .body = .{ .quotation = .{ .instructions = body } } },
+            false,
+        );
+    }
+
+    const def = WordDefinition{
+        .name = "shape-area",
+        .action = .{ .compound = &.{} },
+        .markers = &.{@constCast(&markers_mod.generic_marker)},
+        .dispatch_id = did,
+    };
+
+    var worklist = WordIdentityList{};
+    defer worklist.deinit(allocator);
+    var seen = WordIdentitySet{};
+    defer seen.deinit(allocator);
+    var quotation_bodies = std.ArrayListUnmanaged([]const Instruction){};
+    defer quotation_bodies.deinit(allocator);
+    var quotation_seen = std.AutoHashMapUnmanaged(usize, void){};
+    defer quotation_seen.deinit(allocator);
+    var method_body_ptrs = std.AutoArrayHashMapUnmanaged(usize, MethodBody){};
+    defer method_body_ptrs.deinit(allocator);
+    var pending_call_targets = std.ArrayListUnmanaged(PendingCallTarget){};
+    defer pending_call_targets.deinit(allocator);
+    var pending_callee_bindings = std.ArrayListUnmanaged(PendingCalleeBinding){};
+    defer pending_callee_bindings.deinit(allocator);
+    defer freePendingCallTargetPaths(&pending_call_targets, allocator);
+    var diagnostics: FreezeDiagnostics = .{};
+
+    try walkDispatchMethodBodies(&ctx, def, bareIdentity("shape-area"), &worklist, &seen, &quotation_bodies, &quotation_seen, &method_body_ptrs, &pending_call_targets, &pending_callee_bindings, &diagnostics, .runtime_image_aot, allocator, allocator);
+
+    try testing.expectEqual(@as(usize, 4), quotation_bodies.items.len);
+    try testing.expectEqual(@as(usize, 4), method_body_ptrs.count());
+    for (bodies, 0..) |body, i| {
+        try testing.expectEqual(@intFromPtr(body.ptr), @intFromPtr(quotation_bodies.items[i].ptr));
+        try testing.expectEqual(@intFromPtr(body.ptr), method_body_ptrs.keys()[i]);
+    }
 }
 
 test "discoverReachableWords includes reached generic's method bodies and excludes unreached" {

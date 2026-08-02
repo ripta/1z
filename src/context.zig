@@ -4697,7 +4697,15 @@ pub const Context = struct {
                 if (cmp_a != .eq) return cmp_a == .lt;
                 const a_b_name = ctx.lookupTypeNameByDescriptorLocked(a.key.type_b) orelse "";
                 const b_b_name = ctx.lookupTypeNameByDescriptorLocked(b.key.type_b) orelse "";
-                return std.mem.order(u8, a_b_name, b_b_name) == .lt;
+                const cmp_b = std.mem.order(u8, a_b_name, b_b_name);
+                if (cmp_b != .eq) return cmp_b == .lt;
+
+                // Two descriptors resolving to the same name, or to no name at all, would
+                // otherwise keep raw hash-collection order. Registration sequence breaks the tie
+                // for base-table entries. A tie between frame entries keeps collection order,
+                // which is hash order; that residual cannot reach emission, since dispatch frames
+                // are popped before freeze collects.
+                return a.entry.sequence < b.entry.sequence;
             }
         }.lessThan);
         return slice;
@@ -10383,4 +10391,40 @@ test "deinit releases runtime-created values stored into image container slots" 
     // deinit's image-slot walk drops the donated references; the destroys
     // release the stored hashes. testing.allocator reports them if not.
     ctx.deinit();
+}
+
+test "dispatchEntriesForId breaks type-name ties by registration sequence" {
+    const alloc = std.testing.allocator;
+    var ctx = Context.init(alloc);
+    defer ctx.deinit();
+
+    // Descriptors with no registry name all sort as the empty name, so the sort's name keys tie
+    // for every pair and only the sequence tie-break orders them.
+    var tds: [4]*value_mod.TypeDescriptor = undefined;
+    for (&tds) |*td| {
+        td.* = try alloc.create(value_mod.TypeDescriptor);
+        td.*.* = .{ .kind = .builtin };
+    }
+    defer for (tds) |td| alloc.destroy(td);
+    const td_sentinel = try alloc.create(value_mod.TypeDescriptor);
+    defer alloc.destroy(td_sentinel);
+    td_sentinel.* = .{ .kind = .sentinel };
+
+    const body = [_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const did: u32 = 9001;
+    for (tds) |td| {
+        try ctx.registerDispatch(
+            .{ .dispatch_id = did, .type_a = td, .type_b = td_sentinel },
+            .{ .body = .{ .quotation = .{ .instructions = &body } } },
+            false,
+        );
+    }
+
+    const pairs = try ctx.dispatchEntriesForId(did, alloc);
+    defer alloc.free(pairs);
+
+    try std.testing.expectEqual(@as(usize, 4), pairs.len);
+    for (pairs, tds) |pair, td| {
+        try std.testing.expectEqual(@as(*const value_mod.TypeDescriptor, td), pair.key.type_a);
+    }
 }

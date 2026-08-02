@@ -240,7 +240,12 @@ const Inference = struct {
     /// pointer. A `parameter{ [ ... ] }` default is the case that reaches here: freeze seeds its
     /// callees into the worklist but appends the body itself to neither `words` nor `quotations`, so
     /// the census has to walk it directly or the calls inside it go unrecorded.
-    orphan_bodies: std.AutoHashMapUnmanaged(usize, []const Instruction) = .{},
+    ///
+    /// An array-hash map so iteration follows insertion order rather than the pointer keys' hash
+    /// order. Walk order decides step counts through the `visited_calls` memoization, and the
+    /// round budget is checked mid-walk. A pointer-order walk would therefore make budget
+    /// exhaustion -- which discards the whole census -- differ run to run.
+    orphan_bodies: std.AutoArrayHashMapUnmanaged(usize, []const Instruction) = .{},
 
     /// Parameter states for every target, words first and quotations after, sliced by `offsets`.
     states: []ParamState = &.{},
@@ -1557,6 +1562,60 @@ test "a call inside a parameter default counts against the callee" {
     try inferParamTypes(&result, .{}, allocator);
 
     try testing.expectEqual(@as(usize, 0), wordParams(&result, "scale").len);
+}
+
+test "orphan bodies are recorded and walked in discovery order" {
+    const allocator = testing.allocator;
+
+    // Five parameter-default bodies. Four sit directly in the entry body; the fifth is buried
+    // inside the first default, so only the orphan walk itself can discover it. Its key landing
+    // last pins that a walked orphan appends its discoveries deterministically too.
+    const body_e = [_]Instruction{at(.{ .push_literal = .{ .fixnum = 5 } })};
+    const param_e = value_mod.Parameter{
+        .name = "pe",
+        .default_quotation = .{ .instructions = &body_e },
+    };
+    const body_a = [_]Instruction{
+        at(.{ .push_literal = .{ .parameter = @constCast(&param_e) } }),
+        at(.{ .call_word = "drop" }),
+    };
+    const body_b = [_]Instruction{at(.{ .push_literal = .{ .fixnum = 2 } })};
+    const body_c = [_]Instruction{at(.{ .push_literal = .{ .fixnum = 3 } })};
+    const body_d = [_]Instruction{at(.{ .push_literal = .{ .fixnum = 4 } })};
+
+    const param_a = value_mod.Parameter{ .name = "pa", .default_quotation = .{ .instructions = &body_a } };
+    const param_b = value_mod.Parameter{ .name = "pb", .default_quotation = .{ .instructions = &body_b } };
+    const param_c = value_mod.Parameter{ .name = "pc", .default_quotation = .{ .instructions = &body_c } };
+    const param_d = value_mod.Parameter{ .name = "pd", .default_quotation = .{ .instructions = &body_d } };
+
+    const entry_body = [_]Instruction{
+        at(.{ .push_literal = .{ .parameter = @constCast(&param_a) } }),
+        at(.{ .call_word = "drop" }),
+        at(.{ .push_literal = .{ .parameter = @constCast(&param_b) } }),
+        at(.{ .call_word = "drop" }),
+        at(.{ .push_literal = .{ .parameter = @constCast(&param_c) } }),
+        at(.{ .call_word = "drop" }),
+        at(.{ .push_literal = .{ .parameter = @constCast(&param_d) } }),
+        at(.{ .call_word = "drop" }),
+    };
+
+    var result = try fixture(allocator, &.{
+        .{ .name = "__entry__", .body = &entry_body },
+    }, &.{}, &.{});
+    defer result.deinit(allocator);
+
+    var inference = try Inference.build(allocator, &result, .{});
+    defer inference.deinit();
+    _ = try inference.converge();
+
+    const expected = [_]usize{
+        @intFromPtr(@as([]const Instruction, &body_a).ptr),
+        @intFromPtr(@as([]const Instruction, &body_b).ptr),
+        @intFromPtr(@as([]const Instruction, &body_c).ptr),
+        @intFromPtr(@as([]const Instruction, &body_d).ptr),
+        @intFromPtr(@as([]const Instruction, &body_e).ptr),
+    };
+    try testing.expectEqualSlices(usize, &expected, inference.orphan_bodies.keys());
 }
 
 test "two descriptors sharing a name disqualify both" {
