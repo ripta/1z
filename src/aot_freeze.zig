@@ -1457,31 +1457,25 @@ fn classifyCallee(ctx: *const Context, name: []const u8, vis: ?ModuleDepsVisibil
     return .{ .unresolved = .not_in_dictionary };
 }
 
-/// True for a callee defined in an ephemeral private scope -- a `private{ }` helper or a
-/// `local-scope`/`current-scope` snapshot.
-fn isPrivateHelperCallee(callee: WordDefinition) bool {
-    return aot_image.isPrivateHelperSource(callee.source_module);
-}
-
 /// Recurse through a composite literal Value to reach every buried `.quotation` and seed its callees
 /// onto the worklist, resolved under `vis` (the containing word's module scope). Mirrors
 /// `collectQuotationsInValue`'s traversal, but seeds callees rather than collecting bodies, since the
 /// bodies are already collected by `collectCompositeQuotations`. See `seedQuotationBodyCallees` for
-/// `private_only`.
-fn seedCompositeQuotationCallees(ctx: *const Context, val: Value, caller: WordIdentity, vis: ?ModuleDepsVisibility, private_only: bool, worklist: *WordIdentityList, seen: *WordIdentitySet, pending_callee_bindings: *std.ArrayListUnmanaged(PendingCalleeBinding), allocator: Allocator) Allocator.Error!void {
+/// `module_scoped_only`.
+fn seedCompositeQuotationCallees(ctx: *const Context, val: Value, caller: WordIdentity, vis: ?ModuleDepsVisibility, module_scoped_only: bool, worklist: *WordIdentityList, seen: *WordIdentitySet, pending_callee_bindings: *std.ArrayListUnmanaged(PendingCalleeBinding), allocator: Allocator) Allocator.Error!void {
     switch (val) {
-        .quotation => |q| try seedQuotationBodyCallees(ctx, q.instructions, caller, vis, private_only, worklist, seen, pending_callee_bindings, allocator),
-        .array => |arr| for (arr.items) |elem| try seedCompositeQuotationCallees(ctx, elem, caller, vis, private_only, worklist, seen, pending_callee_bindings, allocator),
+        .quotation => |q| try seedQuotationBodyCallees(ctx, q.instructions, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
+        .array => |arr| for (arr.items) |elem| try seedCompositeQuotationCallees(ctx, elem, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
         .hash => |h| {
             var it = h.map.iterator();
-            while (it.next()) |entry| try seedCompositeQuotationCallees(ctx, entry.value_ptr.*, caller, vis, private_only, worklist, seen, pending_callee_bindings, allocator);
+            while (it.next()) |entry| try seedCompositeQuotationCallees(ctx, entry.value_ptr.*, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator);
         },
-        .vector => |v| for (v.list.items) |elem| try seedCompositeQuotationCallees(ctx, elem, caller, vis, private_only, worklist, seen, pending_callee_bindings, allocator),
+        .vector => |v| for (v.list.items) |elem| try seedCompositeQuotationCallees(ctx, elem, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
         .mutable_map => |m| {
             var it = m.map.iterator();
-            while (it.next()) |entry| try seedCompositeQuotationCallees(ctx, entry.value_ptr.*, caller, vis, private_only, worklist, seen, pending_callee_bindings, allocator);
+            while (it.next()) |entry| try seedCompositeQuotationCallees(ctx, entry.value_ptr.*, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator);
         },
-        .struct_instance => |si| for (si.fields) |field| try seedCompositeQuotationCallees(ctx, field, caller, vis, private_only, worklist, seen, pending_callee_bindings, allocator),
+        .struct_instance => |si| for (si.fields) |field| try seedCompositeQuotationCallees(ctx, field, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
         else => {},
     }
 }
@@ -1493,19 +1487,20 @@ fn seedCompositeQuotationCallees(ctx: *const Context, val: Value, caller: WordId
 /// No per-call-site record: the call site lives in the buried quotation, not in the containing word's
 /// compiled body.
 ///
-/// `private_only` seeds only a callee defined in an ephemeral private scope (a `private{ }` helper,
-/// per `isPrivateHelperCallee`). A composite dispatch table (an `H{ }` of quotations) buries many
-/// quotations calling ordinary prelude combinators, which the runtime already provides; seeding those
-/// only bloats the compile and fallback set. Only a private helper truly needs seeding, since nothing
-/// else would pull it into the image. A parameter default passes `false` to seed every callee,
-/// keeping its long-standing "compile the default's callees or they drop to an empty body at runtime"
-/// behavior.
-fn seedQuotationBodyCallees(ctx: *const Context, instrs: []const Instruction, caller: WordIdentity, vis: ?ModuleDepsVisibility, private_only: bool, worklist: *WordIdentityList, seen: *WordIdentitySet, pending_callee_bindings: *std.ArrayListUnmanaged(PendingCalleeBinding), allocator: Allocator) Allocator.Error!void {
+/// `module_scoped_only` seeds only a callee with a defining module: a `private{ }` helper or a
+/// public module word. A composite dispatch table (an `H{ }` of quotations) buries many quotations
+/// calling ordinary prelude combinators, which are module-less and which the runtime already
+/// provides; seeding those only bloats the compile and fallback set. A module-scoped callee needs
+/// seeding for its freeze identity: without one, the buried call site falls to the program-wide
+/// bare-name callee fallback, where a same-named module-less word looks like the name's sole owner
+/// and the wrong body runs. A parameter default passes `false` to seed every callee, keeping its
+/// long-standing "compile the default's callees or they drop to an empty body at runtime" behavior.
+fn seedQuotationBodyCallees(ctx: *const Context, instrs: []const Instruction, caller: WordIdentity, vis: ?ModuleDepsVisibility, module_scoped_only: bool, worklist: *WordIdentityList, seen: *WordIdentitySet, pending_callee_bindings: *std.ArrayListUnmanaged(PendingCalleeBinding), allocator: Allocator) Allocator.Error!void {
     for (instrs) |instr| switch (instr.op) {
         .call_word, .call_word_direct, .call_word_module => {
             const name = instr.op.callTargetName().?;
             const callee = ctx.lookupWordFiltered(name, vis) orelse continue;
-            if (private_only and !isPrivateHelperCallee(callee)) continue;
+            if (module_scoped_only and callee.source_module == null) continue;
 
             const identity = WordIdentity{ .module = callee.source_module, .name = name };
             const gop = try seen.getOrPut(allocator, identity);
@@ -1517,9 +1512,9 @@ fn seedQuotationBodyCallees(ctx: *const Context, instrs: []const Instruction, ca
             });
         },
         .push_literal => |v| switch (v) {
-            .quotation => |q| try seedQuotationBodyCallees(ctx, q.instructions, caller, vis, private_only, worklist, seen, pending_callee_bindings, allocator),
-            .parameter => |p| try seedQuotationBodyCallees(ctx, p.default_quotation.instructions, caller, vis, private_only, worklist, seen, pending_callee_bindings, allocator),
-            .array, .hash, .vector, .mutable_map, .struct_instance => try seedCompositeQuotationCallees(ctx, v, caller, vis, private_only, worklist, seen, pending_callee_bindings, allocator),
+            .quotation => |q| try seedQuotationBodyCallees(ctx, q.instructions, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
+            .parameter => |p| try seedQuotationBodyCallees(ctx, p.default_quotation.instructions, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
+            .array, .hash, .vector, .mutable_map, .struct_instance => try seedCompositeQuotationCallees(ctx, v, caller, vis, module_scoped_only, worklist, seen, pending_callee_bindings, allocator),
             else => {},
         },
     };
@@ -1670,9 +1665,10 @@ fn collectCallWords(
                     // A quotation buried in a composite literal (an `H{ }` dispatch table, an array of
                     // quotations, ...) runs under the interpreter when the value is later extracted and
                     // called. `collectCompositeQuotations` collects its body, but leaves its callees
-                    // undiscovered, so a module-private word it calls is never serialized.
+                    // undiscovered, so a module word it calls is never serialized and owns no freeze
+                    // identity that would bind the buried call site.
                     //
-                    // Seed only the private-helper callees (`private_only`): a dispatch table's
+                    // Seed only the module-scoped callees (`module_scoped_only`): a dispatch table's
                     // quotations otherwise call ordinary prelude combinators the runtime already
                     // provides. Skipped for strict interpreter-free builds, whose must-compile
                     // invariant handles buried quotations through the keyed promoting passes instead.
@@ -4812,6 +4808,61 @@ test "collectCompositeQuotations collects a quotation nested in a hash literal" 
 
     try testing.expectEqual(@as(usize, 1), quotation_bodies.items.len);
     try testing.expectEqual(@intFromPtr(inner_instrs.ptr), @intFromPtr(quotation_bodies.items[0].ptr));
+}
+
+test "seedCompositeQuotationCallees seeds a module-scoped callee and skips a module-less one" {
+    const allocator = testing.allocator;
+    var ctx = Context.init(allocator);
+    defer ctx.deinit();
+    const arena_alloc = ctx.arena.allocator();
+
+    const effect = StackEffect{ .inputs = &.{}, .outputs = &.{} };
+    const probe_body = try arena_alloc.alloc(Instruction, 1);
+    probe_body[0] = .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 };
+
+    const mod = try arena_alloc.create(value_mod.Module);
+    mod.* = .{ .name = "mod-m", .words = .{} };
+
+    try ctx.pushLocalFrame();
+    defer ctx.popLocalFrame();
+    const frame = &ctx.local_frames.items[ctx.local_frames.items.len - 1];
+    try frame.put(allocator, "mod-probe", .{
+        .name = "mod-probe",
+        .source_module = mod,
+        .stack_effect = effect,
+        .action = .{ .compound = probe_body },
+    });
+    try frame.put(allocator, "bare-probe", .{
+        .name = "bare-probe",
+        .stack_effect = effect,
+        .action = .{ .compound = probe_body },
+    });
+
+    const inner_instrs = &[_]Instruction{
+        .{ .op = .{ .call_word = "mod-probe" }, .line = 1 },
+        .{ .op = .{ .call_word = "bare-probe" }, .line = 1 },
+    };
+    const hash = try value_mod.HashTable.create(allocator);
+    defer hash.header.release();
+    try hash.map.put(allocator, try allocator.dupe(u8, "go"), .{ .quotation = .{ .instructions = inner_instrs } });
+
+    var worklist = WordIdentityList{};
+    defer worklist.deinit(allocator);
+    var seen = WordIdentitySet{};
+    defer seen.deinit(allocator);
+    var bindings = std.ArrayListUnmanaged(PendingCalleeBinding){};
+    defer bindings.deinit(allocator);
+
+    try seedCompositeQuotationCallees(&ctx, .{ .hash = hash }, bareIdentity("caller"), null, true, &worklist, &seen, &bindings, allocator);
+
+    // The module word is seeded under its own identity, so it compiles and the
+    // buried call site binds to it; the module-less callee stays unseeded.
+    try testing.expectEqual(@as(usize, 1), worklist.items.len);
+    try testing.expectEqualStrings("mod-probe", worklist.items[0].name);
+    try testing.expect(worklist.items[0].module == mod);
+    try testing.expectEqual(@as(usize, 1), bindings.items.len);
+    try testing.expectEqualStrings("mod-probe", bindings.items[0].callee_name);
+    try testing.expect(bindings.items[0].callee_module == mod);
 }
 
 test "collectCompositeQuotations collects a quotation nested in a nested composite" {

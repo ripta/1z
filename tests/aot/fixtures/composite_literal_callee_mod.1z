@@ -1,0 +1,3 @@
+probe:  ( -- fixnum ) [ 111 ] ;
+table:  ( -- hash )   [ H{ go: [ probe . ] } ] ;
+caller: ( -- )        [ table go: @get call ] ;

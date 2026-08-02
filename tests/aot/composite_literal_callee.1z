@@ -1,0 +1,11 @@
+\ A public module word whose only call site sits inside a composite literal
+\ (a quotation stored in a hash) must be discovered by freeze and bound at
+\ the buried call site. The entry defines a colliding top-level `probe`; the
+\ module's stored quotation must still run the module's own body.
+
+m: "fixtures/composite_literal_callee_mod.1z" load ;
+
+probe: ( -- fixnum ) [ 222 ] ;
+
+probe .
+m.caller
