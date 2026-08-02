@@ -1,0 +1,8 @@
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+=== parent-captured lexical scope in a spawned task ===
+Stack: [ ]
+PASS: a stored quotation resolves its parent-captured local over the durable word
+Stack: [ ]

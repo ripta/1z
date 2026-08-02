@@ -1,0 +1,19 @@
+\ The partial-import variant of the task doc-extraction repro.
+\
+\ With the entry also importing 1z-tokens, the rule literal is pushed in the child under a live
+\ 1z-tokens deps frame, so the rule word itself resolves through its captured ambient deps, and
+\ the failure moved one hop down: the private helper's own body could not resolve scanner's
+\ `peek`. Same gap, different failing word, so it pins the deeper hop and pins that the entry's
+\ import set no longer changes what a library-internal quotation resolves.
+
+use "testing" ;
+use "1z-tokens" ;
+use "doc/extract" ;
+
+"doc extraction in a spawned task with a partial entry import" test-section
+
+[
+  out: 1 <buffered-channel> ;
+  [ "lib/char.1z" extract-doc-info-from-file drop "upper?" @has? out send ] spawn drop
+  out receive "a private rule helper resolves its module's deps inside a task" assert-true
+] task-scope

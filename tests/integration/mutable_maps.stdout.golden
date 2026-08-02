@@ -68,6 +68,8 @@ Stack: [ ]
 Stack: [ ]
 PASS: mmap @keys count
 Stack: [ ]
+PASS: mmap @keys key bytes survive the map's release
+Stack: [ ]
 === Mutable map @values ===
 Stack: [ ]
 PASS: mmap @values count

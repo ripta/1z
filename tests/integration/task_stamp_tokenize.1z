@@ -1,0 +1,15 @@
+\ Tokenization inside a spawned task, with the tokenizer module imported directly at the entry.
+\
+\ This is the working half of the stored-quotation stamp gap: it worked before the shared stamp
+\ store landed, and pins that the store did not regress the direct-import path.
+
+use "testing" ;
+use "1z-tokens" ;
+
+"tokenization in a spawned task" test-section
+
+[
+  out: 1 <buffered-channel> ;
+  [ "dup ." 1z-tokenize #collect #len out send ] spawn drop
+  out receive 3 "a directly-imported tokenizer tokenizes inside a task" assert=
+] task-scope

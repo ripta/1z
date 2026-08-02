@@ -395,7 +395,13 @@ fn nativeAtKeysMutableMap(ctx: *Context) anyerror!void {
     var iter = m.map.iterator();
     var i: usize = 0;
     while (iter.next()) |entry| {
-        keys[i] = .{ .symbol = entry.key_ptr.* };
+        // The map owns its key bytes and frees them at release, so
+        // the escaping symbols need arena-lifetime copies.
+        const key_copy = ctx.quotationAllocator().dupe(u8, entry.key_ptr.*) catch {
+            ctx.allocator.free(keys);
+            return error.OutOfMemory;
+        };
+        keys[i] = .{ .symbol = key_copy };
         i += 1;
     }
     try helpers.pushAdoptedArray(ctx, ctx.allocator, keys);

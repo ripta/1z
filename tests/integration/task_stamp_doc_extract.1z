@@ -1,0 +1,17 @@
+\ A module word reached through another module must resolve its own scope inside a spawned task.
+\
+\ The doc-extraction chain runs 1z-tokens' stored rule quotations while draining a lazy iterator,
+\ after every frame from the call has been popped, so only the defining-module stamp can recover
+\ their module scope. With the stamp in a per-context map the child task's map was empty, and this
+\ raised unknown-word on the lexer's private rule words.
+
+use "testing" ;
+use "doc/extract" ;
+
+"doc extraction in a spawned task" test-section
+
+[
+  out: 1 <buffered-channel> ;
+  [ "lib/char.1z" extract-doc-info-from-file drop "upper?" @has? out send ] spawn drop
+  out receive "a stored lexer rule resolves its module scope inside a task" assert-true
+] task-scope

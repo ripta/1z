@@ -1,0 +1,8 @@
+\ Companion module for task_stamp_shadow.1z.
+\
+\ `get-stored` returns a quotation literal whose bare `probe` must resolve to this module's own
+\ `probe`, wherever and whenever the quotation runs.
+
+probe: ( -- s ) [ "MOD-PROBE" ] ;
+
+get-stored: ( -- q ) [ [ probe ] ] ;

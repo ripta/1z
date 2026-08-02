@@ -1,0 +1,4 @@
+=== doc extraction in a spawned task ===
+Stack: [ ]
+PASS: a stored lexer rule resolves its module scope inside a task
+Stack: [ ]

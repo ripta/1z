@@ -1,0 +1,31 @@
+\ A stored quotation's lexical captures recorded in the parent context must be reachable in a
+\ child task.
+\
+\ The quotation closes over `val` from a local frame that is gone by the time it runs, and it
+\ reaches the child through a shared container rather than as the spawned body, so the spawn-time
+\ scope copy cannot carry it: only the body-entry ancestor walk can. The durable same-named `val`
+\ is what the child would resolve if the walk failed -- the shadowing half, not just unknown-word.
+
+use "testing" ;
+
+\ Both `val`s stay effect-free: under eager compilation a quotation-local redefinition warns about
+\ dropping the original's declared effect even when the local declares a matching one.
+val: [ "DURABLE-VAL" ] ;
+
+make-stored: ( -- q ) [
+  val: [ "CAPTURED-VAL" ] ;
+  [ val ]
+] ;
+
+holder: V{ } ;
+holder make-stored #push! drop
+
+"parent-captured lexical scope in a spawned task" test-section
+
+[
+  out: 1 <buffered-channel> ;
+  [ holder 0 #nth call out send ] spawn drop
+  out receive "CAPTURED-VAL"
+  "a stored quotation resolves its parent-captured local over the durable word"
+  assert=
+] task-scope

@@ -46,6 +46,7 @@ M{ a: 1 } a: @remove! #len 0 "@remove! can empty map" assert=
 
 "Mutable map @keys" test-section
 M{ a: 1 b: 2 } @keys #len 2 "mmap @keys count" assert=
+M{ a: 1 } @keys 0 #nth >string "a" "mmap @keys key bytes survive the map's release" assert=
 
 "Mutable map @values" test-section
 M{ a: 1 b: 2 } @values #len 2 "mmap @values count" assert=

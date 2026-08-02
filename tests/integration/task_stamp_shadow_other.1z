@@ -1,0 +1,3 @@
+\ Companion module for task_stamp_shadow.1z: the colliding `probe` the entry imports.
+
+probe: ( -- s ) [ "OTHER-PROBE" ] ;

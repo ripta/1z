@@ -1,0 +1,25 @@
+\ Own-module precedence for a stored module quotation executed in a spawned task: the quotation's
+\ bare `probe` must resolve to its defining module's own binding, not the same-named word the
+\ entry imports.
+\
+\ With the defining-module stamp unreachable in the child, resolution fell back to the child's
+\ durable imports and silently ran the entry's `probe` -- the wrong-word-wins half of the stamp
+\ gap, not just unknown-word. The child reaches the quotation through a shared vector, so no deps
+\ frame of the defining module is live at the call: only the stamp can resolve its own binding.
+
+use "testing" ;
+use { get-stored: } "./task_stamp_shadow_mod.1z" ;
+use { probe: } "./task_stamp_shadow_other.1z" ;
+
+holder: V{ } ;
+holder get-stored #push! drop
+
+"own-module precedence in a spawned task" test-section
+
+[
+  out: 1 <buffered-channel> ;
+  [ holder 0 #nth call out send ] spawn drop
+  out receive "MOD-PROBE"
+  "a stored module quotation resolves its own probe over the entry's import"
+  assert=
+] task-scope

@@ -1,0 +1,4 @@
+=== tokenization in a spawned task ===
+Stack: [ ]
+PASS: a directly-imported tokenizer tokenizes inside a task
+Stack: [ ]

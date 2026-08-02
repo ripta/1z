@@ -1,0 +1,4 @@
+=== doc extraction in a spawned task with a partial entry import ===
+Stack: [ ]
+PASS: a private rule helper resolves its module's deps inside a task
+Stack: [ ]

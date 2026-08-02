@@ -5,8 +5,6 @@
 
 use "os/fs" ;
 use "os/path" ;
-use "scanner" ;
-use "1z-tokens" ;
 use "strings" ;
 use "sequences" ;
 use "runtime/introspect" ;

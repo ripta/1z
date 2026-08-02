@@ -1,0 +1,6 @@
+Stack: [ ]
+Stack: [ ]
+=== own-module precedence in a spawned task ===
+Stack: [ ]
+PASS: a stored module quotation resolves its own probe over the entry's import
+Stack: [ ]
