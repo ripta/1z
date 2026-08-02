@@ -992,11 +992,11 @@ fn internTopLevelFrameLiterals(
 /// entry. For quotation-bodied entries, the body walker picks up
 /// `.type_val` and friends. For key TypeDescriptors, the descriptor
 /// itself does not back-reference its owning TypeValue, so build a
-/// one-shot index over the Context's known TypeValue registries and
-/// intern via that map. Descriptors not present in any registry are
-/// silently skipped -- they correspond to TypeValues that no live
-/// reference path reaches, and the slot table cannot rehydrate them
-/// either.
+/// one-shot index over the slot table and the Context's known
+/// TypeValue registries and intern via that map. Descriptors the
+/// index does not reach are silently skipped -- they correspond to
+/// TypeValues that no live reference path reaches, and the slot
+/// table cannot rehydrate them either.
 fn internDispatchTableLiterals(
     struct_plans: *std.ArrayListUnmanaged(StructTypePlan),
     struct_index: *std.AutoHashMapUnmanaged(*const value_mod.StructType, u32),
@@ -1005,7 +1005,7 @@ fn internDispatchTableLiterals(
 ) Allocator.Error!void {
     var desc_index: std.AutoHashMapUnmanaged(*const value_mod.TypeDescriptor, *const value_mod.TypeValue) = .{};
     defer desc_index.deinit(effect_table.allocator);
-    try indexKnownTypeValues(&desc_index, effect_table.allocator, ctx);
+    try indexKnownTypeValues(&desc_index, effect_table.allocator, ctx, effect_table);
 
     inline for (.{ &ctx.dispatch.entries, &ctx.dispatch.native_entries }) |table| {
         var iter = table.iterator();
@@ -1028,35 +1028,62 @@ fn internDispatchTableLiterals(
     }
 }
 
-/// Build a descriptor→TypeValue index from the Context's known
-/// TypeValue registries. Used to recover the TypeValue identity of a
-/// dispatch key's `*const TypeDescriptor` since TypeDescriptor itself
-/// carries no back-pointer to its owning TypeValue.
+/// Claim a descriptor key for its TypeValue, first insert wins. The one insertion policy every
+/// pass of `indexKnownTypeValues` goes through.
+fn claimDescriptorKey(
+    desc_index: *std.AutoHashMapUnmanaged(*const value_mod.TypeDescriptor, *const value_mod.TypeValue),
+    allocator: Allocator,
+    tv: *const value_mod.TypeValue,
+) Allocator.Error!void {
+    const desc = tv.descriptor orelse return;
+    const gop = try desc_index.getOrPut(allocator, desc);
+    if (!gop.found_existing) gop.value_ptr.* = tv;
+}
+
+/// Build a descriptor→TypeValue index from the slot table and the Context's known TypeValue
+/// registries. Used to recover the TypeValue identity of a dispatch key's `*const TypeDescriptor`
+/// since TypeDescriptor itself carries no back-pointer to its owning TypeValue.
+///
+/// Descriptor interning collapses same-shaped types onto one descriptor, so two TypeValues can
+/// claim one key. The tie-break is smallest interned slot wins: the ordered `type_slots` array is
+/// indexed first with first-insert-wins, and the registries fill only keys no slotted TypeValue
+/// claims, so a slot-less registry claimant cannot steal a key and regress its dispatch rows to
+/// the dropped slot 0.
+///
+/// The slot pass is also what covers user-defined `virtual{` / `struct{` types, which appear in
+/// no registry. Without it a method dispatched on such a type would resolve to the unresolved
+/// sentinel, slot 0, and be dropped by the loader.
+///
+/// `anonymous_union_type_values` iterates in pointer order, but every union TypeValue mints its
+/// own fresh descriptor at intern time, so no two of its entries claim one key and its order
+/// cannot matter. The other registries are string-keyed or insertion-ordered, so the index is
+/// deterministic.
 fn indexKnownTypeValues(
     desc_index: *std.AutoHashMapUnmanaged(*const value_mod.TypeDescriptor, *const value_mod.TypeValue),
     allocator: Allocator,
     ctx: *const Context,
+    table: *const StackEffectTable,
 ) Allocator.Error!void {
+    for (table.type_slots.items) |tv| {
+        try claimDescriptorKey(desc_index, allocator, tv);
+    }
+
     var builtin_iter = ctx.builtin_type_values.iterator();
     while (builtin_iter.next()) |entry| {
-        const tv = entry.value_ptr.*;
-        if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
+        try claimDescriptorKey(desc_index, allocator, entry.value_ptr.*);
     }
     var resource_iter = ctx.resource_type_values.iterator();
     while (resource_iter.next()) |entry| {
-        const tv = entry.value_ptr.*;
-        if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
+        try claimDescriptorKey(desc_index, allocator, entry.value_ptr.*);
     }
     var union_iter = ctx.anonymous_union_type_values.iterator();
     while (union_iter.next()) |entry| {
-        const tv = entry.value_ptr.*;
-        if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
+        try claimDescriptorKey(desc_index, allocator, entry.value_ptr.*);
     }
     for (ctx.type_registry_frames.items) |*frame| {
         var enum_iter = frame.enum_registry.iterator();
         while (enum_iter.next()) |entry| {
-            const tv = entry.key_ptr.*;
-            if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
+            try claimDescriptorKey(desc_index, allocator, entry.key_ptr.*);
         }
     }
 }
@@ -2203,18 +2230,7 @@ fn emitDispatchEntryTable(
 
     var desc_index: std.AutoHashMapUnmanaged(*const value_mod.TypeDescriptor, *const value_mod.TypeValue) = .{};
     defer desc_index.deinit(allocator);
-    try indexKnownTypeValues(&desc_index, allocator, ctx);
-    // `indexKnownTypeValues` covers built-in, resource, union, and enum types
-    // but not user-defined `virtual{` / `struct{` types. A method dispatched on
-    // such a type would otherwise resolve to slot 0 (unresolved) and be dropped
-    // by the loader. Every TypeValue already interned in the slot table has a
-    // real slot, so index those descriptors too -- this is the canonical
-    // TypeValue the dispatch key references, so pointer identity holds.
-    var slot_iter = table.type_slot_index.iterator();
-    while (slot_iter.next()) |slot| {
-        const tv = slot.key_ptr.*;
-        if (tv.descriptor) |desc| try desc_index.put(allocator, desc, tv);
-    }
+    try indexKnownTypeValues(&desc_index, allocator, ctx, table);
 
     const slot_maps: instruction_bytecode.SlotEncodingMaps = .{
         .typevalue_slot_index = &table.type_slot_index,
@@ -6848,6 +6864,44 @@ test "emitImageC: dispatch entry quotation body interns referenced types" {
     try testing.expect(std.mem.indexOf(u8, out.items, "dispatch-key-type") != null);
 }
 
+test "indexKnownTypeValues: smallest interned slot wins a shared descriptor" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    var table = StackEffectTable.init(testing.allocator);
+    defer table.deinit();
+
+    // Two TypeValues claiming one descriptor, interned in slot order.
+    const shared_desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const tv_a = try arena.create(value_mod.TypeValue);
+    tv_a.* = .{ .name = "claimant-a", .descriptor = shared_desc };
+    const tv_b = try arena.create(value_mod.TypeValue);
+    tv_b.* = .{ .name = "claimant-b", .descriptor = shared_desc };
+
+    _ = try table.internType(tv_a);
+    _ = try table.internType(tv_b);
+
+    // A registry claimant on the same descriptor must not steal the key
+    // from the slotted winner.
+    const tv_c = try arena.create(value_mod.TypeValue);
+    tv_c.* = .{ .name = "claimant-c", .descriptor = shared_desc };
+    try ctx.resource_type_values.put(ctx.allocator, "claimant-c", tv_c);
+
+    // A descriptor no slotted TypeValue claims is filled from the registry.
+    const registry_desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const tv_d = try arena.create(value_mod.TypeValue);
+    tv_d.* = .{ .name = "registry-only", .descriptor = registry_desc };
+    try ctx.resource_type_values.put(ctx.allocator, "registry-only", tv_d);
+
+    var desc_index: std.AutoHashMapUnmanaged(*const value_mod.TypeDescriptor, *const value_mod.TypeValue) = .{};
+    defer desc_index.deinit(testing.allocator);
+    try indexKnownTypeValues(&desc_index, testing.allocator, &ctx, &table);
+
+    try testing.expectEqual(@as(*const value_mod.TypeValue, tv_a), desc_index.get(shared_desc).?);
+    try testing.expectEqual(@as(*const value_mod.TypeValue, tv_d), desc_index.get(registry_desc).?);
+}
+
 test "emitImageC: protocol annotation interns descriptor and emits full description row" {
     var ctx = Context.init(testing.allocator);
     defer ctx.deinit();
@@ -7119,6 +7173,79 @@ test "emitDispatchEntryTable: one row per reachable user quotation entry, types 
     // With no interpreter-run-bodies map, compiled rows carry no body bytecode.
     try testing.expect(std.mem.indexOf(u8, out.items, ".body_bytecode = NULL, .body_bytecode_len = 0") != null);
     try testing.expect(std.mem.indexOf(u8, out.items, "onez_image_dispatch_q_0_body[]") == null);
+}
+
+test "emitDispatchEntryTable: a shared descriptor resolves to the smallest interned slot" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    // Two same-shaped TypeValues sharing one descriptor. Both reach the
+    // slot table through one word's param annotations, which intern in
+    // param order, so the x claimant holds the smaller slot.
+    const shared_desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+    const tv_a = try arena.create(value_mod.TypeValue);
+    tv_a.* = .{ .name = "payload-a", .descriptor = shared_desc };
+    const tv_b = try arena.create(value_mod.TypeValue);
+    tv_b.* = .{ .name = "payload-b", .descriptor = shared_desc };
+
+    const instrs = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0, .column = 0 },
+    });
+    const eff_inputs = try arena.dupe(StackEffectParam, &.{
+        .{ .name = "x", .type_annotation = .{ .type = tv_a } },
+        .{ .name = "y", .type_annotation = .{ .type = tv_b } },
+    });
+    const eff_outputs = try arena.dupe(StackEffectParam, &.{});
+    const m = try arena.create(Module);
+    m.* = .{ .name = "demo", .words = .{} };
+    try m.words.put(arena, "alpha", .{
+        .action = .{ .compound = instrs },
+        .stack_effect = .{ .inputs = eff_inputs, .outputs = eff_outputs },
+    });
+    {
+        const cache_alloc = ctx.module_cache_value.header.allocator;
+        try ctx.module_cache_value.map.put(cache_alloc, try cache_alloc.dupe(u8, "demo"), .{ .module = m });
+    }
+
+    const unary = ctx.dispatch_unary_sentinel.?.descriptor.?;
+    const body = try arena.dupe(Instruction, &.{
+        .{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0, .column = 0 },
+    });
+    try ctx.registerDispatch(
+        .{ .dispatch_id = 7, .type_a = shared_desc, .type_b = unary },
+        .{ .body = .{ .quotation = .{ .instructions = body } }, .source_module = m },
+        false,
+    );
+
+    var manifest = try aot_image.buildImageManifest(&ctx, testing.allocator);
+    defer manifest.deinit(testing.allocator);
+    var lookup: std.StringHashMapUnmanaged(u32) = .{};
+    defer lookup.deinit(testing.allocator);
+
+    var qmap: std.AutoHashMapUnmanaged(usize, u32) = .{};
+    defer qmap.deinit(testing.allocator);
+    try qmap.put(testing.allocator, @intFromPtr(body.ptr), 0);
+
+    var collection = try collectImageSlots(testing.allocator, &ctx, manifest, .{}, &.{});
+    defer collection.deinit();
+
+    var out: std.ArrayListUnmanaged(u8) = .{};
+    defer out.deinit(testing.allocator);
+
+    _ = try emitImageCFromCollection(&out, testing.allocator, &ctx, manifest, &lookup, &collection, .{}, &qmap, null, null, &.{}, &.{});
+
+    const slot_a = collection.effect_table.type_slot_index.get(tv_a).?;
+    const slot_b = collection.effect_table.type_slot_index.get(tv_b).?;
+    try testing.expect(slot_a < slot_b);
+
+    var wb: [64]u8 = undefined;
+    const winner = std.fmt.bufPrint(&wb, ".dispatch_id = 7, .type_a_slot = {d},", .{slot_a}) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, winner) != null);
+
+    var lb: [64]u8 = undefined;
+    const loser = std.fmt.bufPrint(&lb, ".type_a_slot = {d},", .{slot_b}) catch unreachable;
+    try testing.expect(std.mem.indexOf(u8, out.items, loser) == null);
 }
 
 test "emitDispatchEntryTable: an interpreter-run method body carries its bytecode" {
