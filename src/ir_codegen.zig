@@ -272,8 +272,7 @@ pub const PicStats = struct {
 ///   category            | site
 ///   --------------------+----------------------------------------------
 ///   per_op_native       | polymorphic arithmetic/comparison cold path
-///   quotation           | emitIndirectQuotCall (raw quotation slot)
-///   quotation           | emitIfBranchDispatch (if branch on raw slot)
+///   quotation           | emitValueQuotCall (raw callable slot or spill)
 ///   quotation           | `<choose>` indirect dispatch
 ///   quotation           | dynamic `call` inside a compiled word
 ///   quotation           | with-parameter dispatch
@@ -403,13 +402,14 @@ fn countOccurrences(haystack: []const u8, needle: []const u8) u32 {
 }
 
 /// Cross-check the build-time fallback inventory against the assembled C
-/// source. The `extern` declarations of `jitNativeWordCall(...)` and
-/// `jitCallQuotation(...)` are emitted unconditionally, so each of their
-/// observed call-site counts is the raw match count minus one when at
-/// least one occurrence appears. The `jitInterpretedCall(...)` extern is
-/// only emitted when at least one `compound_uncompiled` site needs it, so
-/// the caller passes `jit_interpreted_call_extern_emitted` to indicate
-/// whether the raw count needs the same minus-one adjustment.
+/// source. The `extern` declarations of `jitNativeWordCall(...)`,
+/// `jitCallQuotation(...)`, and `jitCallQuotationValue(...)` are emitted
+/// unconditionally, so each of their observed call-site counts is the raw
+/// match count minus one when at least one occurrence appears. The
+/// `jitInterpretedCall(...)` extern is only emitted when at least one
+/// `compound_uncompiled` site needs it, so the caller passes
+/// `jit_interpreted_call_extern_emitted` to indicate whether the raw count
+/// needs the same minus-one adjustment.
 pub fn verifyAotFallbackInventory(
     source: []const u8,
     report: *const AotFallbackReport,
@@ -418,12 +418,14 @@ pub fn verifyAotFallbackInventory(
     const raw_jic = countOccurrences(source, "jitInterpretedCall(");
     const raw_jnwc = countOccurrences(source, "jitNativeWordCall(");
     const raw_jcq = countOccurrences(source, "jitCallQuotation(");
+    const raw_jcqv = countOccurrences(source, "jitCallQuotationValue(");
     const observed_jic = if (jit_interpreted_call_extern_emitted)
         (if (raw_jic > 0) raw_jic - 1 else 0)
     else
         raw_jic;
     const observed_jnwc = if (raw_jnwc > 0) raw_jnwc - 1 else 0;
-    const observed_jcq = if (raw_jcq > 0) raw_jcq - 1 else 0;
+    const observed_jcq = (if (raw_jcq > 0) raw_jcq - 1 else 0) +
+        (if (raw_jcqv > 0) raw_jcqv - 1 else 0);
 
     const expected_jic = report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)];
     const expected_jnwc =
@@ -2090,6 +2092,10 @@ const CompileState = struct {
     aot_proto_2arg: c.ir_ref = c.IR_UNUSED,
     /// jitCallQuotation callback ref (used inline, not stored in CompileState for JIT).
     call_quotation_fn: c.ir_ref = c.IR_UNUSED,
+    /// jitCallQuotationValue callback ref: interpreter fallback for a callable
+    /// dispatched from a known slot or frame spill, read through its address
+    /// rather than popped from the exposed stack top. Only wired in AOT mode.
+    call_quotation_value_fn: c.ir_ref = c.IR_UNUSED,
     /// jitCallCodePtr callback ref: dispatches a compiled quotation via its
     /// code_ptr in AOT mode. The IR C backend emits loaded addresses as
     /// uintptr_t which cannot be called directly; this callback casts and
@@ -4129,59 +4135,38 @@ fn emitTruthiness(state: *CompileState, entry: StackEntry, base_addr: c.ir_ref) 
 /// Emit an indirect call to a quotation Value stored at physical stack slot.
 /// Both AOT and JIT modes: tag check, code_ptr null check, direct call with
 /// interpreter fallback for uncompiled quotations.
-fn emitIndirectQuotCall(
+fn emitValueQuotCall(
     state: *CompileState,
     stack: []StackEntry,
     sp: *usize,
-    slot: usize,
+    value_addr: c.ir_ref,
     line: usize,
-) IrCodegenError!void {
+    trace: CurrentTraceFrame,
+) void {
     const ctx = state.ctx;
-    const base_addr = state.base_addr;
 
-    const slot_byte_offset = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
-    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-
-    // Check tag is quotation
+    const tag_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), value_addr, state.tag_offset_const);
+    const tag_val = c._ir_LOAD(ctx, ValueLayout.ir_tag_type, tag_addr);
     const quotation_tag_const = emitTagConst(ctx, .quotation);
-    if (state.type_mismatch_error_fn != c.IR_UNUSED) {
-        emitTagCheckOrError(state, elem_addr, quotation_tag_const, state.type_mismatch_error_fn);
-    } else {
-        emitTagCheck(ctx, elem_addr, quotation_tag_const, state.tag_offset_const, state.bail_status);
-    }
+    const is_quot = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), tag_val, quotation_tag_const);
 
-    // Load code_ptr
+    // Loading the code_ptr field of a non-quotation reads our own spill or slot bytes, never a
+    // dereference of the payload, so the load is safe ahead of the tag branch.
     const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
-    const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
+    const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), value_addr, code_ptr_off);
     const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
-
-    // Null-check code_ptr
     const null_addr = c.ir_const_addr(ctx, 0);
-    const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
-    const if_null = c._ir_IF(ctx, is_null);
+    const nonnull = c.ir_fold2(ctx, c.IR_OPT(c.IR_NE, c.IR_BOOL), code_ptr_val, null_addr);
 
-    // Cold path: interpreter fallback for quotations without a code_ptr
-    c._ir_IF_TRUE_cold(ctx, if_null);
+    const is_compiled = c.ir_fold2(ctx, c.IR_OPT(c.IR_AND, c.IR_BOOL), is_quot, nonnull);
+
+    flushToPhysicalStack(state, stack, sp.*);
+
+    const if_compiled = c._ir_IF(ctx, is_compiled);
+
+    // Hot path: a compiled quotation, called directly through its code_ptr.
+    c._ir_IF_TRUE(ctx, if_compiled);
     {
-        sp.* += 1;
-        flushToPhysicalStack(state, stack, sp.*);
-        const ctx_val = emitCallbackPreamble(state, sp.*);
-        sp.* -= 1;
-        const call_quot_fn = if (state.aot_mode)
-            state.call_quotation_fn
-        else
-            c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-        state.noteAotFallbackEmission(.quotation, "<quotation>", 0, line);
-        const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .{ .builtin = .{ .kind = .call, .line = line } });
-    }
-    const end_fallback = c._ir_END(ctx);
-
-    // Hot path: quotation is compiled, call directly
-    c._ir_IF_FALSE(ctx, if_null);
-    {
-        flushToPhysicalStack(state, stack, sp.*);
-
         const sp_const = c.ir_const_addr(ctx, sp.*);
         const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
         c._ir_STORE(ctx, state.sp_ptr, new_sp);
@@ -4192,15 +4177,44 @@ fn emitIndirectQuotCall(
             c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
         else
             c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-        emitCallbackPostCheck(state, call_result, call_result, null, .{ .builtin = .{ .kind = .call, .line = line } });
+        emitCallbackPostCheck(state, call_result, call_result, null, trace);
     }
     const end_compiled = c._ir_END(ctx);
 
-    c._ir_MERGE_2(ctx, end_fallback, end_compiled);
+    // Cold path: an uncompiled quotation, a closure, or a non-callable. The interpreter reads the
+    // callable through its address, so nothing depends on it sitting at the exposed stack top.
+    c._ir_IF_FALSE_cold(ctx, if_compiled);
+    {
+        const ctx_val = emitCallbackPreamble(state, sp.*);
+        const call_quot_fn = if (state.aot_mode)
+            state.call_quotation_value_fn
+        else
+            c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotationValue));
+        state.noteAotFallbackEmission(.quotation, "<quotation>", 0, line);
+        const fb_result = c._ir_CALL_2(ctx, c.IR_I32, call_quot_fn, ctx_val, value_addr);
+        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, trace);
+    }
+    const end_fallback = c._ir_END(ctx);
+
+    c._ir_MERGE_2(ctx, end_compiled, end_fallback);
 
     if (state.refresh_stack_fn != c.IR_UNUSED) {
         refreshCachedStackPointer(state);
     }
+}
+
+/// Spill the callable Value at physical `slot` into a frame-local alloca and return the spill's
+/// address for `emitValueQuotCall`.
+///
+/// A loop intrinsic reads its callable on every iteration, but the operand slot sits at or above
+/// the exposed stack top, inside the region the callee's own pushes reuse. A deep enough body
+/// clobbers the slot and the next iteration reads garbage. The spill lives on the C stack, which
+/// the 1z stack machinery never touches, so it stays valid for every iteration.
+fn emitCallableSpill(state: *CompileState, slot: usize) c.ir_ref {
+    const ctx = state.ctx;
+    const spill = c._ir_ALLOCA(ctx, c.ir_const_addr(ctx, ValueLayout.value_size));
+    emitCopyToPtr(ctx, state.base_addr, slot, spill);
+    return spill;
 }
 
 /// Settle one branch of an if-over-row before its END so both branches leave the
@@ -4346,72 +4360,17 @@ fn emitIfOverRow(
 
 /// Emit a runtime quotation dispatch for an `if` branch where the quotation
 /// is a `raw_at_slot` entry rather than a statically-known `quotation_body`.
-/// Loads code_ptr from the quotation and calls it directly when compiled,
-/// falling back to jitCallQuotation for uncompiled quotations.
 ///
-/// Unlike `emitIndirectQuotCall`, this does NOT set `dynamic_call_emitted`
-/// because the branch effect is known from the other (quotation_body) branch.
+/// A single-shot dispatch reads the slot before any callee push can clobber
+/// it, so no spill is needed; the slot address goes straight to
+/// `emitValueQuotCall`.
 fn emitIfBranchDispatch(
     state: *CompileState,
     stack: []StackEntry,
     sp: *usize,
     slot: usize,
 ) void {
-    const ctx = state.ctx;
-    const base_addr = state.base_addr;
-
-    const slot_byte_offset = c.ir_const_addr(ctx, slot * ValueLayout.value_size);
-    const elem_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
-
-    // Load code_ptr from the quotation's payload
-    const code_ptr_off = c.ir_const_addr(ctx, ValueLayout.quotation_code_ptr_offset);
-    const code_ptr_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), elem_addr, code_ptr_off);
-    const code_ptr_val = c._ir_LOAD(ctx, c.IR_ADDR, code_ptr_addr);
-
-    // Null-check code_ptr
-    const null_addr = c.ir_const_addr(ctx, 0);
-    const is_null = c.ir_fold2(ctx, c.IR_OPT(c.IR_EQ, c.IR_BOOL), code_ptr_val, null_addr);
-    const if_null = c._ir_IF(ctx, is_null);
-
-    // Cold path: interpreter fallback for uncompiled quotations
-    c._ir_IF_TRUE_cold(ctx, if_null);
-    {
-        sp.* += 1;
-        flushToPhysicalStack(state, stack, sp.*);
-        const ctx_val = emitCallbackPreamble(state, sp.*);
-        sp.* -= 1;
-        const call_quot_fn = if (state.aot_mode)
-            state.call_quotation_fn
-        else
-            c.ir_const_addr(ctx, @intFromPtr(&jitCallQuotation));
-        state.noteAotFallbackEmission(.quotation, "<quotation>", 0, 0);
-        const fb_result = c._ir_CALL_1(ctx, c.IR_I32, call_quot_fn, ctx_val);
-        emitCallbackPostCheck(state, fb_result, state.error_propagate_status, null, .none);
-    }
-    const end_fallback = c._ir_END(ctx);
-
-    // Hot path: quotation is compiled, call directly
-    c._ir_IF_FALSE(ctx, if_null);
-    {
-        flushToPhysicalStack(state, stack, sp.*);
-
-        const sp_const = c.ir_const_addr(ctx, sp.*);
-        const new_sp = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), state.base_idx, sp_const);
-        c._ir_STORE(ctx, state.sp_ptr, new_sp);
-
-        const call_result = if (state.aot_mode)
-            c._ir_CALL_2(ctx, c.IR_I32, state.call_code_ptr_fn, state.jit_ctx_ptr, code_ptr_val)
-        else
-            c._ir_CALL_1(ctx, c.IR_I32, code_ptr_val, state.jit_ctx_ptr);
-        emitCallbackPostCheck(state, call_result, call_result, null, .none);
-    }
-    const end_compiled = c._ir_END(ctx);
-
-    c._ir_MERGE_2(ctx, end_fallback, end_compiled);
-
-    if (state.refresh_stack_fn != c.IR_UNUSED) {
-        refreshCachedStackPointer(state);
-    }
+    emitValueQuotCall(state, stack, sp, liveSlotAddr(state, slot), 0, .none);
 }
 
 /// Compile a while/until loop: pred and body quotations with an optional
@@ -4445,6 +4404,16 @@ fn compilePredBodyLoop(
 
     flushToPhysicalStack(state, stack, sp.*);
 
+    // Spill runtime callables before the loop; see emitCallableSpill.
+    const pred_spill: ?c.ir_ref = switch (pred_entry) {
+        .raw_at_slot => |s| emitCallableSpill(state, s),
+        else => null,
+    };
+    const body_spill: ?c.ir_ref = switch (body_source) {
+        .slot => |s| emitCallableSpill(state, s),
+        else => null,
+    };
+
     // Snapshot the symbolic stack state at loop entry for back-edge
     // invariance checks (RowId positions must be identical each iteration).
     const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp.*]) catch return IrCodegenError.OutOfMemory;
@@ -4471,8 +4440,8 @@ fn compilePredBodyLoop(
             resetStackToPhysicalPreservingRows(stack, sp.*);
             try compileInstructions(state, body, stack, sp);
         },
-        .raw_at_slot => |s| {
-            try emitIndirectQuotCall(state, stack, sp, s, 0);
+        .raw_at_slot => {
+            emitValueQuotCall(state, stack, sp, pred_spill.?, 0, .{ .builtin = .{ .kind = .call, .line = 0 } });
             sp.* += 1; // predicate pushes one value (bool)
             resetStackToPhysicalPreservingRows(stack, sp.*);
         },
@@ -4508,8 +4477,8 @@ fn compilePredBodyLoop(
             if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
             flushToPhysicalStack(state, stack, sp.*);
         },
-        .slot => |s| {
-            try emitIndirectQuotCall(state, stack, sp, s, 0);
+        .slot => {
+            emitValueQuotCall(state, stack, sp, body_spill.?, 0, .{ .builtin = .{ .kind = .call, .line = 0 } });
         },
         .unsupported => {
             state.not_compilable_reason = .quotation_reification;
@@ -7403,6 +7372,12 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
     // Flush user stack to physical memory before the loop
     flushToPhysicalStack(state, stack, sp.*);
 
+    // Spill a runtime callable before the loop; see emitCallableSpill.
+    const quot_spill: ?c.ir_ref = switch (quot_entry) {
+        .raw_at_slot => |s| emitCallableSpill(state, s),
+        else => null,
+    };
+
     // Snapshot symbolic stack state at loop entry for
     // back-edge invariance checks.
     const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp.*]) catch return IrCodegenError.OutOfMemory;
@@ -7437,8 +7412,8 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
             // Flush body results back
             flushToPhysicalStack(state, stack, sp.*);
         },
-        .raw_at_slot => |s| {
-            try emitIndirectQuotCall(state, stack, sp, s, ec.line);
+        .raw_at_slot => {
+            emitValueQuotCall(state, stack, sp, quot_spill.?, ec.line, .{ .builtin = .{ .kind = .call, .line = ec.line } });
         },
         else => {
             state.not_compilable_reason = .quotation_reification;
@@ -7493,6 +7468,12 @@ fn emitIntrinsicLoop(ec: EmitCtx) IrCodegenError!ControlFlow {
     // Flush user stack to physical memory before the loop
     flushToPhysicalStack(state, stack, sp.*);
 
+    // Spill a runtime callable before the loop; see emitCallableSpill.
+    const pred_spill: ?c.ir_ref = switch (pred_entry) {
+        .raw_at_slot => |s| emitCallableSpill(state, s),
+        else => null,
+    };
+
     // Snapshot symbolic stack state at loop entry for
     // back-edge invariance checks.
     const loop_entry_stack = state.allocator.dupe(StackEntry, stack[0..sp.*]) catch return IrCodegenError.OutOfMemory;
@@ -7519,8 +7500,8 @@ fn emitIntrinsicLoop(ec: EmitCtx) IrCodegenError!ControlFlow {
             resetStackToPhysicalPreservingRows(stack, sp.*);
             try compileInstructions(state, body, stack, sp);
         },
-        .raw_at_slot => |s| {
-            try emitIndirectQuotCall(state, stack, sp, s, ec.line);
+        .raw_at_slot => {
+            emitValueQuotCall(state, stack, sp, pred_spill.?, ec.line, .{ .builtin = .{ .kind = .call, .line = ec.line } });
             sp.* += 1; // predicate pushes one value (bool)
             resetStackToPhysicalPreservingRows(stack, sp.*);
         },
@@ -9375,6 +9356,7 @@ fn emitWordCAotPass(
         c.IR_UNUSED;
 
     const call_quotation_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitCallQuotation"), proto_1arg);
+    const call_quotation_value_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitCallQuotationValue"), proto_2arg);
     const call_code_ptr_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitCallCodePtr"), proto_2arg);
     const call_value_fn = c.ir_const_func(&ctx, c.ir_str(&ctx, "jitCallValue"), proto_2arg);
 
@@ -9516,6 +9498,7 @@ fn emitWordCAotPass(
         .aot_proto_1arg = proto_1arg,
         .aot_proto_2arg = proto_2arg,
         .call_quotation_fn = call_quotation_fn,
+        .call_quotation_value_fn = call_quotation_value_fn,
         .call_code_ptr_fn = call_code_ptr_fn,
         .call_value_fn = call_value_fn,
         .preloaded_ctx_val = preloaded_ctx_val,
@@ -10935,6 +10918,7 @@ pub fn emitProgramC(
     try out.appendSlice(allocator, "extern int32_t jitEnsureStackCapacity(uintptr_t jit_ctx, uintptr_t needed);\n");
     try out.appendSlice(allocator, "extern int32_t jitValidateParamEffects(uintptr_t ctx, uintptr_t effect_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallQuotation(uintptr_t ctx);\n");
+    try out.appendSlice(allocator, "extern int32_t jitCallQuotationValue(uintptr_t ctx, uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallCodePtr(uintptr_t jit_ctx, uintptr_t code_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitCallValue(uintptr_t jit_ctx, uintptr_t value_ptr);\n");
     try out.appendSlice(allocator, "extern int32_t jitTypeMismatchError(uintptr_t ctx);\n");
@@ -13264,6 +13248,41 @@ export fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
         return 2;
     }
     control.nativeCall(ctx) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    };
+    return 0;
+}
+
+/// Interpreter fallback for a quotation call dispatched from a known stack slot or frame spill.
+/// `value_ptr_raw` addresses the Value holding the callable, which may sit above the exposed
+/// stack top, so it is read through the pointer instead of popped.
+///
+/// Mirrors `popQuotation`'s acceptance: a closure runs with its captured scope stamped, and a
+/// non-callable raises the same type mismatch the interpreter's `call` raises.
+export fn jitCallQuotationValue(ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i32 {
+    if (ctx_raw == 0 or value_ptr_raw == 0) return 1;
+    const ctx: *Context = @ptrFromInt(ctx_raw);
+    if (!ctx.allow_interpreted_fallback) {
+        const stderr_file: std.fs.File = .stderr();
+        stderr_file.writeAll("Fatal: quotation call requires interpreter fallback; rebuild with --interpreter-fallback=true\n") catch {};
+        ctx.jit_pending_error = error.InterpreterFallbackDisabled;
+        return 2;
+    }
+
+    // Copy the Value out before executing: the execution below may push onto ctx.stack and
+    // reallocate the backing array out from under value_ptr_raw.
+    const val = @as(*const Value, @ptrFromInt(value_ptr_raw)).*;
+    const quot = (helpers.asQuotationStamped(ctx, val) catch |err| {
+        ctx.jit_pending_error = err;
+        return 2;
+    }) orelse {
+        helpers.setTypeMismatchError(ctx, "quotation", val);
+        ctx.jit_pending_error = error.TypeMismatch;
+        return 2;
+    };
+
+    ctx.executeQuotationWithFrame(quot) catch |err| {
         ctx.jit_pending_error = err;
         return 2;
     };
@@ -20605,20 +20624,22 @@ test "verifyAotFallbackInventory matches when source agrees with builder" {
     // Source includes one extern declaration plus one real call site for
     // jitInterpretedCall (compound), one extern plus two real call sites
     // for jitNativeWordCall (native and per-op-native), and one extern
-    // plus one real call site for jitCallQuotation.
+    // plus one real call site each for jitCallQuotation and
+    // jitCallQuotationValue, which share the quotation category.
     const source =
         "extern int32_t jitInterpretedCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
         "extern int32_t jitNativeWordCall(uintptr_t, uintptr_t, uintptr_t);\n" ++
         "extern int32_t jitCallQuotation(uintptr_t);\n" ++
+        "extern int32_t jitCallQuotationValue(uintptr_t, uintptr_t);\n" ++
         "int32_t f(void) { jitInterpretedCall(0,1,2); return 0; }\n" ++
         "int32_t h(void) { jitNativeWordCall(0,1,2); jitNativeWordCall(0,3,4); return 0; }\n" ++
-        "int32_t g(void) { jitCallQuotation(0); return 0; }\n";
+        "int32_t g(void) { jitCallQuotation(0); jitCallQuotationValue(0,1); return 0; }\n";
 
     var report: AotFallbackReport = .{};
     report.totals[@intFromEnum(AotFallbackCategory.native)] = 1;
     report.totals[@intFromEnum(AotFallbackCategory.per_op_native)] = 1;
     report.totals[@intFromEnum(AotFallbackCategory.compound_uncompiled)] = 1;
-    report.totals[@intFromEnum(AotFallbackCategory.quotation)] = 1;
+    report.totals[@intFromEnum(AotFallbackCategory.quotation)] = 2;
 
     const check = verifyAotFallbackInventory(source, &report, true);
     try testing.expect(check.populated);
@@ -20627,8 +20648,8 @@ test "verifyAotFallbackInventory matches when source agrees with builder" {
     try testing.expectEqual(@as(u32, 1), check.observed_jit_interpreted_calls);
     try testing.expectEqual(@as(u32, 2), check.expected_jit_native_word_calls);
     try testing.expectEqual(@as(u32, 2), check.observed_jit_native_word_calls);
-    try testing.expectEqual(@as(u32, 1), check.expected_jit_call_quotation);
-    try testing.expectEqual(@as(u32, 1), check.observed_jit_call_quotation);
+    try testing.expectEqual(@as(u32, 2), check.expected_jit_call_quotation);
+    try testing.expectEqual(@as(u32, 2), check.observed_jit_call_quotation);
 }
 
 test "verifyAotFallbackInventory flags mismatch when builder undercounts" {

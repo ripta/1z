@@ -1,0 +1,32 @@
+\ A compiled word body must drive a loop combinator over a quotation that
+\ arrives as a word parameter, not only over a literal quotation.
+
+e-times: ( n quot -- ) [ times ] ;
+3 [ "." print ] e-times "" print-line
+
+e-while: ( pred body -- ) [ while ] ;
+3 [ dup 0 > ] [ 1 - ] e-while "while:" print .
+
+e-until: ( pred body -- ) [ until ] ;
+3 [ dup 0 = ] [ 1 - ] e-until "until:" print .
+
+e-loop: ( pred -- ) [ loop ] ;
+3 [ 1 - dup 0 > ] e-loop "loop:" print .
+
+\ Quotation below other popped operands, with carried values under the loop.
+sum-times: ( acc n quot -- acc' ) [ times ] ;
+0 4 [ 10 + ] sum-times "sum:" print .
+
+\ Body transients push past the quotation's own slot; the callable must
+\ survive into later iterations anyway.
+deep-times: ( acc n quot -- acc' ) [ times ] ;
+0 3 [ 1 2 + + ] deep-times "deep:" print .
+
+\ A closure (curry result) driven through a loop combinator.
+run3: ( quot -- ) [ 3 swap times ] ;
+5 [ . ] curry run3
+
+\ An `if` whose taken branch arrives as a word parameter.
+e-if: ( ? tq -- ) [ [ "F" print-line ] if ] ;
+t [ "T" print-line ] e-if
+f [ "T" print-line ] e-if

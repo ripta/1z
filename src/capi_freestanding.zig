@@ -212,6 +212,7 @@ comptime {
         @export(&jitPushTaggedSlot, .{ .name = "jitPushTaggedSlot" });
         @export(&jitPushMutableMapSlot, .{ .name = "jitPushMutableMapSlot" });
         @export(&jitCallQuotation, .{ .name = "jitCallQuotation" });
+        @export(&jitCallQuotationValue, .{ .name = "jitCallQuotationValue" });
         @export(&jitGet, .{ .name = "jitGet" });
         @export(&jitWithParameter, .{ .name = "jitWithParameter" });
         @export(&jitInterpretedCall, .{ .name = "jitInterpretedCall" });
@@ -1560,6 +1561,11 @@ fn jitPushMutableMapSlot(ctx_raw: usize, slot: usize) callconv(.c) i32 {
 }
 
 fn jitCallQuotation(ctx_raw: usize) callconv(.c) i32 {
+    return unsupportedJit(ctx_raw, "quotation calls");
+}
+
+fn jitCallQuotationValue(ctx_raw: usize, value_ptr_raw: usize) callconv(.c) i32 {
+    _ = value_ptr_raw;
     return unsupportedJit(ctx_raw, "quotation calls");
 }
 
