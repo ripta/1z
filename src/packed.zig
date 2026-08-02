@@ -2,6 +2,15 @@ const std = @import("std");
 
 pub const Op = enum { add, sub, mul, div };
 
+/// Integer division failures. Float division never raises: zero divisors follow IEEE and
+/// produce inf/nan. FixnumOverflow covers minInt(T) / -1, whose quotient does not fit T;
+/// the scalar tower promotes that case to bignum, which a fixed-width packed array cannot hold.
+pub const DivideError = error{ DivisionByZero, FixnumOverflow };
+
+fn OpResult(comptime op: Op) type {
+    return if (op == .div) DivideError!void else void;
+}
+
 /// Element-wise addition on packed byte slices interpreted as type T.
 pub fn addPacked(comptime T: type, a: []const u8, b: []const u8, out: []u8) void {
     binaryOp(T, .add, a, b, out);
@@ -19,8 +28,8 @@ pub fn mulPacked(comptime T: type, a: []const u8, b: []const u8, out: []u8) void
 
 /// Element-wise division on packed byte slices interpreted as type T.
 /// Integer types use truncating division; float types use standard division.
-pub fn divPacked(comptime T: type, a: []const u8, b: []const u8, out: []u8) void {
-    binaryOp(T, .div, a, b, out);
+pub fn divPacked(comptime T: type, a: []const u8, b: []const u8, out: []u8) DivideError!void {
+    return binaryOp(T, .div, a, b, out);
 }
 
 /// Fill a packed byte slice with copies of a single value.
@@ -192,12 +201,22 @@ pub fn dotPacked(comptime T: type, a: []const u8, b: []const u8) T {
 // ---------------------------------------------------------------------------
 
 /// Element-wise operation with a scalar broadcast to the second operand.
-pub fn scalarBinaryOp(comptime T: type, comptime op: Op, a: []const u8, scalar: T, out: []u8) void {
+pub fn scalarBinaryOp(comptime T: type, comptime op: Op, a: []const u8, scalar: T, out: []u8) OpResult(op) {
     const elem_size = @sizeOf(T);
     const n = a.len / elem_size;
     const chunk = std.simd.suggestVectorLength(T) orelse 4;
     const is_int = @typeInfo(T) == .int;
     const chunk_bytes = chunk * elem_size;
+
+    const guard_div = comptime (op == .div and is_int);
+    const guard_overflow = comptime (guard_div and @typeInfo(T).int.signedness == .signed);
+
+    // The divisor is loop-invariant, so the zero test hoists to entry. The minInt / -1
+    // overflow depends on each dividend element, so only the divisor half hoists.
+    if (comptime guard_div) {
+        if (scalar == 0) return error.DivisionByZero;
+    }
+    const check_min = if (comptime guard_overflow) scalar == -1 else false;
 
     var i: usize = 0;
     while (i + chunk <= n) : (i += chunk) {
@@ -207,6 +226,12 @@ pub fn scalarBinaryOp(comptime T: type, comptime op: Op, a: []const u8, scalar: 
 
         const a_aligned: *align(@alignOf(@Vector(chunk, T))) const [chunk]T = @ptrCast(&a_buf);
         const va: @Vector(chunk, T) = a_aligned.*;
+        if (comptime guard_overflow) {
+            if (check_min) {
+                const min_splat: @Vector(chunk, T) = @splat(std.math.minInt(T));
+                if (@reduce(.Or, va == min_splat)) return error.FixnumOverflow;
+            }
+        }
         const vb: @Vector(chunk, T) = @splat(scalar);
         const vr: @Vector(chunk, T) = switch (op) {
             .add => if (is_int) va +% vb else va + vb,
@@ -221,6 +246,9 @@ pub fn scalarBinaryOp(comptime T: type, comptime op: Op, a: []const u8, scalar: 
 
     while (i < n) : (i += 1) {
         const ae = readElement(T, a, i);
+        if (comptime guard_overflow) {
+            if (check_min and ae == std.math.minInt(T)) return error.FixnumOverflow;
+        }
         const re: T = switch (op) {
             .add => if (is_int) ae +% scalar else ae + scalar,
             .sub => if (is_int) ae -% scalar else ae - scalar,
@@ -251,11 +279,14 @@ fn minCmp(comptime T: type, a: T, b: T) bool {
 // Internal: SIMD binary operation kernel
 // ---------------------------------------------------------------------------
 
-fn binaryOp(comptime T: type, comptime op: Op, a: []const u8, b: []const u8, out: []u8) void {
+fn binaryOp(comptime T: type, comptime op: Op, a: []const u8, b: []const u8, out: []u8) OpResult(op) {
     const elem_size = @sizeOf(T);
     const n = a.len / elem_size;
     const chunk = std.simd.suggestVectorLength(T) orelse 4;
     const is_int = @typeInfo(T) == .int;
+
+    const guard_div = comptime (op == .div and is_int);
+    const guard_overflow = comptime (guard_div and @typeInfo(T).int.signedness == .signed);
 
     // SIMD track: load chunks into aligned local buffers, process, write back.
     // Each chunk covers `chunk` elements, which is `chunk * elem_size` bytes wide.
@@ -273,6 +304,17 @@ fn binaryOp(comptime T: type, comptime op: Op, a: []const u8, b: []const u8, out
 
         const va: @Vector(chunk, T) = a_aligned.*;
         const vb: @Vector(chunk, T) = b_aligned.*;
+        if (comptime guard_div) {
+            const zero_splat: @Vector(chunk, T) = @splat(0);
+            if (@reduce(.Or, vb == zero_splat)) return error.DivisionByZero;
+        }
+        if (comptime guard_overflow) {
+            const min_splat: @Vector(chunk, T) = @splat(std.math.minInt(T));
+            const neg_one_splat: @Vector(chunk, T) = @splat(-1);
+            const false_splat: @Vector(chunk, bool) = @splat(false);
+            const overflow_lanes = @select(bool, va == min_splat, vb == neg_one_splat, false_splat);
+            if (@reduce(.Or, overflow_lanes)) return error.FixnumOverflow;
+        }
         const vr: @Vector(chunk, T) = switch (op) {
             .add => if (is_int) va +% vb else va + vb,
             .sub => if (is_int) va -% vb else va - vb,
@@ -288,6 +330,12 @@ fn binaryOp(comptime T: type, comptime op: Op, a: []const u8, b: []const u8, out
     while (i < n) : (i += 1) {
         const ae = readElement(T, a, i);
         const be = readElement(T, b, i);
+        if (comptime guard_div) {
+            if (be == 0) return error.DivisionByZero;
+        }
+        if (comptime guard_overflow) {
+            if (ae == std.math.minInt(T) and be == -1) return error.FixnumOverflow;
+        }
         const re: T = switch (op) {
             .add => if (is_int) ae +% be else ae + be,
             .sub => if (is_int) ae -% be else ae - be,
@@ -354,7 +402,7 @@ test "divPacked f64: basic" {
     const a_vals = [_]f64{ 10.0, 20.0, 30.0 };
     const b_vals = [_]f64{ 2.0, 5.0, 6.0 };
     var out_bytes: [3 * 8]u8 = undefined;
-    divPacked(f64, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes);
+    try divPacked(f64, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes);
     try testing.expectEqual(@as(f64, 5.0), readElement(f64, &out_bytes, 0));
     try testing.expectEqual(@as(f64, 4.0), readElement(f64, &out_bytes, 1));
     try testing.expectEqual(@as(f64, 5.0), readElement(f64, &out_bytes, 2));
@@ -364,10 +412,81 @@ test "divPacked i32: truncating" {
     const a_vals = [_]i32{ 7, -7, 10 };
     const b_vals = [_]i32{ 2, 2, 3 };
     var out_bytes: [3 * 4]u8 = undefined;
-    divPacked(i32, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes);
+    try divPacked(i32, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes);
     try testing.expectEqual(@as(i32, 3), readElement(i32, &out_bytes, 0));
     try testing.expectEqual(@as(i32, -3), readElement(i32, &out_bytes, 1));
     try testing.expectEqual(@as(i32, 3), readElement(i32, &out_bytes, 2));
+}
+
+test "divPacked i32: zero divisor in scalar tail" {
+    const a_vals = [_]i32{6};
+    const b_vals = [_]i32{0};
+    var out_bytes: [4]u8 = undefined;
+    try testing.expectError(error.DivisionByZero, divPacked(i32, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes));
+}
+
+test "divPacked i32: zero divisor in vector path" {
+    const n = 16;
+    var a_vals: [n]i32 = undefined;
+    var b_vals: [n]i32 = undefined;
+    for (0..n) |i| {
+        a_vals[i] = @intCast(i + 1);
+        b_vals[i] = 1;
+    }
+    b_vals[0] = 0;
+    var out_bytes: [n * 4]u8 = undefined;
+    try testing.expectError(error.DivisionByZero, divPacked(i32, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes));
+}
+
+test "divPacked u16: zero divisor" {
+    const a_vals = [_]u16{6};
+    const b_vals = [_]u16{0};
+    var out_bytes: [2]u8 = undefined;
+    try testing.expectError(error.DivisionByZero, divPacked(u16, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes));
+}
+
+test "divPacked i32: minInt / -1 in scalar tail" {
+    const a_vals = [_]i32{std.math.minInt(i32)};
+    const b_vals = [_]i32{-1};
+    var out_bytes: [4]u8 = undefined;
+    try testing.expectError(error.FixnumOverflow, divPacked(i32, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes));
+}
+
+test "divPacked i32: minInt / -1 in vector path" {
+    const n = 16;
+    var a_vals: [n]i32 = undefined;
+    var b_vals: [n]i32 = undefined;
+    for (0..n) |i| {
+        a_vals[i] = @intCast(i + 1);
+        b_vals[i] = -1;
+    }
+    a_vals[3] = std.math.minInt(i32);
+    var out_bytes: [n * 4]u8 = undefined;
+    try testing.expectError(error.FixnumOverflow, divPacked(i32, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes));
+}
+
+test "divPacked i32: minInt lane with nonzero non-negative-one divisor is fine" {
+    const n = 16;
+    var a_vals: [n]i32 = undefined;
+    var b_vals: [n]i32 = undefined;
+    for (0..n) |i| {
+        a_vals[i] = @intCast(i + 1);
+        b_vals[i] = 2;
+    }
+    a_vals[0] = std.math.minInt(i32);
+    b_vals[5] = -1;
+    var out_bytes: [n * 4]u8 = undefined;
+    try divPacked(i32, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes);
+    try testing.expectEqual(@as(i32, -1073741824), readElement(i32, &out_bytes, 0));
+    try testing.expectEqual(@as(i32, -6), readElement(i32, &out_bytes, 5));
+}
+
+test "divPacked f64: zero divisor follows IEEE" {
+    const a_vals = [_]f64{6.0};
+    const b_vals = [_]f64{0.0};
+    var out_bytes: [8]u8 = undefined;
+    try divPacked(f64, std.mem.sliceAsBytes(&a_vals), std.mem.sliceAsBytes(&b_vals), &out_bytes);
+    try testing.expect(std.math.isInf(readElement(f64, &out_bytes, 0)));
 }
 
 test "addPacked i8: wrapping overflow" {
@@ -505,6 +624,48 @@ test "scalarBinaryOp i32 mul: basic" {
 test "scalarBinaryOp f64: empty" {
     var out = [_]u8{};
     scalarBinaryOp(f64, .add, &.{}, 5.0, &out);
+}
+
+test "scalarBinaryOp i32 div: zero divisor" {
+    const a_vals = [_]i32{ 6, 8 };
+    var out_bytes: [2 * 4]u8 = undefined;
+    try testing.expectError(error.DivisionByZero, scalarBinaryOp(i32, .div, std.mem.sliceAsBytes(&a_vals), 0, &out_bytes));
+}
+
+test "scalarBinaryOp u16 div: zero divisor" {
+    const a_vals = [_]u16{6};
+    var out_bytes: [2]u8 = undefined;
+    try testing.expectError(error.DivisionByZero, scalarBinaryOp(u16, .div, std.mem.sliceAsBytes(&a_vals), 0, &out_bytes));
+}
+
+test "scalarBinaryOp i32 div: minInt / -1 in scalar tail" {
+    const a_vals = [_]i32{std.math.minInt(i32)};
+    var out_bytes: [4]u8 = undefined;
+    try testing.expectError(error.FixnumOverflow, scalarBinaryOp(i32, .div, std.mem.sliceAsBytes(&a_vals), -1, &out_bytes));
+}
+
+test "scalarBinaryOp i32 div: minInt / -1 in vector path" {
+    const n = 16;
+    var a_vals: [n]i32 = undefined;
+    for (0..n) |i| a_vals[i] = @intCast(i + 1);
+    a_vals[2] = std.math.minInt(i32);
+    var out_bytes: [n * 4]u8 = undefined;
+    try testing.expectError(error.FixnumOverflow, scalarBinaryOp(i32, .div, std.mem.sliceAsBytes(&a_vals), -1, &out_bytes));
+}
+
+test "scalarBinaryOp i32 div: -1 divisor without minInt dividend is fine" {
+    const a_vals = [_]i32{ 6, -8 };
+    var out_bytes: [2 * 4]u8 = undefined;
+    try scalarBinaryOp(i32, .div, std.mem.sliceAsBytes(&a_vals), -1, &out_bytes);
+    try testing.expectEqual(@as(i32, -6), readElement(i32, &out_bytes, 0));
+    try testing.expectEqual(@as(i32, 8), readElement(i32, &out_bytes, 1));
+}
+
+test "scalarBinaryOp f32 div: zero divisor follows IEEE" {
+    const a_vals = [_]f32{6.0};
+    var out_bytes: [4]u8 = undefined;
+    try scalarBinaryOp(f32, .div, std.mem.sliceAsBytes(&a_vals), 0.0, &out_bytes);
+    try testing.expect(std.math.isInf(readElement(f32, &out_bytes, 0)));
 }
 
 // ---------------------------------------------------------------------------

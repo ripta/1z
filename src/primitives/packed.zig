@@ -425,7 +425,7 @@ fn packedArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!vo
     try out_ba.ensureTotalCapacity(alloc, a_bytes.len);
     out_ba.items.len = a_bytes.len;
 
-    callKernel(op, elem_type, a_bytes, b_bytes, out_ba.items);
+    try callKernel(op, elem_type, a_bytes, b_bytes, out_ba.items);
 
     const inner = try ctx.quotationAllocator().create(Value);
     inner.* = .{ .byte_array = out_ba };
@@ -437,7 +437,7 @@ fn packedArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyerror!vo
     });
 }
 
-fn callKernel(comptime op: packed_kernels.Op, elem_type: PackedElementType, a: []const u8, b: []const u8, out: []u8) void {
+fn callKernel(comptime op: packed_kernels.Op, elem_type: PackedElementType, a: []const u8, b: []const u8, out: []u8) packed_kernels.DivideError!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = switch (et) {
@@ -456,7 +456,7 @@ fn callKernel(comptime op: packed_kernels.Op, elem_type: PackedElementType, a: [
                 .add => packed_kernels.addPacked(T, a, b, out),
                 .sub => packed_kernels.subPacked(T, a, b, out),
                 .mul => packed_kernels.mulPacked(T, a, b, out),
-                .div => packed_kernels.divPacked(T, a, b, out),
+                .div => try packed_kernels.divPacked(T, a, b, out),
             }
         },
     }
@@ -521,7 +521,11 @@ fn packedScalarArithmeticOp(comptime op: packed_kernels.Op, ctx: *Context) anyer
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
             const scalar = try valueToElement(T, ctx, arena, scalar_val);
-            packed_kernels.scalarBinaryOp(T, op, a_bytes, scalar, out_ba.items);
+            if (comptime op == .div) {
+                try packed_kernels.scalarBinaryOp(T, op, a_bytes, scalar, out_ba.items);
+            } else {
+                packed_kernels.scalarBinaryOp(T, op, a_bytes, scalar, out_ba.items);
+            }
         },
     }
 

@@ -125,6 +125,32 @@ PASS: 128 out of range for i8
 Stack: [ ]
 PASS: -129 out of range for i8
 Stack: [ ]
+=== error: integer division by zero ===
+Stack: [ ]
+PASS: i32 / zero scalar
+Stack: [ ]
+PASS: i32 / zero element
+Stack: [ ]
+PASS: u16 / zero scalar
+Stack: [ ]
+Stack: [ [ { 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 } >packed:i32 { 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 } >packed:i32 / ] ]
+PASS: i32 / zero in SIMD chunk
+Stack: [ ]
+=== error: integer division overflow ===
+Stack: [ ]
+PASS: i32 minInt / -1 scalar
+Stack: [ ]
+PASS: i32 minInt / -1 element
+Stack: [ ]
+Stack: [ { -6 8 } ]
+PASS: i32 / -1 without minInt is fine
+Stack: [ ]
+=== float division by zero follows IEEE ===
+Stack: [ ]
+PASS: f64 / zero scalar is inf
+Stack: [ ]
+PASS: f64 / zero element is inf
+Stack: [ ]
 === scalar broadcast + ===
 Stack: [ ]
 Stack: [ { 11.0 12.0 13.0 } ]

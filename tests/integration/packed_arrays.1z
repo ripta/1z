@@ -108,6 +108,29 @@ dup 0 #nth 3.0 = swap 31 #nth 3.0 = and t "large f64 + first and last" assert=
 [ { 128 } >packed:i8 ] "128 out of range for i8" assert-error
 [ { -129 } >packed:i8 ] "-129 out of range for i8" assert-error
 
+"error: integer division by zero" test-section
+
+[ { 6 8 } >packed:i32 0 / ] division-by-zero: "i32 / zero scalar" assert-error-type
+[ { 6 } >packed:i32 { 0 } >packed:i32 / ] division-by-zero: "i32 / zero element" assert-error-type
+[ { 6 } >packed:u16 0 / ] division-by-zero: "u16 / zero scalar" assert-error-type
+[ { 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 } >packed:i32
+  { 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 } >packed:i32 /
+]
+division-by-zero: "i32 / zero in SIMD chunk" assert-error-type
+
+"error: integer division overflow" test-section
+
+[ { -2147483648 } >packed:i32 -1 / ] fixnum-overflow: "i32 minInt / -1 scalar" assert-error-type
+[ { -2147483648 } >packed:i32 { -1 } >packed:i32 / ] fixnum-overflow: "i32 minInt / -1 element" assert-error-type
+
+{ 6 -8 } >packed:i32 -1 / packed>array
+{ -6 8 } "i32 / -1 without minInt is fine" assert=
+
+"float division by zero follows IEEE" test-section
+
+{ 6.0 } >packed:f64 0.0 / packed>array 0 #nth inspect "inf" "f64 / zero scalar is inf" assert=
+{ 6.0 } >packed:f64 { 0.0 } >packed:f64 / packed>array 0 #nth inspect "inf" "f64 / zero element is inf" assert=
+
 "scalar broadcast +" test-section
 
 { 1.0 2.0 3.0 } >packed:f64 10.0 + packed>array
