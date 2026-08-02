@@ -809,7 +809,9 @@ fn populateTypeValueSlots(
     // the `enum_variant` TypeValues by their parent enum, using the
     // `virtual_type` back-references set in Pass 3.5.
     {
-        var groups = std.AutoHashMapUnmanaged(
+        // Insertion-ordered so registration follows typevalue slot order rather
+        // than pointer allocation order, which varies run to run.
+        var groups = std.AutoArrayHashMapUnmanaged(
             *const value_mod.TypeValue,
             std.ArrayListUnmanaged(*const value_mod.VirtualType),
         ){};
@@ -4035,4 +4037,32 @@ test "loadIntoContext: combinator element with out-of-range type slot errors" {
             .constraint_combinators = &combinator_slots,
         }, null),
     );
+}
+
+test "findEnumVariantTypeValueByName: colliding variant names resolve to the first-registered enum" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+
+    const arena = ctx.quotationAllocator();
+
+    const first_variant_tv = try arena.create(value_mod.TypeValue);
+    first_variant_tv.* = .{ .name = "collide-shared", .descriptor = null };
+    const first_vt = try arena.create(value_mod.VirtualType);
+    first_vt.* = .{ .name = "collide-shared", .inner_type = "symbol", .type_val = first_variant_tv };
+    const enum_a = try arena.create(value_mod.TypeValue);
+    enum_a.* = .{ .name = "collide-a:", .descriptor = null };
+    const variants_a: []const *const value_mod.VirtualType = &.{first_vt};
+    try ctx.registerEnumVariants(enum_a, variants_a);
+
+    const second_variant_tv = try arena.create(value_mod.TypeValue);
+    second_variant_tv.* = .{ .name = "collide-shared", .descriptor = null };
+    const second_vt = try arena.create(value_mod.VirtualType);
+    second_vt.* = .{ .name = "collide-shared", .inner_type = "symbol", .type_val = second_variant_tv };
+    const enum_b = try arena.create(value_mod.TypeValue);
+    enum_b.* = .{ .name = "collide-b:", .descriptor = null };
+    const variants_b: []const *const value_mod.VirtualType = &.{second_vt};
+    try ctx.registerEnumVariants(enum_b, variants_b);
+
+    const found = findEnumVariantTypeValueByName(&ctx, "collide-shared");
+    try testing.expectEqual(@as(?*value_mod.TypeValue, first_variant_tv), found);
 }

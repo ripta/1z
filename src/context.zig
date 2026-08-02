@@ -296,7 +296,10 @@ pub const PragmaFrame = std.StringHashMapUnmanaged(Value);
 /// of type registrations.
 pub const TypeRegistryFrame = struct {
     type_descriptors: std.StringHashMapUnmanaged(*value_mod.TypeDescriptor) = .{},
-    enum_registry: std.AutoHashMapUnmanaged(*const value_mod.TypeValue, []const *const value_mod.VirtualType) = .{},
+    // Insertion-ordered so first-match by-name scans over variants resolve
+    // deterministically; a pointer-keyed hash map iterates in allocation-address
+    // order, which varies run to run.
+    enum_registry: std.AutoArrayHashMapUnmanaged(*const value_mod.TypeValue, []const *const value_mod.VirtualType) = .{},
 
     pub fn deinit(self: *TypeRegistryFrame, allocator: Allocator) void {
         self.type_descriptors.deinit(allocator);
@@ -7669,6 +7672,29 @@ test "enum registry frame push/pop" {
     ctx.popTypeRegistryFrame();
     try std.testing.expect(ctx.lookupEnumVariants(size_tv) == null);
     try std.testing.expect(ctx.lookupEnumVariants(color_tv) != null);
+}
+
+test "enum registry iterates in registration order" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const alloc = ctx.arena.allocator();
+    var tvs: [3]*value_mod.TypeValue = undefined;
+    const names = [_][]const u8{ "reg-order-a:", "reg-order-b:", "reg-order-c:" };
+    for (&tvs, names) |*slot, name| {
+        const tv = try alloc.create(value_mod.TypeValue);
+        tv.* = .{ .name = name, .descriptor = null };
+        slot.* = tv;
+        try ctx.registerEnumVariants(tv, &.{});
+    }
+
+    const reg = &ctx.type_registry_frames.items[ctx.type_registry_frames.items.len - 1].enum_registry;
+    const keys = reg.keys();
+    try std.testing.expect(keys.len >= 3);
+    const base = keys.len - 3;
+    for (tvs, 0..) |tv, i| {
+        try std.testing.expectEqual(@as(*const value_mod.TypeValue, tv), keys[base + i]);
+    }
 }
 
 test "deriveEnumTypeParams orders distinct parameters by first appearance" {
