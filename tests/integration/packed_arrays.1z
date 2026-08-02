@@ -216,3 +216,16 @@ division-by-zero: "i32 / zero in SIMD chunk" assert-error-type
 { 1.0 2.0 3.0 } >packed:f64 inspect "packed-f64{ 1.0 2.0 3.0 }" "f64 inspect" assert=
 { 1 2 3 } >packed:i32 inspect "packed-i32{ 1 2 3 }" "i32 inspect" assert=
 { } >packed:f64 inspect "packed-f64{ }" "empty inspect" assert=
+
+"packed-u64 upper half" test-section
+
+{ 18446744073709551614 } >packed:u64 packed>array { 18446744073709551614 } "u64 upper-half roundtrip" assert=
+{ 18446744073709551615 } >packed:u64 0 #nth 18446744073709551615 "u64 max #nth" assert=
+{ 9223372036854775807 } >packed:u64 2 * 0 #nth 18446744073709551614 "u64 wrap reads back unsigned" assert=
+{ 18446744073709551614 } >packed:u64 inspect "packed-u64{ 18446744073709551614 }" "u64 upper-half inspect" assert=
+{ 9223372036854775807 9223372036854775807 } >packed:u64 packed-sum 18446744073709551614 "u64 sum into upper half" assert=
+{ 18446744073709551615 1 } >packed:u64 packed-max 18446744073709551615 "u64 max in upper half" assert=
+2 18446744073709551614 packed-fill:u64 packed>array { 18446744073709551614 18446744073709551614 } "u64 fill with bignum" assert=
+
+[ { 18446744073709551616 } >packed:u64 ] "above u64 max rejected" assert-error
+[ { -1 } >packed:u64 ] "negative rejected for u64" assert-error

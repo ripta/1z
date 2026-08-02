@@ -260,3 +260,23 @@ PASS: i32 inspect
 Stack: [ ]
 PASS: empty inspect
 Stack: [ ]
+=== packed-u64 upper half ===
+Stack: [ ]
+PASS: u64 upper-half roundtrip
+Stack: [ ]
+PASS: u64 max #nth
+Stack: [ ]
+PASS: u64 wrap reads back unsigned
+Stack: [ ]
+PASS: u64 upper-half inspect
+Stack: [ ]
+PASS: u64 sum into upper half
+Stack: [ ]
+PASS: u64 max in upper half
+Stack: [ ]
+PASS: u64 fill with bignum
+Stack: [ ]
+PASS: above u64 max rejected
+Stack: [ ]
+PASS: negative rejected for u64
+Stack: [ ]

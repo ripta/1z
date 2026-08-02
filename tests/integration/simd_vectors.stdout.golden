@@ -136,3 +136,15 @@ PASS: simd-4xf32? on simd-4xf32
 Stack: [ t ]
 PASS: simd-4xf32? on simd-4xi32
 Stack: [ t f ]
+=== 2xu64 upper half ===
+Stack: [ t f ]
+PASS: 2xu64 upper-half lane read
+Stack: [ t f ]
+PASS: 2xu64 upper-half to-array
+Stack: [ t f ]
+PASS: 2xu64 wrap reads back unsigned
+Stack: [ t f ]
+PASS: above u64 max rejected
+Stack: [ t f ]
+PASS: negative rejected for 2xu64
+Stack: [ t f ]

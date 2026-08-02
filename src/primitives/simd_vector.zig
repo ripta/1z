@@ -129,6 +129,11 @@ fn valueToElement(comptime T: type, ctx: *Context, arena: Allocator, val: Value)
                 }
                 break :blk @intFromFloat(f);
             },
+            .bignum => |b| {
+                if (b.fits(T)) return b.toInt(T) catch unreachable;
+                helpers.setErrorContext(ctx, "simd: bignum out of range for {s}", .{@typeName(T)});
+                return error.TypeMismatch;
+            },
             else => {
                 helpers.setErrorContext(ctx, "simd: expected number, got {s}", .{helpers.valueTypeName(val)});
                 return error.TypeMismatch;
@@ -143,24 +148,21 @@ fn valueToElement(comptime T: type, ctx: *Context, arena: Allocator, val: Value)
     }
 }
 
-fn elementToValue(comptime T: type, elem: T) Value {
+fn elementToValue(comptime T: type, ctx: *Context, elem: T) !Value {
     const info = @typeInfo(T);
     if (info == .float) {
         return .{ .float = @floatCast(elem) };
     } else if (info == .int) {
-        if (info.int.signedness == .unsigned) {
-            if (@sizeOf(T) <= 4) {
-                return .{ .fixnum = @intCast(elem) };
-            } else {
-                if (elem <= std.math.maxInt(i64)) {
-                    return .{ .fixnum = @intCast(elem) };
-                } else {
-                    return .{ .fixnum = @bitCast(@as(u64, elem)) };
-                }
+        if (info.int.signedness == .unsigned and @sizeOf(T) == 8) {
+            // u64 is the one element type whose range exceeds fixnum; the upper half boxes as bignum
+            if (elem > std.math.maxInt(i64)) {
+                const alloc = ctx.arena.allocator();
+                const big = try value_mod.BigIntManaged.initSet(alloc, elem);
+                return .{ .bignum = try value_mod.boxBigInt(alloc, big) };
             }
-        } else {
             return .{ .fixnum = @intCast(elem) };
         }
+        return .{ .fixnum = @intCast(elem) };
     } else {
         unreachable;
     }
@@ -360,7 +362,7 @@ fn nativeSimdToArray(ctx: *Context) anyerror!void {
             const T = comptime etToType(et);
             const N = comptime etToLaneCount(et);
             for (0..N) |i| {
-                result[i] = elementToValue(T, simd_kernels.simdGetLane(N, T, bytes, i));
+                result[i] = try elementToValue(T, ctx, simd_kernels.simdGetLane(N, T, bytes, i));
             }
         },
     }
@@ -399,7 +401,7 @@ fn nativeSimdLaneGet(ctx: *Context) anyerror!void {
         inline .@"2xf64", .@"4xf32", .@"2xi64", .@"4xi32", .@"8xi16", .@"16xi8", .@"2xu64", .@"4xu32", .@"8xu16", .@"16xu8" => |et| {
             const T = comptime etToType(et);
             const N = comptime etToLaneCount(et);
-            try ctx.stack.push(elementToValue(T, simd_kernels.simdGetLane(N, T, bytes, lane)));
+            try ctx.stack.push(try elementToValue(T, ctx, simd_kernels.simdGetLane(N, T, bytes, lane)));
         },
     }
 }

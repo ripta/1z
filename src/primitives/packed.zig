@@ -185,6 +185,11 @@ fn valueToElement(comptime T: type, ctx: *Context, arena: Allocator, val: Value)
                 }
                 break :blk @intFromFloat(f);
             },
+            .bignum => |b| {
+                if (b.fits(T)) return b.toInt(T) catch unreachable;
+                helpers.setErrorContext(ctx, "packed-from-array: bignum out of range for {s}", .{@typeName(T)});
+                return error.TypeMismatch;
+            },
             else => {
                 helpers.setErrorContext(ctx, "packed-from-array: expected number, got {s}", .{helpers.valueTypeName(val)});
                 return error.TypeMismatch;
@@ -295,51 +300,36 @@ fn nativePackedToArray(ctx: *Context) anyerror!void {
     const result = try alloc.alloc(Value, count);
 
     switch (elem_type) {
-        .f64 => readElements(f64, bytes, result),
-        .f32 => readElements(f32, bytes, result),
-        .i8 => readElements(i8, bytes, result),
-        .i16 => readElements(i16, bytes, result),
-        .i32 => readElements(i32, bytes, result),
-        .i64 => readElements(i64, bytes, result),
-        .u8 => readElements(u8, bytes, result),
-        .u16 => readElements(u16, bytes, result),
-        .u32 => readElements(u32, bytes, result),
-        .u64 => readElements(u64, bytes, result),
+        inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
+            try readElements(etToType(et), ctx, bytes, result);
+        },
     }
 
     try helpers.pushAdoptedArray(ctx, alloc, result);
 }
 
-fn readElements(comptime T: type, bytes: []const u8, out: []Value) void {
+fn readElements(comptime T: type, ctx: *Context, bytes: []const u8, out: []Value) !void {
     const n = packed_kernels.elementCount(T, bytes);
     for (0..n) |i| {
-        out[i] = elementToValue(T, packed_kernels.readElement(T, bytes, i));
+        out[i] = try elementToValue(T, ctx, packed_kernels.readElement(T, bytes, i));
     }
 }
 
-fn elementToValue(comptime T: type, elem: T) Value {
+fn elementToValue(comptime T: type, ctx: *Context, elem: T) !Value {
     const info = @typeInfo(T);
     if (info == .float) {
         return .{ .float = @floatCast(elem) };
     } else if (info == .int) {
-        if (info.int.signedness == .unsigned) {
-            // uint: always fit in i64 for u8..u32, check for u64
-            if (@sizeOf(T) <= 4) {
-                return .{ .fixnum = @intCast(elem) };
-            } else {
-                // u64: check if it fits in i64
-                if (elem <= std.math.maxInt(i64)) {
-                    return .{ .fixnum = @intCast(elem) };
-                } else {
-                    // Would need bignum; for now, truncate to i64
-                    // TODO: promote to bignum for u64 values > maxInt(i64)
-                    return .{ .fixnum = @bitCast(@as(u64, elem)) };
-                }
+        if (info.int.signedness == .unsigned and @sizeOf(T) == 8) {
+            // u64 is the one element type whose range exceeds fixnum; the upper half boxes as bignum
+            if (elem > std.math.maxInt(i64)) {
+                const alloc = ctx.arena.allocator();
+                const big = try BigIntManaged.initSet(alloc, elem);
+                return .{ .bignum = try value_mod.boxBigInt(alloc, big) };
             }
-        } else {
-            // int: i8..i32 always fit; i64 is fixnum directly
             return .{ .fixnum = @intCast(elem) };
         }
+        return .{ .fixnum = @intCast(elem) };
     } else {
         unreachable;
     }
@@ -564,7 +554,7 @@ fn nativePackedSum(ctx: *Context) anyerror!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
-            try ctx.stack.push(elementToValue(T, packed_kernels.sumPacked(T, ba.slice())));
+            try ctx.stack.push(try elementToValue(T, ctx, packed_kernels.sumPacked(T, ba.slice())));
         },
     }
 }
@@ -579,7 +569,7 @@ fn nativePackedProduct(ctx: *Context) anyerror!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
-            try ctx.stack.push(elementToValue(T, packed_kernels.productPacked(T, ba.slice())));
+            try ctx.stack.push(try elementToValue(T, ctx, packed_kernels.productPacked(T, ba.slice())));
         },
     }
 }
@@ -598,7 +588,7 @@ fn nativePackedMin(ctx: *Context) anyerror!void {
                 helpers.setErrorContext(ctx, "packed-min: empty array", .{});
                 return error.InvalidArgument;
             };
-            try ctx.stack.push(elementToValue(T, result));
+            try ctx.stack.push(try elementToValue(T, ctx, result));
         },
     }
 }
@@ -617,7 +607,7 @@ fn nativePackedMax(ctx: *Context) anyerror!void {
                 helpers.setErrorContext(ctx, "packed-max: empty array", .{});
                 return error.InvalidArgument;
             };
-            try ctx.stack.push(elementToValue(T, result));
+            try ctx.stack.push(try elementToValue(T, ctx, result));
         },
     }
 }
@@ -665,7 +655,7 @@ fn nativePackedDot(ctx: *Context) anyerror!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
-            try ctx.stack.push(elementToValue(T, packed_kernels.dotPacked(T, a_bytes, b_bytes)));
+            try ctx.stack.push(try elementToValue(T, ctx, packed_kernels.dotPacked(T, a_bytes, b_bytes)));
         },
     }
 }
@@ -720,7 +710,7 @@ fn nativePackedNth(ctx: *Context) anyerror!void {
     switch (elem_type) {
         inline .f64, .f32, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => |et| {
             const T = comptime etToType(et);
-            try ctx.stack.push(elementToValue(T, packed_kernels.readElement(T, bytes, i)));
+            try ctx.stack.push(try elementToValue(T, ctx, packed_kernels.readElement(T, bytes, i)));
         },
     }
 }

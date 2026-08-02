@@ -139,3 +139,12 @@ simd-select simd>array
 "type predicates" test-section
 t 1.0 2.0 3.0 4.0 <simd-4xf32> simd-4xf32? "simd-4xf32? on simd-4xf32" assert-true
 f 1 2 3 4 <simd-4xi32> simd-4xf32? "simd-4xf32? on simd-4xi32" assert-false
+
+\ -- 2xu64 upper half --
+
+"2xu64 upper half" test-section
+18446744073709551614 1 <simd-2xu64> 0 simd-lane 18446744073709551614 "2xu64 upper-half lane read" assert=
+18446744073709551614 1 <simd-2xu64> simd>array { 18446744073709551614 1 } "2xu64 upper-half to-array" assert=
+9223372036854775807 simd-splat:2xu64 2 simd-splat:2xu64 * 0 simd-lane 18446744073709551614 "2xu64 wrap reads back unsigned" assert=
+[ 18446744073709551616 1 <simd-2xu64> ] "above u64 max rejected" assert-error
+[ -1 1 <simd-2xu64> ] "negative rejected for 2xu64" assert-error
