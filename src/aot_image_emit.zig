@@ -987,9 +987,15 @@ fn internTopLevelFrameLiterals(
     }
 }
 
-/// Walk both halves of the dispatch table (`entries` and
-/// `native_entries`) and intern type references reachable from each
-/// entry. For quotation-bodied entries, the body walker picks up
+/// Walk the dispatch table's base entries in registration order and intern type references
+/// reachable from each entry. Slots are assigned in intern-call order, so an unordered walk would
+/// permute the image's slot numbering.
+///
+/// `native_entries` needs no pass of its own. Its sole writer is `registerNative`, which inserts
+/// into `entries` first and copies. Nothing removes from `entries`. Its bodies are always
+/// `.native_fn`, so the base walk already interns everything it holds.
+///
+/// For quotation-bodied entries, the body walker picks up
 /// `.type_val` and friends. For key TypeDescriptors, the descriptor
 /// itself does not back-reference its owning TypeValue, so build a
 /// one-shot index over the slot table and the Context's known
@@ -1007,23 +1013,21 @@ fn internDispatchTableLiterals(
     defer desc_index.deinit(effect_table.allocator);
     try indexKnownTypeValues(&desc_index, effect_table.allocator, ctx, effect_table);
 
-    inline for (.{ &ctx.dispatch.entries, &ctx.dispatch.native_entries }) |table| {
-        var iter = table.iterator();
-        while (iter.next()) |slot| {
-            const key = slot.key_ptr.*;
-            if (desc_index.get(key.type_a)) |tv| _ = try effect_table.internType(tv);
-            if (desc_index.get(key.type_b)) |tv| _ = try effect_table.internType(tv);
+    const pairs = try ctx.dispatch.allEntriesSorted(effect_table.allocator);
+    defer effect_table.allocator.free(pairs);
 
-            const entry = slot.value_ptr.*;
-            switch (entry.body) {
-                .quotation => |q| try internInstructionTypeLiterals(
-                    struct_plans,
-                    struct_index,
-                    effect_table,
-                    q.instructions,
-                ),
-                .native_fn, .host_callback => {},
-            }
+    for (pairs) |pair| {
+        if (desc_index.get(pair.key.type_a)) |tv| _ = try effect_table.internType(tv);
+        if (desc_index.get(pair.key.type_b)) |tv| _ = try effect_table.internType(tv);
+
+        switch (pair.entry.body) {
+            .quotation => |q| try internInstructionTypeLiterals(
+                struct_plans,
+                struct_index,
+                effect_table,
+                q.instructions,
+            ),
+            .native_fn, .host_callback => {},
         }
     }
 }
@@ -6900,6 +6904,57 @@ test "indexKnownTypeValues: smallest interned slot wins a shared descriptor" {
 
     try testing.expectEqual(@as(*const value_mod.TypeValue, tv_a), desc_index.get(shared_desc).?);
     try testing.expectEqual(@as(*const value_mod.TypeValue, tv_d), desc_index.get(registry_desc).?);
+}
+
+test "internDispatchTableLiterals assigns type slots in registration order" {
+    var ctx = Context.init(testing.allocator);
+    defer ctx.deinit();
+    const arena = ctx.quotationAllocator();
+
+    const names = [_][]const u8{
+        "slot-order-0", "slot-order-1", "slot-order-2",
+        "slot-order-3", "slot-order-4", "slot-order-5",
+    };
+    var tvs: [names.len]*value_mod.TypeValue = undefined;
+    for (names, 0..) |name, i| {
+        const desc = try value_mod.createTypeDescriptor(arena, .{ .virtual = .{} }, .{});
+        const tv = try arena.create(value_mod.TypeValue);
+        tv.* = .{ .name = name, .descriptor = desc };
+        try ctx.resource_type_values.put(ctx.allocator, name, tv);
+        tvs[i] = tv;
+    }
+
+    for (tvs, 0..) |tv, i| {
+        try ctx.dispatch.register(
+            .{
+                .dispatch_id = @intCast(i),
+                .type_a = tv.descriptor.?,
+                .type_b = tv.descriptor.?,
+            },
+            .{ .body = .{ .quotation = .{ .instructions = &.{} } } },
+            false,
+        );
+    }
+
+    var struct_plans: std.ArrayListUnmanaged(StructTypePlan) = .{};
+    defer struct_plans.deinit(testing.allocator);
+    var struct_index: std.AutoHashMapUnmanaged(*const value_mod.StructType, u32) = .{};
+    defer struct_index.deinit(testing.allocator);
+    var table = StackEffectTable.init(testing.allocator);
+    defer table.deinit();
+
+    try internDispatchTableLiterals(&struct_plans, &struct_index, &table, &ctx);
+
+    // The walk also interns the built-in native dispatch entries the Context registers at init,
+    // and those precede the six test entries in registration order. What must hold is the
+    // relative order: slots ascend with registration sequence regardless of the map's iteration
+    // order.
+    var prev_slot: u32 = 0;
+    for (tvs) |tv| {
+        const slot = table.type_slot_index.get(tv).?;
+        try testing.expect(slot > prev_slot);
+        prev_slot = slot;
+    }
 }
 
 test "emitImageC: protocol annotation interns descriptor and emits full description row" {

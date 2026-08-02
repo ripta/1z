@@ -410,6 +410,23 @@ pub const DispatchTable = struct {
         return results.toOwnedSlice(alloc);
     }
 
+    /// Collect every entry in the base table, sorted by registration sequence. The map itself
+    /// iterates in pointer-hash order, which differs run to run. Caller owns the returned slice.
+    ///
+    /// The order is total only because every base-table write path goes through `register`, which
+    /// stamps a unique sequence. A direct `entries.put` leaves sequence 0, and tied entries sort
+    /// in map order.
+    pub fn allEntriesSorted(self: *const DispatchTable, alloc: Allocator) Allocator.Error![]KeyEntryPair {
+        var results: std.ArrayListUnmanaged(KeyEntryPair) = .{};
+        errdefer results.deinit(alloc);
+        var iter = self.entries.iterator();
+        while (iter.next()) |entry| {
+            try results.append(alloc, .{ .key = entry.key_ptr.*, .entry = entry.value_ptr.* });
+        }
+        std.mem.sortUnstable(KeyEntryPair, results.items, {}, lessThanBySequence);
+        return results.toOwnedSlice(alloc);
+    }
+
     fn lessThanBySequence(_: void, a: KeyEntryPair, b: KeyEntryPair) bool {
         return a.entry.sequence < b.entry.sequence;
     }
@@ -899,6 +916,33 @@ test "entriesForDispatchId returns entries in registration order" {
     for (pairs, 0..) |pair, i| {
         try std.testing.expectEqual(descs[i * 2], @constCast(pair.key.type_a));
         try std.testing.expectEqual(@as(u64, i * 2), pair.entry.sequence);
+    }
+}
+
+test "allEntriesSorted returns every entry in registration order" {
+    var table = DispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    var descs: [24]*value_mod.TypeDescriptor = undefined;
+    for (&descs) |*d| d.* = try testDescriptor("t");
+    defer for (descs) |d| value_mod.destroyTypeDescriptor(std.testing.allocator, d);
+
+    for (descs, 0..) |d, i| {
+        const dispatch_id: u32 = if (i % 2 == 0) 1 else 9;
+        try table.register(
+            .{ .dispatch_id = dispatch_id, .type_a = d, .type_b = d },
+            .{ .body = .{ .native_fn = dummyNativeFn } },
+            false,
+        );
+    }
+
+    const pairs = try table.allEntriesSorted(std.testing.allocator);
+    defer std.testing.allocator.free(pairs);
+
+    try std.testing.expectEqual(descs.len, pairs.len);
+    for (pairs, 0..) |pair, i| {
+        try std.testing.expectEqual(descs[i], @constCast(pair.key.type_a));
+        try std.testing.expectEqual(@as(u64, i), pair.entry.sequence);
     }
 }
 
