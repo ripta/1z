@@ -11,10 +11,17 @@ const RelayTarget = enum {
     stderr,
 };
 
+const RelaySink = struct {
+    list: *std.ArrayListUnmanaged(u8),
+    allocator: std.mem.Allocator,
+};
+
 const RelayContext = struct {
     source: std.fs.File,
     target: RelayTarget,
     capture: ?std.fs.File = null,
+    // Written only by this stream's relay thread; the main thread reads it after join.
+    sink: ?RelaySink = null,
     relay_to_tty: bool = true,
 };
 
@@ -28,6 +35,7 @@ const RunOptions = struct {
     stdout_file: ?[]const u8,
     stderr_file: ?[]const u8,
     relay_to_tty: bool,
+    stderr_on_failure: bool,
     argv_start: usize,
 };
 
@@ -76,6 +84,7 @@ fn parseRunArgs(args: []const []const u8) !RunOptions {
     var stdout_file: ?[]const u8 = null;
     var stderr_file: ?[]const u8 = null;
     var relay_to_tty = true;
+    var stderr_on_failure = false;
     var i: usize = 2;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
@@ -133,6 +142,10 @@ fn parseRunArgs(args: []const []const u8) !RunOptions {
             relay_to_tty = false;
             continue;
         }
+        if (std.mem.eql(u8, arg, "--stderr-on-failure")) {
+            stderr_on_failure = true;
+            continue;
+        }
         return error.InvalidArguments;
     }
     if (i >= args.len or label == null or timeout_secs == null or status_file == null) {
@@ -148,6 +161,7 @@ fn parseRunArgs(args: []const []const u8) !RunOptions {
         .stdout_file = stdout_file,
         .stderr_file = stderr_file,
         .relay_to_tty = relay_to_tty,
+        .stderr_on_failure = stderr_on_failure,
         .argv_start = i,
     };
 }
@@ -178,6 +192,11 @@ fn runCase(allocator: std.mem.Allocator, args: []const []const u8, opts: RunOpti
         stderr_capture = try std.fs.cwd().createFile(stderr_file, .{ .truncate = true });
     }
 
+    // With --stderr-on-failure the child's stderr is buffered instead of relayed live, so a
+    // succeeding case stays quiet and a failing one replays the buffer below.
+    var stderr_buffer: std.ArrayListUnmanaged(u8) = .empty;
+    defer stderr_buffer.deinit(allocator);
+
     var stdin_thread: ?std.Thread = null;
     if (opts.stdin_file) |stdin_file| {
         const child_stdin = child.stdin.?;
@@ -195,7 +214,8 @@ fn runCase(allocator: std.mem.Allocator, args: []const []const u8, opts: RunOpti
         .source = child_stderr,
         .target = .stderr,
         .capture = stderr_capture,
-        .relay_to_tty = opts.relay_to_tty,
+        .sink = if (opts.stderr_on_failure) .{ .list = &stderr_buffer, .allocator = allocator } else null,
+        .relay_to_tty = opts.relay_to_tty and !opts.stderr_on_failure,
     }});
 
     var wait_state = WaitState{};
@@ -223,13 +243,17 @@ fn runCase(allocator: std.mem.Allocator, args: []const []const u8, opts: RunOpti
     stderr_thread.join();
     if (stdin_thread) |thread| thread.join();
 
-    if (wait_state.err) |err| return err;
+    if (wait_state.err) |err| {
+        replayBufferedStderr(stderr_buffer.items);
+        return err;
+    }
     const term = wait_state.result orelse return error.Unexpected;
     const ended_ns = std.time.nanoTimestamp();
     const duration_ms = @as(u64, @intCast(@divTrunc(ended_ns - started_ns, std.time.ns_per_ms)));
 
     if (timed_out) {
         try writeStatusFile(opts.status_file, opts.label, .timeout, duration_ms);
+        replayBufferedStderr(stderr_buffer.items);
         std.debug.print("TIMEOUT: {s} exceeded {d}s\n", .{ opts.label, opts.timeout_secs });
         std.process.exit(1);
     }
@@ -246,8 +270,15 @@ fn runCase(allocator: std.mem.Allocator, args: []const []const u8, opts: RunOpti
     }
 
     if (exit_code != 0) {
+        replayBufferedStderr(stderr_buffer.items);
         std.process.exit(exit_code);
     }
+}
+
+fn replayBufferedStderr(bytes: []const u8) void {
+    if (bytes.len == 0) return;
+    const stderr = std.fs.File.stderr();
+    stderr.writeAll(bytes) catch {};
 }
 
 fn summarize(allocator: std.mem.Allocator, files: []const []const u8) !void {
@@ -338,6 +369,9 @@ fn relayOutput(ctx: RelayContext) !void {
         if (n == 0) break;
         if (capture) |*file| {
             try file.writeAll(buf[0..n]);
+        }
+        if (ctx.sink) |sink| {
+            try sink.list.appendSlice(sink.allocator, buf[0..n]);
         }
         if (ctx.relay_to_tty) {
             try out.interface.writeAll(buf[0..n]);

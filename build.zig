@@ -399,6 +399,7 @@ pub fn build(b: *std.Build) void {
             null,
             &fmt_status_files,
             &.{},
+            false,
         );
         fmt_run.addArtifactArg(exe);
         fmt_run.addArg("fmt");
@@ -1118,6 +1119,7 @@ fn addWrappedCommand(
     stdin_file: ?std.Build.LazyPath,
     status_files: *std.ArrayListUnmanaged(std.Build.LazyPath),
     extra_inputs: []const std.Build.LazyPath,
+    stderr_on_failure: bool,
 ) *std.Build.Step.Run {
     const run = std.Build.Step.Run.create(b, label);
     run.addArtifactArg(helper);
@@ -1130,6 +1132,9 @@ fn addWrappedCommand(
     run.addArg(b.fmt("{d}", .{slow_ms}));
     if (print_slow) {
         run.addArg("--print-slow");
+    }
+    if (stderr_on_failure) {
+        run.addArg("--stderr-on-failure");
     }
     run.addArg("--status-file");
     const status_file = run.addOutputFileArg(b.fmt("status_{d}.tsv", .{status_files.items.len}));
@@ -1209,6 +1214,7 @@ fn addIntegrationTests(
                 if (te.has_stdin) b.path(te.stdin_path) else null,
                 status_files,
                 &.{artifact.getEmittedBin()},
+                false,
             );
         if (!te.direct_run) {
             test_run.addArtifactArg(artifact);
@@ -1576,6 +1582,7 @@ fn addAotTests(
             null,
             status_files,
             &.{artifact.getEmittedBin()},
+            !is_build_only,
         );
         compile_run.addArg(exe_path);
         compile_run.setName(compile_label);
@@ -1754,9 +1761,6 @@ fn addAotTests(
             continue;
         }
 
-        // Capturing keeps the step cacheable and leaves the cache key unchanged.
-        _ = compile_run.captureStdErr();
-
         // chmod +x the compiled binary
         const chmod = b.addSystemCommand(&.{ "chmod", "+x" });
         chmod.addFileArg(aot_binary);
@@ -1777,6 +1781,7 @@ fn addAotTests(
             null,
             status_files,
             &.{aot_binary},
+            false,
         );
         exec_run.addFileArg(aot_binary);
         exec_run.setName(exec_label);
@@ -2175,6 +2180,7 @@ fn addLspTests(
             stdin_file,
             status_files,
             &.{lsp_artifact.getEmittedBin()},
+            false,
         );
         test_run.addArtifactArg(lsp_artifact);
         test_run.setName(label);
