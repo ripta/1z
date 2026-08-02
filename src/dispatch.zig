@@ -204,6 +204,12 @@ pub const DispatchEntry = struct {
     /// live for the whole Context. Null for native and host-callback bodies,
     /// and for methods registered outside any module load.
     source_module: ?*const value_mod.Module = null,
+    /// Registration order within the base table, stamped by `DispatchTable.register`. An
+    /// overwriting re-registration keeps the original entry's sequence, so priority is a property
+    /// of the key and a replaced body does not reshuffle order-sensitive consumers.
+    ///
+    /// Dispatch-frame entries bypass `register`, so a frame entry carries no meaningful sequence.
+    sequence: u64 = 0,
 };
 
 /// Dispatch table mapping (dispatch_id, type_a, type_b) to method bodies.
@@ -213,6 +219,9 @@ pub const DispatchTable = struct {
     allocator: Allocator,
     /// Incremented on every method registration, used for PIC invalidation.
     generation: u32 = 0,
+    /// Next value for `DispatchEntry.sequence`, consumed by `register` when
+    /// a key is first inserted.
+    next_sequence: u64 = 0,
 
     pub fn init(allocator: Allocator) DispatchTable {
         return .{
@@ -234,7 +243,16 @@ pub const DispatchTable = struct {
         if (gop.found_existing and !allow_overwrite) {
             return error.DuplicateMethod;
         }
-        gop.value_ptr.* = entry;
+
+        var stamped = entry;
+        if (gop.found_existing) {
+            stamped.sequence = gop.value_ptr.sequence;
+        } else {
+            stamped.sequence = self.next_sequence;
+            self.next_sequence += 1;
+        }
+
+        gop.value_ptr.* = stamped;
         self.generation +%= 1;
     }
 
@@ -334,7 +352,7 @@ pub const DispatchTable = struct {
             .provenance = .{ .generator = "native", .parent = "", .role = "", .field = "" },
         };
         try self.register(key, entry, false);
-        try self.native_entries.put(self.allocator, key, entry);
+        try self.native_entries.put(self.allocator, key, self.entries.get(key).?);
     }
 
     /// Look up a binary dispatch entry in the native-only shadow table.
@@ -377,8 +395,9 @@ pub const DispatchTable = struct {
         return null;
     }
 
-    /// Collect all dispatch keys and entries registered for a given dispatch ID.
-    /// Caller owns the returned slice.
+    /// Collect all dispatch keys and entries registered for a given dispatch ID, sorted by
+    /// registration sequence. The map itself iterates in pointer-hash order, which differs run to
+    /// run. Caller owns the returned slice.
     pub fn entriesForDispatchId(self: *const DispatchTable, dispatch_id: u32, alloc: Allocator) ![]KeyEntryPair {
         var results: std.ArrayListUnmanaged(KeyEntryPair) = .{};
         var iter = self.entries.iterator();
@@ -387,7 +406,12 @@ pub const DispatchTable = struct {
                 try results.append(alloc, .{ .key = entry.key_ptr.*, .entry = entry.value_ptr.* });
             }
         }
+        std.mem.sortUnstable(KeyEntryPair, results.items, {}, lessThanBySequence);
         return results.toOwnedSlice(alloc);
+    }
+
+    fn lessThanBySequence(_: void, a: KeyEntryPair, b: KeyEntryPair) bool {
+        return a.entry.sequence < b.entry.sequence;
     }
 };
 
@@ -748,6 +772,134 @@ test "register increments generation counter" {
         true,
     );
     try std.testing.expectEqual(@as(u32, 2), table.generation);
+}
+
+test "register stamps monotonically increasing sequence" {
+    var table = DispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const fixnum_desc = try testDescriptor("fixnum");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
+    const string_desc = try testDescriptor("string");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, string_desc);
+    const any_desc = try testDescriptor("*");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
+
+    const body = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    try table.register(
+        .{ .dispatch_id = 1, .type_a = fixnum_desc, .type_b = fixnum_desc },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
+        false,
+    );
+    try table.register(
+        .{ .dispatch_id = 1, .type_a = string_desc, .type_b = string_desc },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
+        false,
+    );
+    try table.register(
+        .{ .dispatch_id = 2, .type_a = fixnum_desc, .type_b = fixnum_desc },
+        .{ .body = .{ .quotation = .{ .instructions = body } } },
+        false,
+    );
+
+    const first = table.lookupBinary(1, fixnum_desc, fixnum_desc, any_desc).?;
+    const second = table.lookupBinary(1, string_desc, string_desc, any_desc).?;
+    const third = table.lookupBinary(2, fixnum_desc, fixnum_desc, any_desc).?;
+    try std.testing.expectEqual(@as(u64, 0), first.sequence);
+    try std.testing.expectEqual(@as(u64, 1), second.sequence);
+    try std.testing.expectEqual(@as(u64, 2), third.sequence);
+}
+
+test "overwriting re-registration keeps the original sequence" {
+    var table = DispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const fixnum_desc = try testDescriptor("fixnum");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
+    const string_desc = try testDescriptor("string");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, string_desc);
+    const any_desc = try testDescriptor("*");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
+
+    const body1 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 0 }};
+    const body2 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 2 } }, .line = 0 }};
+
+    try table.register(
+        .{ .dispatch_id = 1, .type_a = fixnum_desc, .type_b = fixnum_desc },
+        .{ .body = .{ .quotation = .{ .instructions = body1 } } },
+        false,
+    );
+    try table.register(
+        .{ .dispatch_id = 1, .type_a = string_desc, .type_b = string_desc },
+        .{ .body = .{ .quotation = .{ .instructions = body1 } } },
+        false,
+    );
+    try table.register(
+        .{ .dispatch_id = 1, .type_a = fixnum_desc, .type_b = fixnum_desc },
+        .{ .body = .{ .quotation = .{ .instructions = body2 } } },
+        true,
+    );
+
+    const overwritten = table.lookupBinary(1, fixnum_desc, fixnum_desc, any_desc).?;
+    try std.testing.expectEqual(@as(u64, 0), overwritten.sequence);
+    try std.testing.expectEqual(@as(i64, 2), overwritten.body.quotation.instructions[0].op.push_literal.fixnum);
+
+    // A later fresh insert still draws from the advanced counter.
+    const body3 = &[_]Instruction{.{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 0 }};
+    try table.register(
+        .{ .dispatch_id = 2, .type_a = fixnum_desc, .type_b = fixnum_desc },
+        .{ .body = .{ .quotation = .{ .instructions = body3 } } },
+        false,
+    );
+    const fresh = table.lookupBinary(2, fixnum_desc, fixnum_desc, any_desc).?;
+    try std.testing.expectEqual(@as(u64, 2), fresh.sequence);
+}
+
+test "registerNative stamps the native_entries copy with the same sequence" {
+    var table = DispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    const fixnum_desc = try testDescriptor("fixnum");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, fixnum_desc);
+    const string_desc = try testDescriptor("string");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, string_desc);
+    const any_desc = try testDescriptor("*");
+    defer value_mod.destroyTypeDescriptor(std.testing.allocator, any_desc);
+
+    try table.registerNative(1, fixnum_desc, fixnum_desc, dummyNativeFn);
+    try table.registerNative(1, string_desc, string_desc, dummyNativeFn);
+
+    const entry = table.lookupBinary(1, string_desc, string_desc, any_desc).?;
+    const shadow = table.lookupNativeBinary(1, string_desc, string_desc, any_desc).?;
+    try std.testing.expectEqual(@as(u64, 1), entry.sequence);
+    try std.testing.expectEqual(entry.sequence, shadow.sequence);
+}
+
+test "entriesForDispatchId returns entries in registration order" {
+    var table = DispatchTable.init(std.testing.allocator);
+    defer table.deinit();
+
+    var descs: [24]*value_mod.TypeDescriptor = undefined;
+    for (&descs) |*d| d.* = try testDescriptor("t");
+    defer for (descs) |d| value_mod.destroyTypeDescriptor(std.testing.allocator, d);
+
+    for (descs, 0..) |d, i| {
+        const dispatch_id: u32 = if (i % 2 == 0) 1 else 9;
+        try table.register(
+            .{ .dispatch_id = dispatch_id, .type_a = d, .type_b = d },
+            .{ .body = .{ .native_fn = dummyNativeFn } },
+            false,
+        );
+    }
+
+    const pairs = try table.entriesForDispatchId(1, std.testing.allocator);
+    defer std.testing.allocator.free(pairs);
+
+    try std.testing.expectEqual(@as(usize, 12), pairs.len);
+    for (pairs, 0..) |pair, i| {
+        try std.testing.expectEqual(descs[i * 2], @constCast(pair.key.type_a));
+        try std.testing.expectEqual(@as(u64, i * 2), pair.entry.sequence);
+    }
 }
 
 test "builtinTypeName matches dispatchTypeName for static variants" {

@@ -12327,27 +12327,28 @@ fn emitInlineDispatchTableCheck(
 
     if (state.pic_stats) |ps| ps.sites_attempted += 1;
 
-    // Collect native-function entries with builtin type tags from the
-    // dispatch table. Cap at max_pic_entries to match PIC path behavior
-    // and avoid excessive code bloat.
+    // Collect native-function entries with builtin type tags from the dispatch table, in
+    // registration order. Cap at max_pic_entries to match PIC path behavior and avoid excessive
+    // code bloat.
     var qualified: [pic_mod.max_pic_entries]InlinePicEntry = undefined;
     var qualified_count: usize = 0;
 
-    var iter = interp_ctx.dispatch.entries.iterator();
-    while (iter.next()) |entry| {
+    const pairs = interp_ctx.dispatch.entriesForDispatchId(dispatch_id, state.allocator) catch return false;
+    defer state.allocator.free(pairs);
+
+    for (pairs) |pair| {
         if (qualified_count >= pic_mod.max_pic_entries) break;
-        if (entry.key_ptr.dispatch_id != dispatch_id) continue;
 
         // Skip wildcard and unary entries
-        if (entry.key_ptr.type_a == any_desc or entry.key_ptr.type_b == any_desc) continue;
-        if (entry.key_ptr.type_b == unary_desc) continue;
+        if (pair.key.type_a == any_desc or pair.key.type_b == any_desc) continue;
+        if (pair.key.type_b == unary_desc) continue;
 
-        const body_fn = switch (entry.value_ptr.body) {
+        const body_fn = switch (pair.entry.body) {
             .native_fn => |f| @intFromPtr(f),
             .quotation, .host_callback => continue,
         };
-        const tag_a = reverseMapDescriptorToTag(interp_ctx, entry.key_ptr.type_a) orelse continue;
-        const tag_b = reverseMapDescriptorToTag(interp_ctx, entry.key_ptr.type_b) orelse continue;
+        const tag_a = reverseMapDescriptorToTag(interp_ctx, pair.key.type_a) orelse continue;
+        const tag_b = reverseMapDescriptorToTag(interp_ctx, pair.key.type_b) orelse continue;
         qualified[qualified_count] = .{
             .tag_a = tag_a,
             .tag_b = tag_b,
@@ -12431,20 +12432,21 @@ fn emitInlineDispatchTableCheckUnary(
     var qualified: [pic_mod.max_pic_entries]InlinePicEntry = undefined;
     var qualified_count: usize = 0;
 
-    var iter = interp_ctx.dispatch.entries.iterator();
-    while (iter.next()) |entry| {
+    const pairs = interp_ctx.dispatch.entriesForDispatchId(dispatch_id, state.allocator) catch return false;
+    defer state.allocator.free(pairs);
+
+    for (pairs) |pair| {
         if (qualified_count >= pic_mod.max_pic_entries) break;
-        if (entry.key_ptr.dispatch_id != dispatch_id) continue;
 
         // Keep only unary-sentinel entries; skip wildcard operands.
-        if (entry.key_ptr.type_b != unary_desc) continue;
-        if (entry.key_ptr.type_a == any_desc) continue;
+        if (pair.key.type_b != unary_desc) continue;
+        if (pair.key.type_a == any_desc) continue;
 
-        const body_fn = switch (entry.value_ptr.body) {
+        const body_fn = switch (pair.entry.body) {
             .native_fn => |f| @intFromPtr(f),
             .quotation, .host_callback => continue,
         };
-        const tag_a = reverseMapDescriptorToTag(interp_ctx, entry.key_ptr.type_a) orelse continue;
+        const tag_a = reverseMapDescriptorToTag(interp_ctx, pair.key.type_a) orelse continue;
         qualified[qualified_count] = .{
             .tag_a = tag_a,
             .tag_b = tag_a,
