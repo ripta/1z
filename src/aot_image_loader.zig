@@ -327,10 +327,10 @@ fn decodeWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
         if (word_entry.action == .compound and word_entry.action.compound.len > 0) continue;
 
         const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-        const instrs = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables) catch
+        const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, arena, &tables) catch
             return LoaderError.OutOfMemory;
-        ctx.registerQuotationContainerLiterals(instrs) catch return LoaderError.OutOfMemory;
-        word_entry.action = .{ .compound = instrs };
+        ctx.registerQuotationContainerLiterals(decoded.instructions) catch return LoaderError.OutOfMemory;
+        word_entry.action = .{ .compound = decoded.instructions };
     }
 }
 
@@ -539,7 +539,8 @@ fn stampWordBodies(ctx: *Context, header: *const Header) LoaderError!void {
 fn decodeWordBodyInline(arena: Allocator, w: Word) []const value_mod.Instruction {
     if (w.body_bytecode == null or w.body_bytecode_len == 0) return &.{};
     const bytes = w.body_bytecode.?[0..w.body_bytecode_len];
-    return instruction_bytecode.deserializeQuotationInstructions(bytes, arena, null) catch &.{};
+    const decoded = instruction_bytecode.deserializeQuotationInstructions(bytes, arena, null) catch return &.{};
+    return decoded.instructions;
 }
 
 // -- Module + word population ------------------------------------------
@@ -906,21 +907,23 @@ fn populateParameterSlots(
         const row = descs[i];
         if (row.slot >= header.parameter_slot_count) return LoaderError.BadSlotIndex;
         const name = nameSlice(row.name, row.name_len);
-        const instructions: []const value_mod.Instruction = if (row.default_quotation_bytecode) |p|
-            if (row.default_quotation_bytecode_len > 0)
-                instruction_bytecode.deserializeQuotationInstructions(
+        var instructions: []const value_mod.Instruction = &.{};
+        var default_effect: ?*const stack_effect_mod.StackEffect = null;
+        if (row.default_quotation_bytecode) |p| {
+            if (row.default_quotation_bytecode_len > 0) {
+                const decoded = instruction_bytecode.deserializeQuotationInstructions(
                     p[0..row.default_quotation_bytecode_len],
                     arena,
                     null,
-                ) catch return LoaderError.OutOfMemory
-            else
-                &.{}
-        else
-            &.{};
+                ) catch return LoaderError.OutOfMemory;
+                instructions = decoded.instructions;
+                default_effect = decoded.effect;
+            }
+        }
         const param = arena.create(value_mod.Parameter) catch return LoaderError.OutOfMemory;
         param.* = .{
             .name = name,
-            .default_quotation = .{ .instructions = instructions, .code_ptr = null },
+            .default_quotation = .{ .instructions = instructions, .effect = default_effect, .code_ptr = null },
         };
         slot_table[row.slot] = param;
 
@@ -1299,6 +1302,7 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
         // so the dispatcher runs it through the interpreter. A row with
         // neither is skipped, as before.
         var body_instructions: []const value_mod.Instruction = &.{};
+        var body_effect: ?*const stack_effect_mod.StackEffect = null;
         const is_interp_only = row.quotation_id == aot_image_emit.dispatch_interp_quotation_id_sentinel;
         const compiled_fn: ?*const anyopaque = blk: {
             if (is_interp_only) break :blk null;
@@ -1314,8 +1318,10 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
             // `.struct_type` literals (e.g. generated field getters). The
             // tables are patched before replay runs, so they resolve here.
             const body_tables = imageSlotTables(ctx);
-            body_instructions = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &body_tables) catch
+            const decoded = instruction_bytecode.deserializeQuotationInstructionsForImage(bytes, ctx.quotationAllocator(), &body_tables) catch
                 return LoaderError.OutOfMemory;
+            body_instructions = decoded.instructions;
+            body_effect = decoded.effect;
             ctx.registerQuotationContainerLiterals(body_instructions) catch
                 return LoaderError.OutOfMemory;
             break :blk null;
@@ -1362,7 +1368,7 @@ pub fn replayMethodDispatch(ctx: *Context) LoaderError!void {
         };
         std.debug.assert(key.dispatch_id == row.dispatch_id);
         const entry = dispatch_mod.DispatchEntry{
-            .body = .{ .quotation = .{ .instructions = body_instructions, .code_ptr = code_ptr } },
+            .body = .{ .quotation = .{ .instructions = body_instructions, .effect = body_effect, .code_ptr = code_ptr } },
             .source_module = module,
         };
         // Fill gaps only: in interpreter-linked AOT the prelude reload already
@@ -2577,7 +2583,7 @@ test "loadIntoContext: bytecode body decodes into compound action" {
         .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1, .column = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 1, .column = 3 },
     };
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &sample, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &sample, null, testing.allocator, null, null);
 
     const w_name = "twiddle";
     const m_name = "demo";
@@ -2639,14 +2645,18 @@ test "loadIntoContext: nested quotation literal round-trips" {
     const inner = [_]value_mod.Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 3 } }, .line = 0, .column = 0 },
     };
+    const declared = stack_effect_mod.StackEffect{
+        .inputs = &.{},
+        .outputs = &[_]stack_effect_mod.StackEffectParam{.{ .name = "n" }},
+    };
     const outer = [_]value_mod.Instruction{
-        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner } } }, .line = 0, .column = 0 },
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner, .effect = &declared } } }, .line = 0, .column = 0 },
         .{ .op = .{ .call_word = "call" }, .line = 0, .column = 0 },
     };
 
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, null, testing.allocator, null, null);
 
     const w_name = "wrap";
     const m_name = "demo";
@@ -2674,6 +2684,12 @@ test "loadIntoContext: nested quotation literal round-trips" {
     const nested = decoded[0].op.push_literal.quotation.instructions;
     try testing.expectEqual(@as(usize, 1), nested.len);
     try testing.expectEqual(@as(i64, 3), nested[0].op.push_literal.fixnum);
+
+    // The nested literal's declared effect survives the image round trip.
+    const nested_effect = decoded[0].op.push_literal.quotation.effect.?;
+    try testing.expectEqual(@as(usize, 0), nested_effect.inputs.len);
+    try testing.expectEqual(@as(usize, 1), nested_effect.outputs.len);
+    try testing.expectEqualStrings("n", nested_effect.outputs[0].name);
 }
 
 test "loadIntoContext: stamps decoded bodies and nested quotations with their module" {
@@ -2689,7 +2705,7 @@ test "loadIntoContext: stamps decoded bodies and nested quotations with their mo
 
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, null, testing.allocator, null, null);
 
     const w_name = "handout";
     const m_name = "demo";
@@ -2739,7 +2755,7 @@ test "replayMethodDispatch: stamps interpreter-run body with its module" {
 
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
 
     const m_name = "demo";
     const words = [_]Word{wordRow("stub", 0, 0)};
@@ -2805,9 +2821,13 @@ test "populateParameterSlots: stamps a module-attributed default" {
         .{ .op = .{ .call_word = "call" }, .line = 0, .column = 0 },
     };
 
+    const declared = stack_effect_mod.StackEffect{
+        .inputs = &.{},
+        .outputs = &[_]stack_effect_mod.StackEffectParam{.{ .name = "v" }},
+    };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &default_body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &default_body, &declared, testing.allocator, null, null);
 
     const m_name = "demo";
     const p_name = "p";
@@ -2850,6 +2870,12 @@ test "populateParameterSlots: stamps a module-attributed default" {
         @as(?*const value_mod.Module, module_ptr),
         ctx.quotation_stamp_store.lookup(@intFromPtr(nested.ptr)),
     );
+
+    // The default's declared effect survives the image round trip.
+    const dec_eff = param.default_quotation.effect.?;
+    try testing.expectEqual(@as(usize, 0), dec_eff.inputs.len);
+    try testing.expectEqual(@as(usize, 1), dec_eff.outputs.len);
+    try testing.expectEqualStrings("v", dec_eff.outputs[0].name);
 }
 
 test "populateReifiedQuotationModules: keys rows by data pointer" {
@@ -2891,7 +2917,7 @@ test "populateModuleDeps: fills owner deps from the source module's words" {
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
 
     const owner_name = "moda";
     const source_name = "modc";
@@ -2940,10 +2966,11 @@ test "call-target slots: a decoded baked call carries the target module's own de
     };
     var target_enc: std.ArrayListUnmanaged(u8) = .{};
     defer target_enc.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&target_enc, &target_body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&target_enc, &target_body, null, testing.allocator, null, null);
 
     var caller_enc: std.ArrayListUnmanaged(u8) = .{};
     defer caller_enc.deinit(testing.allocator);
+    try caller_enc.append(testing.allocator, 0); // has_effect
     const one: u32 = 1;
     try caller_enc.appendSlice(testing.allocator, std.mem.asBytes(&one));
     const line: u32 = 3;
@@ -3091,7 +3118,7 @@ test "populateEntryImports: restores imports into a fresh durable frame above th
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
 
     const source_name = "modc";
     const import_name = "probe";
@@ -3193,7 +3220,7 @@ test "replayMethodDispatch: patches an entry-import frame def's dispatch_id" {
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
 
     const source_name = "modc";
     const generic_name = "gword";
@@ -3247,7 +3274,7 @@ test "replayMethodDispatch: patches a dep entry's dispatch_id like a word entry"
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
 
     const owner_name = "moda";
     const source_name = "modc";
@@ -3313,13 +3340,13 @@ test "populateModulesAndWords: private-flagged rows land in deps, coexisting wit
     };
     var pub_encoded: std.ArrayListUnmanaged(u8) = .{};
     defer pub_encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&pub_encoded, &pub_body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&pub_encoded, &pub_body, null, testing.allocator, null, null);
     var priv_encoded: std.ArrayListUnmanaged(u8) = .{};
     defer priv_encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&priv_encoded, &priv_body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&priv_encoded, &priv_body, null, testing.allocator, null, null);
     var helper_encoded: std.ArrayListUnmanaged(u8) = .{};
     defer helper_encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&helper_encoded, &helper_body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&helper_encoded, &helper_body, null, testing.allocator, null, null);
 
     const m_name = "demo";
     var pub_row = wordRow("dup", 0, 0);
@@ -3386,7 +3413,7 @@ test "loadIntoContext: stamps a private helper's decoded body with the owning mo
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &outer, null, testing.allocator, null, null);
 
     const m_name = "demo";
     var w = wordRow("helper", 1, 0);
@@ -3429,7 +3456,7 @@ test "decodeWordBodies: provenanced private row decodes into the deps entry" {
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
 
     const m_name = "demo";
     const gen = "struct{";
@@ -3503,7 +3530,7 @@ test "replayMethodDispatch: patches a private deps entry and templates the helpe
     };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
+    try instruction_bytecode.serializeInstructionsInto(&encoded, &body, null, testing.allocator, null, null);
 
     const m_name = "demo";
     const generic_name = "gword";

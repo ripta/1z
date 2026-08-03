@@ -3271,9 +3271,7 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, e
                 const body = q.body;
                 if (state.aot_mode) {
                     // Serialize the instruction body and record it for C emission.
-                    //
-                    // The wire format carries no effect slot, so a declared effect is dropped here.
-                    const serialized = serializeQuotationInstructions(body, std.heap.page_allocator, null, null) catch {
+                    const serialized = serializeQuotationInstructions(body, q.effect, std.heap.page_allocator, null, null) catch {
                         state.not_compilable_reason = .non_serializable_literal;
                         return IrCodegenError.NotCompilable;
                     };
@@ -10748,14 +10746,38 @@ pub fn emitProgramC(
         }
         var uncompiled_q: std.ArrayListUnmanaged(UncompiledQuotation) = .{};
         defer uncompiled_q.deinit(allocator);
+        // A method body's declared effect lives on the dispatch entry's quotation. The freeze
+        // descriptor carries only the bare instruction slice, so recover the effect by body
+        // pointer.
+        //
+        // The walk rides `allEntriesSorted`, since the map feeds emitted bytes and raw map
+        // iteration is pointer-ordered. Empty bodies are skipped: all empty instruction slices
+        // share one pointer value, so a by-pointer entry for one would donate its effect to
+        // every empty-bodied method.
+        var method_body_effects: std.AutoHashMapUnmanaged(usize, *const StackEffect) = .{};
+        defer method_body_effects.deinit(allocator);
+        if (emit_runtime_image and can_link_interpreter) {
+            if (interp_ctx) |ictx| {
+                const pairs = try ictx.dispatch.allEntriesSorted(allocator);
+                defer allocator.free(pairs);
+                for (pairs) |pair| {
+                    const entry_body = pair.entry.body;
+                    if (entry_body != .quotation) continue;
+                    if (entry_body.quotation.instructions.len == 0) continue;
+                    const eff = entry_body.quotation.effect orelse continue;
+                    try method_body_effects.put(allocator, @intFromPtr(entry_body.quotation.instructions.ptr), eff);
+                }
+            }
+        }
         for (quotations) |q| {
             if (q.is_method_body) {
                 if (q.compiled) continue;
                 if (emit_runtime_image and can_link_interpreter) {
+                    const declared_effect = method_body_effects.get(@intFromPtr(q.instructions.ptr));
                     const maybe_bytes = if (method_slot_maps) |*sm|
-                        ibc.serializeQuotationInstructionsForImage(q.instructions, allocator, sm, null)
+                        ibc.serializeQuotationInstructionsForImage(q.instructions, declared_effect, allocator, sm, null)
                     else
-                        serializeQuotationInstructions(q.instructions, allocator, null, null);
+                        serializeQuotationInstructions(q.instructions, declared_effect, allocator, null, null);
                     const bytes = maybe_bytes catch |err| switch (err) {
                         error.OutOfMemory => return error.OutOfMemory,
                         error.NotEncodable => {
@@ -13666,17 +13688,17 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
     const ctx: *Context = @ptrFromInt(ctx_raw);
     const src: [*]const u8 = @ptrFromInt(data_ptr);
 
-    const instructions: []const Instruction = blk: {
+    const body: struct { instructions: []const Instruction, effect: ?*const StackEffect } = blk: {
         if (ctx.runtime_image_loaded) {
             const cache = ctx.reified_decode_cache;
-            if (cache.lookup(data_ptr)) |cached| break :blk cached;
+            if (cache.lookup(data_ptr)) |cached| break :blk .{ .instructions = cached.instructions, .effect = cached.effect };
 
             cache.decode_mu.lock();
             defer cache.decode_mu.unlock();
 
             // Re-check under the mutex: another context may have decoded this site between the
             // lock-free probe above and the acquisition.
-            if (cache.lookup(data_ptr)) |cached| break :blk cached;
+            if (cache.lookup(data_ptr)) |cached| break :blk .{ .instructions = cached.instructions, .effect = cached.effect };
 
             // A failure below strands the partial decode on the shared arena, which cannot free
             // it individually. Accepted: these paths fire only on true backing-allocator
@@ -13687,22 +13709,23 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
             };
             if (ctx.image_reified_quotation_modules) |modules| {
                 if (modules.get(data_ptr)) |module| {
-                    ctx.stampQuotationBodies(decoded, module) catch {
+                    ctx.stampQuotationBodies(decoded.instructions, module) catch {
                         ctx.jit_pending_error = error.OutOfMemory;
                         return 2;
                     };
                 }
             }
-            cache.insertAssumeLocked(data_ptr, decoded) catch {
+            cache.insertAssumeLocked(data_ptr, decoded.instructions, decoded.effect) catch {
                 ctx.jit_pending_error = error.OutOfMemory;
                 return 2;
             };
-            break :blk decoded;
+            break :blk .{ .instructions = decoded.instructions, .effect = decoded.effect };
         }
-        break :blk deserializeQuotationInstructions(src[0..data_len], ctx.quotationAllocator(), null) catch {
+        const decoded = deserializeQuotationInstructions(src[0..data_len], ctx.quotationAllocator(), null) catch {
             ctx.jit_pending_error = error.OutOfMemory;
             return 2;
         };
+        break :blk .{ .instructions = decoded.instructions, .effect = decoded.effect };
     };
 
     const dest: *Value = @ptrFromInt(dest_raw);
@@ -13712,7 +13735,7 @@ export fn jitPushQuotation(ctx_raw: usize, data_ptr: usize, data_len: usize, des
             code_ptr = fns.table[quotation_id];
         }
     }
-    dest.* = .{ .quotation = .{ .instructions = instructions, .code_ptr = code_ptr } };
+    dest.* = .{ .quotation = .{ .instructions = body.instructions, .effect = body.effect, .code_ptr = code_ptr } };
     return 0;
 }
 
@@ -14417,9 +14440,13 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
     const body = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner } } }, .line = 0, .column = 0 },
     };
+    const declared = StackEffect{
+        .inputs = &[_]StackEffectParam{},
+        .outputs = &[_]StackEffectParam{.{ .name = "q" }},
+    };
     var encoded: std.ArrayListUnmanaged(u8) = .{};
     defer encoded.deinit(testing.allocator);
-    try ibc.serializeInstructionsInto(&encoded, &body, testing.allocator, null, null);
+    try ibc.serializeInstructionsInto(&encoded, &body, &declared, testing.allocator, null, null);
 
     var module = value_mod.Module{ .name = "demo", .words = .{} };
     var modules: std.AutoHashMapUnmanaged(usize, *const value_mod.Module) = .{};
@@ -14445,6 +14472,12 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
         ctx.quotation_stamp_store.lookup(@intFromPtr(decoded.ptr)),
     );
 
+    // The decoded push carries the stream's declared effect.
+    const first_effect = first.quotation.effect.?;
+    try testing.expectEqual(@as(usize, 0), first_effect.inputs.len);
+    try testing.expectEqual(@as(usize, 1), first_effect.outputs.len);
+    try testing.expectEqualStrings("q", first_effect.outputs[0].name);
+
     const nested = decoded[0].op.push_literal.quotation.instructions;
     try testing.expectEqual(
         @as(?*const value_mod.Module, &module),
@@ -14459,6 +14492,9 @@ test "jitPushQuotation: runtime-image push caches the decode and stamps the defi
     try testing.expectEqual(@as(i32, 0), rc2);
     try testing.expectEqual(decoded.ptr, second.quotation.instructions.ptr);
     try testing.expectEqual(stamp_count, ctx.quotation_stamp_store.count());
+
+    // The cached second push preserves the effect the first decode recovered.
+    try testing.expectEqual(first.quotation.effect, second.quotation.effect);
 }
 
 test "jitNativeWordCall: dispatch hit runs the registered override, not the native's default body" {

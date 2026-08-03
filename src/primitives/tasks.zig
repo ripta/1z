@@ -1056,9 +1056,18 @@ fn deepCopyQuotation(quot: value_mod.Quotation, alloc: Allocator, longlived: All
         };
     }
 
+    // The effect can live on the sending task's arena: a compiled push in a non-image AOT binary
+    // decodes it onto the executing context's arena, and `eval-string` inside a task parses it
+    // there. Copy it like the instructions rather than sharing a pointer that dies with the task.
+    const new_effect: ?*const StackEffect = if (quot.effect) |e| blk: {
+        const copied = try alloc.create(StackEffect);
+        copied.* = try deepCopyStackEffect(e.*, alloc);
+        break :blk copied;
+    } else null;
+
     return .{
         .instructions = new_instrs,
-        .effect = quot.effect,
+        .effect = new_effect,
     };
 }
 
@@ -1072,14 +1081,19 @@ fn deepCopyStackEffect(effect: StackEffect, alloc: Allocator) DeepCopyError!Stac
 fn deepCopyStackEffectParams(params: []const StackEffectParam, alloc: Allocator) DeepCopyError![]const StackEffectParam {
     const new_params = try alloc.alloc(StackEffectParam, params.len);
     for (params, 0..) |param, i| {
-        const new_name = try alloc.dupe(u8, param.name);
-        if (param.quotation_effect) |qe| {
-            const new_qe = try alloc.create(StackEffect);
-            new_qe.* = try deepCopyStackEffect(qe.*, alloc);
-            new_params[i] = .{ .name = new_name, .quotation_effect = new_qe };
-        } else {
-            new_params[i] = .{ .name = new_name };
-        }
+        const new_qe: ?*const StackEffect = if (param.quotation_effect) |qe| blk: {
+            const copied = try alloc.create(StackEffect);
+            copied.* = try deepCopyStackEffect(qe.*, alloc);
+            break :blk copied;
+        } else null;
+        // The annotation is an identity pointer shared like the `.type_val` pass-through arm,
+        // with the same eval-string-in-a-task limitation documented there.
+        new_params[i] = .{
+            .name = try alloc.dupe(u8, param.name),
+            .quotation_effect = new_qe,
+            .is_row_variable = param.is_row_variable,
+            .type_annotation = param.type_annotation,
+        };
     }
     return new_params;
 }
@@ -1347,6 +1361,39 @@ test "await-all propagates borrowed buffer escape from failed child" {
     try std.testing.expectError(error.UserThrown, nativeAwaitAll(&ctx));
     try std.testing.expect(ctx.thrown_error != null);
     try std.testing.expectEqualStrings("borrowed-buffer-escape", ctx.thrown_error.?.error_type);
+}
+
+test "deepCopyValue: a quotation's declared effect is copied, not shared" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const nested = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "x" }},
+        .outputs = &[_]StackEffectParam{.{ .name = "y" }},
+    };
+    const declared = StackEffect{
+        .inputs = &[_]StackEffectParam{
+            .{ .name = "..a", .is_row_variable = true },
+            .{ .name = "quot", .quotation_effect = &nested },
+        },
+        .outputs = &[_]StackEffectParam{.{ .name = "..a", .is_row_variable = true }},
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+    };
+    const quot = value_mod.Quotation{ .instructions = &instrs, .effect = &declared };
+
+    const copied = try deepCopyValue(.{ .quotation = quot }, arena.allocator(), testing.allocator);
+    const copied_effect = copied.quotation.effect.?;
+    try testing.expect(copied_effect != &declared);
+    try testing.expectEqual(@as(usize, 2), copied_effect.inputs.len);
+    try testing.expect(copied_effect.inputs[0].is_row_variable);
+    try testing.expectEqualStrings("quot", copied_effect.inputs[1].name);
+    const copied_nested = copied_effect.inputs[1].quotation_effect.?;
+    try testing.expect(copied_nested != &nested);
+    try testing.expectEqualStrings("x", copied_nested.inputs[0].name);
+    try testing.expect(copied_effect.outputs[0].is_row_variable);
 }
 
 test "deepCopyValue: shares a self-contained hash by refcount bump" {

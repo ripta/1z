@@ -1,0 +1,8 @@
+PASS: returned literal reports its declaration
+PASS: declared input count
+PASS: declared output count
+PASS: undeclared literal reports none
+PASS: array-buried literal reports its declaration
+PASS: buried declared input count
+PASS: param carries its nested effect
+PASS: nested effect output count

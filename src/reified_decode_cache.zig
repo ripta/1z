@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const value_mod = @import("value.zig");
+const StackEffect = @import("stack_effect.zig").StackEffect;
 const AtomicSlotMap = @import("atomic_slot_map.zig").AtomicSlotMap;
 
 /// Process-shared cache of decoded reified-quotation bodies, keyed by the static bytecode
@@ -27,9 +28,12 @@ pub const ReifiedDecodeCache = struct {
     decode_mu: std.Thread.Mutex = .{},
     arena: std.heap.ArenaAllocator,
 
-    /// Boxes the decoded slice so the map's atomic slot holds one pointer.
-    const Entry = struct {
+    /// Boxes the decoded body so the map's atomic slot holds one pointer.
+    pub const Entry = struct {
         instructions: []const value_mod.Instruction,
+        /// The declared stack effect recovered from the stream's effect slot, null when the
+        /// literal declared none. Lives on the cache arena like the instructions.
+        effect: ?*const StackEffect,
     };
 
     const initial_capacity: usize = 64;
@@ -55,9 +59,8 @@ pub const ReifiedDecodeCache = struct {
 
     /// The decoded body for `data_ptr`, or null when no context has decoded it yet. One acquire
     /// load plus one probe, no lock; this is the compiled push's steady-state path.
-    pub fn lookup(self: *const ReifiedDecodeCache, data_ptr: usize) ?[]const value_mod.Instruction {
-        const entry = self.map.lookup(data_ptr) orelse return null;
-        return entry.instructions;
+    pub fn lookup(self: *const ReifiedDecodeCache, data_ptr: usize) ?*const Entry {
+        return self.map.lookup(data_ptr);
     }
 
     /// Allocator for decoded instructions. Only valid while holding `decode_mu`: the arena is
@@ -68,9 +71,9 @@ pub const ReifiedDecodeCache = struct {
 
     /// Publish a decoded body. The caller holds `decode_mu` and has re-checked `lookup` after
     /// acquiring it, so the key cannot already be present.
-    pub fn insertAssumeLocked(self: *ReifiedDecodeCache, data_ptr: usize, instructions: []const value_mod.Instruction) error{OutOfMemory}!void {
+    pub fn insertAssumeLocked(self: *ReifiedDecodeCache, data_ptr: usize, instructions: []const value_mod.Instruction, effect: ?*const StackEffect) error{OutOfMemory}!void {
         const entry = try self.arena.allocator().create(Entry);
-        entry.* = .{ .instructions = instructions };
+        entry.* = .{ .instructions = instructions, .effect = effect };
         const inserted = try self.map.insert(data_ptr, entry);
         std.debug.assert(inserted);
     }
@@ -85,17 +88,20 @@ test "ReifiedDecodeCache: a published body is returned by pointer identity" {
     cache.decode_mu.lock();
     const instrs = try cache.decodeAllocator().alloc(value_mod.Instruction, 1);
     instrs[0] = .{ .op = .{ .call_word = "probe" }, .line = 1 };
-    try cache.insertAssumeLocked(0x4000, instrs);
+    const effect = try cache.decodeAllocator().create(StackEffect);
+    effect.* = .{ .inputs = &.{}, .outputs = &.{} };
+    try cache.insertAssumeLocked(0x4000, instrs, effect);
     cache.decode_mu.unlock();
 
     const found = cache.lookup(0x4000) orelse return error.TestUnexpectedResult;
-    try testing.expectEqual(instrs.ptr, found.ptr);
-    try testing.expectEqual(instrs.len, found.len);
+    try testing.expectEqual(instrs.ptr, found.instructions.ptr);
+    try testing.expectEqual(instrs.len, found.instructions.len);
+    try testing.expectEqual(@as(?*const StackEffect, effect), found.effect);
 }
 
 test "ReifiedDecodeCache: an unknown data pointer misses" {
     const cache = try ReifiedDecodeCache.create(testing.allocator);
     defer cache.destroy();
 
-    try testing.expectEqual(@as(?[]const value_mod.Instruction, null), cache.lookup(0x4000));
+    try testing.expect(cache.lookup(0x4000) == null);
 }

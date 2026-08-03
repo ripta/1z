@@ -1,0 +1,29 @@
+\ The runtime-image variant of aot_quotation_effect_introspect: the reified
+\ literal's declared effect decodes through the image loader's slot-aware path,
+\ and the library wrappers exercise interpreted image bodies over the same
+\ decoded values.
+
+use "testing" ;
+use "runtime/effect" ;
+
+make-annotated: ( -- q ) [ [ ( a b -- c ) + ] ] ;
+
+make-annotated quotation-effect-get?
+dup option:some? t "returned literal reports its declaration" assert=
+unwrap-or-throw
+dup effect-inputs 2 "declared input count" assert=
+effect-outputs 1 "declared output count" assert=
+
+make-plain: ( -- q ) [ [ + ] ] ;
+make-plain quotation-effect-get? option:none? t "undeclared literal reports none" assert=
+
+make-table: ( -- a ) [ { [ ( n -- m ) 1 + ] } ] ;
+make-table #first quotation-effect-get?
+dup option:some? t "array-buried literal reports its declaration" assert=
+unwrap-or-throw effect-inputs 1 "buried declared input count" assert=
+
+make-nested: ( -- q ) [ [ ( quot: ( x -- y ) -- z ) call ] ] ;
+make-nested quotation-effect-get?
+unwrap-or-throw inputs>> #first nested-effect>>
+dup f = f "param carries its nested effect" assert=
+effect-outputs 1 "nested effect output count" assert=

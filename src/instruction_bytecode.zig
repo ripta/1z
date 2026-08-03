@@ -13,8 +13,23 @@
 //! Per quotation:
 //!
 //! ```
+//! u8 has_effect | [effect]
 //! u32 instruction_count
 //! instruction[]
+//! ```
+//!
+//! The leading effect slot carries the quotation's declared stack effect (the
+//! `( ... )` the parser attached to the literal), so `Quotation.effect`
+//! round-trips the wire. A word body serializes with no effect: its declared
+//! effect travels in the image header's stack-effect table, not here.
+//!
+//! Per effect:
+//!
+//! ```
+//! param_array(inputs) | param_array(outputs)
+//! param_array := u32 count | param[]
+//! param       := u8 is_row_variable | u32 name_len | name_bytes
+//!              | u8 has_quotation_effect | [effect]
 //! ```
 //!
 //! Per instruction:
@@ -42,18 +57,20 @@
 //! - `2 = boolean`: `u8`
 //! - `3 = string`: `u32 len | bytes`
 //! - `4 = symbol`: `u32 len | bytes`
-//! - `5 = quotation`: `u32 quotation_id | instruction_count | instructions`.
-//!   `quotation_id` is the build-time global ID under which the AOT compiler
-//!   emitted this quotation's compiled body; the runtime deserialize attaches
+//! - `5 = quotation`: `u32 quotation_id | <quotation stream>`. The embedded
+//!   stream begins with the effect slot, so a nested literal's declared effect
+//!   rides the same encoding as a top-level one. `quotation_id` is the
+//!   build-time global ID under which the AOT compiler emitted this
+//!   quotation's compiled body; the runtime deserialize attaches
 //!   `onez_quotation_table[id]` as the reconstructed quotation's `code_ptr`. A
 //!   sentinel ID (`0xFFFFFFFF`) marks "no compiled function" -- written by every
 //!   path that has no quotation-ID map, and decoded as a null `code_ptr`.
 //! - `6 = array`: `u32 elem_count | values[]`
 //! - `7 = hash`: `u32 entry_count | entries[]` where each entry is
 //!   `u32 key_len | key_bytes | value`
-//! - `8 = stack_effect`: `u32 input_count | params[] | u32 output_count |
-//!   params[]` where each param is `u8 is_row_variable | u32 name_len |
-//!   name_bytes`
+//! - `8 = stack_effect`: `param_array(inputs) | param_array(outputs)`, the
+//!   same param codec the effect slot uses, so a param's nested
+//!   `quotation_effect` recurses here too
 //! - `9 = unit`: empty payload
 //! - `15 = mutable_map`: same wire shape as hash, but the loader
 //!   allocates a fresh `MutableMap` so mutations persist across pushes.
@@ -78,11 +95,12 @@
 //!
 //! ## stack_effect fidelity
 //!
-//! The `stack_effect` encoding preserves param `name` and `is_row_variable`
-//! flags. It does not encode `type_annotation` (which holds a TypeValue or
-//! ProtocolDescriptor pointer) or `quotation_effect` (which is recursive). A
-//! future revision can extend the wire format with a slot resolver and
-//! recursive effects without renumbering the existing tags.
+//! The param codec preserves `name`, `is_row_variable`, and a recursive
+//! `quotation_effect`. It does not encode `type_annotation`: the annotation is
+//! a pointer to a `TypeValue`, `ProtocolDescriptor`, or `ConstraintCombinator`
+//! identity, and name-based re-resolution at decode would bind in decode-time
+//! scope rather than parse-time scope. Encoding it needs an identity-correct
+//! type-reference design of its own, and slots in without renumbering.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -268,32 +286,38 @@ pub const quotation_id_sentinel: u32 = std.math.maxInt(u32);
 pub const QuotationIdMap = std.AutoHashMapUnmanaged(usize, u32);
 
 /// Serialize an instruction slice into a freshly allocated byte buffer.
-/// Caller owns the returned slice. `qid_map` stamps each nested quotation with
+/// Caller owns the returned slice. `effect` is the quotation's declared stack
+/// effect, written into the stream's effect slot; pass `null` for a word body
+/// or an undeclared literal. `qid_map` stamps each nested quotation with
 /// its global ID; pass `null` to write the sentinel for every quotation.
 /// `call_targets` bakes call sites the body's own module scope resolves; pass
 /// `null` to keep every call a bare name.
 pub fn serializeQuotationInstructions(
     instructions: []const Instruction,
+    effect: ?*const StackEffect,
     allocator: Allocator,
     qid_map: ?*const QuotationIdMap,
     call_targets: ?CallTargetResolver,
 ) SerializeError![]u8 {
     var buf = std.ArrayListUnmanaged(u8){};
     errdefer buf.deinit(allocator);
-    try serializeInstructionsInto(&buf, instructions, allocator, qid_map, call_targets);
+    try serializeInstructionsInto(&buf, instructions, effect, allocator, qid_map, call_targets);
     return buf.toOwnedSlice(allocator);
 }
 
 /// Append a serialized instruction slice to an existing buffer. `qid_map`
 /// stamps each nested quotation with its global ID; pass `null` for the sentinel.
-/// See `serializeQuotationInstructions` for `call_targets`.
+/// See `serializeQuotationInstructions` for `effect` and `call_targets`.
 pub fn serializeInstructionsInto(
     buf: *std.ArrayListUnmanaged(u8),
     instructions: []const Instruction,
+    effect: ?*const StackEffect,
     allocator: Allocator,
     qid_map: ?*const QuotationIdMap,
     call_targets: ?CallTargetResolver,
 ) SerializeError!void {
+    try buf.append(allocator, @intFromBool(effect != null));
+    if (effect) |e| try writeEffect(buf, allocator, e);
     const count: u32 = @intCast(instructions.len);
     try buf.appendSlice(allocator, std.mem.asBytes(&count));
     for (instructions) |instr| {
@@ -333,10 +357,13 @@ pub fn serializeInstructionsInto(
 pub fn serializeInstructionsIntoForImage(
     buf: *std.ArrayListUnmanaged(u8),
     instructions: []const Instruction,
+    effect: ?*const StackEffect,
     allocator: Allocator,
     slot_maps: *const SlotEncodingMaps,
     call_targets: ?CallTargetResolver,
 ) SerializeError!void {
+    try buf.append(allocator, @intFromBool(effect != null));
+    if (effect) |e| try writeEffect(buf, allocator, e);
     const count: u32 = @intCast(instructions.len);
     try buf.appendSlice(allocator, std.mem.asBytes(&count));
     for (instructions) |instr| {
@@ -359,13 +386,14 @@ pub fn serializeInstructionsIntoForImage(
 /// `serializeInstructionsIntoForImage`.
 pub fn serializeQuotationInstructionsForImage(
     instructions: []const Instruction,
+    effect: ?*const StackEffect,
     allocator: Allocator,
     slot_maps: *const SlotEncodingMaps,
     call_targets: ?CallTargetResolver,
 ) SerializeError![]u8 {
     var buf = std.ArrayListUnmanaged(u8){};
     errdefer buf.deinit(allocator);
-    try serializeInstructionsIntoForImage(&buf, instructions, allocator, slot_maps, call_targets);
+    try serializeInstructionsIntoForImage(&buf, instructions, effect, allocator, slot_maps, call_targets);
     return buf.toOwnedSlice(allocator);
 }
 
@@ -446,7 +474,7 @@ pub fn serializeValueInto(
             try buf.append(allocator, value_tag_quotation);
             const q_id: u32 = if (qid_map) |m| (m.get(@intFromPtr(q.instructions.ptr)) orelse quotation_id_sentinel) else quotation_id_sentinel;
             try buf.appendSlice(allocator, std.mem.asBytes(&q_id));
-            try serializeInstructionsInto(buf, q.instructions, allocator, qid_map, call_targets);
+            try serializeInstructionsInto(buf, q.instructions, q.effect, allocator, qid_map, call_targets);
         },
         .closure => |cl| {
             // A closure (a runtime curry/compose result) serializes as its plain
@@ -456,7 +484,7 @@ pub fn serializeValueInto(
             // arm keeps a stray closure from breaking serialization.
             try buf.append(allocator, value_tag_quotation);
             try buf.appendSlice(allocator, std.mem.asBytes(&quotation_id_sentinel));
-            try serializeInstructionsInto(buf, cl.instructions, allocator, qid_map, call_targets);
+            try serializeInstructionsInto(buf, cl.instructions, cl.effect, allocator, qid_map, call_targets);
         },
         .array => |arr| {
             try buf.append(allocator, value_tag_array);
@@ -590,10 +618,17 @@ pub fn serializeValueIntoForImage(
             try buf.append(allocator, value_tag_quotation);
             const q_id: u32 = if (maps.quotation_id_map) |m| (m.get(@intFromPtr(q.instructions.ptr)) orelse quotation_id_sentinel) else quotation_id_sentinel;
             try buf.appendSlice(allocator, std.mem.asBytes(&q_id));
-            try serializeInstructionsIntoForImage(buf, q.instructions, allocator, maps, call_targets);
+            try serializeInstructionsIntoForImage(buf, q.instructions, q.effect, allocator, maps, call_targets);
         },
         else => try serializeValueInto(buf, val, allocator, null, call_targets),
     }
+}
+
+/// Write an effect payload: the two param arrays, no tag byte. Shared by the
+/// stream effect slot and the tag-8 stack_effect value encoding.
+fn writeEffect(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, effect: *const StackEffect) SerializeError!void {
+    try writeParamArray(buf, allocator, effect.inputs);
+    try writeParamArray(buf, allocator, effect.outputs);
 }
 
 fn writeParamArray(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, params: []const StackEffectParam) SerializeError!void {
@@ -604,22 +639,34 @@ fn writeParamArray(buf: *std.ArrayListUnmanaged(u8), allocator: Allocator, param
         const name_len: u32 = @intCast(param.name.len);
         try buf.appendSlice(allocator, std.mem.asBytes(&name_len));
         try buf.appendSlice(allocator, param.name);
+        try buf.append(allocator, @intFromBool(param.quotation_effect != null));
+        if (param.quotation_effect) |qe| try writeEffect(buf, allocator, qe);
     }
 }
 
-/// Decode an instruction slice from a serialized byte buffer. Caller owns
-/// the returned slice and any string/symbol/array/hash payloads that were
-/// allocated through `allocator`.
-pub fn deserializeQuotationInstructions(data: []const u8, allocator: Allocator, qfns: ?[]const ?*const anyopaque) Allocator.Error![]Instruction {
+/// A decoded quotation stream: the instruction slice plus the declared stack
+/// effect recovered from the stream's effect slot, null when none was
+/// serialized. Both are allocated through the decode allocator.
+pub const DecodedQuotation = struct {
+    instructions: []Instruction,
+    effect: ?*const StackEffect,
+};
+
+/// Decode a quotation stream from a serialized byte buffer. Caller owns
+/// the returned instructions, effect, and any string/symbol/array/hash
+/// payloads that were allocated through `allocator`.
+pub fn deserializeQuotationInstructions(data: []const u8, allocator: Allocator, qfns: ?[]const ?*const anyopaque) Allocator.Error!DecodedQuotation {
     var offset: usize = 0;
     return deserializeInstructionsAt(data, &offset, allocator, qfns);
 }
 
-/// Decode an instruction slice starting at `offset`, advancing it past the
+/// Decode a quotation stream starting at `offset`, advancing it past the
 /// consumed bytes. When `qfns` is non-null, a nested quotation's decoded
 /// `quotation_id` indexes it to attach a compiled `code_ptr`; pass `null` to
 /// leave every reconstructed quotation's `code_ptr` null.
-pub fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Allocator, qfns: ?[]const ?*const anyopaque) Allocator.Error![]Instruction {
+pub fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Allocator, qfns: ?[]const ?*const anyopaque) Allocator.Error!DecodedQuotation {
+    const effect = try readStreamEffect(data, offset, allocator);
+    errdefer if (effect) |e| freeEffectTree(allocator, e);
     if (offset.* + 4 > data.len) return error.OutOfMemory;
     const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
     offset.* += 4;
@@ -648,7 +695,7 @@ pub fn deserializeInstructionsAt(data: []const u8, offset: *usize, allocator: Al
             return error.OutOfMemory;
         }
     }
-    return instructions;
+    return .{ .instructions = instructions, .effect = effect };
 }
 
 /// Image-mode variant of `deserializeQuotationInstructions`. `push_literal`
@@ -661,7 +708,7 @@ pub fn deserializeQuotationInstructionsForImage(
     data: []const u8,
     allocator: Allocator,
     slot_tables: *const SlotResolutionTables,
-) Allocator.Error![]Instruction {
+) Allocator.Error!DecodedQuotation {
     var offset: usize = 0;
     return deserializeInstructionsAtForImage(data, &offset, allocator, slot_tables);
 }
@@ -673,7 +720,9 @@ pub fn deserializeInstructionsAtForImage(
     offset: *usize,
     allocator: Allocator,
     slot_tables: *const SlotResolutionTables,
-) Allocator.Error![]Instruction {
+) Allocator.Error!DecodedQuotation {
+    const effect = try readStreamEffect(data, offset, allocator);
+    errdefer if (effect) |e| freeEffectTree(allocator, e);
     if (offset.* + 4 > data.len) return error.OutOfMemory;
     const count = std.mem.readInt(u32, data[offset.*..][0..4], .little);
     offset.* += 4;
@@ -710,7 +759,7 @@ pub fn deserializeInstructionsAtForImage(
             return error.OutOfMemory;
         }
     }
-    return instructions;
+    return .{ .instructions = instructions, .effect = effect };
 }
 
 /// Decode a single value payload starting at `offset`, advancing it past
@@ -766,7 +815,7 @@ pub fn deserializeValueAt(data: []const u8, offset: *usize, allocator: Allocator
                 (if (q_id != quotation_id_sentinel and q_id < t.len) t[q_id] else null)
             else
                 null;
-            break :blk .{ .quotation = .{ .instructions = nested, .code_ptr = code_ptr } };
+            break :blk .{ .quotation = .{ .instructions = nested.instructions, .effect = nested.effect, .code_ptr = code_ptr } };
         },
         value_tag_array => blk: {
             if (offset.* + 4 > data.len) return error.OutOfMemory;
@@ -982,15 +1031,15 @@ pub fn deserializeValueAtForImage(
             offset.* += 4;
             const nested = try deserializeInstructionsAtForImage(data, offset, allocator, tables);
             if (tables.decoded_streams) |streams| {
-                if (container_backing.instructionsHaveContainerLiteral(nested)) {
-                    try streams.append(tables.decoded_streams_allocator.?, nested);
+                if (container_backing.instructionsHaveContainerLiteral(nested.instructions)) {
+                    try streams.append(tables.decoded_streams_allocator.?, nested.instructions);
                 }
             }
             const code_ptr: ?*const anyopaque = if (tables.quotation_fns) |t|
                 (if (q_id != quotation_id_sentinel and q_id < t.len) t[q_id] else null)
             else
                 null;
-            break :blk .{ .quotation = .{ .instructions = nested, .code_ptr = code_ptr } };
+            break :blk .{ .quotation = .{ .instructions = nested.instructions, .effect = nested.effect, .code_ptr = code_ptr } };
         },
         else => blk: {
             // Rewind one byte so the legacy decoder re-reads the tag.
@@ -998,6 +1047,41 @@ pub fn deserializeValueAtForImage(
             break :blk deserializeValueAt(data, offset, allocator, null);
         },
     };
+}
+
+fn readStreamEffect(data: []const u8, offset: *usize, allocator: Allocator) Allocator.Error!?*const StackEffect {
+    if (offset.* >= data.len) return error.OutOfMemory;
+    const has_effect = data[offset.*] != 0;
+    offset.* += 1;
+    if (!has_effect) return null;
+    return try readEffect(data, offset, allocator);
+}
+
+/// Free a decoded effect tree: the param arrays, their duped names, nested effects, and the box.
+/// Error-path cleanup for a decoder whose caller is not an arena; a partial read inside
+/// `readEffect` itself keeps the shallow-cleanup convention instruction payloads follow.
+fn freeEffectTree(allocator: Allocator, effect: *const StackEffect) void {
+    freeParamTree(allocator, effect.inputs);
+    freeParamTree(allocator, effect.outputs);
+    allocator.destroy(effect);
+}
+
+fn freeParamTree(allocator: Allocator, params: []const StackEffectParam) void {
+    for (params) |p| {
+        allocator.free(p.name);
+        if (p.quotation_effect) |qe| freeEffectTree(allocator, qe);
+    }
+    allocator.free(params);
+}
+
+/// Read an effect payload into a boxed `StackEffect`, the shape
+/// `Quotation.effect` and `StackEffectParam.quotation_effect` point at.
+fn readEffect(data: []const u8, offset: *usize, allocator: Allocator) Allocator.Error!*const StackEffect {
+    const inputs = try readParamArray(data, offset, allocator);
+    const outputs = try readParamArray(data, offset, allocator);
+    const effect = try allocator.create(StackEffect);
+    effect.* = .{ .inputs = inputs, .outputs = outputs };
+    return effect;
 }
 
 fn readParamArray(data: []const u8, offset: *usize, allocator: Allocator) Allocator.Error![]StackEffectParam {
@@ -1014,7 +1098,11 @@ fn readParamArray(data: []const u8, offset: *usize, allocator: Allocator) Alloca
         if (offset.* + nlen > data.len) return error.OutOfMemory;
         const name = try allocator.dupe(u8, data[offset.*..][0..nlen]);
         offset.* += nlen;
-        param.* = .{ .name = name, .is_row_variable = is_row };
+        if (offset.* >= data.len) return error.OutOfMemory;
+        const has_nested = data[offset.*] != 0;
+        offset.* += 1;
+        const nested: ?*const StackEffect = if (has_nested) try readEffect(data, offset, allocator) else null;
+        param.* = .{ .name = name, .is_row_variable = is_row, .quotation_effect = nested };
     }
     return params;
 }
@@ -1024,6 +1112,11 @@ fn readParamArray(data: []const u8, offset: *usize, allocator: Allocator) Alloca
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
+
+fn freeDecodedQuotation(decoded: DecodedQuotation) void {
+    freeDecodedInstructions(decoded.instructions);
+    if (decoded.effect) |e| freeEffectTree(testing.allocator, e);
+}
 
 fn freeDecodedInstructions(decoded: []Instruction) void {
     for (decoded) |instr| {
@@ -1057,6 +1150,7 @@ fn freeDecodedValue(v: Value) void {
         .quotation => |q| {
             for (q.instructions) |instr| freeDecodedOp(instr.op);
             testing.allocator.free(q.instructions);
+            if (q.effect) |e| freeEffectTree(testing.allocator, e);
         },
         .hash => |h| {
             // Raw string/array allocations inside the decoded values are not
@@ -1070,10 +1164,8 @@ fn freeDecodedValue(v: Value) void {
             h.header.release();
         },
         .stack_effect => |effect| {
-            for (effect.inputs) |p| testing.allocator.free(p.name);
-            testing.allocator.free(effect.inputs);
-            for (effect.outputs) |p| testing.allocator.free(p.name);
-            testing.allocator.free(effect.outputs);
+            freeParamTree(testing.allocator, effect.inputs);
+            freeParamTree(testing.allocator, effect.outputs);
         },
         else => {},
     }
@@ -1084,10 +1176,11 @@ test "roundtrip: fixnum push + call" {
         .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
         .{ .op = .{ .call_word = "+" }, .line = 2 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expectEqual(@as(usize, 2), decoded.len);
     try testing.expect(decoded[0].op == .push_literal);
@@ -1118,7 +1211,7 @@ test "call target: a resolved name bakes a slot index, an unresolved one stays a
         .{ .op = .{ .call_word = "+" }, .line = 2 },
     };
     var state: OneNameResolver = .{ .name = "own-word", .slot_index = 0 };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, state.resolver());
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, state.resolver());
     defer testing.allocator.free(data);
 
     // The decoder only stores the slot address; nothing here dereferences the definition, so a
@@ -1150,8 +1243,9 @@ test "call target: a resolved name bakes a slot index, an unresolved one stays a
         .call_target_slot_count = 1,
     };
 
-    const decoded = try deserializeQuotationInstructionsForImage(data, testing.allocator, &tables);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructionsForImage(data, testing.allocator, &tables);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expectEqual(@as(usize, 2), decoded.len);
     try testing.expect(decoded[0].op == .call_word_module);
@@ -1165,7 +1259,7 @@ test "call target: the by-value decoder rejects a baked call, deferring to the i
         .{ .op = .{ .call_word = "own-word" }, .line = 1 },
     };
     var state: OneNameResolver = .{ .name = "own-word", .slot_index = 0 };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, state.resolver());
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, state.resolver());
     defer testing.allocator.free(data);
 
     try testing.expectError(
@@ -1178,10 +1272,11 @@ test "roundtrip: string literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .string = "hello" } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expectEqual(@as(usize, 1), decoded.len);
     try testing.expect(decoded[0].op.push_literal == .string);
@@ -1190,11 +1285,12 @@ test "roundtrip: string literal" {
 
 test "roundtrip: empty body" {
     const instrs: [0]Instruction = .{};
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
     const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer testing.allocator.free(decoded);
-    try testing.expectEqual(@as(usize, 0), decoded.len);
+    defer testing.allocator.free(decoded.instructions);
+    try testing.expectEqual(@as(usize, 0), decoded.instructions.len);
+    try testing.expect(decoded.effect == null);
 }
 
 test "roundtrip: bool and float" {
@@ -1202,10 +1298,11 @@ test "roundtrip: bool and float" {
         .{ .op = .{ .push_literal = .{ .boolean = true } }, .line = 1 },
         .{ .op = .{ .push_literal = .{ .float = 3.14 } }, .line = 2 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expectEqual(@as(usize, 2), decoded.len);
     try testing.expectEqual(true, decoded[0].op.push_literal.boolean);
@@ -1216,10 +1313,11 @@ test "preserves line and column" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .fixnum = 42 } }, .line = 5, .column = 10 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
     try testing.expectEqual(@as(usize, 5), decoded[0].line);
     try testing.expectEqual(@as(usize, 10), decoded[0].column);
 }
@@ -1228,10 +1326,11 @@ test "roundtrip: symbol literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .symbol = "foo" } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expect(decoded[0].op.push_literal == .symbol);
     try testing.expectEqualStrings("foo", decoded[0].op.push_literal.symbol);
@@ -1242,10 +1341,11 @@ test "roundtrip: empty array" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .array = &empty } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expect(decoded[0].op.push_literal == .array);
     try testing.expectEqual(@as(usize, 0), decoded[0].op.push_literal.array.items.len);
@@ -1262,10 +1362,11 @@ test "roundtrip: array with elements" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .array = &arr_lit } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     const arr = decoded[0].op.push_literal.array.items;
     try testing.expectEqual(@as(usize, 3), arr.len);
@@ -1287,10 +1388,11 @@ test "roundtrip: nested array" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .array = &outer_arr } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     const arr = decoded[0].op.push_literal.array.items;
     try testing.expectEqual(@as(usize, 2), arr.len);
@@ -1307,10 +1409,11 @@ test "roundtrip: empty hash" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .hash = h_ptr } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expect(decoded[0].op.push_literal == .hash);
     try testing.expectEqual(@as(u32, 0), decoded[0].op.push_literal.hash.map.count());
@@ -1324,10 +1427,11 @@ test "roundtrip: hash with entries" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .hash = h_ptr } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     const dh = decoded[0].op.push_literal.hash;
     try testing.expectEqual(@as(u32, 2), dh.map.count());
@@ -1344,10 +1448,11 @@ test "roundtrip: nested quotation" {
         .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner_instrs } } }, .line = 1 },
         .{ .op = .{ .call_word = "call" }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&outer_instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&outer_instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expectEqual(@as(usize, 2), decoded.len);
     try testing.expect(decoded[0].op.push_literal == .quotation);
@@ -1365,10 +1470,11 @@ test "roundtrip: array containing symbol" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .array = &arr_lit } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     const arr = decoded[0].op.push_literal.array.items;
     try testing.expectEqual(@as(usize, 1), arr.len);
@@ -1387,10 +1493,11 @@ test "roundtrip: stack_effect literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expect(decoded[0].op.push_literal == .stack_effect);
     const dec_eff = decoded[0].op.push_literal.stack_effect;
@@ -1414,10 +1521,11 @@ test "roundtrip: stack_effect preserves is_row_variable" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     const dec_eff = decoded[0].op.push_literal.stack_effect;
     try testing.expect(dec_eff.inputs[0].is_row_variable);
@@ -1431,10 +1539,11 @@ test "roundtrip: stack_effect with empty params" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     const dec_eff = decoded[0].op.push_literal.stack_effect;
     try testing.expectEqual(@as(usize, 0), dec_eff.inputs.len);
@@ -1445,10 +1554,11 @@ test "roundtrip: unit literal" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .unit = {} } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expect(decoded[0].op.push_literal == .unit);
 }
@@ -1768,10 +1878,11 @@ test "lowering: type_val push_literal becomes call_word" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .type_val = &tv } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expectEqual(@as(usize, 1), decoded.len);
     try testing.expect(decoded[0].op == .call_word);
@@ -1787,10 +1898,11 @@ test "lowering: tagged push_literal becomes call_word using tag name" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .tagged = .{ .tag = &virtual, .inner = &inner_val } } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expect(decoded[0].op == .call_word);
     try testing.expectEqualStrings("stdio-mode:inherit", decoded[0].op.call_word);
@@ -1804,10 +1916,11 @@ test "lowering: parameter push_literal becomes call_word" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .parameter = &param } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expect(decoded[0].op == .call_word);
     try testing.expectEqualStrings("current-stdout", decoded[0].op.call_word);
@@ -1818,10 +1931,11 @@ test "lowering: marker push_literal becomes call_word" {
     const instrs = [_]Instruction{
         .{ .op = .{ .push_literal = .{ .marker = &marker } }, .line = 1 },
     };
-    const data = try serializeQuotationInstructions(&instrs, testing.allocator, null, null);
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
     defer testing.allocator.free(data);
-    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
-    defer freeDecodedInstructions(decoded);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
 
     try testing.expect(decoded[0].op == .call_word);
     try testing.expectEqualStrings("const", decoded[0].op.call_word);
@@ -1921,4 +2035,174 @@ test "nested quotation decodes to null code_ptr without a map or table" {
     try testing.expect(decoded == .array);
     try testing.expect(decoded.array.items[0] == .quotation);
     try testing.expect(decoded.array.items[0].quotation.code_ptr == null);
+}
+
+test "roundtrip: stream carries a declared effect" {
+    const inputs = [_]StackEffectParam{
+        .{ .name = "..a", .is_row_variable = true },
+        .{ .name = "x" },
+    };
+    const outputs = [_]StackEffectParam{
+        .{ .name = "y" },
+    };
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &outputs };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 1 } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, &effect, testing.allocator, null, null);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded);
+
+    try testing.expectEqual(@as(usize, 1), decoded.instructions.len);
+    const dec_eff = decoded.effect.?;
+    try testing.expectEqual(@as(usize, 2), dec_eff.inputs.len);
+    try testing.expectEqualStrings("..a", dec_eff.inputs[0].name);
+    try testing.expect(dec_eff.inputs[0].is_row_variable);
+    try testing.expectEqualStrings("x", dec_eff.inputs[1].name);
+    try testing.expect(!dec_eff.inputs[1].is_row_variable);
+    try testing.expectEqual(@as(usize, 1), dec_eff.outputs.len);
+    try testing.expectEqualStrings("y", dec_eff.outputs[0].name);
+}
+
+test "roundtrip: nested quotation carries its declared effect" {
+    const declared_inputs = [_]StackEffectParam{ .{ .name = "a" }, .{ .name = "b" } };
+    const declared_outputs = [_]StackEffectParam{.{ .name = "c" }};
+    const declared = StackEffect{ .inputs = &declared_inputs, .outputs = &declared_outputs };
+    const inner_instrs = [_]Instruction{
+        .{ .op = .{ .call_word = "+" }, .line = 1 },
+    };
+    const outer_instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = &inner_instrs, .effect = &declared } } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&outer_instrs, null, testing.allocator, null, null);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded);
+
+    try testing.expect(decoded.effect == null);
+    const q = decoded.instructions[0].op.push_literal.quotation;
+    const dec_eff = q.effect.?;
+    try testing.expectEqual(@as(usize, 2), dec_eff.inputs.len);
+    try testing.expectEqualStrings("a", dec_eff.inputs[0].name);
+    try testing.expectEqualStrings("b", dec_eff.inputs[1].name);
+    try testing.expectEqual(@as(usize, 1), dec_eff.outputs.len);
+    try testing.expectEqualStrings("c", dec_eff.outputs[0].name);
+}
+
+test "roundtrip: recursive quotation_effect on a param" {
+    const nested_inputs = [_]StackEffectParam{.{ .name = "x" }};
+    const nested_outputs = [_]StackEffectParam{.{ .name = "y" }};
+    const nested = StackEffect{ .inputs = &nested_inputs, .outputs = &nested_outputs };
+    const inputs = [_]StackEffectParam{
+        .{ .name = "quot", .quotation_effect = &nested },
+    };
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &.{} };
+    const instrs: [0]Instruction = .{};
+    const data = try serializeQuotationInstructions(&instrs, &effect, testing.allocator, null, null);
+    defer testing.allocator.free(data);
+    const decoded = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded);
+
+    const dec_eff = decoded.effect.?;
+    try testing.expectEqual(@as(usize, 1), dec_eff.inputs.len);
+    try testing.expectEqualStrings("quot", dec_eff.inputs[0].name);
+    const dec_nested = dec_eff.inputs[0].quotation_effect.?;
+    try testing.expectEqual(@as(usize, 1), dec_nested.inputs.len);
+    try testing.expectEqualStrings("x", dec_nested.inputs[0].name);
+    try testing.expectEqual(@as(usize, 1), dec_nested.outputs.len);
+    try testing.expectEqualStrings("y", dec_nested.outputs[0].name);
+}
+
+test "roundtrip: stack_effect value carries a param's nested quotation_effect" {
+    const nested_inputs = [_]StackEffectParam{.{ .name = "n" }};
+    const nested = StackEffect{ .inputs = &nested_inputs, .outputs = &.{} };
+    const inputs = [_]StackEffectParam{
+        .{ .name = "quot", .quotation_effect = &nested },
+    };
+    const effect = StackEffect{ .inputs = &inputs, .outputs = &.{} };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .stack_effect = effect } }, .line = 1 },
+    };
+    const data = try serializeQuotationInstructions(&instrs, null, testing.allocator, null, null);
+    defer testing.allocator.free(data);
+    const decoded_q = try deserializeQuotationInstructions(data, testing.allocator, null);
+    defer freeDecodedQuotation(decoded_q);
+    const decoded = decoded_q.instructions;
+
+    const dec_eff = decoded[0].op.push_literal.stack_effect;
+    const dec_nested = dec_eff.inputs[0].quotation_effect.?;
+    try testing.expectEqual(@as(usize, 1), dec_nested.inputs.len);
+    try testing.expectEqualStrings("n", dec_nested.inputs[0].name);
+}
+
+test "image roundtrip: nested quotation carries its declared effect" {
+    const alloc = testing.allocator;
+    const declared_outputs = [_]StackEffectParam{.{ .name = "n" }};
+    const declared = StackEffect{ .inputs = &.{}, .outputs = &declared_outputs };
+    const inner = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1 },
+    };
+    const q = Value{ .quotation = .{ .instructions = &inner, .effect = &declared } };
+
+    var tv_idx: std.AutoHashMapUnmanaged(*const TypeValue, u32) = .{};
+    defer tv_idx.deinit(alloc);
+    var st_idx: std.AutoHashMapUnmanaged(*const StructType, u32) = .{};
+    defer st_idx.deinit(alloc);
+    var mk_idx: std.AutoHashMapUnmanaged(*const Marker, u32) = .{};
+    defer mk_idx.deinit(alloc);
+    var pm_idx: std.AutoHashMapUnmanaged(*const Parameter, u32) = .{};
+    defer pm_idx.deinit(alloc);
+    var tg_idx: std.AutoHashMapUnmanaged(TaggedKey, u32) = .{};
+    defer tg_idx.deinit(alloc);
+    var mm_idx: std.AutoHashMapUnmanaged(*const MutableMap, u32) = .{};
+    defer mm_idx.deinit(alloc);
+    var sx_idx: std.AutoHashMapUnmanaged(*const StructInstance, u32) = .{};
+    defer sx_idx.deinit(alloc);
+    var vx_idx: std.AutoHashMapUnmanaged(*const Vector, u32) = .{};
+    defer vx_idx.deinit(alloc);
+
+    const enc = SlotEncodingMaps{
+        .typevalue_slot_index = &tv_idx,
+        .struct_type_slot_index = &st_idx,
+        .marker_slot_index = &mk_idx,
+        .parameter_slot_index = &pm_idx,
+        .tagged_slot_index = &tg_idx,
+        .mutable_map_slot_index = &mm_idx,
+        .struct_instance_slot_index = &sx_idx,
+        .vector_slot_index = &vx_idx,
+    };
+
+    var buf: std.ArrayListUnmanaged(u8) = .{};
+    defer buf.deinit(alloc);
+    try serializeValueIntoForImage(&buf, q, alloc, &enc, null);
+
+    const tables = SlotResolutionTables{
+        .typevalue_slots = null,
+        .typevalue_slot_count = 0,
+        .struct_type_slots = null,
+        .struct_type_slot_count = 0,
+        .marker_slots = null,
+        .marker_slot_count = 0,
+        .parameter_slots = null,
+        .parameter_slot_count = 0,
+        .tagged_slots = null,
+        .tagged_slot_count = 0,
+        .mutable_map_slots = null,
+        .mutable_map_slot_count = 0,
+        .struct_instance_slots = null,
+        .struct_instance_slot_count = 0,
+        .vector_slots = null,
+        .vector_slot_count = 0,
+    };
+
+    var offset: usize = 0;
+    const decoded = try deserializeValueAtForImage(buf.items, &offset, alloc, &tables);
+    defer freeDecodedValue(decoded);
+    try testing.expect(decoded == .quotation);
+    const dec_eff = decoded.quotation.effect.?;
+    try testing.expectEqual(@as(usize, 0), dec_eff.inputs.len);
+    try testing.expectEqual(@as(usize, 1), dec_eff.outputs.len);
+    try testing.expectEqualStrings("n", dec_eff.outputs[0].name);
+    try testing.expectEqual(buf.items.len, offset);
 }

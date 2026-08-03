@@ -495,17 +495,17 @@ static const onez_image_marker_description_t onez_image_marker_descriptions_stor
 };
 
 static const char onez_image_param_desc_0_name[] = "module-loaded-hooks";
-static const uint8_t onez_image_param_desc_0_body[] = {1,0,0,0,2,0,0,0,35,0,0,0,0,6,0,0,0,0};
+static const uint8_t onez_image_param_desc_0_body[] = {0,1,0,0,0,2,0,0,0,35,0,0,0,0,6,0,0,0,0};
 static const char onez_image_param_desc_1_name[] = "input-stream";
-static const uint8_t onez_image_param_desc_1_body[] = {1,0,0,0,2,0,0,0,28,0,0,0,1,5,0,0,0,115,116,100,105,110};
+static const uint8_t onez_image_param_desc_1_body[] = {0,1,0,0,0,2,0,0,0,28,0,0,0,1,5,0,0,0,115,116,100,105,110};
 static const char onez_image_param_desc_2_name[] = "output-stream";
-static const uint8_t onez_image_param_desc_2_body[] = {1,0,0,0,2,0,0,0,29,0,0,0,1,6,0,0,0,115,116,100,111,117,116};
+static const uint8_t onez_image_param_desc_2_body[] = {0,1,0,0,0,2,0,0,0,29,0,0,0,1,6,0,0,0,115,116,100,111,117,116};
 static const char onez_image_param_desc_3_name[] = "word-defined-hooks";
-static const uint8_t onez_image_param_desc_3_body[] = {1,0,0,0,2,0,0,0,34,0,0,0,0,6,0,0,0,0};
+static const uint8_t onez_image_param_desc_3_body[] = {0,1,0,0,0,2,0,0,0,34,0,0,0,0,6,0,0,0,0};
 static const char onez_image_param_desc_4_name[] = "error-stream";
-static const uint8_t onez_image_param_desc_4_body[] = {1,0,0,0,2,0,0,0,28,0,0,0,1,6,0,0,0,115,116,100,101,114,114};
+static const uint8_t onez_image_param_desc_4_body[] = {0,1,0,0,0,2,0,0,0,28,0,0,0,1,6,0,0,0,115,116,100,101,114,114};
 static const char onez_image_param_desc_5_name[] = "module-cache";
-static const uint8_t onez_image_param_desc_5_body[] = {1,0,0,0,2,0,0,0,28,0,0,0,1,25,0,0,0,110,97,116,105,118,101,46,109,111,100,117,108,101,45,99,97,99,104,101,45,118,97,108,117,101};
+static const uint8_t onez_image_param_desc_5_body[] = {0,1,0,0,0,2,0,0,0,28,0,0,0,1,25,0,0,0,110,97,116,105,118,101,46,109,111,100,117,108,101,45,99,97,99,104,101,45,118,97,108,117,101};
 
 static const onez_image_parameter_description_t onez_image_parameter_descriptions_storage[] = {
     { .name = onez_image_param_desc_0_name, .name_len = 19, .slot = 0, .default_quotation_bytecode = onez_image_param_desc_0_body, .default_quotation_bytecode_len = sizeof(onez_image_param_desc_0_body), .module_name = NULL, .module_name_len = 0 },
@@ -1082,9 +1082,9 @@ static const char onez_image_w_6_pp[] = "color";
 static const char onez_image_w_6_pr[] = "predicate";
 static const char onez_image_w_7_sf[] = "fixtures/dump_image_dep.1z";
 
-static const uint8_t onez_image_w_2_body[] = {1,0,0,0,0,0,0,0,0,0,0,0,0,14,0,0,0,0};
-static const uint8_t onez_image_w_4_body[] = {1,0,0,0,0,0,0,0,0,0,0,0,0,14,1,0,0,0};
-static const uint8_t onez_image_w_7_body[] = {2,0,0,0,7,0,0,0,28,0,0,0,0,0,2,0,0,0,0,0,0,0,7,0,0,0,30,0,0,0,1,1,0,0,0,42};
+static const uint8_t onez_image_w_2_body[] = {0,1,0,0,0,0,0,0,0,0,0,0,0,0,14,0,0,0,0};
+static const uint8_t onez_image_w_4_body[] = {0,1,0,0,0,0,0,0,0,0,0,0,0,0,14,1,0,0,0};
+static const uint8_t onez_image_w_7_body[] = {0,2,0,0,0,7,0,0,0,28,0,0,0,0,0,2,0,0,0,0,0,0,0,7,0,0,0,30,0,0,0,1,1,0,0,0,42};
 
 static const onez_image_marker_t *const onez_image_w_0_markers[] = {
     &onez_image_markers_storage[0],
@@ -1176,7 +1176,7 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .markers = NULL,
         .marker_count = 0,
         .body_bytecode = onez_image_w_2_body,
-        .body_bytecode_len = 18,
+        .body_bytecode_len = 19,
         .typevalue_slot = 0u,
         .doc = NULL,
         .doc_len = 0,
@@ -1238,7 +1238,7 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .markers = NULL,
         .marker_count = 0,
         .body_bytecode = onez_image_w_4_body,
-        .body_bytecode_len = 18,
+        .body_bytecode_len = 19,
         .typevalue_slot = 0u,
         .doc = NULL,
         .doc_len = 0,
@@ -1331,7 +1331,7 @@ static const onez_image_word_t onez_image_words_storage[] = {
         .markers = NULL,
         .marker_count = 0,
         .body_bytecode = onez_image_w_7_body,
-        .body_bytecode_len = 36,
+        .body_bytecode_len = 37,
         .typevalue_slot = 0u,
         .doc = NULL,
         .doc_len = 0,
@@ -1381,7 +1381,7 @@ static const onez_image_entry_import_t onez_image_entry_imports_storage[] = {
 };
 
 __attribute__((used)) const onez_image_header_t onez_image_v1 = {
-    .format_version = 17,
+    .format_version = 18,
     .module_count = 1,
     .word_count = 8,
     .marker_pool_count = 4,

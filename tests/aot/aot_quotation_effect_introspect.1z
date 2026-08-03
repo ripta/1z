@@ -1,0 +1,18 @@
+\ A declared-effect quotation literal pushed by a compiled body must report its
+\ declaration through quotation>effect in an AOT binary. The declaration rides
+\ the reified quotation's wire encoding, so this pins the encoding end to end.
+
+make-annotated: ( -- q ) [ [ ( a b -- c ) + ] ] ;
+make-annotated native.quotation>effect .
+
+\ An undeclared literal still reports no effect.
+make-plain: ( -- q ) [ [ + ] ] ;
+make-plain native.quotation>effect .
+
+\ A literal buried in an array literal rides the composite value encoding.
+make-table: ( -- a ) [ { [ ( n -- m ) 1 + ] } ] ;
+make-table #first native.quotation>effect .
+
+\ A param's nested quotation effect recurses through the encoding.
+make-nested: ( -- q ) [ [ ( quot: ( x -- y ) -- z ) call ] ] ;
+make-nested native.quotation>effect .

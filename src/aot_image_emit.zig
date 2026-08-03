@@ -65,7 +65,7 @@ pub const flag_bit_module_private: u8 = 1 << 5;
 
 /// Format version emitted into `onez_image_header.format_version`. Bumped
 /// when the on-disk layout changes in a way the loader cannot ignore.
-pub const format_version: u32 = 17;
+pub const format_version: u32 = 18;
 
 /// Counts that the metadata emitter plumbs back into `AotMetadata`. The
 /// codegen knows these as it walks the manifest, so emitting them here
@@ -1456,7 +1456,7 @@ fn emitParameterDescriptionsStorage(
         try emitCStringLiteral(out, allocator, param.name);
         try out.appendSlice(allocator, ";\n");
 
-        const bytes = instruction_bytecode.serializeQuotationInstructions(param.default_quotation.instructions, allocator, null, null) catch |err| switch (err) {
+        const bytes = instruction_bytecode.serializeQuotationInstructions(param.default_quotation.instructions, param.default_quotation.effect, allocator, null, null) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NotEncodable => return error.NotEncodable,
         };
@@ -2264,10 +2264,11 @@ fn emitDispatchEntryTable(
     var iter = ctx.dispatch.entries.iterator();
     while (iter.next()) |slot| {
         const entry = slot.value_ptr.*;
-        const body = switch (entry.body) {
-            .quotation => |q| q.instructions,
+        const body_quotation = switch (entry.body) {
+            .quotation => |q| q,
             .native_fn, .host_callback => continue,
         };
+        const body = body_quotation.instructions;
         const key = slot.key_ptr.*;
         // A method body the freeze compiled or collected has a quotation_id; its interpreter-run
         // bytecode is already serialized into interpreter_run_bodies.
@@ -2286,7 +2287,7 @@ fn emitDispatchEntryTable(
         } else {
             if (!emit_unreached_interp_run) continue;
             quotation_id = dispatch_interp_quotation_id_sentinel;
-            body_bytecode = instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps, null) catch |err| switch (err) {
+            body_bytecode = instruction_bytecode.serializeQuotationInstructionsForImage(body, body_quotation.effect, allocator, &slot_maps, null) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.NotEncodable => continue,
             };
@@ -3910,12 +3911,12 @@ fn emitWordBodyBytecode(
         // (`jitCallQuotation`) calls them. A still-unencodable generated
         // body falls back to the prior empty-body behavior.
         const bytes = if (mw_ptr.provenance != null)
-            instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps, resolver) catch |err| switch (err) {
+            instruction_bytecode.serializeQuotationInstructionsForImage(body, null, allocator, &slot_maps, resolver) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.NotEncodable => continue,
             }
         else
-            instruction_bytecode.serializeQuotationInstructions(body, allocator, null, resolver) catch |err| switch (err) {
+            instruction_bytecode.serializeQuotationInstructions(body, null, allocator, null, resolver) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 // A user word body may push a slot-encodable literal (i.e., a mutable_map holding
                 // struct instances, a struct instance, a nested array of them) that the by-value
@@ -3924,7 +3925,7 @@ fn emitWordBodyBytecode(
                 // Fall back to the image serializer so the literal slot-references the live runtime
                 // value. The loader decodes every body through the image decoder, which resolves the
                 // slot tags.
-                error.NotEncodable => instruction_bytecode.serializeQuotationInstructionsForImage(body, allocator, &slot_maps, resolver) catch |e| switch (e) {
+                error.NotEncodable => instruction_bytecode.serializeQuotationInstructionsForImage(body, null, allocator, &slot_maps, resolver) catch |e| switch (e) {
                     error.OutOfMemory => return error.OutOfMemory,
                     error.NotEncodable => return error.NotEncodable,
                 },
@@ -5991,7 +5992,8 @@ test "emitImageC: structural bytecode round-trips through decoder" {
         try bytes.append(testing.allocator, v);
     }
 
-    const decoded = try instruction_bytecode.deserializeQuotationInstructions(bytes.items, testing.allocator, null);
+    const decoded_q = try instruction_bytecode.deserializeQuotationInstructions(bytes.items, testing.allocator, null);
+    const decoded = decoded_q.instructions;
     defer {
         for (decoded) |instr| {
             switch (instr.op) {
@@ -6001,6 +6003,7 @@ test "emitImageC: structural bytecode round-trips through decoder" {
         }
         testing.allocator.free(decoded);
     }
+    try testing.expect(decoded_q.effect == null);
     try testing.expectEqual(@as(usize, 2), decoded.len);
     try testing.expect(decoded[0].op == .push_literal);
     try testing.expectEqual(@as(i64, 21), decoded[0].op.push_literal.fixnum);
