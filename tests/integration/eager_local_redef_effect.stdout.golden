@@ -1,0 +1,6 @@
+=== quotation-local redefinition keeps its declared effect ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ ]
+PASS: local redefinition with matching declared effect runs silently
+Stack: [ ]

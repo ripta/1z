@@ -1,0 +1,15 @@
+\ A quotation-local redefinition whose declared effect mismatches the shadowed word's arity must
+\ raise arity-mismatch under eager compilation, where it previously ran to completion because the
+\ compiled body materialized the literal without its declaration. Pinned eager in both suites via
+\ the flags sidecar; the compiled rendering lacks the interpreter's error frames, so the golden
+\ cannot be shared with an interpreted run. The interpreted twin is
+\ local_redef_arity_mismatch_interp.1z.
+
+val: ( -- s ) [ "A" ] ;
+
+make-stored: ( -- s ) [
+  val: ( x y -- s ) [ 2drop "B" ] ;
+  val
+] ;
+
+make-stored drop

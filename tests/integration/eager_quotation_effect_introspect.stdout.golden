@@ -1,0 +1,11 @@
+=== declared effect on a literal returned by a word ===
+Stack: [ ]
+Stack: [ ]
+Stack: [ <option:some option-payload{ value: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f type-annotation: f } } } }> ]
+PASS: returned literal reports its declaration
+Stack: [ <option:some option-payload{ value: stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f type-annotation: f } } } }> ]
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f type-annotation: f } } } ]
+PASS: declared input count
+Stack: [ stack-effect-info{ inputs: { stack-effect-param{ name: "a" row-variable?: f nested-effect: f type-annotation: f } stack-effect-param{ name: "b" row-variable?: f nested-effect: f type-annotation: f } } outputs: { stack-effect-param{ name: "c" row-variable?: f nested-effect: f type-annotation: f } } } ]
+PASS: declared output count
+Stack: [ ]

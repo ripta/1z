@@ -1,0 +1,17 @@
+\ A quotation-local redefinition that declares a matching stack effect must not warn about
+\ dropping the declaration. The declaration travels attached to the quotation literal, so a
+\ compiled body must deliver it to the redefinition checks exactly as the interpreter does.
+\ This file runs under both the interpreter and eager suites against the same goldens.
+
+use "testing" ;
+
+"quotation-local redefinition keeps its declared effect" test-section
+
+val: ( -- s ) [ "A" ] ;
+
+make-stored: ( -- s ) [
+  val: ( -- s ) [ "B" ] ;
+  val
+] ;
+
+make-stored "B" "local redefinition with matching declared effect runs silently" assert=

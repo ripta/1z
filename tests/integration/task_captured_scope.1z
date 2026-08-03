@@ -8,12 +8,10 @@
 
 use "testing" ;
 
-\ Both `val`s stay effect-free: under eager compilation a quotation-local redefinition warns about
-\ dropping the original's declared effect even when the local declares a matching one.
-val: [ "DURABLE-VAL" ] ;
+val: ( -- s ) [ "DURABLE-VAL" ] ;
 
 make-stored: ( -- q ) [
-  val: [ "CAPTURED-VAL" ] ;
+  val: ( -- s ) [ "CAPTURED-VAL" ] ;
   [ val ]
 ] ;
 

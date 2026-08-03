@@ -1,0 +1,17 @@
+\ A declared-effect quotation literal returned by a word must report its declaration through
+\ quotation-effect-get?. The declaration travels attached to the literal, so a compiled body must
+\ materialize the value with the effect intact exactly as the interpreter pushes it.
+\ This file runs under both the interpreter and eager suites against the same goldens.
+
+use "testing" ;
+use "runtime/effect" ;
+
+"declared effect on a literal returned by a word" test-section
+
+make-annotated: ( -- q ) [ [ ( a b -- c ) + ] ] ;
+
+make-annotated quotation-effect-get?
+dup option:some? t "returned literal reports its declaration" assert=
+unwrap-or-throw
+dup effect-inputs 2 "declared input count" assert=
+effect-outputs 1 "declared output count" assert=

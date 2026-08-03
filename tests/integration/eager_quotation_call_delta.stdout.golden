@@ -1,0 +1,5 @@
+=== call-delta validation on a materialized literal ===
+Stack: [ ]
+Stack: [ ]
+PASS: declared one output but pushes two
+Stack: [ ]

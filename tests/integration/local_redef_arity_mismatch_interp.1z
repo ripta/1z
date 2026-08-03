@@ -1,0 +1,12 @@
+\ The interpreted baseline for eager_local_redef_arity_mismatch.1z: the same quotation-local
+\ redefinition with a mismatched declared effect raises arity-mismatch with the interpreter's
+\ framed rendering. Pinned interpreted in both suites via the flags sidecar.
+
+val: ( -- s ) [ "A" ] ;
+
+make-stored: ( -- s ) [
+  val: ( x y -- s ) [ 2drop "B" ] ;
+  val
+] ;
+
+make-stored drop

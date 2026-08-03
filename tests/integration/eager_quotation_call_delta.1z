@@ -1,0 +1,12 @@
+\ Calling a declared-effect quotation whose body's actual delta contradicts the declaration must
+\ raise stack-effect-mismatch. The declaration travels attached to the literal, so a compiled
+\ body must materialize the value with the effect intact for the call-delta validation to fire.
+\ This file runs under both the interpreter and eager suites against the same goldens.
+
+use "testing" ;
+
+"call-delta validation on a materialized literal" test-section
+
+make-lying: ( -- q ) [ [ ( -- n ) 1 2 ] ] ;
+
+[ make-lying call ] EStackEffectMismatch "declared one output but pushes two" assert-error-type

@@ -1794,9 +1794,15 @@ const StackEntry = union(enum) {
     /// IR boolean from a comparison op or `t`/`f` literal, boxed to a boolean
     /// Value at finalization.
     bool_ref: c.ir_ref,
-    /// Captured instruction slice from a quotation literal. Never reaches
-    /// finalization -- consumed by `if` at compile time.
-    quotation_body: []const Instruction,
+    /// Captured quotation literal: the instruction slice plus the declared
+    /// stack effect the parser attached to the literal, if any.
+    ///
+    /// Never reaches finalization -- consumed by `if`/`call` at compile time
+    /// or materialized into a real Value.
+    quotation_body: struct {
+        body: []const Instruction,
+        effect: ?*const StackEffect,
+    },
     /// Opaque Value written to physical stack slot N. This is used for types
     /// that can't be represented as IR scalars, i.e., anything other than
     /// fixnum / boolean.
@@ -2799,7 +2805,7 @@ fn resolveRowVariableEffect(
         // Check if the corresponding stack entry is a visible quotation body.
         const stack_pos = base_pos + concrete_idx;
         const body = switch (stack[stack_pos]) {
-            .quotation_body => |b| b,
+            .quotation_body => |q| q.body,
             else => return null,
         };
 
@@ -3261,9 +3267,12 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, e
     const base_addr = state.base_addr;
     for (0..sp) |qi| {
         switch (stack[qi]) {
-            .quotation_body => |body| {
+            .quotation_body => |q| {
+                const body = q.body;
                 if (state.aot_mode) {
                     // Serialize the instruction body and record it for C emission.
+                    //
+                    // The wire format carries no effect slot, so a declared effect is dropped here.
                     const serialized = serializeQuotationInstructions(body, std.heap.page_allocator, null, null) catch {
                         state.not_compilable_reason = .non_serializable_literal;
                         return IrCodegenError.NotCompilable;
@@ -3323,7 +3332,7 @@ fn materializeQuotations(state: *CompileState, stack: []StackEntry, sp: usize, e
 
                     stack[qi] = .{ .raw_at_slot = qi };
                 } else {
-                    const qval = Value{ .quotation = .{ .instructions = body, .code_ptr = null } };
+                    const qval = Value{ .quotation = .{ .instructions = body, .effect = q.effect, .code_ptr = null } };
                     const slot_byte_offset = c.ir_const_addr(ctx, qi * ValueLayout.value_size);
                     const dest_addr = c.ir_fold2(ctx, c.IR_OPT(c.IR_ADD, c.IR_ADDR), base_addr, slot_byte_offset);
                     emitPushValue(ctx, &qval, dest_addr);
@@ -3864,7 +3873,7 @@ fn cloneStackEntry(
         .i64_ref => |ref| .{ .i64_ref = ref },
         .f64_ref => |ref| .{ .f64_ref = ref },
         .bool_ref => |ref| .{ .bool_ref = ref },
-        .quotation_body => |body| .{ .quotation_body = body },
+        .quotation_body => |q| .{ .quotation_body = q },
         .raw_at_slot => |s| blk: {
             emitCopySlot(state.ctx, base_addr, s, dest_slot);
             // The copy is a second owning reference to the same backing.
@@ -4392,7 +4401,7 @@ fn compilePredBodyLoop(
     // scalar slice / slot extracted here cannot alias that slot.
     const BodySource = union(enum) { quotation: []const Instruction, slot: usize, unsupported };
     const body_source: BodySource = switch (body_entry) {
-        .quotation_body => |body| .{ .quotation = body },
+        .quotation_body => |q| .{ .quotation = q.body },
         .raw_at_slot => |s| .{ .slot = s },
         else => .unsupported,
     };
@@ -4436,9 +4445,9 @@ fn compilePredBodyLoop(
     // Execute predicate
     const pre_body_sp = sp.*;
     switch (pred_entry) {
-        .quotation_body => |body| {
+        .quotation_body => |q| {
             resetStackToPhysicalPreservingRows(stack, sp.*);
-            try compileInstructions(state, body, stack, sp);
+            try compileInstructions(state, q.body, stack, sp);
         },
         .raw_at_slot => {
             emitValueQuotCall(state, stack, sp, pred_spill.?, 0, .{ .builtin = .{ .kind = .call, .line = 0 } });
@@ -5368,7 +5377,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
     sp.* -= 1;
     const entry = stack[sp.*];
     switch (entry) {
-        .quotation_body => |body| {
+        .quotation_body => |q| {
             const saved_inline_trace_frame_count = state.inline_trace_frame_count;
             if (traceFramesEnabled(state) and state.inline_trace_frame_count < max_inline_trace_frames) {
                 state.inline_trace_frames[state.inline_trace_frame_count] = .{
@@ -5377,7 +5386,7 @@ fn emitIntrinsicCall(ec: EmitCtx) IrCodegenError!ControlFlow {
                 };
                 state.inline_trace_frame_count += 1;
             }
-            try compileInstructions(state, body, stack, sp);
+            try compileInstructions(state, q.body, stack, sp);
             if (traceFramesEnabled(state)) state.inline_trace_frame_count = saved_inline_trace_frame_count;
         },
         .raw_at_slot => |s| {
@@ -5666,7 +5675,7 @@ fn spliceDipRetaining(ec: EmitCtx, retain_count: usize) IrCodegenError!ControlFl
     if (sp.* < retain_count + 1) return .not_handled;
 
     const body = switch (stack[sp.* - 1]) {
-        .quotation_body => |b| b,
+        .quotation_body => |q| q.body,
         else => return .not_handled,
     };
 
@@ -5748,7 +5757,7 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
     const entry_quot = stack[output_slot + 2];
 
     switch (entry_quot) {
-        .quotation_body => |body| {
+        .quotation_body => |q| {
             // Flush a1/a2 to physical slots so they survive
             // the quotation body compilation.
             stack[output_slot] = entry_a1;
@@ -5769,7 +5778,7 @@ fn emitIntrinsicChoose(ec: EmitCtx) IrCodegenError!ControlFlow {
             if (sp.* > state.peak_sp) state.peak_sp = @intCast(sp.*);
 
             // Compile the quotation body: consumes 2, pushes 1.
-            try compileInstructions(state, body, stack, sp);
+            try compileInstructions(state, q.body, stack, sp);
             if (sp.* != output_slot + 3) return IrCodegenError.StackShapeMismatch;
 
             // Pop the result and compute truthiness.
@@ -5995,7 +6004,13 @@ fn stackEntryEql(a: StackEntry, b: StackEntry) bool {
         .bool_ref => |r| b == .bool_ref and b.bool_ref == r,
         .raw_at_slot => |s| b == .raw_at_slot and b.raw_at_slot == s,
         .row_region => |id| b == .row_region and b.row_region == id,
-        .quotation_body => |body| b == .quotation_body and b.quotation_body.ptr == body.ptr and b.quotation_body.len == body.len,
+        // The effect pointer participates in identity: all empty instruction
+        // slices share one pointer value, so body identity alone would
+        // conflate two empty-bodied literals with different declared effects.
+        .quotation_body => |q| b == .quotation_body and
+            b.quotation_body.body.ptr == q.body.ptr and
+            b.quotation_body.body.len == q.body.len and
+            b.quotation_body.effect == q.effect,
     };
 }
 
@@ -6104,7 +6119,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
     // Extract quotation bodies where available; raw_at_slot
     // branches will be dispatched at runtime.
     const true_body: ?[]const Instruction = switch (true_entry) {
-        .quotation_body => |body| body,
+        .quotation_body => |q| q.body,
         .raw_at_slot => null,
         else => {
             state.not_compilable_reason = .quotation_reification;
@@ -6112,7 +6127,7 @@ fn emitIntrinsicIf(ec: EmitCtx) IrCodegenError!ControlFlow {
         },
     };
     const false_body: ?[]const Instruction = switch (false_entry) {
-        .quotation_body => |body| body,
+        .quotation_body => |q| q.body,
         .raw_at_slot => null,
         else => {
             state.not_compilable_reason = .quotation_reification;
@@ -7405,9 +7420,9 @@ fn emitIntrinsicTimes(ec: EmitCtx) IrCodegenError!ControlFlow {
     const counter_phi = c._ir_PHI_2(ctx, c.IR_I64, initial_n, c.IR_UNUSED);
 
     switch (quot_entry) {
-        .quotation_body => |body| {
+        .quotation_body => |q| {
             resetStackToPhysicalPreservingRows(stack, sp.*);
-            try compileInstructions(state, body, stack, sp);
+            try compileInstructions(state, q.body, stack, sp);
             if (!symbolicShapeMatches(stack, sp.*, loop_entry_stack, loop_entry_sp)) return IrCodegenError.StackShapeMismatch;
             // Flush body results back
             flushToPhysicalStack(state, stack, sp.*);
@@ -7496,9 +7511,9 @@ fn emitIntrinsicLoop(ec: EmitCtx) IrCodegenError!ControlFlow {
     // Execute predicate body
     const pre_body_sp = sp.*;
     switch (pred_entry) {
-        .quotation_body => |body| {
+        .quotation_body => |q| {
             resetStackToPhysicalPreservingRows(stack, sp.*);
-            try compileInstructions(state, body, stack, sp);
+            try compileInstructions(state, q.body, stack, sp);
         },
         .raw_at_slot => {
             emitValueQuotCall(state, stack, sp, pred_spill.?, ec.line, .{ .builtin = .{ .kind = .call, .line = ec.line } });
@@ -7800,7 +7815,10 @@ fn compileInstructions(
                     stack[sp.*] = .{ .i64_ref = c.ir_const_i64(ctx, val.fixnum) };
                     sp.* += 1;
                 } else if (val == .quotation) {
-                    stack[sp.*] = .{ .quotation_body = val.quotation.instructions };
+                    stack[sp.*] = .{ .quotation_body = .{
+                        .body = val.quotation.instructions,
+                        .effect = val.quotation.effect,
+                    } };
                     sp.* += 1;
                 } else if (val == .float) {
                     stack[sp.*] = .{ .f64_ref = c.ir_const_double(ctx, val.float) };
@@ -18383,7 +18401,7 @@ test "resolveRowVariableEffect: simple apply with [ 1 + ]" {
     const body = makeInstructions(.{ @as(i64, 1), "+" });
     var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 }; // x
-    stack[1] = .{ .quotation_body = &body }; // quot
+    stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } }; // quot
 
     const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result != null);
@@ -18421,7 +18439,7 @@ test "resolveRowVariableEffect: keep with [ 2 * ]" {
     const body = makeInstructions(.{ @as(i64, 2), "*" });
     var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 }; // x
-    stack[1] = .{ .quotation_body = &body }; // quot
+    stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } }; // quot
 
     const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result != null);
@@ -18458,7 +18476,7 @@ test "resolveRowVariableEffect: keep with [ dup ]" {
     const body = makeInstructions(.{"dup"});
     var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 };
-    stack[1] = .{ .quotation_body = &body };
+    stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } };
 
     const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result != null);
@@ -18492,7 +18510,7 @@ test "resolveRowVariableEffect: try with a single-output quotation resolves" {
 
     const body = makeInstructions(.{ @as(i64, 2), "*" });
     var stack: [max_abstract_stack_depth]StackEntry = undefined;
-    stack[0] = .{ .quotation_body = &body }; // quot
+    stack[0] = .{ .quotation_body = .{ .body = &body, .effect = null } }; // quot
 
     const result = resolveRowVariableEffect(&outer, &stack, 1, null) catch unreachable;
     try testing.expect(result != null);
@@ -18526,7 +18544,7 @@ test "resolveRowVariableEffect: try with a multi-output quotation bails to null"
 
     const body = makeInstructions(.{ @as(i64, 1), @as(i64, 2) });
     var stack: [max_abstract_stack_depth]StackEntry = undefined;
-    stack[0] = .{ .quotation_body = &body }; // quot
+    stack[0] = .{ .quotation_body = .{ .body = &body, .effect = null } }; // quot
 
     const result = resolveRowVariableEffect(&outer, &stack, 1, null) catch unreachable;
     try testing.expect(result == null);
@@ -18584,7 +18602,7 @@ test "resolveRowVariableEffect: unresolvable quotation body returns null" {
     const body = makeInstructions(.{"unknown-word"});
     var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 };
-    stack[1] = .{ .quotation_body = &body };
+    stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } };
 
     const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result == null);
@@ -18615,7 +18633,7 @@ test "resolveRowVariableEffect: empty quotation [ ]" {
     const body = makeInstructions(.{});
     var stack: [max_abstract_stack_depth]StackEntry = undefined;
     stack[0] = .{ .raw_at_slot = 0 };
-    stack[1] = .{ .quotation_body = &body };
+    stack[1] = .{ .quotation_body = .{ .body = &body, .effect = null } };
 
     const result = resolveRowVariableEffect(&outer, &stack, 2, null) catch unreachable;
     try testing.expect(result != null);
@@ -19280,6 +19298,59 @@ test "epilogue reifies an escaping quotation output instead of bailing" {
     defer testing.allocator.free(source);
     try testing.expect(std.mem.indexOf(u8, source, "onez_push_quotation") != null);
     try testing.expect(std.mem.indexOf(u8, source, "onez_w_make_quot") != null);
+}
+
+test "materialized quotation literal carries its declared stack effect" {
+    // `( -- q ) [ ( -- n ) [ 7 ] ]` escapes a declared-effect literal through
+    // the epilogue. The materialized runtime value must carry the declaration,
+    // which is what the `;` redefinition checks, `quotation>effect`, and the
+    // call-delta validation read.
+    const declared = StackEffect{
+        .inputs = &[_]StackEffectParam{},
+        .outputs = &[_]StackEffectParam{.{ .name = "n" }},
+    };
+    const inner_body = &[_]Instruction{
+        .{ .op = .{ .push_literal = .{ .fixnum = 7 } }, .line = 1 },
+    };
+    const instrs = [_]Instruction{
+        .{ .op = .{ .push_literal = .{ .quotation = .{ .instructions = inner_body, .effect = &declared } } }, .line = 1 },
+    };
+
+    const result = try compileWord(&instrs, 0, 1, null, null, null, null, null);
+    defer result.jit_buf.deinit();
+
+    const func: CompiledFn = @ptrCast(@alignCast(result.code_ptr));
+    var values: [1]Value = undefined;
+    var sp: usize = 0;
+    try testing.expectEqual(@as(i32, 0), callCompiledValues(func, values[0..1], &sp));
+    try testing.expectEqual(@as(usize, 1), sp);
+    try testing.expect(values[0] == .quotation);
+    try testing.expectEqual(inner_body.ptr, values[0].quotation.instructions.ptr);
+    try testing.expectEqual(@as(?*const StackEffect, &declared), values[0].quotation.effect);
+}
+
+test "stackEntryEql distinguishes empty-bodied literals by effect" {
+    // All empty instruction slices share one pointer value, so the effect
+    // pointer is what keeps two effect-differing empty literals distinct in
+    // the branch-merge identity check.
+    const e1 = StackEffect{
+        .inputs = &[_]StackEffectParam{},
+        .outputs = &[_]StackEffectParam{.{ .name = "a" }},
+    };
+    const e2 = StackEffect{
+        .inputs = &[_]StackEffectParam{.{ .name = "a" }},
+        .outputs = &[_]StackEffectParam{},
+    };
+    const empty: []const Instruction = &.{};
+
+    const with_e1 = StackEntry{ .quotation_body = .{ .body = empty, .effect = &e1 } };
+    const with_e2 = StackEntry{ .quotation_body = .{ .body = empty, .effect = &e2 } };
+    const with_none = StackEntry{ .quotation_body = .{ .body = empty, .effect = null } };
+
+    try testing.expect(stackEntryEql(with_e1, with_e1));
+    try testing.expect(!stackEntryEql(with_e1, with_e2));
+    try testing.expect(!stackEntryEql(with_e1, with_none));
+    try testing.expect(stackEntryEql(with_none, with_none));
 }
 
 test "branch merge reifies an escaping quotation arm instead of bailing" {
