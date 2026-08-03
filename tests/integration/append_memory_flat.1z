@@ -1,0 +1,12 @@
+\ Bounded-memory regression for #append's second-operand scratch buffer.
+\
+\ Each #append used to materialize its second operand onto the context
+\ arena, which is never reclaimed on the main task, so this loop grew by
+\ roughly 160 bytes per iteration and exhausted the 4 MB cap set in the
+\ `.flags` sidecar partway through. The scratch slice now lives on the
+\ general allocator and is freed inside the call, so the loop stays flat
+\ and prints the marker.
+
+20000 [ { 1 2 3 4 } { 5 6 7 8 } #append drop ] times
+
+"flat" print-line

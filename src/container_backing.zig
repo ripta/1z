@@ -194,13 +194,13 @@ pub const ContainerHeader = struct {
 
 /// Per-variant retain dispatch.
 ///
-/// The header-backed variants (i.e., `array`, `vector`, `mutable_map`, `hash`, `set`) carry a
-/// refcounted backing and route through `header.retain()`. Their contents are accounted only at
-/// `destroy`, so we don't recurse into them here.
+/// The header-backed variants (i.e., `array`, `vector`, `mutable_map`, `hash`, `set`, `iterator`)
+/// carry a refcounted backing and route through `header.retain()`. Their contents are accounted
+/// only at `destroy`, so we don't recurse into them here.
 ///
-/// The headerless composites (i.e., `tagged`, `error_value`, `iterator`) own a reference to each
-/// refcounted value they embed, so a stack slot holding one must retain those embedded values
-/// recursively. An `error_value` owns the value carried in its `data` field.
+/// The headerless composites (i.e., `tagged`, `error_value`) own a reference to each refcounted
+/// value they embed, so a stack slot holding one must retain those embedded values recursively.
+/// An `error_value` owns the value carried in its `data` field.
 ///
 /// A `struct_instance` is either form. A runtime-created instance carries a header and routes
 /// through it, so the instance is the single owner of its field set and the field setter can
@@ -225,7 +225,7 @@ pub fn retainValue(v: Value) void {
         .tagged => |t| retainValue(t.inner.*),
         .struct_instance => |si| if (si.header) |h| h.retain() else retainValues(si.fields),
         .error_value => |err| if (err.data) |data| retainValue(data.*),
-        .iterator => |it| retainIteratorBacking(it),
+        .iterator => |it| it.header.retain(),
         else => {},
     }
 }
@@ -249,49 +249,8 @@ pub fn releaseValue(v: Value) void {
         .tagged => |t| releaseValue(t.inner.*),
         .struct_instance => |si| if (si.header) |h| h.release() else releaseValues(si.fields),
         .error_value => |err| if (err.data) |data| releaseValue(data.*),
-        .iterator => |it| releaseIteratorBacking(it),
+        .iterator => |it| it.header.release(),
         else => {},
-    }
-}
-
-/// Retain the refcounted backing an iterator captures.
-///
-/// `array` iterators either walk a headered array (retain its header) or a
-/// slice materialized from another sequence type (retain each element).
-///
-/// The chained iterators (`map`, `filter`, `take`, `drop`) forward to their inner iterator.
-///
-/// `range` captures no Values.
-///
-/// `callback` captures only quotations whose container literals are tracked by the per-arena release
-/// list, so both are no-ops.
-///
-/// This backing ownership is distinct from the per-element ownership that `Iterator.next` hands out,
-/// where `next` yields an owning reference for every iterator kind, which the consumer releases once
-/// it has consumed the value.
-///
-/// The backing retained here keeps the source elements alive for the iterator's lifetime; the
-/// per-yield retain is balanced separately by the consumer.
-pub fn retainIteratorBacking(it: *Iterator) void {
-    switch (it.kind) {
-        .array => |ai| if (ai.source) |arr| arr.header.retain() else retainValues(ai.items),
-        .map => |m| retainIteratorBacking(m.inner),
-        .filter => |fi| retainIteratorBacking(fi.inner),
-        .take => |t| retainIteratorBacking(t.inner),
-        .drop => |d| retainIteratorBacking(d.inner),
-        .range, .callback => {},
-    }
-}
-
-/// Release the refcounted backing an iterator captures.
-pub fn releaseIteratorBacking(it: *Iterator) void {
-    switch (it.kind) {
-        .array => |ai| if (ai.source) |arr| arr.header.release() else releaseValues(ai.items),
-        .map => |m| releaseIteratorBacking(m.inner),
-        .filter => |fi| releaseIteratorBacking(fi.inner),
-        .take => |t| releaseIteratorBacking(t.inner),
-        .drop => |d| releaseIteratorBacking(d.inner),
-        .range, .callback => {},
     }
 }
 
@@ -453,7 +412,7 @@ pub fn retainInstructionsContainerLiterals(instructions: []const Instruction) vo
 /// be released at teardown.
 pub fn valueHoldsRefcountedBacking(val: Value) bool {
     return switch (val) {
-        .vector, .mutable_map, .byte_array, .hash, .set, .array => true,
+        .vector, .mutable_map, .byte_array, .hash, .set, .array, .iterator => true,
         .tagged => |t| valueHoldsRefcountedBacking(t.inner.*),
         .struct_instance => |si| {
             if (si.header != null) return true;
@@ -956,15 +915,25 @@ test "retainValue/releaseValue: static array release never frees the backing" {
     try testing.expectEqual(@as(i64, 1), arr.items[0].fixnum);
 }
 
-test "retainValue/releaseValue: array iterator propagates to captured vector" {
+test "retainValue/releaseValue: iterator header owns its materialized backing" {
     const vec = try value_mod.Vector.create(testing.allocator);
-    var items = [_]Value{.{ .vector = vec }};
-    var it = Iterator{ .kind = .{ .array = .{ .items = &items, .index = 0 } } };
+    const items = try testing.allocator.alloc(Value, 1);
+    items[0] = .{ .vector = vec };
+    // The iterator's backing owns one reference per element.
+    vec.header.retain();
+    const it = try Iterator.create(testing.allocator, .{ .array = .{ .items = items, .index = 0 } });
 
-    retainValue(.{ .iterator = &it });
+    // A stack slot bumps the iterator's own header, not the captured elements.
+    retainValue(.{ .iterator = it });
+    try testing.expectEqual(@as(u32, 2), it.header.refcountValue());
     try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
 
-    releaseValue(.{ .iterator = &it });
+    releaseValue(.{ .iterator = it });
+    try testing.expectEqual(@as(u32, 2), vec.header.refcountValue());
+
+    // Dropping the creation reference destroys the iterator, releasing the element and freeing
+    // the slice.
+    releaseValue(.{ .iterator = it });
     try testing.expectEqual(@as(u32, 1), vec.header.refcountValue());
 
     vec.header.release();
@@ -1061,7 +1030,7 @@ test "valueShareable: mutable containers, composites, and code values do not qua
     try testing.expect(!valueShareable(.{ .quotation = quot }, testing.allocator));
 
     var items = [_]Value{.{ .fixnum = 1 }};
-    var it = Iterator{ .kind = .{ .array = .{ .items = &items, .index = 0 } } };
+    var it = Iterator{ .header = undefined, .kind = .{ .array = .{ .items = &items, .index = 0 } } };
     try testing.expect(!valueShareable(.{ .iterator = &it }, testing.allocator));
 }
 

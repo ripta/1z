@@ -14,6 +14,7 @@ const Module = value_mod.Module;
 const Marker = value_mod.Marker;
 const StructType = value_mod.StructType;
 const StructInstance = value_mod.StructInstance;
+const Iterator = @import("../iterator.zig").Iterator;
 const Task = @import("../task.zig").Task;
 const Channel = @import("../channel.zig").Channel;
 const dispatch_mod = @import("../dispatch.zig");
@@ -36,6 +37,15 @@ pub fn pushAdoptedArray(ctx: *Context, alloc: Allocator, items: []const Value) a
     };
     ctx.stack.pushMoved(.{ .array = arr }) catch |e| {
         container_backing.releaseValue(.{ .array = arr });
+        return e;
+    };
+}
+
+/// Push a freshly created iterator, transferring its creation reference to the stack slot. On
+/// failure the reference is dropped, destroying the iterator.
+pub fn pushMovedIterator(ctx: *Context, iter: *Iterator) anyerror!void {
+    ctx.stack.pushMoved(.{ .iterator = iter }) catch |e| {
+        container_backing.releaseValue(.{ .iterator = iter });
         return e;
     };
 }

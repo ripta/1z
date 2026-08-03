@@ -382,10 +382,20 @@ pub const SequenceBuilder = struct {
 /// Convert a sequence to an array of Values.
 /// Useful for operations that need random access.
 pub fn sequenceToValues(val: Value, allocator: Allocator) ![]Value {
-    const len = sequenceLength(val) orelse return error.TypeMismatch;
-    const result = allocator.alloc(Value, len) catch return error.OutOfMemory;
+    return sequenceToValuesScratch(val, allocator, allocator);
+}
 
-    var iter = SequenceIterator.init(val, allocator) orelse return error.TypeMismatch;
+/// Convert a sequence to an array of Values, splitting the slice from the element allocations.
+///
+/// The `[]Value` lands on `slice_alloc` so a caller using it as scratch can free it when done.
+/// Per-codepoint strings duped for a string source land on `elem_alloc`; those may escape into the
+/// caller's result, so a scratch caller passes the arena there.
+pub fn sequenceToValuesScratch(val: Value, slice_alloc: Allocator, elem_alloc: Allocator) ![]Value {
+    const len = sequenceLength(val) orelse return error.TypeMismatch;
+    const result = slice_alloc.alloc(Value, len) catch return error.OutOfMemory;
+    errdefer slice_alloc.free(result);
+
+    var iter = SequenceIterator.init(val, elem_alloc) orelse return error.TypeMismatch;
     var i: usize = 0;
     while (try iter.next()) |elem| {
         result[i] = elem;
@@ -398,6 +408,21 @@ pub fn sequenceToValues(val: Value, allocator: Allocator) ![]Value {
 // =============================================================================
 // Tests
 // =============================================================================
+
+test "sequenceToValuesScratch splits slice and element allocators" {
+    var elem_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer elem_arena.deinit();
+
+    // The leak detector pins the split: codepoint dupes on the slice allocator would leak once
+    // only the slice is freed.
+    const items = try sequenceToValuesScratch(.{ .string = "héllo" }, std.testing.allocator, elem_arena.allocator());
+    defer std.testing.allocator.free(items);
+
+    try std.testing.expectEqual(@as(usize, 5), items.len);
+    try std.testing.expectEqualStrings("h", items[0].string);
+    try std.testing.expectEqualStrings("é", items[1].string);
+    try std.testing.expectEqualStrings("o", items[4].string);
+}
 
 test "utf8CodepointCount" {
     try std.testing.expectEqual(@as(usize, 5), utf8CodepointCount("hello"));

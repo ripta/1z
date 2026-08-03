@@ -1,0 +1,17 @@
+\ Bounded-memory regression for iterator allocations.
+\
+\ Every #map, #filter, #take, #drop, and >iterator used to allocate its
+\ Iterator struct on the context arena, and >iterator on a non-array
+\ sequence also parked its materialized slice there, so this loop grew by
+\ a few hundred bytes per iteration and exhausted the 4 MB cap set in the
+\ `.flags` sidecar partway through. Iterators are refcounted on the
+\ general allocator now: draining #collect drops the last reference,
+\ which frees the struct and its materialized backing, so the loop stays
+\ flat and prints the marker.
+
+10000 [
+  { 1 2 3 4 } [ 2 * ] #map #collect drop
+  "ab" >iterator #collect drop
+] times
+
+"flat" print-line

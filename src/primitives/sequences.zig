@@ -35,19 +35,37 @@ const TaggedPayload = std.meta.TagPayload(Value, .tagged);
 
 const unwrapBaseType = dispatch_mod.unwrapBaseType;
 
-/// Convert a sequence value to an ArrayIter. Returns null if the value is not
-/// a recognized sequence type. For arrays, wraps directly; for other types
-/// (string, vector, byte-array, set), materializes to a values array first.
-fn seqToArrayIter(seq: Value, alloc: Allocator) !?*Iterator {
+/// Create a heap iterator over a sequence value. Returns null if the value is not a recognized
+/// sequence type.
+///
+/// The returned iterator owns its backing, released at destroy: an array source is retained
+/// through its header, and the other sequence types materialize a slice on `ctx.allocator` whose
+/// elements are retained. String codepoint dupes go to the arena, since a yielded string may
+/// outlive the iterator and string bytes have no ownership model yet.
+pub fn seqToArrayIter(seq: Value, ctx: *Context) !?*Iterator {
     const s = unwrapBaseType(seq);
     const kind: Iterator.Kind = switch (s) {
-        .array => |arr| .{ .array = .{ .items = arr.items, .index = 0, .source = arr } },
-        .string, .vector, .byte_array, .set => .{ .array = .{ .items = try sequenceToValues(s, alloc), .index = 0 } },
+        .array => |arr| blk: {
+            arr.header.retain();
+            break :blk .{ .array = .{ .items = arr.items, .index = 0, .source = arr } };
+        },
+        .string, .vector, .byte_array, .set => blk: {
+            const items = try sequenceToValuesScratch(s, ctx.allocator, ctx.quotationAllocator());
+            container_backing.retainValues(items);
+            break :blk .{ .array = .{ .items = items, .index = 0 } };
+        },
         else => return null,
     };
-    const iter = try alloc.create(Iterator);
-    iter.* = .{ .kind = kind };
-    return iter;
+    return Iterator.create(ctx.allocator, kind) catch |err| {
+        switch (kind) {
+            .array => |ai| if (ai.source) |arr| arr.header.release() else {
+                container_backing.releaseValues(ai.items);
+                ctx.allocator.free(ai.items);
+            },
+            else => {},
+        }
+        return err;
+    };
 }
 
 const arithmetic = @import("arithmetic.zig");
@@ -76,12 +94,11 @@ fn collectToMutableArray(in_seq: Value, ctx: *Context, alloc: Allocator) ![]Valu
             return list.toOwnedSlice(alloc) catch return error.OutOfMemory;
         },
         .string, .vector, .byte_array, .set => {
-            // Materialize on the arena: a string source dupes per-codepoint
-            // strings, and those bytes must die with the context rather than
-            // land on the process-lifetime allocator. Only the slice itself
-            // moves onto `alloc` for the result array to adopt.
-            const materialized = try sequenceToValues(seq, ctx.quotationAllocator());
-            const result = alloc.dupe(Value, materialized) catch return error.OutOfMemory;
+            // The slice lands on `alloc` for the result array to adopt. A string source dupes
+            // per-codepoint strings; those go to the arena, since string bytes have no ownership
+            // model yet and must die with the context rather than land on the process-lifetime
+            // allocator.
+            const result = try sequenceToValuesScratch(seq, alloc, ctx.quotationAllocator());
             container_backing.retainValues(result);
             return result;
         },
@@ -262,6 +279,7 @@ const SequenceBuilder = sequence.SequenceBuilder;
 const SequenceKind = sequence.SequenceKind;
 const classifySequence = sequence.classifySequence;
 const sequenceToValues = sequence.sequenceToValues;
+const sequenceToValuesScratch = sequence.sequenceToValuesScratch;
 const utf8NthCodepoint = sequence.utf8NthCodepoint;
 const utf8CodepointCount = sequence.utf8CodepointCount;
 const utf8SliceByCodepoints = sequence.utf8SliceByCodepoints;
@@ -861,46 +879,46 @@ pub fn nativeEachIndex(ctx: *Context) anyerror!void {
 pub fn nativeMap(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
-    // Pushing the wrapper iterator retains the materialized backing through
-    // `retainIteratorBacking`, so releasing the source here transfers its
-    // element ownership to the iterator value rather than dropping it.
     defer container_backing.releaseValue(seq);
-    const alloc = ctx.quotationAllocator();
 
-    const inner = if (seq == .iterator)
-        seq.iterator
-    else
-        try seqToArrayIter(seq, alloc) orelse {
-            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-            return error.TypeMismatch;
-        };
+    // The wrapper owns its inner iterator: an aliased inner is retained here because the deferred
+    // release drops the popped slot's reference, and a fresh one hands over its creation reference.
+    const inner = if (seq == .iterator) blk: {
+        seq.iterator.header.retain();
+        break :blk seq.iterator;
+    } else try seqToArrayIter(seq, ctx) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
 
-    const iter = alloc.create(Iterator) catch return error.OutOfMemory;
-    iter.* = .{ .kind = .{ .map = .{ .inner = inner, .quotation = quot } } };
-    try ctx.stack.push(.{ .iterator = iter });
+    const iter = Iterator.create(ctx.allocator, .{ .map = .{ .inner = inner, .quotation = quot } }) catch |err| {
+        inner.header.release();
+        return err;
+    };
+    try helpers.pushMovedIterator(ctx, iter);
 }
 
 /// #filter ( seq quot -- iterator )
 pub fn nativeFilter(ctx: *Context) anyerror!void {
     const quot = try popQuotation(ctx);
     const seq = try ctx.stack.pop();
-    // Pushing the wrapper iterator retains the materialized backing through
-    // `retainIteratorBacking`, so releasing the source here transfers its
-    // element ownership to the iterator value rather than dropping it.
     defer container_backing.releaseValue(seq);
-    const alloc = ctx.quotationAllocator();
 
-    const inner = if (seq == .iterator)
-        seq.iterator
-    else
-        try seqToArrayIter(seq, alloc) orelse {
-            setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
-            return error.TypeMismatch;
-        };
+    // The wrapper owns its inner iterator: an aliased inner is retained here because the deferred
+    // release drops the popped slot's reference, and a fresh one hands over its creation reference.
+    const inner = if (seq == .iterator) blk: {
+        seq.iterator.header.retain();
+        break :blk seq.iterator;
+    } else try seqToArrayIter(seq, ctx) orelse {
+        setErrorContext(ctx, "expected sequence, got {s}", .{valueTypeName(seq)});
+        return error.TypeMismatch;
+    };
 
-    const iter = alloc.create(Iterator) catch return error.OutOfMemory;
-    iter.* = .{ .kind = .{ .filter = .{ .inner = inner, .quotation = quot } } };
-    try ctx.stack.push(.{ .iterator = iter });
+    const iter = Iterator.create(ctx.allocator, .{ .filter = .{ .inner = inner, .quotation = quot } }) catch |err| {
+        inner.header.release();
+        return err;
+    };
+    try helpers.pushMovedIterator(ctx, iter);
 }
 
 /// #reduce ( seq init quot -- result )
@@ -1202,7 +1220,8 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
 
     switch (seq1) {
         .array => |arr1| {
-            const items2 = try sequenceToValues(seq2, alloc);
+            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
+            defer ctx.allocator.free(items2);
             const result = ctx.allocator.alloc(Value, arr1.items.len + items2.len) catch return error.OutOfMemory;
             @memcpy(result[0..arr1.items.len], arr1.items);
             @memcpy(result[arr1.items.len..], items2);
@@ -1211,7 +1230,8 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
         },
         .vector => |vec1| {
-            const items2 = try sequenceToValues(seq2, alloc);
+            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
+            defer ctx.allocator.free(items2);
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
             new_vec.list.ensureTotalCapacity(alloc, vec1.list.items.len + items2.len) catch return error.OutOfMemory;
             for (vec1.list.items) |item| {
@@ -1238,7 +1258,8 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
 
             // For strings, convert seq2 elements to strings and concatenate
             // Accept both strings (codepoints) and integers 0-255 (single bytes)
-            const items2 = try sequenceToValues(seq2, alloc);
+            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
+            defer ctx.allocator.free(items2);
             var total_len: usize = s1.len;
             for (items2) |item| {
                 switch (item) {
@@ -1289,7 +1310,8 @@ pub fn nativeAppend(ctx: *Context) anyerror!void {
             }
 
             // For byte arrays, accept integers 0-255 and strings (as UTF-8 bytes)
-            const items2 = try sequenceToValues(seq2, alloc);
+            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
+            defer ctx.allocator.free(items2);
 
             var extra_len: usize = 0;
             for (items2) |item| {
@@ -1368,11 +1390,12 @@ pub fn nativeAppendMut(ctx: *Context) anyerror!void {
         return err;
     };
 
-    const items = sequenceToValues(seq, ctx.quotationAllocator()) catch |err| {
+    const items = sequenceToValuesScratch(seq, ctx.allocator, ctx.quotationAllocator()) catch |err| {
         container_backing.releaseValue(seq);
         container_backing.releaseValue(.{ .vector = vec });
         return err;
     };
+    defer ctx.allocator.free(items);
 
     vec.header.lock();
     var appended: usize = 0;
@@ -1408,7 +1431,8 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
 
     switch (seq1) {
         .array => |arr1| {
-            const items2 = try sequenceToValues(seq2, alloc);
+            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
+            defer ctx.allocator.free(items2);
             const result = ctx.allocator.alloc(Value, items2.len + arr1.items.len) catch return error.OutOfMemory;
             @memcpy(result[0..items2.len], items2);
             @memcpy(result[items2.len..], arr1.items);
@@ -1417,7 +1441,8 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
             try helpers.pushAdoptedArray(ctx, ctx.allocator, result);
         },
         .vector => |vec1| {
-            const items2 = try sequenceToValues(seq2, alloc);
+            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
+            defer ctx.allocator.free(items2);
             const new_vec = Vector.create(alloc) catch return error.OutOfMemory;
             new_vec.list.ensureTotalCapacity(alloc, items2.len + vec1.list.items.len) catch return error.OutOfMemory;
             for (items2) |item| {
@@ -1433,7 +1458,8 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
         .string => |s1| {
             // For strings, convert seq2 elements to strings and prepend
             // Accept both strings (codepoints) and integers 0-255 (single bytes)
-            const items2 = try sequenceToValues(seq2, alloc);
+            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
+            defer ctx.allocator.free(items2);
             var total_len: usize = s1.len;
             for (items2) |item| {
                 switch (item) {
@@ -1473,7 +1499,8 @@ pub fn nativePrepend(ctx: *Context) anyerror!void {
         },
         .byte_array => |b1| {
             // For byte arrays, accept integers 0-255 and strings (as UTF-8 bytes)
-            const items2 = try sequenceToValues(seq2, alloc);
+            const items2 = try sequenceToValuesScratch(seq2, ctx.allocator, alloc);
+            defer ctx.allocator.free(items2);
 
             var extra_len: usize = 0;
             for (items2) |item| {
@@ -2311,12 +2338,12 @@ pub fn nativeTake(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     if (seq == .iterator) {
-        const iter = alloc.create(Iterator) catch return error.OutOfMemory;
-        iter.* = .{ .kind = .{ .take = .{ .inner = seq.iterator, .remaining = n } } };
-        try ctx.stack.push(.{ .iterator = iter });
-        // Pushing the wrapper retained the backing; drop the popped
-        // source's reference.
-        container_backing.releaseValue(seq);
+        // The wrapper takes over the popped slot's reference to the inner.
+        const iter = Iterator.create(ctx.allocator, .{ .take = .{ .inner = seq.iterator, .remaining = n } }) catch |err| {
+            container_backing.releaseValue(seq);
+            return err;
+        };
+        try helpers.pushMovedIterator(ctx, iter);
         return;
     }
     defer container_backing.releaseValue(seq);
@@ -2381,12 +2408,12 @@ pub fn nativeDrop(ctx: *Context) anyerror!void {
     const alloc = ctx.quotationAllocator();
 
     if (seq == .iterator) {
-        const iter = alloc.create(Iterator) catch return error.OutOfMemory;
-        iter.* = .{ .kind = .{ .drop = .{ .inner = seq.iterator, .to_skip = n } } };
-        try ctx.stack.push(.{ .iterator = iter });
-        // Pushing the wrapper retained the backing; drop the popped
-        // source's reference.
-        container_backing.releaseValue(seq);
+        // The wrapper takes over the popped slot's reference to the inner.
+        const iter = Iterator.create(ctx.allocator, .{ .drop = .{ .inner = seq.iterator, .to_skip = n } }) catch |err| {
+            container_backing.releaseValue(seq);
+            return err;
+        };
+        try helpers.pushMovedIterator(ctx, iter);
         return;
     }
     defer container_backing.releaseValue(seq);
@@ -3651,4 +3678,151 @@ test "#byte-slice non-string throws TypeMismatch" {
     try ctx.stack.push(.{ .fixnum = 0 });
     try ctx.stack.push(.{ .fixnum = 1 });
     try std.testing.expectError(error.TypeMismatch, nativeByteSlice(&ctx));
+}
+
+fn testPushFixnumArray(ctx: *Context, comptime fixnums: []const i64) !void {
+    const items = try std.testing.allocator.alloc(Value, fixnums.len);
+    for (fixnums, 0..) |n, i| {
+        items[i] = .{ .fixnum = n };
+    }
+    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+    ctx.stack.pushMoved(.{ .array = arr }) catch |err| {
+        container_backing.releaseValue(.{ .array = arr });
+        return err;
+    };
+}
+
+test "#append array arm frees its scratch and leaves the arena flat" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const baseline = ctx.arena.queryCapacity();
+    var round: usize = 0;
+    while (round < 8) : (round += 1) {
+        try testPushFixnumArray(&ctx, &.{ 1, 2 });
+        try testPushFixnumArray(&ctx, &.{ 3, 4 });
+        try nativeAppend(&ctx);
+
+        const result = try ctx.stack.pop();
+        try std.testing.expectEqual(@as(usize, 4), result.array.items.len);
+        try std.testing.expectEqual(@as(i64, 3), result.array.items[2].fixnum);
+        container_backing.releaseValue(result);
+    }
+    // The scratch slice lives on ctx.allocator now; the leak detector pins the free, and the
+    // arena pin shows nothing per-call lands there.
+    try std.testing.expectEqual(baseline, ctx.arena.queryCapacity());
+}
+
+test "#append array arm keeps string-source codepoint elements readable" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try testPushFixnumArray(&ctx, &.{9});
+    try ctx.stack.push(.{ .string = "ab" });
+    try nativeAppend(&ctx);
+
+    // The codepoint dupes live on the arena and outlive the freed scratch slice the result was
+    // copied from.
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(usize, 3), result.array.items.len);
+    try std.testing.expectEqualStrings("a", result.array.items[1].string);
+    try std.testing.expectEqualStrings("b", result.array.items[2].string);
+    container_backing.releaseValue(result);
+}
+
+test "#prepend string arm frees its scratch slice" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .string = "world" });
+    try ctx.stack.push(.{ .string = "hi" });
+    try nativePrepend(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqualStrings("hiworld", result.string);
+}
+
+test "#append! frees its scratch slice" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const vec = try Vector.create(std.testing.allocator);
+    try ctx.stack.pushMoved(.{ .vector = vec });
+    try testPushFixnumArray(&ctx, &.{ 5, 6 });
+    try nativeAppendMut(&ctx);
+
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(usize, 2), result.vector.list.items.len);
+    try std.testing.expectEqual(@as(i64, 6), result.vector.list.items[1].fixnum);
+    container_backing.releaseValue(result);
+}
+
+test "#map wrapper retains an aliased inner and death releases it" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const items = try std.testing.allocator.alloc(Value, 2);
+    items[0] = .{ .fixnum = 1 };
+    items[1] = .{ .fixnum = 2 };
+    const inner = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } });
+
+    try ctx.stack.pushMoved(.{ .iterator = inner });
+    try ctx.stack.push(.{ .quotation = .{ .instructions = &.{}, .effect = null, .code_ptr = null } });
+    try nativeMap(&ctx);
+
+    // The popped source slot was released inside #map; the wrapper holds the sole remaining
+    // reference to the inner.
+    const wrapper = try ctx.stack.pop();
+    try std.testing.expect(wrapper == .iterator);
+    try std.testing.expectEqual(@as(u32, 1), inner.header.refcountValue());
+
+    // Destroying the wrapper releases the inner, which frees its slice.
+    container_backing.releaseValue(wrapper);
+}
+
+test "#take wrapper takes over the popped inner reference" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const items = try std.testing.allocator.alloc(Value, 3);
+    for (items, 0..) |*slot, i| {
+        slot.* = .{ .fixnum = @intCast(i) };
+    }
+    const inner = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } });
+
+    try ctx.stack.pushMoved(.{ .iterator = inner });
+    try ctx.stack.push(.{ .fixnum = 2 });
+    try nativeTake(&ctx);
+
+    const wrapper = try ctx.stack.pop();
+    try std.testing.expect(wrapper == .iterator);
+    try std.testing.expectEqual(@as(u32, 1), inner.header.refcountValue());
+    container_backing.releaseValue(wrapper);
+}
+
+test "two wrappers over one inner both die cleanly" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const items = try std.testing.allocator.alloc(Value, 1);
+    items[0] = .{ .fixnum = 7 };
+    const inner = try Iterator.create(std.testing.allocator, .{ .array = .{ .items = items, .index = 0 } });
+
+    // Two wrapper sources: the stack slot pushed here plus one extra reference standing in for a
+    // dup'd slot.
+    inner.header.retain();
+    try ctx.stack.pushMoved(.{ .iterator = inner });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try nativeTake(&ctx);
+    const first = try ctx.stack.pop();
+
+    try ctx.stack.pushMoved(.{ .iterator = inner });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try nativeDrop(&ctx);
+    const second = try ctx.stack.pop();
+
+    try std.testing.expectEqual(@as(u32, 2), inner.header.refcountValue());
+    container_backing.releaseValue(first);
+    try std.testing.expectEqual(@as(u32, 1), inner.header.refcountValue());
+    container_backing.releaseValue(second);
 }

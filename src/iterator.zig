@@ -6,6 +6,7 @@ const Context = @import("context.zig").Context;
 const container_backing = @import("container_backing.zig");
 
 pub const Iterator = struct {
+    header: container_backing.ContainerHeader,
     kind: Kind,
 
     pub const Kind = union(enum) {
@@ -17,6 +18,37 @@ pub const Iterator = struct {
         drop: DropIter,
         callback: CallbackIter,
     };
+
+    pub fn create(allocator: std.mem.Allocator, kind: Kind) error{OutOfMemory}!*Iterator {
+        const self = try allocator.create(Iterator);
+        self.* = .{ .header = undefined, .kind = kind };
+        self.header.init(allocator, destroyIterator);
+        return self;
+    }
+
+    /// Release-to-zero callback. Frees memory only; it never executes user code, so a callback
+    /// iterator's cleanup quotation still runs only via `close-iterator` or exhaustion.
+    ///
+    /// An `.array` kind with no source array owns its materialized slice; the slice must be
+    /// allocated on the same allocator as the iterator. Its element string dupes are arena-owned
+    /// and outlive the iterator, so any yielded string a consumer still holds stays valid.
+    fn destroyIterator(header: *container_backing.ContainerHeader) void {
+        const self: *Iterator = @fieldParentPtr("header", header);
+        switch (self.kind) {
+            .array => |ai| if (ai.source) |arr| arr.header.release() else {
+                for (ai.items) |item| {
+                    container_backing.releaseValue(item);
+                }
+                header.allocator.free(ai.items);
+            },
+            .map => |it| it.inner.header.release(),
+            .filter => |it| it.inner.header.release(),
+            .take => |it| it.inner.header.release(),
+            .drop => |it| it.inner.header.release(),
+            .range, .callback => {},
+        }
+        header.allocator.destroy(self);
+    }
 
     pub fn next(self: *Iterator, ctx: *Context) anyerror!?Value {
         return switch (self.kind) {
@@ -99,11 +131,10 @@ pub const ArrayIter = struct {
     items: []const Value,
     index: usize,
 
-    /// Set when the iterator walks a headered array's backing: the backing
-    /// retain/release then goes through the array's header, which keeps both
-    /// the elements and the slice memory alive. Null for slices materialized
-    /// from other sequence types, which fall back to element-wise retention
-    /// and whose slice memory is arena-owned.
+    /// Set when the iterator walks a headered array's backing: the iterator holds one reference on
+    /// the array's header, which keeps both the elements and the slice memory alive. Null for
+    /// slices materialized from other sequence types, which the iterator owns outright: one element
+    /// reference apiece, and the slice memory itself, both dropped at destroy.
     source: ?*value_mod.Array = null,
 
     pub fn next(self: *ArrayIter) ?Value {
@@ -248,7 +279,7 @@ test "ArrayIter on empty array returns null immediately" {
 }
 
 test "Iterator kindName returns correct name" {
-    const iter = Iterator{ .kind = .{ .array = .{ .items = &.{}, .index = 0 } } };
+    const iter = Iterator{ .header = undefined, .kind = .{ .array = .{ .items = &.{}, .index = 0 } } };
     try std.testing.expectEqualStrings("array", iter.kindName());
 }
 
@@ -284,7 +315,7 @@ test "RangeIter empty when start equals end" {
 }
 
 test "RangeIter kindName returns range" {
-    const iter = Iterator{ .kind = .{ .range = .{ .current = 0, .end = 10, .step = 1, .infinite = false } } };
+    const iter = Iterator{ .header = undefined, .kind = .{ .range = .{ .current = 0, .end = 10, .step = 1, .infinite = false } } };
     try std.testing.expectEqualStrings("range", iter.kindName());
 }
 

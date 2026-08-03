@@ -9,8 +9,7 @@ const iter_mod = @import("../iterator.zig");
 const Iterator = iter_mod.Iterator;
 const CallbackIter = iter_mod.CallbackIter;
 const RangeIter = iter_mod.RangeIter;
-const sequence = @import("sequence.zig");
-const unwrapBaseType = @import("../dispatch.zig").unwrapBaseType;
+const sequences = @import("sequences.zig");
 const container_backing = @import("../container_backing.zig");
 
 pub const registry_entries = [_]RegistryEntry{
@@ -40,27 +39,14 @@ pub const primitives = [_]Primitive{
 /// >iterator ( seq -- iterator )
 pub fn nativeToIterator(ctx: *Context) anyerror!void {
     const raw_val = try ctx.stack.pop();
-    // Releasing the source pairs with the backing ownership the pushed
-    // iterator value takes on via `retainIteratorBacking`. The materialized
-    // backing borrows the source's element references; the push below retains
-    // them before this release drops the source's own references.
+    // The created iterator owns its backing, so releasing the popped source here cannot drop the
+    // elements it walks.
     defer container_backing.releaseValue(raw_val);
-    const alloc = ctx.quotationAllocator();
-    const val = unwrapBaseType(raw_val);
-    const kind: Iterator.Kind = switch (val) {
-        .array => |arr| .{ .array = .{ .items = arr.items, .index = 0, .source = arr } },
-        .string, .vector, .byte_array, .set => .{ .array = .{
-            .items = sequence.sequenceToValues(val, alloc) catch return error.OutOfMemory,
-            .index = 0,
-        } },
-        else => {
-            helpers.setTypeMismatchError(ctx, "sequence", raw_val);
-            return error.TypeMismatch;
-        },
+    const iter = try sequences.seqToArrayIter(raw_val, ctx) orelse {
+        helpers.setTypeMismatchError(ctx, "sequence", raw_val);
+        return error.TypeMismatch;
     };
-    const iter = try alloc.create(Iterator);
-    iter.* = .{ .kind = kind };
-    try ctx.stack.push(.{ .iterator = iter });
+    try helpers.pushMovedIterator(ctx, iter);
 }
 
 /// #next ( iterator -- value )
@@ -169,15 +155,13 @@ fn nativeMakeRangeIter(ctx: *Context) anyerror!void {
     };
     const infinite = infinite_val != .boolean or infinite_val.boolean;
 
-    const alloc = ctx.quotationAllocator();
-    const iter = try alloc.create(Iterator);
-    iter.* = .{ .kind = .{ .range = .{
+    const iter = try Iterator.create(ctx.allocator, .{ .range = .{
         .current = start,
         .end = end,
         .step = step,
         .infinite = infinite,
-    } } };
-    try ctx.stack.push(.{ .iterator = iter });
+    } });
+    try helpers.pushMovedIterator(ctx, iter);
 }
 
 /// make-callback-iter ( quot -- iterator )
@@ -191,15 +175,13 @@ fn nativeMakeCallbackIter(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    const alloc = ctx.quotationAllocator();
-    const iter = try alloc.create(Iterator);
-    iter.* = .{ .kind = .{ .callback = .{
+    const iter = try Iterator.create(ctx.allocator, .{ .callback = .{
         .quotation = quotation,
         .exhausted = false,
         .cleanup_quotation = null,
         .cleanup_ran = false,
-    } } };
-    try ctx.stack.push(.{ .iterator = iter });
+    } });
+    try helpers.pushMovedIterator(ctx, iter);
 }
 
 /// make-callback-iter-with-cleanup ( step-quot cleanup-quot -- iterator )
@@ -222,20 +204,20 @@ fn nativeMakeCallbackIterWithCleanup(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     };
-    const alloc = ctx.quotationAllocator();
-    const iter = try alloc.create(Iterator);
-    iter.* = .{ .kind = .{ .callback = .{
+    const iter = try Iterator.create(ctx.allocator, .{ .callback = .{
         .quotation = step_quotation,
         .exhausted = false,
         .cleanup_quotation = cleanup_quotation,
         .cleanup_ran = false,
-    } } };
-    try ctx.stack.push(.{ .iterator = iter });
+    } });
+    try helpers.pushMovedIterator(ctx, iter);
 }
 
 /// close-iterator ( iterator -- )
 pub fn nativeCloseIterator(ctx: *Context) anyerror!void {
     const val = try ctx.stack.pop();
+    // The popped slot owned the iterator; release it even when the cleanup quotation throws.
+    defer container_backing.releaseValue(val);
     switch (val) {
         .iterator => |iter| {
             try iter.close(ctx);
@@ -245,4 +227,77 @@ pub fn nativeCloseIterator(ctx: *Context) anyerror!void {
             return error.TypeMismatch;
         },
     }
+}
+
+test ">iterator materialized backing retains elements until destroy" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const elem = try value_mod.Vector.create(std.testing.allocator);
+    const src = try value_mod.Vector.create(std.testing.allocator);
+    // The source's slot takes the element's creation reference.
+    try src.list.append(src.header.allocator, .{ .vector = elem });
+
+    try ctx.stack.pushMoved(.{ .vector = src });
+    try nativeToIterator(&ctx);
+
+    // The source was released inside >iterator and destroyed; only the iterator's materialized
+    // backing keeps the element alive.
+    const it_val = try ctx.stack.pop();
+    try std.testing.expect(it_val == .iterator);
+    try std.testing.expectEqual(@as(u32, 1), elem.header.refcountValue());
+
+    // Destroying the iterator releases the element and frees the slice.
+    container_backing.releaseValue(it_val);
+}
+
+test ">iterator over an array retains the source through its header" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const items = try std.testing.allocator.alloc(Value, 1);
+    items[0] = .{ .fixnum = 3 };
+    const arr = try value_mod.Array.fromOwnedSlice(std.testing.allocator, items);
+
+    try ctx.stack.pushMoved(.{ .array = arr });
+    try nativeToIterator(&ctx);
+
+    const it_val = try ctx.stack.pop();
+    try std.testing.expect(it_val == .iterator);
+    try std.testing.expectEqual(@as(u32, 1), arr.header.refcountValue());
+    container_backing.releaseValue(it_val);
+}
+
+test "close-iterator releases the popped iterator" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    try ctx.stack.push(.{ .fixnum = 0 });
+    try ctx.stack.push(.{ .fixnum = 3 });
+    try ctx.stack.push(.{ .fixnum = 1 });
+    try ctx.stack.push(.{ .boolean = false });
+    try nativeMakeRangeIter(&ctx);
+    try nativeCloseIterator(&ctx);
+
+    // The leak detector confirms the iterator was destroyed.
+    try std.testing.expectEqual(@as(usize, 0), ctx.stack.depth());
+}
+
+test "#collect drains and destroys a partially shared chain" {
+    var ctx = Context.init(std.testing.allocator);
+    defer ctx.deinit();
+
+    const elem = try value_mod.Vector.create(std.testing.allocator);
+    const src = try value_mod.Vector.create(std.testing.allocator);
+    try src.list.append(src.header.allocator, .{ .vector = elem });
+
+    try ctx.stack.pushMoved(.{ .vector = src });
+    try nativeToIterator(&ctx);
+    try nativeCollect(&ctx);
+
+    // The iterator was destroyed when #collect released its slot, so the collected array holds
+    // the element's only reference.
+    const result = try ctx.stack.pop();
+    try std.testing.expectEqual(@as(u32, 1), elem.header.refcountValue());
+    container_backing.releaseValue(result);
 }
